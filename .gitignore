@@ -1,0 +1,7 @@
+.vscode/.ascript-sync.json
+__pycache__/
+*.pyc
+.venv/
+dist/
+build/
+*.spec

@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dhxy2"
+version = "0.1.0"
+description = "Ascript Project Template"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+dependencies = [
+    "ascript",
+#    "rapidocr==3.5.0",
+#    "onnxruntime==1.23.2"
+]
+
+[tool.setuptools]
+# 【硬映射核心】
+# 这里的含义是：创建一个名为 "dhxy2" 的虚拟包，
+# 并告诉系统它的源代码就在当前根目录 "."
+package-dir = {"dhxy2" = "."}
+packages = ["dhxy2"]
+
+include-package-data = true
+
+[tool.setuptools.package-data]
+# 这里的 key 必须和上面 packages 里的名字一致
+"dhxy2" = ["res/**/*", "config.json", "build.as","pyarmor_runtime_000000/**/*"]
+
+[tool.setuptools.exclude-package-data]
+"dhxy2" = ["sercert/**/*"]
+
+[tool.ascript.pack]
+# 文件夹排除列表：这些文件夹及其内容不会被打包
+exclude-dirs = [
+    ".venv", "venv", ".idea", ".vscode", "__pycache__",
+    "build", "dist", ".git", ".pytest_cache"
+]
+
+# 文件后缀排除列表：匹配这些后缀的文件不会被打包
+exclude-exts = [
+    ".pyc", ".pyo", ".pyd", ".DS_Store", ".log", "Thumbs.db"
+]

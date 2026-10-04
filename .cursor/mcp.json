@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "ascript-local": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["--with", "mcp<2", "ascript-mcp==1.7.0"]
+    }
+  }
+}
