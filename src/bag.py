@@ -1,0 +1,126 @@
+"""背包相关操作：打开背包、物品检测与点击。"""
+import time
+
+from ascript.windows.system import R
+from ascript.windows.screen.find_images import FindImages
+from .app_utils import log, human_click
+
+# 背包按钮模板（res/img/bag.png，34x34，实测匹配度 0.999）
+BAG_ICON = "bag.png"
+# 背包面板标志模板（res/img/bag_box.png，34x265，实测匹配度 0.99）
+BAG_BOX_ICON = "bag_box.png"
+# 摄妖香物品图标模板（res/img/sheyaoxiang.png，49x48，实测匹配度 1.0）
+SHEYAOXIANG_ICON = "sheyaoxiang.png"
+# 背包储物格切换按钮模板（res/img/box_one_close.png，26x27）
+BOX_ONE_CLOSE_ICON = "box_one_close.png"
+# 储物格切换的纵向偏移：以 box_one_close 为基准向下 35px 递增，
+# 共 4 个储物格（再往下第 5 个位置已经是任务栏）
+SLOT_OFFSETS = [0, 35, 70, 105]
+
+
+def find_and_click_bag(win):
+    """在游戏窗口中找到背包按钮并点击打开。
+
+    返回 (是否成功, 描述)。
+    """
+    results = FindImages.find_all_template(R.img(BAG_ICON), im_source=win, threshold=0.8)
+    if not results:
+        return False, "未找到背包按钮"
+    r = results[0]
+    human_click(win, r.x, r.y)
+    return True, f"匹配度 {r.confidence:.2f}"
+
+
+def _find_bag_box(win):
+    """查找背包面板标志（bag_box），返回首个匹配结果或 None。"""
+    results = FindImages.find_all_template(R.img(BAG_BOX_ICON), im_source=win, threshold=0.8)
+    return results[0] if results else None
+
+
+def is_bag_open(win):
+    """检测背包是否已打开（是否找到 bag_box 模板）。"""
+    return _find_bag_box(win) is not None
+
+
+def find_item_in_bag(win, icon_name):
+    """在游戏窗口中查找指定物品图标（背包打开状态下）。
+
+    返回匹配结果列表，未找到返回空列表。
+    """
+    return FindImages.find_all_template(R.img(icon_name), im_source=win, threshold=0.8)
+
+
+def find_box_one_close(win):
+    """查找背包储物格切换按钮 box_one_close，返回首个匹配或 None。"""
+    results = FindImages.find_all_template(R.img(BOX_ONE_CLOSE_ICON), im_source=win, threshold=0.8)
+    return results[0] if results else None
+
+
+def find_sheyaoxiang_with_slots(win):
+    """在背包中查找摄妖香，未找到时切换储物格再找。
+
+    直接检测不到时：点击 box_one_close（储物格切换），仍没有则以 35px
+    为步长向下点击，最多重复 4 次；每次操作前等待 100ms（识别摄妖香的
+    耗时不计入等待）。返回 (MatchResult 或 None, 过程描述)。
+    """
+    items = find_item_in_bag(win, SHEYAOXIANG_ICON)
+    if items:
+        return items[0], "直接检测到"
+
+    base = find_box_one_close(win)
+    if base is None:
+        return None, "未找到 box_one_close 储物格按钮"
+
+    for i, offset in enumerate(SLOT_OFFSETS):
+        time.sleep(0.1)  # 每次操作前等待（识别摄妖香的耗时不计入等待）
+        y = base.y + offset
+        log(f"[背包] 摄妖香未检测到，点击储物格 {i + 1}: ({base.x}, {y})"
+            f"（box_one_close 下方 {offset}px）", "INFO")
+        human_click(win, base.x, y)
+        time.sleep(0.1)  # 等待储物格界面切换
+        items = find_item_in_bag(win, SHEYAOXIANG_ICON)
+        if items:
+            return items[0], f"切换储物格 {i + 1} 后检测到"
+    return None, f"切换 {len(SLOT_OFFSETS)} 个储物格后仍未检测到摄妖香"
+
+
+def open_bag(win):
+    """点击背包并验证打开。
+
+    点击后检测 bag_box 模板：存在=打开成功；不存在=重试一次（仅一次）。
+    注意背包按钮是开关切换：若此前已是打开状态，第一次点击会关闭，
+    检测失败后重试点击即可恢复打开，流程自愈。
+    返回 (是否成功, 描述)。
+    """
+    for attempt in (1, 2):
+        results = FindImages.find_all_template(R.img(BAG_ICON), im_source=win, threshold=0.8)
+        if not results:
+            return False, "未找到背包按钮"
+        r = results[0]
+        human_click(win, r.x, r.y)
+        time.sleep(1.5)  # 等待面板打开动画
+        if is_bag_open(win):
+            return True, f"第{attempt}次点击成功（匹配度 {r.confidence:.2f}）"
+        log(f"[背包] 第{attempt}次点击后未检测到背包面板，重试一次...", "WARN")
+    return False, "两次尝试后仍未检测到背包面板"
+
+
+def close_bag(win):
+    """右键点击背包面板关闭背包。
+
+    识别到 bag_box 后记录坐标，关闭时移动到该位置右键点击（游戏面板
+    支持右键关闭）。点击后检测 bag_box：不存在=关闭成功；仍存在=重试一次。
+    返回 (是否成功, 描述)。
+    """
+    for attempt in (1, 2):
+        box = _find_bag_box(win)
+        if box is None:
+            if not is_bag_open(win):
+                return True, "背包未打开"
+            return False, "未找到背包面板"
+        human_click(win, box.x, box.y, button="secondary")
+        time.sleep(1.5)  # 等待面板关闭动画
+        if not is_bag_open(win):
+            return True, f"第{attempt}次右键成功关闭（匹配度 {box.confidence:.2f}）"
+        log(f"[背包] 第{attempt}次右键后背包仍打开，重试一次...", "WARN")
+    return False, "两次尝试后背包仍未关闭"
