@@ -22,6 +22,8 @@ from ascript.windows.ui import WebWindow
 TASK_MODES = ["五环", "客栈", "修罗", "五倍", "玄枢轶闻", "名望"]
 _DEFAULT_MODE = TASK_MODES[0]  # 五环
 _MODE_KEY = "task_mode"
+# 是否使用摄妖香（UI 开关，KeyValue 持久化）
+_USE_SHEYAOXIANG_KEY = "use_sheyaoxiang"
 
 
 def load_task_mode():
@@ -35,6 +37,17 @@ def save_task_mode(mode):
     if mode not in TASK_MODES:
         return {"status": "error", "msg": "INVALID_MODE"}
     KeyValue.save(_MODE_KEY, mode)
+    return {"status": "success"}
+
+
+def load_use_sheyaoxiang():
+    """读取是否使用摄妖香开关（首次默认开启）。"""
+    return bool(KeyValue.get(_USE_SHEYAOXIANG_KEY, True))
+
+
+def save_use_sheyaoxiang(on):
+    """保存是否使用摄妖香开关，返回操作结果。"""
+    KeyValue.save(_USE_SHEYAOXIANG_KEY, bool(on))
     return {"status": "success"}
 
 
@@ -69,17 +82,22 @@ class ControlWindow(WebWindow):
         self._visible = True  # 启动时直接可见
         self.expose(self.get_init_data)
         self.expose(self.save_task_mode)
+        self.expose(self.save_use_sheyaoxiang)
         self.expose(self.start_task)
         self.expose(self.reset_task)
         self.expose(self.close_window)
 
     def get_init_data(self):
-        """页面初始化数据：当前选中的任务模式。"""
-        return {"mode": load_task_mode()}
+        """页面初始化数据：当前选中的任务模式与摄妖香开关状态。"""
+        return {"mode": load_task_mode(), "use_sheyaoxiang": load_use_sheyaoxiang()}
 
     def save_task_mode(self, mode):
         """单选项变更：保存任务模式。"""
         return save_task_mode(mode)
+
+    def save_use_sheyaoxiang(self, on):
+        """摄妖香开关变更：保存开关状态。"""
+        return save_use_sheyaoxiang(on)
 
     def start_task(self):
         """启动按钮：对当前选中的模式开始执行任务。"""
@@ -127,7 +145,7 @@ class ControlWindow(WebWindow):
             except Exception:
                 pass
 
-    def prepare(self, width=360, height=340):
+    def prepare(self, width=360, height=360):
         """创建窗口但不启动事件循环（webview.start 由 app.show() 统一执行）。"""
         file_url = Path(self.abs_path).as_uri()
         win = webview.create_window(

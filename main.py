@@ -23,10 +23,12 @@ from ascript.windows.system import R  # 程序上下文与资源路由
 from ascript.windows.ui import LicenseWindow  # 安全验证组件
 from ascript.windows.ui import FloatScriptWindow  # 脚本控制台组件
 from src.polyfill import patch_js_bridge  # pywebview 6 桥接兼容补丁
-from src.control_window import ControlWindow, load_task_mode  # 自定义网页控制窗口（开始/停止按钮）
+from src.control_window import (ControlWindow, load_task_mode,
+                                load_use_sheyaoxiang)  # 自定义网页控制窗口（开始/停止按钮）
 from src.app_utils import log, toast, human_click  # 日志、系统通知与拟人化点击
 from src import game  # 游戏窗口操作
 from src import bag  # 背包操作
+from src import xuanshu  # 玄枢轶闻任务自动化
 
 
 class AppWindow(FloatScriptWindow):
@@ -104,7 +106,10 @@ def task_start():
     在此函数中编写自动化任务的核心业务逻辑。
     """
     log("业务进程已建立，开始执行自动化任务...", "SYS")
-    log(f"[模式] 当前任务模式: {load_task_mode()}", "SYS")
+    mode = load_task_mode()
+    use_sheyaoxiang = load_use_sheyaoxiang()
+    log(f"[模式] 当前任务模式: {mode}", "SYS")
+    log(f"[配置] 使用摄妖香: {'开' if use_sheyaoxiang else '关'}", "SYS")
 
     # uiautomation 需要线程内 COM 初始化：任务运行在子进程的工作线程中，
     # 必须显式初始化；保持引用直至任务结束（析构时自动 CoUninitialize）
@@ -136,6 +141,7 @@ def task_start():
     last_tab = None
     bag_opened = False   # 背包是否已点击打开（每次任务启动重新执行一次）
     bag_retry_at = 0.0   # 找背包失败后的下次重试时间
+    xuanshu_next_at = 0.0  # 玄枢轶闻检查的下一轮时间
     while True:
         main_win = game.find_main_window()
         if main_win is None:
@@ -159,7 +165,9 @@ def task_start():
             last_tab = tab
 
         # 登录状态下打开背包（点击+bag_box 验证，内置一次重试；成功一次后不再重复）
+        # 使用摄妖香开关关闭时跳过整个背包/摄妖香流程
         if (tab and tab != game.GAME_TITLE and not bag_opened
+                and use_sheyaoxiang
                 and time.time() >= bag_retry_at):
             ok, info = bag.open_bag(main_win)
             if ok:
@@ -184,6 +192,12 @@ def task_start():
             else:
                 log(f"[背包] {info}，10 秒后重试", "WARN")
                 bag_retry_at = time.time() + 10
+
+        # 玄枢轶闻模式：检查任务追踪/绿色文案/地图位置（每 3 秒一轮）
+        if (mode == "玄枢轶闻" and tab and tab != game.GAME_TITLE
+                and time.time() >= xuanshu_next_at):
+            xuanshu.run_cycle(main_win)
+            xuanshu_next_at = time.time() + 3
 
         time.sleep(1)
 
