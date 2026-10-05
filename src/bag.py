@@ -56,14 +56,14 @@ def find_box_one_close(win):
     return results[0] if results else None
 
 
-def find_sheyaoxiang_with_slots(win):
-    """在背包中查找摄妖香，未找到时切换储物格再找。
+def find_item_with_slots(win, icon_name, label):
+    """在背包中查找指定物品，未找到时切换储物格再找。
 
     直接检测不到时：点击 box_one_close（储物格切换），仍没有则以 35px
-    为步长向下点击，最多重复 4 次；每次操作前等待 100ms（识别摄妖香的
+    为步长向下点击，最多重复 4 次；每次操作前等待 100ms（识别物品的
     耗时不计入等待）。返回 (MatchResult 或 None, 过程描述)。
     """
-    items = find_item_in_bag(win, SHEYAOXIANG_ICON)
+    items = find_item_in_bag(win, icon_name)
     if items:
         return items[0], "直接检测到"
 
@@ -72,16 +72,21 @@ def find_sheyaoxiang_with_slots(win):
         return None, "未找到 box_one_close 储物格按钮"
 
     for i, offset in enumerate(SLOT_OFFSETS):
-        time.sleep(0.1)  # 每次操作前等待（识别摄妖香的耗时不计入等待）
+        time.sleep(0.1)  # 每次操作前等待（识别物品的耗时不计入等待）
         y = base.y + offset
-        log(f"[背包] 摄妖香未检测到，点击储物格 {i + 1}: ({base.x}, {y})"
+        log(f"[背包] {label}未检测到，点击储物格 {i + 1}: ({base.x}, {y})"
             f"（box_one_close 下方 {offset}px）", "INFO")
         human_click(win, base.x, y)
         time.sleep(0.1)  # 等待储物格界面切换
-        items = find_item_in_bag(win, SHEYAOXIANG_ICON)
+        items = find_item_in_bag(win, icon_name)
         if items:
             return items[0], f"切换储物格 {i + 1} 后检测到"
-    return None, f"切换 {len(SLOT_OFFSETS)} 个储物格后仍未检测到摄妖香"
+    return None, f"切换 {len(SLOT_OFFSETS)} 个储物格后仍未检测到{label}"
+
+
+def find_sheyaoxiang_with_slots(win):
+    """在背包中查找摄妖香（含储物格切换搜索），返回 (MatchResult 或 None, 描述)。"""
+    return find_item_with_slots(win, SHEYAOXIANG_ICON, "摄妖香")
 
 
 def open_bag(win):

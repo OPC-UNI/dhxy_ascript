@@ -2,6 +2,8 @@
 
 功能：
 - read_map_position：OCR 地图位置区域，识别当前地图 (地名, x, y)
+- read_position_with_recovery：识别当前位置，失败按 Alt+C 恢复后重试
+- is_in_map：判断当前是否在指定地图（地名模糊匹配）
 - is_at_position：判断位置是否在指定地图坐标附近（±tolerance）
 - open_world_map / close_world_map：世界地图开关
 - open_mini_map：打开当前地图的小地图（点击地图位置区域）
@@ -17,15 +19,19 @@ import time
 import numpy as np
 from rapidocr_onnxruntime import RapidOCR
 
+from ascript.windows.hardware.keyboard import Keyboard
 from ascript.windows.system import R
 from ascript.windows.screen.find_images import FindImages
 
-from .app_utils import human_click
+from .app_utils import human_click, log
 
 # 地图位置文字区域（窗口相对坐标，左上角）
 MAP_POS_REGION = (45, 60, 222, 90)
 # 世界地图按钮模板（实测匹配 0.969）
 WORLD_MAP_ICON = "item_map_shijie.png"
+# 世界地图上的城市图标（任务模块共用：点击城市打开该城市的小地图）
+WORLD_MAP_LUOYANG_ICON = "shijie_luoyang.png"  # 洛阳城（实测匹配 0.991）
+WORLD_MAP_CHANGAN_ICON = "shijie_changan.png"         # 长安城（五环任务实测）
 # 世界地图打开标志模板（实测匹配 0.95，右键其位置可关闭）
 WORLD_MAP_OPEN_ICON = "map_shijie_open.png"
 # 小地图打开标志模板（实测匹配 0.95；左键其位置可关闭）
@@ -40,11 +46,17 @@ _engine = None
 
 
 def ocr_image(img):
-    """OCR 识别图像，返回按纵坐标排序的 [(txt, rect, score)] 列表。"""
+    """OCR 识别图像，返回 (items, img_np)。
+
+    items：按纵坐标排序的 [(txt, rect, score)] 列表；
+    img_np：图像的 numpy 数组，供调用方做像素级判断（绿色文字校验等），
+    避免调用方重复转换。
+    """
     global _engine
     if _engine is None:
         _engine = RapidOCR()
-    result, _ = _engine(np.asarray(img))
+    img_np = np.asarray(img)
+    result, _ = _engine(img_np)
     items = []
     if result:
         for box, txt, score in result:
@@ -52,7 +64,7 @@ def ocr_image(img):
             r, b = float(box[2][0]), float(box[2][1])
             items.append((str(txt), [int(l), int(t), int(r), int(b)], float(score)))
     items.sort(key=lambda x: x[1][1])
-    return items
+    return items, img_np
 
 
 def _clean_map_pos(text):
@@ -77,12 +89,33 @@ def read_map_position(win):
     if img is None:
         return None
     region_img = img.crop(MAP_POS_REGION)
-    raw = " ".join(t[0] for t in ocr_image(region_img)).strip()
+    items, _ = ocr_image(region_img)
+    raw = " ".join(t[0] for t in items).strip()
     m = _MAP_POS_RE.search(_clean_map_pos(raw))
     if m:
         name = m.group(1).replace("陽", "阳")
         return name, int(m.group(2)), int(m.group(3))
     return None
+
+
+def read_position_with_recovery(win):
+    """识别当前位置；失败时按 Alt+C 恢复位置显示后重试一次（常见于人物未落地）。"""
+    pos = read_map_position(win)
+    if pos is None:
+        log("[地图] 位置识别失败，按 Alt+C 后重试", "WARN")
+        Keyboard.key_hot("alt", "c")
+        time.sleep(1.0)  # 等待位置显示恢复
+        pos = read_map_position(win)
+    return pos
+
+
+def is_in_map(win, name):
+    """判断当前是否在指定地图（地名精确匹配）。
+
+    精确匹配避免误判相邻地图（如「长安」不能匹配「长安城东」）。
+    """
+    pos = read_position_with_recovery(win)
+    return pos is not None and pos[0].strip() == name
 
 
 def is_at_position(pos, name, x, y, tolerance=5):

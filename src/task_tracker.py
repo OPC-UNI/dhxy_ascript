@@ -20,6 +20,9 @@ from . import map as game_map  # OCR 能力复用
 
 # 绿色文案判定参数：G 通道显著高于 R/B 即视为绿色文字
 GREEN_MIN_G = 90
+# 链接亮绿判定下限：链接文字/下划线为亮绿（五环实测 G≈186、玄枢轶闻 G=255），
+# 而任务描述文字可能是暗绿（五环实测 G≈130），须区分
+GREEN_BRIGHT_MIN = 150
 GREEN_DOMINANCE = 30
 # 区域中绿色像素占比下限（OCR 合并长描述行时绿字占比可低至 ~2.6%，实测取 1%）
 GREEN_MIN_RATIO = 0.01
@@ -27,16 +30,25 @@ GREEN_MIN_RATIO = 0.01
 PANEL_MAX_X = 400
 
 
-def green_ratio(img_np, rect):
+def _green_mask(region, min_g):
+    """绿色像素掩码（G 通道亮度与色相判定）。"""
+    g = region[:, :, 1].astype(int)
+    r = region[:, :, 0].astype(int)
+    b = region[:, :, 2].astype(int)
+    return (g > min_g) & (g > r + GREEN_DOMINANCE) & (g > b + GREEN_DOMINANCE)
+
+
+def green_ratio(img_np, rect, min_g=GREEN_MIN_G):
     """文字区域内绿色像素占比。"""
     region = img_np[rect[1]:rect[3], rect[0]:rect[2]]
     if region.size == 0:
         return 0.0
-    g = region[:, :, 1].astype(int)
-    r = region[:, :, 0].astype(int)
-    b = region[:, :, 2].astype(int)
-    mask = (g > GREEN_MIN_G) & (g > r + GREEN_DOMINANCE) & (g > b + GREEN_DOMINANCE)
-    return float(mask.mean())
+    return float(_green_mask(region, min_g).mean())
+
+
+def bright_green_ratio(img_np, rect):
+    """文字区域内亮绿像素（链接文字/下划线）占比。"""
+    return green_ratio(img_np, rect, min_g=GREEN_BRIGHT_MIN)
 
 
 def is_green_text(img_np, rect):
@@ -44,31 +56,69 @@ def is_green_text(img_np, rect):
     return green_ratio(img_np, rect) > GREEN_MIN_RATIO
 
 
+def _longest_run_center(cols):
+    """最长连续列段的中点（下划线为实线，比文字噪点列段显著更长）。"""
+    best_start = best_len = 0
+    start = None
+    prev = 0
+    for c in cols:
+        if start is None or c != prev + 1:
+            start = c
+        prev = c
+        if c - start + 1 > best_len:
+            best_len = c - start + 1
+            best_start = start
+    return best_start + best_len // 2
+
+
 def green_text_center(img_np, rect):
     """定位文字区域内绿色像素的点击中心。
 
-    OCR 可能把描述文字与绿色链接合并成一行（绿字只占行的一部分），
-    此时应按绿色像素列的中心点击而不是整行中心。
-    无绿色像素时退回区域中心。
+    OCR 可能把描述文字与绿色链接合并成一行（绿字只占行的一部分，
+    甚至整行描述都与链接同色），此时按整行绿色像素中心点击会点错。
+    优先点击链接下划线：文字区域底部 30% 内检测实线亮绿行（单行亮绿
+    像素达到行宽 15% 以上），点击该行上方 2px（下划线是链接专属，
+    且纵坐标落在文字与下划线之间，不会点到文字下方）；
+    无实线行时依次退回亮绿像素、任意绿色像素（取最长连续列段，
+    纵坐标取区域中心），再退回区域中心。
     """
     region = img_np[rect[1]:rect[3], rect[0]:rect[2]]
     if region.size == 0:
         return (rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2
-    g = region[:, :, 1].astype(int)
-    r = region[:, :, 0].astype(int)
-    b = region[:, :, 2].astype(int)
-    mask = (g > GREEN_MIN_G) & (g > r + GREEN_DOMINANCE) & (g > b + GREEN_DOMINANCE)
-    cols = np.where(mask.any(axis=0))[0]
-    if cols.size == 0:
-        return (rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2
-    cx = rect[0] + (cols.min() + cols.max()) // 2
-    cy = (rect[1] + rect[3]) // 2
-    return cx, cy
+    h, w = region.shape[:2]
+    # 下划线检测：底部 30% 内的实线亮绿行（取最下方一行）
+    under_top = int(h * 0.7)
+    under = region[under_top:]
+    mask = _green_mask(under, GREEN_BRIGHT_MIN)
+    solid_rows = np.where(mask.sum(axis=1) >= max(6, w * 0.15))[0]
+    if solid_rows.size:
+        y_row = solid_rows[-1]
+        cols = np.where(mask[y_row])[0]
+        cx = rect[0] + _longest_run_center(cols)
+        cy = rect[1] + under_top + y_row - 2  # 下划线上方 2px，容 ±2px 点击抖动
+        return cx, cy
+    # 无下划线：亮绿/绿色像素最长连续列段，纵坐标取区域中心（不点文字下方）
+    for min_g in (GREEN_BRIGHT_MIN, GREEN_MIN_G):
+        cols = np.where(_green_mask(region, min_g).any(axis=0))[0]
+        if cols.size:
+            return (rect[0] + _longest_run_center(cols),
+                    (rect[1] + rect[3]) // 2)
+    return (rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2
 
 
 def _is_title_line(txt):
-    """标题行判定：含方括号的短行（任务标题如 洛川乱渊[水啸神踪]）。"""
-    return len(txt) <= 20 and ("[" in txt or "【" in txt or "［" in txt)
+    """标题行判定：短行且含方括号，且括号段内不含数字。
+
+    任务标题如 洛川乱渊[水啸神踪]；内容行的回合计数如 [1/5]、
+    [1/（OCR 截断）括号段内含数字，须视为内容行。
+    标题左括号可能被 OCR 丢失（如 五环[五环] 读成 五环五环]），
+    短行只含右括号且无数字时也按标题处理。
+    """
+    if len(txt) > 20:
+        return False
+    if not re.search(r"[\[［【\]］】]", txt):
+        return False
+    return not re.search(r"[\[［【][^\]］】]*\d", txt)
 
 
 def group_tasks(items):
@@ -99,7 +149,8 @@ def read_tasks(win):
     img = win.capture()
     if img is None:
         return []
-    return group_tasks(game_map.ocr_image(img))
+    items, _ = game_map.ocr_image(img)
+    return group_tasks(items)
 
 
 def task_count(win):
@@ -116,8 +167,7 @@ def has_task(win, title):
     img = win.capture()
     if img is None:
         return False
-    items = game_map.ocr_image(img)
-    img_np = np.asarray(img)
+    items, img_np = game_map.ocr_image(img)
     for txt, rect, score in items:
         if title in txt and score >= 0.6 and rect[0] < PANEL_MAX_X:
             if not is_green_text(img_np, rect):
@@ -144,7 +194,8 @@ def get_task(win, title):
     img = win.capture()
     if img is None:
         return None
-    return find_task(group_tasks(game_map.ocr_image(img)), title)
+    items, _ = game_map.ocr_image(img)
+    return find_task(group_tasks(items), title)
 
 
 def task_signature(task):
@@ -172,8 +223,7 @@ def track_task(win, title, text=None, green_index=0, retries=4, retry_interval=1
         img = win.capture()
         if img is None:
             return False, "窗口截图失败"
-        items = game_map.ocr_image(img)
-        img_np = np.asarray(img)
+        items, img_np = game_map.ocr_image(img)
 
         # 任务锚点行：任意包含标题文案的行（兼容无方括号的标题）
         anchor_idx = None
@@ -214,16 +264,20 @@ def track_task(win, title, text=None, green_index=0, retries=4, retry_interval=1
 
         green = [it for it in content if is_green_text(img_np, it[1])]
         if green:
-            tgt = green[min(green_index, len(green) - 1)]
+            # 优先选择含亮绿（链接文字/下划线）的行：
+            # 暗绿可能是整行描述文字染色，其亮绿部分才是真正的链接
+            pool = [it for it in green if bright_green_ratio(img_np, it[1]) > 0] or green
+            tgt = pool[min(green_index, len(pool) - 1)]
             # 跨行绿字：相邻绿行构成一个链接（如「那块」+「奇怪的石头」），
-            # 选择绿色像素最多的行点击（链接主体所在行，避开描述行的绿字噪声）
+            # 选择亮绿像素最多的行点击（链接主体所在行，避开描述行的绿字噪声）
             cluster = [tgt]
             for other in green:
                 if other is not tgt and abs(other[1][1] - tgt[1][3]) <= 6 \
                         and abs(other[1][0] - tgt[1][0]) < 80:
                     cluster.append(other)
             if len(cluster) > 1:
-                tgt = max(cluster, key=lambda it: green_ratio(img_np, it[1]))
+                tgt = max(cluster, key=lambda it: bright_green_ratio(img_np, it[1])
+                          or green_ratio(img_np, it[1]))
                 wrap_note = " + ".join(f"「{t[0]}」" for t in cluster if t is not tgt)
                 wrap_note += "(跨行绿字)"
             else:

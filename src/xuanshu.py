@@ -23,8 +23,6 @@ import time
 import cv2
 import numpy as np
 
-from ascript.windows.hardware.keyboard import Keyboard
-
 from .app_utils import log, human_click
 from . import bag  # 物品栏开关
 from . import map as game_map  # 地图操作（世界地图/小地图/位置识别）
@@ -40,7 +38,6 @@ LUOYANG_CITY = "洛阳城"
 TASK_MAP_POS = (93, 125)            # 任务位置（洛阳城坐标；None 表示目标非坐标）
 MAP_POS_TOLERANCE = 5               # 坐标判定容差（±5 像素）
 MAP_CLICK_POS = (399, 442)          # 小地图上任务位置对应的点击点（窗口相对坐标）
-WORLD_MAP_LUOYANG_ICON = "shijie_luoyang.png"  # 世界地图上的洛阳城模板（实测匹配 0.991）
 TASK_LINGQU_ICON = "task_lingqu.png"           # 领取任务按钮模板
 ARRIVE_TIMEOUT = 90                 # 等待寻路完成的超时（秒）
 # 领取任务对话框中的绿色选项（两步）
@@ -100,17 +97,6 @@ def _at_target(pos):
     return game_map.is_at_position(pos, LUOYANG_CITY,
                                    TASK_MAP_POS[0], TASK_MAP_POS[1],
                                    MAP_POS_TOLERANCE)
-
-
-def _read_position_with_recovery(win):
-    """识别当前位置；失败时按 Alt+C 恢复位置显示后重试一次。"""
-    pos = game_map.read_map_position(win)
-    if pos is None:
-        log("[玄枢轶闻] 地图位置识别失败，按 Alt+C 后重新识别", "WARN")
-        Keyboard.key_hot("alt", "c")
-        time.sleep(1.0)  # 等待位置显示恢复
-        pos = game_map.read_map_position(win)
-    return pos
 
 
 def _close_scene_panels(win):
@@ -193,10 +179,10 @@ def _click_dialog_green_option(win, text, timeout=DIALOG_TIMEOUT, abort_text=Non
         if img is None:
             time.sleep(1.0)
             continue
-        items = game_map.ocr_image(img)
+        items, img_np = game_map.ocr_image(img)
         if abort_text and _dialog_text_present(items, abort_text):
             return False, f"检测到「{abort_text}」"
-        if _click_green_option_once(win, items, np.asarray(img), text):
+        if _click_green_option_once(win, items, img_np, text):
             return True, f"已点击对话框绿色选项「{text}」"
         time.sleep(1.5)
     return False, f"未找到对话框绿色选项「{text}」"
@@ -221,7 +207,7 @@ def navigate_to_task(win):
     # 场景前置：清理残留地图（小地图在上层，先关）与物品栏
     _close_scene_panels(win)
 
-    pos = _read_position_with_recovery(win)
+    pos = game_map.read_position_with_recovery(win)
     if pos is None:
         return False, "无法识别当前地图位置"
     name, x, y = pos
@@ -235,7 +221,7 @@ def navigate_to_task(win):
             return False, info
         log(f"[玄枢轶闻] 在洛阳城（{loc}），已打开小地图", "SYS")
     else:
-        ok, info = game_map.open_mini_map_city(win, WORLD_MAP_LUOYANG_ICON, "洛阳城")
+        ok, info = game_map.open_mini_map_city(win, game_map.WORLD_MAP_LUOYANG_ICON, "洛阳城")
         if not ok:
             return False, info
         log(f"[玄枢轶闻] 不在洛阳城（{loc}），经世界地图前往洛阳城", "SYS")
@@ -278,7 +264,7 @@ def navigate_to_task(win):
         if task_tracker.has_task(win, TASK_TITLE):
             return True, "已领取任务"
         img = win.capture()
-        if img is not None and _dialog_text_present(game_map.ocr_image(img), DAILY_LIMIT_TEXT):
+        if img is not None and _dialog_text_present(game_map.ocr_image(img)[0], DAILY_LIMIT_TEXT):
             return False, DAILY_LIMIT_INFO
         time.sleep(1.0)
     return False, "已点击领取玄枢轶闻，但任务追踪中未检测到任务"
@@ -391,8 +377,9 @@ def _dialog_text_present(items, dtxt):
                for line in [t[0] for t in items] + [joined])
 
 
-def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT):
-    """循环跟踪任务直到完成。
+def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶闻",
+                extra_dialog_handler=None):
+    """循环跟踪任务直到完成（prefix 供其他任务复用，如五环）。
 
     每轮：点击任务当前第一个绿色文案 → 等待任务信息变化（内容更新）
     → 进入下一轮；任务从追踪面板消失即完成。
@@ -400,6 +387,10 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT):
     点屏幕中间跳过、DIALOG_OPTIONS 已知绿字、战斗失败「你输了」点击任务绿字推进）
     与锄遗聚宝小游戏。
     战斗中跳过识别（任务追踪与坐标不可用），等待战斗结束。
+
+    extra_dialog_handler：附加对话框处理回调 (win, items, img_np) → 是否已处理，
+    供其他任务注入专属对话流程（如五环的提交装备）；回调中抛出的异常向上传播，
+    供调用方做任务级终止。
     返回 (是否完成, 描述)。
     """
     deadline = time.time() + timeout
@@ -423,23 +414,26 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT):
             return False, info
         last_clicked_sig = sig
         rounds += 1
-        log(f"[玄枢轶闻] 第 {rounds} 轮跟踪完成，等待任务信息变化", "SYS")
+        log(f"[{prefix}] 第 {rounds} 轮跟踪完成，等待任务信息变化", "SYS")
 
         # 等待任务信息变化或任务消失；期间处理对话框选项与锄遗聚宝小游戏
         while time.time() < deadline:
             time.sleep(FOLLOW_POLL_INTERVAL)
-            # 战斗中：跳过本轮识别（任务追踪与坐标不可用）
-            if is_in_battle(win):
-                continue
             img = win.capture()
             if img is None:
                 continue
-            items = game_map.ocr_image(img)
-            img_np = np.asarray(img)
+            items, img_np = game_map.ocr_image(img)
+            # 附加对话框处理优先：战斗中也可能出现任务对话（如五环提交装备），
+            # 此时任务追踪不可用，等战斗结束后再继续识别
+            if extra_dialog_handler is not None:
+                extra_dialog_handler(win, items, img_np)
+            # 战斗中：跳过本轮识别（任务追踪与坐标不可用）
+            if is_in_battle(win):
+                continue
             # 锄遗聚宝优先：出现则完整处理（开始 + 消除 err 直到主图消失）
             if game_map.find_template(win, CHUYIJUEBAO_ICON) is not None:
                 ok2, info2 = _play_chuyijuebao(win)
-                log(f"[玄枢轶闻] {info2}", "SYS" if ok2 else "WARN")
+                log(f"[{prefix}] {info2}", "SYS" if ok2 else "WARN")
                 continue
             task2 = task_tracker.find_task(task_tracker.group_tasks(items), title)
             if task2 is None:
@@ -458,10 +452,10 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT):
                 # 战斗失败对话框：继续点击任务追踪的绿色文案推进任务
                 ok3, info3 = task_tracker.track_task(win, title)
                 if ok3:
-                    log("[玄枢轶闻] 检测到「你输了」对话，继续点击任务绿字推进", "SYS")
+                    log(f"[{prefix}] 检测到「你输了」对话，继续点击任务绿字推进", "SYS")
                     handled = True
                 else:
-                    log(f"[玄枢轶闻] 「你输了」对话中任务绿字点击失败: {info3}", "WARN")
+                    log(f"[{prefix}] 「你输了」对话中任务绿字点击失败: {info3}", "WARN")
             if not handled:
                 for dtxt in DIALOG_SKIP_TEXTS:
                     if _dialog_text_present(items, dtxt):
