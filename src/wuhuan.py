@@ -181,7 +181,7 @@ def _click_green_option(win, items, img_np, text):
     for txt, rect, score in items:
         if score >= 0.6 and needle in re.sub(r"[^\w]", "", txt) \
                 and task_tracker.is_green_text(img_np, rect):
-            cx, cy = task_tracker.green_text_center(img_np, rect)
+            cx, cy = task_tracker.green_text_center(img_np, rect, prefer_underline=False)
             human_click(win, cx, cy)
             log(f"[五环] 已点击绿色选项「{txt}」", "SYS")
             return True
@@ -193,7 +193,7 @@ def _click_wuhuan_option_once(win, items, img_np):
     for txt, rect, score in items:
         if score >= 0.6 and ("五环" in txt or "帮助" in txt) \
                 and task_tracker.is_green_text(img_np, rect):
-            cx, cy = task_tracker.green_text_center(img_np, rect)
+            cx, cy = task_tracker.green_text_center(img_np, rect, prefer_underline=False)
             human_click(win, cx, cy)
             log(f"[五环] 已点击绿色选项「{txt}」", "SYS")
             return True

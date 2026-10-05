@@ -56,8 +56,13 @@ DIALOG_SKIP_TEXTS = ["你是做嘛的？莫来惹老子！"
                      ,"受害者所闻那水鬼之声出自善口技者之音，你幼时曾学过口技，又时常与人"
                      ,"第二起案子中，被打捞的尸体手脚被渔人结牢牢捆住，那渔人结并非常人所"
                      ,"少侠运气不错"
-                     ,"翠花说的难道是这块石头？但是."]
-DIALOG_SKIP_CLICKS = 3               # 跳过对话的点击次数
+                     ,"翠花说的难道是这块石头？但是."
+                     ,"刚刚是你再说话？"
+                     ,"准备好接受地理方面的考验了么"
+                     ,"少侠准备好接受考验了么"
+                     ,"少侠准备好接受常识类学问的考验了么"
+                     ]
+DIALOG_SKIP_CLICKS = 4               # 跳过对话的点击次数
 SCREEN_CENTER_POS = (689, 415)       # 屏幕中间（游戏窗口中心，点击推进对话）
 # 特定对话框出现时点击的绿色选项（对话框文案 → 绿字选项）
 DIALOG_OPTION_MAP = {
@@ -67,16 +72,29 @@ DIALOG_OPTION_MAP = {
     "少侠有什么事吗？": "玄枢轶闻",
     "太阳的别称是什么":"金乌",
     "浑天仪":"观测星星的位置",
-    "大唐都城":"长安",
-    "丝绸":"丝绸之路",
+    "大唐的都城":"长安",
+    "大唐的丝绸":"丝绸之路",
+    "大唐人最喜欢喝什么":"茶",
+    "大唐人见面行礼":"拱手",
     "有人要偷我们的宝贝，拿下他！":"什么情况",
     "使劲晃动杯中的三颗骰子":"轻轻摇晃",
     "我倒数三个数后大家一起出拳":"出石头",
+    "看打！":"看我怎么收拾你",
 }
+# 选项无法被 OCR 识别（如单字选项「茶」）时，按序号点击：
+# 选项为问题文案下方的纵向列表，第 idx 项（对话框文案 → 序号）
+DIALOG_OPTION_INDEX_MAP = {
+    "大唐人最喜欢喝什么": 3,  # 茶（咖啡、果汁之后的第 3 项）
+}
+# 序号点击的坐标参数（相对问题行 rect）：首项纵偏移、行间距、横向偏移
+# （实测三选项文字中心：咖啡 +12、果汁 +30、茶 +48，间距 18px）
+OPTION_FIRST_OFFSET = 10
+OPTION_ROW_STEP = 18
+OPTION_X_OFFSET = 1
 # 锄遗聚宝小游戏（点击「注入玄蕴试试看」后出现）
 CHUYIJUEBAO_ICON = "chuyijuebao.png"              # 主图（消失即结束；实测匹配 0.91）"
 CHUYIJUEBAO_START_ICON = "chuyijuebao_start.png"  # 开始按钮（实测匹配 0.92）
-CHUYIJUEBAO_CHECK_INTERVAL = 0.2                 # 杂气检测间隔（秒）
+CHUYIJUEBAO_CHECK_INTERVAL = 0.1                 # 杂气检测间隔（秒）
 CHUYIJUEBAO_TIMEOUT = 60                        # 小游戏总超时（秒）
 # 红色杂气检测参数（游戏说明：点击红色杂气将其清除）
 QI_RED_MIN = 120        # R 通道最低亮度
@@ -151,11 +169,32 @@ def _click_green_option_once(win, items, img_np, text):
     """单帧检测并点击指定文案的绿色选项；点击成功返回 True。"""
     for txt, rect, score in items:
         if text in txt and score >= 0.6 and task_tracker.is_green_text(img_np, rect):
-            cx, cy = task_tracker.green_text_center(img_np, rect)
+            cx, cy = task_tracker.green_text_center(img_np, rect, prefer_underline=False)
             human_click(win, cx, cy)
             log(f"[玄枢轶闻] 已点击对话框绿色选项「{txt}」@({cx},{cy})", "SYS")
             return True
     return False
+
+
+def _click_dialog_option_by_index(win, items, dtxt, idx):
+    """按序号点击问题下方的选项（选项无法 OCR 识别时使用）。
+
+    定位问题文案所在行，选项在其下方纵向排列：
+    第 idx 项的点击位置 = 问题行下方 10 + 18*(idx-1) 像素、问题行左侧 +1 像素
+    （实测问答题三选项文字中心 咖啡 +12/果汁 +30/茶 +48，取略偏上避免点到行间）。
+    """
+    qrect = None
+    for txt, rect, _ in items:
+        if _fuzzy_contains(txt, dtxt):
+            qrect = rect
+            break
+    if qrect is None:
+        return False
+    cx = qrect[0] + OPTION_X_OFFSET
+    cy = qrect[3] + OPTION_FIRST_OFFSET + OPTION_ROW_STEP * (idx - 1)
+    human_click(win, cx, cy)
+    log(f"[玄枢轶闻] 已按序号点击第 {idx} 项选项 @({cx},{cy})", "SYS")
+    return True
 
 
 def _click_screen_center(win, times=DIALOG_SKIP_CLICKS):
@@ -417,6 +456,7 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
         log(f"[{prefix}] 第 {rounds} 轮跟踪完成，等待任务信息变化", "SYS")
 
         # 等待任务信息变化或任务消失；期间处理对话框选项与锄遗聚宝小游戏
+        changed_once = False
         while time.time() < deadline:
             time.sleep(FOLLOW_POLL_INTERVAL)
             img = win.capture()
@@ -439,13 +479,24 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
             if task2 is None:
                 return True, f"任务已从任务追踪中消失（完成，共 {rounds} 轮）"
             if not _signatures_similar(task_tracker.task_signature(task2), sig):
-                break
+                # 连续两次轮询确认签名确实变化（单次可能是 OCR 抖动，
+                # 避免任务无变化时重复点击任务绿字）
+                if changed_once:
+                    break
+                changed_once = True
+                continue
+            changed_once = False
             # 对话框处理：特定对话框指定绿字 → 点屏幕中间跳过 → 已知绿字选项
             # 文案匹配为模糊匹配（逐行与全文拼接，抗 OCR 个别字误读与换行拆分）
             handled = False
             for dtxt, opt in DIALOG_OPTION_MAP.items():
                 if _dialog_text_present(items, dtxt):
                     if _click_green_option_once(win, items, img_np, opt):
+                        handled = True
+                        break
+                    # 选项未被 OCR 识别（如单字选项）：按序号点击兜底
+                    idx = DIALOG_OPTION_INDEX_MAP.get(dtxt)
+                    if idx and _click_dialog_option_by_index(win, items, dtxt, idx):
                         handled = True
                         break
             if not handled and _dialog_text_present(items, DIALOG_LOSE_TEXT):

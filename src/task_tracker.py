@@ -71,38 +71,45 @@ def _longest_run_center(cols):
     return best_start + best_len // 2
 
 
-def green_text_center(img_np, rect):
+def green_text_center(img_np, rect, prefer_underline=True):
     """定位文字区域内绿色像素的点击中心。
 
     OCR 可能把描述文字与绿色链接合并成一行（绿字只占行的一部分，
     甚至整行描述都与链接同色），此时按整行绿色像素中心点击会点错。
-    优先点击链接下划线：文字区域底部 30% 内检测实线亮绿行（单行亮绿
-    像素达到行宽 15% 以上），点击该行上方 2px（下划线是链接专属，
-    且纵坐标落在文字与下划线之间，不会点到文字下方）；
-    无实线行时依次退回亮绿像素、任意绿色像素（取最长连续列段，
-    纵坐标取区域中心），再退回区域中心。
+
+    prefer_underline=True（任务追踪链接）：优先点击链接下划线——底部 30%
+    内实线亮绿行（单行亮绿像素达到行宽 15% 以上），点击该行上方 2px
+    （下划线是链接专属，不点到文字下方）。
+    prefer_underline=False（对话框选项）：不检测下划线——按亮绿/绿色像素
+    的纵向中心与最长连续列段定位，落在选项文字本体上（OCR 框的余白或
+    邻行文字不干扰）。
+    依次退回亮绿像素、任意绿色像素，再退回区域中心。
     """
     region = img_np[rect[1]:rect[3], rect[0]:rect[2]]
     if region.size == 0:
         return (rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2
     h, w = region.shape[:2]
-    # 下划线检测：底部 30% 内的实线亮绿行（取最下方一行）
-    under_top = int(h * 0.7)
-    under = region[under_top:]
-    mask = _green_mask(under, GREEN_BRIGHT_MIN)
-    solid_rows = np.where(mask.sum(axis=1) >= max(6, w * 0.15))[0]
-    if solid_rows.size:
-        y_row = solid_rows[-1]
-        cols = np.where(mask[y_row])[0]
-        cx = rect[0] + _longest_run_center(cols)
-        cy = rect[1] + under_top + y_row - 2  # 下划线上方 2px，容 ±2px 点击抖动
-        return cx, cy
-    # 无下划线：亮绿/绿色像素最长连续列段，纵坐标取区域中心（不点文字下方）
+    if prefer_underline:
+        # 下划线检测：底部 30% 内的实线亮绿行（取最下方一行）
+        under_top = int(h * 0.7)
+        under = region[under_top:]
+        mask = _green_mask(under, GREEN_BRIGHT_MIN)
+        solid_rows = np.where(mask.sum(axis=1) >= max(6, w * 0.15))[0]
+        if solid_rows.size:
+            y_row = solid_rows[-1]
+            cols = np.where(mask[y_row])[0]
+            cx = rect[0] + _longest_run_center(cols)
+            cy = rect[1] + under_top + y_row - 2  # 下划线上方 2px，容 ±2px 点击抖动
+            return cx, cy
+    # 亮绿/绿色像素：最长连续列段横向中心、绿色像素纵向中心（落在文字本体上）
     for min_g in (GREEN_BRIGHT_MIN, GREEN_MIN_G):
-        cols = np.where(_green_mask(region, min_g).any(axis=0))[0]
+        mask = _green_mask(region, min_g)
+        cols = np.where(mask.any(axis=0))[0]
+        rows = np.where(mask.any(axis=1))[0]
         if cols.size:
-            return (rect[0] + _longest_run_center(cols),
-                    (rect[1] + rect[3]) // 2)
+            cx = rect[0] + _longest_run_center(cols)
+            cy = rect[1] + (rows.min() + rows.max()) // 2
+            return cx, cy
     return (rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2
 
 
@@ -199,12 +206,15 @@ def get_task(win, title):
 
 
 def task_signature(task):
-    """任务信息签名（标题 + 拼接内容），用于检测任务信息是否变化。
+    """任务信息签名（标题 + 首行内容），用于检测任务信息是否变化。
 
-    比较前剔除标点与空白，避免 OCR 对句读的有无造成假变化
-    （如「…玄石」与「…玄石。」被误判为信息变化导致重复点击）。
+    只取首行内容：任务目标文案恒在首行，尾部行（剩余时间倒计时、
+    偶发合并的下一任务行等 OCR 边界噪声）不参与比较，避免任务
+    未变化时因尾部行抖动导致重复点击。
+    比较前剔除标点与空白（如「…玄石」与「…玄石。」视为相同）。
     """
-    return re.sub(r"[^\w]", "", f"{task['title']}|{task['text']}")
+    first = task["lines"][0][0] if task["lines"] else ""
+    return re.sub(r"[^\w]", "", f"{task['title']}|{first}")
 
 
 def track_task(win, title, text=None, green_index=0, retries=4, retry_interval=1.5):
