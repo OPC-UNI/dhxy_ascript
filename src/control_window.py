@@ -1,8 +1,13 @@
-"""自定义网页控制窗口：页面提供启动/重置/关闭三个功能控制自动化任务。
+"""自定义网页控制窗口：页面提供启动/重置/关闭三个控制按钮自动化任务。
 
 ControlWindow 基于 WebWindow（pywebview），页面为 res/ui/control_window.html。
 必须在 app.show()（webview.start）之前调用 prepare() 创建窗口，
 与浮动控制面板共用同一次 GUI 事件循环。
+
+页面结构：
+- 顶部：启动/重置/关闭三个按钮 + 任务状态显示
+- Tab 栏：任务设置（任务模式、任务次数）/ 通用设置（摄妖香、血蓝阈值、
+  人物与召唤兽默认战斗动作）/ 高级设置（暂无）
 
 功能约定：
 - 启动：对当前选中的任务模式开始执行任务
@@ -51,6 +56,35 @@ def save_use_sheyaoxiang(on):
     return {"status": "success"}
 
 
+# ---- 任务次数设置（每个任务模式独立，步进 1，下限 0；部分模式有上限） ----
+TASK_COUNT_DEFAULTS = {"五环": 2, "客栈": 20, "修罗": 90, "五倍": 100, "玄枢轶闻": 5, "名望": 5}
+# 上限约束：未列出的模式（修罗、五倍）无上限
+TASK_COUNT_MAX = {"五环": 2, "客栈": 20, "玄枢轶闻": 5, "名望": 5}
+_COUNT_KEYS = {mode: f"task_count_{mode}" for mode in TASK_MODES}
+
+
+def _clamp_count(mode, value):
+    """按模式夹取次数：下限 0，上限取 TASK_COUNT_MAX（未限定则无上限）。"""
+    value = max(0, int(value))
+    return min(value, TASK_COUNT_MAX[mode]) if mode in TASK_COUNT_MAX else value
+
+
+def load_task_counts():
+    """读取各任务模式的执行次数（首次使用各自默认值，并夹在上下限内）。"""
+    return {mode: _clamp_count(mode, KeyValue.get(_COUNT_KEYS[mode],
+                                                  TASK_COUNT_DEFAULTS.get(mode, 0)))
+            for mode in TASK_MODES}
+
+
+def save_task_count(mode, value):
+    """保存某任务模式的执行次数（按模式上下限夹取），返回操作结果。"""
+    if mode not in _COUNT_KEYS:
+        return {"status": "error", "msg": "INVALID_MODE"}
+    value = _clamp_count(mode, value)
+    KeyValue.save(_COUNT_KEYS[mode], value)
+    return {"status": "success", "count": value}
+
+
 # ---- 血蓝条阈值设置（各条独立，步进 5%，默认 40%） ----
 _THRESHOLD_KEYS = {
     "char_hp": "threshold_char_hp",
@@ -76,6 +110,37 @@ def save_threshold(name, value):
         return {"status": "error", "msg": "OUT_OF_RANGE"}
     KeyValue.save(_THRESHOLD_KEYS[name], value)
     return {"status": "success", "threshold": value}
+
+
+# ---- 战斗设置（人物/召唤兽默认战斗动作，UI 单选项，KeyValue 持久化） ----
+# 人物：技能面板 3 行 × 5 列共 15 格 + 攻击/防御/捕捉/逃跑/无
+CHAR_BATTLE_ACTIONS = ([f"技能{r}-{c}" for r in range(1, 4) for c in range(1, 6)]
+                       + ["攻击", "防御", "捕捉", "逃跑", "无"])
+# 召唤兽：技能 5 格 + 攻击/防御/逃跑/无（召唤兽不能捕捉）
+BEAST_BATTLE_ACTIONS = [f"技能{i}" for i in range(1, 6)] + ["攻击", "防御", "逃跑", "无"]
+_BATTLE_KEYS = {"char": "battle_char_action", "beast": "battle_beast_action"}
+_DEFAULT_BATTLE = {"char": "攻击", "beast": "攻击"}
+
+
+def load_battle_actions():
+    """读取人物与召唤兽的默认战斗动作（首次默认攻击）。"""
+    result = {}
+    for name, key in _BATTLE_KEYS.items():
+        options = CHAR_BATTLE_ACTIONS if name == "char" else BEAST_BATTLE_ACTIONS
+        value = KeyValue.get(key, _DEFAULT_BATTLE[name])
+        result[name] = value if value in options else _DEFAULT_BATTLE[name]
+    return result
+
+
+def save_battle_action(target, value):
+    """保存人物/召唤兽的默认战斗动作，返回操作结果。"""
+    if target not in _BATTLE_KEYS:
+        return {"status": "error", "msg": "INVALID_TARGET"}
+    options = CHAR_BATTLE_ACTIONS if target == "char" else BEAST_BATTLE_ACTIONS
+    if value not in options:
+        return {"status": "error", "msg": "INVALID_VALUE"}
+    KeyValue.save(_BATTLE_KEYS[target], value)
+    return {"status": "success"}
 
 
 class _ApiBridge:
@@ -109,17 +174,25 @@ class ControlWindow(WebWindow):
         self._visible = True  # 启动时直接可见
         self.expose(self.get_init_data)
         self.expose(self.save_task_mode)
+        self.expose(self.save_task_count)
         self.expose(self.save_use_sheyaoxiang)
         self.expose(self.save_threshold)
+        self.expose(self.save_battle_action)
         self.expose(self.start_task)
         self.expose(self.reset_task)
         self.expose(self.close_window)
 
     def get_init_data(self):
-        """页面初始化数据：任务模式、摄妖香开关与各条阈值。"""
+        """页面初始化数据：任务模式、任务次数、摄妖香开关、各条阈值与战斗动作。"""
         return {"mode": load_task_mode(),
+                "task_counts": load_task_counts(),
                 "use_sheyaoxiang": load_use_sheyaoxiang(),
-                "thresholds": load_thresholds()}
+                "thresholds": load_thresholds(),
+                "battle": load_battle_actions()}
+
+    def save_battle_action(self, target, value):
+        """战斗设置变更：保存人物/召唤兽默认战斗动作。"""
+        return save_battle_action(target, value)
 
     def save_threshold(self, name, value):
         """阈值设置变更：保存某条血蓝阈值。"""
@@ -128,6 +201,10 @@ class ControlWindow(WebWindow):
     def save_task_mode(self, mode):
         """单选项变更：保存任务模式。"""
         return save_task_mode(mode)
+
+    def save_task_count(self, mode, value):
+        """任务次数变更：保存某模式的执行次数。"""
+        return save_task_count(mode, value)
 
     def save_use_sheyaoxiang(self, on):
         """摄妖香开关变更：保存开关状态。"""

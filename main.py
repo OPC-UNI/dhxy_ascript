@@ -8,6 +8,7 @@
 - src/app_utils.py       通用工具（日志、toast）
 - src/game.py            游戏窗口操作（窗口查找、登录 Tab 监听）
 - src/bag.py             背包操作（打开背包、物品检测与点击）
+- src/battle.py          战斗自动化（战斗监控与人物/召唤兽操作）
 - src/control_window.py  网页控制窗口（启动/重置/关闭、任务模式选择）
 - src/polyfill.py        pywebview 6 桥接兼容补丁
 """
@@ -24,10 +25,12 @@ from ascript.windows.ui import LicenseWindow  # 安全验证组件
 from ascript.windows.ui import FloatScriptWindow  # 脚本控制台组件
 from src.polyfill import patch_js_bridge  # pywebview 6 桥接兼容补丁
 from src.control_window import (ControlWindow, load_task_mode,
-                                load_use_sheyaoxiang)  # 自定义网页控制窗口（开始/停止按钮）
+                                load_use_sheyaoxiang,
+                                load_battle_actions)  # 自定义网页控制窗口（开始/停止按钮）
 from src.app_utils import log, toast  # 日志与系统通知
 from src import game  # 游戏窗口操作
 from src import bag  # 背包操作
+from src import battle  # 战斗自动化（战斗监控与人物/召唤兽操作）
 from src import xuanshu  # 玄枢轶闻任务自动化
 from src import status_bars  # 人物/召唤兽血蓝条检测
 
@@ -109,8 +112,10 @@ def task_start():
     log("业务进程已建立，开始执行自动化任务...", "SYS")
     mode = load_task_mode()
     use_sheyaoxiang = load_use_sheyaoxiang()
+    battle_actions = load_battle_actions()
     log(f"[模式] 当前任务模式: {mode}", "SYS")
     log(f"[配置] 使用摄妖香: {'开' if use_sheyaoxiang else '关'}", "SYS")
+    log(f"[配置] 人物战斗动作: {battle_actions['char']}，召唤兽战斗动作: {battle_actions['beast']}", "SYS")
 
     # uiautomation 需要线程内 COM 初始化：任务运行在子进程的工作线程中，
     # 必须显式初始化；保持引用直至任务结束（析构时自动 CoUninitialize）
@@ -171,9 +176,20 @@ def task_start():
             else:
                 log(f"[摄妖香] {info}", "WARN")
 
-        # 4. 玄枢轶闻检查（该模式且已登录时执行一次）
+        # 4. 战斗监控线程（已登录时启动，任何模式下自动执行人物/召唤兽战斗操作）
+        if logged_in:
+            battle_thread = threading.Thread(target=battle.watch_loop,
+                                             args=(main_win,),
+                                             daemon=True, name="battle-watch")
+            battle_thread.start()
+            log("[战斗] 战斗监控线程已启动", "SYS")
+
+        # 5. 玄枢轶闻主循环（该模式且已登录时执行：跟踪完成 → 继续领取 → 往复）
+        #    循环正常结束（次数上限/每日次数已满）时任务进程退出，面板自动显示已停止
         if logged_in and mode == "玄枢轶闻":
-            xuanshu.run_cycle(main_win)
+            info = xuanshu.run_loop(main_win)
+            log(f"[玄枢轶闻] 任务循环结束：{info}", "SYS")
+            return
 
         # 5. 血蓝条检测（已登录时执行一次）
         if logged_in:

@@ -9,18 +9,44 @@
             overflow: hidden; background-color: #1a1a1a;
             display: flex; flex-direction: column;
         }
-        .header {
-            width: 100%; height: 40px; min-height: 40px; flex-shrink: 0;
-            display: flex; align-items: center; padding: 0 12px;
+        /* ---- 顶部：三个控制按钮 + 任务状态 ---- */
+        .top-bar {
+            height: 48px; min-height: 48px; flex-shrink: 0;
+            display: flex; align-items: center; gap: 8px; padding: 0 12px;
             background-color: #222; border-bottom: 1px solid #333;
         }
-        .title { color: #eeeeee; font-size: 13px; font-family: "微软雅黑"; font-weight: bold; }
-        .body {
-            flex: 1; display: flex; flex-direction: column;
-            align-items: center; justify-content: center; gap: 18px;
+        .btn {
+            width: 64px; height: 30px; border-radius: 6px; border: 1px solid #444;
+            font-size: 13px; font-family: "微软雅黑"; cursor: pointer;
+            background: #2a2a2a; color: #eee; transition: all 0.15s;
         }
-        #status { color: #888; font-size: 12px; font-family: 'Consolas', '微软雅黑', monospace; }
+        .btn:hover:not(:disabled) { filter: brightness(1.25); }
+        .btn:disabled { opacity: 0.35; cursor: not-allowed; }
+        #btn-start { border-color: #00ff88; color: #00ff88; }
+        #btn-reset { border-color: #ffb300; color: #ffb300; }
+        #btn-close { border-color: #666; color: #999; }
+        #status { margin-left: auto; color: #888; font-size: 12px; font-family: 'Consolas', '微软雅黑', monospace; }
         #status.running { color: #00ff88; }
+        /* ---- Tab 栏 ---- */
+        .tab-bar {
+            height: 40px; min-height: 40px; flex-shrink: 0;
+            display: flex; background-color: #222; border-bottom: 1px solid #333;
+        }
+        .tab {
+            flex: 1; display: flex; align-items: center; justify-content: center;
+            color: #888; font-size: 13px; font-family: "微软雅黑";
+            cursor: pointer; user-select: none; border-bottom: 2px solid transparent;
+            transition: color 0.15s;
+        }
+        .tab:hover { color: #ccc; }
+        .tab.active { color: #00ff88; border-bottom-color: #00ff88; }
+        /* ---- 内容区 ---- */
+        .body { flex: 1; overflow-y: auto; }
+        .tab-panel {
+            display: none; flex-direction: column; align-items: center; justify-content: center;
+            gap: 18px; padding: 18px 12px; min-height: 100%;
+        }
+        .tab-panel.active { display: flex; }
         .section { display: flex; flex-direction: column; align-items: center; gap: 8px; }
         .section-title { color: #888; font-size: 12px; font-family: "微软雅黑"; }
         .radio-grid {
@@ -29,6 +55,8 @@
         }
         .radio-grid label { display: flex; align-items: center; gap: 5px; cursor: pointer; user-select: none; }
         .radio-grid input[type="radio"] { accent-color: #00ff88; cursor: pointer; }
+        /* 战斗设置：5 列小字号，容纳 技能1-1 等标签 */
+        .battle-grid { grid-template-columns: repeat(5, 1fr); gap: 6px 4px; font-size: 12px; }
         .switch-row { display: flex; align-items: center; gap: 8px; color: #ccc; font-size: 13px; font-family: "微软雅黑"; cursor: pointer; user-select: none; }
         .switch-row input { display: none; }
         .switch-track {
@@ -42,9 +70,6 @@
         }
         .switch-row input:checked + .switch-track { background: #00b36b; }
         .switch-row input:checked + .switch-track::after { left: 22px; }
-        .threshold-grid { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-family: "微软雅黑"; color: #ccc; }
-        .th-row { display: flex; align-items: center; gap: 10px; }
-        .th-row .th-label { width: 64px; text-align: right; }
         .th-btn {
             width: 22px; height: 22px; border-radius: 4px; border: 1px solid #444;
             background: #2a2a2a; color: #ccc; font-size: 14px; line-height: 1;
@@ -52,71 +77,157 @@
         }
         .th-btn:hover { background: #3a3a3a; color: #00ff88; }
         .th-val { width: 40px; text-align: center; color: #00ff88; font-family: 'Consolas', monospace; }
-        .btn-row { display: flex; gap: 10px; }
-        .btn {
-            width: 96px; height: 46px; border-radius: 8px; border: 1px solid #444;
-            font-size: 16px; font-family: "微软雅黑"; cursor: pointer;
-            background: #2a2a2a; color: #eee; transition: all 0.15s;
+        /* ---- 任务次数：小卡片式 ---- */
+        .count-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; width: 100%; }
+        /* ---- 血量蓝量：小卡片式（2 列） ---- */
+        .th-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; width: 100%; }
+        .count-card {
+            display: flex; flex-direction: column; align-items: center; gap: 6px;
+            background: #222; border: 1px solid #333; border-radius: 8px; padding: 8px 4px;
         }
-        .btn:hover:not(:disabled) { filter: brightness(1.25); }
-        .btn:disabled { opacity: 0.35; cursor: not-allowed; }
-        #btn-start { border-color: #00ff88; color: #00ff88; }
-        #btn-reset { border-color: #ffb300; color: #ffb300; }
-        #btn-close { border-color: #666; color: #999; }
+        .cc-name { color: #ccc; font-size: 13px; font-family: "微软雅黑"; }
+        .cc-ctrl { display: flex; align-items: center; gap: 6px; }
+        .count-card .th-val { width: 28px; }
+        .empty-hint { color: #555; font-size: 12px; font-family: "微软雅黑"; }
     </style>
 </head>
 <body>
+    <div class="top-bar">
+        <button id="btn-start" class="btn" onclick="start()">启 动</button>
+        <button id="btn-reset" class="btn" onclick="reset()">重 置</button>
+        <button id="btn-close" class="btn" onclick="closeWin()">关 闭</button>
+        <span id="status">已停止</span>
+    </div>
+    <div class="tab-bar">
+        <div class="tab active" data-tab="task">任务设置</div>
+        <div class="tab" data-tab="general">通用设置</div>
+        <div class="tab" data-tab="advanced">高级设置</div>
+    </div>
     <div class="body">
-        <div id="status">任务状态：已停止</div>
-
-        <div class="btn-row">
-            <button id="btn-start" class="btn" onclick="start()">启 动</button>
-            <button id="btn-reset" class="btn" onclick="reset()">重 置</button>
-            <button id="btn-close" class="btn" onclick="closeWin()">关 闭</button>
-        </div>
-        <div class="section">
-            <div class="radio-grid" id="mode-grid">
-                <label><input type="radio" name="task-mode" value="五环">五环</label>
-                <label><input type="radio" name="task-mode" value="客栈">客栈</label>
-                <label><input type="radio" name="task-mode" value="修罗">修罗</label>
-                <label><input type="radio" name="task-mode" value="五倍">五倍</label>
-                <label><input type="radio" name="task-mode" value="玄枢轶闻">玄枢轶闻</label>
-                <label><input type="radio" name="task-mode" value="名望">名望</label>
-            </div>
-        </div>
-        <label class="switch-row">
-            <input type="checkbox" id="use-syx">
-            <span class="switch-track"></span>
-            <span>使用摄妖香</span>
-        </label>
-        <div class="section">
-            <div class="section-title">阈值设置（步进5%）</div>
-            <div class="threshold-grid">
-                <div class="th-row">
-                    <span class="th-label">人物红条</span>
-                    <button class="th-btn" onclick="th('char_hp', -5)">−</button>
-                    <span class="th-val" id="th-char_hp">40%</span>
-                    <button class="th-btn" onclick="th('char_hp', 5)">＋</button>
-                </div>
-                <div class="th-row">
-                    <span class="th-label">人物蓝条</span>
-                    <button class="th-btn" onclick="th('char_mp', -5)">−</button>
-                    <span class="th-val" id="th-char_mp">40%</span>
-                    <button class="th-btn" onclick="th('char_mp', 5)">＋</button>
-                </div>
-                <div class="th-row">
-                    <span class="th-label">召唤兽红条</span>
-                    <button class="th-btn" onclick="th('beast_hp', -5)">−</button>
-                    <span class="th-val" id="th-beast_hp">40%</span>
-                    <button class="th-btn" onclick="th('beast_hp', 5)">＋</button>
-                </div>
-                <div class="th-row">
-                    <span class="th-label">召唤兽蓝条</span>
-                    <button class="th-btn" onclick="th('beast_mp', -5)">−</button>
-                    <span class="th-val" id="th-beast_mp">40%</span>
-                    <button class="th-btn" onclick="th('beast_mp', 5)">＋</button>
+        <!-- 任务设置：任务模式单选 + 各模式任务次数 -->
+        <div class="tab-panel active" id="panel-task">
+            <div class="section">
+                <div class="section-title">任务模式</div>
+                <div class="radio-grid" id="mode-grid">
+                    <label><input type="radio" name="task-mode" value="五环">五环</label>
+                    <label><input type="radio" name="task-mode" value="客栈">客栈</label>
+                    <label><input type="radio" name="task-mode" value="修罗">修罗</label>
+                    <label><input type="radio" name="task-mode" value="五倍">五倍</label>
+                    <label><input type="radio" name="task-mode" value="玄枢轶闻">玄枢轶闻</label>
+                    <label><input type="radio" name="task-mode" value="名望">名望</label>
                 </div>
             </div>
+            <div class="section">
+                <div class="section-title">任务次数</div>
+                <div class="count-grid">
+                    <div class="count-card">
+                        <div class="cc-name">五环</div>
+                        <div class="cc-ctrl">
+                            <button class="th-btn" onclick="count('五环', -1)">−</button>
+                            <span class="th-val" id="cnt-五环">2</span>
+                            <button class="th-btn" onclick="count('五环', 1)">＋</button>
+                        </div>
+                    </div>
+                    <div class="count-card">
+                        <div class="cc-name">客栈</div>
+                        <div class="cc-ctrl">
+                            <button class="th-btn" onclick="count('客栈', -1)">−</button>
+                            <span class="th-val" id="cnt-客栈">20</span>
+                            <button class="th-btn" onclick="count('客栈', 1)">＋</button>
+                        </div>
+                    </div>
+                    <div class="count-card">
+                        <div class="cc-name">修罗</div>
+                        <div class="cc-ctrl">
+                            <button class="th-btn" onclick="count('修罗', -1)">−</button>
+                            <span class="th-val" id="cnt-修罗">90</span>
+                            <button class="th-btn" onclick="count('修罗', 1)">＋</button>
+                        </div>
+                    </div>
+                    <div class="count-card">
+                        <div class="cc-name">五倍</div>
+                        <div class="cc-ctrl">
+                            <button class="th-btn" onclick="count('五倍', -1)">−</button>
+                            <span class="th-val" id="cnt-五倍">100</span>
+                            <button class="th-btn" onclick="count('五倍', 1)">＋</button>
+                        </div>
+                    </div>
+                    <div class="count-card">
+                        <div class="cc-name">玄枢轶闻</div>
+                        <div class="cc-ctrl">
+                            <button class="th-btn" onclick="count('玄枢轶闻', -1)">−</button>
+                            <span class="th-val" id="cnt-玄枢轶闻">5</span>
+                            <button class="th-btn" onclick="count('玄枢轶闻', 1)">＋</button>
+                        </div>
+                    </div>
+                    <div class="count-card">
+                        <div class="cc-name">名望</div>
+                        <div class="cc-ctrl">
+                            <button class="th-btn" onclick="count('名望', -1)">−</button>
+                            <span class="th-val" id="cnt-名望">5</span>
+                            <button class="th-btn" onclick="count('名望', 1)">＋</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <!-- 通用设置：摄妖香开关 + 血量蓝量阈值 + 人物/召唤兽战斗动作 -->
+        <div class="tab-panel" id="panel-general">
+            <label class="switch-row">
+                <input type="checkbox" id="use-syx">
+                <span class="switch-track"></span>
+                <span>使用摄妖香</span>
+            </label>
+            <div class="section">
+                <div class="section-title">血量蓝量设置（步进5%）</div>
+                <div class="th-grid">
+                    <div class="count-card">
+                        <div class="cc-name">人物红条</div>
+                        <div class="cc-ctrl">
+                            <button class="th-btn" onclick="th('char_hp', -5)">−</button>
+                            <span class="th-val" id="th-char_hp">40%</span>
+                            <button class="th-btn" onclick="th('char_hp', 5)">＋</button>
+                        </div>
+                    </div>
+                    <div class="count-card">
+                        <div class="cc-name">人物蓝条</div>
+                        <div class="cc-ctrl">
+                            <button class="th-btn" onclick="th('char_mp', -5)">−</button>
+                            <span class="th-val" id="th-char_mp">40%</span>
+                            <button class="th-btn" onclick="th('char_mp', 5)">＋</button>
+                        </div>
+                    </div>
+                    <div class="count-card">
+                        <div class="cc-name">召唤兽红条</div>
+                        <div class="cc-ctrl">
+                            <button class="th-btn" onclick="th('beast_hp', -5)">−</button>
+                            <span class="th-val" id="th-beast_hp">40%</span>
+                            <button class="th-btn" onclick="th('beast_hp', 5)">＋</button>
+                        </div>
+                    </div>
+                    <div class="count-card">
+                        <div class="cc-name">召唤兽蓝条</div>
+                        <div class="cc-ctrl">
+                            <button class="th-btn" onclick="th('beast_mp', -5)">−</button>
+                            <span class="th-val" id="th-beast_mp">40%</span>
+                            <button class="th-btn" onclick="th('beast_mp', 5)">＋</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <!-- 战斗动作：人物与召唤兽（单选，由 JS 动态生成） -->
+            <div class="section">
+                <div class="section-title">人物设置</div>
+                <div class="radio-grid battle-grid" id="battle-char-grid"></div>
+            </div>
+            <div class="section">
+                <div class="section-title">召唤兽设置</div>
+                <div class="radio-grid battle-grid" id="battle-beast-grid"></div>
+            </div>
+        </div>
+        <!-- 高级设置：暂无设置项 -->
+        <div class="tab-panel" id="panel-advanced">
+            <div class="empty-hint">暂无高级设置</div>
         </div>
     </div>
 
@@ -127,11 +238,48 @@
         const modeRadios = document.querySelectorAll('input[name="task-mode"]');
         const useSyx = document.getElementById('use-syx');
 
+        // 战斗设置选项：人物 3 行 × 5 列技能 + 攻击/防御/捕捉/逃跑/无；召唤兽 5 技能 + 攻击/防御/逃跑/无
+        const CHAR_BATTLE = [];
+        for (let r = 1; r <= 3; r++) for (let c = 1; c <= 5; c++) CHAR_BATTLE.push('技能' + r + '-' + c);
+        CHAR_BATTLE.push('攻击', '防御', '捕捉', '逃跑', '无');
+        const BEAST_BATTLE = [];
+        for (let i = 1; i <= 5; i++) BEAST_BATTLE.push('技能' + i);
+        BEAST_BATTLE.push('攻击', '防御', '逃跑', '无');
+
+        // 动态生成人物/召唤兽战斗动作单选网格，变更立即保存
+        function buildBattleGrid(container, name, options) {
+            options.forEach(opt => {
+                const label = document.createElement('label');
+                const input = document.createElement('input');
+                input.type = 'radio';
+                input.name = 'battle-' + name;
+                input.value = opt;
+                input.addEventListener('change', () => {
+                    if (input.checked) callPython('save_battle_action', name, opt);
+                });
+                label.appendChild(input);
+                label.appendChild(document.createTextNode(opt));
+                container.appendChild(label);
+            });
+            return container;
+        }
+        const charBattleGrid = buildBattleGrid(document.getElementById('battle-char-grid'), 'char', CHAR_BATTLE);
+        const beastBattleGrid = buildBattleGrid(document.getElementById('battle-beast-grid'), 'beast', BEAST_BATTLE);
+
         function update() {
-            statusEl.innerText = running ? '任务状态：运行中' : '任务状态：已停止';
+            statusEl.innerText = running ? '运行中' : '已停止';
             statusEl.className = running ? 'running' : '';
             btnStart.disabled = running;  // 运行中必须先重置再启动
         }
+
+        // Tab 切换（默认选中任务设置）
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t === tab));
+                document.querySelectorAll('.tab-panel').forEach(p =>
+                    p.classList.toggle('active', p.id === 'panel-' + tab.dataset.tab));
+            });
+        });
 
         // 页面初始化：恢复上次选择的任务模式、摄妖香开关与各条阈值
         window.addEventListener('onPythonReady', async () => {
@@ -148,6 +296,18 @@
                         const el = document.getElementById('th-' + key);
                         if (el && ths[key] !== undefined) el.innerText = ths[key] + '%';
                     }
+                    const counts = info.task_counts || {};
+                    for (const mode of ['五环', '客栈', '修罗', '五倍', '玄枢轶闻', '名望']) {
+                        const el = document.getElementById('cnt-' + mode);
+                        if (el && counts[mode] !== undefined) el.innerText = counts[mode];
+                    }
+                    const battle = info.battle || {};
+                    for (const [name, grid] of [['char', charBattleGrid], ['beast', beastBattleGrid]]) {
+                        if (battle[name]) {
+                            const radio = grid.querySelector('input[value="' + battle[name] + '"]');
+                            if (radio) radio.checked = true;
+                        }
+                    }
                 }
             } catch (e) {}
         });
@@ -159,6 +319,17 @@
             const val = Math.min(95, Math.max(5, cur + delta));
             const r = await callPython('save_threshold', key, val);
             if (r && r.status === 'success') el.innerText = r.threshold + '%';
+        }
+
+        // 任务次数步进：±1，下限 0，部分模式有上限（五环2/客栈20/玄枢轶闻5/名望5），变更立即保存
+        const COUNT_MAX = {'五环': 2, '客栈': 20, '玄枢轶闻': 5, '名望': 5};
+        async function count(mode, delta) {
+            const el = document.getElementById('cnt-' + mode);
+            const cur = parseInt(el.innerText);
+            const val = Math.min(COUNT_MAX[mode] || Infinity, Math.max(0, cur + delta));
+            if (val === cur) return;  // 已到上下限，不发请求
+            const r = await callPython('save_task_count', mode, val);
+            if (r && r.status === 'success') el.innerText = r.count;
         }
 
         // 单选变更：立即保存选择
