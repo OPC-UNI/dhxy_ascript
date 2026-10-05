@@ -15,8 +15,9 @@
      → 点给与按钮完成；未找到则切换背包储物格再找，
      全部切换后仍未找到即终止任务）
      → 继续点击绿字 → 任务从追踪消失即完成一次
-3. 完成后回到云游大师领取下一次；达到次数上限或领取时出现活力值不足
-   对话框（点击「那可不行，我一会再来。」）即结束任务进程
+3. 完成后回到云游大师领取下一次；达到次数上限、领取时出现活力值不足
+   对话框（点击「那可不行，我一会再来。」）或跟踪期间出现
+   「恭喜你完成了今天五环任务」对话框（今日五环全部完成）即结束任务进程
 """
 import re
 import time
@@ -34,6 +35,10 @@ from .xuanshu import (follow_task, _click_dialog_green_option,
 
 # 任务追踪面板中的任务标题
 WUHUAN_TITLE = "五环"
+# 五环子目标关键词：追踪链接行格式「去找{地图}(x, y){子目标}」（实测
+# 「去找大唐境内(223, 21)武痴[1/5]」、「去找大唐边境(193, 144)惯骗[3/5]」），
+# 链接行内容采集失败时按关键词兜底点击
+WUHUAN_SUB_KEYWORDS = ["替身", "武痴", "惯骗","盗号贼", "食婴鬼"]
 
 # ---- 长安与服装店（用户实测坐标/模板） ----
 # 长安城世界地图图标见 map.py 的 WORLD_MAP_CHANGAN_ICON（城市图标统一在 map.py 维护）
@@ -62,6 +67,9 @@ GIVE_ICON = "give.png"                              # 给与面板标志（27.pn
 GIVE_BTN_ICON = "give_btn.png"                      # 给与按钮（28.png，OCR 读作「给子」）
 XIANGLIAN_ICON = "fuzhuangdian_xianglian.png"       # 项链（与商店/给与面板行格式相同，实测给与面板匹配 1.0）
 MISSING_EQUIPMENT_INFO = "缺少五环装备"              # 终止原因描述
+# ---- 完成标记 ----
+COMPLETE_DIALOG_TEXT = "恭喜你完成了今天五环任务"    # 今日五环全部完成的对话框文案
+COMPLETE_INFO = "今日五环任务已完成"                 # 结束状态描述
 
 # ---- 时序参数（秒） ----
 CLOTH_SHOP_ARRIVE_TIMEOUT = 90  # 寻路到布店门口的超时
@@ -74,6 +82,10 @@ GIVE_PANEL_TIMEOUT = 10         # 等待给与面板出现的超时
 
 class MissingEquipment(Exception):
     """给与面板中未找到五环装备（切换全部储物格后）。"""
+
+
+class DailyComplete(Exception):
+    """检测到今日五环任务全部完成的恭喜对话框。"""
 
 
 def _close_scene_panels(win):
@@ -323,12 +335,18 @@ def _prepare(win):
 def _handle_submit_dialog(win, items, img_np):
     """处理五环提交装备流程（follow_task 的附加对话处理回调）。
 
+    完成标记优先：对话「恭喜你完成了今天五环任务」出现 → 抛 DailyComplete
+    结束任务循环（今日五环全部完成）。
     阶段一：对话「我在这里练级…」出现 → 点绿色选项「刚好我这里有，送你啦」；
     阶段二：给与面板打开 → 检索项链（含储物格切换）→ 点击选中 → 点给与按钮完成。
     给与面板打开时优先走阶段二（跨轮询续接）；
     全部储物格切换后仍未找到 → 抛 MissingEquipment 终止任务。
     返回是否已处理。
     """
+    # 完成标记优先：每日五环全部完成出现恭喜对话框 → 抛异常结束任务循环
+    if _dialog_text_present(items, COMPLETE_DIALOG_TEXT):
+        log(f"[五环] 检测到「{COMPLETE_DIALOG_TEXT}」，今日五环任务已完成", "SYS")
+        raise DailyComplete()
     # 阶段二优先：给与面板已打开（对话已处理过），继续完成给与
     if game_map.find_template(win, GIVE_ICON) is not None:
         return _do_give(win)
@@ -363,6 +381,25 @@ def _do_give(win):
     return True
 
 
+def _wuhuan_progress_key(items, img_np):
+    """五环进度键：追踪面板中子目标关键词行及其亮绿状态。
+
+    子目标推进时链接行文案变化（如「…武痴」→「…盗号贼」）；若文字
+    签名检测不到（子目标行被判定为标题行、未并入任务内容），改用
+    面板关键词行集合检测推进：行消失（关键词集合变化）或行色变暗
+    （亮绿状态变化）均视为推进。
+    """
+    found = []
+    for txt, rect, score in items:
+        if score >= 0.6 and rect[0] < task_tracker.PANEL_MAX_X:
+            for kw in WUHUAN_SUB_KEYWORDS:
+                if kw in txt:
+                    bright = task_tracker.bright_green_ratio(img_np, rect) > 0
+                    found.append(f"{kw}{'+' if bright else ''}")
+                    break
+    return "|".join(sorted(set(found)))
+
+
 def run_loop(win, cycle_interval=3.0):
     """五环主循环：领取任务 → 跟踪到完成 → 回云游大师领取下一次。
 
@@ -370,6 +407,7 @@ def run_loop(win, cycle_interval=3.0):
     结束条件（满足其一即返回结束原因，任务随之停止）：
     1. 完成任务次数达到设置的次数上限（通用设置-任务次数）
     2. 领取时出现活力值不足对话框（点击「那可不行，我一会再来。」后结束）
+    3. 跟踪期间出现「恭喜你完成了今天五环任务」对话框（今日五环全部完成）
     返回结束原因描述。
     """
     max_rounds = load_task_counts().get(WUHUAN_TITLE, 0)
@@ -403,10 +441,16 @@ def run_loop(win, cycle_interval=3.0):
         # 提交装备步骤：由 follow_task 的附加对话处理回调接管
         try:
             ok, info = follow_task(win, WUHUAN_TITLE, prefix="五环",
-                                   extra_dialog_handler=_handle_submit_dialog)
+                                   extra_dialog_handler=_handle_submit_dialog,
+                                   fallback_keywords=WUHUAN_SUB_KEYWORDS,
+                                   progress_key=_wuhuan_progress_key)
         except MissingEquipment as e:
             log(f"[五环] {MISSING_EQUIPMENT_INFO}（{e}），结束任务", "SYS")
             return f"{MISSING_EQUIPMENT_INFO}，结束五环任务（已完成 {done} 次）"
+        except DailyComplete:
+            # 恭喜对话框出现在本轮完成时：计入本轮
+            log(f"[五环] {COMPLETE_INFO}（含本轮共 {done + 1} 次），结束任务", "SYS")
+            return f"{COMPLETE_INFO}，结束五环任务（已完成 {done + 1} 次）"
         if not ok:
             log(f"[五环] {info}", "WARN")
             time.sleep(cycle_interval)
