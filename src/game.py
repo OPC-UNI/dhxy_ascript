@@ -24,9 +24,14 @@ def find_main_window():
 
     游戏存在多个同进程可见窗口（如聊天窗口 xychildwindow），
     用类名 MAIN_WINDOW_CLASS 精确定位主窗口。游戏最小化时返回 None。
+    多个主窗口并存时（多开客户端），优先返回已登录的窗口（标题含 $Revision）。
     """
-    return Window.find(title_re=re.escape(GAME_TITLE), process_name="xy2",
-                       class_name=MAIN_WINDOW_CLASS)
+    wins = Window.find_all(title_re=re.escape(GAME_TITLE), process_name="xy2",
+                           class_name=MAIN_WINDOW_CLASS)
+    for w in wins:
+        if "$Revision" in w.title:
+            return w
+    return wins[0] if wins else None
 
 
 def read_login_tab(win):

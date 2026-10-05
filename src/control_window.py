@@ -51,6 +51,33 @@ def save_use_sheyaoxiang(on):
     return {"status": "success"}
 
 
+# ---- 血蓝条阈值设置（各条独立，步进 5%，默认 40%） ----
+_THRESHOLD_KEYS = {
+    "char_hp": "threshold_char_hp",
+    "char_mp": "threshold_char_mp",
+    "beast_hp": "threshold_beast_hp",
+    "beast_mp": "threshold_beast_mp",
+}
+DEFAULT_THRESHOLD = 40
+
+
+def load_thresholds():
+    """读取各条血蓝阈值（百分比，默认 40）。"""
+    return {name: KeyValue.get(key, DEFAULT_THRESHOLD)
+            for name, key in _THRESHOLD_KEYS.items()}
+
+
+def save_threshold(name, value):
+    """保存某条血蓝阈值，返回操作结果。"""
+    if name not in _THRESHOLD_KEYS:
+        return {"status": "error", "msg": "INVALID"}
+    value = int(value)
+    if value < 5 or value > 95:
+        return {"status": "error", "msg": "OUT_OF_RANGE"}
+    KeyValue.save(_THRESHOLD_KEYS[name], value)
+    return {"status": "success", "threshold": value}
+
+
 class _ApiBridge:
     """JS 与 Python 之间的 API 桥接，与 WebWindow 内部实现保持一致。"""
 
@@ -83,13 +110,20 @@ class ControlWindow(WebWindow):
         self.expose(self.get_init_data)
         self.expose(self.save_task_mode)
         self.expose(self.save_use_sheyaoxiang)
+        self.expose(self.save_threshold)
         self.expose(self.start_task)
         self.expose(self.reset_task)
         self.expose(self.close_window)
 
     def get_init_data(self):
-        """页面初始化数据：当前选中的任务模式与摄妖香开关状态。"""
-        return {"mode": load_task_mode(), "use_sheyaoxiang": load_use_sheyaoxiang()}
+        """页面初始化数据：任务模式、摄妖香开关与各条阈值。"""
+        return {"mode": load_task_mode(),
+                "use_sheyaoxiang": load_use_sheyaoxiang(),
+                "thresholds": load_thresholds()}
+
+    def save_threshold(self, name, value):
+        """阈值设置变更：保存某条血蓝阈值。"""
+        return save_threshold(name, value)
 
     def save_task_mode(self, mode):
         """单选项变更：保存任务模式。"""
@@ -145,7 +179,7 @@ class ControlWindow(WebWindow):
             except Exception:
                 pass
 
-    def prepare(self, width=360, height=360):
+    def prepare(self, width=360, height=500):
         """创建窗口但不启动事件循环（webview.start 由 app.show() 统一执行）。"""
         file_url = Path(self.abs_path).as_uri()
         win = webview.create_window(

@@ -25,10 +25,11 @@ from ascript.windows.ui import FloatScriptWindow  # 脚本控制台组件
 from src.polyfill import patch_js_bridge  # pywebview 6 桥接兼容补丁
 from src.control_window import (ControlWindow, load_task_mode,
                                 load_use_sheyaoxiang)  # 自定义网页控制窗口（开始/停止按钮）
-from src.app_utils import log, toast, human_click  # 日志、系统通知与拟人化点击
+from src.app_utils import log, toast  # 日志与系统通知
 from src import game  # 游戏窗口操作
 from src import bag  # 背包操作
 from src import xuanshu  # 玄枢轶闻任务自动化
+from src import status_bars  # 人物/召唤兽血蓝条检测
 
 
 class AppWindow(FloatScriptWindow):
@@ -137,68 +138,49 @@ def task_start():
         toast("AScript 窗口检查", msg)
         log(f"[检查] {msg}", "WARN")
 
-    # ---- 监听登录用户 Tab 变化（每秒轮询一次） ----
-    last_tab = None
-    bag_opened = False   # 背包是否已点击打开（每次任务启动重新执行一次）
-    bag_retry_at = 0.0   # 找背包失败后的下次重试时间
-    xuanshu_next_at = 0.0  # 玄枢轶闻检查的下一轮时间
-    while True:
+    # ---- 启动检查（仅执行一次，不做循环检查） ----
+    # 1. 等待游戏主窗口出现（最多 30 秒）
+    main_win = None
+    deadline = time.time() + 30
+    while main_win is None and time.time() < deadline:
         main_win = game.find_main_window()
         if main_win is None:
-            # 游戏最小化或未启动：清空状态，避免恢复后误报"变化"
-            if last_tab is not None:
-                log("[监听] 游戏主窗口不可见，暂停监听", "WARN")
-                last_tab = None
             time.sleep(1)
-            continue
 
+    if main_win is None:
+        log("[检查] 30 秒内未检测到游戏主窗口", "WARN")
+    else:
+        # 2. 登录状态检查（Tab 读取一次）
         tab = game.read_login_tab(main_win)
-        if tab != last_tab:
-            if last_tab is not None:
-                log(f"[监听] Tab 变化: {last_tab!r} -> {tab!r}", "SYS")
-            if tab == game.GAME_TITLE:
-                log("[监听] 当前未登录（Tab 显示为大话西游2经典版）", "WARN")
-            elif tab:
-                log(f"[监听] 当前登录角色: {tab}", "SYS")
-            else:
-                log("[监听] Tab 读取为空（游戏加载中？）", "WARN")
-            last_tab = tab
+        if tab == game.GAME_TITLE:
+            log("[检查] 当前未登录（Tab 显示为大话西游2经典版）", "WARN")
+        elif tab:
+            log(f"[检查] 当前登录角色: {tab}", "SYS")
+        else:
+            log("[检查] Tab 读取为空（游戏加载中？）", "WARN")
 
-        # 登录状态下打开背包（点击+bag_box 验证，内置一次重试；成功一次后不再重复）
-        # 使用摄妖香开关关闭时跳过整个背包/摄妖香流程
-        if (tab and tab != game.GAME_TITLE and not bag_opened
-                and use_sheyaoxiang
-                and time.time() >= bag_retry_at):
-            ok, info = bag.open_bag(main_win)
+        logged_in = bool(tab and tab != game.GAME_TITLE)
+        if not logged_in:
+            log("[检查] 未登录，跳过摄妖香/玄枢轶闻/血蓝条检查", "WARN")
+
+        # 3. 摄妖香流程（开关开启且已登录时执行一次）
+        if logged_in and use_sheyaoxiang:
+            ok, info = bag.use_sheyaoxiang(main_win)
             if ok:
-                bag_opened = True
-                log(f"[背包] 已打开（{info}）", "SYS")
-                # 背包打开后检测摄妖香（未找到时自动切换储物格再找）
-                item, desc = bag.find_sheyaoxiang_with_slots(main_win)
-                if item:
-                    log(f"[摄妖香] 背包中存在（{desc}，匹配度 {item.confidence:.2f}）", "SYS")
-                    # 鼠标移动到物品位置并右键点击一次
-                    human_click(main_win, item.x, item.y, button="secondary")
-                    log(f"[摄妖香] 已右键点击 ({item.x}, {item.y})", "SYS")
-                    # 使用完成后重新点击背包按钮关闭背包
-                    time.sleep(0.2)  # 物品使用后短暂等待
-                    ok2, info2 = bag.close_bag(main_win)
-                    if ok2:
-                        log(f"[背包] 已关闭（{info2}）", "SYS")
-                    else:
-                        log(f"[背包] {info2}", "WARN")
-                else:
-                    log(f"[摄妖香] {desc}", "WARN")
+                log(f"[摄妖香] {info}", "SYS")
             else:
-                log(f"[背包] {info}，10 秒后重试", "WARN")
-                bag_retry_at = time.time() + 10
+                log(f"[摄妖香] {info}", "WARN")
 
-        # 玄枢轶闻模式：检查任务追踪/绿色文案/地图位置（每 3 秒一轮）
-        if (mode == "玄枢轶闻" and tab and tab != game.GAME_TITLE
-                and time.time() >= xuanshu_next_at):
+        # 4. 玄枢轶闻检查（该模式且已登录时执行一次）
+        if logged_in and mode == "玄枢轶闻":
             xuanshu.run_cycle(main_win)
-            xuanshu_next_at = time.time() + 3
 
+        # 5. 血蓝条检测（已登录时执行一次）
+        if logged_in:
+            status_bars.check_all_bars(main_win)
+
+    # ---- 保持任务运行，等待停止信号（后续各模式的持续逻辑在此扩展） ----
+    while True:
         time.sleep(1)
 
 

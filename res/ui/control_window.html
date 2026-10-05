@@ -42,6 +42,16 @@
         }
         .switch-row input:checked + .switch-track { background: #00b36b; }
         .switch-row input:checked + .switch-track::after { left: 22px; }
+        .threshold-grid { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-family: "微软雅黑"; color: #ccc; }
+        .th-row { display: flex; align-items: center; gap: 10px; }
+        .th-row .th-label { width: 64px; text-align: right; }
+        .th-btn {
+            width: 22px; height: 22px; border-radius: 4px; border: 1px solid #444;
+            background: #2a2a2a; color: #ccc; font-size: 14px; line-height: 1;
+            cursor: pointer; user-select: none;
+        }
+        .th-btn:hover { background: #3a3a3a; color: #00ff88; }
+        .th-val { width: 40px; text-align: center; color: #00ff88; font-family: 'Consolas', monospace; }
         .btn-row { display: flex; gap: 10px; }
         .btn {
             width: 96px; height: 46px; border-radius: 8px; border: 1px solid #444;
@@ -79,6 +89,35 @@
             <span class="switch-track"></span>
             <span>使用摄妖香</span>
         </label>
+        <div class="section">
+            <div class="section-title">阈值设置（步进5%）</div>
+            <div class="threshold-grid">
+                <div class="th-row">
+                    <span class="th-label">人物红条</span>
+                    <button class="th-btn" onclick="th('char_hp', -5)">−</button>
+                    <span class="th-val" id="th-char_hp">40%</span>
+                    <button class="th-btn" onclick="th('char_hp', 5)">＋</button>
+                </div>
+                <div class="th-row">
+                    <span class="th-label">人物蓝条</span>
+                    <button class="th-btn" onclick="th('char_mp', -5)">−</button>
+                    <span class="th-val" id="th-char_mp">40%</span>
+                    <button class="th-btn" onclick="th('char_mp', 5)">＋</button>
+                </div>
+                <div class="th-row">
+                    <span class="th-label">召唤兽红条</span>
+                    <button class="th-btn" onclick="th('beast_hp', -5)">−</button>
+                    <span class="th-val" id="th-beast_hp">40%</span>
+                    <button class="th-btn" onclick="th('beast_hp', 5)">＋</button>
+                </div>
+                <div class="th-row">
+                    <span class="th-label">召唤兽蓝条</span>
+                    <button class="th-btn" onclick="th('beast_mp', -5)">−</button>
+                    <span class="th-val" id="th-beast_mp">40%</span>
+                    <button class="th-btn" onclick="th('beast_mp', 5)">＋</button>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -94,7 +133,7 @@
             btnStart.disabled = running;  // 运行中必须先重置再启动
         }
 
-        // 页面初始化：恢复上次选择的任务模式与摄妖香开关状态
+        // 页面初始化：恢复上次选择的任务模式、摄妖香开关与各条阈值
         window.addEventListener('onPythonReady', async () => {
             try {
                 const info = await callPython('get_init_data');
@@ -102,9 +141,25 @@
                     const radio = [...modeRadios].find(el => el.value === info.mode);
                     if (radio) radio.checked = true;
                 }
-                if (info) useSyx.checked = !!info.use_sheyaoxiang;
+                if (info) {
+                    useSyx.checked = !!info.use_sheyaoxiang;
+                    const ths = info.thresholds || {};
+                    for (const key of ['char_hp', 'char_mp', 'beast_hp', 'beast_mp']) {
+                        const el = document.getElementById('th-' + key);
+                        if (el && ths[key] !== undefined) el.innerText = ths[key] + '%';
+                    }
+                }
             } catch (e) {}
         });
+
+        // 阈值步进：±5%，范围 5~95，变更立即保存
+        async function th(key, delta) {
+            const el = document.getElementById('th-' + key);
+            const cur = parseInt(el.innerText);
+            const val = Math.min(95, Math.max(5, cur + delta));
+            const r = await callPython('save_threshold', key, val);
+            if (r && r.status === 'success') el.innerText = r.threshold + '%';
+        }
 
         // 单选变更：立即保存选择
         modeRadios.forEach(radio => {

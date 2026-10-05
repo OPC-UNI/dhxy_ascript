@@ -124,3 +124,40 @@ def close_bag(win):
             return True, f"第{attempt}次右键成功关闭（匹配度 {box.confidence:.2f}）"
         log(f"[背包] 第{attempt}次右键后背包仍打开，重试一次...", "WARN")
     return False, "两次尝试后背包仍未关闭"
+
+
+def use_sheyaoxiang(win):
+    """完整执行一次使用摄妖香流程（面向对象视角：背包使用摄妖香）。
+
+    打开背包 → 查找摄妖香（未找到时切换储物格）→ 右键使用 → 关闭背包。
+    注意：已右键使用但关闭背包失败时仍视为成功——重试会造成重复使用。
+    返回 (是否成功, 描述)。
+    """
+    # 1. 打开背包
+    ok, info = open_bag(win)
+    if not ok:
+        return False, f"打开背包失败: {info}"
+    log(f"[背包] 已打开（{info}）", "SYS")
+
+    # 2. 查找摄妖香（含储物格切换搜索）
+    item, desc = find_sheyaoxiang_with_slots(win)
+    if item is None:
+        log(f"[摄妖香] {desc}", "WARN")
+        ok2, info2 = close_bag(win)  # 未找到也关闭背包，保持界面干净
+        if not ok2:
+            log(f"[背包] {info2}", "WARN")
+        return False, desc
+
+    # 3. 右键使用
+    log(f"[摄妖香] 背包中存在（{desc}，匹配度 {item.confidence:.2f}）", "SYS")
+    human_click(win, item.x, item.y, button="secondary")
+    log(f"[摄妖香] 已右键点击 ({item.x}, {item.y})", "SYS")
+    time.sleep(0.2)  # 物品使用后短暂等待
+
+    # 4. 关闭背包
+    ok2, info2 = close_bag(win)
+    if ok2:
+        log(f"[背包] 已关闭（{info2}）", "SYS")
+        return True, "使用完成"
+    log(f"[背包] 关闭失败: {info2}", "WARN")
+    return True, "已使用，但关闭背包失败（不再重试，避免重复使用）"
