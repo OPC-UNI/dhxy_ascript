@@ -10,6 +10,7 @@
 - src/bag.py             背包操作（打开背包、物品检测与点击）
 - src/battle.py          战斗自动化（战斗监控与人物/召唤兽操作）
 - src/wuhuan.py          五环任务自动化（购装备、领取、跟踪循环）
+- src/kezhan.py          客栈任务自动化（洛阳客栈找掌柜、领取、跟踪循环）
 - src/control_window.py  网页控制窗口（启动/重置/关闭、任务模式选择）
 - src/polyfill.py        pywebview 6 桥接兼容补丁
 """
@@ -34,6 +35,7 @@ from src import bag  # 背包操作
 from src import battle  # 战斗自动化（战斗监控与人物/召唤兽操作）
 from src import xuanshu  # 玄枢轶闻任务自动化
 from src import wuhuan  # 五环任务自动化
+from src import kezhan  # 客栈任务自动化
 from src import status_bars  # 人物/召唤兽血蓝条检测
 
 
@@ -199,7 +201,14 @@ def task_start():
             log(f"[五环] 任务循环结束：{info}", "SYS")
             return
 
-        # 5. 血蓝条检测（已登录时执行一次）
+        # 7. 客栈主循环（洛阳客栈找掌柜 → 领取 → 跟踪 → 往复，
+        #    达到次数上限或找不到掌柜时结束任务进程）
+        if logged_in and mode == "客栈":
+            info = kezhan.run_loop(main_win)
+            log(f"[客栈] 任务循环结束：{info}", "SYS")
+            return
+
+        # 8. 血蓝条检测（已登录时执行一次）
         if logged_in:
             status_bars.check_all_bars(main_win)
 

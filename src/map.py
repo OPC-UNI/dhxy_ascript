@@ -45,26 +45,57 @@ _MAP_POS_RE = re.compile(r"([一-鿿]{2,})\s*[\[［]\s*(\d+)\s*[,，]\s*(\d+)\s*
 _engine = None
 
 
-def ocr_image(img):
-    """OCR 识别图像，返回 (items, img_np)。
+def ocr_regions(img, regions):
+    """OCR 识别多个区域并合并结果，返回 (items, img_np)。
+
+    regions 为空时识别全图。多区域场景（如任务追踪 + 对话框）比单一
+    外接矩形省去区域之间的无关像素，进一步提速；rect 与 img_np 保持
+    全图坐标（区域外置黑），下游绿色文字判定与点击坐标无需改动。
 
     items：按纵坐标排序的 [(txt, rect, score)] 列表；
-    img_np：图像的 numpy 数组，供调用方做像素级判断（绿色文字校验等），
-    避免调用方重复转换。
+    img_np：与全图等大的 numpy 数组（区域外为黑），供调用方做像素级判断。
     """
     global _engine
     if _engine is None:
         _engine = RapidOCR()
-    img_np = np.asarray(img)
-    result, _ = _engine(img_np)
+    full_np = np.asarray(img)
+    if not regions:
+        img_np = full_np
+        result, _ = _engine(img_np)
+        items = []
+        if result:
+            for box, txt, score in result:
+                bl, bt = float(box[0][0]), float(box[0][1])
+                br, bb = float(box[2][0]), float(box[2][1])
+                items.append((str(txt), [int(bl), int(bt), int(br), int(bb)],
+                              float(score)))
+        items.sort(key=lambda x: x[1][1])
+        return items, img_np
+    img_np = np.zeros_like(full_np)
     items = []
-    if result:
-        for box, txt, score in result:
-            l, t = float(box[0][0]), float(box[0][1])
-            r, b = float(box[2][0]), float(box[2][1])
-            items.append((str(txt), [int(l), int(t), int(r), int(b)], float(score)))
+    for l, t, r, b in regions:
+        crop = full_np[t:b, l:r]
+        img_np[t:b, l:r] = crop
+        result, _ = _engine(crop)
+        if result:
+            for box, txt, score in result:
+                bl, bt = float(box[0][0]), float(box[0][1])
+                br, bb = float(box[2][0]), float(box[2][1])
+                items.append((str(txt),
+                              [l + int(bl), t + int(bt), l + int(br), t + int(bb)],
+                              float(score)))
     items.sort(key=lambda x: x[1][1])
     return items, img_np
+
+
+def ocr_region(img, region=None):
+    """OCR 识别单个区域（region 为 None 时全图），见 ocr_regions。"""
+    return ocr_regions(img, [] if region is None else [region])
+
+
+def ocr_image(img):
+    """OCR 识别全图，返回 (items, img_np)（见 ocr_regions，regions 为空）。"""
+    return ocr_regions(img, [])
 
 
 def _clean_map_pos(text):
