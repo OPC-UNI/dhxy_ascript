@@ -36,6 +36,7 @@ from src import battle  # 战斗自动化（战斗监控与人物/召唤兽操�
 from src import xuanshu  # 玄枢轶闻任务自动化
 from src import wuhuan  # 五环任务自动化
 from src import kezhan  # 客栈任务自动化
+from src import team  # 组队功能（任务前置退队 + 修罗模式实机自检）
 from src import status_bars  # 人物/召唤兽血蓝条检测
 from src import map as game_map  # 地图操作（OCR 引擎预热等）
 
@@ -195,7 +196,10 @@ def task_start():
 
         # 5. 玄枢轶闻主循环（该模式且已登录时执行：跟踪完成 → 继续领取 → 往复）
         #    循环正常结束（次数上限/每日次数已满）时任务进程退出，面板自动显示已停止
+        #    任务前置：退出队伍（队长解散/队员离开），单人状态执行
         if logged_in and mode == "玄枢轶闻":
+            ok, info = team.leave_or_disband_team(main_win)
+            log(f"[组队] 任务前置退队：{info}", "SYS" if ok else "WARN")
             info = xuanshu.run_loop(main_win)
             log(f"[玄枢轶闻] 任务循环结束：{info}", "SYS")
             return
@@ -208,12 +212,22 @@ def task_start():
 
         # 7. 客栈主循环（洛阳客栈找掌柜 → 领取 → 跟踪 → 往复，
         #    达到次数上限或找不到掌柜时结束任务进程）
+        #    任务前置：退出队伍（队长解散/队员离开），单人状态执行
         if logged_in and mode == "客栈":
+            ok, info = team.leave_or_disband_team(main_win)
+            log(f"[组队] 任务前置退队：{info}", "SYS" if ok else "WARN")
             info = kezhan.run_loop(main_win)
             log(f"[客栈] 任务循环结束：{info}", "SYS")
             return
 
-        # 8. 血蓝条检测（已登录时执行一次）
+        # 8. 【临时】组队功能实机自检：修罗模式暂未实现，借用其分支跑 team.self_test，
+        #    验证通过后移除本分支（修罗任务实现时替换）
+        if logged_in and mode == "修罗":
+            info = team.self_test(main_win)
+            log(f"[组队] 自检结束：{info}", "SYS")
+            return
+
+        # 9. 血蓝条检测（已登录时执行一次）
         if logged_in:
             status_bars.check_all_bars(main_win)
 
