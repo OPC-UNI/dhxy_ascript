@@ -1,4 +1,4 @@
-"""战斗自动化：进入战斗后按配置自动执行人物/召唤兽操作。
+"""战斗自动化：按场次调度战斗操作与自动战斗，处理巫医对话框。
 
 战斗状态检测（模板匹配多信号判定，不用 OCR，防止非战斗画面误报）：
 - 操作条按钮（法术/防御/自动）：战斗专属 UI，误报率最低（非战斗实测 ≤0.39，
@@ -9,15 +9,16 @@
 
 战斗状态判定统一在本模块实现，其他模块（玄枢轶闻等）复用 is_in_battle。
 
-流程：
-1. 战斗开始（回合横幅可见）→ 等待操作条出现
-2. 若同时存在「取消自动」「恢复自动」按钮（上局遗留的自动战斗），
-   先点击取消自动，恢复手动控制
-3. 判断当前回合：
-   - 第 1 回合（battle_first 匹配）：按配置执行人物操作、召唤兽操作
-     （先人物后召唤兽）
-   - 非第 1 回合：直接点击自动按钮，剩余回合交由游戏自动战斗
-4. 战斗中不检查血蓝条；战斗结束（回合横幅消失）后再检查，低于阈值右键回满
+场次调度（不在战斗 → 进入战斗 → 战斗结束算一场战斗，回合变化不算；
+进入与结束均连续两次轮询确认，防战斗开场抖动与回合间隙误判）：
+1. 第 1 场战斗：按配置执行人物/召唤兽操作（第 1 回合），操作完成后
+   点击自动按钮，剩余回合交由游戏自动战斗
+2. 第 6/11/16... 场（每 5 场）：进入战斗后点击一次自动按钮——自动战斗
+   跨场持续，例行确认；已处于自动战斗时（按钮为取消自动）跳过不点
+3. 其余场次：不操作，交由游戏自动战斗
+4. 每场战斗结束后检查血蓝条回满（战斗中不检查）
+5. 巫医对话框：文案含「我是超级巫医，可以帮你医治召唤兽」时点击绿色
+   选项「全部医治和修复」；战后立即检查，非战斗时周期性检查
 
 人物/召唤兽操作（第 1 回合）：
 - 攻击：直接点击攻击按钮位置
@@ -38,7 +39,8 @@ import time
 
 from .app_utils import log, human_click, human_move
 from . import map as game_map
-from . import status_bars  # 血蓝条检测回满（战斗结束后调用）
+from . import status_bars  # 血蓝条检测回满（每场战斗结束后调用）
+from . import task_tracker  # 对话框区域与绿色选项定位（巫医对话框）
 from .control_window import load_battle_actions
 
 # ---- 战斗 UI 坐标与模板（窗口相对坐标，用户实测） ----
@@ -75,7 +77,17 @@ BAR_GONE_TIMEOUT = 10       # 操作后等待操作条关闭
 SKILL_PANEL_DELAY = 1.0     # 点击法术后等待技能选择面板打开
 SKILL_CONFIRM_DELAY = 0.5   # 点击技能后等待面板收起
 AUTO_CANCEL_SETTLE = 1.5    # 点击取消自动后等待操作条恢复
-BATTLE_END_POLL = 2.0       # 等待战斗结束的轮询间隔
+
+# ---- 场次调度（进入战斗 = 一场战斗开始，回合变化不算） ----
+AUTO_REASSERT_EVERY = 5      # 每 5 场战斗进入战斗后点击一次自动按钮（第 1 场操作完成后点击）
+AUTO_ASSERT_TIMEOUT = 35     # 例行确认自动时等待自动按钮出现的超时（覆盖一整回合操作条）
+BATTLE_CONFIRM_POLLS = 2     # 战斗进入/结束的连续轮询确认次数（防开场抖动与回合间隙误判）
+
+# ---- 巫医对话框（召唤兽医治） ----
+WUYI_DIALOG_TEXT = "我是超级巫医，可以帮你医治召唤兽"  # 对话框文案（游戏内原文，出现则处理）
+WUYI_OPTION_TEXT = "全部医治和修复"                    # 对话框绿色选项（游戏内原文，精确子串匹配）
+WUYI_CHECK_INTERVAL = 5.0    # 非战斗时巫医对话框检查间隔（秒）
+WUYI_RETRY_COOLDOWN = 15.0   # 点击选项后的冷却期（对话框未关闭时防重复点击）
 
 _SKILL_RE = re.compile(r"^技能(\d)-(\d)$")
 
@@ -132,22 +144,41 @@ def _park_mouse(win):
                win.rect.top + win.rect.height // 2)
 
 
+def _norm_text(s):
+    """去标点/空白（保留中文与字母数字），选项文案精确子串匹配前规范化。
+
+    OCR 对标点误读常见（「，」读成「；」、句号变逗号等），去标点后
+    再做子串匹配可大幅降低漏配。
+    """
+    return re.sub(r"[^\w]", "", s)
+
+
 def _wait_icon(win, icon, timeout, want_found=True):
-    """轮询模板出现（want_found=True）或消失（False），战斗结束提前返回 False。"""
+    """轮询模板出现（want_found=True）或消失（False），战斗结束提前返回 False。
+
+    战斗结束判定连续两次轮询不在战斗（防回合间隙误判，回合变化不算战斗）。
+    """
     deadline = time.time() + timeout
+    out_polls = 0
     while time.time() < deadline:
-        if not is_in_battle(win):
-            return False
+        if is_in_battle(win):
+            out_polls = 0
+        else:
+            out_polls += 1
+            if out_polls >= BATTLE_CONFIRM_POLLS:
+                return False
         if (game_map.find_template(win, icon) is not None) == want_found:
             return True
         time.sleep(BAR_POLL_INTERVAL)
     return False
 
 
-def _wait_battle_end(win):
-    """等待战斗真正结束（回合横幅消失）。"""
-    while is_in_battle(win):
-        time.sleep(BATTLE_END_POLL)
+def _battle_ended(win):
+    """战斗结束判定：连续两次轮询不在战斗（防回合间隙误判，回合变化不算）。"""
+    if is_in_battle(win):
+        return False
+    time.sleep(BAR_POLL_INTERVAL)
+    return not is_in_battle(win)
 
 
 def _click_template(win, icon):
@@ -227,12 +258,17 @@ def _do_action(win, action, label):
 
 
 def handle_battle(win):
-    """处理一场战斗：第 1 回合按配置操作，之后点击自动；战斗结束后回血蓝。"""
+    """处理首场战斗：第 1 回合按配置操作，操作完成后点击自动。
+
+    后续场次由 watch_loop 按场次调度（每 5 场例行点击一次自动，
+    其余场次交由游戏自动战斗），不再进入本函数；战斗结束的确认、
+    血蓝条检查与巫医对话框处理也统一在 watch_loop 中完成。
+    """
     actions = load_battle_actions()
     log(f"[战斗] 战斗开始：人物={actions['char']}，召唤兽={actions['beast']}", "SYS")
     rounds = 0
     round_1 = True
-    while is_in_battle(win):
+    while not _battle_ended(win):
         # 等待操作条出现（新回合）
         if not _wait_icon(win, FASHU_ICON, ROUND_BAR_TIMEOUT, want_found=True):
             break
@@ -257,7 +293,7 @@ def handle_battle(win):
             time.sleep(PHASE_SWITCH_DELAY)  # 操作条关闭，召唤兽条出现
         else:
             _wait_icon(win, FASHU_ICON, IDLE_COUNTDOWN_WAIT, want_found=False)
-        if not is_in_battle(win):
+        if _battle_ended(win):
             break
         # ---- 召唤兽操作阶段 ----
         _wait_icon(win, FASHU_ICON, BEAST_BAR_TIMEOUT, want_found=True)
@@ -266,19 +302,118 @@ def handle_battle(win):
         _wait_icon(win, FASHU_ICON,
                    BAR_GONE_TIMEOUT if acted else IDLE_COUNTDOWN_WAIT,
                    want_found=False)
-    # 规则 1：战斗中不检查血蓝条；战斗真正结束（回合横幅消失）后再检查回满
-    _wait_battle_end(win)
-    status_bars.check_all_bars(win)
-    log(f"[战斗] 战斗结束（共 {rounds} 回合）", "SYS")
+
+
+def _click_auto_once(win):
+    """进入战斗后点击一次自动按钮（每 5 场例行确认，自动战斗跨场持续）。
+
+    已处于自动战斗时操作条显示「取消自动」而非「自动」，自动按钮
+    不会出现，轮询超时即跳过、不打扰；自动被关掉（如次数耗尽）时
+    点一次重新开启。操作条可能正处回合间隙，最多等待一整回合的
+    操作条周期；战斗结束（连续两轮确认）提前返回。
+    """
+    deadline = time.time() + AUTO_ASSERT_TIMEOUT
+    out_polls = 0
+    while time.time() < deadline:
+        if is_in_battle(win):
+            out_polls = 0
+        else:
+            out_polls += 1
+            if out_polls >= BATTLE_CONFIRM_POLLS:
+                return
+        if _click_template(win, AUTO_ICON):
+            _park_mouse(win)  # 鼠标移开，避免遮挡操作条
+            log("[战斗] 已点击自动按钮（每 5 场例行确认）", "SYS")
+            return
+        time.sleep(BAR_POLL_INTERVAL)
+    log("[战斗] 未识别到自动按钮（可能已处于自动战斗），本场不点击", "INFO")
+
+
+# 巫医对话框选项未识别告警去重标记（对话框消失后复位，防轮询刷屏）
+_wuyi_option_missing_warned = False
+
+
+def _handle_wuyi_dialog(win):
+    """巫医对话框：文案含「我是超级巫医…」时点击绿色选项「全部医治和修复」。
+
+    文案用模糊匹配（抗 OCR 误读）；选项去标点后精确子串匹配（游戏内原文，
+    记忆规则：选项匹配不"纠正"用字）；限定对话框区域（x≥PANEL_MAX_X）
+    且为绿字行，避免误点追踪面板的绿字链接。返回是否已点击。
+    """
+    global _wuyi_option_missing_warned
+    img = win.capture(force_activate=False)
+    if img is None:
+        return False
+    items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
+    from .xuanshu import _dialog_text_present  # 函数内导入，避免循环依赖
+    if not _dialog_text_present(items, WUYI_DIALOG_TEXT):
+        _wuyi_option_missing_warned = False
+        return False
+    needle = _norm_text(WUYI_OPTION_TEXT)
+    for txt, rect, score in items:
+        if score >= 0.55 and needle in _norm_text(txt) \
+                and rect[0] >= task_tracker.PANEL_MAX_X \
+                and task_tracker.is_green_text(img_np, rect):
+            cx, cy = task_tracker.green_text_center(img_np, rect,
+                                                    prefer_underline=False)
+            human_click(win, cx, cy)
+            log(f"[战斗] 巫医对话框：已点击「{txt}」", "SYS")
+            _wuyi_option_missing_warned = False
+            return True
+    if not _wuyi_option_missing_warned:
+        log("[战斗] 巫医对话框出现，但未识别到「全部医治和修复」选项", "WARN")
+        _wuyi_option_missing_warned = True
+    return False
 
 
 def watch_loop(win):
-    """战斗监控线程入口：轮询战斗状态，进入战斗则处理整场战斗。"""
+    """战斗监控线程入口：轮询战斗状态，按场次调度战斗操作。
+
+    场次规则（不在战斗 → 进入战斗 → 战斗结束算一场战斗，回合变化不算；
+    进入与结束均连续两次轮询确认，防战斗开场抖动与回合间隙误判）：
+    - 第 1 场：handle_battle 按配置操作，操作完成后点击自动
+    - 第 6/11/16... 场（每 5 场）：进入战斗后点击一次自动按钮
+    - 其余场次：不操作，交由游戏自动战斗（自动战斗跨场持续生效）
+    每场战斗结束后检查血蓝条回满，并立即检查巫医对话框；
+    非战斗时周期性检查巫医对话框（召唤兽受伤弹出的医治对话框）。
+    """
     log("[战斗] 战斗监控已启动", "SYS")
+    battle_no = 0          # 本场次计数（第 1 场按配置操作）
+    in_battle = False      # 已确认的战斗状态
+    in_polls = 0           # 连续在战斗的轮询数（进入确认）
+    out_polls = 0          # 连续不在战斗的轮询数（结束确认）
+    last_wuyi_check = 0.0  # 上次巫医对话框检查时间
+    wuyi_click_at = 0.0    # 上次点击巫医选项时间（冷却）
     while True:
         try:
             if is_in_battle(win):
-                handle_battle(win)
+                out_polls = 0
+                if not in_battle:
+                    in_polls += 1
+                    if in_polls >= BATTLE_CONFIRM_POLLS:  # 连续两轮确认进入
+                        in_battle = True
+                        battle_no += 1
+                        log(f"[战斗] 第 {battle_no} 场战斗开始", "SYS")
+                        if battle_no == 1:
+                            handle_battle(win)  # 首场：按配置操作后点击自动
+                        elif battle_no % AUTO_REASSERT_EVERY == 1:
+                            _click_auto_once(win)  # 每 5 场：点一次自动
+                        # 其余场次：不操作，等待游戏自动战斗结束
+            else:
+                in_polls = 0
+                if in_battle:
+                    out_polls += 1
+                    if out_polls >= BATTLE_CONFIRM_POLLS:  # 连续两轮确认结束
+                        in_battle = False
+                        log(f"[战斗] 第 {battle_no} 场战斗结束", "SYS")
+                        status_bars.check_all_bars(win)
+                        last_wuyi_check = 0.0  # 战后立即检查巫医对话框
+                now = time.time()
+                if now - last_wuyi_check >= WUYI_CHECK_INTERVAL:
+                    last_wuyi_check = now
+                    if now - wuyi_click_at >= WUYI_RETRY_COOLDOWN \
+                            and _handle_wuyi_dialog(win):
+                        wuyi_click_at = now
         except Exception as e:
             log(f"[战斗] 监控异常: {e}", "WARN")
         time.sleep(WATCH_POLL_INTERVAL)
