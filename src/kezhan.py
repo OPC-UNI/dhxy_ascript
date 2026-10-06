@@ -321,7 +321,7 @@ def _find_awang_by_ocr(win):
     items, _ = game_map.ocr_image(img)
     _, pt, pr, pb = TRACK_PANEL_REGION
     for txt, rect, score in items:
-        if score < 0.6 or len(txt) > 4 or "阿旺" not in txt:
+        if score < 0.55 or len(txt) > 4 or "阿旺" not in txt:
             continue
         if rect[0] < pr and pt <= rect[1] <= pb:
             continue  # 任务追踪面板内的文案，跳过
@@ -634,8 +634,8 @@ def _click_green_option_fuzzy(win, items, img_np, text):
     """
     nopt = _norm_text(text)
     for txt, rect, score in items:
-        if score < 0.6:
-            continue
+        if score < 0.55 or rect[0] < task_tracker.PANEL_MAX_X:
+            continue  # 限定对话框区域，避免误点追踪面板的绿字链接
         ntxt = _norm_text(txt)
         if nopt in ntxt or _fuzzy_contains(ntxt, nopt, threshold=0.8):
             if task_tracker.is_green_text(img_np, rect):

@@ -88,12 +88,25 @@ def is_in_battle(win):
 
     操作条按钮（法术/防御/自动）是战斗专属 UI，出现即战斗操作阶段，
     误报率最低；回合横幅「回合」文字覆盖操作条隐藏的回合间隙。
+    单次截图多模板匹配（旧实现每个模板各自截窗，4 次整窗截图实测
+    233ms，单帧共用 129ms），模板、阈值与短路顺序不变。
+    """
+    img = win.capture(force_activate=False)
+    if img is None:
+        return False
+    return is_in_battle_frame(img)
+
+
+def is_in_battle_frame(img):
+    """在已捕获帧上判断是否战斗中（模板、阈值与顺序同 is_in_battle）。
+
+    供轮询循环复用本帧已抓的截图（如 follow_task 内层），避免重复截窗。
     """
     for icon in (FASHU_ICON, FANGYU_ICON, AUTO_ICON):
-        if game_map.find_template(win, icon, threshold=BAR_BUTTON_THRESHOLD) is not None:
+        if game_map.find_template_in(img, icon, threshold=BAR_BUTTON_THRESHOLD) is not None:
             return True
-    return game_map.find_template(win, ROUND_BANNER_ICON,
-                                  threshold=ROUND_BANNER_THRESHOLD) is not None
+    return game_map.find_template_in(img, ROUND_BANNER_ICON,
+                                     threshold=ROUND_BANNER_THRESHOLD) is not None
 
 
 def is_round_1(win):

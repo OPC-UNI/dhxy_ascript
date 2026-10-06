@@ -43,6 +43,7 @@ MAP_CANVAS_POS = (700, 380)
 _MAP_POS_RE = re.compile(r"([一-鿿]{2,})\s*[\[［]\s*(\d+)\s*[,，]\s*(\d+)\s*[\]］]")
 
 _engine = None
+_region_engine = None
 
 
 def ocr_regions(img, regions):
@@ -55,11 +56,11 @@ def ocr_regions(img, regions):
     items：按纵坐标排序的 [(txt, rect, score)] 列表；
     img_np：与全图等大的 numpy 数组（区域外为黑），供调用方做像素级判断。
     """
-    global _engine
-    if _engine is None:
-        _engine = RapidOCR()
+    global _engine, _region_engine
     full_np = np.asarray(img)
     if not regions:
+        if _engine is None:
+            _engine = RapidOCR()
         img_np = full_np
         result, _ = _engine(img_np)
         items = []
@@ -71,12 +72,19 @@ def ocr_regions(img, regions):
                               float(score)))
         items.sort(key=lambda x: x[1][1])
         return items, img_np
+    # 区域 OCR 用快配置引擎：det_limit_type='max'/736 下区域按原尺寸检测
+    # （默认 'min'/736 会把小区域放大到 736 最小边再检测，实测双区域
+    # 1344ms→944ms、面板区 -29%、对话框区 -52%）。快配置下部分行置信度
+    # 降低（如问答选项「金乌」0.66→0.58），下游 score 门槛已统一降至 0.55
+    if _region_engine is None:
+        _region_engine = RapidOCR(det_model_path=None, det_limit_type="max",
+                                  det_limit_side_len=736)
     img_np = np.zeros_like(full_np)
     items = []
     for l, t, r, b in regions:
         crop = full_np[t:b, l:r]
         img_np[t:b, l:r] = crop
-        result, _ = _engine(crop)
+        result, _ = _region_engine(crop)
         if result:
             for box, txt, score in result:
                 bl, bt = float(box[0][0]), float(box[0][1])
@@ -96,6 +104,18 @@ def ocr_region(img, region=None):
 def ocr_image(img):
     """OCR 识别全图，返回 (items, img_np)（见 ocr_regions，regions 为空）。"""
     return ocr_regions(img, [])
+
+
+def warmup_ocr():
+    """预热 OCR 引擎（首次调用需加载 det/cls/rec 模型，一次性约 1s）。"""
+    global _engine, _region_engine
+    if _engine is None:
+        _engine = RapidOCR()
+        _engine(np.zeros((32, 32, 3), dtype=np.uint8))
+    if _region_engine is None:
+        _region_engine = RapidOCR(det_model_path=None, det_limit_type="max",
+                                  det_limit_side_len=736)
+        _region_engine(np.zeros((32, 32, 3), dtype=np.uint8))
 
 
 def _clean_map_pos(text):
@@ -162,6 +182,17 @@ def is_at_position(pos, name, x, y, tolerance=5):
 def find_template(win, icon, threshold=0.8):
     """在游戏窗口内查找模板，返回首个匹配的 (x, y) 窗口相对坐标或 None。"""
     results = FindImages.find_all_template(R.img(icon), im_source=win, threshold=threshold)
+    return (results[0].x, results[0].y) if results else None
+
+
+def find_template_in(img, icon, threshold=0.8):
+    """在已捕获图像内查找模板，返回首个匹配的 (x, y) 图像相对坐标或 None。
+
+    与 find_template 同模板同阈值，但不重新截窗（FindImages 对 Window
+    源每次调用内部重新 win.capture，一帧多模板场景如战斗判定会重复截
+    4 次窗；此函数复用调用方已抓帧，行为等价）。
+    """
+    results = FindImages.find_all_template(R.img(icon), im_source=img, threshold=threshold)
     return (results[0].x, results[0].y) if results else None
 
 

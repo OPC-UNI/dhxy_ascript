@@ -188,10 +188,12 @@ def _click_green_option(win, items, img_np, text):
     """点击指定文案的绿色选项（忽略标点差异的子串匹配），成功返回 True。
 
     OCR 对中文标点误读常见（如「，」读成「；」），去标点后按子串匹配。
+    限定对话框区域（x≥PANEL_MAX_X），避免误点追踪面板的绿字链接。
     """
     needle = re.sub(r"[^\w]", "", text)
     for txt, rect, score in items:
-        if score >= 0.6 and needle in re.sub(r"[^\w]", "", txt) \
+        if score >= 0.55 and needle in re.sub(r"[^\w]", "", txt) \
+                and rect[0] >= task_tracker.PANEL_MAX_X \
                 and task_tracker.is_green_text(img_np, rect):
             cx, cy = task_tracker.green_text_center(img_np, rect, prefer_underline=False)
             human_click(win, cx, cy)
@@ -201,9 +203,13 @@ def _click_green_option(win, items, img_np, text):
 
 
 def _click_wuhuan_option_once(win, items, img_np):
-    """点击领取对话框中的绿色选项（含「五环」或「帮助」），成功返回 True。"""
+    """点击领取对话框中的绿色选项（含「五环」或「帮助」），成功返回 True。
+
+    限定对话框区域（x≥PANEL_MAX_X），避免误点追踪面板的绿字链接。
+    """
     for txt, rect, score in items:
-        if score >= 0.6 and ("五环" in txt or "帮助" in txt) \
+        if score >= 0.55 and ("五环" in txt or "帮助" in txt) \
+                and rect[0] >= task_tracker.PANEL_MAX_X \
                 and task_tracker.is_green_text(img_np, rect):
             cx, cy = task_tracker.green_text_center(img_np, rect, prefer_underline=False)
             human_click(win, cx, cy)
@@ -391,7 +397,7 @@ def _wuhuan_progress_key(items, img_np):
     """
     found = []
     for txt, rect, score in items:
-        if score >= 0.6 and rect[0] < task_tracker.PANEL_MAX_X:
+        if score >= 0.55 and rect[0] < task_tracker.PANEL_MAX_X:
             for kw in WUHUAN_SUB_KEYWORDS:
                 if kw in txt:
                     bright = task_tracker.bright_green_ratio(img_np, rect) > 0

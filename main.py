@@ -37,6 +37,7 @@ from src import xuanshu  # 玄枢轶闻任务自动化
 from src import wuhuan  # 五环任务自动化
 from src import kezhan  # 客栈任务自动化
 from src import status_bars  # 人物/召唤兽血蓝条检测
+from src import map as game_map  # 地图操作（OCR 引擎预热等）
 
 
 class AppWindow(FloatScriptWindow):
@@ -120,6 +121,10 @@ def task_start():
     log(f"[模式] 当前任务模式: {mode}", "SYS")
     log(f"[配置] 使用摄妖香: {'开' if use_sheyaoxiang else '关'}", "SYS")
     log(f"[配置] 人物战斗动作: {battle_actions['char']}，召唤兽战斗动作: {battle_actions['beast']}", "SYS")
+
+    # OCR 引擎预热：首次调用需加载 det/cls/rec 三个模型（一次性约 1s），
+    # 提前完成避免拖慢任务首轮识别
+    game_map.warmup_ocr()
 
     # uiautomation 需要线程内 COM 初始化：任务运行在子进程的工作线程中，
     # 必须显式初始化；保持引用直至任务结束（析构时自动 CoUninitialize）

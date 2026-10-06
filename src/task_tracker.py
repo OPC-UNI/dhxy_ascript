@@ -31,7 +31,10 @@ PANEL_MAX_X = 400
 # 跟踪轮询与点击的 OCR 区域（窗口相对坐标）：任务追踪面板 + 居中对话框区。
 # 区域外（顶部 HUD、右侧图标列、底部栏）无需识别；全窗 OCR 实测 2.2s，
 # 两个区域合计约 1.2s，轮询与点击提速近一半。
-TRACK_REGION = (0, 200, 260, 600)      # 任务追踪面板
+# 面板区右边界实测取 400（面板内容在 x<260，260~400 为空白背景）：
+# 宽 260 的裁剪会确定性误读标题（实测「玄枢轶闻」读成「玄枢轶铁闻」
+# 导致任务被误判消失），宽 300 及以上读对，留 400 余量。
+TRACK_REGION = (0, 200, 400, 600)      # 任务追踪面板
 DIALOG_REGION = (400, 270, 980, 600)   # 居中对话框区
 OCR_REGIONS = (TRACK_REGION, DIALOG_REGION)
 
@@ -188,7 +191,7 @@ def read_tasks(win):
     每个任务为 {'title': 标题文案, 'lines': [(txt, rect, score), ...],
     'text': 内容行拼接全文（描述换行时用此字段查找）}。
     """
-    img = win.capture()
+    img = win.capture(force_activate=False)
     if img is None:
         return []
     items, _ = game_map.ocr_image(img)
@@ -200,21 +203,27 @@ def task_count(win):
     return len(read_tasks(win))
 
 
+def has_task_in(items, img_np, title):
+    """在 OCR 结果中判断追踪面板是否存在指定任务（判定规则见 has_task）。"""
+    for txt, rect, score in items:
+        if title in txt and score >= 0.55 and rect[0] < PANEL_MAX_X:
+            if not is_green_text(img_np, rect):
+                return True
+    return False
+
+
 def has_task(win, title):
     """判断任务追踪中是否存在指定任务。
 
     判定为追踪面板标题：位于窗口左区（x<PANEL_MAX_X）且非绿色链接文案，
     避免把居中对话框里的绿色选项误判为任务。
+    只 OCR 追踪面板区域（全窗 2.2s → 区域约 0.9s）。
     """
-    img = win.capture()
+    img = win.capture(force_activate=False)
     if img is None:
         return False
-    items, img_np = game_map.ocr_image(img)
-    for txt, rect, score in items:
-        if title in txt and score >= 0.6 and rect[0] < PANEL_MAX_X:
-            if not is_green_text(img_np, rect):
-                return True
-    return False
+    items, img_np = game_map.ocr_regions(img, (TRACK_REGION,))
+    return has_task_in(items, img_np, title)
 
 
 def find_task(tasks, title):
@@ -233,7 +242,7 @@ def get_task(win, title):
 
     返回 {'title', 'lines', 'text'} 或 None。
     """
-    img = win.capture()
+    img = win.capture(force_activate=False)
     if img is None:
         return None
     items, _ = game_map.ocr_image(img)
@@ -261,7 +270,7 @@ def _keyword_fallback(items, img_np, keywords, arect):
     """
     cands = []
     for txt, rect, score in items:
-        if score < 0.6 or rect[0] >= PANEL_MAX_X:
+        if score < 0.55 or rect[0] >= PANEL_MAX_X:
             continue
         if rect[1] < arect[3] - 30:  # 锚点行下方（容抖动）
             continue
@@ -310,7 +319,7 @@ def track_task(win, title, text=None, green_index=0, retries=4, retry_interval=1
         if attempt == 0 and pre_items is not None:
             items, img_np = pre_items
         else:
-            img = win.capture()
+            img = win.capture(force_activate=False)
             if img is None:
                 return False, "窗口截图失败"
             items, img_np = game_map.ocr_regions(img, OCR_REGIONS)
@@ -319,12 +328,12 @@ def track_task(win, title, text=None, green_index=0, retries=4, retry_interval=1
         # 优先取追踪面板左区内的行，避免居中对话框里的「五环」文案抢先
         anchor_idx = None
         for i, (txt, rect, score) in enumerate(items):
-            if title in txt and score >= 0.6 and rect[0] < PANEL_MAX_X:
+            if title in txt and score >= 0.55 and rect[0] < PANEL_MAX_X:
                 anchor_idx = i
                 break
         if anchor_idx is None:
             for i, (txt, rect, score) in enumerate(items):
-                if title in txt and score >= 0.6:
+                if title in txt and score >= 0.55:
                     anchor_idx = i
                     break
         if anchor_idx is None:

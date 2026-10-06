@@ -18,16 +18,21 @@
    达到设置的次数上限或领取时出现「请明天再来」文案（每日次数已满）时结束
 """
 import difflib
+import os
 import time
+from collections import Counter
+from functools import lru_cache
 
 import cv2
 import numpy as np
+from ascript.windows.hardware.mouse import Mouse
+from ascript.windows.window.Window import WindowCaptureFormat
 
 from .app_utils import log, human_click
 from . import bag  # 物品栏开关
 from . import map as game_map  # 地图操作（世界地图/小地图/位置识别）
 from . import task_tracker  # 任务追踪面板操作
-from .battle import is_in_battle  # 战斗状态判定（统一在 battle.py 中实现）
+from .battle import is_in_battle, is_in_battle_frame  # 战斗状态判定（统一在 battle.py 中实现）
 from .control_window import load_task_counts  # 任务次数上限（通用设置）
 
 # 任务追踪面板中的任务标题
@@ -46,8 +51,8 @@ DIALOG_OPTION_LINGQU = "领取玄枢轶闻"
 DIALOG_TIMEOUT = 10                 # 等待对话框出现的超时（秒）
 # 任务过程中出现的对话框绿色选项（跟踪期间检测到则点击，按顺序）
 DIALOG_OPTIONS = ["注入玄蕴试试看"]
-# 战斗失败对话框（出现则继续点击任务追踪的绿色文案推进任务）
-DIALOG_LOSE_TEXT = "你输了"
+# 战斗失败/平局对话框（出现任一文案则继续点击任务追踪的绿色文案推进任务）
+DIALOG_LOSE_TEXTS = ["你输了", "平局"]
 # 每日任务次数已满的对话文案（出现即结束任务循环）
 DAILY_LIMIT_TEXT = "少侠已经完成5次任务，请明天再来吧"
 DAILY_LIMIT_INFO = "今日任务次数已满（请明天再来）"
@@ -61,6 +66,9 @@ DIALOG_SKIP_TEXTS = ["你是做嘛的？莫来惹老子！"
                      ,"准备好接受地理方面的考验了么"
                      ,"少侠准备好接受考验了么"
                      ,"少侠准备好接受常识类学问的考验了么"
+                     ,"少侠可是来替小乔试装的？"
+                     ,"看少侠的表情，旺小乔不满意？"
+                     ,"少侠的脸色有点难看"
                      ]
 DIALOG_SKIP_CLICKS = 4               # 跳过对话的点击次数
 SCREEN_CENTER_POS = (689, 415)       # 屏幕中间（游戏窗口中心，点击推进对话）
@@ -80,6 +88,11 @@ DIALOG_OPTION_MAP = {
     "使劲晃动杯中的三颗骰子":"轻轻摇晃",
     "我倒数三个数后大家一起出拳":"出石头",
     "看打！":"看我怎么收拾你",
+    "不知道这里有没有那条锦鲤鱼": "先钓一下再说！",
+    "这就要少侠自己尝试了":"试试",
+    "少侠习惯就好":"试试",
+    "少侠想换什么款式":"试试",
+    "略略略略略":"都别吵啦",
 }
 # 选项无法被 OCR 识别（如单字选项「茶」）时，按序号点击：
 # 选项为问题文案下方的纵向列表，第 idx 项（对话框文案 → 序号）
@@ -94,8 +107,11 @@ OPTION_X_OFFSET = 1
 # 锄遗聚宝小游戏（点击「注入玄蕴试试看」后出现）
 CHUYIJUEBAO_ICON = "chuyijuebao.png"              # 主图（消失即结束；实测匹配 0.91）"
 CHUYIJUEBAO_START_ICON = "chuyijuebao_start.png"  # 开始按钮（实测匹配 0.92）
-CHUYIJUEBAO_CHECK_INTERVAL = 0.1                 # 杂气检测间隔（秒）
+CHUYIJUEBAO_CHECK_INTERVAL = 0.2                 # 杂气检测间隔（秒）
 CHUYIJUEBAO_TIMEOUT = 60                        # 小游戏总超时（秒）
+CHUYIJUEBAO_DEBUG = False                       # 调试开关：True 时不点击鼠标，
+                                                # 只标注检测结果截图供人工核对
+CHUYIJUEBAO_DEBUG_DIR = "qi_debug"              # 标注截图输出目录（相对程序工作目录）
 # 红色杂气检测参数（游戏说明：点击红色杂气将其清除）
 QI_RED_MIN = 120        # R 通道最低亮度
 QI_RED_DOMINANCE = 30   # R 须高出 G/B 的差值
@@ -105,7 +121,8 @@ QI_AREA_MAX = 2500      # 团块最大面积
 QI_CLICK_DEBOUNCE = 2.0  # 同一位置重复点击的最短间隔（秒）
 # 循环跟踪任务参数
 FOLLOW_TIMEOUT = 300                # 跟踪任务总超时（秒）
-FOLLOW_POLL_INTERVAL = 1.0          # 任务信息变化轮询间隔（秒）
+FOLLOW_POLL_INTERVAL = 0.5          # 任务信息变化轮询间隔（秒）；配合帧复用，
+                                    # 静止帧轮询几乎零成本，动画帧周期由 OCR 主导
 CONFIRM_POLL_INTERVAL = 0.2         # 变化确认轮询间隔（秒）；OCR 本身约 1.2s，
                                     # 确认轮询只需极短间隔留出渲染稳定余量
 # 跟踪轮询的 OCR 区域见 task_tracker（TRACK_REGION/DIALOG_REGION/OCR_REGIONS）
@@ -172,9 +189,15 @@ def wait_arrive(win, timeout=ARRIVE_TIMEOUT):
 
 
 def _click_green_option_once(win, items, img_np, text):
-    """单帧检测并点击指定文案的绿色选项；点击成功返回 True。"""
+    """单帧检测并点击指定文案的绿色选项；点击成功返回 True。
+
+    限定对话框区域（x≥PANEL_MAX_X）：任务追踪面板的绿字链接可能包含
+    相同文案（如链接「去找小胖丫帮旺小乔试试服装」含「试试」），
+    面板行 y 序在前会被先遍历到，不限区域会误点面板链接。
+    """
     for txt, rect, score in items:
-        if text in txt and score >= 0.6 and task_tracker.is_green_text(img_np, rect):
+        if text in txt and score >= 0.55 and rect[0] >= task_tracker.PANEL_MAX_X \
+                and task_tracker.is_green_text(img_np, rect):
             cx, cy = task_tracker.green_text_center(img_np, rect, prefer_underline=False)
             human_click(win, cx, cy)
             log(f"[玄枢轶闻] 已点击对话框绿色选项「{txt}」@({cx},{cy})", "SYS")
@@ -208,7 +231,7 @@ def _click_screen_center(win, times=DIALOG_SKIP_CLICKS):
     cx, cy = SCREEN_CENTER_POS
     for _ in range(times):
         human_click(win, cx, cy)
-        time.sleep(0.5)  # 对话推进间隔
+        time.sleep(0.3)  # 对话推进间隔（漏推进由下一轮询 OCR 自愈）
     log(f"[玄枢轶闻] 已点击屏幕中间 {times} 次（推进对话）", "SYS")
 
 
@@ -220,16 +243,16 @@ def _click_dialog_green_option(win, text, timeout=DIALOG_TIMEOUT, abort_text=Non
     """
     deadline = time.time() + timeout
     while time.time() < deadline:
-        img = win.capture()
+        img = win.capture(force_activate=False)
         if img is None:
             time.sleep(1.0)
             continue
-        items, img_np = game_map.ocr_image(img)
+        items, img_np = game_map.ocr_regions(img, task_tracker.OCR_REGIONS)
         if abort_text and _dialog_text_present(items, abort_text):
             return False, f"检测到「{abort_text}」"
         if _click_green_option_once(win, items, img_np, text):
             return True, f"已点击对话框绿色选项「{text}」"
-        time.sleep(1.5)
+        time.sleep(0.5)
     return False, f"未找到对话框绿色选项「{text}」"
 
 
@@ -243,18 +266,19 @@ def navigate_to_task(win):
     5. 点击领取任务按钮 → 对话框 1 点「玄枢轶闻」→ 对话框 2 点「领取玄枢轶闻」
     6. 校验任务追踪中出现玄枢轶闻任务
 
-    返回 (是否成功, 描述)。
+    返回 (是否成功, 描述, 校验命中时的 (items, img_np) 或 None)——成功时
+    附带领取校验最后轮询的 OCR 结果，供 follow_task 复用省一次截图+OCR。
     """
     # 战斗中：坐标与界面不可用，跳过本轮（由主循环稍后重试）
     if is_in_battle(win):
-        return False, "当前战斗中，跳过本轮寻路"
+        return False, "当前战斗中，跳过本轮寻路", None
 
     # 场景前置：清理残留地图（小地图在上层，先关）与物品栏
     _close_scene_panels(win)
 
     pos = game_map.read_position_with_recovery(win)
     if pos is None:
-        return False, "无法识别当前地图位置"
+        return False, "无法识别当前地图位置", None
     name, x, y = pos
     loc = f"{name}[{x},{y}]"
 
@@ -263,12 +287,12 @@ def navigate_to_task(win):
     elif name == LUOYANG_CITY:
         ok, info = game_map.open_mini_map(win)
         if not ok:
-            return False, info
+            return False, info, None
         log(f"[玄枢轶闻] 在洛阳城（{loc}），已打开小地图", "SYS")
     else:
         ok, info = game_map.open_mini_map_city(win, game_map.WORLD_MAP_LUOYANG_ICON, "洛阳城")
         if not ok:
-            return False, info
+            return False, info, None
         log(f"[玄枢轶闻] 不在洛阳城（{loc}），经世界地图前往洛阳城", "SYS")
 
     if not _at_target(pos):
@@ -281,13 +305,13 @@ def navigate_to_task(win):
     # 等待寻路完成
     ok, info = wait_arrive(win)
     if not ok:
-        return False, info
+        return False, info, None
     log(f"[玄枢轶闻] {info}", "SYS")
 
     # 领取任务
     pt = game_map.find_template(win, TASK_LINGQU_ICON)
     if pt is None:
-        return False, "已到达但未找到领取任务按钮"
+        return False, "已到达但未找到领取任务按钮", None
     human_click(win, pt[0], pt[1])
     log("[玄枢轶闻] 已点击领取任务", "SYS")
 
@@ -295,46 +319,77 @@ def navigate_to_task(win):
     ok, info = _click_dialog_green_option(win, DIALOG_OPTION_XUANSHU,
                                           abort_text=DAILY_LIMIT_TEXT)
     if not ok:
-        return (False, DAILY_LIMIT_INFO) if DAILY_LIMIT_TEXT in info else (False, info)
+        return (False, DAILY_LIMIT_INFO, None) if DAILY_LIMIT_TEXT in info \
+            else (False, info, None)
     # 对话框 2：点击绿色选项「领取玄枢轶闻」
     ok, info = _click_dialog_green_option(win, DIALOG_OPTION_LINGQU,
                                           abort_text=DAILY_LIMIT_TEXT)
     if not ok:
-        return (False, DAILY_LIMIT_INFO) if DAILY_LIMIT_TEXT in info else (False, info)
+        return (False, DAILY_LIMIT_INFO, None) if DAILY_LIMIT_TEXT in info \
+            else (False, info, None)
 
     # 校验任务追踪中出现玄枢轶闻任务；期间检测每日次数已满文案
-    # （满 5 次提示出现在点击「领取玄枢轶闻」之后）
+    # （满 5 次提示出现在点击「领取玄枢轶闻」之后）。
+    # 面板优先：只 OCR 追踪面板区域（约 0.9s）等任务出现；任务未出现时
+    # 再补查对话框区域检测每日次数已满文案（旧逻辑每轮两次全窗 OCR 约 5.4s）。
+    # 命中时把 OCR 结果带回，供 follow_task 复用，省一次截图+OCR
     deadline = time.time() + DIALOG_TIMEOUT
     while time.time() < deadline:
-        if task_tracker.has_task(win, TASK_TITLE):
-            return True, "已领取任务"
-        img = win.capture()
-        if img is not None and _dialog_text_present(game_map.ocr_image(img)[0], DAILY_LIMIT_TEXT):
-            return False, DAILY_LIMIT_INFO
-        time.sleep(1.0)
-    return False, "已点击领取玄枢轶闻，但任务追踪中未检测到任务"
+        img = win.capture(force_activate=False)
+        if img is not None:
+            items, img_np = game_map.ocr_regions(img, (task_tracker.TRACK_REGION,))
+            if task_tracker.has_task_in(items, img_np, TASK_TITLE):
+                return True, "已领取任务", (items, img_np)
+            items2, _ = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
+            if _dialog_text_present(items2, DAILY_LIMIT_TEXT):
+                return False, DAILY_LIMIT_INFO, None
+        time.sleep(0.2)
+    return False, "已点击领取玄枢轶闻，但任务追踪中未检测到任务", None
 
 
-def _find_red_qi_clusters(img_np):
-    """检测世界区域内的红色杂气团块，返回 [(cx, cy), ...] 团块中心列表。
+def _find_red_qi_clusters(region_np):
+    """检测杂气区域（QI_REGION 裁剪，RGB）内的红色杂气团块。
 
+    返回 [(cx, cy, x, y, w, h, area), ...]，坐标为窗口相对全图坐标。
     基于游戏说明「点击红色杂气将其清除」：杂气为红色像素团块，
     用连通块分析过滤面积区间，对杂气动画与尺寸变化不敏感。
+    cx/cy 为团块中心，x/y/w/h 为团块包围盒，area 为团块掩码面积（像素数）。
     """
-    l, t, r, b = QI_REGION
-    region = img_np[t:b, l:r]
-    red = region[:, :, 0].astype(int)
-    green = region[:, :, 1].astype(int)
-    blue = region[:, :, 2].astype(int)
+    red = region_np[:, :, 0].astype(int)
+    green = region_np[:, :, 1].astype(int)
+    blue = region_np[:, :, 2].astype(int)
     mask = ((red > QI_RED_MIN) & (red > green + QI_RED_DOMINANCE)
             & (red > blue + QI_RED_DOMINANCE)).astype(np.uint8)
     n, _, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
-    centers = []
+    clusters = []
     for i in range(1, n):
         x, y, w, h, area = stats[i]
         if QI_AREA_MIN <= area <= QI_AREA_MAX:
-            centers.append((l + x + w // 2, t + y + h // 2))
-    return centers
+            clusters.append((QI_REGION[0] + x + w // 2, QI_REGION[1] + y + h // 2,
+                             QI_REGION[0] + x, QI_REGION[1] + y, w, h, int(area)))
+    return clusters
+
+
+def _mark_qi_debug(img_np, clusters, path):
+    """把检测到的杂气团块画框标注后保存（调试用，img_np 为全窗图）。"""
+    out = img_np.copy()
+    for cx, cy, x, y, w, h, _area in clusters:
+        cv2.rectangle(out, (x, y), (x + w, y + h), (0, 255, 0), 2)
+        cv2.circle(out, (cx, cy), 3, (0, 0, 255), -1)
+    cv2.imwrite(path, out)
+
+
+def _capture_qi_region(win):
+    """快速抓取杂气检测区域，返回 RGB numpy 数组（区域裁剪）或 None。
+
+    win.capture 整窗 NUMPY 后裁剪：实测约 34ms，PrintWindow 抗窗口遮挡
+    （ImageGrab 区域 BitBlt 约 49ms 且遮挡时拍到遮挡物，已弃用）。
+    """
+    l, t, r, b = QI_REGION
+    full = win.capture(force_activate=False, format=WindowCaptureFormat.NUMPY)
+    if full is None:
+        return None
+    return full[t:b, l:r]
 
 
 def _play_chuyijuebao(win, timeout=CHUYIJUEBAO_TIMEOUT):
@@ -344,43 +399,92 @@ def _play_chuyijuebao(win, timeout=CHUYIJUEBAO_TIMEOUT):
     开始后再次进入时无开始按钮（任务已在进行），直接进入消除循环。
     若背包或地图面板打开，先关闭（可能遮挡开始按钮与杂气）；
     循环中每 5 秒兜底检查一次。
-    每 500ms 检测一次红色杂气团块（可能出现多个），逐个点击消除；
-    同一位置 2 秒内不重复点击（避免误点静态红 UI 时刷屏）。
+    每帧只点一个杂气团块：点击后立即重新截帧定位——杂气持续漂移，
+    批量点击会点到已过期的位置（实测杂气多时无法完成）；
+    同一位置 2 秒内不重复点击（容 ±20px 漂移，避免误点静态红 UI 刷屏）。
+    杂气点击用快速移动（跳过拟人化弧线，团块小且移动快）。
+    结束判定（主图模板匹配需独立截图）每 1 秒摊销一次。
+    CHUYIJUEBAO_DEBUG=True 时：不点击鼠标，仅标注检测结果并保存截图
+    （每秒一张到 CHUYIJUEBAO_DEBUG_DIR），供人工核对识别准确性。
     返回 (是否成功, 描述)。
     """
     deadline = time.time() + timeout
     # 场景前置：关闭可能遮挡的背包/小地图/世界地图
     _close_scene_panels(win)
 
-    pt = game_map.find_template(win, CHUYIJUEBAO_START_ICON)
-    if pt is not None:
-        human_click(win, pt[0], pt[1])
-        log("[玄枢轶闻] 已点击锄遗聚宝开始", "SYS")
-        time.sleep(0.5)  # 等待开始动画
+    if not CHUYIJUEBAO_DEBUG:
+        pt = game_map.find_template(win, CHUYIJUEBAO_START_ICON)
+        if pt is not None:
+            human_click(win, pt[0], pt[1])
+            log("[玄枢轶闻] 已点击锄遗聚宝开始", "SYS")
+            time.sleep(0.5)  # 等待开始动画
 
     clicked = 0
     last_click_at = {}
-    iters = 0
+    last_icon_check = 0.0
+    last_panel_check = 0.0
+    last_debug_save = 0.0
     while time.time() < deadline:
-        if game_map.find_template(win, CHUYIJUEBAO_ICON) is None:
-            return True, f"锄遗聚宝结束（共消除 {clicked} 个）"
-        iters += 1
-        if iters % 10 == 0:
-            # 每 5 秒兜底：关闭可能弹出的背包/地图面板
+        now = time.time()
+        # 结束判定：主图消失即结束（模板匹配需独立截图，1 秒摊销一次）
+        if now - last_icon_check >= 1.0:
+            last_icon_check = now
+            if game_map.find_template(win, CHUYIJUEBAO_ICON) is None:
+                return True, f"锄遗聚宝结束（共消除 {clicked} 个）"
+        # 兜底：关闭可能弹出的背包/地图面板（5 秒一次）
+        if now - last_panel_check >= 5.0:
+            last_panel_check = now
             _close_scene_panels(win)
-        img = win.capture()
-        if img is None:
+        if CHUYIJUEBAO_DEBUG:
+            # 调试模式：不点击鼠标，标注检测框并保存截图（每秒一张）
+            if now - last_debug_save >= 1.0:
+                last_debug_save = now
+                full = win.capture(force_activate=False,
+                                   format=WindowCaptureFormat.NUMPY)
+                if full is not None:
+                    l, t, r, b = QI_REGION
+                    clusters = _find_red_qi_clusters(full[t:b, l:r])
+                    os.makedirs(CHUYIJUEBAO_DEBUG_DIR, exist_ok=True)
+                    path = os.path.join(CHUYIJUEBAO_DEBUG_DIR,
+                                        f"qi_{time.strftime('%H%M%S')}.png")
+                    _mark_qi_debug(full, clusters, path)
+                    log(f"[玄枢轶闻] 调试: 检测到 {len(clusters)} 个杂气，已标注保存 {path}", "SYS")
+                    log(f"[玄枢轶闻] 调试: 团块 "
+                        f"{[(c[0], c[1], c[6]) for c in clusters]}（中心, 面积）", "INFO")
             time.sleep(CHUYIJUEBAO_CHECK_INTERVAL)
             continue
-        now = time.time()
-        for cx, cy in _find_red_qi_clusters(np.asarray(img)):
-            if now - last_click_at.get((cx, cy), 0) < QI_CLICK_DEBOUNCE:
+        # 快速区域截图：屏幕 BitBlt 只抓杂气区域（比 PrintWindow 全窗
+        # 快数倍），杂气移动快，点击时效优先
+        region = _capture_qi_region(win)
+        if region is None:
+            time.sleep(CHUYIJUEBAO_CHECK_INTERVAL)
+            continue
+        clusters = _find_red_qi_clusters(region)
+        if not clusters:
+            time.sleep(CHUYIJUEBAO_CHECK_INTERVAL)
+            continue
+        # 每帧只点一个团块：跳过近期点过的位置（容漂移），点击后立即
+        # 重新截帧，保证每次点击都基于最新画面
+        tgt = None
+        for c in clusters:
+            if any(now - t < QI_CLICK_DEBOUNCE
+                   and abs(c[0] - px) <= 20 and abs(c[1] - py) <= 20
+                   for (px, py), t in last_click_at.items()):
                 continue
-            human_click(win, cx, cy)
-            last_click_at[(cx, cy)] = now
-            clicked += 1
-            time.sleep(0.2)  # 点击后短暂等待，避免同一团块被重复命中
-        time.sleep(CHUYIJUEBAO_CHECK_INTERVAL)
+            tgt = c
+            break
+        if tgt is None:
+            time.sleep(CHUYIJUEBAO_CHECK_INTERVAL)
+            continue
+        # 快速点击：杂气团块小且移动快，跳过拟人化弧线移动
+        Mouse.mouse_move(win.rect.left + tgt[0], win.rect.top + tgt[1],
+                         move_duration=0.02)
+        Mouse.click(button="primary")
+        last_click_at[(tgt[0], tgt[1])] = now
+        if len(last_click_at) > 60:
+            last_click_at = {k: t for k, t in last_click_at.items()
+                             if now - t < QI_CLICK_DEBOUNCE}
+        clicked += 1
     return False, f"锄遗聚宝超时（{timeout}s，主图未消失）"
 
 
@@ -395,24 +499,55 @@ def _signatures_similar(a, b, ratio=0.8):
     return difflib.SequenceMatcher(None, a, b).ratio() >= ratio
 
 
+@lru_cache(maxsize=None)
+def _char_counts(s):
+    """字符串字符多重集（needle 静态、同一行跨轮询重复，缓存供上界预过滤）。"""
+    return Counter(s)
+
+
 def _fuzzy_contains(text, needle, threshold=0.85):
     """模糊子串匹配：text 中是否存在与 needle 相似度达标的窗口。
 
     对话框文案的 OCR 结果可能有个别字误读，精确匹配会漏掉；
     以长度 ±3 的滑动窗口做相似度比对（抗误读与多/少字）。
+    预过滤均为 difflib 保证的上界（多重集重合度 / real_quick_ratio /
+    quick_ratio），低于阈值才跳过，不改命中语义（实测 15 万随机对
+    与旧实现 0 不一致）。
     """
     n = len(needle)
     if n == 0:
         return True
+    # 多重集上界：窗口 ratio = 2*M/(size+n) ≤ 2*O/(min_size+n)，
+    # M 为匹配字符数、O 为整行与 needle 的字符重合度；上界低于阈值整行跳过
+    min_size = max(1, n - 3) if n <= len(text) else len(text)
+    overlap = sum((_char_counts(text) & _char_counts(needle)).values())
+    if 2 * overlap / (n + min_size) < threshold:
+        return False
     if n > len(text):
-        return difflib.SequenceMatcher(None, text, needle).ratio() >= threshold
+        sm = difflib.SequenceMatcher(None, text, needle)
+        return sm.real_quick_ratio() >= threshold and sm.ratio() >= threshold
     for size in (n - 3, n - 2, n - 1, n, n + 1, n + 2, n + 3):
         if size <= 0 or size > len(text):
             continue
         for i in range(0, len(text) - size + 1, max(1, size // 2)):
-            if difflib.SequenceMatcher(None, text[i:i + size], needle).ratio() >= threshold:
+            window = text[i:i + size]
+            sm = difflib.SequenceMatcher(None, window, needle)
+            if sm.real_quick_ratio() < threshold or sm.quick_ratio() < threshold:
+                continue
+            if sm.ratio() >= threshold:
                 return True
     return False
+
+
+def _frames_equal(a, b):
+    """两帧像素完全一致（全分辨率逐像素比较，约 2-4ms）。
+
+    仅全等才复用上一帧 OCR 结论；降采样比较会把微小变化抹平，
+    导致缓慢浮现的对话框延迟检出，故不用。
+    """
+    if a is None or b is None or a.size != b.size:
+        return False
+    return bool((np.asarray(a) == np.asarray(b)).all())
 
 
 def _dialog_text_present(items, dtxt):
@@ -424,7 +559,7 @@ def _dialog_text_present(items, dtxt):
 
 def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶闻",
                 extra_dialog_handler=None, green_order=None, progress_key=None,
-                green_picker=None, fallback_keywords=None):
+                green_picker=None, fallback_keywords=None, first_items=None):
     """循环跟踪任务直到完成（prefix 供其他任务复用，如五环）。
 
     每轮：点击任务当前第一个绿色文案 → 等待任务信息变化（内容更新）
@@ -449,6 +584,8 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
     fallback_keywords：锚点内容采集失败时的兜底关键词列表（如五环子目标
     「替身/武痴/盗号贼/食婴鬼」），透传给 track_task 在追踪面板区域内
     直接按关键词匹配绿字行点击。
+    first_items：调用方刚 OCR 的 (items, img_np)（如领取校验刚确认任务
+    出现），首轮跳过截图+OCR，省约 1.2s。
     返回 (是否完成, 描述)。
     """
     deadline = time.time() + timeout
@@ -461,14 +598,17 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
         if is_in_battle(win):
             time.sleep(FOLLOW_POLL_INTERVAL)
             continue
-        # 内层轮询刚确认推进时复用其最近一次 OCR 结果（帧龄 <1s），
+        # 复用最近一次 OCR 结果（内层轮询确认推进时或领取校验命中时），
         # 省一次截图+OCR；该帧同样透传给 track_task 与进度键基线，
         # 点击路径上一共省掉约 3.5s 的重复 OCR
         if last_items is not None:
             items, img_np = last_items
             last_items = None
+        elif first_items is not None:
+            items, img_np = first_items
+            first_items = None
         else:
-            img = win.capture()
+            img = win.capture(force_activate=False)
             if img is None:
                 time.sleep(FOLLOW_POLL_INTERVAL)
                 continue
@@ -501,9 +641,11 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
         changed_once = False
         baseline_key = pre_key
         first_poll = pre_key is None
+        last_poll_img = None
+        last_poll_items = None
         while time.time() < deadline:
             time.sleep(CONFIRM_POLL_INTERVAL if changed_once else FOLLOW_POLL_INTERVAL)
-            img = win.capture()
+            img = win.capture(force_activate=False)
             if img is None:
                 continue
             if changed_once:
@@ -522,16 +664,23 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                     break
                 changed_once = False  # 变化未持续（OCR 抖动），回退正常轮询
                 continue
-            items, img_np = game_map.ocr_regions(img, FOLLOW_OCR_REGIONS)
+            # 帧复用：与上一轮询帧完全相同时复用其 OCR 结果（RapidOCR
+            # 同输入输出确定，逐字等价；静止帧省一次双区域 OCR ~1.2s）
+            if last_poll_items is not None and _frames_equal(img, last_poll_img):
+                items, img_np = last_poll_items
+            else:
+                items, img_np = game_map.ocr_regions(img, FOLLOW_OCR_REGIONS)
+                last_poll_items = (items, img_np)
+                last_poll_img = img
             # 附加对话框处理优先：战斗中也可能出现任务对话（如五环提交装备），
             # 此时任务追踪不可用，等战斗结束后再继续识别
             if extra_dialog_handler is not None:
                 extra_dialog_handler(win, items, img_np)
-            # 战斗中：跳过本轮识别（任务追踪与坐标不可用）
-            if is_in_battle(win):
+            # 战斗中：跳过本轮识别（任务追踪与坐标不可用）；复用本帧
+            if is_in_battle_frame(img):
                 continue
-            # 锄遗聚宝优先：出现则完整处理（开始 + 消除 err 直到主图消失）
-            if game_map.find_template(win, CHUYIJUEBAO_ICON) is not None:
+            # 锄遗聚宝优先：出现则完整处理（复用本帧模板匹配，不重复截窗）
+            if game_map.find_template_in(img, CHUYIJUEBAO_ICON) is not None:
                 ok2, info2 = _play_chuyijuebao(win)
                 log(f"[{prefix}] {info2}", "SYS" if ok2 else "WARN")
                 continue
@@ -571,18 +720,19 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                     if idx and _click_dialog_option_by_index(win, items, dtxt, idx):
                         handled = True
                         break
-            if not handled and _dialog_text_present(items, DIALOG_LOSE_TEXT):
-                # 战斗失败对话框：继续点击任务追踪的绿色文案推进任务
+            if not handled and any(_dialog_text_present(items, t)
+                                   for t in DIALOG_LOSE_TEXTS):
+                # 战斗失败/平局对话框：继续点击任务追踪的绿色文案推进任务
                 # （复用本轮 OCR 结果，省一次截图+OCR）
                 ok3, info3 = task_tracker.track_task(win, title, green_order=green_order,
                                                      green_picker=green_picker,
                                                      fallback_keywords=fallback_keywords,
                                                      pre_items=(items, img_np))
                 if ok3:
-                    log(f"[{prefix}] 检测到「你输了」对话，继续点击任务绿字推进", "SYS")
+                    log(f"[{prefix}] 检测到「你输了/平局」对话，继续点击任务绿字推进", "SYS")
                     handled = True
                 else:
-                    log(f"[{prefix}] 「你输了」对话中任务绿字点击失败: {info3}", "WARN")
+                    log(f"[{prefix}] 「你输了/平局」对话中任务绿字点击失败: {info3}", "WARN")
             if not handled:
                 for dtxt in DIALOG_SKIP_TEXTS:
                     if _dialog_text_present(items, dtxt):
@@ -616,12 +766,12 @@ def run_cycle(win):
         return ("done", info) if ok else ("fail", info)
 
     # 没有任务 → 寻路到任务位置并领取任务
-    ok, info = navigate_to_task(win)
+    ok, info, pre_items = navigate_to_task(win)
     if not ok:
         return ("daily_limit", info) if info == DAILY_LIMIT_INFO else ("fail", info)
 
-    # 领取成功：紧接着跟踪任务，不等轮次间隔
-    ok, info = follow_task(win)
+    # 领取成功：紧接着跟踪任务，不等轮次间隔；复用领取校验的 OCR 结果
+    ok, info = follow_task(win, first_items=pre_items)
     return ("done", info) if ok else ("fail", info)
 
 
