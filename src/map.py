@@ -135,12 +135,14 @@ def read_map_position(win):
     """OCR 地图位置区域（MAP_POS_REGION），返回 (地名, x, y)；失败返回 None。
 
     地名统一繁转简（世界地图用繁体，位置文案两种都可能出现）。
+    用区域快配置引擎直接检测：原实现裁剪后走全精度引擎，det 'min' 会把
+    30px 高的区域放大到 736 最小边再检测（177x30 → 4336x736，极慢），
+    快引擎按原尺寸检测，位置文字约 18-20px 可稳定识别。
     """
     img = win.capture()
     if img is None:
         return None
-    region_img = img.crop(MAP_POS_REGION)
-    items, _ = ocr_image(region_img)
+    items, _ = ocr_region(img, MAP_POS_REGION)
     raw = " ".join(t[0] for t in items).strip()
     m = _MAP_POS_RE.search(_clean_map_pos(raw))
     if m:
@@ -218,10 +220,13 @@ def open_world_map(win):
     if pt is None:
         return False, "未找到世界地图按钮"
     human_click(win, pt[0], pt[1])
-    time.sleep(1.5)  # 等待世界地图打开
-    if not is_world_map_open(win):
-        return False, "点击后世界地图未打开"
-    return True, "世界地图已打开"
+    # 轮询等待打开（实测约 0.5s 即开；替代固定 1.5s 等待，打开即返回）
+    deadline = time.time() + 2.0
+    while time.time() < deadline:
+        time.sleep(0.3)
+        if is_world_map_open(win):
+            return True, "世界地图已打开"
+    return False, "点击后世界地图未打开"
 
 
 def open_mini_map(win):
@@ -249,10 +254,10 @@ def open_mini_map_city(win, city_icon, city_label):
     if pt is None:
         return False, f"世界地图中未找到{city_label}"
     human_click(win, pt[0], pt[1])
-    time.sleep(1.5)  # 等待城市小地图打开
+    # 轮询等待小地图打开（替代固定 1.5s 等待，打开即返回）
     deadline = time.time() + 3
     while not is_mini_map_open(win) and time.time() < deadline:
-        time.sleep(0.5)
+        time.sleep(0.3)
     if not is_mini_map_open(win):
         return False, f"点击{city_label}后小地图未打开"
     return True, f"{city_label}小地图已打开"

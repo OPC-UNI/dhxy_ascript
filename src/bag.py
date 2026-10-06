@@ -59,13 +59,28 @@ def find_box_one_close(win):
 def find_item_with_slots(win, icon_name, label):
     """在背包中查找指定物品，未找到时切换储物格再找。
 
-    直接检测不到时：点击 box_one_close（储物格切换），仍没有则以 35px
-    为步长向下点击，最多重复 4 次；每次操作前等待 100ms（识别物品的
-    耗时不计入等待）。返回 (MatchResult 或 None, 过程描述)。
+    流程：
+    1. 直接检测（命中即返回）
+    2. 未命中：低阈值诊断匹配度并记日志（区分"没检测到"与"匹配度不足"），
+       等待 0.5s 复检一次——背包刚打开时物品图标可能尚未渲染完
+       （实测摄妖香在储物格 4 上首检漏检，遍历一圈回来才 0.84 命中）
+    3. 仍未命中：点击 box_one_close（储物格切换），以 35px 为步长向下
+       点击，最多 4 个储物格；每次操作前等待 100ms
+    返回 (MatchResult 或 None, 过程描述)。
     """
     items = find_item_in_bag(win, icon_name)
     if items:
         return items[0], "直接检测到"
+
+    # 诊断：低阈值再查，看当前储物格上是否只是匹配度不足（日志可见，便于排查）
+    near = FindImages.find_all_template(R.img(icon_name), im_source=win, threshold=0.6)
+    best = max((r.confidence for r in near), default=0.0)
+    log(f"[背包] {label}直接检测未命中（低阈值最优匹配度 {best:.2f}），"
+        f"等待 0.5s 复检", "INFO")
+    time.sleep(0.5)
+    items = find_item_in_bag(win, icon_name)
+    if items:
+        return items[0], "复检检测到"
 
     base = find_box_one_close(win)
     if base is None:

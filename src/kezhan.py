@@ -273,10 +273,12 @@ def _has_task(win):
     """判断任务追踪中是否存在客栈任务（标题行匹配，避免内容行误判）。
 
     匹配串取「客栈任务」（标题形如 月宫采珍【客栈任务】）：
-    单「客栈」会命中地图位置文案 洛阳客栈[18,12]（实测第 12 轮误判根因）；
-    get_task 优先匹配带括号的标题行，对话框居中的绿字选项不会误判。
+    单「客栈」会命中地图位置文案 洛阳客栈[18,12]（实测第 12 轮误判根因）。
+    改用 task_tracker.has_task：只 OCR 追踪面板区域（约 0.9s，全窗 OCR
+    约 2.2s），标题恒在面板左区且非绿字，判定语义与 get_task 一致；
+    领取对话链轮询与每轮任务判定均随之提速。
     """
-    return task_tracker.get_task(win, TASK_TITLE) is not None
+    return task_tracker.has_task(win, TASK_TITLE)
 
 
 def _click_screen_center(win, times=DIALOG_SKIP_CLICKS):
@@ -760,9 +762,10 @@ def run_cycle(win):
     if is_in_battle(win):
         return "fail", "战斗中，跳过本轮（等待战斗结束）"
 
-    # 无任务判定先复核一次
+    # 无任务判定先复核一次（2s：任务判定已改区域 OCR，仍保留复核防瞬时漏检；
+    # 若出现「有任务却误判没有」需调回 3s）
     if not _has_task(win):
-        time.sleep(3.0)
+        time.sleep(2.0)
 
     if _has_task(win):
         # 特殊任务步骤：追踪要求前往大理寺墙外/比武场 → 先手动寻路
