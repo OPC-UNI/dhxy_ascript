@@ -32,7 +32,7 @@ from .battle import is_in_battle, is_in_battle_frame  # 战斗状态判定（统
 from . import debug_overlay  # 调试信息悬浮层（任务进度更新）
 from .control_window import load_task_counts  # 任务次数上限（通用设置）
 from .xuanshu import (follow_task, _click_dialog_green_option,
-                      _dialog_text_present)  # 复用玄枢轶闻的任务跟踪/对话框逻辑
+                      _dialog_text_present, IDLE_RECLICK_INTERVAL)  # 复用玄枢轶闻的任务跟踪/对话框逻辑
 
 # 任务追踪面板中的任务标题
 WUHUAN_TITLE = "五环"
@@ -71,6 +71,19 @@ MISSING_EQUIPMENT_INFO = "缺少五环装备"              # 终止原因描述
 # ---- 完成标记 ----
 COMPLETE_DIALOG_TEXT = "恭喜你完成了今天五环任务"    # 今日五环全部完成的对话框文案
 COMPLETE_INFO = "今日五环任务已完成"                 # 结束状态描述
+# 单次完成的恭喜对话框（完成一次五环后出现「恭喜你完成了一次五环
+# 任务，今日还能再完成一次…」，无绿色选项、无需处理，任务追踪中没有
+# 五环任务时直接领取下一次即可）：文案与每日完成对话框相近，OCR 个别
+# 字误读时模糊匹配可能混淆（实测 0.87 过阈值），须以「还能再完成」
+# 作为区分特征排除
+CONGRATS_MARK_TEXT = "还能再完成"                    # 区分特征：出现即非每日完成
+# 每日两次上限对话框（领取时出现「互助友爱，铭记在心即可，今天你已经
+# 完成过此任务两次，请明天再来！」，今日两次五环均已完成的结束信号）
+DAILY_LIMIT_TEXT = "互助友爱，铭记在心即可，今天你已经完成过此任务两次，请明天再来！"
+DAILY_LIMIT_INFO = "今日两次五环均已完成（请明天再来）"   # 结束状态描述
+# 跟踪总超时（秒）：一轮五环含 5 个子目标与多场战斗，实测耗时约 9 分半，
+# 默认 300s 会中途超时重启（日志出现「跟踪后任务信息无变化（超时）」）
+WUHUAN_FOLLOW_TIMEOUT = 1800
 
 # ---- 时序参数（秒） ----
 CLOTH_SHOP_ARRIVE_TIMEOUT = 90  # 寻路到布店门口的超时
@@ -282,9 +295,12 @@ def _claim_task(win):
             time.sleep(0.2)
             continue
         items, img_np = game_map.ocr_image(img)
+        if _dialog_text_present(items, DAILY_LIMIT_TEXT):
+            log(f"[五环] 检测到「{DAILY_LIMIT_TEXT}」", "SYS")
+            return False, DAILY_LIMIT_INFO
         if _click_green_option(win, items, img_np, CLAIM_DIALOG_OPTION):
             claimed = True
-            # 活力值不足提示在点击领取选项之后出现：重新截帧并轮询几秒
+            # 活力值不足/今日两次已满提示在点击领取选项之后出现：重新截帧并轮询几秒
             vdeadline = time.time() + 4
             while time.time() < vdeadline:
                 img = win.capture()
@@ -292,6 +308,9 @@ def _claim_task(win):
                     time.sleep(0.5)
                     continue
                 items, img_np = game_map.ocr_image(img)
+                if _dialog_text_present(items, DAILY_LIMIT_TEXT):
+                    log(f"[五环] 检测到「{DAILY_LIMIT_TEXT}」", "SYS")
+                    return False, DAILY_LIMIT_INFO
                 if _dialog_text_present(items, VITALITY_DIALOG_TEXT):
                     if _click_green_option(win, items, img_np, VITALITY_DIALOG_OPTION):
                         log("[五环] 活力值不足，已点击「那可不行，我一会再来。」", "SYS")
@@ -309,13 +328,23 @@ def _claim_task(win):
             img = win.capture()
             if img is not None:
                 items, img_np = game_map.ocr_image(img)
+                if _dialog_text_present(items, DAILY_LIMIT_TEXT):
+                    log(f"[五环] 检测到「{DAILY_LIMIT_TEXT}」", "SYS")
+                    return False, DAILY_LIMIT_INFO
                 _click_wuhuan_option_once(win, items, img_np)
             time.sleep(0.5)
     if not claimed:
         return False, "领取对话框处理失败"
-    # 校验任务出现在追踪面板
+    # 校验任务出现在追踪面板；期间检测今日两次已满对话框
+    # （点击领取选项后 NPC 回复「互助友爱…请明天再来」时任务不会出现）
     deadline = time.time() + CLAIM_DIALOG_TIMEOUT
     while not task_tracker.has_task(win, WUHUAN_TITLE) and time.time() < deadline:
+        img = win.capture(force_activate=False)
+        if img is not None:
+            items, _ = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
+            if _dialog_text_present(items, DAILY_LIMIT_TEXT):
+                log(f"[五环] 检测到「{DAILY_LIMIT_TEXT}」", "SYS")
+                return False, DAILY_LIMIT_INFO
         time.sleep(1.0)
     if not task_tracker.has_task(win, WUHUAN_TITLE):
         return False, "已点击领取选项，但任务追踪中未检测到任务"
@@ -357,8 +386,12 @@ def _handle_submit_dialog(win, items, img_np):
     全部储物格切换后仍未找到 → 抛 MissingEquipment 终止任务。
     返回是否已处理。
     """
-    # 完成标记优先：每日五环全部完成出现恭喜对话框 → 抛异常结束任务循环
-    if _dialog_text_present(items, COMPLETE_DIALOG_TEXT):
+    # 完成标记优先：每日五环全部完成出现恭喜对话框 → 抛异常结束任务循环。
+    # 「恭喜你完成了一次五环任务（今日还能再完成一次）」是单次完成的
+    # 恭喜对话框，与每日完成文案相近，OCR 误读时模糊匹配会混淆，
+    # 含「还能再完成」特征即非每日完成，不得结束任务
+    if _dialog_text_present(items, COMPLETE_DIALOG_TEXT) \
+            and not _dialog_text_present(items, CONGRATS_MARK_TEXT):
         log(f"[五环] 检测到「{COMPLETE_DIALOG_TEXT}」，今日五环任务已完成", "SYS")
         raise DailyComplete()
     # 阶段二优先：给与面板已打开（对话已处理过），继续完成给与
@@ -414,6 +447,23 @@ def _wuhuan_progress_key(items, img_np):
     return "|".join(sorted(set(found)))
 
 
+def _wuhuan_text_key(items, img_np):
+    """五环文本签名键：标题 + 内容行排序拼接（行序无关）。
+
+    链接行「去找…惯骗[4/5]」被 OCR 拆成链接/计数两个碎片行，碎片行的
+    输出顺序与纵向坐标都会抖动（实测交替翻转导致默认签名反复翻转、
+    重复点击）；排序拼接后行序无关。计数变化（3/5→4/5）与坐标、单字
+    误读经相似度比较（0.8）过滤，子目标切换（关键词变化）由进度键
+    检测，两者互不干扰。
+    """
+    task = task_tracker.find_task(task_tracker.group_tasks(items), WUHUAN_TITLE)
+    if task is None:
+        return ""
+    parts = [task["title"]] + sorted(
+        re.sub(r"[^\w]", "", ln[0]) for ln in task["lines"])
+    return "|".join(parts)
+
+
 def run_loop(win, cycle_interval=3.0):
     """五环主循环：领取任务 → 跟踪到完成 → 回云游大师领取下一次。
 
@@ -421,7 +471,8 @@ def run_loop(win, cycle_interval=3.0):
     结束条件（满足其一即返回结束原因，任务随之停止）：
     1. 完成任务次数达到设置的次数上限（通用设置-任务次数）
     2. 领取时出现活力值不足对话框（点击「那可不行，我一会再来。」后结束）
-    3. 跟踪期间出现「恭喜你完成了今天五环任务」对话框（今日五环全部完成）
+    3. 领取时出现「互助友爱，铭记在心即可…请明天再来」对话框（今日两次已满）
+    4. 跟踪期间出现「恭喜你完成了今天五环任务」对话框（今日五环全部完成）
     返回结束原因描述。
     """
     max_rounds = load_task_counts().get(WUHUAN_TITLE, 0)
@@ -448,16 +499,25 @@ def run_loop(win, cycle_interval=3.0):
                 if info == VITALITY_LIMIT_INFO:
                     log(f"[五环] {info}（已完成 {done} 次），结束任务", "SYS")
                     return f"活力值不足，结束五环任务（已完成 {done} 次）"
+                if info == DAILY_LIMIT_INFO:
+                    log(f"[五环] {info}（已完成 {done} 次），结束任务", "SYS")
+                    return f"{DAILY_LIMIT_INFO}，结束五环任务（已完成 {done} 次）"
                 log(f"[五环] {info}", "WARN")
                 time.sleep(cycle_interval)
                 continue
             log(f"[五环] {info}", "SYS")
         # 提交装备步骤：由 follow_task 的附加对话处理回调接管
+        # idle_reclick_interval：点击可能被战斗切换等过渡期吞掉，任务信息
+        # 无变化时限频重试（替代旧逻辑的高频噪声式重复点击）
+        # signature_key：行序无关签名（碎片行翻转不再引起重复点击）
         try:
             ok, info = follow_task(win, WUHUAN_TITLE, prefix="五环",
+                                   timeout=WUHUAN_FOLLOW_TIMEOUT,
                                    extra_dialog_handler=_handle_submit_dialog,
                                    fallback_keywords=WUHUAN_SUB_KEYWORDS,
-                                   progress_key=_wuhuan_progress_key)
+                                   progress_key=_wuhuan_progress_key,
+                                   idle_reclick_interval=IDLE_RECLICK_INTERVAL,
+                                   signature_key=_wuhuan_text_key)
         except MissingEquipment as e:
             log(f"[五环] {MISSING_EQUIPMENT_INFO}（{e}），结束任务", "SYS")
             return f"{MISSING_EQUIPMENT_INFO}，结束五环任务（已完成 {done} 次）"

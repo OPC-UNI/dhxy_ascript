@@ -32,7 +32,7 @@ from src.control_window import (ControlWindow, load_task_mode,
                                 load_use_sheyaoxiang,
                                 load_debug_overlay,
                                 load_battle_actions)  # 自定义网页控制窗口（开始/停止按钮）
-from src.app_utils import log, toast  # 日志与系统通知
+from src.app_utils import log, toast, log_file_path  # 日志与系统通知
 from src import game  # 游戏窗口操作
 from src import bag  # 背包操作
 from src import battle  # 战斗自动化（战斗监控与人物/召唤兽操作）
@@ -122,6 +122,7 @@ def task_start():
     在此函数中编写自动化任务的核心业务逻辑。
     """
     log("业务进程已建立，开始执行自动化任务...", "SYS")
+    log(f"[日志] 本地日志文件: {log_file_path()}", "SYS")
     mode = load_task_mode()
     use_sheyaoxiang = load_use_sheyaoxiang()
     battle_actions = load_battle_actions()

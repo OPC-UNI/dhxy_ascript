@@ -184,6 +184,11 @@ def group_tasks(items):
     if cur is not None:
         tasks.append(cur)
     for t in tasks:
+        # 内容行按视觉自上而下排序：OCR 输出顺序不稳定（同高度碎片行
+        # 会随机互换，实测五环链接行「…惯骗[」与计数行「4/5]」交替
+        # 翻转，任务签名随之抖动导致重复点击）；纵向坐标排序后签名与
+        # 点击目标均稳定
+        t["lines"].sort(key=lambda ln: ln[1][1])
         # 中文换行拼接不加空格，跨换行文案才能直接匹配
         t["text"] = "".join(ln[0] for ln in t["lines"])
     return tasks
@@ -357,6 +362,9 @@ def track_task(win, title, text=None, green_index=0, retries=4, retry_interval=1
                 break
             if rect[0] < arect[2] + 40 and rect[2] > arect[0] - 40:
                 content.append((txt, rect, score))
+        # 内容行按视觉自上而下排序（OCR 行序不稳定，五环链接行与计数行
+        # 实测随机互换，点击目标随之摆动）；排序后首个绿字恒为链接行
+        content.sort(key=lambda it: it[1][1])
         last_content = content
 
         if text is not None:
