@@ -11,6 +11,7 @@
 - src/battle.py          战斗自动化（战斗监控与人物/召唤兽操作）
 - src/wuhuan.py          五环任务自动化（购装备、领取、跟踪循环）
 - src/kezhan.py          客栈任务自动化（洛阳客栈找掌柜、领取、跟踪循环）
+- src/xiuluo.py          修罗任务自动化（灵兽村领取、跟踪、返程循环）
 - src/control_window.py  网页控制窗口（启动/重置/关闭、任务模式选择）
 - src/polyfill.py        pywebview 6 桥接兼容补丁
 """
@@ -36,7 +37,8 @@ from src import battle  # 战斗自动化（战斗监控与人物/召唤兽操�
 from src import xuanshu  # 玄枢轶闻任务自动化
 from src import wuhuan  # 五环任务自动化
 from src import kezhan  # 客栈任务自动化
-from src import team  # 组队功能（任务前置退队 + 修罗模式实机自检）
+from src import team  # 组队功能（任务前置退队）
+from src import xiuluo  # 修罗任务自动化
 from src import status_bars  # 人物/召唤兽血蓝条检测
 from src import map as game_map  # 地图操作（OCR 引擎预热等）
 
@@ -220,11 +222,12 @@ def task_start():
             log(f"[客栈] 任务循环结束：{info}", "SYS")
             return
 
-        # 8. 【临时】组队功能实机自检：修罗模式暂未实现，借用其分支跑 team.self_test，
-        #    验证通过后移除本分支（修罗任务实现时替换）
+        # 8. 修罗主循环（灵兽村领取 → 跟踪（寻路/对话开打/战斗）→ 返程 → 往复，
+        #    达到次数上限时结束任务进程）；非队长时核心流程不执行，
+        #    由 run_loop 内部保持任务运行，仅战斗线程自动操作
         if logged_in and mode == "修罗":
-            info = team.self_test(main_win)
-            log(f"[组队] 自检结束：{info}", "SYS")
+            info = xiuluo.run_loop(main_win)
+            log(f"[修罗] 任务循环结束：{info}", "SYS")
             return
 
         # 9. 血蓝条检测（已登录时执行一次）

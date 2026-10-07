@@ -7,7 +7,8 @@ ControlWindow 基于 WebWindow（pywebview），页面为 res/ui/control_window.
 页面结构：
 - 顶部：启动/重置/关闭三个按钮 + 任务状态显示
 - Tab 栏：任务设置（任务模式、任务次数）/ 通用设置（摄妖香、血蓝阈值、
-  人物与召唤兽默认战斗动作）/ 高级设置（暂无）
+  人物与召唤兽默认战斗动作，内含修罗设置分组：最少人数、必须有的种族，
+  仅队长时生效）/ 高级设置（暂无）
 
 功能约定：
 - 启动：对当前选中的任务模式开始执行任务
@@ -112,6 +113,39 @@ def save_threshold(name, value):
     return {"status": "success", "threshold": value}
 
 
+# ---- 修罗设置（最少人数 + 必须有的种族，仅队长时生效，KeyValue 持久化） ----
+XIULUO_MIN_DEFAULT = 5
+XIULUO_MIN_RANGE = (3, 5)  # 最少人数范围：最小 3，最大 5
+XIULUO_RACES = ["男人", "女人", "男鬼", "女鬼", "男仙", "女仙", "男魔", "女魔", "男巫", "女巫"]
+XIULUO_RACES_DEFAULT = ["男人", "男鬼"]
+_XIULUO_MIN_KEY = "xiuluo_min_members"
+_XIULUO_RACES_KEY = "xiuluo_required_races"
+
+
+def load_xiuluo_settings():
+    """读取修罗设置：最少人数（3~5，默认 5）与必须有的种族（默认 男人+男鬼）。"""
+    min_members = int(KeyValue.get(_XIULUO_MIN_KEY, XIULUO_MIN_DEFAULT))
+    min_members = min(XIULUO_MIN_RANGE[1], max(XIULUO_MIN_RANGE[0], min_members))
+    raw = str(KeyValue.get(_XIULUO_RACES_KEY, ",".join(XIULUO_RACES_DEFAULT)))
+    races = [r for r in raw.replace("，", ",").split(",") if r in XIULUO_RACES]
+    return {"min_members": min_members,
+            "races": races or list(XIULUO_RACES_DEFAULT)}
+
+
+def save_xiuluo_min(value):
+    """保存修罗最少人数（夹取 3~5），返回操作结果。"""
+    value = min(XIULUO_MIN_RANGE[1], max(XIULUO_MIN_RANGE[0], int(value)))
+    KeyValue.save(_XIULUO_MIN_KEY, value)
+    return {"status": "success", "min_members": value}
+
+
+def save_xiuluo_races(races):
+    """保存修罗必须有的种族（过滤非法项，按逗号串存储），返回操作结果。"""
+    races = [r for r in (races or []) if r in XIULUO_RACES]
+    KeyValue.save(_XIULUO_RACES_KEY, ",".join(races))
+    return {"status": "success", "races": races}
+
+
 # ---- 战斗设置（人物/召唤兽默认战斗动作，UI 单选项，KeyValue 持久化） ----
 # 人物：技能面板 3 行 × 5 列共 15 格 + 攻击/防御/捕捉/逃跑/无
 CHAR_BATTLE_ACTIONS = ([f"技能{r}-{c}" for r in range(1, 4) for c in range(1, 6)]
@@ -178,17 +212,21 @@ class ControlWindow(WebWindow):
         self.expose(self.save_use_sheyaoxiang)
         self.expose(self.save_threshold)
         self.expose(self.save_battle_action)
+        self.expose(self.save_xiuluo_min)
+        self.expose(self.save_xiuluo_races)
         self.expose(self.start_task)
         self.expose(self.reset_task)
         self.expose(self.close_window)
 
     def get_init_data(self):
-        """页面初始化数据：任务模式、任务次数、摄妖香开关、各条阈值与战斗动作。"""
+        """页面初始化数据：任务模式、任务次数、摄妖香开关、各条阈值、
+        战斗动作与修罗设置。"""
         return {"mode": load_task_mode(),
                 "task_counts": load_task_counts(),
                 "use_sheyaoxiang": load_use_sheyaoxiang(),
                 "thresholds": load_thresholds(),
-                "battle": load_battle_actions()}
+                "battle": load_battle_actions(),
+                "xiuluo": load_xiuluo_settings()}
 
     def save_battle_action(self, target, value):
         """战斗设置变更：保存人物/召唤兽默认战斗动作。"""
@@ -209,6 +247,14 @@ class ControlWindow(WebWindow):
     def save_use_sheyaoxiang(self, on):
         """摄妖香开关变更：保存开关状态。"""
         return save_use_sheyaoxiang(on)
+
+    def save_xiuluo_min(self, value):
+        """修罗设置变更：保存最少人数。"""
+        return save_xiuluo_min(value)
+
+    def save_xiuluo_races(self, races):
+        """修罗设置变更：保存必须有的种族列表。"""
+        return save_xiuluo_races(races)
 
     def start_task(self):
         """启动按钮：对当前选中的模式开始执行任务。"""
