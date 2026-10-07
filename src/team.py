@@ -28,15 +28,21 @@
 - handle_join_requests：申请列表界面与同意/拒绝按钮定位
 - apply_to_team：世界场景中「申请队伍」招募玩家的识别
 """
+import os
+import pathlib
 import re
 import time
 
+import cv2
+import numpy as np
+from PIL import Image
 from ascript.windows.hardware.keyboard import Keyboard
 from ascript.windows.system import R
 from ascript.windows.screen.find_images import FindImages
 
 from .app_utils import log, human_click, human_move
 from . import map as game_map  # 找图与 OCR 能力复用
+from . import debug_overlay  # 调试信息悬浮层（队伍信息行更新）
 
 # ---- 模板（res/img，用户截图提供） ----
 ZUDUI_ITEM_ICON = "zudui_item.png"        # 组队按钮（点击弹出组队菜单）
@@ -52,12 +58,28 @@ LIKAI_DUIWU_ICON = "likaiduiwu.png"       # 队伍面板「离开队伍」按钮
 # 面板成员种族文案区域（窗口相对）；种族文案范围见 RACE_WORDS，
 # 每个成员对应一条种族文案，故成员数 = 识别到的种族数（最多 5，最少 1）
 RACE_REGION = (300, 260, 1066, 620)
-RACE_WORDS = ("男人", "女人", "男鬼", "女鬼", "男仙", "女仙", "男魔", "女魔", "男巫", "女巫")
+RACE_WORDS = ("男人", "女人", "男鬼", "女鬼", "男仙", "女仙", "男魔", "女魔", "男巫", "女巫",
+               "男龙", "女龙")
 
 # 组队菜单区域与文案（OCR 判定菜单已打开：未组队菜单为
 # 组队操作/创建队伍/附近队伍/组队平台，已组队菜单含队伍信息）
 TEAM_MENU_REGION = (950, 640, 1150, 830)
 TEAM_MENU_TEXTS = ("组队操作", "创建队伍", "附近队伍", "组队平台", "队伍信息")
+
+# 第 1 列种族文字固定区域（窗口相对坐标，实测多张截图一致）：
+# 该列文字在「选中态」为金色、灰度对比度低，OCR 稳定读不到；
+# 用固定坐标裁剪 + 颜色掩码提取字形，与字形库做模板匹配识别
+RACE_GLYPH_RECT = (455, 302, 478, 348)
+
+# 取消第 1 个成员选中的点击位置（窗口相对坐标）：
+# 面板打开时默认选中第 1 个成员，其种族渲染为选中态（金色）读不到；
+# 点击其他成员的位置会把选中移走，第 1 个成员恢复普通渲染（用户实测：
+# 空白处点击不能取消选中，点成员位置可以；第 2 列名字行坐标 552,505）
+DESELECT_CLICK_POS = (552, 505)
+DESELECT_SETTLE = 0.5  # 点击后等待选中状态更新
+# 字形匹配阈值（同字体不同颜色，掩码归一化后同种族实测 0.86+，
+# 不同种族 ≤0.31，取 0.80 留余量且不会误判）
+_RACE_GLYPH_MATCH = 0.80
 
 # 模板匹配与等待参数
 _TEMPLATE_THRESHOLD = 0.8
@@ -273,11 +295,118 @@ def _parse_member_ocr(img):
     return race_items, level_items
 
 
+# ---- 种族字形库（第 1 列金色种族文字的识别） ----
+# 第 1 列种族文字为金色（队长标记色？），灰度对比度低、OCR 读不到；
+# 但 5 列种族文字位置固定（列中心 ≈465/608/753/894/1038）且字体相同。
+# 方案：可读列的 OCR 结果自动采集 12 个种族的字形样本入库（随挂机
+# 积累），第 1 列按固定坐标裁剪 + 金色掩码提取字形，与库做形状匹配
+# 识别（颜色归一化后与颜色无关）。库在配置目录，不入 git。
+_GLYPH_SIZE = (23, 46)  # 与 RACE_GLYPH_RECT 尺寸一致
+
+
+def _glyph_path():
+    """字形库文件路径（配置目录，随挂机自动积累）。"""
+    return pathlib.Path(os.getcwd()) / "team_race_glyphs.npz"
+
+
+def _load_glyphs():
+    """加载字形库 {种族: 二值数组}；文件不存在/损坏返回空。"""
+    path = _glyph_path()
+    if not path.exists():
+        return {}
+    try:
+        data = np.load(path)
+        return {str(k): data[k].astype(np.uint8) for k in data.files}
+    except Exception:
+        return {}
+
+
+def _save_glyphs(glyphs):
+    """保存字形库（写临时文件后原子替换）。"""
+    path = _glyph_path()
+    tmp = path.with_suffix(".tmp")
+    try:
+        np.savez_compressed(tmp, **glyphs)
+        os.replace(tmp, path)
+    except Exception:
+        pass
+
+
+def _extract_glyph(np_img, rect, gold=False):
+    """从矩形提取二值字形（归一化到 _GLYPH_SIZE），笔画过少返回 None。
+
+    gold=True：第 1 列金色文字掩码（R/G 高、B 低）；
+    gold=False：可读列亮像素掩码（max>150）。
+    """
+    l, t, r, b = [int(v) for v in rect]
+    seg = np_img[t:b, l:r].astype(int)
+    if seg.size == 0:
+        return None
+    if gold:
+        mask = ((seg[:, :, 0] > 160) & (seg[:, :, 1] > 140) & (seg[:, :, 2] < 170)
+                & (seg[:, :, 0] > seg[:, :, 2] + 40) & (seg[:, :, 1] > seg[:, :, 2] + 30))
+    else:
+        mask = seg.max(axis=2) > 150
+    if mask.sum() < 30:
+        return None
+    small = Image.fromarray((mask * 255).astype(np.uint8)).resize(
+        _GLYPH_SIZE, Image.NEAREST)
+    return np.asarray(small) > 0
+
+
+def _match_glyph(np_img, glyphs):
+    """第 1 列金色字形与库匹配，返回 (种族, 分数) 或 (None, 0.0)。"""
+    if not glyphs:
+        return None, 0.0
+    query = _extract_glyph(np_img, RACE_GLYPH_RECT, gold=True)
+    if query is None:
+        return None, 0.0
+    qf = query.astype(np.float32)
+    best, best_score = None, 0.0
+    for race, g in glyphs.items():
+        gf = g.astype(np.float32)
+        if gf.shape != qf.shape:
+            continue
+        score = float(cv2.matchTemplate(qf, gf, cv2.TM_CCOEFF_NORMED).max())
+        if score > best_score:
+            best, best_score = race, score
+    return best, best_score
+
+
+def _deselect_first_member(win):
+    """点击第 2 个成员位置，取消第 1 个成员的默认选中。
+
+    第 1 个成员处于选中态时其种族文字为金色、OCR 读不到；
+    点击其他成员位置把选中移走后恢复普通渲染（用户实测）。
+    """
+    human_click(win, DESELECT_CLICK_POS[0], DESELECT_CLICK_POS[1])
+    time.sleep(DESELECT_SETTLE)
+
+
+def _harvest_glyphs(img_np, race_items, glyphs):
+    """从可读种族列采集字形样本入库（已有种族的样本跳过）。
+
+    img_np：面板帧（RGB numpy）；返回库是否变化（需要落盘）。
+    """
+    changed = False
+    for race, rect in race_items:
+        if race in glyphs or race == "?":
+            continue
+        # OCR 框外扩 2px 再采集，防笔画贴边被裁
+        l, t, r, b = rect
+        g = _extract_glyph(img_np, (l - 2, t - 2, r + 2, b + 2))
+        if g is None:
+            continue
+        glyphs[race] = g.astype(np.uint8)
+        changed = True
+    return changed
+
+
 def _count_members_frame(win, img):
     """帧内统计队伍人数：优先按等级行计数，无等级行时退回种族数。
 
-    选中成员（自己）的种族文字被绿色高亮遮挡，OCR 经常读不到，
-    导致种族数少于实际人数；等级行不受高亮影响（实测 5 人识别 5 条）。
+    种族行第 1 列经常读不到（实测，原因待确认），导致种族数少于
+    实际人数；等级行稳定（实测 5 人识别 5 条）。
     等级行缺失（面板数据尚未渲染完）时重截一次。
     返回 (是否成功, 人数, 种族列表)。
     """
@@ -375,6 +504,21 @@ def close_team_panel(win):
 
 # ---- 组队状态检查 ----
 
+# 最近一次队伍身份检查结果（供战斗线程等读取，如抢盒子的队长规则）
+_known_leader = None  # True=队长 / False=非队长 / None=未知（未检查过）
+
+
+def record_leader_status(is_leader):
+    """记录最近一次队伍身份检查结果（见 _known_leader）。"""
+    global _known_leader
+    _known_leader = is_leader
+
+
+def known_leader():
+    """最近一次队伍身份检查是否队长；未检查过返回 None。"""
+    return _known_leader
+
+
 def is_in_team(win):
     """检查是否已组队：打开组队菜单，出现「队伍信息」即已组队。
 
@@ -420,13 +564,15 @@ def analyze_team_members(win):
     OCR 面板区域 (300,260)-(1066,620)：种族文案限定 RACE_WORDS
     （竖排文字，位于成员头像旁），等级文案按
     未转102/1转120/2转120/3转120/飞升120 格式解析（位于成员列表）。
-    配对：种族与等级都按 x 分列排序后，取 x 中心最近的等级配对——
-    选中成员（自己）的种族被高亮遮挡读不到时，其余列仍正确对应
-    （索引配对会整体错位）；数量不一致时记 WARN。
+    配对：种族与等级都按 x 分列排序；等级多于种族时缺列按第 1 列
+    （实测第 1 列成员的种族文字 OCR 稳定读不到，原因待确认）处理，
+    其余列按序后移对齐，缺列补「?」成员占位；种族多于等级时记 WARN。
     返回 (是否成功, [(种族, 等级文案或None), ...])；识别到 0 条视为失败。
     """
     if not _is_panel_open(win):
         return False, "队伍面板未打开"
+    # 取消第 1 个成员的默认选中（选中态种族文字为金色、OCR 读不到）
+    _deselect_first_member(win)
     img = win.capture(force_activate=False)
     if img is None:
         return False, "窗口截图失败"
@@ -439,19 +585,37 @@ def analyze_team_members(win):
         img2 = win.capture(force_activate=False)
         if img2 is not None:
             _, level_items = _parse_member_ocr(img2)
-    # 配对：x 中心最近
-    def _cx(rect):
-        return (rect[0] + rect[2]) / 2
+    # 字形库：可读列样本自动入库（新种族采集）；第 1 列金色文字形状匹配识别
+    img_np = np.asarray(img)
+    glyphs = _load_glyphs()
+    if _harvest_glyphs(img_np, race_items, glyphs):
+        _save_glyphs(glyphs)
+    # 配对：等级多于种族时，缺列按第 1 列处理——实测第 1 列成员的种族
+    # 文字为金色、OCR 稳定读不到；用固定坐标裁剪 + 字形库形状匹配识别
+    # （库未积累到该种族时回退「?」），其余列按 x 序一一后移对齐
+    # （race[i] ↔ level[i+gap]）。种族多于等级（数据异常）才告警。
+    gap = len(level_items) - len(race_items)
+    gold_race = None
+    if gap > 0:
+        matched, score = _match_glyph(img_np, glyphs)
+        if matched is not None and score >= _RACE_GLYPH_MATCH:
+            gold_race = matched
+            log(f"[组队] 第 1 列金色种族字形匹配: {matched}（{score:.2f}）", "INFO")
     members = []
-    for race, rect in race_items:
+    for j in range(max(0, gap)):
+        lv = level_items[j][0]
+        race = gold_race if gold_race is not None else "?"
+        members.append((race, f"{lv[0]}{lv[1]}"))
+    for i, (race, _rect) in enumerate(race_items):
         lv_txt = None
-        if level_items:
-            lv = min(level_items, key=lambda it: abs(_cx(it[1]) - _cx(rect)))[0]
+        j = i + max(0, gap)
+        if j < len(level_items):
+            lv = level_items[j][0]
             lv_txt = f"{lv[0]}{lv[1]}"
         members.append((race, lv_txt))
-    if len(level_items) != len(race_items):
-        log(f"[组队] 种族({len(race_items)})与等级({len(level_items)})数量不一致，"
-            f"按列最近配对，结果可能错位", "WARN")
+    if len(race_items) > len(level_items):
+        log(f"[组队] 种族({len(race_items)})多于等级({len(level_items)})，"
+            f"部分等级缺失，结果可能错位", "WARN")
     return True, members
 
 
@@ -498,38 +662,82 @@ def check_team_conditions(win, min_members=None, required_races=None):
     return True, f"队伍满足条件（{len(races)} 人: {'、'.join(races)}）"
 
 
-def check_xiuluo_team(win, min_members=None):
-    """修罗领取前队伍检查：一次打开队伍面板完成队长判定与人数检查。
+def check_team_min(win, min_members=None):
+    """领取前队伍检查（通用，修罗/五倍等复用）：一次打开队伍面板完成
+    队长判定、人数检查与成员信息采集。
 
-    面板打不开（未组队/申请加入面板等）与非队长均返回 not_leader
-    （修罗核心流程仅队长执行）。非队长不检查人数（修罗设置仅在队长生效）。
+    面板打不开（未组队/申请加入面板等）与非队长均返回 not_leader。
     队长判定为双模板比分数（防解散/离开按钮互误匹配）；人数按等级行
-    计数（选中成员种族被高亮遮挡读不到时也不漏）。
+    计数（种族行第 1 列读不到时也不漏）。
     min_members: 人数下限（含自己），None 不检查
-    返回 (状态, 描述)；状态：ready 可领取 / wait 队长但人数不足
-    / not_leader 非队长或队长无法判定。
+    返回 (状态, 描述, 成员列表)；状态：ready 可领取 / wait 队长但人数
+    不足 / not_leader 非队长或队长无法判定。
     """
     if not _is_panel_open(win):
         ok, info = open_team_panel(win)
         if not ok:
-            return "not_leader", f"队长无法判定（{info}）"
+            return "not_leader", f"队长无法判定（{info}）", []
     img = win.capture(force_activate=False)
     if img is None:
         close_team_panel(win)
-        return "not_leader", "窗口截图失败"
+        return "not_leader", "窗口截图失败", []
     if not _is_leader_in_frame(img):
+        # 非队长同样在同一面板打开内采集成员信息（悬浮层展示用）
+        ok2, members = analyze_team_members(win)
         close_team_panel(win)
-        return "not_leader", "非队长（面板无「解散队伍」）"
+        if not ok2:
+            members = []
+        record_leader_status(False)
+        return "not_leader", "非队长（面板无「解散队伍」）", members
+    record_leader_status(True)
     ok, count, races = _count_members_frame(win, img)
+    # 成员详情（同一面板打开内采集，不重复开关面板）
+    ok2, members = analyze_team_members(win)
     close_team_panel(win)
+    if not ok2:
+        members = []
     if not ok:
-        return "wait", "成员识别失败"
+        return "wait", "成员识别失败", members
     race_txt = "、".join(races) if races else "未识别到种族"
     if min_members is not None and count < min_members:
         log(f"[组队] 队伍不满足条件: 人数不足（{count}/{min_members}）"
             f"（当前 {count} 人: {race_txt}）", "WARN")
-        return "wait", f"队伍人数不足（{count}/{min_members}，当前: {race_txt}）"
-    return "ready", f"队伍满足人数要求（{count} 人: {race_txt}）"
+        return "wait", f"队伍人数不足（{count}/{min_members}，当前: {race_txt}）", members
+    return "ready", f"队伍满足人数要求（{count} 人: {race_txt}）", members
+
+
+def update_overlay_team(status, info, members):
+    """按队伍检查结果更新调试悬浮层「队伍」行（身份 + 人数/种族/等级）。
+
+    修罗/五倍等任务模块每次 check_team_min 后调用；不为悬浮层单独
+    开面板，检查的自然结果顺带展示。等级转生段省略为数字。
+    """
+    if status == "not_leader":
+        leader_txt = ("非队长" if "非队长" in info
+                      else "未组队" if "未组队" in info else "未知")
+    else:
+        leader_txt = "队长"
+    parts = [f"队伍: {leader_txt}"]
+    if members:
+        items = []
+        for race, lv in members:
+            digits = re.sub(r"[^0-9]", "", lv or "")
+            items.append(f"{race}{digits}")
+        parts.append(f"{len(members)}人: {' '.join(items)}")
+    debug_overlay.set_team(" | ".join(parts))
+
+
+def check_xiuluo_team(win, min_members=None):
+    """修罗领取前队伍检查（见 check_team_min，仅取状态与描述）。
+
+    面板打不开（未组队/申请加入面板等）与非队长均返回 not_leader
+    （修罗核心流程仅队长执行）。非队长不检查人数（修罗设置仅在队长生效）。
+    min_members: 人数下限（含自己，按识别到的种族数计），None 不检查
+    返回 (状态, 描述)；状态：ready 可领取 / wait 队长但人数不足
+    / not_leader 非队长或队长无法判定。
+    """
+    status, info, _members = check_team_min(win, min_members)
+    return status, info
 
 
 def self_test(win):

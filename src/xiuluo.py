@@ -307,11 +307,15 @@ def _check_team_ready(win):
     """领取前队伍检查（修罗设置仅在队长时生效，一次面板开关）。
 
     队长时按通用设置-修罗设置的最少人数检查（本步不检查种族）。
+    检查结果顺带更新调试悬浮层「队伍」行（身份 + 成员信息）。
     返回 (状态, 描述)；状态见 team.check_xiuluo_team：
     ready 可领取 / wait 人数不足 / not_leader 非队长或队长无法判定。
     """
     settings = load_xiuluo_settings()
-    return team.check_xiuluo_team(win, min_members=settings["min_members"])
+    status, info, members = team.check_team_min(win,
+                                                min_members=settings["min_members"])
+    team.update_overlay_team(status, info, members)
+    return status, info
 
 
 def _handle_fight_dialog(win, items, img_np):

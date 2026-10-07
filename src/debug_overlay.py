@@ -49,6 +49,9 @@ _HELPER_STALE_TIMEOUT = 15  # 状态文件超过该秒数未更新视为父进�
 # ---- 状态（各模块通过 set_* 写入，任务进程内存） ----
 _lock = threading.Lock()
 _task = "任务未开始"
+_team = ""
+_bars = ""
+_name = ""
 _config = ""
 _battle = ""
 _progress = ""
@@ -64,6 +67,27 @@ def set_task(text):
     global _task
     with _lock:
         _task = text
+
+
+def set_team(text):
+    """设置队伍信息行（身份 + 人数/种族/等级，五倍模块启动时一次性写入）。"""
+    global _team
+    with _lock:
+        _team = text
+
+
+def set_bars(text):
+    """设置血蓝摘要行（每场战斗结束后的最近一次检测结果）。"""
+    global _bars
+    with _lock:
+        _bars = text
+
+
+def set_name(text):
+    """设置角色名行（main.py 启动时从登录 Tab 读取）。"""
+    global _name
+    with _lock:
+        _name = text
 
 
 def set_config(char, beast):
@@ -158,6 +182,20 @@ def _helper_main():
     """
     exit_reason = None
     try:
+        # 字体抗锯齿：DrawWindow 的 CreateFontW 用 DEFAULT_QUALITY（0），
+        # 小字号文字发虚；在 ctypes DLL 单例层把绘制质量强制为
+        # ANTIALIASED（4）——DrawWindow 内部取的 gdi32 即该单例，
+        # 仅影响本进程的 GDI 字体创建
+        import ctypes as _ct
+        _orig_create_font = _ct.windll.gdi32.CreateFontW
+
+        def _aa_font(*args):
+            # CreateFontW 第 13 个参数（quality）强制为 4（ANTIALIASED）；
+            # 参数顺序：height,width,esc,ori,weight,italic,underline,
+            # strikeout,charset,outprec,clipprec,quality,pitch,face
+            return _orig_create_font(*args[:12], 4, *args[13:])
+
+        setattr(_ct.windll.gdi32, "CreateFontW", _aa_font)
         from ascript.windows.ui.draw_window import DrawWindow
         drawn = False
         while True:
@@ -192,14 +230,26 @@ def _helper_main():
         os._exit(0)
 
 
-def _build_lines(win):
-    """按当前状态生成绘制行（屏幕坐标，文本块顶部中央）。"""
+def _build_frame(win):
+    """按当前状态生成绘制帧：[(x, y, 文本), ...]。
+
+    行合并：角色 + 任务 + 任务次数一行；队伍信息（身份 + 人数/种族/
+    等级）一行；配置、战斗场次、血蓝各一行。
+    """
     with _lock:
-        lines = [f"任务: {_task}", f"配置: {_config}"]
+        head = _task
+        if _name:
+            head = f"{_name} | {head}"
+        if _progress:
+            head = f"{head} {_progress}"
+        lines = [head]
+        if _team:
+            lines.append(_team)
+        lines.append(f"配置: {_config}")
         if _battle:
             lines.append(_battle)
-        if _progress:
-            lines.append(f"进度: {_progress}")
+        if _bars:
+            lines.append(f"血蓝: {_bars}")
     x = win.rect.left + (win.rect.width - OVERLAY_BLOCK_W) // 2
     y = win.rect.top + OVERLAY_TOP
     return [(x, y + i * OVERLAY_LINE_HEIGHT, ln) for i, ln in enumerate(lines)]
@@ -217,7 +267,7 @@ def _supervise(win):
         try:
             enabled = _read_switch()
             _write_state({"enabled": enabled,
-                          "lines": _build_lines(win) if enabled else [],
+                          "lines": _build_frame(win) if enabled else [],
                           "color": OVERLAY_COLOR, "font": OVERLAY_FONT})
             with _helper_lock:
                 proc = _helper_proc

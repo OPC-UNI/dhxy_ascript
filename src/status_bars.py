@@ -30,6 +30,15 @@ BARS = [
 _FILL_MIN_BRIGHT = 80   # 主通道最低亮度
 _FILL_DOMINANCE = 30    # 主通道须高出其他通道的差值（蓝条对 G 通道放宽到 10）
 
+# 最近一次 check_all_bars 的紧凑摘要（供调试悬浮层显示），
+# 格式如 "人 98/66 兽 99/99"（未检测到填充记 -）
+_last_bars = ""
+
+
+def last_summary():
+    """最近一次血蓝检测的紧凑摘要（调试悬浮层用），未检测过返回空串。"""
+    return _last_bars
+
 
 def _is_fill_pixel(c, color_mode):
     """判断像素是否属于填充色系（红/蓝）。"""
@@ -83,6 +92,7 @@ def check_all_bars(win):
     日志合并：正常时一行摘要（原先每场战斗 4 行 INFO），
     仅未检测到填充/低于阈值/回满动作单独输出。
     """
+    global _last_bars
     thresholds = load_thresholds()
     img = win.capture(force_activate=False)
     if img is None:
@@ -91,9 +101,11 @@ def check_all_bars(win):
     img_np = np.asarray(img)
     parts = []
     problems = []  # (label, rect, pct 或 None, threshold)
+    pct_map = {}
     for label, rect, mode, key in BARS:
         threshold = thresholds.get(key, DEFAULT_THRESHOLD)
         pct, low = _scan_bar(img_np, rect, mode, threshold)
+        pct_map[key] = pct
         if pct is None:
             parts.append(f"{label}空")
             problems.append((label, rect, None, threshold))
@@ -102,6 +114,11 @@ def check_all_bars(win):
         if low:
             problems.append((label, rect, pct, threshold))
     log(f"[血蓝] {' '.join(parts)}", "INFO")
+    # 悬浮层紧凑摘要：人 98/66 兽 99/99（未检测到填充记 -）
+    def _p(key):
+        v = pct_map.get(key)
+        return "-" if v is None else f"{v * 100:.0f}"
+    _last_bars = f"人 {_p('char_hp')}/{_p('char_mp')} 兽 {_p('beast_hp')}/{_p('beast_mp')}"
     for label, rect, pct, threshold in problems:
         if pct is None:
             log(f"[血蓝] {label}: 未检测到填充（空条或召唤兽未出战）", "WARN")
