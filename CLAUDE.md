@@ -92,6 +92,21 @@ Auxiliary waits, swipes, and helper functions do not need heavyweight preconditi
 
 Do not write `FindImages.find("some/path.png")` for a template that does not exist. First capture the screen, crop and save a real template into the project resources, then reference that saved path.
 
+## Performance Rules（性能与响应规则）
+
+轮询/判定是热路径。实现新功能或修改旧功能时必须遵守（实测数据与示例见 docs/performance.md）：
+
+1. **每轮询只截一帧**：等待/判定循环内禁止「is_in_battle(win) 截一帧 + find_template(win) 再截一帧」的模式；截一帧后同帧复用（is_in_battle_frame / find_template_in / match_frame_np）
+2. **轮询截图一律 force_activate=False**（禁止抢前台焦点）；模板热路径用 OPENCV(BGR) 帧；OCR 与绿字判定路径必须保持 PIL(RGB) 帧——BGR 帧会把绿字颜色判定搞反
+3. **模板匹配用 map.py 快速接口**（match_frame_np / best_match_np / match_frame_multi，模板自动缓存）；新增检测点必须配搜索条带（ROI，从真实截图标定、留 ≥50px 余量），带区全未命中才全帧兜底，且兜底必须限频（参考 FULL_CHECK_INTERVAL=3s）——否则非目标场景每轮询付全帧成本（实测 20ms vs 137ms）
+4. **相似模板互匹配一律双模板比分数**（各自分数达标且更高者胜），禁止单模板阈值判定（队伍解散/离开按钮、第1/第2回合横幅均为教训）；新模板必须真图验证 + 非目标图交叉验证（目标帧 ≥0.9 唯一命中、非目标帧低于阈值）
+5. **OCR 三原则**：能区域就不全帧（全帧 ~930ms vs 区域 ~100-170ms）；引擎统一 use_angle_cls=False（带 det_* 参数时必须同时传 det_model_path=None）；轮询类 OCR 前置像素差分预过滤（区域无变化跳过 OCR，实测 148-311ms → 7ms）
+6. **防抖与阈值是实测校准资产，不得随意缩短**：进场确认可快（2 次轮询 × 0.5s）；退出确认必须保持 2 秒窗口（0.5s × 4 轮询）——回合间隙误判结束会打乱场次调度
+7. **固定 sleep 等状态切换 → 轮询目标状态出现的直接信号**（如「自动按钮出现」= 手动状态恢复），固定时延只作超时上限
+8. **批量检测共用一帧**（多条血蓝、多模板判定、取消自动+回合判定+按钮定位）
+9. **实测更差/不值得、明确不做**：替换模板匹配算法（积分图分解实测更慢）、cv2.setNumThreads（无收益）、ocr_regions 掩码缓存（省 1ms）、human_click 拟人化时长压缩（防检测设计）
+10. 引入新轮询时先实测计时（截图/匹配/OCR 分项），以数据决定条带与限频参数，不凭直觉
+
 ## Anti-Patterns
 
 - Guessing AScript APIs from memory instead of calling `search_api`.
