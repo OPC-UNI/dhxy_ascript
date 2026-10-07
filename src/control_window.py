@@ -129,7 +129,8 @@ def save_threshold(name, value):
 # ---- 修罗设置（最少人数 + 必须有的种族，仅队长时生效，KeyValue 持久化） ----
 XIULUO_MIN_DEFAULT = 5
 XIULUO_MIN_RANGE = (3, 5)  # 最少人数范围：最小 3，最大 5
-XIULUO_RACES = ["男人", "女人", "男鬼", "女鬼", "男仙", "女仙", "男魔", "女魔", "男巫", "女巫"]
+XIULUO_RACES = ["男人", "女人", "男鬼", "女鬼", "男仙", "女仙", "男魔", "女魔", "男巫", "女巫",
+                "男龙", "女龙"]
 XIULUO_RACES_DEFAULT = ["男人", "男鬼"]
 _XIULUO_MIN_KEY = "xiuluo_min_members"
 _XIULUO_RACES_KEY = "xiuluo_required_races"
@@ -157,6 +158,55 @@ def save_xiuluo_races(races):
     races = [r for r in (races or []) if r in XIULUO_RACES]
     KeyValue.save(_XIULUO_RACES_KEY, ",".join(races))
     return {"status": "success", "races": races}
+
+
+# 五倍设置：最少人数（默认 5，范围 1~5）
+WUBEI_MIN_DEFAULT = 5
+WUBEI_MIN_RANGE = (1, 5)
+_WUBEI_MIN_KEY = "wubei_min_members"
+
+
+def load_wubei_min():
+    """读取五倍最少人数（1~5，默认 5）。"""
+    value = int(KeyValue.get(_WUBEI_MIN_KEY, WUBEI_MIN_DEFAULT))
+    return min(WUBEI_MIN_RANGE[1], max(WUBEI_MIN_RANGE[0], value))
+
+
+def save_wubei_min(value):
+    """保存五倍最少人数（夹取 1~5），返回操作结果。"""
+    value = min(WUBEI_MIN_RANGE[1], max(WUBEI_MIN_RANGE[0], int(value)))
+    KeyValue.save(_WUBEI_MIN_KEY, value)
+    return {"status": "success", "min_members": value}
+
+
+# 五倍设置：是否自动抢盒子（默认关闭；仅非队长时生效，队长一定抢）
+_WUBEI_HEZI_KEY = "wubei_auto_hezi"
+
+
+def load_wubei_hezi():
+    """读取五倍自动抢盒子开关（首次默认关闭）。"""
+    return bool(KeyValue.get(_WUBEI_HEZI_KEY, False))
+
+
+def save_wubei_hezi(on):
+    """保存五倍自动抢盒子开关，返回操作结果。"""
+    KeyValue.save(_WUBEI_HEZI_KEY, bool(on))
+    return {"status": "success"}
+
+
+# 修罗设置：是否自动抢盒子（福源广泽盒出现时自动点「我需要」，默认关闭）
+_XIULUO_HEZI_KEY = "xiuluo_auto_hezi"
+
+
+def load_xiuluo_hezi():
+    """读取修罗自动抢盒子开关（首次默认关闭）。"""
+    return bool(KeyValue.get(_XIULUO_HEZI_KEY, False))
+
+
+def save_xiuluo_hezi(on):
+    """保存修罗自动抢盒子开关，返回操作结果。"""
+    KeyValue.save(_XIULUO_HEZI_KEY, bool(on))
+    return {"status": "success"}
 
 
 # ---- 战斗设置（人物/召唤兽默认战斗动作，UI 单选项，KeyValue 持久化） ----
@@ -227,6 +277,9 @@ class ControlWindow(WebWindow):
         self.expose(self.save_battle_action)
         self.expose(self.save_xiuluo_min)
         self.expose(self.save_xiuluo_races)
+        self.expose(self.save_xiuluo_hezi)
+        self.expose(self.save_wubei_min)
+        self.expose(self.save_wubei_hezi)
         self.expose(self.save_debug_overlay)
         self.expose(self.start_task)
         self.expose(self.reset_task)
@@ -234,13 +287,16 @@ class ControlWindow(WebWindow):
 
     def get_init_data(self):
         """页面初始化数据：任务模式、任务次数、摄妖香开关、各条阈值、
-        战斗动作、修罗设置与调试信息开关。"""
+        战斗动作、修罗设置（含自动抢盒子）与调试信息开关。"""
         return {"mode": load_task_mode(),
                 "task_counts": load_task_counts(),
                 "use_sheyaoxiang": load_use_sheyaoxiang(),
                 "thresholds": load_thresholds(),
                 "battle": load_battle_actions(),
                 "xiuluo": load_xiuluo_settings(),
+                "xiuluo_hezi": load_xiuluo_hezi(),
+                "wubei": {"min_members": load_wubei_min(),
+                          "hezi": load_wubei_hezi()},
                 "debug_overlay": load_debug_overlay()}
 
     def save_battle_action(self, target, value):
@@ -270,6 +326,18 @@ class ControlWindow(WebWindow):
     def save_xiuluo_races(self, races):
         """修罗设置变更：保存必须有的种族列表。"""
         return save_xiuluo_races(races)
+
+    def save_xiuluo_hezi(self, on):
+        """修罗设置变更：保存自动抢盒子开关状态。"""
+        return save_xiuluo_hezi(on)
+
+    def save_wubei_min(self, value):
+        """五倍设置变更：保存最少人数。"""
+        return save_wubei_min(value)
+
+    def save_wubei_hezi(self, on):
+        """五倍设置变更：保存自动抢盒子开关状态。"""
+        return save_wubei_hezi(on)
 
     def save_debug_overlay(self, on):
         """调试信息开关变更：保存悬浮显示开关状态。"""

@@ -20,8 +20,9 @@
    跨场持续，例行确认；已处于自动战斗时（按钮为取消自动）跳过不点
 3. 其余场次：不操作，交由游戏自动战斗
 4. 每场战斗结束后检查血蓝条回满（战斗中不检查）
-5. 巫医对话框：文案含「我是超级巫医，可以帮你医治召唤兽」时点击绿色
-   选项「全部医治和修复」；战后立即检查，非战斗时周期性检查
+5. 巫医对话框：文案含 WUYI_DIALOG_TEXTS 中任一（修罗「我是超级巫医…」、
+   五倍「召唤兽和坐骑都是上天赐给我们的好朋友…」）时点击绿色选项
+   「全部医治和修复」；战后立即检查，非战斗时周期性检查
 
 人物/召唤兽操作（第 1 回合）：
 - 攻击：直接点击攻击按钮位置
@@ -50,7 +51,9 @@ from . import map as game_map
 from . import status_bars  # 血蓝条检测回满（每场战斗结束后调用）
 from . import task_tracker  # 对话框区域与绿色选项定位（巫医对话框）
 from . import debug_overlay  # 调试信息悬浮层（战斗场次更新）
-from .control_window import load_battle_actions
+from . import team  # 队伍身份（抢盒子的队长规则）
+from .control_window import (load_battle_actions, load_task_mode,
+                             load_xiuluo_hezi, load_wubei_hezi)
 
 # ---- 战斗 UI 坐标与模板（窗口相对坐标，用户实测） ----
 ATTACK_POS = (366, 415)        # 攻击按钮位置；技能选择后也在此位置再点一次
@@ -105,11 +108,25 @@ FULL_CHECK_INTERVAL = 3.0        # 带区全未命中时全帧兜底复查的最
                                  # 仍能被兜底发现
 
 # ---- 巫医对话框（召唤兽医治） ----
-WUYI_DIALOG_TEXT = "我是超级巫医，可以帮你医治召唤兽"  # 对话框文案（游戏内原文，出现则处理）
+# 对话框文案（游戏内原文，任一出现则处理；不同任务场景文案不同，选项相同）
+WUYI_DIALOG_TEXTS = (
+    "我是超级巫医，可以帮你医治召唤兽",
+    "召唤兽和坐骑都是上天赐给我们的好朋友，要好好对待它们，会保佑你的。",
+)
 WUYI_OPTION_TEXT = "全部医治和修复"                    # 对话框绿色选项（游戏内原文，精确子串匹配）
-WUYI_CHECK_INTERVAL = 5.0    # 非战斗时巫医对话框检查间隔（秒）
+WUYI_CHECK_INTERVAL = 2.0    # 非战斗时巫医对话框检查间隔（秒）。
+                             # 实测 5s 节奏弹窗最多等 5s 才被点击，人物寻路走远后
+                             # 对话框关闭、点击失效；2s 下最坏延迟 ~2s。差分预过滤
+                             # 后单次检查仅 ~35ms（截图+差分），2s 节奏占空比 ~1.8%
 WUYI_RETRY_COOLDOWN = 15.0   # 点击选项后的冷却期（对话框未关闭时防重复点击）
 WUYI_DIFF_THRESHOLD = 2.0    # 对话框区域平均像素差阈值：低于则跳过 OCR（区域无变化）
+
+# ---- 修罗/五倍盒子（福源广泽盒：出现时点「我需要」） ----
+XIULUO_HEZI_ICON = "xiuluohezi.png"                 # 盒子面板（用户提供 5.png 素材）
+XIULUO_HEZI_WOXUYAO_ICON = "xiuluohezi_woxuyao.png"  # 「我需要」按钮（用户提供 6.png 素材）
+XIULUO_HEZI_WOXUYAO_THRESHOLD = 0.92  # 按钮匹配阈值（用户要求 ≥0.92，小按钮防误点）
+XIULUO_HEZI_CHECK_INTERVAL = 5.0   # 非战斗时检查节奏（与巫医检查同档）
+XIULUO_HEZI_RETRY_COOLDOWN = 15.0  # 点击后的冷却期（盒子未消失防重复点击）
 
 _SKILL_RE = re.compile(r"^技能(\d)-(\d)$")
 
@@ -517,24 +534,85 @@ def _handle_wuyi_dialog(win):
     _wuyi_prev_roi = roi
     items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
     from .xuanshu import _dialog_text_present  # 函数内导入，避免循环依赖
-    if not _dialog_text_present(items, WUYI_DIALOG_TEXT):
+    if not any(_dialog_text_present(items, t) for t in WUYI_DIALOG_TEXTS):
         _wuyi_option_missing_warned = False
         return False
+    pt = _find_wuyi_option(items, img_np)
+    if pt is None:
+        # 选项文字可能很小（实测五倍对话框「全部医治和修复」字高仅 13px，
+        # 区域 OCR 原尺寸漏检），对对话框区 2 倍放大重识别一次
+        l, t, r, b = task_tracker.DIALOG_REGION
+        crop = img.crop((l, t, r, b)).resize(((r - l) * 2, (b - t) * 2),
+                                             Image.LANCZOS)
+        items2, _ = game_map.ocr_image(crop)
+        mapped = [(txt, [l + rect[0] // 2, t + rect[1] // 2,
+                         l + rect[2] // 2, t + rect[3] // 2], score)
+                  for txt, rect, score in items2]
+        pt = _find_wuyi_option(mapped, img_np)
+    if pt is None:
+        if not _wuyi_option_missing_warned:
+            log("[战斗] 巫医对话框出现，但未识别到「全部医治和修复」选项", "WARN")
+            _wuyi_option_missing_warned = True
+        return False
+    human_click(win, pt[0], pt[1])
+    log(f"[战斗] 巫医对话框：已点击「全部医治和修复」 @ ({pt[0]},{pt[1]})", "SYS")
+    _wuyi_option_missing_warned = False
+    return True
+
+
+def _find_wuyi_option(items, img_np):
+    """在 OCR 行中查找「全部医治和修复」绿字选项，返回点击坐标或 None。
+
+    去标点精确子串匹配（游戏内原文）；限定对话框区域（x≥PANEL_MAX_X）
+    且为绿字行，避免误点追踪面板的绿字链接。
+    """
     needle = _norm_text(WUYI_OPTION_TEXT)
     for txt, rect, score in items:
         if score >= 0.55 and needle in _norm_text(txt) \
                 and rect[0] >= task_tracker.PANEL_MAX_X \
                 and task_tracker.is_green_text(img_np, rect):
-            cx, cy = task_tracker.green_text_center(img_np, rect,
-                                                    prefer_underline=False)
-            human_click(win, cx, cy)
-            log(f"[战斗] 巫医对话框：已点击「{txt}」", "SYS")
-            _wuyi_option_missing_warned = False
-            return True
-    if not _wuyi_option_missing_warned:
-        log("[战斗] 巫医对话框出现，但未识别到「全部医治和修复」选项", "WARN")
-        _wuyi_option_missing_warned = True
-    return False
+            return task_tracker.green_text_center(img_np, rect,
+                                                  prefer_underline=False)
+    return None
+
+
+def _handle_hezi(win):
+    """修罗/五倍盒子：不在战斗时若出现福源广泽盒，点击「我需要」。
+
+    开关规则：仅修罗/五倍模式执行；抢盒子开关只在**非队长**时生效，
+    是队长则**一定抢**（队长规则优先）。身份以最近一次队伍检查结果
+    为准（team.known_leader，任务模块 check_team_min 会更新）。
+    性能（见 CLAUDE.md 性能规则）：5 秒节奏单帧检查；两段匹配——先
+    盒子后按钮，按钮只有盒子命中才匹配；点击后冷却防重复。
+    盒子出现位置暂未标定条带（素材为裁剪图无绝对坐标），全帧匹配
+    单模板 ~27ms/次（5 秒节奏占空比 <1%）；后续拿到窗口内位置后
+    可收紧为条带匹配。
+    """
+    mode = load_task_mode()
+    if mode == "修罗":
+        enabled = load_xiuluo_hezi()
+    elif mode == "五倍":
+        enabled = load_wubei_hezi()
+    else:
+        return False
+    if not (team.known_leader() is True or enabled):
+        return False  # 非队长/身份未知且开关关闭：不抢
+    img = win.capture(force_activate=False, format=WindowCaptureFormat.OPENCV)
+    if img is None:
+        return False
+    box_pt = game_map.match_frame_np(img, XIULUO_HEZI_ICON, fallback=False)
+    if box_pt is None:
+        return False
+    # 按钮小（82x26），用户要求 0.92 以上才点，防误点
+    btn_pt = game_map.match_frame_np(img, XIULUO_HEZI_WOXUYAO_ICON,
+                                     threshold=XIULUO_HEZI_WOXUYAO_THRESHOLD,
+                                     fallback=False)
+    if btn_pt is None:
+        log("[战斗] 修罗盒子出现，但未识别到「我需要」按钮", "WARN")
+        return False
+    human_click(win, btn_pt[0], btn_pt[1])
+    log(f"[战斗] 修罗盒子：已点击「我需要」 @ ({btn_pt[0]},{btn_pt[1]})", "SYS")
+    return True
 
 
 def watch_loop(win):
@@ -556,6 +634,8 @@ def watch_loop(win):
     pending_auto = False   # 首场结束仍未挂上自动 → 下一场进场补点一次
     last_wuyi_check = 0.0  # 上次巫医对话框检查时间
     wuyi_click_at = 0.0    # 上次点击巫医选项时间（冷却）
+    last_hezi_check = 0.0  # 上次修罗盒子检查时间
+    hezi_click_at = 0.0    # 上次点击「我需要」时间（冷却）
     while True:
         try:
             if is_in_battle(win):
@@ -588,13 +668,21 @@ def watch_loop(win):
                         in_battle = False
                         log(f"[战斗] 第 {battle_no} 场战斗结束", "SYS")
                         status_bars.check_all_bars(win)
-                        last_wuyi_check = 0.0  # 战后立即检查巫医对话框
+                        debug_overlay.set_bars(status_bars.last_summary())  # 悬浮层血蓝摘要
+                        # 战后立即检查：先补血蓝（上一步），再巫医对话框/修罗盒子
+                        last_wuyi_check = 0.0
+                        last_hezi_check = 0.0
                 now = time.time()
                 if now - last_wuyi_check >= WUYI_CHECK_INTERVAL:
                     last_wuyi_check = now
                     if now - wuyi_click_at >= WUYI_RETRY_COOLDOWN \
                             and _handle_wuyi_dialog(win):
                         wuyi_click_at = now
+                if now - last_hezi_check >= XIULUO_HEZI_CHECK_INTERVAL:
+                    last_hezi_check = now
+                    if now - hezi_click_at >= XIULUO_HEZI_RETRY_COOLDOWN \
+                            and _handle_hezi(win):
+                        hezi_click_at = now
         except Exception as e:
             log(f"[战斗] 监控异常: {e}", "WARN")
         time.sleep(WATCH_POLL_INTERVAL)

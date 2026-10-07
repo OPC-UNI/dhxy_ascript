@@ -207,6 +207,27 @@
                     <span class="group-label">必须有的种族</span>
                     <div class="radio-grid battle-grid" id="xiuluo-race-grid"></div>
                 </div>
+                <label class="switch-row">
+                    <input type="checkbox" id="xiuluo-hezi">
+                    <span class="switch-track"></span>
+                    <span>自动抢盒子（仅非队长时生效，队长一定抢）</span>
+                </label>
+            </div>
+            <!-- 五倍设置分组：最少人数（仅队长时生效）+ 自动抢盒子（仅非队长时生效） -->
+            <div class="group-box">
+                <div class="group-title">五倍设置</div>
+                <div class="group-row">
+                    <span class="group-label">最少人数</span>
+                    <button class="th-btn" onclick="wubeiMin(-1)">−</button>
+                    <span class="th-val" id="wubei-min">5</span>
+                    <button class="th-btn" onclick="wubeiMin(1)">＋</button>
+                    <span class="group-hint">范围 1~5（仅队长时生效）</span>
+                </div>
+                <label class="switch-row">
+                    <input type="checkbox" id="wubei-hezi">
+                    <span class="switch-track"></span>
+                    <span>自动抢盒子（仅非队长时生效，队长一定抢）</span>
+                </label>
             </div>
             <!-- 血量蓝量分组 -->
             <div class="group-box">
@@ -278,6 +299,8 @@
         const modeRadios = document.querySelectorAll('input[name="task-mode"]');
         const useSyx = document.getElementById('use-syx');
         const debugOverlay = document.getElementById('debug-overlay');
+        const xiuluoHezi = document.getElementById('xiuluo-hezi');
+        const wubeiHezi = document.getElementById('wubei-hezi');
 
         // 战斗设置选项：人物 3 行 × 5 列技能 + 攻击/防御/捕捉/逃跑/无；召唤兽 5 技能 + 攻击/防御/逃跑/无
         const CHAR_BATTLE = [];
@@ -308,7 +331,7 @@
         const beastBattleGrid = buildBattleGrid(document.getElementById('battle-beast-grid'), 'beast', BEAST_BATTLE);
 
         // 修罗设置：必须有的种族多选框（全部种族可选，变更立即保存）
-        const XIULUO_RACES = ['男人', '女人', '男鬼', '女鬼', '男仙', '女仙', '男魔', '女魔', '男巫', '女巫'];
+        const XIULUO_RACES = ['男人', '女人', '男鬼', '女鬼', '男仙', '女仙', '男魔', '女魔', '男巫', '女巫', '男龙', '女龙'];
         const xiuluoRaceGrid = document.getElementById('xiuluo-race-grid');
         XIULUO_RACES.forEach(race => {
             const label = document.createElement('label');
@@ -337,6 +360,16 @@
             callPython('save_xiuluo_races', checked);
         }
 
+        // 五倍最少人数步进：±1，范围 1~5，变更立即保存
+        async function wubeiMin(delta) {
+            const el = document.getElementById('wubei-min');
+            const cur = parseInt(el.innerText);
+            const val = Math.min(5, Math.max(1, cur + delta));
+            if (val === cur) return;  // 已到上下限，不发请求
+            const r = await callPython('save_wubei_min', val);
+            if (r && r.status === 'success') el.innerText = r.min_members;
+        }
+
         function update() {
             statusEl.innerText = running ? '运行中' : '已停止';
             statusEl.className = running ? 'running' : '';
@@ -363,6 +396,8 @@
                 if (info) {
                     useSyx.checked = !!info.use_sheyaoxiang;
                     debugOverlay.checked = !!info.debug_overlay;
+                    xiuluoHezi.checked = !!info.xiuluo_hezi;
+                    wubeiHezi.checked = !!(info.wubei && info.wubei.hezi);
                     const ths = info.thresholds || {};
                     for (const key of ['char_hp', 'char_mp', 'beast_hp', 'beast_mp']) {
                         const el = document.getElementById('th-' + key);
@@ -383,6 +418,10 @@
                     const xl = info.xiuluo || {};
                     if (xl.min_members) {
                         document.getElementById('xiuluo-min').innerText = xl.min_members;
+                    }
+                    const wb = info.wubei || {};
+                    if (wb.min_members) {
+                        document.getElementById('wubei-min').innerText = wb.min_members;
                     }
                     if (xl.races) {
                         xiuluoRaceGrid.querySelectorAll('input').forEach(el => {
@@ -428,6 +467,16 @@
         // 调试信息开关变更：立即保存（任务运行中切换后数秒生效）
         debugOverlay.addEventListener('change', () => {
             callPython('save_debug_overlay', debugOverlay.checked);
+        });
+
+        // 修罗自动抢盒子开关变更：立即保存（下次任务启动生效）
+        xiuluoHezi.addEventListener('change', () => {
+            callPython('save_xiuluo_hezi', xiuluoHezi.checked);
+        });
+
+        // 五倍自动抢盒子开关变更：立即保存（下次任务启动生效）
+        wubeiHezi.addEventListener('change', () => {
+            callPython('save_wubei_hezi', wubeiHezi.checked);
         });
 
         // Python 侧（任务状态联动）调用，用于同步页面显示

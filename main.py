@@ -12,6 +12,7 @@
 - src/wuhuan.py          五环任务自动化（购装备、领取、跟踪循环）
 - src/kezhan.py          客栈任务自动化（洛阳客栈找掌柜、领取、跟踪循环）
 - src/xiuluo.py          修罗任务自动化（灵兽村领取、跟踪、返程循环）
+- src/wubei.py           五倍任务自动化（战斗先行，其余流程后续增加）
 - src/control_window.py  网页控制窗口（启动/重置/关闭、任务模式选择）
 - src/polyfill.py        pywebview 6 桥接兼容补丁
 """
@@ -40,6 +41,7 @@ from src import wuhuan  # 五环任务自动化
 from src import kezhan  # 客栈任务自动化
 from src import team  # 组队功能（任务前置退队）
 from src import xiuluo  # 修罗任务自动化
+from src import wubei  # 五倍任务自动化
 from src import status_bars  # 人物/召唤兽血蓝条检测
 from src import debug_overlay  # 调试信息悬浮层（游戏窗口上绘制任务/配置/进度）
 from src import map as game_map  # 地图操作（OCR 引擎预热等）
@@ -187,6 +189,7 @@ def task_start():
             log("[检查] 当前未登录（Tab 显示为大话西游2经典版）", "WARN")
         elif tab:
             log(f"[检查] 当前登录角色: {tab}", "SYS")
+            debug_overlay.set_name(tab)  # 悬浮层角色名
         else:
             log("[检查] Tab 读取为空（游戏加载中？）", "WARN")
 
@@ -248,7 +251,15 @@ def task_start():
             debug_overlay.shutdown()
             return
 
-        # 9. 血蓝条检测（已登录时执行一次）
+        # 9. 五倍主循环（当前仅战斗功能：保持任务运行，战斗由战斗监控
+        #    线程自动操作；领取/寻路/返程流程后续增加）
+        if logged_in and mode == "五倍":
+            info = wubei.run_loop(main_win)
+            log(f"[五倍] 任务循环结束：{info}", "SYS")
+            debug_overlay.shutdown()
+            return
+
+        # 10. 血蓝条检测（已登录时执行一次）
         if logged_in:
             status_bars.check_all_bars(main_win)
 
