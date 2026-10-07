@@ -15,7 +15,9 @@
 """
 import re
 import time
+from pathlib import Path
 
+import cv2
 import numpy as np
 from rapidocr_onnxruntime import RapidOCR
 
@@ -75,10 +77,12 @@ def ocr_regions(img, regions):
     # 区域 OCR 用快配置引擎：det_limit_type='max'/736 下区域按原尺寸检测
     # （默认 'min'/736 会把小区域放大到 736 最小边再检测，实测双区域
     # 1344ms→944ms、面板区 -29%、对话框区 -52%）。快配置下部分行置信度
-    # 降低（如问答选项「金乌」0.66→0.58），下游 score 门槛已统一降至 0.55
+    # 降低（如问答选项「金乌」0.66→0.58），下游 score 门槛已统一降至 0.55。
+    # use_angle_cls=False：游戏 UI 全是水平文本，角度分类只判 0/180 度翻转，
+    # 关掉实测双区域 277→138ms（-50%），识别框数不变
     if _region_engine is None:
         _region_engine = RapidOCR(det_model_path=None, det_limit_type="max",
-                                  det_limit_side_len=736)
+                                  det_limit_side_len=736, use_angle_cls=False)
     img_np = np.zeros_like(full_np)
     items = []
     for l, t, r, b in regions:
@@ -114,7 +118,7 @@ def warmup_ocr():
         _engine(np.zeros((32, 32, 3), dtype=np.uint8))
     if _region_engine is None:
         _region_engine = RapidOCR(det_model_path=None, det_limit_type="max",
-                                  det_limit_side_len=736)
+                                  det_limit_side_len=736, use_angle_cls=False)
         _region_engine(np.zeros((32, 32, 3), dtype=np.uint8))
 
 
@@ -196,6 +200,129 @@ def find_template_in(img, icon, threshold=0.8):
     """
     results = FindImages.find_all_template(R.img(icon), im_source=img, threshold=threshold)
     return (results[0].x, results[0].y) if results else None
+
+
+def best_match_in(img, icon):
+    """在已捕获图像内查找模板的全局最高匹配，返回 (confidence, (x, y))。
+
+    与 find_template_in 同源同匹配算法，maxcnt=1 快速模式取全局最高分。
+    供双模板比分数场景使用（如队伍面板解散/离开按钮、第1/第2回合横幅
+    ——相似模板互相弱匹配，单模板阈值判定会误判）。
+    无匹配时返回 (0.0, (0, 0))。
+    """
+    results = FindImages.find_all_template(R.img(icon), im_source=img,
+                                           threshold=0.0, max_res=1)
+    if not results:
+        return 0.0, (0, 0)
+    r = results[0]
+    return float(r.confidence), (int(r.center[0]), int(r.center[1]))
+
+
+# ---- 快速模板接口（战斗等热路径专用；旧接口全部保留，兼容现有调用方） ----
+# 同一帧上多模板匹配的重复开销：每次 FindImages 调用都对 PIL 帧做
+# np.array+BGR 转换（实测 ~7ms）并重新解码模板（~0.3ms）。本接口：
+# 1) 模板灰度缓存（mtime 失效）2) 帧一次灰度转换 3) 可选 ROI 限定
+# （TM_CCOEFF_NORMED 分数在裁剪区内与全图严格一致，无需重标定阈值）。
+_TEMPLATE_CACHE = {}  # icon -> (mtime_ns, 灰度模板数组)
+
+
+def _load_template(icon):
+    """加载模板灰度数组（磁盘解码一次后缓存，按 mtime 失效）。失败返回 None。"""
+    path = Path(R.img(icon))
+    try:
+        mtime = path.stat().st_mtime_ns
+    except OSError:
+        return None
+    cached = _TEMPLATE_CACHE.get(icon)
+    if cached is not None and cached[0] == mtime:
+        return cached[1]
+    tpl = cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
+    if tpl is None:
+        return None
+    _TEMPLATE_CACHE[icon] = (mtime, tpl)
+    return tpl
+
+
+def match_frame_np(img_np, icon, threshold=0.8, region=None, fallback=True):
+    """在 BGR numpy 帧上做模板匹配，返回首个 (x, y) 中心或 None。
+
+    与 find_template_in 同算法同阈值语义（TM_CCOEFF_NORMED 灰度匹配）。
+    region=(l,t,r,b) 限定搜索区域；区域内未命中且 fallback=True 时
+    全帧兜底（布局漂移保险，慢路径只在未命中时触发）。
+    """
+    tpl = _load_template(icon)
+    if tpl is None:
+        return None
+    search = img_np
+    ox = oy = 0
+    if region is not None:
+        l, t, r, b = region
+        search = img_np[max(0, t):min(img_np.shape[0], b),
+                        max(0, l):min(img_np.shape[1], r)]
+        ox, oy = max(0, l), max(0, t)
+    res = cv2.matchTemplate(cv2.cvtColor(search, cv2.COLOR_BGR2GRAY), tpl,
+                            cv2.TM_CCOEFF_NORMED)
+    _, max_val, _, max_loc = cv2.minMaxLoc(res)
+    if max_val < threshold:
+        if fallback and region is not None:
+            return match_frame_np(img_np, icon, threshold=threshold,
+                                  region=None, fallback=False)
+        return None
+    h, w = tpl.shape[:2]
+    return ox + max_loc[0] + w // 2, oy + max_loc[1] + h // 2
+
+
+def best_match_np(img_np, icon, region=None):
+    """在 BGR numpy 帧上取模板全局最高分，返回 (confidence, (x, y))。
+
+    与 best_match_in 同语义（双模板比分数场景用）；无匹配返回 (0.0, (0, 0))。
+    """
+    tpl = _load_template(icon)
+    if tpl is None:
+        return 0.0, (0, 0)
+    search = img_np
+    ox = oy = 0
+    if region is not None:
+        l, t, r, b = region
+        search = img_np[max(0, t):min(img_np.shape[0], b),
+                        max(0, l):min(img_np.shape[1], r)]
+        ox, oy = max(0, l), max(0, t)
+    res = cv2.matchTemplate(cv2.cvtColor(search, cv2.COLOR_BGR2GRAY), tpl,
+                            cv2.TM_CCOEFF_NORMED)
+    _, max_val, _, max_loc = cv2.minMaxLoc(res)
+    h, w = tpl.shape[:2]
+    return float(max_val), (ox + max_loc[0] + w // 2, oy + max_loc[1] + h // 2)
+
+
+def match_frame_multi(img_np, icons, threshold=0.8, regions=None):
+    """同一 BGR 帧上批量匹配多模板（帧只做一次灰度转换）。
+
+    icons: 模板名列表；regions: 与 icons 一一对应的 region 或 None。
+    返回 {icon: (x, y) 或 None}。未命中不回退全帧（调用方自行兜底）。
+    """
+    gray = cv2.cvtColor(img_np, cv2.COLOR_BGR2GRAY)
+    result = {}
+    for i, icon in enumerate(icons):
+        tpl = _load_template(icon)
+        if tpl is None:
+            result[icon] = None
+            continue
+        search = gray
+        ox = oy = 0
+        region = regions[i] if regions else None
+        if region is not None:
+            l, t, r, b = region
+            search = gray[max(0, t):min(gray.shape[0], b),
+                          max(0, l):min(gray.shape[1], r)]
+            ox, oy = max(0, l), max(0, t)
+        res = cv2.matchTemplate(search, tpl, cv2.TM_CCOEFF_NORMED)
+        _, max_val, _, max_loc = cv2.minMaxLoc(res)
+        if max_val < threshold:
+            result[icon] = None
+            continue
+        h, w = tpl.shape[:2]
+        result[icon] = (ox + max_loc[0] + w // 2, oy + max_loc[1] + h // 2)
+    return result
 
 
 def find_templates(win, icon, threshold=0.8):

@@ -5,14 +5,17 @@
   真实按钮 1.0，阈值 0.85）
 - round_banner.png：回合横幅「回合」文字区（第X回合任意回合均匹配，
   非战斗实测 ≤0.45，真实横幅 0.99，阈值 0.8），覆盖操作条隐藏的回合间隙
-- battle_first.png 即「第1回合」横幅（用于判断是否第 1 回合）
+- battle_first.png 即「第1回合」横幅，与 battle_other.png（「第2回合」横幅）
+  双模板比分数判断是否第 1 回合（两横幅仅数字不同，会互相弱匹配）
 
 战斗状态判定统一在本模块实现，其他模块（玄枢轶闻等）复用 is_in_battle。
 
 场次调度（不在战斗 → 进入战斗 → 战斗结束算一场战斗，回合变化不算；
 进入与结束均连续两次轮询确认，防战斗开场抖动与回合间隙误判）：
-1. 第 1 场战斗：按配置执行人物/召唤兽操作（第 1 回合），操作完成后
-   点击自动按钮，剩余回合交由游戏自动战斗
+1. 第 1 场战斗：进场若已处于自动战斗先取消自动（双模板比分数判定），
+   按配置执行人物/召唤兽操作（第 1 回合），操作完成后立即点击自动
+   （一轮就结束的战斗也挂上自动）；战斗结束时仍未挂上的，下一场
+   进场补点一次自动
 2. 第 6/11/16... 场（每 5 场）：进入战斗后点击一次自动按钮——自动战斗
    跨场持续，例行确认；已处于自动战斗时（按钮为取消自动）跳过不点
 3. 其余场次：不操作，交由游戏自动战斗
@@ -37,10 +40,16 @@
 import re
 import time
 
+import cv2
+import numpy as np
+from PIL import Image
+from ascript.windows.window.Window import WindowCaptureFormat
+
 from .app_utils import log, human_click, human_move
 from . import map as game_map
 from . import status_bars  # 血蓝条检测回满（每场战斗结束后调用）
 from . import task_tracker  # 对话框区域与绿色选项定位（巫医对话框）
+from . import debug_overlay  # 调试信息悬浮层（战斗场次更新）
 from .control_window import load_battle_actions
 
 # ---- 战斗 UI 坐标与模板（窗口相对坐标，用户实测） ----
@@ -52,7 +61,8 @@ FANGYU_ICON = "fangyu.png"     # 防御按钮模板（用户提供 16.png）
 AUTO_ICON = "auto.png"         # 自动按钮模板（用户提供 17.png）
 AUTO_CANCEL_ICON = "auto_cancel.png"    # 取消自动按钮模板（用户提供 18.png）
 AUTO_RESUME_ICON = "auto_resume.png"    # 恢复自动按钮模板（用户提供 19.png）
-BATTLE_FIRST_ICON = "battle_first.png"  # 「第1回合」横幅模板（第 1 回合才匹配）
+BATTLE_FIRST_ICON = "battle_first.png"  # 「第1回合」横幅模板（第 1 回合判定，见 is_round_1）
+BATTLE_OTHER_ICON = "battle_other.png"  # 「第2回合」横幅模板（与第1回合双模板比分数）
 ROUND_BANNER_ICON = "round_banner.png"  # 回合横幅「回合」文字区（任意回合均匹配）
 ROUND_BANNER_THRESHOLD = 0.8   # 横幅文字匹配阈值（非战斗画面实测最高 0.45，真实横幅 0.99）
 BAR_BUTTON_THRESHOLD = 0.85    # 操作条按钮匹配阈值（非战斗画面实测最高 0.39，真实按钮 1.0）
@@ -67,7 +77,8 @@ BEAST_SKILL_POS = {
 }
 
 # ---- 时序参数（秒） ----
-WATCH_POLL_INTERVAL = 1.0   # 战斗监控轮询间隔
+WATCH_POLL_INTERVAL = 0.5   # 战斗监控轮询间隔（单帧判定 + 快速匹配后 0.5s 无压力，
+                            # 进场确认 2 次轮询 ≈ 0.5~1s，比原先 1~2s 更快）
 BAR_POLL_INTERVAL = 0.5     # 操作条出现/消失轮询间隔
 ROUND_BAR_TIMEOUT = 60      # 等待新回合操作条出现（含回合动画时间）
 PHASE_SWITCH_DELAY = 2.0    # 点击操作后操作条关闭、召唤兽条出现
@@ -76,18 +87,29 @@ IDLE_COUNTDOWN_WAIT = 40    # 无操作时等待游戏倒计时结束（游戏�
 BAR_GONE_TIMEOUT = 10       # 操作后等待操作条关闭
 SKILL_PANEL_DELAY = 1.0     # 点击法术后等待技能选择面板打开
 SKILL_CONFIRM_DELAY = 0.5   # 点击技能后等待面板收起
-AUTO_CANCEL_SETTLE = 1.5    # 点击取消自动后等待操作条恢复
+AUTO_CANCEL_SETTLE = 1.5    # 点击取消自动后等待自动按钮出现的超时上限（快恢复即继续）
 
 # ---- 场次调度（进入战斗 = 一场战斗开始，回合变化不算） ----
 AUTO_REASSERT_EVERY = 5      # 每 5 场战斗进入战斗后点击一次自动按钮（第 1 场操作完成后点击）
 AUTO_ASSERT_TIMEOUT = 35     # 例行确认自动时等待自动按钮出现的超时（覆盖一整回合操作条）
-BATTLE_CONFIRM_POLLS = 2     # 战斗进入/结束的连续轮询确认次数（防开场抖动与回合间隙误判）
+BATTLE_CONFIRM_POLLS = 2     # 战斗进入的连续轮询确认次数（防开场抖动）
+BATTLE_END_CONFIRM_POLLS = 4  # 战斗结束的连续轮询确认次数（0.5s×4=2s 窗口，
+                              # 与原先 1s×2 相同，防回合间隙误判结束）
+
+# ---- 战斗 UI 搜索条带（快速匹配用，窗口相对坐标，实测 1378x831 布局） ----
+BANNER_BAND = (0, 40, 400, 240)  # 回合横幅带（第1/第2回合横幅实测 x34-121 y88-116）
+BAR_BAND_HEIGHT = 190            # 操作条按钮带高度（按钮实测 y≈677，取底部 190px）
+FULL_CHECK_INTERVAL = 3.0        # 带区全未命中时全帧兜底复查的最小间隔（秒）——
+                                 # 非战斗画面带区每轮询都全未命中，全帧兜底若不限频，
+                                 # 空闲轮询反而比旧实现更慢；限频后布局漂移 3 秒内
+                                 # 仍能被兜底发现
 
 # ---- 巫医对话框（召唤兽医治） ----
 WUYI_DIALOG_TEXT = "我是超级巫医，可以帮你医治召唤兽"  # 对话框文案（游戏内原文，出现则处理）
 WUYI_OPTION_TEXT = "全部医治和修复"                    # 对话框绿色选项（游戏内原文，精确子串匹配）
 WUYI_CHECK_INTERVAL = 5.0    # 非战斗时巫医对话框检查间隔（秒）
 WUYI_RETRY_COOLDOWN = 15.0   # 点击选项后的冷却期（对话框未关闭时防重复点击）
+WUYI_DIFF_THRESHOLD = 2.0    # 对话框区域平均像素差阈值：低于则跳过 OCR（区域无变化）
 
 _SKILL_RE = re.compile(r"^技能(\d)-(\d)$")
 
@@ -95,35 +117,88 @@ _SKILL_RE = re.compile(r"^技能(\d)-(\d)$")
 _UNSUPPORTED_ACTIONS = ("捕捉", "逃跑")
 
 
+def _bar_band(img):
+    """操作条按钮搜索条带（相对帧尺寸：底部 190px 全宽，按钮实测 y≈677）。"""
+    h, w = img.shape[:2]
+    return (0, max(0, h - BAR_BAND_HEIGHT), w, h)
+
+
 def is_in_battle(win):
     """判断是否处于战斗中（多信号判定，防止非战斗画面误报）。
 
     操作条按钮（法术/防御/自动）是战斗专属 UI，出现即战斗操作阶段，
     误报率最低；回合横幅「回合」文字覆盖操作条隐藏的回合间隙。
-    单次截图多模板匹配（旧实现每个模板各自截窗，4 次整窗截图实测
-    233ms，单帧共用 129ms），模板、阈值与短路顺序不变。
+    用 BGR 帧 + 条带限定匹配（单帧判定，模板/阈值/短路顺序不变）。
     """
-    img = win.capture(force_activate=False)
+    img = win.capture(force_activate=False, format=WindowCaptureFormat.OPENCV)
     if img is None:
         return False
     return is_in_battle_frame(img)
+
+
+# 全帧兜底复查的最近时间（限频，见 FULL_CHECK_INTERVAL）
+_last_full_check = 0.0
 
 
 def is_in_battle_frame(img):
     """在已捕获帧上判断是否战斗中（模板、阈值与顺序同 is_in_battle）。
 
     供轮询循环复用本帧已抓的截图（如 follow_task 内层），避免重复截窗。
+    接受 BGR numpy（战斗内部路径）或 PIL 帧（其他模块复用）；
+    条带限定匹配；带区全部未命中时全帧兜底复查——限频（非战斗画面
+    带区每轮询都全未命中，全帧兜底若每轮询都跑反而比旧实现更慢），
+    布局漂移 3 秒内仍能被发现。
     """
+    global _last_full_check
+    if isinstance(img, Image.Image):
+        img = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
+    band = _bar_band(img)
+    found = game_map.match_frame_multi(img, (FASHU_ICON, FANGYU_ICON, AUTO_ICON),
+                                       threshold=BAR_BUTTON_THRESHOLD,
+                                       regions=(band, band, band))
     for icon in (FASHU_ICON, FANGYU_ICON, AUTO_ICON):
-        if game_map.find_template_in(img, icon, threshold=BAR_BUTTON_THRESHOLD) is not None:
+        if found[icon] is not None:
             return True
-    return game_map.find_template_in(img, ROUND_BANNER_ICON,
-                                     threshold=ROUND_BANNER_THRESHOLD) is not None
+    if game_map.match_frame_np(img, ROUND_BANNER_ICON,
+                               threshold=ROUND_BANNER_THRESHOLD,
+                               region=BANNER_BAND, fallback=False) is not None:
+        return True
+    now = time.time()
+    if now - _last_full_check < FULL_CHECK_INTERVAL:
+        return False
+    _last_full_check = now
+    # 布局漂移兜底：带区全部未命中时全帧重跑一遍原顺序（限频）
+    found2 = game_map.match_frame_multi(img, (FASHU_ICON, FANGYU_ICON, AUTO_ICON),
+                                        threshold=BAR_BUTTON_THRESHOLD)
+    for icon in (FASHU_ICON, FANGYU_ICON, AUTO_ICON):
+        if found2[icon] is not None:
+            return True
+    return game_map.match_frame_np(img, ROUND_BANNER_ICON,
+                                   threshold=ROUND_BANNER_THRESHOLD) is not None
 
 
 def is_round_1(win):
-    """判断当前是否第 1 回合（battle_first 模板即「第1回合」横幅）。"""
-    return game_map.find_template(win, BATTLE_FIRST_ICON) is not None
+    """判断当前是否第 1 回合（第1/第2回合横幅双模板比分数）。
+
+    两个横幅仅回合数字不同，模板互相弱匹配（实测对方横幅 0.893 ≥
+    0.8 阈值，单模板判定会误判）；比分数取高者：第1回合模板分数
+    达标且更高才算第 1 回合。第 3 回合及以后两模板分数均不高于
+    第1模板，不会误判。
+    """
+    img = win.capture(force_activate=False, format=WindowCaptureFormat.OPENCV)
+    if img is None:
+        return False
+    return _is_round_1_frame(img)
+
+
+def _is_round_1_frame(img):
+    """帧内第 1 回合判定（横幅带区比分数，带区双未命中时全帧兜底）。"""
+    first_score, _ = game_map.best_match_np(img, BATTLE_FIRST_ICON, region=BANNER_BAND)
+    other_score, _ = game_map.best_match_np(img, BATTLE_OTHER_ICON, region=BANNER_BAND)
+    if first_score < ROUND_BANNER_THRESHOLD and other_score < ROUND_BANNER_THRESHOLD:
+        first_score, _ = game_map.best_match_np(img, BATTLE_FIRST_ICON)
+        other_score, _ = game_map.best_match_np(img, BATTLE_OTHER_ICON)
+    return first_score >= ROUND_BANNER_THRESHOLD and first_score > other_score
 
 
 def char_skill_pos(action):
@@ -156,18 +231,25 @@ def _norm_text(s):
 def _wait_icon(win, icon, timeout, want_found=True):
     """轮询模板出现（want_found=True）或消失（False），战斗结束提前返回 False。
 
+    单帧判定：每轮询只截一帧（BGR），战斗状态与图标匹配共用（原先
+    每轮询截 2 次窗且 find_template 带激活抢前台焦点）。
     战斗结束判定连续两次轮询不在战斗（防回合间隙误判，回合变化不算战斗）。
     """
     deadline = time.time() + timeout
     out_polls = 0
     while time.time() < deadline:
-        if is_in_battle(win):
+        img = win.capture(force_activate=False, format=WindowCaptureFormat.OPENCV)
+        if img is None:
+            time.sleep(BAR_POLL_INTERVAL)
+            continue
+        if is_in_battle_frame(img):
             out_polls = 0
         else:
             out_polls += 1
             if out_polls >= BATTLE_CONFIRM_POLLS:
                 return False
-        if (game_map.find_template(win, icon) is not None) == want_found:
+        pt = _find_in_frame(win, img, icon)
+        if (pt is not None) == want_found:
             return True
         time.sleep(BAR_POLL_INTERVAL)
     return False
@@ -181,9 +263,20 @@ def _battle_ended(win):
     return not is_in_battle(win)
 
 
+def _find_in_frame(win, frame, icon):
+    """帧内查找图标中心（操作条图标走条带+兜底）；frame 为 None 时自行截帧。"""
+    if frame is None:
+        frame = win.capture(force_activate=False, format=WindowCaptureFormat.OPENCV)
+        if frame is None:
+            return None
+    region = _bar_band(frame) if icon in (FASHU_ICON, FANGYU_ICON,
+                                          AUTO_ICON, AUTO_CANCEL_ICON) else None
+    return game_map.match_frame_np(frame, icon, region=region, fallback=True)
+
+
 def _click_template(win, icon):
-    """查找模板并点击其位置，返回是否成功。"""
-    pt = game_map.find_template(win, icon)
+    """查找模板并点击其位置，返回是否成功（单帧匹配，不抢焦点）。"""
+    pt = _find_in_frame(win, None, icon)
     if pt is None:
         return False
     human_click(win, pt[0], pt[1])
@@ -191,45 +284,75 @@ def _click_template(win, icon):
 
 
 def _cancel_auto(win):
-    """规则 3：同时存在「取消自动」「恢复自动」按钮（上局遗留自动）时，
-    先点击取消自动恢复手动控制。"""
-    cancel_pt = game_map.find_template(win, AUTO_CANCEL_ICON)
-    resume_pt = game_map.find_template(win, AUTO_RESUME_ICON)
-    if cancel_pt is not None and resume_pt is not None:
+    """进入第 1 回合时若已处于自动战斗，先点击取消自动恢复手动。
+
+    不取消的话手动操作来不及执行就被自动抢先。原实现要求「取消自动」
+    「恢复自动」同时存在才取消（上局遗留自动），新客户端下两按钮未必
+    同时出现；改为双模板比分数：取消自动分数达标且高于自动按钮分数
+    即处于自动中（两按钮同位置样式相近，单模板阈值会误判）。
+    """
+    img = win.capture(force_activate=False, format=WindowCaptureFormat.OPENCV)
+    if img is None:
+        return
+    _cancel_auto_frame(win, img)
+
+
+def _cancel_auto_frame(win, img):
+    """帧内取消自动（见 _cancel_auto）。返回是否点击了取消。
+
+    取消后轮询自动按钮出现代替固定等待（快恢复时立即继续，1.5s 超时
+    上限与旧固定等待相同）。
+    """
+    band = _bar_band(img)
+    cancel_score, cancel_pt = game_map.best_match_np(img, AUTO_CANCEL_ICON, region=band)
+    auto_score, _ = game_map.best_match_np(img, AUTO_ICON, region=band)
+    if cancel_score >= BAR_BUTTON_THRESHOLD and cancel_score > auto_score:
         human_click(win, cancel_pt[0], cancel_pt[1])
         _park_mouse(win)  # 鼠标移开，避免遮挡操作条
-        log("[战斗] 检测到遗留自动战斗，已点击取消自动", "SYS")
-        time.sleep(AUTO_CANCEL_SETTLE)  # 等待操作条恢复手动状态
+        log("[战斗] 检测到自动战斗，已点击取消自动恢复手动", "SYS")
+        # 等待操作条恢复手动（自动按钮出现即恢复）
+        _wait_icon(win, AUTO_ICON, AUTO_CANCEL_SETTLE, want_found=True)
+        return True
+    # 分数可疑（取消自动弱匹配但未达判定）才输出，便于排查模板是否需更新；
+    # 明确的非自动状态（取消自动 <0.5）不打日志
+    if cancel_score >= 0.5:
+        log(f"[战斗] 非自动状态（取消自动={cancel_score:.3f} 自动={auto_score:.3f}），无需取消", "INFO")
+    return False
 
 
-def _do_action(win, action, label):
+def _do_action(win, action, label, frame=None, round_no=None):
     """执行一条战斗操作，返回是否发出了操作指令。
 
+    frame：调用方已捕获的 BGR 帧（第 1 回合人物操作与取消自动/回合
+    判定共用一帧，省重复截图）；None 时自行截帧。
+    round_no：回合号（操作日志前缀用，替代原先独立的「第 N 回合：
+    X 操作」头行，日志合并为一行）。
     未发出指令（无/暂不支持/识别失败）时操作条会停留到倒计时结束，
     调用方需等待该阶段自行结束。
     """
+    prefix = f"第 {round_no} 回合 " if round_no else ""
     if action == "无":
         return False
     if action in _UNSUPPORTED_ACTIONS:
-        log(f"[战斗] {label}：{action}暂不支持（无按钮模板），本阶段不操作", "WARN")
+        log(f"[战斗] {prefix}{label}：{action}暂不支持（无按钮模板），本阶段不操作", "WARN")
         return False
 
     # 攻击：直接点击攻击按钮
     if action == "攻击":
         human_click(win, ATTACK_POS[0], ATTACK_POS[1])
         _park_mouse(win)  # 鼠标移开，避免遮挡召唤兽操作条
-        log(f"[战斗] {label}：攻击", "INFO")
+        log(f"[战斗] {prefix}{label}：攻击", "INFO")
         return True
 
     # 防御：识别防御按钮点击
     if action == "防御":
-        pt = game_map.find_template(win, FANGYU_ICON)
+        pt = _find_in_frame(win, frame, FANGYU_ICON)
         if pt is None:
-            log(f"[战斗] {label}：未识别到防御按钮，本阶段不操作", "WARN")
+            log(f"[战斗] {prefix}{label}：未识别到防御按钮，本阶段不操作", "WARN")
             return False
         human_click(win, pt[0], pt[1])
         _park_mouse(win)  # 鼠标移开，避免遮挡召唤兽操作条
-        log(f"[战斗] {label}：防御", "INFO")
+        log(f"[战斗] {prefix}{label}：防御", "INFO")
         return True
 
     # 技能：识别法术按钮 → 打开技能面板 → 点击技能 → 攻击按钮位置再点一次
@@ -238,14 +361,14 @@ def _do_action(win, action, label):
     else:
         pos = BEAST_SKILL_POS.get(action)
         if pos is None:
-            log(f"[战斗] {label}：{action} 坐标未配置，本阶段不操作", "WARN")
+            log(f"[战斗] {prefix}{label}：{action} 坐标未配置，本阶段不操作", "WARN")
             return False
     if pos is None:
-        log(f"[战斗] {label}：无法解析 {action}，本阶段不操作", "WARN")
+        log(f"[战斗] {prefix}{label}：无法解析 {action}，本阶段不操作", "WARN")
         return False
-    pt = game_map.find_template(win, FASHU_ICON)
+    pt = _find_in_frame(win, frame, FASHU_ICON)
     if pt is None:
-        log(f"[战斗] {label}：未识别到法术按钮，本阶段不操作", "WARN")
+        log(f"[战斗] {prefix}{label}：未识别到法术按钮，本阶段不操作", "WARN")
         return False
     human_click(win, pt[0], pt[1])
     time.sleep(SKILL_PANEL_DELAY)  # 等待技能选择面板打开
@@ -253,21 +376,24 @@ def _do_action(win, action, label):
     time.sleep(SKILL_CONFIRM_DELAY)  # 等待面板收起
     human_click(win, ATTACK_POS[0], ATTACK_POS[1])
     _park_mouse(win)  # 鼠标移开，避免遮挡召唤兽操作条
-    log(f"[战斗] {label}：施放 {action}", "INFO")
+    log(f"[战斗] {prefix}{label}：施放 {action}", "INFO")
     return True
 
 
 def handle_battle(win):
     """处理首场战斗：第 1 回合按配置操作，操作完成后点击自动。
 
+    返回 "auto_ok"（本场已挂上自动）或 "no_auto"（战斗结束时仍未挂上，
+    供 watch_loop 在下一场战斗进场时补点一次自动）。
     后续场次由 watch_loop 按场次调度（每 5 场例行点击一次自动，
     其余场次交由游戏自动战斗），不再进入本函数；战斗结束的确认、
     血蓝条检查与巫医对话框处理也统一在 watch_loop 中完成。
     """
-    actions = load_battle_actions()
-    log(f"[战斗] 战斗开始：人物={actions['char']}，召唤兽={actions['beast']}", "SYS")
+    actions = load_battle_actions()  # 操作配置已在 main.py 启动时输出，不重复打日志
+    auto_engaged = False
     rounds = 0
     round_1 = True
+    round1_frame = None  # 第 1 回合操作条帧（取消自动/回合判定/人物操作共用）
     while not _battle_ended(win):
         # 等待操作条出现（新回合）
         if not _wait_icon(win, FASHU_ICON, ROUND_BAR_TIMEOUT, want_found=True):
@@ -275,20 +401,32 @@ def handle_battle(win):
         time.sleep(0.5)  # 操作条刚出现，稍作稳定再操作
         rounds += 1
         if rounds == 1:
-            # 首次操作条：先取消遗留自动（规则 3），再判断当前回合（规则 2）
-            _cancel_auto(win)
-            round_1 = is_round_1(win)
+            # 首次操作条：截一帧完成「取消自动 + 第 1 回合判定」，
+            # 该帧同时供人物操作的防御/法术按钮定位复用（省 2 次截图）
+            round1_frame = win.capture(force_activate=False,
+                                       format=WindowCaptureFormat.OPENCV)
+            if round1_frame is None:
+                _cancel_auto(win)
+                round_1 = is_round_1(win)
+            else:
+                canceled = _cancel_auto_frame(win, round1_frame)
+                round_1 = _is_round_1_frame(round1_frame)
+                if canceled:
+                    round1_frame = None  # 取消自动后操作条已变化，帧失效
             log(f"[战斗] 当前为第 1 回合" if round_1 else "[战斗] 当前非第 1 回合", "INFO")
         # 非第 1 回合：点击自动按钮，剩余回合交由游戏自动战斗
         if not (rounds == 1 and round_1):
             if _click_template(win, AUTO_ICON):
                 _park_mouse(win)  # 鼠标移开，避免遮挡操作条
+                auto_engaged = True
                 log("[战斗] 已点击自动，剩余回合由游戏自动战斗", "SYS")
                 break
             log("[战斗] 未识别到自动按钮，本回合按配置手动操作", "WARN")
         # ---- 第 1 回合（或自动不可用）：按配置执行人物/召唤兽操作 ----
-        log(f"[战斗] 第 {rounds} 回合：人物操作", "INFO")
-        acted = _do_action(win, actions["char"], "人物")
+        # （操作日志自带回合前缀，不再单独输出「第 N 回合：X 操作」头行）
+        acted = _do_action(win, actions["char"], "人物",
+                           frame=round1_frame if rounds == 1 else None,
+                           round_no=rounds)
         if acted:
             time.sleep(PHASE_SWITCH_DELAY)  # 操作条关闭，召唤兽条出现
         else:
@@ -297,11 +435,22 @@ def handle_battle(win):
             break
         # ---- 召唤兽操作阶段 ----
         _wait_icon(win, FASHU_ICON, BEAST_BAR_TIMEOUT, want_found=True)
-        log(f"[战斗] 第 {rounds} 回合：召唤兽操作", "INFO")
-        acted = _do_action(win, actions["beast"], "召唤兽")
+        acted = _do_action(win, actions["beast"], "召唤兽", round_no=rounds)
+        if rounds == 1 and round_1 and acted:
+            # 操作完成立即点自动（赶在操作条关闭前）：一轮就结束的战斗也要
+            # 挂上自动，否则下场战斗进场不在自动状态；点不到时由下一操作条
+            # （本场第 2 回合）或 watch_loop 下场进场补点
+            time.sleep(SKILL_CONFIRM_DELAY)
+            if _click_template(win, AUTO_ICON):
+                _park_mouse(win)  # 鼠标移开，避免遮挡操作条
+                auto_engaged = True
+                log("[战斗] 操作完成，已点击自动", "SYS")
+                break
+            log("[战斗] 操作条已关闭未点到自动，待下一操作条补点", "INFO")
         _wait_icon(win, FASHU_ICON,
                    BAR_GONE_TIMEOUT if acted else IDLE_COUNTDOWN_WAIT,
                    want_found=False)
+    return "auto_ok" if auto_engaged else "no_auto"
 
 
 def _click_auto_once(win):
@@ -310,18 +459,25 @@ def _click_auto_once(win):
     已处于自动战斗时操作条显示「取消自动」而非「自动」，自动按钮
     不会出现，轮询超时即跳过、不打扰；自动被关掉（如次数耗尽）时
     点一次重新开启。操作条可能正处回合间隙，最多等待一整回合的
-    操作条周期；战斗结束（连续两轮确认）提前返回。
+    操作条周期；战斗结束（连续两轮确认）提前返回。单帧判定。
     """
     deadline = time.time() + AUTO_ASSERT_TIMEOUT
     out_polls = 0
     while time.time() < deadline:
-        if is_in_battle(win):
+        img = win.capture(force_activate=False, format=WindowCaptureFormat.OPENCV)
+        if img is None:
+            time.sleep(BAR_POLL_INTERVAL)
+            continue
+        if is_in_battle_frame(img):
             out_polls = 0
         else:
             out_polls += 1
             if out_polls >= BATTLE_CONFIRM_POLLS:
                 return
-        if _click_template(win, AUTO_ICON):
+        pt = game_map.match_frame_np(img, AUTO_ICON, region=_bar_band(img),
+                                     fallback=True)
+        if pt is not None:
+            human_click(win, pt[0], pt[1])
             _park_mouse(win)  # 鼠标移开，避免遮挡操作条
             log("[战斗] 已点击自动按钮（每 5 场例行确认）", "SYS")
             return
@@ -331,6 +487,8 @@ def _click_auto_once(win):
 
 # 巫医对话框选项未识别告警去重标记（对话框消失后复位，防轮询刷屏）
 _wuyi_option_missing_warned = False
+# 对话框区域上一帧（像素差分预过滤：区域无变化跳过 OCR）
+_wuyi_prev_roi = None
 
 
 def _handle_wuyi_dialog(win):
@@ -339,11 +497,24 @@ def _handle_wuyi_dialog(win):
     文案用模糊匹配（抗 OCR 误读）；选项去标点后精确子串匹配（游戏内原文，
     记忆规则：选项匹配不"纠正"用字）；限定对话框区域（x≥PANEL_MAX_X）
     且为绿字行，避免误点追踪面板的绿字链接。返回是否已点击。
+
+    性能：对话框区域像素差分预过滤——区域与上一帧几乎相同（无弹窗/
+    动画）时跳过 OCR（实测 OCR 148-311ms）；已知对话框存在但选项
+    未识别（告警中）时不跳过，保持重试。
     """
-    global _wuyi_option_missing_warned
+    global _wuyi_option_missing_warned, _wuyi_prev_roi
     img = win.capture(force_activate=False)
     if img is None:
         return False
+    l, t, r, b = task_tracker.DIALOG_REGION
+    roi = np.asarray(img)[t:b, l:r]
+    if _wuyi_prev_roi is not None and not _wuyi_option_missing_warned:
+        diff = float(np.abs(roi.astype(np.int16)
+                            - _wuyi_prev_roi.astype(np.int16)).mean())
+        if diff < WUYI_DIFF_THRESHOLD:
+            _wuyi_prev_roi = roi
+            return False
+    _wuyi_prev_roi = roi
     items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
     from .xuanshu import _dialog_text_present  # 函数内导入，避免循环依赖
     if not _dialog_text_present(items, WUYI_DIALOG_TEXT):
@@ -382,6 +553,7 @@ def watch_loop(win):
     in_battle = False      # 已确认的战斗状态
     in_polls = 0           # 连续在战斗的轮询数（进入确认）
     out_polls = 0          # 连续不在战斗的轮询数（结束确认）
+    pending_auto = False   # 首场结束仍未挂上自动 → 下一场进场补点一次
     last_wuyi_check = 0.0  # 上次巫医对话框检查时间
     wuyi_click_at = 0.0    # 上次点击巫医选项时间（冷却）
     while True:
@@ -393,17 +565,26 @@ def watch_loop(win):
                     if in_polls >= BATTLE_CONFIRM_POLLS:  # 连续两轮确认进入
                         in_battle = True
                         battle_no += 1
+                        debug_overlay.set_battle(battle_no)  # 调试悬浮层场次
                         log(f"[战斗] 第 {battle_no} 场战斗开始", "SYS")
                         if battle_no == 1:
-                            handle_battle(win)  # 首场：按配置操作后点击自动
+                            result = handle_battle(win)  # 首场：按配置操作后点击自动
+                            pending_auto = (result != "auto_ok")
+                            if pending_auto:
+                                log("[战斗] 首场结束未挂上自动，下一场进场补点一次", "WARN")
                         elif battle_no % AUTO_REASSERT_EVERY == 1:
                             _click_auto_once(win)  # 每 5 场：点一次自动
+                        elif pending_auto:
+                            _click_auto_once(win)  # 首场未挂上自动：本场进场补点
+                            pending_auto = False
                         # 其余场次：不操作，等待游戏自动战斗结束
             else:
                 in_polls = 0
                 if in_battle:
                     out_polls += 1
-                    if out_polls >= BATTLE_CONFIRM_POLLS:  # 连续两轮确认结束
+                    # 结束确认保持 2s 窗口（0.5s×4 轮询，与原先 1s×2 相同，
+                    # 防回合间隙误判结束——退出判定不放宽）
+                    if out_polls >= BATTLE_END_CONFIRM_POLLS:
                         in_battle = False
                         log(f"[战斗] 第 {battle_no} 场战斗结束", "SYS")
                         status_bars.check_all_bars(win)

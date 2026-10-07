@@ -37,6 +37,10 @@ PANEL_MAX_X = 400
 TRACK_REGION = (0, 200, 400, 600)      # 任务追踪面板
 DIALOG_REGION = (400, 270, 980, 600)   # 居中对话框区
 OCR_REGIONS = (TRACK_REGION, DIALOG_REGION)
+# 任务面板读取（read_tasks/get_task）的 OCR 区域：右缘放宽到 430——
+# 与 PANEL_MAX_X 同宽会裁切标题框边缘导致标题误读（实测），
+# group_tasks 仍按 x<PANEL_MAX_X 过滤，区域外行不参与
+TRACK_OCR_REGION = (0, 200, 430, 600)
 
 
 def _green_mask(region, min_g):
@@ -194,7 +198,7 @@ def read_tasks(win):
     img = win.capture(force_activate=False)
     if img is None:
         return []
-    items, _ = game_map.ocr_image(img)
+    items, _ = game_map.ocr_regions(img, (TRACK_OCR_REGION,))
     return group_tasks(items)
 
 
@@ -245,7 +249,7 @@ def get_task(win, title):
     img = win.capture(force_activate=False)
     if img is None:
         return None
-    items, _ = game_map.ocr_image(img)
+    items, _ = game_map.ocr_regions(img, (TRACK_OCR_REGION,))
     return find_task(group_tasks(items), title)
 
 

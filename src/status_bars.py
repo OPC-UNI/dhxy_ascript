@@ -62,38 +62,53 @@ def _scan_fill_edge(img_np, rect, color_mode):
     return edge
 
 
-def _check_bar(win, rect, color_mode, threshold):
-    """检测单条血蓝条。
+def _scan_bar(img_np, rect, color_mode, threshold):
+    """帧内检测单条血蓝条，返回 (百分比或 None, 是否低于阈值)。
 
-    返回 (百分比或 None, 是否低于阈值, 边缘屏幕坐标或 None)；
     无填充（空条/未召唤）时百分比为 None。
     """
-    img = win.capture()
-    if img is None:
-        return None, False, None
-    edge = _scan_fill_edge(np.asarray(img), rect, color_mode)
+    edge = _scan_fill_edge(img_np, rect, color_mode)
     if edge is None:
-        return None, True, None
-    left, t, right, _ = rect
+        return None, True
+    left, _t, right, _b = rect
     pct = (edge - left) / (right - left)
-    screen_pos = (win.rect.left + edge, win.rect.top + (t + rect[3]) // 2)
-    return pct, pct < threshold / 100, screen_pos
+    return pct, pct < threshold / 100
 
 
 def check_all_bars(win):
-    """检测全部血蓝条：低于阈值时右键对应条回满。"""
+    """检测全部血蓝条：低于阈值时右键对应条回满。
+
+    单帧检测：4 条共用一次截图（原先每条各自截窗 4 次，且默认
+    带激活抢前台焦点）；像素扫描逻辑与阈值不变。
+    日志合并：正常时一行摘要（原先每场战斗 4 行 INFO），
+    仅未检测到填充/低于阈值/回满动作单独输出。
+    """
     thresholds = load_thresholds()
+    img = win.capture(force_activate=False)
+    if img is None:
+        log("[血蓝] 窗口截图失败，跳过检测", "WARN")
+        return
+    img_np = np.asarray(img)
+    parts = []
+    problems = []  # (label, rect, pct 或 None, threshold)
     for label, rect, mode, key in BARS:
         threshold = thresholds.get(key, DEFAULT_THRESHOLD)
-        pct, low, _pos = _check_bar(win, rect, mode, threshold)
+        pct, low = _scan_bar(img_np, rect, mode, threshold)
+        if pct is None:
+            parts.append(f"{label}空")
+            problems.append((label, rect, None, threshold))
+            continue
+        parts.append(f"{label}{pct * 100:.0f}%")
+        if low:
+            problems.append((label, rect, pct, threshold))
+    log(f"[血蓝] {' '.join(parts)}", "INFO")
+    for label, rect, pct, threshold in problems:
         if pct is None:
             log(f"[血蓝] {label}: 未检测到填充（空条或召唤兽未出战）", "WARN")
             continue
-        mark = f"（低于{threshold}%）" if low else ""
-        log(f"[血蓝] {label}: {pct * 100:.0f}%{mark}", "WARN" if low else "INFO")
-        if low:
-            # 低于阈值：移动到条中心右键回满
-            cx = (rect[0] + rect[2]) // 2
-            cy = (rect[1] + rect[3]) // 2
-            human_click(win, cx, cy, button="secondary")
-            log(f"[血蓝] {label} 已右键回满（{pct * 100:.0f}% → 待恢复）", "SYS")
+        log(f"[血蓝] {label}: {pct * 100:.0f}%（低于{threshold}%）", "WARN")
+        # 低于阈值：移动到条中心右键回满
+        cx = (rect[0] + rect[2]) // 2
+        cy = (rect[1] + rect[3]) // 2
+        human_click(win, cx, cy, button="secondary")
+        log(f"[血蓝] {label} 已右键回满（{pct * 100:.0f}% → 待恢复）", "SYS")
