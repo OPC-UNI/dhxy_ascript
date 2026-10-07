@@ -143,7 +143,7 @@ def read_map_position(win):
     30px 高的区域放大到 736 最小边再检测（177x30 → 4336x736，极慢），
     快引擎按原尺寸检测，位置文字约 18-20px 可稳定识别。
     """
-    img = win.capture()
+    img = win.capture(force_activate=False)
     if img is None:
         return None
     items, _ = ocr_region(img, MAP_POS_REGION)
@@ -186,9 +186,17 @@ def is_at_position(pos, name, x, y, tolerance=5):
 
 
 def find_template(win, icon, threshold=0.8):
-    """在游戏窗口内查找模板，返回首个匹配的 (x, y) 窗口相对坐标或 None。"""
-    results = FindImages.find_all_template(R.img(icon), im_source=win, threshold=threshold)
-    return (results[0].x, results[0].y) if results else None
+    """在游戏窗口内查找模板，返回首个匹配的 (x, y) 窗口相对坐标或 None。
+
+    先截一帧（force_activate=False）再在帧上匹配：FindImages 的
+    im_source=Window 路径内部调用 win.capture() 且默认 force_activate=True，
+    每次匹配都激活游戏窗口抢前台焦点（耗时且干扰用户其他窗口），
+    违反性能规则「轮询截图一律 force_activate=False」。
+    """
+    img = win.capture(force_activate=False)
+    if img is None:
+        return None
+    return find_template_in(img, icon, threshold)
 
 
 def find_template_in(img, icon, threshold=0.8):
@@ -326,9 +334,16 @@ def match_frame_multi(img_np, icons, threshold=0.8, regions=None):
 
 
 def find_templates(win, icon, threshold=0.8):
-    """在游戏窗口内查找模板的全部匹配，返回 [(x, y), ...] 窗口相对坐标列表。"""
+    """在游戏窗口内查找模板的全部匹配，返回 [(x, y), ...] 窗口相对坐标列表。
+
+    截一帧（force_activate=False）后在帧上匹配，不激活游戏窗口
+    （原因同 find_template）。
+    """
+    img = win.capture(force_activate=False)
+    if img is None:
+        return []
     return [(r.x, r.y)
-            for r in FindImages.find_all_template(R.img(icon), im_source=win, threshold=threshold)]
+            for r in FindImages.find_all_template(R.img(icon), im_source=img, threshold=threshold)]
 
 
 def is_world_map_open(win):

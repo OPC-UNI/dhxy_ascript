@@ -294,7 +294,7 @@ def _claim_task(win):
         if task_tracker.has_task(win, WUHUAN_TITLE):
             claimed = True
             break
-        img = win.capture()
+        img = win.capture(force_activate=False)
         if img is None:
             time.sleep(0.2)
             continue
@@ -307,7 +307,7 @@ def _claim_task(win):
             # 活力值不足/今日两次已满提示在点击领取选项之后出现：重新截帧并轮询几秒
             vdeadline = time.time() + 4
             while time.time() < vdeadline:
-                img = win.capture()
+                img = win.capture(force_activate=False)
                 if img is None:
                     time.sleep(0.5)
                     continue
@@ -329,7 +329,7 @@ def _claim_task(win):
             if task_tracker.has_task(win, WUHUAN_TITLE):
                 claimed = True
                 break
-            img = win.capture()
+            img = win.capture(force_activate=False)
             if img is not None:
                 items, img_np = game_map.ocr_image(img)
                 if _dialog_text_present(items, DAILY_LIMIT_TEXT):

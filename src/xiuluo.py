@@ -20,23 +20,32 @@
 3. 对话开打：寻路到达后出现对话面板 → 点击绿色选项「看打！」进入战斗
    （点击成功标记本轮战斗由「看打！」进入）
 4. 战斗：战斗由 battle.watch_loop 线程自动操作；follow_task 战斗中自动跳过识别
-5. 返程：战斗结束后回领取 NPC（仅「看打！」进入的战斗才返程，
-   其他方式进入的战斗不自动返程；返程路径待实现）
+5. 返程：战斗结束后用修罗回城符回灵兽村（仅「看打！」进入的战斗才返程，
+   其他方式进入的战斗不自动返程）：打开背包 → 打开任务储物格
+   （box_task/box_task_selected 双模板比分数判定）→ 右键修罗回城符
+   → 关闭世界地图/小地图/背包
 6. 循环往复；达到次数上限时结束任务进程
 
 TODO（待用户逐步确认后填充）：
 - 任务标题（追踪面板匹配串；注意不可与地图位置文案如「修罗古城」混淆，
   参考客栈任务「客栈任务」vs「洛阳客栈」的教训，需实测确认）
-- 返程路径（参考领取流程的世界地图/小地图寻路方式）
+- 修罗回城符模板（res/img/xiuluo_huichengfu.png，用户后续提供；
+  未提供时返程步骤返回失败，下一轮领取走世界地图寻路兜底）
 """
 import re
 import time
+from pathlib import Path
 
-from .app_utils import human_click, log
+import cv2
+import numpy as np
+from ascript.windows.system import R  # 资源路由（模板路径）
+
+from .app_utils import human_click, human_move, log
 from . import task_tracker  # 任务追踪面板操作
 from . import map as game_map  # 地图操作（世界地图/小地图/位置识别）
 from . import team  # 组队检查（领取前队伍人数检查，仅队长生效）
 from . import debug_overlay  # 调试信息悬浮层（任务进度更新）
+from . import bag  # 背包操作（打开/关闭背包、任务储物格）
 from .battle import is_in_battle, is_in_battle_frame  # 战斗状态判定（统一在 battle.py 中实现）
 from .control_window import load_task_counts, load_xiuluo_settings  # 任务次数上限/修罗设置
 from .xuanshu import (follow_task,  # 任务跟踪（绿字点击寻路/战斗跳过/附加对话处理）
@@ -75,8 +84,22 @@ _fight_via_kanda = False        # 本轮战斗是否由「看打！」进入（�
 BATTLE_END_POLL = 2.0            # 等待战斗结束的轮询间隔
 BATTLE_END_TIMEOUT = 600         # 等待战斗结束的超时兜底
 
-# ---- 返程（TODO: 路径待确认） ----
-RETURN_TIMEOUT = 90              # 返程寻路超时
+# ---- 返程（用户流程：背包任务储物格 → 修罗回城符右键 → 回灵兽村） ----
+BOX_TASK_ICON = "box_task.png"                    # 背包任务储物格按钮（未选中态，点击打开）
+BOX_TASK_SELECTED_ICON = "box_task_selected.png"  # 任务储物格已打开（选中态，无需再点击）
+XIULUO_RETURN_ICON = "xiuluo_huichengfu.png"      # 修罗回城符模板（TODO: 待用户提供）
+TASK_BOX_THRESHOLD = 0.8         # 储物格按钮双模板判定阈值（与其他模板一致）
+TASK_BOX_TIMEOUT = 10            # 等待任务储物格打开的超时（点击后渲染/切换）
+RETURN_TALISMAN_TIMEOUT = 15     # 等待回城符在任务储物格中出现的超时
+RETURN_POLL_INTERVAL = 0.5       # 返程轮询间隔（打开动画约 0.4s，实测点击后 1s 内
+                                 # 出现选中态；非防抖判定点，无需更长窗口）
+VERIFY_HOVER_SECONDS = 2.0       # 验证模式：鼠标悬停在回城符上等待关闭背包的秒数
+# 任务储物格按钮相对背包面板标志（bag_box 中心）的偏移与搜索条带：
+# 面板可拖动但内部布局固定，偏移恒定（面板左缘/中部两位置实测
+# +349/+305 与 +353/+305，取均值）；条带留 55px 余量，带区全未命中
+# 才全帧兜底（限频：仅带区未命中时触发）
+TASK_BOX_OFFSET = (351, 305)
+TASK_BOX_BAND_MARGIN = 55
 
 # 骨架阶段占位标记：流程函数未实现时返回该描述，主循环据此退出避免空转；
 # 实现逐个填充后该分支自然不再触发
@@ -177,7 +200,7 @@ def _read_claim_count(win, timeout=CLAIM_COUNT_TIMEOUT):
     """
     deadline = time.time() + timeout
     while time.time() < deadline:
-        img = win.capture()
+        img = win.capture(force_activate=False)
         if img is None:
             time.sleep(0.5)
             continue
@@ -262,7 +285,7 @@ def _claim_task(win):
         if task_tracker.has_task(win, TASK_TITLE):
             claimed = True
             break
-        img = win.capture()
+        img = win.capture(force_activate=False)
         if img is None:
             time.sleep(0.5)
             continue
@@ -280,7 +303,7 @@ def _claim_task(win):
             if task_tracker.has_task(win, TASK_TITLE):
                 claimed = True
                 break
-            img = win.capture()
+            img = win.capture(force_activate=False)
             if img is not None:
                 items, img_np = game_map.ocr_image(img)
                 if _handle_team_warning(win, items, img_np):
@@ -366,13 +389,204 @@ def _wait_battle_end(win, timeout=BATTLE_END_TIMEOUT):
     return True, "战斗已结束"
 
 
-def _return_to_npc(win):
-    """返程：任务完成后回领取 NPC，准备下一轮领取。返回 (是否成功, 描述)。
+def _open_task_box(win):
+    """打开背包并确保任务储物格已打开。返回 (是否成功, 描述)。
 
-    TODO: 待用户确认返程路径后实现（参考领取流程的世界地图/小地图寻路方式）。
+    用户流程：打开背包 → 检查 box_task_selected（选中态）：存在说明
+    任务储物格已在背包中打开，无需点击；否则点击 box_task 打开。
+    两模板是同一按钮的两种状态、互相弱匹配，双模板比分数判定：
+    各自分数达标且更高者胜（防止未选中按钮被选中态模板误判成已打开，
+    以及已打开时误点未选中态反而把储物格关上）。
+    每轮询只截一帧，双模板批量检测共用一帧；以 bag_box 为锚点的
+    搜索条带限定匹配范围（带区全未命中才全帧兜底）。
     """
-    log("[修罗] 返程流程待实现", "WARN")
-    return False, STUB_INFO
+    if not bag.is_bag_open(win):
+        ok, info = bag.open_bag(win)
+        if not ok:
+            return False, f"打开背包失败: {info}"
+    else:
+        log("[修罗] 背包已打开，跳过开包", "INFO")
+    # 以 bag_box（面板标志）为锚点计算任务储物格按钮的搜索条带
+    # （面板可拖动，内部元素相对偏移恒定；未找到锚点则全帧匹配）
+    region = None
+    anchor = bag.find_bag_box(win)
+    if anchor is not None:
+        bx, by = anchor
+        region = (bx + TASK_BOX_OFFSET[0] - TASK_BOX_BAND_MARGIN,
+                  by + TASK_BOX_OFFSET[1] - TASK_BOX_BAND_MARGIN,
+                  bx + TASK_BOX_OFFSET[0] + TASK_BOX_BAND_MARGIN,
+                  by + TASK_BOX_OFFSET[1] + TASK_BOX_BAND_MARGIN)
+    deadline = time.time() + TASK_BOX_TIMEOUT
+    clicked = False
+    while time.time() < deadline:
+        img = win.capture(force_activate=False)
+        if img is None:
+            time.sleep(RETURN_POLL_INTERVAL)
+            continue
+        frame = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
+        sel_score, _ = game_map.best_match_np(frame, BOX_TASK_SELECTED_ICON,
+                                              region=region)
+        task_score, task_pt = game_map.best_match_np(frame, BOX_TASK_ICON,
+                                                     region=region)
+        if sel_score < TASK_BOX_THRESHOLD and task_score < TASK_BOX_THRESHOLD \
+                and region is not None:
+            # 带区全未命中：全帧兜底（限频——仅带区未命中时触发）
+            sel_score, _ = game_map.best_match_np(frame, BOX_TASK_SELECTED_ICON)
+            task_score, task_pt = game_map.best_match_np(frame, BOX_TASK_ICON)
+        if sel_score >= TASK_BOX_THRESHOLD and sel_score > task_score:
+            return True, "任务储物格已在背包中打开"
+        if task_score >= TASK_BOX_THRESHOLD:
+            if not clicked:
+                human_click(win, task_pt[0], task_pt[1])
+                log("[修罗] 已点击任务储物格按钮，等待打开...", "SYS")
+                clicked = True
+            time.sleep(RETURN_POLL_INTERVAL)
+            continue
+        time.sleep(RETURN_POLL_INTERVAL)
+    if clicked:
+        return False, "已点击任务储物格按钮，但未检测到选中态（打开失败）"
+    return False, "背包中未找到任务储物格按钮"
+
+
+def _find_return_talisman(win):
+    """在已打开的任务储物格中查找修罗回城符，返回 (pt 或 None, 描述)。
+
+    只识别不点击（右键使用由 _use_return_talisman 执行；验证流程
+    复用本函数仅移动鼠标悬停）。模板尚未提供时直接失败并说明
+    （不进入等待循环）。
+    """
+    try:
+        has_tpl = Path(R.img(XIULUO_RETURN_ICON)).exists()
+    except Exception:
+        # R.img 对不存在的模板会打印 ⚠️ 警告，GBK 控制台下 print 抛
+        # UnicodeEncodeError；吞掉按模板缺失处理
+        has_tpl = False
+    if not has_tpl:
+        return None, f"修罗回城符模板未提供（待补充 {XIULUO_RETURN_ICON}）"
+    deadline = time.time() + RETURN_TALISMAN_TIMEOUT
+    while time.time() < deadline:
+        img = win.capture(force_activate=False)
+        if img is None:
+            time.sleep(RETURN_POLL_INTERVAL)
+            continue
+        frame = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
+        pt = game_map.match_frame_np(frame, XIULUO_RETURN_ICON)
+        if pt is not None:
+            return pt, "已在任务储物格中找到修罗回城符"
+        time.sleep(RETURN_POLL_INTERVAL)
+    return None, "任务储物格中未找到修罗回城符"
+
+
+def _use_return_talisman(win):
+    """在已打开的任务储物格中识别修罗回城符并右键使用，返回灵兽村。
+
+    返回 (是否成功, 描述)。未找到时下一轮领取流程会走世界地图
+    寻路回灵兽村兜底。
+    """
+    pt, info = _find_return_talisman(win)
+    if pt is None:
+        return False, info
+    human_click(win, pt[0], pt[1], button="secondary")
+    log(f"[修罗] 已右键使用修罗回城符 ({pt[0]}, {pt[1]})，返回灵兽村", "SYS")
+    time.sleep(1.0)  # 等待传送生效
+    return True, "已右键使用修罗回城符"
+
+
+def _close_return_panels(win):
+    """返程收尾：关闭世界地图、小地图、背包（尽力而为，失败仅记日志）。
+
+    先截一帧批量检测三项是否全未打开（常见场景：回城符使用后界面已
+    自行关闭）：全未打开直接返回，1 次截图替代 4~6 次带截图的逐项检测
+    （实测逐项 ~110ms/两项 + 关包检测 ~140ms）；任一打开才走既有关闭流程。
+    """
+    img = win.capture(force_activate=False)
+    if img is not None:
+        frame = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
+        found = game_map.match_frame_multi(
+            frame, (game_map.WORLD_MAP_OPEN_ICON,
+                    game_map.MINI_MAP_OPEN_ICON,
+                    bag.BAG_BOX_ICON))
+        if not any(found.values()):
+            log("[修罗] 世界地图/小地图/背包均未打开，无需关闭", "INFO")
+            return
+    game_map.close_maps(win)
+    ok, info = bag.close_bag(win)
+    if ok:
+        log(f"[修罗] {info}", "SYS")
+    else:
+        log(f"[修罗] 背包关闭失败: {info}", "WARN")
+
+
+def _return_to_npc(win):
+    """返程：任务完成后用修罗回城符回灵兽村，准备下一轮领取。返回 (是否成功, 描述)。
+
+    用户流程：
+    1. 战斗结束后打开背包：检查 box_task_selected（选中态），存在说明
+       任务储物格已在背包中打开；否则点击 box_task 打开
+    2. 识别修罗回城符 → 右键使用，返回到灵兽村
+    3. 关闭世界地图、小地图、背包
+    """
+    # 前置：确保战斗已结束（意外遭遇战会遮挡背包按钮）
+    if is_in_battle(win):
+        ok, info = _wait_battle_end(win, timeout=60)
+        if not ok:
+            return False, info
+    # 1. 打开背包并确保任务储物格已打开
+    ok, info = _open_task_box(win)
+    if not ok:
+        return False, info
+    # 2. 识别修罗回城符并右键使用（返回灵兽村）
+    ok, info = _use_return_talisman(win)
+    if not ok:
+        # 回城符未使用：也关闭背包与地图保持界面干净；下一轮领取
+        # 会走世界地图寻路回灵兽村兜底
+        _close_return_panels(win)
+        return False, info
+    # 3. 关闭世界地图、小地图、背包（清理界面）
+    _close_return_panels(win)
+    # 传送后位置识别（短时等待加载完成，仅供日志与下一轮领取判断）
+    deadline = time.time() + 3
+    pos = None
+    while time.time() < deadline:
+        pos = game_map.read_map_position(win)
+        if pos is not None:
+            break
+        time.sleep(1.0)
+    if pos is not None:
+        log(f"[修罗] 返程后位置: {pos[0]} {pos[1]},{pos[2]}", "SYS")
+    else:
+        log("[修罗] 返程后位置识别失败（不影响本轮返程）", "INFO")
+    return True, "已返回灵兽村"
+
+
+def verify_return_flow(win):
+    """验证修罗回程流程（高级设置-验证按钮，主进程调用）。
+
+    与实际返程 _return_to_npc 完全一致，唯一区别是不右键使用回城符：
+    仅将鼠标移动到回城符上悬停 VERIFY_HOVER_SECONDS 秒供人工确认，
+    然后关闭世界地图/小地图/背包。返回 (是否成功, 描述)。
+    """
+    # 前置：确保战斗已结束（与实际返程一致）
+    if is_in_battle(win):
+        ok, info = _wait_battle_end(win, timeout=60)
+        if not ok:
+            return False, info
+    # 1. 打开背包并确保任务储物格已打开（与实际返程一致）
+    ok, info = _open_task_box(win)
+    if not ok:
+        return False, info
+    # 2. 识别修罗回城符：仅移动鼠标悬停，不点击
+    pt, info = _find_return_talisman(win)
+    if pt is None:
+        _close_return_panels(win)
+        return False, info
+    human_move(win.rect.left + pt[0], win.rect.top + pt[1])
+    log(f"[修罗][验证] 已移动鼠标到修罗回城符 ({pt[0]}, {pt[1]})，"
+        f"悬停 {VERIFY_HOVER_SECONDS:.0f} 秒（不点击）...", "SYS")
+    time.sleep(VERIFY_HOVER_SECONDS)
+    # 3. 关闭世界地图、小地图、背包
+    _close_return_panels(win)
+    return True, f"验证通过：回城符位于 ({pt[0]}, {pt[1]})"
 
 
 def _keep_alive(info):
@@ -455,8 +669,8 @@ def run_loop(win, cycle_interval=3.0):
             log(f"[修罗] {info}", "WARN")
             time.sleep(cycle_interval)
             continue
-        # 5. 返程：仅「看打！」进入的战斗结束后才返程，
-        #    其他方式进入的战斗不自动返程
+        # 5. 返程：仅「看打！」进入的战斗结束后才返程（背包任务储物格
+        #    右键修罗回城符回灵兽村），其他方式进入的战斗不自动返程
         if _fight_via_kanda:
             ok, info = _return_to_npc(win)
             if not ok:

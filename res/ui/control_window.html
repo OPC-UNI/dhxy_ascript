@@ -132,6 +132,9 @@
         }
         .group-title { color: var(--accent); font-size: 13px; font-family: "微软雅黑"; }
         .group-row { display: flex; align-items: center; gap: 8px; }
+        /* ---- 修罗回程验证行 ---- */
+        .verify-row { display: flex; align-items: center; gap: 8px; }
+        #verify-result { color: var(--text); font-size: 12px; font-family: "微软雅黑"; flex: 1; word-break: break-all; }
         .group-label { color: var(--text); font-size: 13px; font-family: "微软雅黑"; width: 84px; flex-shrink: 0; }
         .group-hint { color: var(--text-dim); font-size: 11px; font-family: "微软雅黑"; }
         .group-sub { color: var(--text-dim); font-size: 12px; font-family: "微软雅黑"; }
@@ -306,6 +309,14 @@
                     <span>游戏窗口悬浮显示任务信息（同时显示右侧吸附日志窗口）</span>
                 </label>
             </div>
+            <div class="group-box">
+                <div class="group-title">修罗回程验证</div>
+                <div class="verify-row">
+                    <button id="btn-verify-xiuluo" class="btn" onclick="verifyXiuluoReturn()">验证修罗回程</button>
+                    <span id="verify-result"></span>
+                </div>
+                <div class="group-hint">与实际返程一致：打开背包 → 任务储物格 → 鼠标移动到修罗回城符（不点击，悬停 2 秒）→ 关闭背包。任务运行中不可验证。</div>
+            </div>
         </div>
     </div>
 
@@ -320,6 +331,9 @@
         const debugOverlay = document.getElementById('debug-overlay');
         const xiuluoHezi = document.getElementById('xiuluo-hezi');
         const wubeiHezi = document.getElementById('wubei-hezi');
+        const btnVerifyXiuluo = document.getElementById('btn-verify-xiuluo');
+        const verifyResultEl = document.getElementById('verify-result');
+        let verifying = false;  // 验证请求在途标记（防连点）
 
         // 战斗设置选项：人物 3 行 × 5 列技能 + 攻击/防御/捕捉/逃跑/无；召唤兽 5 技能 + 攻击/防御/逃跑/无
         const CHAR_BATTLE = [];
@@ -529,6 +543,38 @@
         wubeiHezi.addEventListener('change', () => {
             callPython('save_wubei_hezi', wubeiHezi.checked);
         });
+
+        // 修罗回程验证：Python 侧后台线程执行，结果经 onVerifyResult 异步回推
+        async function verifyXiuluoReturn() {
+            if (verifying) return;
+            verifying = true;
+            btnVerifyXiuluo.disabled = true;
+            verifyResultEl.style.color = 'var(--text)';
+            verifyResultEl.innerText = '验证中...';
+            try {
+                const r = await callPython('verify_xiuluo_return');
+                if (!r || r.status !== 'success') {
+                    verifyResultEl.style.color = '#ff5f5f';
+                    verifyResultEl.innerText = (r && r.msg) || '验证请求失败';
+                    verifying = false;
+                    btnVerifyXiuluo.disabled = false;
+                }
+                // 成功：等待 Python 侧 onVerifyResult 回推最终结果
+            } catch (e) {
+                verifyResultEl.style.color = '#ff5f5f';
+                verifyResultEl.innerText = '验证请求异常';
+                verifying = false;
+                btnVerifyXiuluo.disabled = false;
+            }
+        }
+
+        // Python 侧调用：验证结束回推结果（ok=是否成功，info=描述文案）
+        window.onVerifyResult = function (ok, info) {
+            verifying = false;
+            btnVerifyXiuluo.disabled = false;
+            verifyResultEl.style.color = ok ? 'var(--accent)' : '#ff5f5f';
+            verifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+        };
 
         // Python 侧（任务状态联动）调用，用于同步页面显示
         window.syncStatus = function (isActive) {

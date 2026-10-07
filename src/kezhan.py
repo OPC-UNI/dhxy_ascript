@@ -201,7 +201,7 @@ def _go_to_inn(win):
     log("[客栈] 已点击洛阳小地图 (884,600)，前往洛阳客栈", "SYS")
     time.sleep(1.0)  # 等待寻路/对话框响应
     # 先查快送对话框再清理地图：清理的右键回退点可能落在对话框上将其点掉
-    img = win.capture()
+    img = win.capture(force_activate=False)
     if img is not None:
         # 快送对话框为居中对话框，区域 OCR（全帧 930ms → 区域 ~100ms）
         items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
@@ -220,7 +220,7 @@ def _go_to_inn(win):
         if is_in_battle(win):
             time.sleep(2.0)
             continue
-        img = win.capture()
+        img = win.capture(force_activate=False)
         if img is not None:
             items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
             if _click_fast_travel_option(win, items, img_np):
@@ -319,7 +319,7 @@ def _find_awang_by_ocr(win):
     只匹配短行（≤4 字）含「阿旺」，排除任务追踪面板区域（0,200-260,600），
     避免误点追踪文案（如「找阿旺。」）。NPC 名字标签本身即可点击。
     """
-    img = win.capture()
+    img = win.capture(force_activate=False)
     if img is None:
         return None
     items, _ = game_map.ocr_image(img)
@@ -528,7 +528,7 @@ def _find_duchong(win, threshold=0.75):
     返回模板匹配中心（与 FindImages 约定一致）。每轮只截图一次、
     三个模板连续匹配，接近 140ms 的检索节奏。
     """
-    img = win.capture()
+    img = win.capture(force_activate=False)
     if img is None:
         return None
     scene = np.asarray(img)[:, :, :3]
@@ -549,7 +549,7 @@ def _has_task_fast(win):
     """快速检查任务追踪中是否仍有客栈任务（仅 OCR 追踪面板顶部一小块，
     客栈任务恒为面板首个任务；避免全窗 OCR 拖慢拍虫节奏）。
     截图失败时返回 True（不判定结束）。"""
-    img = win.capture()
+    img = win.capture(force_activate=False)
     if img is None:
         return True
     items, _ = game_map.ocr_region(img, TRACK_TITLE_REGION)
@@ -732,7 +732,7 @@ def _claim_task(win, pt):
     while time.time() < deadline:
         if _has_task(win):
             return True, "已领取客栈任务"
-        img = win.capture()
+        img = win.capture(force_activate=False)
         if img is None:
             time.sleep(0.5)
             continue

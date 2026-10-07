@@ -23,6 +23,7 @@ ControlWindow 基于 WebWindow（pywebview），页面为 res/ui/control_window.
 注意：页面不要自行声明 callPython 函数，使用框架注入的桥接
 （window.callPython → call_internal 通道），否则注入会被跳过。
 """
+import json
 import threading
 import webview
 from pathlib import Path
@@ -30,6 +31,7 @@ from ascript.windows.system import R
 from ascript.windows.system.key_value import KeyValue
 from ascript.windows.ui import WebWindow
 from src.log_window import LogWindow
+from . import game  # 游戏窗口查找（修罗回程验证用；game 不反向依赖本模块，可顶层导入）
 
 # ---- 任务模式（UI 单选项，KeyValue 持久化，记住上次选择） ----
 TASK_MODES = ["五环", "客栈", "修罗", "五倍", "玄枢轶闻", "名望"]
@@ -295,6 +297,7 @@ class ControlWindow(WebWindow):
         self._visible = True  # 启动时直接可见
         self._real_close = threading.Event()  # 置位后 X/销毁真正放行（退出路径）
         self._debug_on = load_debug_overlay()  # 调试信息开关：控制日志窗口显隐
+        self._verifying = False  # 修罗回程验证进行中标记（防连点）
         self.log_win = LogWindow()
         self.log_win.set_debug_off_callback(self._on_log_window_closed)
         self.log_win.apply_theme(load_ui_theme())  # 初始主题与主面板一致
@@ -314,6 +317,7 @@ class ControlWindow(WebWindow):
         self.expose(self.start_task)
         self.expose(self.stop_task)
         self.expose(self.reset_task)
+        self.expose(self.verify_xiuluo_return)
         # 任务状态/日志回流接线：TaskManager → 主窗口状态 + 日志窗口
         self._tm.set_callbacks(on_status=self.sync_status, on_log=self.add_logs)
 
@@ -401,6 +405,78 @@ class ControlWindow(WebWindow):
             return result
         save_task_mode(_DEFAULT_MODE)
         return {"status": "success", "mode": load_task_mode()}
+
+    def verify_xiuluo_return(self):
+        """高级设置-修罗回程验证按钮：与实际返程流程一致，但不右键使用
+        回城符——仅将鼠标移动到回城符上悬停 2 秒后关闭背包，供人工
+        确认整条链路（开背包 → 任务储物格 → 回城符识别）是否正确。
+
+        验证在主进程后台线程执行（不占用任务子进程通道）；
+        任务运行中拒绝验证，避免与任务子进程互抢游戏操作。
+        """
+        if self._tm.is_running():
+            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if self._verifying:
+            return {"status": "error", "msg": "验证进行中，请稍候"}
+        win = game.find_main_window()
+        if win is None:
+            return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
+        # 负面条件：游戏窗口须在前台可见——被遮挡时截图正常但点击
+        # 会落到遮挡窗口上（实测 VS Code 最大化遮挡导致开包点击无效）
+        if not _game_window_clickable(win):
+            return {"status": "error", "msg": "游戏窗口被其他窗口遮挡，请将游戏窗口置于前台后再验证"}
+        self._verifying = True
+        threading.Thread(target=self._run_verify, args=(win,),
+                         daemon=True, name="xiuluo-verify").start()
+        return {"status": "success",
+                "msg": "验证已开始：开背包 → 任务储物格 → 悬停回城符 2 秒 → 关背包"}
+
+    def _run_verify(self, win):
+        """验证线程体：跑修罗返程链路（悬停代替点击），结果回推页面与日志窗。"""
+        from . import xiuluo  # 延迟导入：xiuluo 反向导入本模块（避免循环）
+        try:
+            self.add_logs(["[验证] 开始验证修罗回程（不点击回城符，悬停 2 秒后关闭背包）..."])
+            ok, info = xiuluo.verify_return_flow(win)
+        except Exception as e:
+            ok, info = False, f"验证异常: {e}"
+        try:
+            self.add_logs([f"[验证] 结果: {info}"])
+        except Exception:
+            pass
+        self._notify_verify_result(ok, info)
+        self._verifying = False
+
+    def _notify_verify_result(self, ok, info):
+        """验证结果回推页面（高级设置-验证行的结果文案）。"""
+        if self.webview_instance:
+            try:
+                ok_js = "true" if ok else "false"
+                self.webview_instance.evaluate_js(
+                    f"if(window.onVerifyResult){{window.onVerifyResult({ok_js}, {json.dumps(info)});}}")
+            except Exception:
+                pass
+
+
+def _game_window_clickable(win):
+    """检查游戏窗口中心点是否被其他窗口遮挡（点击会落到遮挡窗口上）。
+
+    截图不依赖前台（窗口 DC 直接读取），但鼠标点击是屏幕坐标——
+    游戏被最大化窗口遮挡时点击全落到遮挡窗口上。沿父窗口链向上
+    查找，能走到游戏窗口 hwnd 才认为可点击。
+    """
+    try:
+        import win32gui
+        cx = win.rect.left + win.rect.width // 2
+        cy = win.rect.top + win.rect.height // 2
+        hwnd = win32gui.WindowFromPoint((cx, cy))
+        game_hwnd = win.hwnd
+        while hwnd:
+            if hwnd == game_hwnd:
+                return True
+            hwnd = win32gui.GetParent(hwnd)
+        return False
+    except Exception:
+        return True  # 检查失败不阻塞验证（宁可放行）
 
     def add_log(self, line):
         """单行日志推送到吸附日志窗口（主进程 [系统] 消息用）。"""
