@@ -1,28 +1,35 @@
-"""自定义网页控制窗口：页面提供启动/重置/关闭三个控制按钮自动化任务。
+"""自定义网页控制窗口：任务启动/停止、页面设置与配置、独立吸附日志窗口。
 
-ControlWindow 基于 WebWindow（pywebview），页面为 res/ui/control_window.html。
-必须在 app.show()（webview.start）之前调用 prepare() 创建窗口，
-与浮动控制面板共用同一次 GUI 事件循环。
+ControlWindow 基于 WebWindow（pywebview），页面为 res/ui/control_window.html，
+是应用主窗口；日志由独立的 LogWindow 吸附在主窗口右侧，仅在调试信息开关
+开启时显示（主窗口移动/缩放时跟随）。先 prepare() 创建窗口，再 show() 进入
+阻塞式 GUI 事件循环（webview.start 由主线程执行，配合 Runtime.wait 驻留
+线程防程序自行退出）。
 
 页面结构：
-- 顶部：启动/重置/关闭三个按钮 + 任务状态显示
-- Tab 栏：任务设置（任务模式、任务次数）/ 通用设置（摄妖香、血蓝阈值、
-  人物与召唤兽默认战斗动作，内含修罗设置分组：最少人数、必须有的种族，
-  仅队长时生效）/ 高级设置（暂无）
+- 顶部：启动/停止按钮 + 重置按钮 + 任务状态显示 + 浅色/深色主题切换
+- Tab 栏：任务设置（每任务一组：模式单选 + 次数步进）/ 通用设置
+  （摄妖香、血蓝阈值、人物与召唤兽默认战斗动作，内含修罗/五倍设置
+  分组，仅队长时生效）/ 高级设置（调试信息悬浮开关）
 
 功能约定：
-- 启动：对当前选中的任务模式开始执行任务
+- 启动/停止：桥接调用 TaskManager 启停任务子进程（升级强杀保证线程全清）
 - 重置：停止当前任务，并把模式恢复默认（五环）
-- 关闭：仅隐藏控制窗口，程序继续后台运行（托盘菜单可再唤起）
+- 关闭（X）：取消关闭并隐藏到托盘（_on_closing），任务继续运行；
+  真正退出须先 close_window() 放行（_real_close），否则窗口永不销毁
+- 调试信息开关：控制游戏窗口悬浮层（任务侧读取），同时控制日志窗口显隐；
+  关闭日志窗口 = 自动关闭调试信息开关（页面勾选同步）
 
 注意：页面不要自行声明 callPython 函数，使用框架注入的桥接
 （window.callPython → call_internal 通道），否则注入会被跳过。
 """
+import threading
 import webview
 from pathlib import Path
 from ascript.windows.system import R
 from ascript.windows.system.key_value import KeyValue
 from ascript.windows.ui import WebWindow
+from src.log_window import LogWindow
 
 # ---- 任务模式（UI 单选项，KeyValue 持久化，记住上次选择） ----
 TASK_MODES = ["五环", "客栈", "修罗", "五倍", "玄枢轶闻", "名望"]
@@ -32,6 +39,23 @@ _MODE_KEY = "task_mode"
 _USE_SHEYAOXIANG_KEY = "use_sheyaoxiang"
 # 调试信息悬浮显示（UI 开关，KeyValue 持久化；游戏窗口上绘制任务/配置/进度）
 _DEBUG_OVERLAY_KEY = "debug_overlay"
+# UI 主题（浅色/深色，KeyValue 持久化；首次默认浅色）
+_UI_THEME_KEY = "ui_theme"
+UI_THEMES = ("dark", "light")
+
+
+def load_ui_theme():
+    """读取 UI 主题（首次默认浅色）。"""
+    theme = KeyValue.get(_UI_THEME_KEY, "light")
+    return theme if theme in UI_THEMES else "light"
+
+
+def save_ui_theme(theme):
+    """保存 UI 主题（浅色/深色），返回操作结果。"""
+    if theme not in UI_THEMES:
+        return {"status": "error", "msg": "INVALID_THEME"}
+    KeyValue.save(_UI_THEME_KEY, theme)
+    return {"status": "success"}
 
 
 def load_task_mode():
@@ -258,17 +282,22 @@ class _ApiBridge:
 
 
 class ControlWindow(WebWindow):
-    """独立网页控制窗口。
+    """应用主窗口：任务启动/停止、配置页面；日志由吸附的 LogWindow 显示。
 
-    开始/停止按钮通过桥接调用浮动面板（FloatScriptWindow）的启停逻辑，
-    任务进程的创建、日志转发等仍由浮动面板统一管理。
+    启停通过桥接调用 TaskManager（任务子进程管理），状态与日志由
+    TaskManager 回调推送（sync_status / add_logs → 日志窗口）。
     """
 
-    def __init__(self, app, title="AScript 控制面板"):
+    def __init__(self, tm, title="啄木鸟"):
         super().__init__(R.ui("control_window.html"))
-        self._app = app
+        self._tm = tm
         self._title = title
         self._visible = True  # 启动时直接可见
+        self._real_close = threading.Event()  # 置位后 X/销毁真正放行（退出路径）
+        self._debug_on = load_debug_overlay()  # 调试信息开关：控制日志窗口显隐
+        self.log_win = LogWindow()
+        self.log_win.set_debug_off_callback(self._on_log_window_closed)
+        self.log_win.apply_theme(load_ui_theme())  # 初始主题与主面板一致
         self.expose(self.get_init_data)
         self.expose(self.save_task_mode)
         self.expose(self.save_task_count)
@@ -281,14 +310,18 @@ class ControlWindow(WebWindow):
         self.expose(self.save_wubei_min)
         self.expose(self.save_wubei_hezi)
         self.expose(self.save_debug_overlay)
+        self.expose(self.save_ui_theme)
         self.expose(self.start_task)
+        self.expose(self.stop_task)
         self.expose(self.reset_task)
-        self.expose(self.close_window)
+        # 任务状态/日志回流接线：TaskManager → 主窗口状态 + 日志窗口
+        self._tm.set_callbacks(on_status=self.sync_status, on_log=self.add_logs)
 
     def get_init_data(self):
-        """页面初始化数据：任务模式、任务次数、摄妖香开关、各条阈值、
-        战斗动作、修罗设置（含自动抢盒子）与调试信息开关。"""
-        return {"mode": load_task_mode(),
+        """页面初始化数据：主题、任务模式、任务次数、摄妖香开关、各条
+        阈值、战斗动作、修罗/五倍设置与调试信息开关。"""
+        return {"theme": load_ui_theme(),
+                "mode": load_task_mode(),
                 "task_counts": load_task_counts(),
                 "use_sheyaoxiang": load_use_sheyaoxiang(),
                 "thresholds": load_thresholds(),
@@ -340,30 +373,79 @@ class ControlWindow(WebWindow):
         return save_wubei_hezi(on)
 
     def save_debug_overlay(self, on):
-        """调试信息开关变更：保存悬浮显示开关状态。"""
-        return save_debug_overlay(on)
+        """调试信息开关变更：保存开关状态，并同步日志窗口显隐。"""
+        result = save_debug_overlay(on)
+        if result.get("status") == "success":
+            self._set_debug_on(bool(on))
+        return result
+
+    def save_ui_theme(self, theme):
+        """主题切换：保存浅色/深色选择，并同步日志窗口主题。"""
+        result = save_ui_theme(theme)
+        if result.get("status") == "success":
+            self.log_win.apply_theme(theme)
+        return result
 
     def start_task(self):
-        """启动按钮：对当前选中的模式开始执行任务。"""
-        return self._app.on_toggle_click(True)
+        """启动按钮：启动任务子进程。"""
+        return self._tm.start()
+
+    def stop_task(self):
+        """停止按钮：停止任务子进程（升级强杀，保证任务线程全清）。"""
+        return self._tm.stop()
 
     def reset_task(self):
         """重置按钮：停止当前任务，并把模式恢复默认（五环）。"""
-        result = self._app.on_toggle_click(False)
+        result = self._tm.stop()
         if result.get("status") != "success":
             return result
         save_task_mode(_DEFAULT_MODE)
         return {"status": "success", "mode": load_task_mode()}
 
-    def close_window(self):
-        """关闭按钮：仅隐藏控制窗口，程序继续后台运行。"""
-        if self.webview_instance and self._visible:
+    def add_log(self, line):
+        """单行日志推送到吸附日志窗口（主进程 [系统] 消息用）。"""
+        self.add_logs([line])
+
+    def add_logs(self, lines):
+        """批量日志推送到吸附日志窗口（隐藏期间由 LogWindow 内部缓冲）。"""
+        self.log_win.add_logs(lines)
+
+    # ---- 日志窗口联动 ----
+
+    def _set_debug_on(self, on):
+        """更新调试信息开关状态并刷新日志窗口显隐。"""
+        self._debug_on = bool(on)
+        self._refresh_log_visibility()
+
+    def _refresh_log_visibility(self):
+        """日志窗口可见 = 调试信息开启 且 主窗口可见；显示前先吸附定位。"""
+        visible = self._debug_on and self._visible
+        if visible:
+            self._dock_log()
+        self.log_win.set_visible(visible)
+
+    def _dock_log(self):
+        """日志窗口吸附到主窗口右侧（等高、右缘对齐、顶部对齐）。"""
+        if not (self.webview_instance and self.log_win.webview_instance):
+            return
+        try:
+            mw = self.webview_instance
+            lw = self.log_win.webview_instance
+            lw.resize(260, mw.height)
+            lw.move(mw.x + mw.width, mw.y)
+        except Exception:
+            pass
+
+    def _on_log_window_closed(self):
+        """日志窗口被 X 关闭：关闭调试信息开关并同步主页面勾选。"""
+        save_debug_overlay(False)
+        self._debug_on = False
+        if self.webview_instance:
             try:
-                self.webview_instance.hide()
-                self._visible = False
+                self.webview_instance.evaluate_js(
+                    "if(window.setDebugSwitch){window.setDebugSwitch(false);}")
             except Exception:
                 pass
-        return {"status": "success"}
 
     def toggle_visible(self):
         """切换控制窗口显示/隐藏（供托盘菜单调用）。"""
@@ -378,6 +460,7 @@ class ControlWindow(WebWindow):
                 self._visible = True
         except Exception:
             pass
+        self._refresh_log_visibility()
 
     def sync_status(self, running):
         """任务状态同步到页面（仅更新状态与按钮，不改窗口显隐）。"""
@@ -389,8 +472,39 @@ class ControlWindow(WebWindow):
             except Exception:
                 pass
 
+    def _on_closing(self, *_args):
+        """用户点 X：取消关闭并隐藏到托盘（任务继续运行）。
+
+        返回 False → pywebview closing 事件置 Cancel（winforms FormClosing 取消）；
+        _real_close 置位时返回 True 放行（真正退出路径）。本处理器在 GUI
+        STA 线程同步执行（should_lock=True），hide() 无需 Invoke。
+        """
+        if self._real_close.is_set():
+            return True
+        self._visible = False
+        try:
+            self.webview_instance.hide()
+        except Exception:
+            pass
+        self._refresh_log_visibility()  # 主窗口隐藏时日志窗口一并隐藏
+        return False
+
+    def close_window(self):
+        """真正退出：放行关闭并销毁全部窗口 → Application.Exit → webview.start 返回。"""
+        self._real_close.set()
+        self.log_win.close_window()
+        if self.webview_instance:
+            try:
+                self.webview_instance.destroy()
+            except Exception:
+                pass
+
     def prepare(self, width=360, height=500):
-        """创建窗口但不启动事件循环（webview.start 由 app.show() 统一执行）。"""
+        """创建主窗口与日志窗口（不启动事件循环，webview.start 统一执行）。
+
+        日志窗口初始隐藏，主窗口 shown 后按调试信息开关决定是否吸附显示；
+        主窗口移动/缩放/最小化/恢复时同步日志窗口位置与显隐。
+        """
         file_url = Path(self.abs_path).as_uri()
         win = webview.create_window(
             title=self._title,
@@ -407,3 +521,20 @@ class ControlWindow(WebWindow):
             self._inject("control window loaded")
 
         win.events.loaded += on_loaded
+        win.events.closing += self._on_closing
+        # 主窗口 shown 后首次吸附定位并应用日志窗口初始显隐
+        win.events.shown += lambda: self._refresh_log_visibility()
+        # 移动/缩放时跟随吸附（仅日志窗口可见时重定位）
+        win.events.moved += self._on_main_moved
+        win.events.resized += self._on_main_moved
+        # 最小化隐藏日志窗口，恢复时按开关重新显示
+        win.events.minimized += lambda: self.log_win.set_visible(False)
+        win.events.restored += lambda: self._refresh_log_visibility()
+
+        # 日志窗口：初始隐藏创建（与主窗口同一次 webview.start）
+        self.log_win.prepare()
+
+    def _on_main_moved(self):
+        """主窗口移动/缩放：日志窗口可见时重新吸附。"""
+        if self._debug_on and self._visible:
+            self._dock_log()

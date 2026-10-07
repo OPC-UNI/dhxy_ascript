@@ -1,8 +1,8 @@
-"""AScript Windows 应用模板的入口程序。
+"""AScript Windows 自动化应用入口程序。
 
-演示如何使用 FloatScriptWindow 创建带有启动/停止控制的自动化脚本应用。
-日志输出使用 FloatScriptWindow 自带的日志面板：print 会自动显示在
-浮动窗口的日志区（点击窗口上的日志预览行即可展开）。
+架构：控制窗口（ControlWindow）是唯一界面；任务在独立 spawn 子进程中运行
+（TaskManager 管理启停、升级强杀与日志回流）；主线程跑 webview GUI 消息循环，
+Runtime.wait 驻留线程防止程序自行退出（托盘「彻底退出」→ Runtime.stop 清理退出）。
 
 模块划分（main.py 之外的代码均在 src/ 下）：
 - src/app_utils.py       通用工具（日志、toast）
@@ -13,25 +13,24 @@
 - src/kezhan.py          客栈任务自动化（洛阳客栈找掌柜、领取、跟踪循环）
 - src/xiuluo.py          修罗任务自动化（灵兽村领取、跟踪、返程循环）
 - src/wubei.py           五倍任务自动化（战斗先行，其余流程后续增加）
-- src/control_window.py  网页控制窗口（启动/重置/关闭、任务模式选择）
-- src/polyfill.py        pywebview 6 桥接兼容补丁
+- src/task_manager.py    任务子进程管理（启停、升级强杀、日志回流）
+- src/control_window.py  网页控制窗口（启动/停止/重置、任务模式选择、内嵌日志）
 """
-import multiprocessing
-import os
+import sys
 import threading
 import time
-from typing import Optional
 import pystray
 from PIL import Image
 import uiautomation as auto  # UIA 需要线程内 COM 初始化
+import webview  # GUI 消息循环（窗口已在 ControlWindow.prepare 创建，这里直接 start）
 from ascript.windows.system import R  # 程序上下文与资源路由
+from ascript.windows.system import Runtime  # 生命周期驻留（防止程序自行退出）
 from ascript.windows.ui import LicenseWindow  # 安全验证组件
-from ascript.windows.ui import FloatScriptWindow  # 脚本控制台组件
-from src.polyfill import patch_js_bridge  # pywebview 6 桥接兼容补丁
+from src.task_manager import TaskManager  # 任务子进程管理（启停/强杀/日志回流）
 from src.control_window import (ControlWindow, load_task_mode,
                                 load_use_sheyaoxiang,
                                 load_debug_overlay,
-                                load_battle_actions)  # 自定义网页控制窗口（开始/停止按钮）
+                                load_battle_actions)  # 网页控制窗口（启动/停止/重置、配置持久化）
 from src.app_utils import log, toast, log_file_path  # 日志与系统通知
 from src import game  # 游戏窗口操作
 from src import bag  # 背包操作
@@ -47,79 +46,27 @@ from src import debug_overlay  # 调试信息悬浮层（游戏窗口上绘制�
 from src import map as game_map  # 地图操作（OCR 引擎预热等）
 
 
-class AppWindow(FloatScriptWindow):
-    """浮动控制面板：任务状态同步到网页控制窗口，托盘菜单扩展控制窗口显隐。
-
-    覆写 on_toggle_click（面板播放键与控制窗口按钮都会经过它），
-    任务启动/停止后仅同步控制窗口页面的状态显示，不改窗口显隐。
-    """
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.control_win: Optional[ControlWindow] = None
-
-    def on_toggle_click(self, status):
-        result = super().on_toggle_click(status)
-        if result.get("status") == "success" and self.control_win is not None:
-            self.control_win.sync_status(bool(status))
-        return result
-
-    def _setup_tray(self):
-        """托盘菜单：增加控制窗口的显示/隐藏项。"""
-        try:
-            img = Image.open(self.icon_path)
-            menu = pystray.Menu(
-                pystray.MenuItem("显示/隐藏悬浮面板", self.toggle_visible, default=True),
-                pystray.MenuItem("显示/隐藏控制窗口", self._toggle_control_window),
-                pystray.MenuItem("彻底退出", lambda: os._exit(0)),
-            )
-            tray = pystray.Icon("AScriptTray", img, self.ui_title, menu)
-            tray.run()
-        except Exception:
-            pass
-
-    def _toggle_control_window(self, icon=None, item=None):
-        """托盘菜单回调：切换控制窗口显隐。"""
-        if self.control_win is not None:
-            self.control_win.toggle_visible()
+def _setup_tray(icon_path, control_win):
+    """托盘菜单：显示/隐藏控制窗口 + 彻底退出（Runtime.stop 触发退出清理）。"""
+    try:
+        img = Image.open(icon_path)
+        menu = pystray.Menu(
+            pystray.MenuItem("显示/隐藏控制窗口",
+                             lambda icon, item: control_win.toggle_visible(),
+                             default=True),
+            pystray.MenuItem("彻底退出", lambda icon, item: Runtime.stop()),
+        )
+        tray = pystray.Icon("AScriptTray", img, "啄木鸟", menu)
+        tray.run()
+    except Exception:
+        pass
 
 
-# 初始化控制台：支持自启动 (auto_start) 与 多进程隔离 (use_process)
-# auto_start=False：程序启动时不自动运行任务，由浮动面板播放键触发
-app = AppWindow(R.img("logo.ico"), title="我的程序", auto_start=False)
-
-# 仅主进程创建窗口资源（Windows spawn 子进程会重新导入本模块）
-if multiprocessing.current_process().name == "MainProcess":
-    # pywebview 6 下修复悬浮窗页面桥接，日志才能正常显示（必须早于 app.show() 挂载）
-    patch_js_bridge(app)
-    # 网页控制窗口：隐藏创建，任务启动后自动弹出；必须早于 app.show() 创建（单次 webview.start 显示全部窗口）
-    control_win = ControlWindow(app)
-    control_win.prepare()
-    app.control_win = control_win
-
-    # 面板关闭时一并销毁隐藏的控制窗口，避免程序残留后台
-    # （窗口实例在 app.show() 内部才创建，故用线程轮询挂载关闭回调）
-    def _on_panel_closed(*_args):
-        try:
-            if control_win.webview_instance is not None:
-                control_win.webview_instance.destroy()
-        except Exception:
-            pass
-
-    def _watch_panel_close():
-        while app.webview_instance is None:
-            time.sleep(0.05)
-        app.webview_instance.events.closed += _on_panel_closed
-
-    threading.Thread(target=_watch_panel_close, daemon=True).start()
-
-
-@app.on('start')
 def task_start():
-    """业务逻辑入口函数。
+    """业务逻辑入口函数（顶层函数，spawn 按引用 pickle）。
 
-    当用户点击启动按钮或触发自启动时，此函数将在独立的子进程中运行。
-    在此函数中编写自动化任务的核心业务逻辑。
+    由 TaskManager 在独立子进程的 daemon 线程中调用；
+    停止/超限时进程被强杀，本函数内所有循环与线程随进程一并终止。
     """
     log("业务进程已建立，开始执行自动化任务...", "SYS")
     log(f"[日志] 本地日志文件: {log_file_path()}", "SYS")
@@ -174,8 +121,8 @@ def task_start():
             time.sleep(1)
 
     if main_win is None:
-        # 游戏未启动：结束任务——return 触发框架停止流程（面板自动显示已停止、
-        # 执行 on('stop') 善后回调释放系统资源），与各任务循环正常结束一致
+        # 游戏未启动：结束任务——return 后 wrapper 执行 task_stop 善后、
+        # 子进程退出，TaskManager 监控线程收口状态与日志，与各任务循环正常结束一致
         log("[检查] 30 秒内未检测到游戏主窗口，游戏未启动，任务结束", "WARN")
         debug_overlay.shutdown()
         return
@@ -269,20 +216,78 @@ def task_start():
         time.sleep(1)
 
 
-@app.on('stop')
 def task_stop():
-    """任务停止时的善后处理回调。
+    """任务停止时的善后处理回调（顶层函数，spawn 按引用 pickle）。
 
-    当用户手动停止或任务结束时触发。可在此执行资源释放操作，
-    如关闭文件句柄、断开数据库连接等。注意约有 3 秒的执行时限，
-    超时后系统会强制回收进程资源。
+    由 TaskManager 的子进程 wrapper 在停止时调用（预算约 2.5 秒，
+    超时由进程退出兜底）；优先显式回收调试悬浮层绘制子进程，
+    强杀路径下其 15 秒心跳自灭兜底。
     """
     log("接收到停止信号，正在释放系统资源...", "SYS")
+    debug_overlay.shutdown()  # 显式回收悬浮层绘制进程（幂等）
     # 模拟保存数据逻辑
     time.sleep(1)
     log("资源释放完毕，安全退出。", "SYS")
 
 
 if __name__ == '__main__':
-    # 解决打包后子进程重复启动问题
-    app.show()
+    # ---- 授权守门员：未激活不允许进入主程序 ----
+    # 先静默在线校验：免费版直接放行；本地缓存激活码在线验证通过则不弹窗。
+    # 校验失败再弹激活窗口（阻塞），激活成功或关闭窗口后才继续
+    auth_win = LicenseWindow(app_id="23651")
+    silent_ok = False
+    try:
+        auth_win.get_app_info()
+        cached_key = auth_win.get_cached_key()
+        if cached_key:
+            auth_win.activate_key(cached_key)
+        silent_ok = auth_win.start_app() is True
+    except Exception as e:
+        print(f"[授权] 静默校验异常: {e}")
+    if not silent_ok:
+        # 阻塞式激活窗口：窗口内 start_app 校验通过会关闭窗口并置 _return_value=True
+        auth_win.show(title="软件授权激活", width=400, height=500)
+    if not auth_win._return_value:
+        print("授权未通过，程序退出。")
+        sys.exit(0)
+    print("授权通过，启动主程序...")
+
+    # ---- 授权通过后装配主程序 ----
+    # 必须放在 __main__ 内：Windows spawn 子进程会重新导入本模块但不执行此段
+    # （解决打包后子进程重复启动问题）；同时保证授权窗口阶段 webview 窗口
+    # 列表里只有授权窗口自己，其关闭即结束该次消息循环
+    tm = TaskManager(task_start, task_stop)
+    control_win = ControlWindow(tm)  # 构造内已接线 tm 的状态/日志回调
+    control_win.prepare()            # 创建唯一窗口（uid='master'）
+
+    # 托盘：显示/隐藏控制窗口 + 彻底退出（Runtime.stop 触发退出清理）
+    threading.Thread(target=_setup_tray,
+                     args=(R.img("logo.ico"), control_win),
+                     daemon=True, name="tray").start()
+
+    def _runtime_waiter():
+        """Runtime 驻留线程：托盘「彻底退出」→ Runtime.stop() 后醒来执行清理。
+
+        注意：Runtime 文档模式（主线程 Runtime.wait + 窗口 block=False）在本机
+        pywebview 版本不可用——webview.start 要求调用线程名为 MainThread，
+        且 winforms 会在调用线程注册 signal 处理器（非主线程必 ValueError）。
+        故反向安排：主线程跑 GUI 循环（与授权窗口同一条已验证路径），
+        Runtime.wait 放独立非守护线程（信号注册失败已被 Runtime 内部吞掉），
+        承担驻留语义与退出触发。
+        """
+        Runtime.wait()
+        # 清理顺序：先杀任务（日志还能进窗口），再销毁窗口结束 GUI 循环
+        tm.stop()
+        control_win.close_window()
+
+    threading.Thread(target=_runtime_waiter, daemon=False,
+                     name="runtime-waiter").start()
+
+    # 主线程阻塞式 GUI 循环：窗口已在 prepare() 创建，这里直接 start
+    # （不能用 WebWindow.show()——它内部会重复 create_window 出第二个窗口）
+    webview.start(debug=False, gui='edgechromium')
+
+    # GUI 循环结束（窗口已销毁）后收尾：兜底清理任务进程并退出
+    tm.stop()
+    Runtime.stop()
+    print("[系统] 程序已正常退出。")

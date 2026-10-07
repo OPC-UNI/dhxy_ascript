@@ -4,110 +4,147 @@
     <meta charset="utf-8">
     <style>
         * { box-sizing: border-box; }
+        /* ---- 主题变量：深色（默认）/ 浅色（body.light） ---- */
+        :root {
+            --bg: #1a1a1a;
+            --panel: #222;
+            --panel2: #2a2a2a;
+            --border: #333;
+            --border2: #444;
+            --text: #ccc;
+            --text-dim: #888;
+            --accent: #00ff88;
+            --accent-dim: #00b36b;
+            --warn: #ffb300;
+        }
+        body.light {
+            --bg: #f0f2f5;
+            --panel: #ffffff;
+            --panel2: #f7f8fa;
+            --border: #d9dce1;
+            --border2: #c2c7ce;
+            --text: #2c3e50;
+            --text-dim: #7f8c8d;
+            --accent: #00a86b;
+            --accent-dim: #00b36b;
+            --warn: #c77700;
+        }
         html, body {
             margin: 0; padding: 0; width: 100%; height: 100%;
-            overflow: hidden; background-color: #1a1a1a;
+            overflow: hidden; background-color: var(--bg);
             display: flex; flex-direction: column;
         }
-        /* ---- 顶部：三个控制按钮 + 任务状态 ---- */
+        /* ---- 顶部：重置按钮 + 任务状态 + 主题切换 ---- */
         .top-bar {
             height: 48px; min-height: 48px; flex-shrink: 0;
             display: flex; align-items: center; gap: 8px; padding: 0 12px;
-            background-color: #222; border-bottom: 1px solid #333;
+            background-color: var(--panel); border-bottom: 1px solid var(--border);
         }
         .btn {
-            width: 64px; height: 30px; border-radius: 6px; border: 1px solid #444;
-            font-size: 13px; font-family: "微软雅黑"; cursor: pointer;
-            background: #2a2a2a; color: #eee; transition: all 0.15s;
+            min-width: 64px; height: 30px; padding: 0 12px; border-radius: 6px;
+            border: 1px solid var(--border2); font-size: 13px;
+            font-family: "微软雅黑"; cursor: pointer;
+            background: var(--panel2); color: var(--text); transition: all 0.15s;
         }
-        .btn:hover:not(:disabled) { filter: brightness(1.25); }
+        .btn:hover:not(:disabled) { filter: brightness(1.2); }
         .btn:disabled { opacity: 0.35; cursor: not-allowed; }
-        #btn-start { border-color: #00ff88; color: #00ff88; }
-        #btn-reset { border-color: #ffb300; color: #ffb300; }
-        #btn-close { border-color: #666; color: #999; }
-        #status { margin-left: auto; color: #888; font-size: 12px; font-family: 'Consolas', '微软雅黑', monospace; }
-        #status.running { color: #00ff88; }
+        #btn-reset { border-color: var(--warn); color: var(--warn); }
+        #btn-theme { border-color: var(--accent); color: var(--accent); margin-left: auto; }
+        #btn-start { border-color: var(--accent); color: var(--accent); }
+        #btn-start.running { border-color: #ff5f5f; color: #ff5f5f; }
+        #status { color: var(--text-dim); font-size: 12px; font-family: 'Consolas', '微软雅黑', monospace; }
+        #status.running { color: var(--accent); }
         /* ---- Tab 栏 ---- */
         .tab-bar {
             height: 40px; min-height: 40px; flex-shrink: 0;
-            display: flex; background-color: #222; border-bottom: 1px solid #333;
+            display: flex; background-color: var(--panel); border-bottom: 1px solid var(--border);
         }
         .tab {
             flex: 1; display: flex; align-items: center; justify-content: center;
-            color: #888; font-size: 13px; font-family: "微软雅黑";
+            color: var(--text-dim); font-size: 13px; font-family: "微软雅黑";
             cursor: pointer; user-select: none; border-bottom: 2px solid transparent;
             transition: color 0.15s;
         }
-        .tab:hover { color: #ccc; }
-        .tab.active { color: #00ff88; border-bottom-color: #00ff88; }
+        .tab:hover { color: var(--text); }
+        .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
         /* ---- 内容区 ---- */
         .body { flex: 1; overflow-y: auto; }
         .tab-panel {
-            display: none; flex-direction: column; align-items: center; justify-content: center;
-            gap: 18px; padding: 18px 12px; min-height: 100%;
+            display: none; flex-direction: column; align-items: center;
+            gap: 12px; padding: 14px 12px; min-height: 100%;
         }
         .tab-panel.active { display: flex; }
-        .section { display: flex; flex-direction: column; align-items: center; gap: 8px; }
-        .section-title { color: #888; font-size: 12px; font-family: "微软雅黑"; }
         .radio-grid {
             display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px 16px;
-            font-size: 13px; font-family: "微软雅黑"; color: #ccc;
+            font-size: 13px; font-family: "微软雅黑"; color: var(--text);
         }
         .radio-grid label { display: flex; align-items: center; gap: 5px; cursor: pointer; user-select: none; }
-        .radio-grid input[type="radio"] { accent-color: #00ff88; cursor: pointer; }
-        .radio-grid input[type="checkbox"] { accent-color: #00ff88; cursor: pointer; }
+        .radio-grid input[type="radio"] { accent-color: var(--accent); cursor: pointer; }
+        .radio-grid input[type="checkbox"] { accent-color: var(--accent); cursor: pointer; }
         /* 战斗设置：5 列小字号，容纳 技能1-1 等标签 */
         .battle-grid { grid-template-columns: repeat(5, 1fr); gap: 6px 4px; font-size: 12px; }
-        .switch-row { display: flex; align-items: center; gap: 8px; color: #ccc; font-size: 13px; font-family: "微软雅黑"; cursor: pointer; user-select: none; }
+        .switch-row { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: 13px; font-family: "微软雅黑"; cursor: pointer; user-select: none; }
         .switch-row input { display: none; }
         .switch-track {
-            width: 40px; height: 20px; border-radius: 10px; background: #444;
-            position: relative; transition: background 0.2s;
+            width: 40px; height: 20px; border-radius: 10px; background: var(--border2);
+            position: relative; transition: background 0.2s; flex-shrink: 0;
         }
         .switch-track::after {
             content: ''; position: absolute; top: 2px; left: 2px;
             width: 16px; height: 16px; border-radius: 50%;
-            background: #ccc; transition: left 0.2s;
+            background: var(--text-dim); transition: left 0.2s;
         }
-        .switch-row input:checked + .switch-track { background: #00b36b; }
-        .switch-row input:checked + .switch-track::after { left: 22px; }
+        .switch-row input:checked + .switch-track { background: var(--accent-dim); }
+        .switch-row input:checked + .switch-track::after { left: 22px; background: #fff; }
         .th-btn {
-            width: 22px; height: 22px; border-radius: 4px; border: 1px solid #444;
-            background: #2a2a2a; color: #ccc; font-size: 14px; line-height: 1;
+            width: 22px; height: 22px; border-radius: 4px; border: 1px solid var(--border2);
+            background: var(--panel2); color: var(--text); font-size: 14px; line-height: 1;
             cursor: pointer; user-select: none;
         }
-        .th-btn:hover { background: #3a3a3a; color: #00ff88; }
-        .th-val { width: 40px; text-align: center; color: #00ff88; font-family: 'Consolas', monospace; }
-        /* ---- 任务次数：小卡片式 ---- */
-        .count-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; width: 100%; }
+        .th-btn:hover { background: var(--border); color: var(--accent); }
+        .th-val { width: 32px; text-align: center; color: var(--accent); font-family: 'Consolas', monospace; }
+        /* ---- 任务设置：每任务一组（模式单选 + 次数步进） ---- */
+        .task-group {
+            width: 100%; display: flex; flex-direction: row; align-items: center;
+            gap: 10px; background: var(--panel); border: 1px solid var(--border);
+            border-radius: 8px; padding: 8px 12px;
+        }
+        .task-radio {
+            flex: 1; display: flex; align-items: center; gap: 6px;
+            color: var(--text); font-size: 13px; font-family: "微软雅黑";
+            cursor: pointer; user-select: none;
+        }
+        .task-radio input[type="radio"] { accent-color: var(--accent); cursor: pointer; }
+        .task-count { display: flex; align-items: center; gap: 6px; }
         /* ---- 血量蓝量：小卡片式（2 列） ---- */
         .th-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; width: 100%; }
         .count-card {
             display: flex; flex-direction: column; align-items: center; gap: 6px;
-            background: #222; border: 1px solid #333; border-radius: 8px; padding: 8px 4px;
+            background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; padding: 8px 4px;
         }
-        .cc-name { color: #ccc; font-size: 13px; font-family: "微软雅黑"; }
+        .cc-name { color: var(--text); font-size: 13px; font-family: "微软雅黑"; }
         .cc-ctrl { display: flex; align-items: center; gap: 6px; }
-        .count-card .th-val { width: 28px; }
-        .empty-hint { color: #555; font-size: 12px; font-family: "微软雅黑"; }
-        /* ---- 通用设置中的修罗设置分组框 ---- */
+        /* ---- 分组框（通用/高级设置） ---- */
         .group-box {
             width: 100%; display: flex; flex-direction: column; gap: 10px;
-            background: #222; border: 1px solid #333; border-radius: 8px;
+            background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
             padding: 10px 12px;
         }
-        .group-title { color: #00ff88; font-size: 13px; font-family: "微软雅黑"; }
+        .group-title { color: var(--accent); font-size: 13px; font-family: "微软雅黑"; }
         .group-row { display: flex; align-items: center; gap: 8px; }
-        .group-label { color: #ccc; font-size: 13px; font-family: "微软雅黑"; width: 84px; flex-shrink: 0; }
-        .group-hint { color: #666; font-size: 11px; font-family: "微软雅黑"; }
+        .group-label { color: var(--text); font-size: 13px; font-family: "微软雅黑"; width: 84px; flex-shrink: 0; }
+        .group-hint { color: var(--text-dim); font-size: 11px; font-family: "微软雅黑"; }
+        .group-sub { color: var(--text-dim); font-size: 12px; font-family: "微软雅黑"; }
+        /* 种族选择：独立成行，4 列全宽（12 项 3 行） */
+        .race-grid { grid-template-columns: repeat(4, 1fr); width: 100%; }
     </style>
 </head>
-<body>
+<body class="light">
     <div class="top-bar">
-        <button id="btn-start" class="btn" onclick="start()">启 动</button>
+        <button id="btn-start" class="btn" onclick="toggleTask()">启 动</button>
         <button id="btn-reset" class="btn" onclick="reset()">重 置</button>
-        <button id="btn-close" class="btn" onclick="closeWin()">关 闭</button>
         <span id="status">已停止</span>
+        <button id="btn-theme" class="btn" onclick="toggleTheme()">深 色</button>
     </div>
     <div class="tab-bar">
         <div class="tab active" data-tab="task">任务设置</div>
@@ -115,74 +152,58 @@
         <div class="tab" data-tab="advanced">高级设置</div>
     </div>
     <div class="body">
-        <!-- 任务设置：任务模式单选 + 各模式任务次数 -->
+        <!-- 任务设置：每任务一组（模式单选 + 任务次数步进） -->
         <div class="tab-panel active" id="panel-task">
-            <div class="section">
-                <div class="section-title">任务模式</div>
-                <div class="radio-grid" id="mode-grid">
-                    <label><input type="radio" name="task-mode" value="五环">五环</label>
-                    <label><input type="radio" name="task-mode" value="客栈">客栈</label>
-                    <label><input type="radio" name="task-mode" value="修罗">修罗</label>
-                    <label><input type="radio" name="task-mode" value="五倍">五倍</label>
-                    <label><input type="radio" name="task-mode" value="玄枢轶闻">玄枢轶闻</label>
-                    <label><input type="radio" name="task-mode" value="名望">名望</label>
+            <div class="task-group">
+                <label class="task-radio"><input type="radio" name="task-mode" value="五环"><span>五环</span></label>
+                <div class="task-count">
+                    <button class="th-btn" onclick="count('五环', -1)">−</button>
+                    <span class="th-val" id="cnt-五环">2</span>
+                    <button class="th-btn" onclick="count('五环', 1)">＋</button>
                 </div>
             </div>
-            <div class="section">
-                <div class="section-title">任务次数</div>
-                <div class="count-grid">
-                    <div class="count-card">
-                        <div class="cc-name">五环</div>
-                        <div class="cc-ctrl">
-                            <button class="th-btn" onclick="count('五环', -1)">−</button>
-                            <span class="th-val" id="cnt-五环">2</span>
-                            <button class="th-btn" onclick="count('五环', 1)">＋</button>
-                        </div>
-                    </div>
-                    <div class="count-card">
-                        <div class="cc-name">客栈</div>
-                        <div class="cc-ctrl">
-                            <button class="th-btn" onclick="count('客栈', -1)">−</button>
-                            <span class="th-val" id="cnt-客栈">20</span>
-                            <button class="th-btn" onclick="count('客栈', 1)">＋</button>
-                        </div>
-                    </div>
-                    <div class="count-card">
-                        <div class="cc-name">修罗</div>
-                        <div class="cc-ctrl">
-                            <button class="th-btn" onclick="count('修罗', -1)">−</button>
-                            <span class="th-val" id="cnt-修罗">90</span>
-                            <button class="th-btn" onclick="count('修罗', 1)">＋</button>
-                        </div>
-                    </div>
-                    <div class="count-card">
-                        <div class="cc-name">五倍</div>
-                        <div class="cc-ctrl">
-                            <button class="th-btn" onclick="count('五倍', -1)">−</button>
-                            <span class="th-val" id="cnt-五倍">100</span>
-                            <button class="th-btn" onclick="count('五倍', 1)">＋</button>
-                        </div>
-                    </div>
-                    <div class="count-card">
-                        <div class="cc-name">玄枢轶闻</div>
-                        <div class="cc-ctrl">
-                            <button class="th-btn" onclick="count('玄枢轶闻', -1)">−</button>
-                            <span class="th-val" id="cnt-玄枢轶闻">5</span>
-                            <button class="th-btn" onclick="count('玄枢轶闻', 1)">＋</button>
-                        </div>
-                    </div>
-                    <div class="count-card">
-                        <div class="cc-name">名望</div>
-                        <div class="cc-ctrl">
-                            <button class="th-btn" onclick="count('名望', -1)">−</button>
-                            <span class="th-val" id="cnt-名望">5</span>
-                            <button class="th-btn" onclick="count('名望', 1)">＋</button>
-                        </div>
-                    </div>
+            <div class="task-group">
+                <label class="task-radio"><input type="radio" name="task-mode" value="客栈"><span>客栈</span></label>
+                <div class="task-count">
+                    <button class="th-btn" onclick="count('客栈', -1)">−</button>
+                    <span class="th-val" id="cnt-客栈">20</span>
+                    <button class="th-btn" onclick="count('客栈', 1)">＋</button>
+                </div>
+            </div>
+            <div class="task-group">
+                <label class="task-radio"><input type="radio" name="task-mode" value="修罗"><span>修罗</span></label>
+                <div class="task-count">
+                    <button class="th-btn" onclick="count('修罗', -1)">−</button>
+                    <span class="th-val" id="cnt-修罗">90</span>
+                    <button class="th-btn" onclick="count('修罗', 1)">＋</button>
+                </div>
+            </div>
+            <div class="task-group">
+                <label class="task-radio"><input type="radio" name="task-mode" value="五倍"><span>五倍</span></label>
+                <div class="task-count">
+                    <button class="th-btn" onclick="count('五倍', -1)">−</button>
+                    <span class="th-val" id="cnt-五倍">100</span>
+                    <button class="th-btn" onclick="count('五倍', 1)">＋</button>
+                </div>
+            </div>
+            <div class="task-group">
+                <label class="task-radio"><input type="radio" name="task-mode" value="玄枢轶闻"><span>玄枢轶闻</span></label>
+                <div class="task-count">
+                    <button class="th-btn" onclick="count('玄枢轶闻', -1)">−</button>
+                    <span class="th-val" id="cnt-玄枢轶闻">5</span>
+                    <button class="th-btn" onclick="count('玄枢轶闻', 1)">＋</button>
+                </div>
+            </div>
+            <div class="task-group">
+                <label class="task-radio"><input type="radio" name="task-mode" value="名望"><span>名望</span></label>
+                <div class="task-count">
+                    <button class="th-btn" onclick="count('名望', -1)">−</button>
+                    <span class="th-val" id="cnt-名望">5</span>
+                    <button class="th-btn" onclick="count('名望', 1)">＋</button>
                 </div>
             </div>
         </div>
-        <!-- 通用设置：摄妖香开关 + 血量蓝量阈值 + 人物/召唤兽战斗动作 -->
+        <!-- 通用设置：摄妖香开关 + 修罗/五倍分组 + 血量蓝量阈值 + 人物/召唤兽战斗动作 -->
         <div class="tab-panel" id="panel-general">
             <!-- 摄妖香分组 -->
             <div class="group-box">
@@ -203,10 +224,8 @@
                     <button class="th-btn" onclick="xiuluoMin(1)">＋</button>
                     <span class="group-hint">范围 3~5</span>
                 </div>
-                <div class="group-row" style="align-items: flex-start;">
-                    <span class="group-label">必须有的种族</span>
-                    <div class="radio-grid battle-grid" id="xiuluo-race-grid"></div>
-                </div>
+                <div class="group-sub">必须有的种族</div>
+                <div class="radio-grid race-grid" id="xiuluo-race-grid"></div>
                 <label class="switch-row">
                     <input type="checkbox" id="xiuluo-hezi">
                     <span class="switch-track"></span>
@@ -269,33 +288,33 @@
             </div>
             <!-- 战斗动作分组：人物与召唤兽（单选，由 JS 动态生成） -->
             <div class="group-box">
-                <div class="group-title">人物设置</div>
+                <div class="group-title">人物战斗动作</div>
                 <div class="radio-grid battle-grid" id="battle-char-grid"></div>
             </div>
             <div class="group-box">
-                <div class="group-title">召唤兽设置</div>
+                <div class="group-title">召唤兽战斗动作</div>
                 <div class="radio-grid battle-grid" id="battle-beast-grid"></div>
             </div>
-            <!-- 调试信息分组：游戏窗口悬浮显示任务/配置/进度（仅调试用，切换后数秒生效） -->
+        </div>
+        <!-- 高级设置：调试信息（悬浮显示 + 右侧吸附日志窗口，切换后数秒生效） -->
+        <div class="tab-panel" id="panel-advanced">
             <div class="group-box">
                 <div class="group-title">调试信息</div>
                 <label class="switch-row">
                     <input type="checkbox" id="debug-overlay">
                     <span class="switch-track"></span>
-                    <span>游戏窗口悬浮显示任务信息</span>
+                    <span>游戏窗口悬浮显示任务信息（同时显示右侧吸附日志窗口）</span>
                 </label>
             </div>
-        </div>
-        <!-- 高级设置：暂无设置项 -->
-        <div class="tab-panel" id="panel-advanced">
-            <div class="empty-hint">暂无高级设置</div>
         </div>
     </div>
 
     <script>
         let running = false;
+        let switching = false;  // 启停请求在途标记（防连点）
         const statusEl = document.getElementById('status');
         const btnStart = document.getElementById('btn-start');
+        const btnTheme = document.getElementById('btn-theme');
         const modeRadios = document.querySelectorAll('input[name="task-mode"]');
         const useSyx = document.getElementById('use-syx');
         const debugOverlay = document.getElementById('debug-overlay');
@@ -373,7 +392,38 @@
         function update() {
             statusEl.innerText = running ? '运行中' : '已停止';
             statusEl.className = running ? 'running' : '';
-            btnStart.disabled = running;  // 运行中必须先重置再启动
+            btnStart.innerText = running ? '停 止' : '启 动';
+            btnStart.classList.toggle('running', running);
+        }
+
+        // 启动/停止切换：调用 Python 侧 TaskManager（防连点；Python 侧另有 BUSY 守卫）
+        async function toggleTask() {
+            if (switching) return;
+            switching = true;
+            btnStart.disabled = true;
+            try {
+                const r = await callPython(running ? 'stop_task' : 'start_task');
+                if (r && r.status === 'success' && typeof r.running === 'boolean') {
+                    running = r.running;  // 立即反馈；后续 syncStatus 再校正
+                    update();
+                }
+            } finally {
+                switching = false;
+                btnStart.disabled = false;
+            }
+        }
+
+        // 日志已移至独立吸附窗口（右侧），本页面仅保留调试开关的被动同步接口
+
+        // 主题切换：按钮文案显示切换后的目标模式
+        function applyTheme(theme) {
+            document.body.classList.toggle('light', theme === 'light');
+            btnTheme.innerText = theme === 'light' ? '深 色' : '浅 色';
+        }
+        async function toggleTheme() {
+            const next = document.body.classList.contains('light') ? 'dark' : 'light';
+            const r = await callPython('save_ui_theme', next);
+            if (r && r.status === 'success') applyTheme(next);
         }
 
         // Tab 切换（默认选中任务设置）
@@ -385,15 +435,16 @@
             });
         });
 
-        // 页面初始化：恢复上次选择的任务模式、摄妖香开关与各条阈值
+        // 页面初始化：恢复上次选择的主题、任务模式、摄妖香开关与各条阈值
         window.addEventListener('onPythonReady', async () => {
             try {
                 const info = await callPython('get_init_data');
-                if (info && info.mode) {
-                    const radio = [...modeRadios].find(el => el.value === info.mode);
-                    if (radio) radio.checked = true;
-                }
                 if (info) {
+                    applyTheme(info.theme === 'light' ? 'light' : 'dark');
+                    if (info.mode) {
+                        const radio = [...modeRadios].find(el => el.value === info.mode);
+                        if (radio) radio.checked = true;
+                    }
                     useSyx.checked = !!info.use_sheyaoxiang;
                     debugOverlay.checked = !!info.debug_overlay;
                     xiuluoHezi.checked = !!info.xiuluo_hezi;
@@ -485,11 +536,10 @@
             update();
         };
 
-        async function start() {
-            if (running) return;
-            const r = await callPython('start_task');
-            if (r && r.status === 'success') { running = true; update(); }
-        }
+        // Python 侧调用：日志窗口被关闭时同步调试信息开关勾选（不触发保存回调）
+        window.setDebugSwitch = function (on) {
+            debugOverlay.checked = !!on;
+        };
 
         async function reset() {
             const r = await callPython('reset_task');
@@ -501,10 +551,6 @@
                 }
                 update();
             }
-        }
-
-        function closeWin() {
-            callPython('close_window');
         }
     </script>
 </body>

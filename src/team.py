@@ -690,15 +690,18 @@ def check_team_min(win, min_members=None):
         record_leader_status(False)
         return "not_leader", "非队长（面板无「解散队伍」）", members
     record_leader_status(True)
-    ok, count, races = _count_members_frame(win, img)
-    # 成员详情（同一面板打开内采集，不重复开关面板）
+    ok, count, _races = _count_members_frame(win, img)
+    # 成员详情（同一面板打开内采集，不重复开关面板；内含取消第 1 列
+    # 选中操作，种族识别结果以本次为准）
     ok2, members = analyze_team_members(win)
     close_team_panel(win)
     if not ok2:
         members = []
     if not ok:
         return "wait", "成员识别失败", members
-    race_txt = "、".join(races) if races else "未识别到种族"
+    # 种族文案从成员分析结果取（_count_members_frame 用的是取消选中前
+    # 的帧，选中态下第 1 列种族读不到会误报「未识别到种族」）
+    race_txt = "、".join(r for r, _ in members if r and r != "?") or "未识别到种族"
     if min_members is not None and count < min_members:
         log(f"[组队] 队伍不满足条件: 人数不足（{count}/{min_members}）"
             f"（当前 {count} 人: {race_txt}）", "WARN")
