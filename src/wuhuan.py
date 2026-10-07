@@ -32,7 +32,7 @@ from .battle import is_in_battle, is_in_battle_frame  # 战斗状态判定（统
 from . import debug_overlay  # 调试信息悬浮层（任务进度更新）
 from .control_window import load_task_counts  # 任务次数上限（通用设置）
 from .xuanshu import (follow_task, _click_dialog_green_option,
-                      _dialog_text_present, IDLE_RECLICK_INTERVAL)  # 复用玄枢轶闻的任务跟踪/对话框逻辑
+                      _dialog_text_present)  # 复用玄枢轶闻的任务跟踪/对话框逻辑
 
 # 任务追踪面板中的任务标题
 WUHUAN_TITLE = "五环"
@@ -40,6 +40,9 @@ WUHUAN_TITLE = "五环"
 # 「去找大唐境内(223, 21)武痴[1/5]」、「去找大唐边境(193, 144)惯骗[3/5]」），
 # 链接行内容采集失败时按关键词兜底点击
 WUHUAN_SUB_KEYWORDS = ["替身", "武痴", "惯骗","盗号贼", "食婴鬼"]
+# 签名污染行判定（_wuhuan_text_key 用）：去标点后纯数字的行
+# （计数碎片「1/51」→151、无标签倒计时「00:59:16」→005916）
+_DIGITS_ONLY_RE = re.compile(r"^\d+$")
 
 # ---- 长安与服装店（用户实测坐标/模板） ----
 # 长安城世界地图图标见 map.py 的 WORLD_MAP_CHANGAN_ICON（城市图标统一在 map.py 维护）
@@ -91,6 +94,7 @@ SHOP_ENTER_TIMEOUT = 15         # 进入服装店的超时（到达门口后）
 CLAIM_ARRIVE_TIMEOUT = 90       # 寻路到云游大师附近的超时
 CLAIM_BUTTON_TIMEOUT = 20       # 到达后等待领取任务按钮出现的超时
 CLAIM_DIALOG_TIMEOUT = 15       # 领取对话框处理超时
+CLAIM_VERIFY_TIMEOUT = 25       # 领取后任务出现在追踪面板的校验超时（任务渲染较慢，实测 15s 压线）
 GIVE_PANEL_TIMEOUT = 10         # 等待给与面板出现的超时
 
 
@@ -336,8 +340,9 @@ def _claim_task(win):
     if not claimed:
         return False, "领取对话框处理失败"
     # 校验任务出现在追踪面板；期间检测今日两次已满对话框
-    # （点击领取选项后 NPC 回复「互助友爱…请明天再来」时任务不会出现）
-    deadline = time.time() + CLAIM_DIALOG_TIMEOUT
+    # （点击领取选项后 NPC 回复「互助友爱…请明天再来」时任务不会出现）。
+    # 任务渲染较慢，实测 15s 压线（日志 19:09），放宽到 25s
+    deadline = time.time() + CLAIM_VERIFY_TIMEOUT
     while not task_tracker.has_task(win, WUHUAN_TITLE) and time.time() < deadline:
         img = win.capture(force_activate=False)
         if img is not None:
@@ -429,39 +434,54 @@ def _do_give(win):
 
 
 def _wuhuan_progress_key(items, img_np):
-    """五环进度键：追踪面板中子目标关键词行及其亮绿状态。
+    """五环进度键：追踪面板中亮绿子目标关键词集合（去重、行序无关）。
 
-    子目标推进时链接行文案变化（如「…武痴」→「…盗号贼」）；若文字
-    签名检测不到（子目标行被判定为标题行、未并入任务内容），改用
-    面板关键词行集合检测推进：行消失（关键词集合变化）或行色变暗
-    （亮绿状态变化）均视为推进。
+    子目标推进时链接行文案变化（如「…武痴」→「…盗号贼」），新链接行
+    亮绿、旧行变暗；只统计亮绿关键词行：暗绿条目（同一视觉行被 OCR
+    拆出的重复行框、已完成子目标的残留行）不进键——日志 19:09:30-48
+    键在「替身+」↔「替身|替身+」间震荡（暗绿替身条目出现/消失），
+    亮绿集合恒为 {替身} 稳定；19:09:54 真实推进「惯骗+|替身」亮绿集
+    {惯骗}≠{替身} 检出；19:09:57 旧行移除「惯骗|惯骗+」→「惯骗+」
+    亮绿集同为 {惯骗}，不再误触发。
+    旧行先于新行移除/渲染的过渡帧亮绿集短暂不变 → 延迟一拍检出
+    （不误点击），文本签名兜底。
     """
-    found = []
+    found = set()
     for txt, rect, score in items:
         if score >= 0.55 and rect[0] < task_tracker.PANEL_MAX_X:
             for kw in WUHUAN_SUB_KEYWORDS:
-                if kw in txt:
-                    bright = task_tracker.bright_green_ratio(img_np, rect) > 0
-                    found.append(f"{kw}{'+' if bright else ''}")
+                if kw in txt and task_tracker.bright_green_ratio(img_np, rect) > 0:
+                    found.add(kw)
                     break
-    return "|".join(sorted(set(found)))
+    return "|".join(sorted(found))
 
 
 def _wuhuan_text_key(items, img_np):
-    """五环文本签名键：标题 + 内容行排序拼接（行序无关）。
+    """五环文本签名键：标题 + 内容行排序拼接（行序无关、污染行过滤）。
 
     链接行「去找…惯骗[4/5]」被 OCR 拆成链接/计数两个碎片行，碎片行的
     输出顺序与纵向坐标都会抖动（实测交替翻转导致默认签名反复翻转、
-    重复点击）；排序拼接后行序无关。计数变化（3/5→4/5）与坐标、单字
+    重复点击）；排序拼接后行序无关。倒计时行（「剩余时间 00:59:16」，
+    逐秒变化）与计数碎片/纯数字行（「1/51」「151」「005916」，随机
+    出现消失）不参与签名——日志 19:10:10 签名混入「剩余时间005916」
+    与「151」导致误判变化、重复点击。计数变化（3/5→4/5）与坐标、单字
     误读经相似度比较（0.8）过滤，子目标切换（关键词变化）由进度键
     检测，两者互不干扰。
     """
     task = task_tracker.find_task(task_tracker.group_tasks(items), WUHUAN_TITLE)
     if task is None:
         return ""
-    parts = [task["title"]] + sorted(
-        re.sub(r"[^\w]", "", ln[0]) for ln in task["lines"])
-    return "|".join(parts)
+    parts = [task["title"]]
+    for ln in task["lines"]:
+        stripped = re.sub(r"[^\w]", "", ln[0])
+        if not stripped:
+            continue
+        if _DIGITS_ONLY_RE.match(stripped):
+            continue  # 计数碎片行/纯数字行（1/51→151、005916）
+        if "剩余" in stripped:
+            continue  # 倒计时行（含 OCR 变体「剩余时问」等），逐秒变化
+        parts.append(stripped)
+    return "|".join([parts[0]] + sorted(parts[1:]))
 
 
 def run_loop(win, cycle_interval=3.0):
@@ -489,6 +509,11 @@ def run_loop(win, cycle_interval=3.0):
     round_no = 0
     while True:
         round_no += 1
+        if is_in_battle(win):
+            # 战斗中任务面板不可读：静默等待战斗结束再判定（避免每 3s
+            # 刷「跳过本轮领取」与面板 OCR，实测一场战斗 2.5 分钟刷 38 轮）
+            time.sleep(3.0)
+            continue
         log(f"[五环] ==== 第 {round_no} 轮 ====", "SYS")
         # 任务追踪中已有「五环[五环]」任务：直接跟踪，跳过领取
         if task_tracker.has_task(win, WUHUAN_TITLE):
@@ -507,17 +532,16 @@ def run_loop(win, cycle_interval=3.0):
                 continue
             log(f"[五环] {info}", "SYS")
         # 提交装备步骤：由 follow_task 的附加对话处理回调接管
-        # idle_reclick_interval：点击可能被战斗切换等过渡期吞掉，任务信息
-        # 无变化时限频重试（替代旧逻辑的高频噪声式重复点击）
         # signature_key：行序无关签名（碎片行翻转不再引起重复点击）
+        # ignore_empty_key：到达 NPC 链接变暗的过渡帧不作变化信号
         try:
             ok, info = follow_task(win, WUHUAN_TITLE, prefix="五环",
                                    timeout=WUHUAN_FOLLOW_TIMEOUT,
                                    extra_dialog_handler=_handle_submit_dialog,
                                    fallback_keywords=WUHUAN_SUB_KEYWORDS,
                                    progress_key=_wuhuan_progress_key,
-                                   idle_reclick_interval=IDLE_RECLICK_INTERVAL,
-                                   signature_key=_wuhuan_text_key)
+                                   signature_key=_wuhuan_text_key,
+                                   ignore_empty_key=True)
         except MissingEquipment as e:
             log(f"[五环] {MISSING_EQUIPMENT_INFO}（{e}），结束任务", "SYS")
             return f"{MISSING_EQUIPMENT_INFO}，结束五环任务（已完成 {done} 次）"

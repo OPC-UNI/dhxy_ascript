@@ -28,6 +28,11 @@ GREEN_DOMINANCE = 30
 GREEN_MIN_RATIO = 0.01
 # 追踪面板左区边界（x），用于区分面板标题与居中对话框的绿色选项
 PANEL_MAX_X = 400
+# 地图坐标模式（链接行专属）：链接行恒含「(x, y)」（如「去找大唐边境
+# (358, 21)惯骗[」），描述行与计数碎片行不含；绿字行选择时坐标行优先，
+# 避免点击目标在描述行/计数碎片行间漂移。兼容实测 OCR 变体：全角括号
+# 「（140,39)」、右括号丢失「(178,111」、句点分隔「(178. 111)」
+MAP_COORD_RE = re.compile(r"[\(（]\s*\d+\s*[.,，]\s*\d+\s*[\)）]?")
 # 跟踪轮询与点击的 OCR 区域（窗口相对坐标）：任务追踪面板 + 居中对话框区。
 # 区域外（顶部 HUD、右侧图标列、底部栏）无需识别；全窗 OCR 实测 2.2s，
 # 两个区域合计约 1.2s，轮询与点击提速近一半。
@@ -157,6 +162,10 @@ def _is_title_line(txt):
     OCR 截断只剩未闭合左括号时（…武痴[）也不按标题处理，否则
     内容采集在链接行处中断（实测五环内容 0 行即由此引起）。
     """
+    # 计数碎片行（如「1/51]」，链接行计数段被 OCR 拆出且左括号丢失）：
+    # 判为内容行，否则误判为标题行会切断任务块内容采集（五环边界）
+    if re.match(r"^\d+/\d+\]?$", txt.strip()):
+        return False
     if len(txt) > 20:
         return False
     if not re.search(r"[\[［【\]］】]", txt):
@@ -394,6 +403,16 @@ def track_task(win, title, text=None, green_index=0, retries=4, retry_interval=1
             # 优先选择含亮绿（链接文字/下划线）的行：
             # 暗绿可能是整行描述文字染色，其亮绿部分才是真正的链接
             pool = [it for it in green if bright_green_ratio(img_np, it[1]) > 0] or green
+            # 坐标行优先（仅无 green_order 的任务）：链接行恒含地图坐标
+            # (x, y)（如「去找大唐边境(358, 21)惯骗[」），描述行与计数
+            # 碎片行不含——五环实测点击目标在描述行 (54,285) 与链接
+            # 下划线 (197,268) 间漂移。按顺序点击的任务（客栈四象封印）
+            # 保持关键词选择，不受坐标约束
+            coord_pool = None
+            if green_order is None:
+                coord_pool = [it for it in pool if MAP_COORD_RE.search(it[0])]
+                if coord_pool:
+                    pool = coord_pool
             tgt = pool[min(green_index, len(pool) - 1)]
             wrap_note = ""
             if green_order:
@@ -417,10 +436,15 @@ def track_task(win, title, text=None, green_index=0, retries=4, retry_interval=1
                             and abs(other[1][0] - tgt[1][0]) < 80:
                         cluster.append(other)
                 if len(cluster) > 1:
-                    tgt = max(cluster, key=lambda it: bright_green_ratio(img_np, it[1])
-                              or green_ratio(img_np, it[1]))
-                    wrap_note = " + ".join(f"「{t[0]}」" for t in cluster if t is not tgt)
-                    wrap_note += "(跨行绿字)"
+                    # 坐标行优先时只与坐标行聚簇：描述行/计数碎片行的
+                    # 亮绿更多时会抢走点击目标（点击漂移根因）
+                    if coord_pool:
+                        cluster = [it for it in cluster if MAP_COORD_RE.search(it[0])]
+                    if len(cluster) > 1:
+                        tgt = max(cluster, key=lambda it: bright_green_ratio(img_np, it[1])
+                                  or green_ratio(img_np, it[1]))
+                        wrap_note = " + ".join(f"「{t[0]}」" for t in cluster if t is not tgt)
+                        wrap_note += "(跨行绿字)"
             cx, cy = green_text_center(img_np, tgt[1])
             human_click(win, cx, cy)
             log(f"[任务追踪] 已点击「{title}」绿色文案: {tgt[0]}"

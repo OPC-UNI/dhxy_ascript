@@ -130,6 +130,18 @@ XIULUO_HEZI_RETRY_COOLDOWN = 15.0  # 点击后的冷却期（盒子未消失防�
 
 _SKILL_RE = re.compile(r"^技能(\d)-(\d)$")
 
+# 战斗监控线程的确认状态（watch_loop 维护、任务线程读取）。
+# is_in_battle 是模板匹配的单帧判定，战斗动画间隙（操作条/回合横幅
+# 不显示）会返回 False；watch_loop 的进入/结束各有连续轮询确认窗口，
+# 全程未误判（实测 2.5 分钟战斗 19:45:06-19:47:35 无误报），任务侧
+# 判定「任务消失」等边界时复用此状态，免重复截图判定
+_watch_in_battle = False
+
+
+def watch_in_battle():
+    """战斗监控线程当前确认的战斗状态（线程间共享，读取几乎零成本）。"""
+    return _watch_in_battle
+
 # 暂未支持的操作（无按钮模板/坐标），仅日志提示
 _UNSUPPORTED_ACTIONS = ("捕捉", "逃跑")
 
@@ -626,6 +638,7 @@ def watch_loop(win):
     每场战斗结束后检查血蓝条回满，并立即检查巫医对话框；
     非战斗时周期性检查巫医对话框（召唤兽受伤弹出的医治对话框）。
     """
+    global _watch_in_battle
     log("[战斗] 战斗监控已启动", "SYS")
     battle_no = 0          # 本场次计数（第 1 场按配置操作）
     in_battle = False      # 已确认的战斗状态
@@ -644,6 +657,7 @@ def watch_loop(win):
                     in_polls += 1
                     if in_polls >= BATTLE_CONFIRM_POLLS:  # 连续两轮确认进入
                         in_battle = True
+                        _watch_in_battle = True  # 任务侧共享状态
                         battle_no += 1
                         debug_overlay.set_battle(battle_no)  # 调试悬浮层场次
                         log(f"[战斗] 第 {battle_no} 场战斗开始", "SYS")
@@ -666,6 +680,7 @@ def watch_loop(win):
                     # 防回合间隙误判结束——退出判定不放宽）
                     if out_polls >= BATTLE_END_CONFIRM_POLLS:
                         in_battle = False
+                        _watch_in_battle = False  # 任务侧共享状态
                         log(f"[战斗] 第 {battle_no} 场战斗结束", "SYS")
                         status_bars.check_all_bars(win)
                         debug_overlay.set_bars(status_bars.last_summary())  # 悬浮层血蓝摘要

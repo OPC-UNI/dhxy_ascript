@@ -32,7 +32,8 @@ from .app_utils import log, human_click
 from . import bag  # 物品栏开关
 from . import map as game_map  # 地图操作（世界地图/小地图/位置识别）
 from . import task_tracker  # 任务追踪面板操作
-from .battle import is_in_battle, is_in_battle_frame  # 战斗状态判定（统一在 battle.py 中实现）
+from .battle import (is_in_battle, is_in_battle_frame,
+                     watch_in_battle as battle_watch_in_battle)  # 战斗状态判定（统一在 battle.py 中实现）
 from . import debug_overlay  # 调试信息悬浮层（任务进度更新）
 from .control_window import load_task_counts  # 任务次数上限（通用设置）
 
@@ -134,11 +135,6 @@ CONFIRM_POLL_INTERVAL = 0.2         # 变化确认轮询间隔（秒）；OCR �
 TASK_GONE_CONFIRM_TIMEOUT = 6.0    # 确认窗口总时长（秒）
 TASK_GONE_CONFIRM_POLLS = 2        # 连续未见的轮询次数（面板区域 OCR 约 0.9s）
 TASK_GONE_POLL_INTERVAL = 1.0      # 确认轮询间隔（秒）
-# 空闲重试：任务信息长时间无变化时重试点击任务绿字。点击可能在战斗
-# 切换/寻路启动等过渡期被游戏吞掉，此时任务状态不变化、不会触发下一次
-# 点击，任务会一直卡到跟踪超时；限频重试替代旧逻辑的高频噪声式重复
-# 点击（旧逻辑因 OCR 行序抖动每 ~3s 点击一次）
-IDLE_RECLICK_INTERVAL = 15.0
 # 跟踪轮询的 OCR 区域见 task_tracker（TRACK_REGION/DIALOG_REGION/OCR_REGIONS）
 FOLLOW_TRACK_REGION = task_tracker.TRACK_REGION
 FOLLOW_DIALOG_REGION = task_tracker.DIALOG_REGION
@@ -580,14 +576,23 @@ def _confirm_task_gone(win, title):
     结束后再观察）。返回 True=确认消失（任务完成）。
     """
     deadline = time.time() + TASK_GONE_CONFIRM_TIMEOUT
+    # 延长总上限：战斗/截窗失败不断延长窗口的硬顶（约为基本窗口 4 倍）。
+    # 超过上限仍未决 → 返回 False 让调用方继续跟踪（由外层战斗检查
+    # 等战斗结束后重新确认），避免长时间遮挡下误判完成
+    hard_deadline = time.time() + TASK_GONE_CONFIRM_TIMEOUT * 4
     gone_polls = 0
-    while time.time() < deadline:
+    while time.time() < deadline and time.time() < hard_deadline:
         img = win.capture(force_activate=False)
         if img is None:
+            # 截窗失败不计入确认窗口（与战斗帧同待遇，防瞬时失败误判）
+            deadline = time.time() + TASK_GONE_CONFIRM_TIMEOUT
             time.sleep(TASK_GONE_POLL_INTERVAL)
             continue
-        if is_in_battle_frame(img):
-            # 战斗画面遮挡追踪面板：本帧不作判定，延长确认窗口
+        if is_in_battle_frame(img) or battle_watch_in_battle():
+            # 战斗画面遮挡追踪面板：本帧不作判定，延长确认窗口。
+            # 双信号：本帧模板匹配 + 战斗监控线程的确认状态——单帧
+            # 匹配在战斗动画间隙（操作条/横幅不显示）会漏判（实测
+            # 2.5 分钟战斗中被误判任务消失完成）
             deadline = time.time() + TASK_GONE_CONFIRM_TIMEOUT
             time.sleep(2.0)
             continue
@@ -598,13 +603,15 @@ def _confirm_task_gone(win, title):
         if gone_polls >= TASK_GONE_CONFIRM_POLLS:
             return True
         time.sleep(TASK_GONE_POLL_INTERVAL)
+    if time.time() >= hard_deadline:
+        return False  # 延长耗尽仍无法确认：继续跟踪，稍后重新确认
     return True  # 确认窗口内始终未见任务：视为完成
 
 
 def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶闻",
                 extra_dialog_handler=None, green_order=None, progress_key=None,
                 green_picker=None, fallback_keywords=None, first_items=None,
-                idle_reclick_interval=None, signature_key=None):
+                signature_key=None, ignore_empty_key=False):
     """循环跟踪任务直到完成（prefix 供其他任务复用，如五环）。
 
     每轮：点击任务当前第一个绿色文案 → 等待任务信息变化（内容更新）
@@ -631,13 +638,13 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
     直接按关键词匹配绿字行点击。
     first_items：调用方刚 OCR 的 (items, img_np)（如领取校验刚确认任务
     出现），首轮跳过截图+OCR，省约 1.2s。
-    idle_reclick_interval：任务信息长时间无变化时重试点击任务绿字的
-    限频间隔（秒）；None 不重试（默认——玄枢轶闻/客栈/修罗的跟踪节奏
-    正常无需重试，五环实测点击可能被过渡期吞掉故启用）。
     signature_key：任务文本签名回调 (items, img_np) → str，替代默认的
     标题+首行签名参与相似度比较（五环链接行被 OCR 拆成链接/计数两个
     碎片行且输出顺序抖动，默认签名反复翻转导致重复点击；五环改用
     行序无关的排序拼接签名）。
+    ignore_empty_key：进度键为空时不作为变化信号（五环到达 NPC 时
+    链接变暗、亮绿关键词集合为空再回弹，属过渡帧抖动；客栈的「」
+    是合法终态，默认不启用）。
     返回 (是否完成, 描述)。
     """
     deadline = time.time() + timeout
@@ -680,7 +687,11 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
         if last_clicked_sig is not None and _signatures_similar(sig, last_clicked_sig) \
                 and not progressed:
             # 任务信息未真实变化（OCR 噪声抖动）→ 不重复点击，继续等待
-            # progressed=True 时（进度键已变化）允许继续点击下一个绿字
+            # progressed=True 时（进度键已变化）允许继续点击下一个绿字。
+            # 阻塞期仍须处理任务对话（如五环提交装备）：对话框出现时
+            # 任务签名不变，不处理会一直卡到跟踪超时
+            if extra_dialog_handler is not None:
+                extra_dialog_handler(win, items, img_np)
             time.sleep(FOLLOW_POLL_INTERVAL)
             continue
         # 进度键基线：直接用当前帧（点击前捕获；点击后目标可能立刻完成
@@ -710,7 +721,6 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
         first_poll = pre_key is None
         last_poll_img = None
         last_poll_items = None
-        last_click_at = time.time()  # 最近一次点击任务绿字时间（空闲重试限频）
         while time.time() < deadline:
             time.sleep(CONFIRM_POLL_INTERVAL if changed_once else FOLLOW_POLL_INTERVAL)
             img = win.capture(force_activate=False)
@@ -722,6 +732,9 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 # 验证首次变化时的同一信号且新值稳定：文本变化须新签名与
                 # 首次变化时相似；进度键变化须与首次变化时相等。单一信号
                 # 的单次 OCR 抖动被过滤，两个信号各抖一次也无法组合骗过
+                if is_in_battle_frame(img):
+                    time.sleep(2.0)  # 战斗画面遮挡面板：跳过本帧（免空转 OCR）
+                    continue
                 items, img_np = game_map.ocr_regions(img, (FOLLOW_TRACK_REGION,))
                 task2 = task_tracker.find_task(task_tracker.group_tasks(items), title)
                 if task2 is None:
@@ -734,6 +747,8 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 key = progress_key(items, img_np) if progress_key is not None else None
                 key_changed = key is not None and not first_poll \
                     and key != baseline_key
+                if ignore_empty_key and (not key or not baseline_key):
+                    key_changed = False  # 空键为过渡帧，不作信号
                 if changed_kind == "text":
                     if text_changed and _signatures_similar(sig2, changed_sig):
                         log(f"[{prefix}] 变化确认: 任务签名「{sig}」→「{sig2}」", "INFO")
@@ -788,6 +803,8 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                     first_poll = False
                 else:
                     key_changed = key != baseline_key
+                    if ignore_empty_key and (not key or not baseline_key):
+                        key_changed = False  # 空键为过渡帧，不作信号
             if text_changed or key_changed:
                 # 连续两次轮询确认同一信号确实变化（单次可能是 OCR 抖动，
                 # 避免任务无变化时重复点击任务绿字）
@@ -824,7 +841,6 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                                                      fallback_keywords=fallback_keywords,
                                                      pre_items=(items, img_np))
                 if ok3:
-                    last_click_at = time.time()  # 空闲重试限频基准
                     log(f"[{prefix}] 检测到「你输了/平局」对话，继续点击任务绿字推进", "SYS")
                     handled = True
                 else:
@@ -839,21 +855,6 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 for opt in DIALOG_OPTIONS:
                     if _click_green_option_once(win, items, img_np, opt):
                         break
-            # 空闲重试（idle_reclick_interval 启用时）：任务信息长时间
-            # 无变化时重试点击任务绿字（复用本轮 OCR 帧）。点击可能在
-            # 战斗切换/寻路启动等过渡期被游戏吞掉，此时任务状态不变化、
-            # 不会触发下一次点击，任务会一直卡到跟踪超时；限频重试替代
-            # 旧逻辑的高频噪声式重复点击
-            if idle_reclick_interval is not None \
-                    and time.time() - last_click_at >= idle_reclick_interval:
-                ok3, info3 = task_tracker.track_task(win, title, green_order=green_order,
-                                                     green_picker=green_picker,
-                                                     fallback_keywords=fallback_keywords,
-                                                     pre_items=(items, img_np))
-                if ok3:
-                    last_click_at = time.time()
-                    log(f"[{prefix}] 任务信息 {idle_reclick_interval:.0f}s 无变化，"
-                        f"重试点击任务绿字", "SYS")
         else:
             return False, f"第 {rounds} 轮跟踪后任务信息无变化（超时）"
     return False, f"跟踪任务超时（{timeout}s）"
