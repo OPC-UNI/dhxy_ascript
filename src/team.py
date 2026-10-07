@@ -3,11 +3,15 @@
 识别方式（用户提供，2026-10-06，模板见 res/img）：
 1. 是否已组队：点击组队按钮 zudui_item.png → 菜单中出现「队伍信息」
    duiwuxinxi.png 即已组队，否则未组队
-2. 是否队长：队伍面板打开后，面板中出现「解散队伍」jiesanduiwu.png 即队长
+2. 是否队长：队伍面板打开后双模板比分数——「解散队伍」jiesanduiwu.png
+   分数达标且高于「离开队伍」likaiduiwu.png 才算队长（两按钮样式相近，
+   单模板会把离开按钮误判为解散按钮，实测误匹配 0.807~0.834 ≥ 0.8 阈值）
 3. 退出队伍：队长面板点「解散队伍」jiesanduiwu.png；队员面板点
    「离开队伍」likaiduiwu.png
-4. 队伍面板已打开判定：duiwumianban.png（阈值 0.6，匹配度随成员数变化）
-   与 zudui_close.png（0.8）双条件印证
+4. 队伍面板已打开判定：duiwumianban.png（0.6）为主判据；标志匹配随成员数
+   退化（5 人队实测 0.44~0.68 抖动）不达标时，以面板专属文案
+   （队标/暂时离队/招募队友）OCR 兜底。不用关闭按钮判定——多个面板
+   共用同款关闭按钮，不具区分性
 5. 队伍成员分析：面板打开后 OCR (300,260)-(1066,620) 区域，种族文案限定
    男人/女人/男鬼/女鬼/男仙/女仙/男魔/女魔/男巫/女巫，
    等级文案格式 未转102 / 1转120 / 2转120 / 3转120 / 飞升120，
@@ -28,6 +32,8 @@ import re
 import time
 
 from ascript.windows.hardware.keyboard import Keyboard
+from ascript.windows.system import R
+from ascript.windows.screen.find_images import FindImages
 
 from .app_utils import log, human_click, human_move
 from . import map as game_map  # 找图与 OCR 能力复用
@@ -55,12 +61,15 @@ TEAM_MENU_TEXTS = ("组队操作", "创建队伍", "附近队伍", "组队平台
 
 # 模板匹配与等待参数
 _TEMPLATE_THRESHOLD = 0.8
-# 面板标志模板匹配度随队伍成员数变化（单人队实测 ~0.99，两人队降至 0.65），
-# 面板打开判定放宽到 0.6 并与关闭按钮 zudui_close 互相印证（见 _is_panel_open）
+# 面板标志模板匹配度随队伍成员数变化（单人队实测 ~0.99，两人队降至 0.65，
+# 5 人队实测 0.436~0.683 抖动）；判定不依赖关闭按钮——多个面板共用同款
+# 关闭按钮（申请加入面板即同款），不具区分性。低于阈值时 OCR 文案兜底
 _PANEL_FLAG_THRESHOLD = 0.6
+# 面板专属文案（队伍面板内按钮/标签，其他面板与场景不出现；OCR 兜底判据）
+_PANEL_TEXTS = ("队标", "暂时离队", "招募队友")
 _MENU_WAIT_TRIES = 3       # 菜单弹出等待（组队按钮点击后）
 _MENU_WAIT_INTERVAL = 0.5
-_PANEL_WAIT_TRIES = 6      # 面板打开等待（队伍信息点击后，面板为服务器数据，稍慢）
+_PANEL_WAIT_TRIES = 8      # 面板打开等待（队伍信息点击后，面板为服务器数据，稍慢）
 _PANEL_WAIT_INTERVAL = 0.5
 _OCR_MIN_SCORE = 0.55
 
@@ -161,15 +170,22 @@ def _has_duiwuxinxi(img):
 
 
 def _is_panel_open(win):
-    """队伍面板是否已打开（双条件判定）。
+    """队伍面板是否已打开（面板专属信号判定）。
 
-    duiwumianban 面板标志的匹配度随成员数变化（两人队实测降至 0.65），
-    故阈值放宽到 0.6；再与关闭按钮 zudui_close（实测 0.99+，面板专属）
-    互相印证，避免放宽阈值引入误判。
+    不依赖关闭按钮——多个面板共用同款关闭按钮（申请加入面板即同款），
+    不具区分性。判定只看面板专属信号：
+    1. duiwumianban 面板标志（随成员数退化，5 人队实测 0.436~0.683
+       抖动，阈值 0.6 时灵时不灵）
+    2. 不达标时以面板专属文案（队标/暂时离队/招募队友）OCR 兜底——
+       这些文案只在队伍面板内出现，申请加入面板与场景界面均无
     """
-    if game_map.find_template(win, DUIWU_MIANBAN_ICON, _PANEL_FLAG_THRESHOLD) is None:
+    img = win.capture(force_activate=False)
+    if img is None:
         return False
-    return game_map.find_template(win, ZUDUI_CLOSE_ICON, _TEMPLATE_THRESHOLD) is not None
+    if _best_match(img, DUIWU_MIANBAN_ICON)[0] >= _PANEL_FLAG_THRESHOLD:
+        return True
+    items, _ = game_map.ocr_region(img, RACE_REGION)
+    return any(any(t in txt for t in _PANEL_TEXTS) for txt, _, _ in items)
 
 
 def _wait_panel(win):
@@ -208,6 +224,73 @@ def _parse_level(txt):
     if not digits.isdigit():
         return None
     return stage, int(digits)
+
+
+def _best_match(img, icon):
+    """帧内模板匹配全局最高分与其中心坐标（maxcnt=1 快速模式）。
+
+    与 find_template_in 同源（FindImages/TM_CCOEFF_NORMED），返回
+    (confidence, (x, y))；无匹配时返回 (0.0, (0, 0))（调用方先以
+    confidence ≥ 阈值 过滤，无匹配时坐标不会被使用）。
+    """
+    return game_map.best_match_in(img, icon)
+
+
+def _is_leader_in_frame(img):
+    """帧内队长判定：解散队伍分数达标且高于离开队伍分数（双模板比分数）。
+
+    解散队伍模板与离开队伍按钮存在弱误匹配（实测 0.807 ≥ 0.8 阈值，
+    而离开按钮真实匹配 0.985），单模板判定会把队员误判为队长；
+    比分数即可区分两者，无需重裁模板。
+    """
+    jiesan_score, _ = _best_match(img, JIESAN_DUIWU_ICON)
+    likai_score, _ = _best_match(img, LIKAI_DUIWU_ICON)
+    return jiesan_score >= _TEMPLATE_THRESHOLD and jiesan_score > likai_score
+
+
+def _parse_member_ocr(img):
+    """帧内解析队伍面板种族与等级行，按 x 分列排序（y 抖动不参与排序）。
+
+    返回 (race_items, level_items)：race_items = [(种族, rect)]，
+    level_items = [((转生段, 等级), rect)]。
+    """
+    items, _ = game_map.ocr_region(img, RACE_REGION)
+    race_items = []
+    level_items = []
+    for txt, rect, score in items:
+        if score < _OCR_MIN_SCORE:
+            continue
+        for w in RACE_WORDS:
+            if w in txt:
+                race_items.append((w, rect))
+                break
+        else:
+            lv = _parse_level(txt)
+            if lv is not None:
+                level_items.append((lv, rect))
+    race_items.sort(key=lambda it: it[1][0])
+    level_items.sort(key=lambda it: it[1][0])
+    return race_items, level_items
+
+
+def _count_members_frame(win, img):
+    """帧内统计队伍人数：优先按等级行计数，无等级行时退回种族数。
+
+    选中成员（自己）的种族文字被绿色高亮遮挡，OCR 经常读不到，
+    导致种族数少于实际人数；等级行不受高亮影响（实测 5 人识别 5 条）。
+    等级行缺失（面板数据尚未渲染完）时重截一次。
+    返回 (是否成功, 人数, 种族列表)。
+    """
+    race_items, level_items = _parse_member_ocr(img)
+    if not level_items:
+        time.sleep(0.5)
+        img2 = win.capture(force_activate=False)
+        if img2 is not None:
+            race_items, level_items = _parse_member_ocr(img2)
+    count = len(level_items) or len(race_items)
+    if count == 0:
+        return False, 0, []
+    return True, count, [r for r, _ in race_items]
 
 
 def _close_menu(win):
@@ -309,17 +392,19 @@ def is_in_team(win):
 
 
 def is_team_leader(win):
-    """检查自己是否是队长：队伍面板打开后识别「解散队伍」按钮。
+    """检查自己是否是队长：队伍面板打开后双模板比分数判定。
 
     流程：面板未打开则先打开（组队菜单 → 队伍信息），
-    再在面板中查找 jiesanduiwu，出现即队长。检查后关闭面板。
+    帧内比较解散队伍/离开队伍两个模板的匹配分（见 _is_leader_in_frame，
+    单模板会把离开按钮误判为解散按钮）。检查后关闭面板。
     返回 (是否队长, 描述)。
     """
     if not _is_panel_open(win):
         ok, info = open_team_panel(win)
         if not ok:
             return False, info
-    is_leader = game_map.find_template(win, JIESAN_DUIWU_ICON, _TEMPLATE_THRESHOLD) is not None
+    img = win.capture(force_activate=False)
+    is_leader = _is_leader_in_frame(img) if img is not None else False
     close_team_panel(win)
     if is_leader:
         return True, "是队长（面板可见「解散队伍」）"
@@ -329,14 +414,15 @@ def is_team_leader(win):
 # ---- 队伍种族分析 ----
 
 def analyze_team_members(win):
-    """分析队伍成员：种族与转生等级配对识别。
+    """分析队伍成员：种族与转生等级按成员列（x 最近）配对识别。
 
     前置条件：队伍面板已打开（duiwumianban 模板可见）。
     OCR 面板区域 (300,260)-(1066,620)：种族文案限定 RACE_WORDS
-    （竖排文字，位于选中成员头像旁），等级文案按
+    （竖排文字，位于成员头像旁），等级文案按
     未转102/1转120/2转120/3转120/飞升120 格式解析（位于成员列表）。
-    配对：种族与等级分别按纵向顺序一一对应（面板布局实测两者不在同一行，
-    但顺序一致）；数量不一致时按顺序配对并记 WARN。
+    配对：种族与等级都按 x 分列排序后，取 x 中心最近的等级配对——
+    选中成员（自己）的种族被高亮遮挡读不到时，其余列仍正确对应
+    （索引配对会整体错位）；数量不一致时记 WARN。
     返回 (是否成功, [(种族, 等级文案或None), ...])；识别到 0 条视为失败。
     """
     if not _is_panel_open(win):
@@ -344,51 +430,28 @@ def analyze_team_members(win):
     img = win.capture(force_activate=False)
     if img is None:
         return False, "窗口截图失败"
-    items, _ = game_map.ocr_region(img, RACE_REGION)
-    race_items = []   # (种族词, rect)
-    level_items = []  # ((转生段, 等级), rect)
-    for txt, rect, score in items:
-        if score < _OCR_MIN_SCORE:
-            continue
-        for w in RACE_WORDS:
-            if w in txt:
-                race_items.append((w, rect))
-                break
-        else:
-            lv = _parse_level(txt)
-            if lv is not None:
-                level_items.append((lv, rect))
-    if not race_items:
-        return False, "种族区域内未识别到种族文案"
-    # 按位置排序：种族竖排文字（可能纵向堆叠或横向并列，按 上→下、左→右
-    # 即成员顺序），等级列表（纵向堆叠，按 y）——两者顺序一致后一一配对
-    race_items.sort(key=lambda it: (it[1][1], it[1][0]))
-    level_items.sort(key=lambda it: it[1][1])
+    race_items, level_items = _parse_member_ocr(img)
+    if not race_items and not level_items:
+        return False, "种族区域内未识别到成员信息"
     # 有种族但无等级：面板数据可能尚未渲染完，等待后重截一次
     if not level_items:
         time.sleep(0.5)
-        img = win.capture(force_activate=False)
-        if img is not None:
-            items, _ = game_map.ocr_region(img, RACE_REGION)
-            for txt, rect, score in items:
-                if score < _OCR_MIN_SCORE:
-                    continue
-                lv = _parse_level(txt)
-                if lv is not None:
-                    level_items.append((lv, rect))
-            level_items.sort(key=lambda it: it[1][1])
-    # 配对：种族与等级按纵向顺序一一对应
+        img2 = win.capture(force_activate=False)
+        if img2 is not None:
+            _, level_items = _parse_member_ocr(img2)
+    # 配对：x 中心最近
+    def _cx(rect):
+        return (rect[0] + rect[2]) / 2
     members = []
-    for i, (race, _) in enumerate(race_items):
+    for race, rect in race_items:
         lv_txt = None
-        if i < len(level_items):
-            lv = level_items[i][0]
+        if level_items:
+            lv = min(level_items, key=lambda it: abs(_cx(it[1]) - _cx(rect)))[0]
             lv_txt = f"{lv[0]}{lv[1]}"
         members.append((race, lv_txt))
     if len(level_items) != len(race_items):
         log(f"[组队] 种族({len(race_items)})与等级({len(level_items)})数量不一致，"
-            f"按顺序配对，结果可能错位", "WARN")
-    detail = "、".join(f"{r} {lv or '等级未识别'}" for r, lv in members)
+            f"按列最近配对，结果可能错位", "WARN")
     return True, members
 
 
@@ -440,7 +503,9 @@ def check_xiuluo_team(win, min_members=None):
 
     面板打不开（未组队/申请加入面板等）与非队长均返回 not_leader
     （修罗核心流程仅队长执行）。非队长不检查人数（修罗设置仅在队长生效）。
-    min_members: 人数下限（含自己，按识别到的种族数计），None 不检查
+    队长判定为双模板比分数（防解散/离开按钮互误匹配）；人数按等级行
+    计数（选中成员种族被高亮遮挡读不到时也不漏）。
+    min_members: 人数下限（含自己），None 不检查
     返回 (状态, 描述)；状态：ready 可领取 / wait 队长但人数不足
     / not_leader 非队长或队长无法判定。
     """
@@ -448,19 +513,23 @@ def check_xiuluo_team(win, min_members=None):
         ok, info = open_team_panel(win)
         if not ok:
             return "not_leader", f"队长无法判定（{info}）"
-    is_leader = game_map.find_template(win, JIESAN_DUIWU_ICON, _TEMPLATE_THRESHOLD) is not None
-    if not is_leader:
+    img = win.capture(force_activate=False)
+    if img is None:
+        close_team_panel(win)
+        return "not_leader", "窗口截图失败"
+    if not _is_leader_in_frame(img):
         close_team_panel(win)
         return "not_leader", "非队长（面板无「解散队伍」）"
-    ok, races = analyze_team_races(win)
+    ok, count, races = _count_members_frame(win, img)
     close_team_panel(win)
     if not ok:
-        return "wait", f"种族识别失败: {races}"
-    if min_members is not None and len(races) < min_members:
-        log(f"[组队] 队伍不满足条件: 人数不足（{len(races)}/{min_members}）"
-            f"（当前 {len(races)} 人: {'、'.join(races)}）", "WARN")
-        return "wait", f"队伍人数不足（{len(races)}/{min_members}，当前: {'、'.join(races)}）"
-    return "ready", f"队伍满足人数要求（{len(races)} 人: {'、'.join(races)}）"
+        return "wait", "成员识别失败"
+    race_txt = "、".join(races) if races else "未识别到种族"
+    if min_members is not None and count < min_members:
+        log(f"[组队] 队伍不满足条件: 人数不足（{count}/{min_members}）"
+            f"（当前 {count} 人: {race_txt}）", "WARN")
+        return "wait", f"队伍人数不足（{count}/{min_members}，当前: {race_txt}）"
+    return "ready", f"队伍满足人数要求（{count} 人: {race_txt}）"
 
 
 def self_test(win):
@@ -475,9 +544,10 @@ def self_test(win):
     ok, info = open_team_panel(win)
     log(f"[组队] 1.是否组队+打开面板: {ok} - {info}", "SYS")
     if ok:
-        is_leader = game_map.find_template(win, JIESAN_DUIWU_ICON, _TEMPLATE_THRESHOLD) is not None
+        img = win.capture(force_activate=False)
+        is_leader = _is_leader_in_frame(img) if img is not None else False
         log(f"[组队] 2.是否队长: {is_leader} - {'是队长' if is_leader else '不是队长'}"
-            f"（面板内识别）", "SYS")
+            f"（双模板比分数识别）", "SYS")
         ok, members = analyze_team_members(win)
         if ok:
             detail = "、".join(f"{r} {lv or '等级未识别'}" for r, lv in members)
@@ -495,8 +565,8 @@ def self_test(win):
 def leave_team(win):
     """离开队伍（队员身份）：已组队时打开队伍面板，点击「离开队伍」。
 
-    流程：确保队伍面板打开（未组队时报错）→ 面板中查找 likaiduiwu
-    并点击（点击即完成，无确认对话框）→ 关闭面板。
+    流程：确保队伍面板打开（未组队时报错）→ 帧内双模板比分数，
+    离开分数达标且高于解散分数才点击（防两按钮互误匹配）→ 关闭面板。
     面板中无离开按钮返回失败（通常表示是队长，应走 disband_team）。
     返回 (是否成功, 描述)。
     """
@@ -504,12 +574,17 @@ def leave_team(win):
         ok, info = open_team_panel(win)
         if not ok:
             return False, info
-    pt = game_map.find_template(win, LIKAI_DUIWU_ICON, _TEMPLATE_THRESHOLD)
-    if pt is None:
+    img = win.capture(force_activate=False)
+    if img is None:
+        close_team_panel(win)
+        return False, "窗口截图失败"
+    likai_score, likai_pt = _best_match(img, LIKAI_DUIWU_ICON)
+    jiesan_score, _ = _best_match(img, JIESAN_DUIWU_ICON)
+    if not (likai_score >= _TEMPLATE_THRESHOLD and likai_score > jiesan_score):
         close_team_panel(win)
         return False, "面板中未找到「离开队伍」按钮（可能是队长）"
-    human_click(win, pt[0], pt[1])
-    log(f"[组队] 已点击离开队伍按钮 @ ({pt[0]},{pt[1]})", "SYS")
+    human_click(win, likai_pt[0], likai_pt[1])
+    log(f"[组队] 已点击离开队伍按钮 @ ({likai_pt[0]},{likai_pt[1]})", "SYS")
     time.sleep(0.5)
     close_team_panel(win)  # 已离开队伍，面板可能已自动关闭；未关则补关
     return True, "已离开队伍"
@@ -518,8 +593,8 @@ def leave_team(win):
 def disband_team(win):
     """解散队伍（队长身份）：已组队时打开队伍面板，点击「解散队伍」。
 
-    流程：确保队伍面板打开（未组队时报错）→ 面板中查找 jiesanduiwu
-    并点击（点击即完成，无确认对话框）→ 关闭面板。
+    流程：确保队伍面板打开（未组队时报错）→ 帧内双模板比分数，
+    解散分数达标且高于离开分数才点击（防两按钮互误匹配）→ 关闭面板。
     面板中无解散按钮返回失败（通常表示不是队长）。
     返回 (是否成功, 描述)。
     """
@@ -527,12 +602,17 @@ def disband_team(win):
         ok, info = open_team_panel(win)
         if not ok:
             return False, info
-    pt = game_map.find_template(win, JIESAN_DUIWU_ICON, _TEMPLATE_THRESHOLD)
-    if pt is None:
+    img = win.capture(force_activate=False)
+    if img is None:
+        close_team_panel(win)
+        return False, "窗口截图失败"
+    jiesan_score, jiesan_pt = _best_match(img, JIESAN_DUIWU_ICON)
+    likai_score, _ = _best_match(img, LIKAI_DUIWU_ICON)
+    if not (jiesan_score >= _TEMPLATE_THRESHOLD and jiesan_score > likai_score):
         close_team_panel(win)
         return False, "面板中未找到「解散队伍」按钮（可能不是队长）"
-    human_click(win, pt[0], pt[1])
-    log(f"[组队] 已点击解散队伍按钮 @ ({pt[0]},{pt[1]})", "SYS")
+    human_click(win, jiesan_pt[0], jiesan_pt[1])
+    log(f"[组队] 已点击解散队伍按钮 @ ({jiesan_pt[0]},{jiesan_pt[1]})", "SYS")
     time.sleep(0.5)
     close_team_panel(win)  # 队伍已解散，面板可能已自动关闭；未关则补关
     return True, "已解散队伍"
@@ -541,8 +621,8 @@ def disband_team(win):
 def leave_or_disband_team(win):
     """按身份退出队伍：未组队不操作；队长解散；队员离开。
 
-    单次面板流程（避免重复开关面板）：打开队伍面板 → 面板中同时
-    查找「解散队伍」（队长）与「离开队伍」（队员），命中哪个点哪个。
+    单次面板流程（避免重复开关面板）：打开队伍面板 → 帧内双模板
+    比分数（解散/离开按钮会互误匹配，取分数高且达标者）→ 点击。
     未组队时菜单无「队伍信息」，无法打开面板，直接返回成功不操作。
     返回 (是否成功, 描述)。
     """
@@ -552,17 +632,21 @@ def leave_or_disband_team(win):
             if "未组队" in info:
                 return True, f"未组队，无需操作：{info}"
             return False, info
-    disband_pt = game_map.find_template(win, JIESAN_DUIWU_ICON, _TEMPLATE_THRESHOLD)
-    if disband_pt is not None:
-        human_click(win, disband_pt[0], disband_pt[1])
-        log(f"[组队] 已点击解散队伍按钮 @ ({disband_pt[0]},{disband_pt[1]})", "SYS")
+    img = win.capture(force_activate=False)
+    if img is None:
+        close_team_panel(win)
+        return False, "窗口截图失败"
+    jiesan_score, jiesan_pt = _best_match(img, JIESAN_DUIWU_ICON)
+    likai_score, likai_pt = _best_match(img, LIKAI_DUIWU_ICON)
+    if jiesan_score >= _TEMPLATE_THRESHOLD and jiesan_score > likai_score:
+        human_click(win, jiesan_pt[0], jiesan_pt[1])
+        log(f"[组队] 已点击解散队伍按钮 @ ({jiesan_pt[0]},{jiesan_pt[1]})", "SYS")
         time.sleep(0.5)
         close_team_panel(win)  # 队伍已解散，面板可能已自动关闭；未关则补关
         return True, "已解散队伍"
-    leave_pt = game_map.find_template(win, LIKAI_DUIWU_ICON, _TEMPLATE_THRESHOLD)
-    if leave_pt is not None:
-        human_click(win, leave_pt[0], leave_pt[1])
-        log(f"[组队] 已点击离开队伍按钮 @ ({leave_pt[0]},{leave_pt[1]})", "SYS")
+    if likai_score >= _TEMPLATE_THRESHOLD and likai_score > jiesan_score:
+        human_click(win, likai_pt[0], likai_pt[1])
+        log(f"[组队] 已点击离开队伍按钮 @ ({likai_pt[0]},{likai_pt[1]})", "SYS")
         time.sleep(0.5)
         close_team_panel(win)
         return True, "已离开队伍"
