@@ -33,6 +33,7 @@ from . import bag  # 物品栏开关
 from . import map as game_map  # 地图操作（世界地图/小地图/位置识别）
 from . import task_tracker  # 任务追踪面板操作
 from .battle import is_in_battle, is_in_battle_frame  # 战斗状态判定（统一在 battle.py 中实现）
+from . import debug_overlay  # 调试信息悬浮层（任务进度更新）
 from .control_window import load_task_counts  # 任务次数上限（通用设置）
 
 # 任务追踪面板中的任务标题
@@ -795,6 +796,7 @@ def run_loop(win, cycle_interval=3.0):
         if status == "done":
             done += 1
             total = max_rounds if max_rounds > 0 else "∞"
+            debug_overlay.set_progress(f"{done}/{total}")
             log(f"[玄枢轶闻] {info}（{done}/{total}）", "SYS")
             if 0 < max_rounds <= done:
                 return f"已完成 {done} 次任务，达到次数上限 {max_rounds}"

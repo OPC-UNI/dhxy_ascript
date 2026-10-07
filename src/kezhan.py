@@ -33,6 +33,7 @@ from . import bag  # 物品栏开关
 from . import map as game_map  # 地图操作（世界地图/小地图/位置识别）
 from . import task_tracker  # 任务追踪面板操作
 from .battle import is_in_battle  # 战斗状态判定（统一在 battle.py 中实现）
+from . import debug_overlay  # 调试信息悬浮层（任务进度更新）
 from .control_window import load_task_counts  # 任务次数上限（通用设置）
 from .xuanshu import (follow_task, _click_green_option_once,
                       _dialog_text_present, _fuzzy_contains,
@@ -202,7 +203,8 @@ def _go_to_inn(win):
     # 先查快送对话框再清理地图：清理的右键回退点可能落在对话框上将其点掉
     img = win.capture()
     if img is not None:
-        items, img_np = game_map.ocr_image(img)
+        # 快送对话框为居中对话框，区域 OCR（全帧 930ms → 区域 ~100ms）
+        items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
         if _click_fast_travel_option(win, items, img_np):
             log("[客栈] 已点击「快送我去」，等待传送", "SYS")
             time.sleep(2.0)  # 等待传送完成
@@ -220,7 +222,7 @@ def _go_to_inn(win):
             continue
         img = win.capture()
         if img is not None:
-            items, img_np = game_map.ocr_image(img)
+            items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
             if _click_fast_travel_option(win, items, img_np):
                 log("[客栈] 已点击「快送我去」，等待传送", "SYS")
                 time.sleep(2.0)  # 等待传送完成
@@ -835,6 +837,7 @@ def run_loop(win, cycle_interval=3.0):
         if status == "done":
             done += 1
             total = max_rounds if max_rounds > 0 else "∞"
+            debug_overlay.set_progress(f"{done}/{total}")
             log(f"[客栈] {info}（{done}/{total}）", "SYS")
             if 0 < max_rounds <= done:
                 return f"已完成 {done} 次客栈任务，达到次数上限 {max_rounds}"

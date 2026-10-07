@@ -30,6 +30,8 @@ _DEFAULT_MODE = TASK_MODES[0]  # 五环
 _MODE_KEY = "task_mode"
 # 是否使用摄妖香（UI 开关，KeyValue 持久化）
 _USE_SHEYAOXIANG_KEY = "use_sheyaoxiang"
+# 调试信息悬浮显示（UI 开关，KeyValue 持久化；游戏窗口上绘制任务/配置/进度）
+_DEBUG_OVERLAY_KEY = "debug_overlay"
 
 
 def load_task_mode():
@@ -54,6 +56,17 @@ def load_use_sheyaoxiang():
 def save_use_sheyaoxiang(on):
     """保存是否使用摄妖香开关，返回操作结果。"""
     KeyValue.save(_USE_SHEYAOXIANG_KEY, bool(on))
+    return {"status": "success"}
+
+
+def load_debug_overlay():
+    """读取调试信息悬浮开关（首次默认关闭）。"""
+    return bool(KeyValue.get(_DEBUG_OVERLAY_KEY, False))
+
+
+def save_debug_overlay(on):
+    """保存调试信息悬浮开关，返回操作结果。"""
+    KeyValue.save(_DEBUG_OVERLAY_KEY, bool(on))
     return {"status": "success"}
 
 
@@ -214,19 +227,21 @@ class ControlWindow(WebWindow):
         self.expose(self.save_battle_action)
         self.expose(self.save_xiuluo_min)
         self.expose(self.save_xiuluo_races)
+        self.expose(self.save_debug_overlay)
         self.expose(self.start_task)
         self.expose(self.reset_task)
         self.expose(self.close_window)
 
     def get_init_data(self):
         """页面初始化数据：任务模式、任务次数、摄妖香开关、各条阈值、
-        战斗动作与修罗设置。"""
+        战斗动作、修罗设置与调试信息开关。"""
         return {"mode": load_task_mode(),
                 "task_counts": load_task_counts(),
                 "use_sheyaoxiang": load_use_sheyaoxiang(),
                 "thresholds": load_thresholds(),
                 "battle": load_battle_actions(),
-                "xiuluo": load_xiuluo_settings()}
+                "xiuluo": load_xiuluo_settings(),
+                "debug_overlay": load_debug_overlay()}
 
     def save_battle_action(self, target, value):
         """战斗设置变更：保存人物/召唤兽默认战斗动作。"""
@@ -255,6 +270,10 @@ class ControlWindow(WebWindow):
     def save_xiuluo_races(self, races):
         """修罗设置变更：保存必须有的种族列表。"""
         return save_xiuluo_races(races)
+
+    def save_debug_overlay(self, on):
+        """调试信息开关变更：保存悬浮显示开关状态。"""
+        return save_debug_overlay(on)
 
     def start_task(self):
         """启动按钮：对当前选中的模式开始执行任务。"""

@@ -36,7 +36,8 @@ from .app_utils import human_click, log
 from . import task_tracker  # 任务追踪面板操作
 from . import map as game_map  # 地图操作（世界地图/小地图/位置识别）
 from . import team  # 组队检查（领取前队伍人数检查，仅队长生效）
-from .battle import is_in_battle  # 战斗状态判定（统一在 battle.py 中实现）
+from . import debug_overlay  # 调试信息悬浮层（任务进度更新）
+from .battle import is_in_battle, is_in_battle_frame  # 战斗状态判定（统一在 battle.py 中实现）
 from .control_window import load_task_counts, load_xiuluo_settings  # 任务次数上限/修罗设置
 from .xuanshu import (follow_task,  # 任务跟踪（绿字点击寻路/战斗跳过/附加对话处理）
                       _dialog_text_present)  # 对话框文案检测（复用玄枢轶闻）
@@ -95,13 +96,20 @@ def _near_claim_spot(pos, tolerance):
 
 
 def _wait_template(win, icon, timeout):
-    """等待模板出现（战斗中跳过等待）；返回是否出现。"""
+    """等待模板出现（战斗中跳过等待）；返回是否出现。
+
+    单帧判定：战斗状态与模板匹配共用一帧（原先每轮询截 2 次窗）。
+    """
     deadline = time.time() + timeout
     while time.time() < deadline:
-        if is_in_battle(win):
+        img = win.capture(force_activate=False)
+        if img is None:
+            time.sleep(1.5)
+            continue
+        if is_in_battle_frame(img):
             time.sleep(2.0)
             continue
-        if game_map.find_template(win, icon) is not None:
+        if game_map.find_template_in(img, icon) is not None:
             return True
         time.sleep(1.5)
     return False
@@ -455,6 +463,7 @@ def run_loop(win, cycle_interval=3.0):
                 continue
         done += 1
         total = max_rounds if max_rounds > 0 else "∞"
+        debug_overlay.set_progress(f"{done}/{total}")
         log(f"[修罗] 本轮修罗任务完成（{done}/{total}）", "SYS")
         if 0 < max_rounds <= done:
             return f"已完成 {done} 次修罗任务，达到次数上限 {max_rounds}"

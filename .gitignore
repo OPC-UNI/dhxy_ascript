@@ -8,3 +8,6 @@ build/
 # 运行时状态（框架缓存 / 用户上次选择的任务模式）
 path_cache.json
 config.json
+# 调试信息悬浮层运行时文件（任务进程与绘制进程间通信）
+debug_overlay_state.json
+debug_overlay_helper_exit.txt

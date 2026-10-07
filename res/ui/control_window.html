@@ -255,6 +255,15 @@
                 <div class="group-title">召唤兽设置</div>
                 <div class="radio-grid battle-grid" id="battle-beast-grid"></div>
             </div>
+            <!-- 调试信息分组：游戏窗口悬浮显示任务/配置/进度（仅调试用，切换后数秒生效） -->
+            <div class="group-box">
+                <div class="group-title">调试信息</div>
+                <label class="switch-row">
+                    <input type="checkbox" id="debug-overlay">
+                    <span class="switch-track"></span>
+                    <span>游戏窗口悬浮显示任务信息</span>
+                </label>
+            </div>
         </div>
         <!-- 高级设置：暂无设置项 -->
         <div class="tab-panel" id="panel-advanced">
@@ -268,6 +277,7 @@
         const btnStart = document.getElementById('btn-start');
         const modeRadios = document.querySelectorAll('input[name="task-mode"]');
         const useSyx = document.getElementById('use-syx');
+        const debugOverlay = document.getElementById('debug-overlay');
 
         // 战斗设置选项：人物 3 行 × 5 列技能 + 攻击/防御/捕捉/逃跑/无；召唤兽 5 技能 + 攻击/防御/逃跑/无
         const CHAR_BATTLE = [];
@@ -352,6 +362,7 @@
                 }
                 if (info) {
                     useSyx.checked = !!info.use_sheyaoxiang;
+                    debugOverlay.checked = !!info.debug_overlay;
                     const ths = info.thresholds || {};
                     for (const key of ['char_hp', 'char_mp', 'beast_hp', 'beast_mp']) {
                         const el = document.getElementById('th-' + key);
@@ -412,6 +423,11 @@
         // 摄妖香开关变更：立即保存
         useSyx.addEventListener('change', () => {
             callPython('save_use_sheyaoxiang', useSyx.checked);
+        });
+
+        // 调试信息开关变更：立即保存（任务运行中切换后数秒生效）
+        debugOverlay.addEventListener('change', () => {
+            callPython('save_debug_overlay', debugOverlay.checked);
         });
 
         // Python 侧（任务状态联动）调用，用于同步页面显示

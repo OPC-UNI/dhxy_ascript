@@ -29,6 +29,7 @@ from ascript.windows.ui import FloatScriptWindow  # 脚本控制台组件
 from src.polyfill import patch_js_bridge  # pywebview 6 桥接兼容补丁
 from src.control_window import (ControlWindow, load_task_mode,
                                 load_use_sheyaoxiang,
+                                load_debug_overlay,
                                 load_battle_actions)  # 自定义网页控制窗口（开始/停止按钮）
 from src.app_utils import log, toast  # 日志与系统通知
 from src import game  # 游戏窗口操作
@@ -40,6 +41,7 @@ from src import kezhan  # 客栈任务自动化
 from src import team  # 组队功能（任务前置退队）
 from src import xiuluo  # 修罗任务自动化
 from src import status_bars  # 人物/召唤兽血蓝条检测
+from src import debug_overlay  # 调试信息悬浮层（游戏窗口上绘制任务/配置/进度）
 from src import map as game_map  # 地图操作（OCR 引擎预热等）
 
 
@@ -124,6 +126,10 @@ def task_start():
     log(f"[模式] 当前任务模式: {mode}", "SYS")
     log(f"[配置] 使用摄妖香: {'开' if use_sheyaoxiang else '关'}", "SYS")
     log(f"[配置] 人物战斗动作: {battle_actions['char']}，召唤兽战斗动作: {battle_actions['beast']}", "SYS")
+    log(f"[配置] 调试信息悬浮: {'开' if load_debug_overlay() else '关'}", "SYS")
+    # 调试悬浮层初始状态：任务模式与战斗配置（战斗场次/进度由各模块实时更新）
+    debug_overlay.set_task(mode)
+    debug_overlay.set_config(battle_actions["char"], battle_actions["beast"])
 
     # OCR 引擎预热：首次调用需加载 det/cls/rec 三个模型（一次性约 1s），
     # 提前完成避免拖慢任务首轮识别
@@ -165,8 +171,16 @@ def task_start():
             time.sleep(1)
 
     if main_win is None:
-        log("[检查] 30 秒内未检测到游戏主窗口", "WARN")
+        # 游戏未启动：结束任务——return 触发框架停止流程（面板自动显示已停止、
+        # 执行 on('stop') 善后回调释放系统资源），与各任务循环正常结束一致
+        log("[检查] 30 秒内未检测到游戏主窗口，游戏未启动，任务结束", "WARN")
+        debug_overlay.shutdown()
+        return
     else:
+        # 调试信息悬浮层：在游戏窗口上绘制任务/配置/进度（开关在控制窗口
+        # 切换后实时生效；开关关闭时不创建绘制窗口，行为与未启用一致）
+        debug_overlay.start(main_win)
+
         # 2. 登录状态检查（Tab 读取一次）
         tab = game.read_login_tab(main_win)
         if tab == game.GAME_TITLE:
@@ -188,13 +202,13 @@ def task_start():
             else:
                 log(f"[摄妖香] {info}", "WARN")
 
-        # 4. 战斗监控线程（已登录时启动，任何模式下自动执行人物/召唤兽战斗操作）
+        # 4. 战斗监控线程（已登录时启动，任何模式下自动执行人物/召唤兽战斗操作；
+        #    启动日志由 watch_loop 内部输出，此处不重复打）
         if logged_in:
             battle_thread = threading.Thread(target=battle.watch_loop,
                                              args=(main_win,),
                                              daemon=True, name="battle-watch")
             battle_thread.start()
-            log("[战斗] 战斗监控线程已启动", "SYS")
 
         # 5. 玄枢轶闻主循环（该模式且已登录时执行：跟踪完成 → 继续领取 → 往复）
         #    循环正常结束（次数上限/每日次数已满）时任务进程退出，面板自动显示已停止
@@ -204,12 +218,14 @@ def task_start():
             log(f"[组队] 任务前置退队：{info}", "SYS" if ok else "WARN")
             info = xuanshu.run_loop(main_win)
             log(f"[玄枢轶闻] 任务循环结束：{info}", "SYS")
+            debug_overlay.shutdown()
             return
 
         # 6. 五环主循环（购买装备 → 领取 → 跟踪 → 往复，达到次数上限结束任务进程）
         if logged_in and mode == "五环":
             info = wuhuan.run_loop(main_win)
             log(f"[五环] 任务循环结束：{info}", "SYS")
+            debug_overlay.shutdown()
             return
 
         # 7. 客栈主循环（洛阳客栈找掌柜 → 领取 → 跟踪 → 往复，
@@ -220,6 +236,7 @@ def task_start():
             log(f"[组队] 任务前置退队：{info}", "SYS" if ok else "WARN")
             info = kezhan.run_loop(main_win)
             log(f"[客栈] 任务循环结束：{info}", "SYS")
+            debug_overlay.shutdown()
             return
 
         # 8. 修罗主循环（灵兽村领取 → 跟踪（寻路/对话开打/战斗）→ 返程 → 往复，
@@ -228,6 +245,7 @@ def task_start():
         if logged_in and mode == "修罗":
             info = xiuluo.run_loop(main_win)
             log(f"[修罗] 任务循环结束：{info}", "SYS")
+            debug_overlay.shutdown()
             return
 
         # 9. 血蓝条检测（已登录时执行一次）
