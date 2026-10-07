@@ -38,6 +38,8 @@ DUIWU_XINXI_ICON = "duiwuxinxi.png"       # 菜单「队伍信息」（已组队
 JIESAN_DUIWU_ICON = "jiesanduiwu.png"     # 队伍面板「解散队伍」按钮（仅队长可见）
 DUIWU_MIANBAN_ICON = "duiwumianban.png"   # 队伍面板标志（面板已打开判定）
 ZUDUI_CLOSE_ICON = "zudui_close.png"      # 队伍面板关闭按钮（鼠标移上去左键点击）
+ZUDUI_SHENQINGJIARU_ICON = "zudui_shenqingjiaru.png"  # 申请加入面板标志（队伍人数不足时
+                                          # 点组队按钮可能打开该面板；检测到直接点关闭，不处理）
 LIKAI_DUIWU_ICON = "likaiduiwu.png"       # 队伍面板「离开队伍」按钮（队员可见）
 
 # ---- 队伍面板内种族 OCR ----
@@ -72,11 +74,37 @@ _LEVEL_DIGIT_MAP = str.maketrans({"O": "0", "o": "0", "S": "5", "s": "5",
 # ---- 内部流程 ----
 
 def _is_menu_open(img):
-    """判定组队菜单是否已打开（队伍信息模板优先，菜单文案 OCR 兜底）。"""
+    """判定组队菜单是否已打开（队伍信息模板优先，菜单文案 OCR 兜底）。
+
+    申请加入面板打开时不算菜单（其区域内的「附近队伍」等文案会被
+    OCR 兜底误判成菜单，先排除）。
+    """
+    if game_map.find_template_in(img, ZUDUI_SHENQINGJIARU_ICON, _TEMPLATE_THRESHOLD) is not None:
+        return False
     if game_map.find_template_in(img, DUIWU_XINXI_ICON, _TEMPLATE_THRESHOLD) is not None:
         return True
     items, _ = game_map.ocr_region(img, TEAM_MENU_REGION)
     return any(any(mt in txt for mt in TEAM_MENU_TEXTS) for txt, _, _ in items)
+
+
+def _close_apply_panel(win):
+    """关闭申请加入面板：点击 zudui_close（与队伍面板同款关闭按钮）。
+
+    面板不处理（暂不处理申请流程），关闭后让外层重试。
+    返回 (是否关闭, 描述)。
+    """
+    pt = game_map.find_template(win, ZUDUI_CLOSE_ICON, _TEMPLATE_THRESHOLD)
+    if pt is None:
+        _try_close_menu()
+        return False, "申请加入面板未找到关闭按钮（zudui_close），已退回 ESC"
+    human_move(win.rect.left + pt[0], win.rect.top + pt[1])
+    time.sleep(0.15)  # 悬停让按钮进入可点击状态（与队伍面板关闭同款交互）
+    human_click(win, pt[0], pt[1])
+    for _ in range(_PANEL_WAIT_TRIES):
+        time.sleep(_PANEL_WAIT_INTERVAL)
+        if game_map.find_template(win, ZUDUI_SHENQINGJIARU_ICON, _TEMPLATE_THRESHOLD) is None:
+            return True, "申请加入面板已关闭"
+    return False, "申请加入面板关闭失败"
 
 
 def _wait_menu(win):
@@ -95,16 +123,33 @@ def _ensure_menu_open(win):
     """确保组队菜单已打开：已打开则复用，未打开才点击组队按钮。
 
     菜单未关闭时再点组队按钮会把它关掉（实机踩坑），故必须先检查再决定
-    是否点击。返回 (是否打开, 最新截图)。
+    是否点击。队伍人数不足时点击组队按钮可能打开申请加入面板：
+    面板已开/被点开都只关闭不处理，本轮返回未打开交给外层重试。
+    返回 (是否打开, 最新截图)。
     """
     img = win.capture(force_activate=False)
-    if img is not None and _is_menu_open(img):
+    if img is None:
+        return False, None
+    # 申请加入面板开着会挡住组队菜单：直接关闭，本轮不做其他处理
+    if game_map.find_template_in(img, ZUDUI_SHENQINGJIARU_ICON, _TEMPLATE_THRESHOLD) is not None:
+        ok, info = _close_apply_panel(win)
+        log(f"[组队] {info}", "SYS" if ok else "WARN")
+        return False, None
+    if _is_menu_open(img):
         return True, img
     pt = game_map.find_template(win, ZUDUI_ITEM_ICON, _TEMPLATE_THRESHOLD)
     if pt is None:
         return False, None
     human_click(win, pt[0], pt[1])
-    return _wait_menu(win)
+    opened, img2 = _wait_menu(win)
+    if opened:
+        return True, img2
+    # 菜单未打开：可能点开了申请加入面板（队伍人数不足时出现），
+    # 检测到则直接点击关闭，不处理该面板
+    if game_map.find_template(win, ZUDUI_SHENQINGJIARU_ICON, _TEMPLATE_THRESHOLD) is not None:
+        ok, info = _close_apply_panel(win)
+        log(f"[组队] {info}", "SYS" if ok else "WARN")
+    return False, None
 
 
 def _has_duiwuxinxi(img):
@@ -388,6 +433,34 @@ def check_team_conditions(win, min_members=None, required_races=None):
             f"（当前 {len(races)} 人: {'、'.join(races)}）", "WARN")
         return False, "队伍不满足条件：" + "；".join(problems)
     return True, f"队伍满足条件（{len(races)} 人: {'、'.join(races)}）"
+
+
+def check_xiuluo_team(win, min_members=None):
+    """修罗领取前队伍检查：一次打开队伍面板完成队长判定与人数检查。
+
+    面板打不开（未组队/申请加入面板等）与非队长均返回 not_leader
+    （修罗核心流程仅队长执行）。非队长不检查人数（修罗设置仅在队长生效）。
+    min_members: 人数下限（含自己，按识别到的种族数计），None 不检查
+    返回 (状态, 描述)；状态：ready 可领取 / wait 队长但人数不足
+    / not_leader 非队长或队长无法判定。
+    """
+    if not _is_panel_open(win):
+        ok, info = open_team_panel(win)
+        if not ok:
+            return "not_leader", f"队长无法判定（{info}）"
+    is_leader = game_map.find_template(win, JIESAN_DUIWU_ICON, _TEMPLATE_THRESHOLD) is not None
+    if not is_leader:
+        close_team_panel(win)
+        return "not_leader", "非队长（面板无「解散队伍」）"
+    ok, races = analyze_team_races(win)
+    close_team_panel(win)
+    if not ok:
+        return "wait", f"种族识别失败: {races}"
+    if min_members is not None and len(races) < min_members:
+        log(f"[组队] 队伍不满足条件: 人数不足（{len(races)}/{min_members}）"
+            f"（当前 {len(races)} 人: {'、'.join(races)}）", "WARN")
+        return "wait", f"队伍人数不足（{len(races)}/{min_members}，当前: {'、'.join(races)}）"
+    return "ready", f"队伍满足人数要求（{len(races)} 人: {'、'.join(races)}）"
 
 
 def self_test(win):
