@@ -456,28 +456,6 @@ class ControlWindow(WebWindow):
             except Exception:
                 pass
 
-
-def _game_window_clickable(win):
-    """检查游戏窗口中心点是否被其他窗口遮挡（点击会落到遮挡窗口上）。
-
-    截图不依赖前台（窗口 DC 直接读取），但鼠标点击是屏幕坐标——
-    游戏被最大化窗口遮挡时点击全落到遮挡窗口上。沿父窗口链向上
-    查找，能走到游戏窗口 hwnd 才认为可点击。
-    """
-    try:
-        import win32gui
-        cx = win.rect.left + win.rect.width // 2
-        cy = win.rect.top + win.rect.height // 2
-        hwnd = win32gui.WindowFromPoint((cx, cy))
-        game_hwnd = win.hwnd
-        while hwnd:
-            if hwnd == game_hwnd:
-                return True
-            hwnd = win32gui.GetParent(hwnd)
-        return False
-    except Exception:
-        return True  # 检查失败不阻塞验证（宁可放行）
-
     def add_log(self, line):
         """单行日志推送到吸附日志窗口（主进程 [系统] 消息用）。"""
         self.add_logs([line])
@@ -614,3 +592,26 @@ def _game_window_clickable(win):
         """主窗口移动/缩放：日志窗口可见时重新吸附。"""
         if self._debug_on and self._visible:
             self._dock_log()
+
+
+def _game_window_clickable(win):
+    """检查游戏窗口中心点是否被其他窗口遮挡（点击会落到遮挡窗口上）。
+
+    截图不依赖前台（窗口 DC 直接读取），但鼠标点击是屏幕坐标——
+    游戏被最大化窗口遮挡时点击全落到遮挡窗口上。沿父窗口链向上
+    查找，能走到游戏窗口 hwnd 才认为可点击。
+    注意：必须放在类定义之后（模块级），否则类方法会被吞进本函数体。
+    """
+    try:
+        import win32gui
+        cx = win.rect.left + win.rect.width // 2
+        cy = win.rect.top + win.rect.height // 2
+        hwnd = win32gui.WindowFromPoint((cx, cy))
+        game_hwnd = win.hwnd
+        while hwnd:
+            if hwnd == game_hwnd:
+                return True
+            hwnd = win32gui.GetParent(hwnd)
+        return False
+    except Exception:
+        return True  # 检查失败不阻塞验证（宁可放行）
