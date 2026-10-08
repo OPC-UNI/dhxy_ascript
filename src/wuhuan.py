@@ -24,7 +24,7 @@ import time
 
 from ascript.windows.hardware.mouse import Mouse
 
-from .app_utils import log, human_click, human_move
+from .app_utils import log, human_click, human_move, move_away
 from . import bag  # 背包操作（储物格切换搜索）
 from . import map as game_map  # 地图操作（世界地图/小地图/位置识别）
 from . import task_tracker  # 任务追踪面板操作
@@ -223,6 +223,7 @@ def _click_green_option(win, items, img_np, text):
             cx, cy = task_tracker.green_text_center(img_np, rect, prefer_underline=False)
             human_click(win, cx, cy)
             log(f"[五环] 已点击绿色选项「{txt}」", "SYS")
+            move_away(win)  # 鼠标停留选项上会使其悬停变色，干扰后续绿字判定
             return True
     return False
 
@@ -239,6 +240,7 @@ def _click_wuhuan_option_once(win, items, img_np):
             cx, cy = task_tracker.green_text_center(img_np, rect, prefer_underline=False)
             human_click(win, cx, cy)
             log(f"[五环] 已点击绿色选项「{txt}」", "SYS")
+            move_away(win)  # 鼠标停留选项上会使其悬停变色，干扰后续绿字判定
             return True
     return False
 

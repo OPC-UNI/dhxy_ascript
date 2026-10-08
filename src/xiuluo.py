@@ -40,7 +40,7 @@ import numpy as np
 from ascript.windows.system import R  # 资源路由（模板路径）
 from ascript.windows.hardware.keyboard import Keyboard  # Alt+C 飞行/刷新（领取验证兜底）
 
-from .app_utils import human_click, human_move, log
+from .app_utils import human_click, human_move, log, move_away
 from . import task_tracker  # 任务追踪面板操作
 from . import map as game_map  # 地图操作（世界地图/小地图/位置识别）
 from . import team  # 组队检查（领取前队伍人数检查，仅队长生效）
@@ -49,6 +49,7 @@ from . import bag  # 背包操作（打开/关闭背包、任务储物格）
 from . import status_bars  # 血蓝检测（自动巫医前置条件）
 from .battle import is_in_battle, is_in_battle_frame  # 战斗状态判定（统一在 battle.py 中实现）
 from .battle import WUYI_DIALOG_TEXTS  # 巫医对话框文案（自动巫医等待判定）
+from .battle import _find_wuyi_option  # 「全部医治和修复」选项定位（验证模式自行点击）
 from .control_window import (load_task_counts, load_xiuluo_settings,
                              load_xiuluo_check_team,
                              load_xiuluo_auto_wuyi,
@@ -135,7 +136,6 @@ TASK_BOX_TIMEOUT = 10            # 等待任务储物格打开的超时（点击
 RETURN_TALISMAN_TIMEOUT = 15     # 等待回城符在任务储物格中出现的超时
 RETURN_POLL_INTERVAL = 0.5       # 返程轮询间隔（打开动画约 0.4s，实测点击后 1s 内
                                  # 出现选中态；非防抖判定点，无需更长窗口）
-VERIFY_HOVER_SECONDS = 2.0       # 验证模式：鼠标悬停在回城符上等待关闭背包的秒数
 # 任务储物格按钮相对背包面板标志（bag_box 中心）的偏移与搜索条带：
 # 面板可拖动但内部布局固定，偏移恒定（面板左缘/中部两位置实测
 # +349/+305 与 +353/+305，取均值）；条带留 55px 余量，带区全未命中
@@ -163,7 +163,8 @@ def _near_wuyi_spot(pos):
             and abs(pos[2] - WUYI_SPOT[1]) <= WUYI_NEAR_TOLERANCE)
 
 
-def _run_wuyi_chain(win, hover_before_click=False, skip_condition=False):
+def _run_wuyi_chain(win, hover_before_click=False, skip_condition=False,
+                    click_option_self=False):
     """自动巫医主链路（自动流程与验证共用）：召唤兽血/蓝低于阈值时医治。
 
     1. 巫医条件：召唤兽红条/蓝条低于阈值（通用设置血蓝阈值；空条=
@@ -171,10 +172,14 @@ def _run_wuyi_chain(win, hover_before_click=False, skip_condition=False):
        skip_condition=True 时跳过门槛（验证模式：血蓝状态仅报告）
     2. 位置检查：是否在灵兽村 (115,72) 附近（严格容差 ±5）
     3. 不在 → 打开小地图点击 (610,442) 寻路 → 关闭地图（顺带背包）
-    4. 点击巫医 NPC（xiuluo_lingshoucunwuyi.png）打开医治对话框，
-       等待战斗线程点击「全部医治和修复」（battle.py 已有完整逻辑，
-       无需重复实现——对话框出现→消失即处理完成）；
-       hover_before_click=True 时 NPC 点击前悬停 2s（验证观察用）
+    4. 点击巫医 NPC（xiuluo_lingshoucunwuyi.png）打开医治对话框。
+       真实流程：等待战斗线程点击「全部医治和修复」（battle.py 已有
+       完整逻辑，无需重复实现——对话框出现→消失即处理完成）；
+       click_option_self=True（验证模式）：主进程没有战斗线程，验证
+       自行点击医治选项（复用 battle._find_wuyi_option，与战斗线程
+       行为等效——不宜把常驻 battle 线程拉进主进程，避免与后续任务
+       的战斗线程抢点击）；
+       hover_before_click=True 时 NPC 点击前先移动鼠标定位（无延时，验证时序与真实流程一致）
 
     到达/点击的最终真信号是对话框出现：坐标 OCR 不可靠（实测走完
     站在 NPC 旁位置显示缺失，坐标判定卡死到达循环），NPC 模板远距离
@@ -227,23 +232,32 @@ def _run_wuyi_chain(win, hover_before_click=False, skip_condition=False):
         if hover_before_click:
             human_move(win.rect.left + pt[0], win.rect.top + pt[1])
             log(f"[修罗][验证] 已移动鼠标到巫医 NPC ({pt[0]}, {pt[1]})，"
-                f"悬停 {VERIFY_HOVER_SECONDS:.0f} 秒...", "SYS")
-            time.sleep(VERIFY_HOVER_SECONDS)
+                f"已定位到（验证时序与真实流程一致）", "SYS")
         human_click(win, pt[0], pt[1])
         log(f"[修罗][巫医] 已点击巫医 NPC ({pt[0]}, {pt[1]})，等待医治对话框处理", "SYS")
         # 等待对话框出现并处理（出现→消失）
         deadline = time.time() + WUYI_HANDLE_TIMEOUT
         appeared = False
+        option_clicked = False
         while time.time() < deadline:
             img = win.capture(force_activate=False)
             if img is None:
                 time.sleep(0.5)
                 continue
-            items, _ = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
+            items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
             # 与 battle.py 的巫医判定同款调用（内部模糊匹配，无需预规范化）
             has_dialog = any(_dialog_text_present(items, t) for t in WUYI_DIALOG_TEXTS)
             if has_dialog:
                 appeared = True
+                if click_option_self and not option_clicked:
+                    # 验证模式：主进程无战斗线程，自行点击医治选项
+                    # （与真实环境的战斗线程行为等效）
+                    pt_opt = _find_wuyi_option(items, img_np)
+                    if pt_opt is not None:
+                        human_click(win, pt_opt[0], pt_opt[1])
+                        log(f"[修罗][验证] 已点击「全部医治和修复」"
+                            f"@ ({pt_opt[0]}, {pt_opt[1]})", "SYS")
+                        option_clicked = True
                 time.sleep(1.0)
                 continue
             if appeared:
@@ -267,9 +281,12 @@ def verify_wuyi_flow(win):
     """验证自动巫医流程（高级设置-验证按钮，主进程调用）。
 
     与 _auto_wuyi 同一链路，区别：条件不满足也继续执行（血蓝状态仅
-    报告），NPC 点击前悬停 2s 供人工确认。返回 (是否成功, 描述)。
+    报告），NPC 点击前先移动鼠标定位（无延时），并自行点击医治选项
+    （主进程没有战斗线程——真实环境中该点击由任务进程的战斗线程
+    完成，二者行为等效）。返回 (是否成功, 描述)。
     """
-    return _run_wuyi_chain(win, hover_before_click=True, skip_condition=True)
+    return _run_wuyi_chain(win, hover_before_click=True, skip_condition=True,
+                           click_option_self=True)
 
 
 def _near_claim_spot(pos, tolerance):
@@ -349,6 +366,7 @@ def _click_claim_option(win, items, img_np):
     human_click(win, cx, cy)
     suffix = "（兜底匹配）" if fallback else ""
     log(f"[修罗] 已点击绿色选项「{txt}」{suffix}", "SYS")
+    move_away(win)  # 鼠标停留选项上会使其悬停变色，干扰后续绿字判定
     return True
 
 
@@ -469,7 +487,7 @@ def _click_entry_ensuring_dialog(win, log_tag="[修罗]", hover_before_click=Fal
     """点击领取入口（按钮或使者）并确保对话框出现；未出现判定坐标不对：
     打开小地图点击领取点坐标重定位后重试一次（用户确认的兜底路径）。
 
-    hover_before_click：点击前悬停入口（验证模式观察用）。
+    hover_before_click：点击前先移动鼠标定位入口（无延时，验证时序与真实流程一致）。
     返回 (是否成功, 描述, 来源, 坐标)；成功时对话框已打开（选项可见）。
     """
     dialog_seen = False
@@ -485,8 +503,7 @@ def _click_entry_ensuring_dialog(win, log_tag="[修罗]", hover_before_click=Fal
         if hover_before_click:
             human_move(win.rect.left + pt2[0], win.rect.top + pt2[1])
             log(f"{log_tag} 已移动鼠标到{src2} ({pt2[0]}, {pt2[1]})，"
-                f"悬停 {VERIFY_HOVER_SECONDS:.0f} 秒...", "SYS")
-            time.sleep(VERIFY_HOVER_SECONDS)
+                f"已定位到（验证时序与真实流程一致）", "SYS")
         human_click(win, pt2[0], pt2[1])
         log(f"{log_tag} 已点击{src2}（领取）", "SYS")
         # 等待对话框出现：轮询选项（正常 ~1.5s 即出）；首次尝试短窗口，
@@ -856,7 +873,7 @@ def verify_return_flow(win):
     """验证修罗回程流程（高级设置-验证按钮，主进程调用）。
 
     与实际返程 _return_to_npc 完全一致，唯一区别是不右键使用回城符：
-    仅将鼠标移动到回城符上悬停 VERIFY_HOVER_SECONDS 秒供人工确认，
+    仅将鼠标移动到回城符上（不点击，无延时——时序与真实返程一致），
     然后关闭世界地图/小地图/背包。返回 (是否成功, 描述)。
     """
     # 前置：确保战斗已结束（与实际返程一致）
@@ -868,15 +885,14 @@ def verify_return_flow(win):
     ok, info = _open_task_box(win)
     if not ok:
         return False, info
-    # 2. 识别修罗回城符：仅移动鼠标悬停，不点击
+    # 2. 识别修罗回城符：仅移动鼠标定位，不点击
     pt, info = _find_return_talisman(win)
     if pt is None:
         _close_return_panels(win)
         return False, info
     human_move(win.rect.left + pt[0], win.rect.top + pt[1])
     log(f"[修罗][验证] 已移动鼠标到修罗回城符 ({pt[0]}, {pt[1]})，"
-        f"悬停 {VERIFY_HOVER_SECONDS:.0f} 秒（不点击）...", "SYS")
-    time.sleep(VERIFY_HOVER_SECONDS)
+        f"已定位到（不点击，验证时序与真实流程一致）", "SYS")
     # 3. 关闭世界地图、小地图、背包
     _close_return_panels(win)
     return True, f"验证通过：回城符位于 ({pt[0]}, {pt[1]})"
@@ -887,8 +903,8 @@ def verify_claim_flow(win):
 
     与领取流程一致，但在「点击绿色选项完成领取」前停止：走位 → 领取
     按钮识别 → 点击按钮打开对话框（领取发生在点选项之后，开对话框
-    不改变任务状态）→ 识别绿色选项（完整/尾部/帮忙）→ 仅悬停
-    VERIFY_HOVER_SECONDS 秒不点击 → 点击屏幕中间关闭对话框。
+    不改变任务状态）→ 识别绿色选项（完整/尾部/帮忙）→ 仅移动鼠标定位（不点击）
+    仅定位不点击 → 点击屏幕中间关闭对话框。
     返回 (是否成功, 描述)。
     """
     # 前置：确保战斗已结束（与实际领取一致）
@@ -903,7 +919,7 @@ def verify_claim_flow(win):
     ok, info = _walk_to_claim_spot(win)
     if not ok:
         return False, info
-    # 2. 领取入口：悬停 2s → 点击打开对话框；点击后对话框未出现则
+    # 2. 领取入口：鼠标定位 → 点击打开对话框；点击后对话框未出现则
     #    小地图重定位后重试（与领取流程共用同一兜底助手）
     ok, info, src2, pt2 = _click_entry_ensuring_dialog(
         win, log_tag="[修罗][验证]", hover_before_click=True)
@@ -924,8 +940,7 @@ def verify_claim_flow(win):
             cx, cy, txt, _ = found
             human_move(win.rect.left + cx, win.rect.top + cy)
             log(f"[修罗][验证] 已移动鼠标到绿色选项「{txt}」({cx}, {cy})，"
-                f"悬停 {VERIFY_HOVER_SECONDS:.0f} 秒（不点击）...", "SYS")
-            time.sleep(VERIFY_HOVER_SECONDS)
+                f"已定位到（不点击，验证时序与真实流程一致）", "SYS")
             # 4. 点击屏幕中间关闭对话框（不领取）
             human_click(win, SCREEN_CENTER_POS[0], SCREEN_CENTER_POS[1])
             log("[修罗][验证] 已点击屏幕中间关闭对话框（未领取）", "SYS")

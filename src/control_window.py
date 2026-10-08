@@ -484,7 +484,7 @@ class ControlWindow(WebWindow):
 
     def verify_xiuluo_return(self):
         """高级设置-修罗回程验证按钮：与实际返程流程一致，但不右键使用
-        回城符——仅将鼠标移动到回城符上悬停 2 秒后关闭背包，供人工
+        回城符——仅将鼠标移动到回城符上定位（不点击）后关闭背包，供人工
         确认整条链路（开背包 → 任务储物格 → 回城符识别）是否正确。
 
         验证在主进程后台线程执行（不占用任务子进程通道）；
@@ -505,11 +505,11 @@ class ControlWindow(WebWindow):
         threading.Thread(target=self._run_verify, args=(win,),
                          daemon=True, name="xiuluo-verify").start()
         return {"status": "success",
-                "msg": "验证已开始：开背包 → 任务储物格 → 悬停回城符 2 秒 → 关背包"}
+                "msg": "验证已开始：开背包 → 任务储物格 → 定位回城符（不点击）→ 关背包"}
 
     def verify_xiuluo_claim(self):
         """高级设置-修罗领取验证按钮：与实际领取流程一致，但到绿色选项
-        处仅悬停不点击（点击即领取）——验证走位/按钮识别/对话框/选项
+        处仅移动鼠标定位不点击（点击即领取）——验证走位/按钮识别/对话框/选项
         识别整条链路，最后点击屏幕中间关闭对话框，不领取任务。
         """
         if self._tm.is_running():
@@ -525,11 +525,11 @@ class ControlWindow(WebWindow):
         threading.Thread(target=self._run_claim_verify, args=(win,),
                          daemon=True, name="xiuluo-claim-verify").start()
         return {"status": "success",
-                "msg": "验证已开始：走位 → 领取按钮 → 对话框选项（悬停不点击）→ 关对话框"}
+                "msg": "验证已开始：走位 → 领取按钮 → 对话框选项（仅定位不点击）→ 关对话框"}
 
     def verify_xiuluo_wuyi(self):
         """高级设置-修罗巫医验证按钮：与自动巫医同一链路（条件门槛跳过、
-        血蓝状态仅报告），NPC 点击前悬停 2s；对话框处理复用战斗线程
+        血蓝状态仅报告），NPC 点击前先移动鼠标定位（无延时）；对话框处理复用战斗线程
         逻辑（点击 NPC 后由战斗线程点「全部医治和修复」）。
         """
         if self._tm.is_running():
@@ -545,13 +545,13 @@ class ControlWindow(WebWindow):
         threading.Thread(target=self._run_wuyi_verify, args=(win,),
                          daemon=True, name="xiuluo-wuyi-verify").start()
         return {"status": "success",
-                "msg": "验证已开始：血蓝检查 → 走位到巫医 → NPC 悬停 2s → 点击 → 对话框处理"}
+                "msg": "验证已开始：血蓝检查 → 走位到巫医 → NPC 定位 → 点击 → 对话框处理"}
 
     def _run_wuyi_verify(self, win):
         """巫医验证线程体：跑自动巫医链路（悬停代替直接点击），结果回推页面与日志窗。"""
         from . import xiuluo  # 延迟导入：xiuluo 反向导入本模块（避免循环）
         try:
-            self.add_logs(["[验证] 开始验证修罗巫医（走位 → NPC 悬停 → 点击 → 战斗线程处理对话框）..."])
+            self.add_logs(["[验证] 开始验证修罗巫医（走位 → NPC 定位 → 点击 → 战斗线程处理对话框）..."])
             ok, info = xiuluo.verify_wuyi_flow(win)
         except Exception as e:
             ok, info = False, f"验证异常: {e}"
@@ -576,7 +576,7 @@ class ControlWindow(WebWindow):
         """领取验证线程体：跑修罗领取链路（选项悬停代替点击），结果回推页面与日志窗。"""
         from . import xiuluo  # 延迟导入：xiuluo 反向导入本模块（避免循环）
         try:
-            self.add_logs(["[验证] 开始验证修罗领取（选项仅悬停不点击，最后关闭对话框）..."])
+            self.add_logs(["[验证] 开始验证修罗领取（选项仅定位不点击，最后关闭对话框）..."])
             ok, info = xiuluo.verify_claim_flow(win)
         except Exception as e:
             ok, info = False, f"验证异常: {e}"
@@ -601,7 +601,7 @@ class ControlWindow(WebWindow):
         """验证线程体：跑修罗返程链路（悬停代替点击），结果回推页面与日志窗。"""
         from . import xiuluo  # 延迟导入：xiuluo 反向导入本模块（避免循环）
         try:
-            self.add_logs(["[验证] 开始验证修罗回程（不点击回城符，悬停 2 秒后关闭背包）..."])
+            self.add_logs(["[验证] 开始验证修罗回程（不点击回城符，定位后关闭背包）..."])
             ok, info = xiuluo.verify_return_flow(win)
         except Exception as e:
             ok, info = False, f"验证异常: {e}"

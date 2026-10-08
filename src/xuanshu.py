@@ -5,7 +5,7 @@
    （点击绿色带下划线文案，等待任务信息变化后继续点击；
    期间处理对话框绿色选项与锄遗聚宝小游戏）
 2. 没有任务时，寻路到任务位置（洛阳城 93,125）并领取任务：
-   - 位置识别失败时按 Alt+C 后重试一次（常见于人物未落地）
+   - 位置识别失败一律当不在目标坐标（不按 Alt+C 重试），直接寻路
    - 已在任务位置 5px 内 → 跳过寻路
    - 在洛阳城其他位置 → 打开小地图点击任务点寻路
    - 不在洛阳城 → 世界地图 → 洛阳城 → 小地图 → 点击任务点寻路
@@ -19,6 +19,7 @@
 """
 import difflib
 import os
+import re
 import time
 from collections import Counter
 from functools import lru_cache
@@ -28,7 +29,7 @@ import numpy as np
 from ascript.windows.hardware.mouse import Mouse
 from ascript.windows.window.Window import WindowCaptureFormat
 
-from .app_utils import log, human_click
+from .app_utils import log, human_click, move_away
 from . import bag  # 物品栏开关
 from . import map as game_map  # 地图操作（世界地图/小地图/位置识别）
 from . import task_tracker  # 任务追踪面板操作
@@ -53,11 +54,26 @@ DIALOG_OPTION_LINGQU = "领取玄枢轶闻"
 DIALOG_TIMEOUT = 10                 # 等待对话框出现的超时（秒）
 # 任务过程中出现的对话框绿色选项（跟踪期间检测到则点击，按顺序）
 DIALOG_OPTIONS = ["注入玄蕴试试看"]
-# 战斗失败/平局对话框（出现任一文案则继续点击任务追踪的绿色文案推进任务）
-DIALOG_LOSE_TEXTS = ["你输了", "平局"]
+# ---- 监天盘子任务（追踪文案「使用监天盘寻找石妖踪迹」出现即触发）----
+JIANTIANPAN_TRACK_TEXT = "使用监天盘寻找石妖踪迹"  # 任务追踪触发文案
+JIANTIANPAN_WORLD_ICON = "shijie_huoyungebi.png"  # 世界地图「火云戈壁」标签模板
+JIANTIANPAN_MAP_CLICK_POS = (759, 431)            # 火云戈壁小地图点击点（寻路到目标附近）
+JIANTIANPAN_TARGET_POS = (183, 81)                # 目标坐标（火云戈壁）
+JIANTIANPAN_ARRIVE_TOLERANCE = 3                  # 到达容差（严格：仙药只在目标附近出现）
+JIANTIANPAN_ARRIVE_TIMEOUT = 90                   # 寻路等待超时（秒）
+JIANTIANPAN_ICON = "xuanshu_jiantianpan.png"      # 监天盘模板
+JIANTIANPAN_CLICK_TIMEOUT = 10                    # 到达后等待监天盘出现的超时（秒）
+XIANYAO_ICON = "xuanshu_xianyao.png"              # 仙药模板（使用监天盘后出现）
+XIANYAO_TIMEOUT = 20                              # 等待仙药出现的超时（秒）
+JIANTIANPAN_REDO_INTERVAL = 20                    # 流程失败后最短重做间隔（秒，防紧循环）
+_jiantianpan_last_done = 0.0                      # 上次流程执行时间戳
+# 战斗失败/平局对话框（共享常量，见 dialog_common）
+# 每日次数已满文案与跳过/选项几何常量同样在 dialog_common
+from .dialog_common import (DAILY_LIMIT_TEXT, DAILY_LIMIT_INFO,
+                            DIALOG_LOSE_TEXTS, DIALOG_SKIP_CLICKS,
+                            SCREEN_CENTER_POS,
+                            OPTION_FIRST_OFFSET, OPTION_ROW_STEP, OPTION_X_OFFSET)
 # 每日任务次数已满的对话文案（出现即结束任务循环）
-DAILY_LIMIT_TEXT = "少侠已经完成5次任务，请明天再来吧"
-DAILY_LIMIT_INFO = "今日任务次数已满（请明天再来）"
 # 需要点击屏幕中间跳过的对话框文案（出现则连点屏幕中间推进对话）
 DIALOG_SKIP_TEXTS = ["你是做嘛的？莫来惹老子！"
                      ,"受害者所闻那水鬼之声出自善口技者之音，你幼时曾学过口技，又时常与人"
@@ -72,8 +88,6 @@ DIALOG_SKIP_TEXTS = ["你是做嘛的？莫来惹老子！"
                      ,"看少侠的表情，旺小乔不满意？"
                      ,"少侠的脸色有点难看"
                      ]
-DIALOG_SKIP_CLICKS = 4               # 跳过对话的点击次数
-SCREEN_CENTER_POS = (689, 415)       # 屏幕中间（游戏窗口中心，点击推进对话）
 # 特定对话框出现时点击的绿色选项（对话框文案 → 绿字选项）
 DIALOG_OPTION_MAP = {
     "什么江中劫货？休要血口喷人，你有证据吗？": "指明口技之事",
@@ -87,7 +101,6 @@ DIALOG_OPTION_MAP = {
     "大唐人最喜欢喝什么":"茶",
     "大唐人见面行礼":"拱手",
     "有人要偷我们的宝贝，拿下他！":"什么情况",
-    "使劲晃动杯中的三颗骰子":"轻轻摇晃",
     "我倒数三个数后大家一起出拳":"出石头",
     "看打！":"看我怎么收拾你",
     "不知道这里有没有那条锦鲤鱼": "先钓一下再说！",
@@ -96,7 +109,8 @@ DIALOG_OPTION_MAP = {
     "少侠想换什么款式":"试试",
     "略略略略略":"都别吵啦",
     "要么要钱，要么要命，你自己选吧":"看打",
-    "少侠救我":"看我的"
+    "少侠救我":"看我的",
+    "嘿，又来一个上当的，今日又能提前完成修行了！":"竟是一只石妖，看打！"
 }
 # 选项无法被 OCR 识别（如单字选项「茶」）时，按序号点击：
 # 选项为问题文案下方的纵向列表，第 idx 项（对话框文案 → 序号）
@@ -105,9 +119,6 @@ DIALOG_OPTION_INDEX_MAP = {
 }
 # 序号点击的坐标参数（相对问题行 rect）：首项纵偏移、行间距、横向偏移
 # （实测三选项文字中心：咖啡 +12、果汁 +30、茶 +48，间距 18px）
-OPTION_FIRST_OFFSET = 10
-OPTION_ROW_STEP = 18
-OPTION_X_OFFSET = 1
 # 锄遗聚宝小游戏（点击「注入玄蕴试试看」后出现）
 CHUYIJUEBAO_ICON = "chuyijuebao.png"              # 主图（消失即结束；实测匹配 0.91）"
 CHUYIJUEBAO_START_ICON = "chuyijuebao_start.png"  # 开始按钮（实测匹配 0.92）
@@ -199,51 +210,126 @@ def wait_arrive(win, timeout=ARRIVE_TIMEOUT):
     return False, f"等待寻路完成超时（{timeout}s）"
 
 
-def _click_green_option_once(win, items, img_np, text):
-    """单帧检测并点击指定文案的绿色选项；点击成功返回 True。
-
-    限定对话框区域（x≥PANEL_MAX_X）：任务追踪面板的绿字链接可能包含
-    相同文案（如链接「去找小胖丫帮旺小乔试试服装」含「试试」），
-    面板行 y 序在前会被先遍历到，不限区域会误点面板链接。
-    """
-    for txt, rect, score in items:
-        if text in txt and score >= 0.55 and rect[0] >= task_tracker.PANEL_MAX_X \
-                and task_tracker.is_green_text(img_np, rect):
-            cx, cy = task_tracker.green_text_center(img_np, rect, prefer_underline=False)
-            human_click(win, cx, cy)
-            log(f"[玄枢轶闻] 已点击对话框绿色选项「{txt}」@({cx},{cy})", "SYS")
-            return True
-    return False
+def _norm_text(s):
+    """去标点/空格（保留中文与字母数字），匹配前统一规范化（同 kezhan）。"""
+    return re.sub(r"[^\w]", "", s)
 
 
-def _click_dialog_option_by_index(win, items, dtxt, idx):
-    """按序号点击问题下方的选项（选项无法 OCR 识别时使用）。
+def _jiantianpan_active(items):
+    """追踪面板是否出现监天盘子任务文案（跨行拼接后模糊匹配）。"""
+    panel_txt = "".join(t for t, r, _ in items if r[0] < task_tracker.PANEL_MAX_X)
+    return _fuzzy_contains(_norm_text(panel_txt), JIANTIANPAN_TRACK_TEXT)
 
-    定位问题文案所在行，选项在其下方纵向排列：
-    第 idx 项的点击位置 = 问题行下方 10 + 18*(idx-1) 像素、问题行左侧 +1 像素
-    （实测问答题三选项文字中心 咖啡 +12/果汁 +30/茶 +48，取略偏上避免点到行间）。
-    """
-    qrect = None
-    for txt, rect, _ in items:
-        if _fuzzy_contains(txt, dtxt):
-            qrect = rect
-            break
-    if qrect is None:
+
+def _at_huoyun_target(pos):
+    """是否已在火云戈壁目标附近（严格容差；地名抗 OCR 误读）。"""
+    if pos is None:
         return False
-    cx = qrect[0] + OPTION_X_OFFSET
-    cy = qrect[3] + OPTION_FIRST_OFFSET + OPTION_ROW_STEP * (idx - 1)
-    human_click(win, cx, cy)
-    log(f"[玄枢轶闻] 已按序号点击第 {idx} 项选项 @({cx},{cy})", "SYS")
+    x, y = JIANTIANPAN_TARGET_POS
+    if not (abs(pos[1] - x) <= JIANTIANPAN_ARRIVE_TOLERANCE
+            and abs(pos[2] - y) <= JIANTIANPAN_ARRIVE_TOLERANCE):
+        return False
+    name = pos[0].replace("雲", "云").strip()
+    if name == "火云戈壁":
+        return True
+    return len(name) >= 3 and difflib.SequenceMatcher(
+        None, name, "火云戈壁").ratio() >= 0.7
+
+
+def _wait_jiantianpan_arrive(win, timeout=JIANTIANPAN_ARRIVE_TIMEOUT):
+    """等待走到火云戈壁目标附近（严格容差 + 连续两次同坐标确认停稳）。
+
+    点击小地图后人物可能路过目标附近但不停下，必须停稳才算到达
+    （仙药只在目标附近出现，附近要求严格）。
+    """
+    deadline = time.time() + timeout
+    last = None
+    while time.time() < deadline:
+        pos = game_map.read_map_position(win)
+        if _at_huoyun_target(pos) and pos == last:
+            return True, f"已到达火云戈壁目标附近 {pos[0]}[{pos[1]},{pos[2]}]（严格容差）"
+        last = pos
+        time.sleep(2.0)
+    return False, "前往火云戈壁目标附近超时（严格容差未达成）"
+
+
+def _click_template_wait(win, icon, label, timeout):
+    """轮询等待模板出现并点击。返回 (是否成功, 描述)。"""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        pt = game_map.find_template(win, icon)
+        if pt is not None:
+            human_click(win, pt[0], pt[1])
+            log(f"[玄枢轶闻] 已点击「{label}」@({pt[0]},{pt[1]})", "SYS")
+            return True, f"已点击「{label}」"
+        time.sleep(0.5)
+    return False, f"未找到「{label}」模板（{timeout}s 超时）"
+
+
+def _handle_jiantianpan(win, items, img_np):
+    """监天盘子任务（follow_task 附加处理回调）。
+
+    追踪出现「使用监天盘寻找石妖踪迹」时执行：
+    世界地图点火云戈壁 → 小地图点 (744,441) 寻路 → 严格等待到达
+    火云戈壁 183,81 附近 → 点击监天盘 → 等待仙药出现并点击。
+    已在目标附近时跳过寻路直接点监天盘（失败重试幂等）。
+    流程失败后 JIANTIANPAN_REDO_INTERVAL 内不重试（防紧循环）。
+    返回是否已处理（执行过流程即 True，即使失败）。
+    """
+    global _jiantianpan_last_done
+    if not _jiantianpan_active(items):
+        return False
+    if time.time() - _jiantianpan_last_done < JIANTIANPAN_REDO_INTERVAL:
+        return False
+    _jiantianpan_last_done = time.time()
+    log("[玄枢轶闻] 检测到「使用监天盘寻找石妖踪迹」，执行监天盘流程", "SYS")
+    if not _at_huoyun_target(game_map.read_map_position(win)):
+        ok, info = game_map.open_mini_map_city(win, JIANTIANPAN_WORLD_ICON, "火云戈壁")
+        if not ok:
+            log(f"[玄枢轶闻] 监天盘流程寻路失败: {info}", "WARN")
+            game_map.close_maps(win)
+            return True
+        human_click(win, JIANTIANPAN_MAP_CLICK_POS[0], JIANTIANPAN_MAP_CLICK_POS[1])
+        log("[玄枢轶闻] 已点击火云戈壁小地图寻路点，自动寻路中", "SYS")
+        time.sleep(1.0)  # 等待自动寻路启动
+        game_map.close_maps(win)  # 关闭残留地图，避免遮挡监天盘
+        ok, info = _wait_jiantianpan_arrive(win)
+        if not ok:
+            log(f"[玄枢轶闻] {info}", "WARN")
+            return True
+        log(f"[玄枢轶闻] {info}", "SYS")
+    ok, info = _click_template_wait(win, JIANTIANPAN_ICON, "监天盘", JIANTIANPAN_CLICK_TIMEOUT)
+    if not ok:
+        log(f"[玄枢轶闻] {info}", "WARN")
+        return True
+    ok, info = _click_template_wait(win, XIANYAO_ICON, "仙药", XIANYAO_TIMEOUT)
+    if not ok:
+        log(f"[玄枢轶闻] {info}", "WARN")
+    else:
+        log(f"[玄枢轶闻] {info}", "SYS")
     return True
 
 
+from .dialog_common import (_click_green_option_once as _dc_click_green_option_once,
+                            _click_dialog_option_by_index as _dc_click_dialog_option_by_index,
+                            _click_screen_center as _dc_click_screen_center,
+                            _fuzzy_contains, _char_counts,
+                            _dialog_text_present)
+
+
+def _click_green_option_once(win, items, img_np, text):
+    """玄枢轶闻前缀包装（共享实现在 dialog_common）。"""
+    return _dc_click_green_option_once(win, items, img_np, text, "玄枢轶闻")
+
+
+def _click_dialog_option_by_index(win, items, dtxt, idx):
+    """玄枢轶闻前缀包装（共享实现在 dialog_common）。"""
+    return _dc_click_dialog_option_by_index(win, items, dtxt, idx, "玄枢轶闻")
+
+
 def _click_screen_center(win, times=DIALOG_SKIP_CLICKS):
-    """点击屏幕中间若干次（推进 NPC 对话）。"""
-    cx, cy = SCREEN_CENTER_POS
-    for _ in range(times):
-        human_click(win, cx, cy)
-        time.sleep(0.3)  # 对话推进间隔（漏推进由下一轮询 OCR 自愈）
-    log(f"[玄枢轶闻] 已点击屏幕中间 {times} 次（推进对话）", "SYS")
+    """玄枢轶闻前缀包装（共享实现在 dialog_common）。"""
+    return _dc_click_screen_center(win, times=times, prefix="玄枢轶闻")
 
 
 def _click_dialog_green_option(win, text, timeout=DIALOG_TIMEOUT, abort_text=None):
@@ -271,7 +357,7 @@ def navigate_to_task(win):
     """寻路到玄枢轶闻任务位置（洛阳城 93,125）并领取任务。
 
     1. 场景前置：关闭已打开的小地图/世界地图/物品栏
-    2. 识别当前位置（失败按 Alt+C 重试一次）
+    2. 识别当前位置（失败一律当不在目标坐标，不重试）
     3. 不在目标附近时寻路：在洛阳城 → 小地图点击任务点；不在 → 世界地图 → 洛阳城 → 小地图
     4. 等待寻路完成（到达目标附近；目标非坐标时位置稳定且出现领取按钮）
     5. 点击领取任务按钮 → 对话框 1 点「玄枢轶闻」→ 对话框 2 点「领取玄枢轶闻」
@@ -287,11 +373,15 @@ def navigate_to_task(win):
     # 场景前置：清理残留地图（小地图在上层，先关）与物品栏
     _close_scene_panels(win)
 
-    pos = game_map.read_position_with_recovery(win)
+    # 识别失败一律当不在目标坐标处理：不按 Alt+C 重试（重试无收益
+    # 且拖慢轮次），直接走世界地图路径，寻路完成后位置自然恢复
+    pos = game_map.read_map_position(win)
     if pos is None:
-        return False, "无法识别当前地图位置", None
-    name, x, y = pos
-    loc = f"{name}[{x},{y}]"
+        name = loc = "识别失败"
+        log("[玄枢轶闻] 位置识别失败，按不在目标坐标处理", "WARN")
+    else:
+        name, x, y = pos
+        loc = f"{name}[{x},{y}]"
 
     if _at_target(pos):
         log(f"[玄枢轶闻] 已在任务位置附近（{loc}），跳过寻路", "SYS")
@@ -510,44 +600,6 @@ def _signatures_similar(a, b, ratio=0.8):
     return difflib.SequenceMatcher(None, a, b).ratio() >= ratio
 
 
-@lru_cache(maxsize=None)
-def _char_counts(s):
-    """字符串字符多重集（needle 静态、同一行跨轮询重复，缓存供上界预过滤）。"""
-    return Counter(s)
-
-
-def _fuzzy_contains(text, needle, threshold=0.85):
-    """模糊子串匹配：text 中是否存在与 needle 相似度达标的窗口。
-
-    对话框文案的 OCR 结果可能有个别字误读，精确匹配会漏掉；
-    以长度 ±3 的滑动窗口做相似度比对（抗误读与多/少字）。
-    预过滤均为 difflib 保证的上界（多重集重合度 / real_quick_ratio /
-    quick_ratio），低于阈值才跳过，不改命中语义（实测 15 万随机对
-    与旧实现 0 不一致）。
-    """
-    n = len(needle)
-    if n == 0:
-        return True
-    # 多重集上界：窗口 ratio = 2*M/(size+n) ≤ 2*O/(min_size+n)，
-    # M 为匹配字符数、O 为整行与 needle 的字符重合度；上界低于阈值整行跳过
-    min_size = max(1, n - 3) if n <= len(text) else len(text)
-    overlap = sum((_char_counts(text) & _char_counts(needle)).values())
-    if 2 * overlap / (n + min_size) < threshold:
-        return False
-    if n > len(text):
-        sm = difflib.SequenceMatcher(None, text, needle)
-        return sm.real_quick_ratio() >= threshold and sm.ratio() >= threshold
-    for size in (n - 3, n - 2, n - 1, n, n + 1, n + 2, n + 3):
-        if size <= 0 or size > len(text):
-            continue
-        for i in range(0, len(text) - size + 1, max(1, size // 2)):
-            window = text[i:i + size]
-            sm = difflib.SequenceMatcher(None, window, needle)
-            if sm.real_quick_ratio() < threshold or sm.quick_ratio() < threshold:
-                continue
-            if sm.ratio() >= threshold:
-                return True
-    return False
 
 
 def _frames_equal(a, b):
@@ -560,12 +612,6 @@ def _frames_equal(a, b):
         return False
     return bool((np.asarray(a) == np.asarray(b)).all())
 
-
-def _dialog_text_present(items, dtxt):
-    """对话框文案是否出现：逐行与全文拼接（无空格）做模糊匹配。"""
-    joined = "".join(t[0] for t in items)
-    return any(_fuzzy_contains(line, dtxt)
-               for line in [t[0] for t in items] + [joined])
 
 
 def _confirm_task_gone(win, title, fallback_texts=()):
@@ -678,6 +724,10 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
     """
     deadline = time.time() + timeout
     rounds = 0
+    task_seen = False  # 本轮跟踪中任务是否曾被识别到：完成须满足
+                       # 「无→有→无」——从未出现即确认消失是假完成
+                       # （实测客栈 3s 一轮 0 次点击假完成，任务与对话框
+                       # 都没执行；此时领取大概率失败，应报错回主循环重试）
     last_clicked_sig = None
     progressed = False
     last_items = None
@@ -710,8 +760,11 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
         task = task_tracker.find_task(task_tracker.group_tasks(items), title)
         if task is None:
             if _confirm_task_gone(win, title, fallback_keywords):
+                if not task_seen:
+                    return False, f"任务从未出现在追踪面板（跟踪 {rounds} 次点击，领取可能失败）"
                 return True, f"任务已从任务追踪中消失（本轮跟踪 {rounds} 次点击）"
             continue  # 瞬时漏读：任务仍在，继续跟踪
+        task_seen = True
         sig = _sig_of(items, img_np, task)
         if last_clicked_sig is not None and _signatures_similar(sig, last_clicked_sig) \
                 and not progressed:
@@ -768,6 +821,8 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 task2 = task_tracker.find_task(task_tracker.group_tasks(items), title)
                 if task2 is None:
                     if _confirm_task_gone(win, title, fallback_keywords):
+                        if not task_seen:
+                            return False, f"任务从未出现在追踪面板（跟踪 {rounds} 次点击，领取可能失败）"
                         return True, f"任务已从任务追踪中消失（本轮跟踪 {rounds} 次点击）"
                     changed_once = False  # 面板瞬时不可读：回退正常轮询
                     continue
@@ -816,9 +871,12 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
             task2 = task_tracker.find_task(task_tracker.group_tasks(items), title)
             if task2 is None:
                 if _confirm_task_gone(win, title, fallback_keywords):
+                    if not task_seen:
+                        return False, f"任务从未出现在追踪面板（跟踪 {rounds} 次点击，领取可能失败）"
                     return True, f"任务已从任务追踪中消失（本轮跟踪 {rounds} 次点击）"
                 changed_once = False  # 瞬时漏读：任务仍在，继续等待
                 continue
+            task_seen = True
             sig2 = _sig_of(items, img_np, task2)
             text_changed = not _signatures_similar(sig2, sig)
             key = None
@@ -877,6 +935,8 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
             if not handled:
                 for dtxt in DIALOG_SKIP_TEXTS:
                     if _dialog_text_present(items, dtxt):
+                        # 命中即固定连点推进（多屏对话无需枚举后续文案，
+                        # 漏推进由下一轮询 OCR 自愈）
                         _click_screen_center(win)
                         handled = True
                         break
@@ -903,7 +963,7 @@ def run_cycle(win):
         return "fail", "战斗中，跳过本轮（等待战斗结束）"
 
     if task_tracker.has_task(win, TASK_TITLE):
-        ok, info = follow_task(win)
+        ok, info = follow_task(win, extra_dialog_handler=_handle_jiantianpan)
         return ("done", info) if ok else ("fail", info)
 
     # 没有任务 → 寻路到任务位置并领取任务
@@ -912,7 +972,8 @@ def run_cycle(win):
         return ("daily_limit", info) if info == DAILY_LIMIT_INFO else ("fail", info)
 
     # 领取成功：紧接着跟踪任务，不等轮次间隔；复用领取校验的 OCR 结果
-    ok, info = follow_task(win, first_items=pre_items)
+    ok, info = follow_task(win, first_items=pre_items,
+                           extra_dialog_handler=_handle_jiantianpan)
     return ("done", info) if ok else ("fail", info)
 
 

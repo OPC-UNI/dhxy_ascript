@@ -28,16 +28,18 @@ import numpy as np
 from ascript.windows.hardware.keyboard import Keyboard
 from ascript.windows.system import R
 
-from .app_utils import log, human_click
+from .app_utils import log, human_click, move_away
 from . import bag  # 物品栏开关
 from . import map as game_map  # 地图操作（世界地图/小地图/位置识别）
 from . import task_tracker  # 任务追踪面板操作
 from .battle import is_in_battle  # 战斗状态判定（统一在 battle.py 中实现）
 from . import debug_overlay  # 调试信息悬浮层（任务进度更新）
 from .control_window import load_task_counts  # 任务次数上限（通用设置）
-from .xuanshu import (follow_task, _click_green_option_once,
-                      _dialog_text_present, _fuzzy_contains,
-                      DAILY_LIMIT_TEXT, DAILY_LIMIT_INFO)  # 复用玄枢轶闻的跟踪/对话框逻辑
+from .xuanshu import follow_task  # 共享跟踪引擎（kezhan 对 xuanshu 的唯一依赖）
+from .dialog_common import (_click_green_option_once, _dialog_text_present,
+                            _fuzzy_contains, DAILY_LIMIT_TEXT, DAILY_LIMIT_INFO,
+                            DIALOG_LOSE_TEXTS, DIALOG_SKIP_CLICKS,
+                            SCREEN_CENTER_POS)
 
 # 任务追踪面板中的任务标题
 TASK_MODE = "客栈"       # 控制面板任务模式名（任务次数配置键）
@@ -79,10 +81,36 @@ DIALOG_OPTION_MAP = {
     "我也想念爷爷，我现在就回家！": "快回去吧，爷爷看到你一定会很高兴的！",
     "少侠不妨去那边": "没问题",
     "当初我决心要修炼成精的那一日，我本以为是短暂的分别":"哎",
-    "阴阳通道重归稳定，多谢少侠出手相助。":"小事一桩，不足挂齿，告辞。"
+    "阴阳通道重归稳定，多谢少侠出手相助。":"小事一桩，不足挂齿，告辞。",
+    "蟠桃园近日闹了个偷桃精":"我倒要见识见识那精怪的本事",
+    "那我今日便跟你拼了":"看打",
+    "不过今日我还有事，明日我再来品鉴新熟的桃子哟~" : "下次见到定要再好好揍他",
+    "灵兽大冒险":"没问题",
+    "到时还请少侠也一同前往灵兽村观赛，届时灵兽齐聚，必有一番精彩较量！":"一定到场！",
+    "女儿村的阿晴姑娘前些日子在长安酒楼订了一批上好的食材，说是要给她远":"这等喜事，自然要尽快送到，包在我身上。",
+    "那婉儿姑娘性情温婉，容貌也出众，也不知是谁这么有福气能娶她做婆娘…":"好",
+    "婉儿姑娘预定的食材都在这里了，有糯米、红枣，还有上等的花雕……":"还请姑娘清点一下",
+    "他说要采我最爱的月影花...在回来的路上":"姑娘节哀...待我寻到那伙歹人，定要为姑娘讨回公道！",
+    "近日长安城来了个自称“赌圣”的狂徒，在城中设下赌局，扬言无人能连胜":"赌圣？这么大的口气，我倒要见识见识。",
+    "第一局简单，骰子比大，点数高者胜！":"没问题。",
+    "赌圣张大千使劲晃动":"随意摇晃几下掷骰子",
+    "啧...运气倒是不错":"随便你，换哪儿你都得输。",
+    "不对不对，上次我们比大，这次我们该比小，这次不能作数，我还得换个地":"你怎么那么多事儿……",
+    "今日...今日算我栽了！（慌乱收拾赌具，在众人嘘声中仓皇离去":"下次再出老千我可就不客气了！",
+    "花果山传来急报，水帘洞中有只猴精突发癫狂，见人就扑。那猴儿平日最是":"猴精突然发狂？其中必有蹊跷，我这便去水帘洞一探究竟。",
+    "你！你也是它们派来的！（猴精龇牙咧嘴直扑而来）":"只能先制服它再说了。",
+    "有位整天云游的逍遥散仙刚向我发了份求助，说他家那只宝贝坐骑被蓬莱的":"小事一桩，包在我身上。",
+    "看来这就是那困住灵兔的封印了。":"消耗灵气，破除封印",
+    "多谢少侠，嘿嘿，老夫还要赶去赴瑶池仙会，后会有期！":"您老慢走"
+
 }
 # 需要点击屏幕中间跳过的对话框文案（出现则连点屏幕中间推进对话，
 # 同 xuanshu.DIALOG_SKIP_TEXTS）；实测遇到无选项的对话在此追加
+# ---- 高等食材给与（婉儿姑娘送货任务；给与流程参考五环提交装备） ----
+GAODENGSHICAI_ICON = "kezhan_gaodengshicai.png"  # 高等食材物品（给与面板检索）
+GIVE_ICON = "give.png"          # 给与面板标志（与五环共用模板）
+GIVE_BTN_ICON = "give_btn.png"  # 给与按钮（与五环共用模板，OCR 读作「给子」）
+GIVE_PANEL_TIMEOUT = 10         # 等待给与面板出现的超时
 DIALOG_SKIP_TEXTS = ["少侠来得正及时！这月华霜蕊灵气充盈，正是宴上所需",
                      "附近的妖邪已被我清理干净了。",
                      "莫要过来",
@@ -90,7 +118,18 @@ DIALOG_SKIP_TEXTS = ["少侠来得正及时！这月华霜蕊灵气充盈，正�
                      "有个身份不明的孩童逢人便问花花的下落",
                      "你又来找我干嘛",
                      "我本是溪边一颗石子，花花自幼便叼着我在草地上打滚。那段被它捧在爪间",
-                     "四象归位，怨气已平，去告知"]
+                     "四象归位，怨气已平，去告知",
+                     "世间皆负我……人人都欺我……",
+                     "灵兽村近日打算举办一场名为“灵兽大冒险”的竞技活动，到时记得去参加",
+                     "隐林涧那边我已经通知完毕",
+                     "搞定了。",
+                     "少侠有何事",
+                    "姑娘的夫君想必快回来了吧？",
+                    "就是这里了，我看此地风水不差，这次我定能赢你！",
+                    "来来来，这次咱们比谁的点数小，一局定胜负！",
+                    "走开，都走开",
+                    "你赢了"
+                     ]
 # 任务追踪多绿字点击顺序（四象镇魂：按 青龙→白虎→朱雀→玄武 依次加固封印）；
 # 关键词未命中时自动退回点第一个绿字，不影响其他任务
 GREEN_CLICK_ORDER = ["青龙", "白虎", "朱雀", "玄武"]
@@ -101,8 +140,6 @@ DUCHONG_ICONS = ["duchong1.png", "duchong2.png", "duchong3.png"]  # 三种毒虫
 BUG_CHECK_INTERVAL = 0.14              # 毒虫检索间隔（秒，用户指定 140ms）
 BUG_TIMEOUT = 60                       # 小游戏总超时（秒）
 BUG_IDLE_END = 5.0                     # 连续无虫出现达到该时长视为游戏结束（秒）
-DIALOG_SKIP_CLICKS = 4               # 跳过对话的点击次数
-SCREEN_CENTER_POS = (689, 415)       # 屏幕中间（游戏窗口中心，点击推进对话）
 CLAIM_CHAIN_TIMEOUT = 30             # 整条领取对话链（含接取与任务对话）的总超时（秒）
 # ---- 特殊任务步骤：前往洛阳城大理寺墙外（追踪文案出现时手动寻路） ----
 DALI_TRACK_TEXT = "前往洛阳城大理寺墙外附近"   # 任务追踪文案（出现即需手动寻路）
@@ -111,6 +148,8 @@ DALI_TARGET_POS = (220, 195)                  # 到达目标（洛阳城坐标�
 DALI_ARRIVE_TIMEOUT = 120                     # 寻路等待超时（秒）
 DALI_REDO_INTERVAL = 15                       # 寻路完成后最短重做间隔（任务文案未更新时防重复点击）
 AWANG_ICON = "awang.png"                      # 阿旺 NPC 模板（图片后续提供）
+AWANG_CLICK_OFFSET = 40                       # OCR 识别到名字标签后，点击目标在其正上方
+                                              # 约 40px（用户实测：点文字本身无效）
 # NPC 名字 OCR 兜底查找的排除区（任务追踪面板；面板内文案如「找阿旺。」不可点）
 TRACK_PANEL_REGION = (0, 200, 260, 600)
 # 任务追踪面板顶部小区域（标题行；客栈任务恒为面板首个任务，拍虫时快速检查用）
@@ -177,7 +216,7 @@ def _click_fast_travel_option(win, items, img_np):
     """检测快送对话框并点击绿色选项「快送我去」；点击成功返回 True。"""
     if not _norm_dialog_present(items, FAST_DIALOG_TEXT):
         return False
-    return _click_green_option_once(win, items, img_np, FAST_DIALOG_OPTION)
+    return _click_green_option_once(win, items, img_np, FAST_DIALOG_OPTION, prefix="客栈")
 
 
 def _go_to_inn(win):
@@ -243,7 +282,7 @@ def _go_to_inn(win):
         polls += 1
         if polls % 5 == 0:
             log(f"[客栈] 前往客栈中... 当前位置: {pos or '识别失败'}", "INFO")
-        time.sleep(2.0)
+        time.sleep(1.5)
     return False, f"前往洛阳客栈超时（{ARRIVE_TIMEOUT}s）"
 
 
@@ -267,7 +306,7 @@ def _ensure_zhanggui(win):
             continue
         if "战斗" in info:
             return None, info
-        time.sleep(2.0)  # 轮次间隔，避免空转
+        time.sleep(1.0)  # 重试退避（导航失败快速重试，防紧循环）
     return None, f"多次尝试后仍未到达洛阳客栈（{NAV_MAX_ATTEMPTS} 次），终止任务"
 
 
@@ -284,12 +323,9 @@ def _has_task(win):
 
 
 def _click_screen_center(win, times=DIALOG_SKIP_CLICKS):
-    """点击屏幕中间若干次（推进 NPC 对话）。"""
-    cx, cy = SCREEN_CENTER_POS
-    for _ in range(times):
-        human_click(win, cx, cy)
-        time.sleep(0.5)  # 对话推进间隔
-    log(f"[客栈] 已点击屏幕中间 {times} 次（推进对话）", "SYS")
+    """点击屏幕中间若干次（推进 NPC 对话），「客栈」前缀包装（共享实现在 dialog_common）。"""
+    from .dialog_common import _click_screen_center as _dc
+    return _dc(win, times=times, prefix="客栈")
 
 
 def _near_luoyang(pos, target):
@@ -317,7 +353,8 @@ def _find_awang_by_ocr(win):
     """全屏 OCR 查找 NPC 名字「阿旺」，返回点击坐标或 None。
 
     只匹配短行（≤4 字）含「阿旺」，排除任务追踪面板区域（0,200-260,600），
-    避免误点追踪文案（如「找阿旺。」）。NPC 名字标签本身即可点击。
+    避免误点追踪文案（如「找阿旺。」）。点击目标在名字标签正上方约
+    40px（用户实测：点文字本身无效）。
     """
     img = win.capture(force_activate=False)
     if img is None:
@@ -330,7 +367,7 @@ def _find_awang_by_ocr(win):
         if rect[0] < pr and pt <= rect[1] <= pb:
             continue  # 任务追踪面板内的文案，跳过
         cx = (rect[0] + rect[2]) // 2
-        cy = (rect[1] + rect[3]) // 2
+        cy = (rect[1] + rect[3]) // 2 - AWANG_CLICK_OFFSET
         log(f"[客栈] OCR 识别到 NPC 名字「{txt}」@({cx},{cy})", "SYS")
         return cx, cy
     return None
@@ -401,7 +438,7 @@ def _walk_to_luoyang_pos(win, click_pos, target_pos, timeout, desc):
         polls += 1
         if polls % 5 == 0:
             log(f"[客栈] 前往{desc}中... 当前位置: {pos or '识别失败'}", "INFO")
-        time.sleep(2.0)
+        time.sleep(1.5)
     return False, f"寻路到{desc}超时（未到达洛阳城 {target_pos[0]},{target_pos[1]} 附近）"
 
 
@@ -627,7 +664,67 @@ def _handle_follow_extras(win, items, img_np):
             _biwu_last_done = time.time()
             log(f"[客栈] 比武场寻路: {info}", "SYS" if ok else "WARN")
             return True
+        # 高等食材给与：给与面板打开时跨轮询续接（对话选项点击在
+        # DIALOG_OPTION_MAP 中处理，点击后弹出给与面板在此完成）
+        if _handle_gaodengshicai_give(win):
+            return True
+        # 战斗失败/平局对话框：先关闭对话框，再重新点击任务追踪绿字
+        # 推进（参考 xuanshu 同款处理）。follow 的共享处理在内层等待
+        # 循环里，而战斗失败后任务签名不变，外层循环恒走「签名未变」
+        # 分支只调本回调——共享处理到不了。对话框可能遮挡追踪面板
+        # 区域，直接点绿字会点到对话框上（实测）——须先屏幕中间点击
+        # 关闭，再让 track_task 重新截帧点击（旧帧已失效）
+        if any(_norm_dialog_present(items, t) for t in DIALOG_LOSE_TEXTS):
+            matched = [t for t in DIALOG_LOSE_TEXTS if _norm_dialog_present(items, t)]
+            log(f"[客栈] 检测到「你输了/平局」对话（命中 {matched}），先关闭对话框", "SYS")
+            _click_screen_center(win, times=1)
+            time.sleep(0.3)  # 等待对话框关闭
+            # 诊断：转储关闭后的对话框区域文案与追踪面板标题（复现排查用）
+            try:
+                img2 = win.capture(force_activate=False)
+                if img2 is not None:
+                    dlg, _ = game_map.ocr_regions(img2, (task_tracker.DIALOG_REGION,))
+                    dlg_txt = " | ".join(t for t, _, s in dlg if s >= 0.55)
+                    if len(dlg_txt) > 80:
+                        dlg_txt = dlg_txt[:80] + "…"
+                    titles = [t["title"] for t in task_tracker.read_tasks(win)]
+                    log(f"[客栈] 关闭后状态: 对话框={dlg_txt or '(无)'}；面板标题="
+                        f"{' / '.join(titles) if titles else '(无标题行)'}", "SYS")
+            except Exception:
+                pass
+            ok3, info3 = task_tracker.track_task(win, TASK_TITLE,
+                                                 green_order=GREEN_CLICK_ORDER,
+                                                 green_picker=_pick_order_green)
+            if ok3:
+                log("[客栈] 已重新点击任务绿字推进", "SYS")
+                return True
+            log(f"[客栈] 「你输了/平局」对话中任务绿字点击失败: {info3}", "WARN")
     return _handle_dialog_options(win, items, img_np)
+
+
+def _handle_gaodengshicai_give(win):
+    """给与面板已打开时完成高等食材给与（参考五环 _do_give）。
+
+    检索高等食材（含储物格切换）→ 点击选中 → 点击给与按钮完成。
+    物品未找到/按钮未出现时返回 True（面板仍在，下次轮询续接重试）。
+    返回是否已处理。
+    """
+    if game_map.find_template(win, GIVE_ICON) is None:
+        return False
+    item, desc = bag.find_item_with_slots(win, GAODENGSHICAI_ICON, "高等食材")
+    if item is None:
+        log(f"[客栈] {desc}", "WARN")
+        return True
+    log(f"[客栈] 找到高等食材（{desc}，匹配度 {item.confidence:.2f}），点击选中", "SYS")
+    human_click(win, item.x, item.y)
+    time.sleep(0.5)  # 等待选中
+    pt = game_map.find_template(win, GIVE_BTN_ICON)
+    if pt is None:
+        log("[客栈] 未找到给与按钮，等待下次轮询重试", "WARN")
+        return True
+    human_click(win, pt[0], pt[1])
+    log("[客栈] 已点击给与按钮，高等食材给与完成", "SYS")
+    return True
 
 
 def _click_green_option_fuzzy(win, items, img_np, text):
@@ -647,6 +744,7 @@ def _click_green_option_fuzzy(win, items, img_np, text):
                                                         prefer_underline=False)
                 human_click(win, cx, cy)
                 log(f"[客栈] 已点击对话框绿色选项「{txt}」@({cx},{cy})", "SYS")
+                move_away(win)  # 鼠标停留选项上会使其悬停变色，干扰后续绿字判定
                 return True
     return False
 
@@ -688,6 +786,7 @@ def _click_green_option_fallback(win, items, img_np, qtxt):
     cy = y0 + y + h // 2
     human_click(win, cx, cy)
     log(f"[客栈] 选项「{qtxt}」OCR 不可识别，按问题行下方绿字块点击 @({cx},{cy})", "SYS")
+    move_away(win)  # 鼠标停留选项上会使其悬停变色，干扰后续绿字判定
     return True
 
 
@@ -710,6 +809,7 @@ def _handle_dialog_options(win, items, img_np):
             return True
     for dtxt in DIALOG_SKIP_TEXTS:
         if _norm_dialog_present(items, dtxt):
+            # 命中即固定连点推进（多屏对话无需枚举后续文案）
             _click_screen_center(win)
             return True
     return False
@@ -728,22 +828,32 @@ def _claim_task(win, pt):
     """
     human_click(win, pt[0], pt[1])
     log(f"[客栈] 已点击掌柜 @({pt[0]},{pt[1]})", "SYS")
+    # 每轮询：截图 1 次 + 限对话框区域 OCR（全帧 ~930ms → 区域 ~100-170ms，
+    # 实测点击掌柜→点击「接取客栈任务」间隔 6s+，其中每轮 ~2.9s 全耗在
+    # has_task 前置检查与全帧 OCR）；has_task（追踪区 OCR ~0.9s）限频到
+    # 每 4 轮与点击后——对话框出现前任务不可能已进追踪
     deadline = time.time() + CLAIM_CHAIN_TIMEOUT
+    polls = 0
     while time.time() < deadline:
-        if _has_task(win):
-            return True, "已领取客栈任务"
         img = win.capture(force_activate=False)
         if img is None:
-            time.sleep(0.5)
+            time.sleep(0.3)
             continue
-        items, img_np = game_map.ocr_image(img)
+        items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
         if _norm_dialog_present(items, DAILY_LIMIT_TEXT):
             return False, DAILY_LIMIT_INFO
         # 接取选项优先；未出现时处理任务对话（两屏顺序不定，逐屏推进）
-        handled = _click_green_option_once(win, items, img_np, DIALOG_OPTION_LINGQU)
+        handled = _click_green_option_once(win, items, img_np, DIALOG_OPTION_LINGQU, prefix="客栈")
         if not handled:
             _handle_dialog_options(win, items, img_np)
-        time.sleep(1.0)
+        polls += 1
+        if handled or polls % 4 == 0:
+            # 点击后立即校验；未点击时限频校验（防空转）
+            if _has_task(win):
+                return True, "已领取客栈任务"
+        time.sleep(0.3)
+    if _has_task(win):
+        return True, "已领取客栈任务"
     return False, f"点击掌柜后未领取到客栈任务（对话链超时 {CLAIM_CHAIN_TIMEOUT}s）"
 
 
@@ -817,7 +927,7 @@ def run_cycle(win):
     return ("done", info) if ok else ("fail", info)
 
 
-def run_loop(win, cycle_interval=3.0):
+def run_loop(win, cycle_interval=1.0):
     """客栈主循环：跟踪完成的任务 → 回去继续领取 → 往复执行。
 
     结束条件（满足其一即返回结束原因，任务随之停止）：

@@ -120,3 +120,12 @@ def human_click(win, x: int, y: int, button: str = "primary"):
     sy = win.rect.top + y + random.randint(-2, 2)
     human_move(sx, sy)
     Mouse.click(button=button)
+
+
+def move_away(win):
+    """点击对话框选项后把鼠标移走（窗口左下角中性区域）。
+
+    鼠标停留在选项上会使选项进入悬停变色状态，干扰后续的绿字判定
+    （选项变色后绿色占比下降，二次 OCR 会漏判/误判——用户实测）。
+    """
+    human_move(win.rect.left + 20, win.rect.top + win.rect.height - 20)
