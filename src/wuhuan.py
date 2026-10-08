@@ -304,14 +304,20 @@ def _claim_task(win):
             return False, DAILY_LIMIT_INFO
         if _click_green_option(win, items, img_np, CLAIM_DIALOG_OPTION):
             claimed = True
-            # 活力值不足/今日两次已满提示在点击领取选项之后出现：重新截帧并轮询几秒
+            # 活力值不足/今日两次已满提示在点击领取选项之后出现：重新截帧并轮询几秒。
+            # 任务出现在追踪面板 = 领取成功，限次/活力对话框不会再出现 → 提前退出
+            # （否则成功路径白白等满 4s 窗口，日志实测 ~5s 空档）；OCR 限对话框区域
+            # （全帧 ~930ms vs 区域 ~100-170ms），绿色选项点击依赖的全图坐标与
+            # 像素判定由 ocr_regions 的全图黑底 img_np 保证。
             vdeadline = time.time() + 4
             while time.time() < vdeadline:
+                if task_tracker.has_task(win, WUHUAN_TITLE):
+                    break
                 img = win.capture(force_activate=False)
                 if img is None:
                     time.sleep(0.5)
                     continue
-                items, img_np = game_map.ocr_image(img)
+                items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
                 if _dialog_text_present(items, DAILY_LIMIT_TEXT):
                     log(f"[五环] 检测到「{DAILY_LIMIT_TEXT}」", "SYS")
                     return False, DAILY_LIMIT_INFO
