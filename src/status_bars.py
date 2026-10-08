@@ -40,6 +40,27 @@ def last_summary():
     return _last_bars
 
 
+def beast_below_threshold(win):
+    """召唤兽红条/蓝条是否低于阈值（自动巫医的前置条件）。
+
+    只读检查（不触发右键回满）；空条（召唤兽未出战）返回 False——
+    无召唤兽可医。阈值取通用设置的血蓝阈值（与 check_all_bars 一致）。
+    """
+    thresholds = load_thresholds()
+    img = win.capture(force_activate=False)
+    if img is None:
+        return False
+    img_np = np.asarray(img)
+    for label, rect, mode, key in BARS:
+        if key not in ("beast_hp", "beast_mp"):
+            continue
+        threshold = thresholds.get(key, DEFAULT_THRESHOLD)
+        pct, low = _scan_bar(img_np, rect, mode, threshold)
+        if pct is not None and low:
+            return True
+    return False
+
+
 def _is_fill_pixel(c, color_mode):
     """判断像素是否属于填充色系（红/蓝）。"""
     red, green, blue = int(c[0]), int(c[1]), int(c[2])

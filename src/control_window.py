@@ -251,6 +251,46 @@ def save_xiuluo_check_team(on):
     return {"status": "success"}
 
 
+# ---- 修罗自动巫医（UI 开关+间隔，KeyValue 持久化；默认开启、每 5 轮
+#      一次——领取任务后召唤兽血蓝低于阈值时前往巫医 NPC 医治） ----
+_XIULUO_AUTO_WUYI_KEY = "xiuluo_auto_wuyi"
+_XIULUO_WUYI_INTERVAL_KEY = "xiuluo_wuyi_interval"
+_WUYI_INTERVAL_MIN = 1
+_WUYI_INTERVAL_MAX = 90
+
+
+def load_xiuluo_auto_wuyi():
+    """读取修罗自动巫医开关（首次默认开启）。"""
+    return bool(KeyValue.get(_XIULUO_AUTO_WUYI_KEY, True))
+
+
+def save_xiuluo_auto_wuyi(on):
+    """保存修罗自动巫医开关，返回操作结果。"""
+    KeyValue.save(_XIULUO_AUTO_WUYI_KEY, bool(on))
+    return {"status": "success"}
+
+
+def load_xiuluo_wuyi_interval():
+    """读取修罗自动巫医间隔（轮，首次默认 5）。"""
+    try:
+        value = int(KeyValue.get(_XIULUO_WUYI_INTERVAL_KEY, 5))
+    except (TypeError, ValueError):
+        value = 5
+    return max(_WUYI_INTERVAL_MIN, min(_WUYI_INTERVAL_MAX, value))
+
+
+def save_xiuluo_wuyi_interval(value):
+    """保存修罗自动巫医间隔（1~90 轮），返回操作结果。"""
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        return {"status": "error", "msg": "INVALID_INTERVAL"}
+    if not (_WUYI_INTERVAL_MIN <= value <= _WUYI_INTERVAL_MAX):
+        return {"status": "error", "msg": "OUT_OF_RANGE"}
+    KeyValue.save(_XIULUO_WUYI_INTERVAL_KEY, value)
+    return {"status": "success", "interval": value}
+
+
 # ---- 战斗设置（人物/召唤兽默认战斗动作，UI 单选项，KeyValue 持久化） ----
 # 人物：技能面板 3 行 × 5 列共 15 格 + 攻击/防御/捕捉/逃跑/无
 CHAR_BATTLE_ACTIONS = ([f"技能{r}-{c}" for r in range(1, 4) for c in range(1, 6)]
@@ -327,6 +367,8 @@ class ControlWindow(WebWindow):
         self.expose(self.save_xiuluo_races)
         self.expose(self.save_xiuluo_hezi)
         self.expose(self.save_xiuluo_check_team)
+        self.expose(self.save_xiuluo_auto_wuyi)
+        self.expose(self.save_xiuluo_wuyi_interval)
         self.expose(self.save_wubei_min)
         self.expose(self.save_wubei_hezi)
         self.expose(self.save_debug_overlay)
@@ -336,6 +378,7 @@ class ControlWindow(WebWindow):
         self.expose(self.reset_task)
         self.expose(self.verify_xiuluo_return)
         self.expose(self.verify_xiuluo_claim)
+        self.expose(self.verify_xiuluo_wuyi)
         # 任务状态/日志回流接线：TaskManager → 主窗口状态 + 日志窗口
         self._tm.set_callbacks(on_status=self.sync_status, on_log=self.add_logs)
 
@@ -351,6 +394,8 @@ class ControlWindow(WebWindow):
                 "xiuluo": load_xiuluo_settings(),
                 "xiuluo_hezi": load_xiuluo_hezi(),
                 "xiuluo_check_team": load_xiuluo_check_team(),
+                "xiuluo_auto_wuyi": load_xiuluo_auto_wuyi(),
+                "xiuluo_wuyi_interval": load_xiuluo_wuyi_interval(),
                 "wubei": {"min_members": load_wubei_min(),
                           "hezi": load_wubei_hezi()},
                 "debug_overlay": load_debug_overlay()}
@@ -390,6 +435,14 @@ class ControlWindow(WebWindow):
     def save_xiuluo_check_team(self, on):
         """修罗设置变更：保存检查队伍开关状态。"""
         return save_xiuluo_check_team(on)
+
+    def save_xiuluo_auto_wuyi(self, on):
+        """修罗设置变更：保存自动巫医开关状态。"""
+        return save_xiuluo_auto_wuyi(on)
+
+    def save_xiuluo_wuyi_interval(self, value):
+        """修罗设置变更：保存自动巫医间隔（轮）。"""
+        return save_xiuluo_wuyi_interval(value)
 
     def save_wubei_min(self, value):
         """五倍设置变更：保存最少人数。"""
@@ -473,6 +526,51 @@ class ControlWindow(WebWindow):
                          daemon=True, name="xiuluo-claim-verify").start()
         return {"status": "success",
                 "msg": "验证已开始：走位 → 领取按钮 → 对话框选项（悬停不点击）→ 关对话框"}
+
+    def verify_xiuluo_wuyi(self):
+        """高级设置-修罗巫医验证按钮：与自动巫医同一链路（条件门槛跳过、
+        血蓝状态仅报告），NPC 点击前悬停 2s；对话框处理复用战斗线程
+        逻辑（点击 NPC 后由战斗线程点「全部医治和修复」）。
+        """
+        if self._tm.is_running():
+            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if self._verifying:
+            return {"status": "error", "msg": "验证进行中，请稍候"}
+        win = game.find_main_window()
+        if win is None:
+            return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
+        if not _game_window_clickable(win):
+            return {"status": "error", "msg": "游戏窗口被其他窗口遮挡，请将游戏窗口置于前台后再验证"}
+        self._verifying = True
+        threading.Thread(target=self._run_wuyi_verify, args=(win,),
+                         daemon=True, name="xiuluo-wuyi-verify").start()
+        return {"status": "success",
+                "msg": "验证已开始：血蓝检查 → 走位到巫医 → NPC 悬停 2s → 点击 → 对话框处理"}
+
+    def _run_wuyi_verify(self, win):
+        """巫医验证线程体：跑自动巫医链路（悬停代替直接点击），结果回推页面与日志窗。"""
+        from . import xiuluo  # 延迟导入：xiuluo 反向导入本模块（避免循环）
+        try:
+            self.add_logs(["[验证] 开始验证修罗巫医（走位 → NPC 悬停 → 点击 → 战斗线程处理对话框）..."])
+            ok, info = xiuluo.verify_wuyi_flow(win)
+        except Exception as e:
+            ok, info = False, f"验证异常: {e}"
+        try:
+            self.add_logs([f"[验证] 结果: {info}"])
+        except Exception:
+            pass
+        self._notify_wuyi_verify_result(ok, info)
+        self._verifying = False
+
+    def _notify_wuyi_verify_result(self, ok, info):
+        """巫医验证结果回推页面（高级设置-巫医验证行的结果文案）。"""
+        if self.webview_instance:
+            try:
+                ok_js = "true" if ok else "false"
+                self.webview_instance.evaluate_js(
+                    f"if(window.onWuyiVerifyResult){{window.onWuyiVerifyResult({ok_js}, {json.dumps(info)});}}")
+            except Exception:
+                pass
 
     def _run_claim_verify(self, win):
         """领取验证线程体：跑修罗领取链路（选项悬停代替点击），结果回推页面与日志窗。"""

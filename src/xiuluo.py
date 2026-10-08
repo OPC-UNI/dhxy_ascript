@@ -46,9 +46,13 @@ from . import map as game_map  # 地图操作（世界地图/小地图/位置识
 from . import team  # 组队检查（领取前队伍人数检查，仅队长生效）
 from . import debug_overlay  # 调试信息悬浮层（任务进度更新）
 from . import bag  # 背包操作（打开/关闭背包、任务储物格）
+from . import status_bars  # 血蓝检测（自动巫医前置条件）
 from .battle import is_in_battle, is_in_battle_frame  # 战斗状态判定（统一在 battle.py 中实现）
+from .battle import WUYI_DIALOG_TEXTS  # 巫医对话框文案（自动巫医等待判定）
 from .control_window import (load_task_counts, load_xiuluo_settings,
-                             load_xiuluo_check_team)  # 任务次数上限/修罗设置/检查队伍开关
+                             load_xiuluo_check_team,
+                             load_xiuluo_auto_wuyi,
+                             load_xiuluo_wuyi_interval)  # 任务次数上限/修罗设置/自动巫医
 from .xuanshu import (follow_task,  # 任务跟踪（绿字点击寻路/战斗跳过/附加对话处理）
                       _dialog_text_present)  # 对话框文案检测（复用玄枢轶闻）
 
@@ -68,9 +72,10 @@ TASK_FALLBACK_TEXTS = ("消灭修罗",)  # has_task 兜底匹配串：标题整�
 # ---- 领取任务（灵兽村，用户实测） ----
 LINGSHOUCUN = "灵兽村"                        # 位置识别地名（精确匹配）
 WORLD_MAP_LINGSHOUCUN_ICON = "shijie_lingshoucun.png"  # 世界地图灵兽村图标（14.png 实测素材）
-LINGQU_ICON = "liuluo_lingqu.png"             # 修罗领取任务按钮（15.png 实测素材）
-CLAIM_SPOT = (118, 88)                        # 领取点地图坐标（用户实测 111,90 附近）
-CLAIM_NEAR_TOLERANCE = 8                     # 已在领取点附近判定容差（用户步 1.1）
+LINGQU_ICON = "xiuluo_lingqu.png"             # 修罗领取任务按钮（15.png 实测素材）
+LINGSHOUCUN_SHIZHE_ICON = "xiuluo_lingshoucunshizhe.png"  # 灵兽村使者 NPC（识别到也可点击领取）
+CLAIM_SPOT = (111, 90)                        # 领取点地图坐标（用户实测 111,90 附近）
+CLAIM_NEAR_TOLERANCE = 15                     # 已在领取点附近判定容差（用户步 1.1）
 WALK_ARRIVE_TOLERANCE = 5                     # 寻路到达判定容差（用户步 1.2，更严格：
                                               # 走动中识图点击容易点不到）
 LINGSHOU_MAP_POS = (627, 396)                 # 灵兽村小地图上领取点位置的点击点（窗口相对坐标，用户实测）
@@ -83,6 +88,18 @@ SCREEN_CENTER_POS = (689, 415)                # 屏幕中间（游戏窗口中�
 CLAIM_ARRIVE_TIMEOUT = 90                     # 寻路到领取点的超时
 CLAIM_BUTTON_TIMEOUT = 20                     # 到达后等待领取任务按钮出现的超时
 CLAIM_DIALOG_TIMEOUT = 15                     # 领取对话框处理超时
+CLAIM_DIALOG_APPEAR_TIMEOUT = 4               # 点击领取入口后等待对话框出现的短窗口
+                                              # （正常 ~1.5s 即出）：超时未见选项判定
+                                              # 坐标不对，走小地图重定位兜底
+
+# ---- 自动巫医（用户流程：领取后每 N 轮一次，召唤兽血蓝低于阈值时医治） ----
+WUYI_NPC_ICON = "xiuluo_lingshoucunwuyi.png"  # 巫医 NPC（点击打开医治对话框）
+WUYI_SPOT = (115, 72)                         # 巫医 NPC 位置（用户实测）
+WUYI_MAP_POS = (610, 442)                     # 小地图上巫医位置的点击点（窗口相对坐标，用户实测）
+WUYI_NEAR_TOLERANCE = 11                       # 巫医附近的判定容差（严格：小距离移动，
+                                              # 宽松容差会漏判偏移——用户确认）
+WUYI_ARRIVE_TIMEOUT = 60                      # 寻路到巫医处的超时
+WUYI_HANDLE_TIMEOUT = 15                      # 点击 NPC 后等待战斗线程处理对话框的超时
 CLAIM_COUNT_TIMEOUT = 1.2                     # 等待完成次数对话框出现的超时（尽力而为）：
                                               # 实测该对话框从未出现，长窗口每次领取固定空转
 CLAIM_VERIFY_WAIT = 5                         # 领取后任务进入追踪的正常轮询时长（秒）：
@@ -134,6 +151,127 @@ STUB_INFO = "流程待实现"
 _CLAIM_COUNT_RE = re.compile(re.escape(CLAIM_COUNT_TEXT) + r"\s*[:：]?\s*(\d+)")
 
 
+def _near_wuyi_spot(pos):
+    """判断位置是否在巫医 NPC (115,72) 附近（严格容差 ±5）。
+
+    小距离移动场景：附近定义必须严格，宽松容差会漏判偏移（用户确认）。
+    """
+    if pos is None:
+        return False
+    return (pos[0].strip() == LINGSHOUCUN
+            and abs(pos[1] - WUYI_SPOT[0]) <= WUYI_NEAR_TOLERANCE
+            and abs(pos[2] - WUYI_SPOT[1]) <= WUYI_NEAR_TOLERANCE)
+
+
+def _run_wuyi_chain(win, hover_before_click=False, skip_condition=False):
+    """自动巫医主链路（自动流程与验证共用）：召唤兽血/蓝低于阈值时医治。
+
+    1. 巫医条件：召唤兽红条/蓝条低于阈值（通用设置血蓝阈值；空条=
+       未出战，无需医治）——不满足直接返回成功（无需处理）；
+       skip_condition=True 时跳过门槛（验证模式：血蓝状态仅报告）
+    2. 位置检查：是否在灵兽村 (115,72) 附近（严格容差 ±5）
+    3. 不在 → 打开小地图点击 (610,442) 寻路 → 关闭地图（顺带背包）
+    4. 点击巫医 NPC（xiuluo_lingshoucunwuyi.png）打开医治对话框，
+       等待战斗线程点击「全部医治和修复」（battle.py 已有完整逻辑，
+       无需重复实现——对话框出现→消失即处理完成）；
+       hover_before_click=True 时 NPC 点击前悬停 2s（验证观察用）
+
+    到达/点击的最终真信号是对话框出现：坐标 OCR 不可靠（实测走完
+    站在 NPC 旁位置显示缺失，坐标判定卡死到达循环），NPC 模板远距离
+    也会命中（使者教训）——点击后对话框未出现判定距离不够，小地图
+    再走一次重试（与领取入口同款兜底）。
+    返回 (是否成功, 描述)。
+    """
+    if is_in_battle(win):
+        return False, "战斗中，跳过自动巫医"
+    # 1. 巫医条件（只读检查，不触发右键回满）
+    low = status_bars.beast_below_threshold(win)
+    if not skip_condition and not low:
+        return True, "召唤兽血蓝正常，无需巫医"
+    log(f"[修罗][巫医] 召唤兽血蓝"
+        f"{'低于阈值，执行自动巫医' if low else '正常（验证模式不要求条件满足）'}", "SYS")
+    # 2. 位置检查（严格容差：小距离移动宽松容差会漏判偏移；坐标
+    #    读不到按不在处理——走去巫医无害）
+    pos = game_map.read_map_position(win)
+    if pos is None:
+        pos = game_map.read_position_with_recovery(win)
+    need_walk = not _near_wuyi_spot(pos)
+    # 3~5. 走位 → NPC 点击 → 对话框；对话框未出现判定距离不够，
+    #      小地图再走一次重试（最多两次点击尝试）
+    for attempt in (1, 2):
+        if attempt == 2 or need_walk:
+            ok, info = game_map.open_mini_map(win)
+            if not ok:
+                return False, info
+            human_click(win, WUYI_MAP_POS[0], WUYI_MAP_POS[1])
+            log("[修罗][巫医] 已点击小地图巫医位置，自动寻路中", "SYS")
+            time.sleep(1.0)
+            game_map.close_maps(win)
+        # 等待 NPC 模板可见（到达直接信号，不依赖坐标）
+        pt = None
+        deadline = time.time() + WUYI_ARRIVE_TIMEOUT
+        while time.time() < deadline:
+            if is_in_battle(win):
+                time.sleep(2.0)
+                continue
+            pt = game_map.find_template(win, WUYI_NPC_ICON)
+            if pt is not None:
+                break
+            time.sleep(2.0)
+        if pt is None:
+            if attempt == 1:
+                log("[修罗][巫医] 未检测到巫医 NPC，小地图寻路后重试", "WARN")
+                need_walk = True
+                continue
+            return False, f"未找到巫医 NPC（待补充 {WUYI_NPC_ICON} 模板或位置有误）"
+        if hover_before_click:
+            human_move(win.rect.left + pt[0], win.rect.top + pt[1])
+            log(f"[修罗][验证] 已移动鼠标到巫医 NPC ({pt[0]}, {pt[1]})，"
+                f"悬停 {VERIFY_HOVER_SECONDS:.0f} 秒...", "SYS")
+            time.sleep(VERIFY_HOVER_SECONDS)
+        human_click(win, pt[0], pt[1])
+        log(f"[修罗][巫医] 已点击巫医 NPC ({pt[0]}, {pt[1]})，等待医治对话框处理", "SYS")
+        # 等待对话框出现并处理（出现→消失）
+        deadline = time.time() + WUYI_HANDLE_TIMEOUT
+        appeared = False
+        while time.time() < deadline:
+            img = win.capture(force_activate=False)
+            if img is None:
+                time.sleep(0.5)
+                continue
+            items, _ = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
+            # 与 battle.py 的巫医判定同款调用（内部模糊匹配，无需预规范化）
+            has_dialog = any(_dialog_text_present(items, t) for t in WUYI_DIALOG_TEXTS)
+            if has_dialog:
+                appeared = True
+                time.sleep(1.0)
+                continue
+            if appeared:
+                log("[修罗][巫医] 医治对话框已处理完毕", "SYS")
+                return True, "自动巫医完成"
+            time.sleep(0.5)
+        if appeared:
+            return True, "医治对话框已出现（战斗线程将继续处理）"
+        # 对话框未出现：距离不够 → 走一次再重试
+        log("[修罗][巫医] 点击后未出现对话框（距离不够），小地图重定位后重试", "WARN")
+        need_walk = True
+    return False, "点击巫医后未出现医治对话框（重定位后仍无）"
+
+
+def _auto_wuyi(win):
+    """自动巫医（用户流程，通用设置开关+间隔门控，见 _run_wuyi_chain）。"""
+    return _run_wuyi_chain(win)
+
+
+def verify_wuyi_flow(win):
+    """验证自动巫医流程（高级设置-验证按钮，主进程调用）。
+
+    与 _auto_wuyi 同一链路，区别：条件不满足也继续执行（血蓝状态仅
+    报告），NPC 点击前悬停 2s 供人工确认。返回 (是否成功, 描述)。
+    """
+    return _run_wuyi_chain(win, hover_before_click=True, skip_condition=True)
+
+
 def _near_claim_spot(pos, tolerance):
     """判断位置是否在灵兽村领取点附近（地名精确匹配，容差抗 OCR 噪声）。"""
     if pos is None:
@@ -143,10 +281,23 @@ def _near_claim_spot(pos, tolerance):
             and abs(pos[2] - CLAIM_SPOT[1]) <= tolerance)
 
 
-def _wait_template(win, icon, timeout):
-    """等待模板出现（战斗中跳过等待）；返回是否出现。
+def _find_claim_entry(win):
+    """查找领取入口（领取任务按钮或灵兽村使者），返回 (pt, 来源) 或 (None, None)。
 
-    单帧判定：战斗状态与模板匹配共用一帧（原先每轮询截 2 次窗）。
+    两个入口识别到任一即可点击领取（用户确认：使者 NPC 也可点击）。
+    """
+    for icon, label in ((LINGQU_ICON, "领取任务按钮"),
+                        (LINGSHOUCUN_SHIZHE_ICON, "灵兽村使者")):
+        pt = game_map.find_template(win, icon)
+        if pt is not None:
+            return pt, label
+    return None, None
+
+
+def _wait_claim_entry(win, timeout):
+    """等待领取入口出现（按钮或使者），返回 (pt, 来源) 或 (None, None)。
+
+    战斗中跳过等待；每轮询只截一帧，双模板批量匹配共用一帧。
     """
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -157,10 +308,14 @@ def _wait_template(win, icon, timeout):
         if is_in_battle_frame(img):
             time.sleep(2.0)
             continue
-        if game_map.find_template_in(img, icon) is not None:
-            return True
+        frame = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
+        found = game_map.match_frame_multi(frame, (LINGQU_ICON, LINGSHOUCUN_SHIZHE_ICON))
+        for icon, label in ((LINGQU_ICON, "领取任务按钮"),
+                            (LINGSHOUCUN_SHIZHE_ICON, "灵兽村使者")):
+            if found[icon] is not None:
+                return found[icon], label
         time.sleep(1.5)
-    return False
+    return None, None
 
 
 def _find_claim_option(items, img_np):
@@ -257,7 +412,9 @@ def _walk_to_claim_spot(win):
     """
     if is_in_battle(win):
         return False, "战斗中，跳过本轮寻路"
-    # 直接信号：领取按钮可见 = 已在领取点附近（免位置 OCR，规避坐标误读）
+    # 直接信号：领取按钮可见 = 已在领取点附近（免位置 OCR，规避坐标
+    # 误读）。注意到达判据只认按钮——使者模板远距离也会命中（实测
+    # 距离过远点击不出现对话框），按钮只在可点击范围内出现
     if game_map.find_template(win, LINGQU_ICON) is not None:
         return True, "已在领取点附近（领取按钮可见）"
     # 位置读取：失败时等待传送加载恢复（最多 8s，期间不按 Alt+C）
@@ -308,6 +465,73 @@ def _walk_to_claim_spot(win):
     return False, f"寻路到领取点超时（未到达灵兽村 {CLAIM_SPOT[0]},{CLAIM_SPOT[1]} 附近）"
 
 
+def _click_entry_ensuring_dialog(win, log_tag="[修罗]", hover_before_click=False):
+    """点击领取入口（按钮或使者）并确保对话框出现；未出现判定坐标不对：
+    打开小地图点击领取点坐标重定位后重试一次（用户确认的兜底路径）。
+
+    hover_before_click：点击前悬停入口（验证模式观察用）。
+    返回 (是否成功, 描述, 来源, 坐标)；成功时对话框已打开（选项可见）。
+    """
+    dialog_seen = False
+    appear_timeout = CLAIM_DIALOG_APPEAR_TIMEOUT
+    src2 = pt2 = None
+    for attempt in (1, 2):
+        pt, src = _wait_claim_entry(win, CLAIM_BUTTON_TIMEOUT)
+        if pt is None:
+            return False, "到达后未出现领取任务按钮/灵兽村使者", None, None
+        pt2, src2 = _find_claim_entry(win)
+        if pt2 is None:
+            return False, "领取入口出现后又消失，未点击", None, None
+        if hover_before_click:
+            human_move(win.rect.left + pt2[0], win.rect.top + pt2[1])
+            log(f"{log_tag} 已移动鼠标到{src2} ({pt2[0]}, {pt2[1]})，"
+                f"悬停 {VERIFY_HOVER_SECONDS:.0f} 秒...", "SYS")
+            time.sleep(VERIFY_HOVER_SECONDS)
+        human_click(win, pt2[0], pt2[1])
+        log(f"{log_tag} 已点击{src2}（领取）", "SYS")
+        # 等待对话框出现：轮询选项（正常 ~1.5s 即出）；首次尝试短窗口，
+        # 重定位后的第二次尝试用完整窗口
+        deadline = time.time() + appear_timeout
+        while time.time() < deadline:
+            img = win.capture(force_activate=False)
+            if img is None:
+                time.sleep(0.3)
+                continue
+            items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
+            if _handle_team_warning(win, items, img_np):
+                return False, "队伍数量小于 3，无法领取（已关闭提示对话框）", None, None
+            if _find_claim_option(items, img_np) is not None:
+                dialog_seen = True
+                break
+            time.sleep(0.3)
+        if dialog_seen:
+            break
+        if attempt == 1:
+            # 对话框未出现：坐标不对 → 打开小地图点击领取点坐标重定位
+            log(f"{log_tag} 点击后未出现对话框（坐标不对），打开小地图重定位", "WARN")
+            ok, info = game_map.open_mini_map(win)
+            if not ok:
+                return False, info, None, None
+            human_click(win, LINGSHOU_MAP_POS[0], LINGSHOU_MAP_POS[1])
+            log(f"{log_tag} 已点击灵兽村小地图领取点位置，重新寻路中", "SYS")
+            time.sleep(1.0)
+            game_map.close_maps(win)
+            # 等待重定位到达（只认领取按钮——按钮才代表进入可点击范围，
+            # 使者模板远距离也会命中，不能作到达判据）
+            deadline = time.time() + CLAIM_ARRIVE_TIMEOUT
+            while time.time() < deadline:
+                if is_in_battle(win):
+                    time.sleep(2.0)
+                    continue
+                if game_map.find_template(win, LINGQU_ICON) is not None:
+                    break
+                time.sleep(2.0)
+            appear_timeout = CLAIM_DIALOG_TIMEOUT
+    if not dialog_seen:
+        return False, "点击领取入口后对话框始终未出现（小地图重定位后仍无）", src2, pt2
+    return True, f"已点击{src2}", src2, pt2
+
+
 def _claim_task(win):
     """在领取点附近领取修罗任务（前提：已走到领取点附近）。返回 (是否成功, 描述)。
 
@@ -318,14 +542,12 @@ def _claim_task(win):
     """
     if is_in_battle(win):
         return False, "战斗中，跳过本轮领取"
-    # 识图领取任务按钮并点击
-    if not _wait_template(win, LINGQU_ICON, CLAIM_BUTTON_TIMEOUT):
-        return False, "到达后未出现领取任务按钮"
-    pt = game_map.find_template(win, LINGQU_ICON)
-    if pt is None:
-        return False, "领取任务按钮出现后又消失，未点击"
-    human_click(win, pt[0], pt[1])
-    log("[修罗] 已点击领取任务", "SYS")
+    # 识图领取入口（按钮或灵兽村使者）并点击；点击后对话框未出现
+    # （短窗口内选项不可见）判定坐标不对：打开小地图点击领取点坐标
+    # 重定位后重试一次（用户确认的兜底路径）
+    ok, info, src2, pt2 = _click_entry_ensuring_dialog(win)
+    if not ok:
+        return False, info
     # 对话框：点绿色选项「闲来无事，要我帮忙吗」完成领取
     # 每轮询：截图 1 次 + 限对话框区域 OCR（全帧 ~930ms → 区域 ~100-170ms，
     # 绿色选项点击依赖的全图坐标/像素判定由 ocr_regions 全图黑底 img_np
@@ -681,18 +903,12 @@ def verify_claim_flow(win):
     ok, info = _walk_to_claim_spot(win)
     if not ok:
         return False, info
-    # 2. 领取按钮：等待出现 → 悬停 2s → 点击打开对话框
-    if not _wait_template(win, LINGQU_ICON, CLAIM_BUTTON_TIMEOUT):
-        return False, "未出现领取任务按钮"
-    pt = game_map.find_template(win, LINGQU_ICON)
-    if pt is None:
-        return False, "领取任务按钮出现后又消失"
-    human_move(win.rect.left + pt[0], win.rect.top + pt[1])
-    log(f"[修罗][验证] 已移动鼠标到领取任务按钮 ({pt[0]}, {pt[1]})，"
-        f"悬停 {VERIFY_HOVER_SECONDS:.0f} 秒...", "SYS")
-    time.sleep(VERIFY_HOVER_SECONDS)
-    human_click(win, pt[0], pt[1])
-    log("[修罗][验证] 已点击领取任务按钮，等待对话框...", "SYS")
+    # 2. 领取入口：悬停 2s → 点击打开对话框；点击后对话框未出现则
+    #    小地图重定位后重试（与领取流程共用同一兜底助手）
+    ok, info, src2, pt2 = _click_entry_ensuring_dialog(
+        win, log_tag="[修罗][验证]", hover_before_click=True)
+    if not ok:
+        return False, info
     # 3. 识别绿色选项：仅移动鼠标悬停，不点击（点击即领取）
     deadline = time.time() + CLAIM_DIALOG_TIMEOUT
     while time.time() < deadline:
@@ -713,7 +929,7 @@ def verify_claim_flow(win):
             # 4. 点击屏幕中间关闭对话框（不领取）
             human_click(win, SCREEN_CENTER_POS[0], SCREEN_CENTER_POS[1])
             log("[修罗][验证] 已点击屏幕中间关闭对话框（未领取）", "SYS")
-            return True, f"验证通过：领取按钮 ({pt[0]}, {pt[1]})，选项「{txt}」({cx}, {cy})"
+            return True, f"验证通过：{src2} ({pt2[0]}, {pt2[1]})，选项「{txt}」({cx}, {cy})"
         time.sleep(0.3)
     # 对话框未出现或选项未识别：点击屏幕中间清理后失败
     human_click(win, SCREEN_CENTER_POS[0], SCREEN_CENTER_POS[1])
@@ -755,6 +971,12 @@ def run_loop(win, cycle_interval=1.0):
     # 检查队伍开关（通用设置-修罗设置，默认关闭）：关闭时领取前跳过
     # 全部队伍检查（非队长判定/人数监控），直接走位领取
     check_team = load_xiuluo_check_team()
+    # 自动巫医（通用设置开关，默认开、每 5 轮一次）：领取任务后召唤兽
+    # 血蓝低于阈值时前往巫医 NPC 医治（对话框处理复用战斗线程逻辑）
+    auto_wuyi = load_xiuluo_auto_wuyi()
+    wuyi_interval = max(1, load_xiuluo_wuyi_interval())
+    log(f"[修罗] 自动巫医: {'开' if auto_wuyi else '关'}"
+        + (f"（每 {wuyi_interval} 轮）" if auto_wuyi else ""), "SYS")
     log(f"[修罗] 检查队伍: {'开（领取前检查队伍）' if check_team else '关（跳过队伍检查，直接领取）'}", "SYS")
 
     done = 0
@@ -824,6 +1046,11 @@ def run_loop(win, cycle_interval=1.0):
             log(f"[修罗] {info}", "SYS")
             _team_checked = True  # 首次领取成功：后续轮次跳过队伍检查
             _fight_via_kanda = False  # 新一轮开始：重置「看打！」进入战斗标记
+            # 自动巫医：每 N 轮领取后检查一次召唤兽血蓝，低于阈值则
+            # 前往巫医 NPC 医治（失败仅记日志，不阻断后续寻路）
+            if auto_wuyi and round_no % wuyi_interval == 0:
+                ok2, info2 = _auto_wuyi(win)
+                log(f"[修罗][巫医] {info2}", "SYS" if ok2 else "WARN")
         # 2~4. 寻路 / 对话开打 / 战斗：由任务跟踪统一驱动
         #     （寻路点击绿字自动进行，对话开打走附加对话处理，
         #      战斗由战斗监控线程自动操作、跟踪中自动跳过）

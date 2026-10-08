@@ -225,6 +225,18 @@
                     <span class="switch-track"></span>
                     <span>检查队伍（关闭后领取前跳过全部队伍检查，默认关闭）</span>
                 </label>
+                <label class="switch-row">
+                    <input type="checkbox" id="xiuluo-auto-wuyi">
+                    <span class="switch-track"></span>
+                    <span>自动巫医（领取后召唤兽血蓝低于阈值时医治，默认开启）</span>
+                </label>
+                <div class="group-row">
+                    <span class="group-label">巫医间隔</span>
+                    <button class="th-btn" onclick="xiuluoWuyiInterval(-1)">−</button>
+                    <span class="th-val" id="xiuluo-wuyi-interval">5</span>
+                    <button class="th-btn" onclick="xiuluoWuyiInterval(1)">＋</button>
+                    <span class="group-hint">轮（范围 1~90）</span>
+                </div>
                 <div class="group-row">
                     <span class="group-label">最少人数</span>
                     <button class="th-btn" onclick="xiuluoMin(-1)">−</button>
@@ -324,7 +336,11 @@
                     <button id="btn-verify-xiuluo-claim" class="btn" onclick="verifyXiuluoClaim()">验证修罗领取</button>
                     <span id="claim-verify-result"></span>
                 </div>
-                <div class="group-hint">与实际流程一致但都不改变任务状态：回程=悬停回城符不点击；领取=点击领取按钮开对话框、选项悬停 2 秒不点击、点屏幕中间关闭。任务运行中不可验证。</div>
+                <div class="verify-row">
+                    <button id="btn-verify-xiuluo-wuyi" class="btn" onclick="verifyXiuluoWuyi()">验证修罗巫医</button>
+                    <span id="wuyi-verify-result"></span>
+                </div>
+                <div class="group-hint">与实际流程一致但都不改变任务状态：回程=悬停回城符不点击；领取=点击领取按钮开对话框、选项悬停 2 秒不点击、点屏幕中间关闭；巫医=走位到 NPC、悬停 2 秒后点击打开对话框（医治选项由战斗线程处理）。任务运行中不可验证。</div>
             </div>
         </div>
     </div>
@@ -340,12 +356,16 @@
         const debugOverlay = document.getElementById('debug-overlay');
         const xiuluoHezi = document.getElementById('xiuluo-hezi');
         const xiuluoCheckTeam = document.getElementById('xiuluo-check-team');
+        const xiuluoAutoWuyi = document.getElementById('xiuluo-auto-wuyi');
+        const xiuluoWuyiIntervalEl = document.getElementById('xiuluo-wuyi-interval');
         const wubeiHezi = document.getElementById('wubei-hezi');
         const btnVerifyXiuluo = document.getElementById('btn-verify-xiuluo');
         const verifyResultEl = document.getElementById('verify-result');
         const btnVerifyXiuluoClaim = document.getElementById('btn-verify-xiuluo-claim');
         const claimVerifyResultEl = document.getElementById('claim-verify-result');
-        let verifying = false;  // 验证请求在途标记（防连点，回程/领取共用）
+        const btnVerifyXiuluoWuyi = document.getElementById('btn-verify-xiuluo-wuyi');
+        const wuyiVerifyResultEl = document.getElementById('wuyi-verify-result');
+        let verifying = false;  // 验证请求在途标记（防连点，回程/领取/巫医共用）
 
         // 战斗设置选项：人物 3 行 × 5 列技能 + 攻击/防御/捕捉/逃跑/无；召唤兽 5 技能 + 攻击/防御/逃跑/无
         const CHAR_BATTLE = [];
@@ -475,6 +495,10 @@
                     debugOverlay.checked = !!info.debug_overlay;
                     xiuluoHezi.checked = !!info.xiuluo_hezi;
                     xiuluoCheckTeam.checked = !!info.xiuluo_check_team;
+                    xiuluoAutoWuyi.checked = !!info.xiuluo_auto_wuyi;
+                    if (info.xiuluo_wuyi_interval) {
+                        xiuluoWuyiIntervalEl.innerText = info.xiuluo_wuyi_interval;
+                    }
                     wubeiHezi.checked = !!(info.wubei && info.wubei.hezi);
                     const ths = info.thresholds || {};
                     for (const key of ['char_hp', 'char_mp', 'beast_hp', 'beast_mp']) {
@@ -557,6 +581,21 @@
             callPython('save_xiuluo_check_team', xiuluoCheckTeam.checked);
         });
 
+        // 修罗自动巫医开关变更：立即保存（下次任务启动生效）
+        xiuluoAutoWuyi.addEventListener('change', () => {
+            callPython('save_xiuluo_auto_wuyi', xiuluoAutoWuyi.checked);
+        });
+
+        // 修罗自动巫医间隔步进：±1，范围 1~90，变更立即保存
+        async function xiuluoWuyiInterval(delta) {
+            const el = xiuluoWuyiIntervalEl;
+            const cur = parseInt(el.innerText);
+            const val = Math.min(90, Math.max(1, cur + delta));
+            if (val === cur) return;
+            const r = await callPython('save_xiuluo_wuyi_interval', val);
+            if (r && r.status === 'success') el.innerText = r.interval;
+        }
+
         // 五倍自动抢盒子开关变更：立即保存（下次任务启动生效）
         wubeiHezi.addEventListener('change', () => {
             callPython('save_wubei_hezi', wubeiHezi.checked);
@@ -623,6 +662,37 @@
             btnVerifyXiuluoClaim.disabled = false;
             claimVerifyResultEl.style.color = ok ? 'var(--accent)' : '#ff5f5f';
             claimVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+        };
+
+        // 修罗巫医验证：与回程/领取验证同模式，结果经 onWuyiVerifyResult 异步回推
+        async function verifyXiuluoWuyi() {
+            if (verifying) return;
+            verifying = true;
+            btnVerifyXiuluoWuyi.disabled = true;
+            wuyiVerifyResultEl.style.color = 'var(--text)';
+            wuyiVerifyResultEl.innerText = '验证中...';
+            try {
+                const r = await callPython('verify_xiuluo_wuyi');
+                if (!r || r.status !== 'success') {
+                    wuyiVerifyResultEl.style.color = '#ff5f5f';
+                    wuyiVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
+                    verifying = false;
+                    btnVerifyXiuluoWuyi.disabled = false;
+                }
+            } catch (e) {
+                wuyiVerifyResultEl.style.color = '#ff5f5f';
+                wuyiVerifyResultEl.innerText = '验证请求异常';
+                verifying = false;
+                btnVerifyXiuluoWuyi.disabled = false;
+            }
+        }
+
+        // Python 侧调用：巫医验证结束回推结果
+        window.onWuyiVerifyResult = function (ok, info) {
+            verifying = false;
+            btnVerifyXiuluoWuyi.disabled = false;
+            wuyiVerifyResultEl.style.color = ok ? 'var(--accent)' : '#ff5f5f';
+            wuyiVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
         };
 
         // Python 侧（任务状态联动）调用，用于同步页面显示
