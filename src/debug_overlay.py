@@ -198,6 +198,7 @@ def _helper_main():
         setattr(_ct.windll.gdi32, "CreateFontW", _aa_font)
         from ascript.windows.ui.draw_window import DrawWindow
         drawn = False
+        last_sig = None
         while True:
             try:
                 state = _read_state()
@@ -205,15 +206,28 @@ def _helper_main():
                     exit_reason = "心跳超时（父进程已死）"
                     break
                 if state.get("enabled"):
-                    DrawWindow.clear()
-                    for x, y, text in state.get("lines", []):
-                        DrawWindow.draw_text(x, y, text,
-                                             color=state.get("color", OVERLAY_COLOR),
-                                             font_size=state.get("font", OVERLAY_FONT))
-                    drawn = True
+                    # 变更驱动重绘：内容未变时跳过 clear+draw。悬浮层是
+                    # WS_EX_LAYERED 独立置顶窗口，游戏重绘不会擦除它，
+                    # 无需周期重绘；按秒重绘使 DrawWindow 的 GDI 操作量
+                    # 无谓放大 1~2 个数量级，实测硬崩溃（access violation，
+                    # 无退出原因文件）频率与操作量正相关（任务重负载 OCR
+                    # 期间 ~15s 一崩）。内容仅在 set_* 时变化，延迟不变
+                    # （轮询周期仍为 1s）
+                    sig = (state.get("color", OVERLAY_COLOR),
+                           state.get("font", OVERLAY_FONT),
+                           tuple(tuple(ln) for ln in state.get("lines", [])))
+                    if sig != last_sig:
+                        DrawWindow.clear()
+                        for x, y, text in state.get("lines", []):
+                            DrawWindow.draw_text(x, y, text,
+                                                 color=state.get("color", OVERLAY_COLOR),
+                                                 font_size=state.get("font", OVERLAY_FONT))
+                        last_sig = sig
+                        drawn = True
                 elif drawn:
                     DrawWindow.clear()
                     drawn = False
+                    last_sig = None
             except Exception as e:
                 exit_reason = f"绘制循环异常: {e}"
                 break
@@ -263,6 +277,7 @@ def _supervise(win):
     重启（崩溃只丢悬浮层，任务不受影响）。
     """
     global _helper_proc
+    restart_count = 0
     while not _stopped:
         try:
             enabled = _read_switch()
@@ -273,7 +288,12 @@ def _supervise(win):
                 proc = _helper_proc
             if enabled and (proc is None or proc.poll() is not None):
                 if proc is not None:
-                    log("[调试] 悬浮层绘制进程已退出，自动重启", "WARN")
+                    # 崩溃重启日志降噪：每 3 次记一条（绘制进程崩溃是
+                    # DrawWindow 已知不稳定，自动重启为设计行为，
+                    # 逐次记录刷屏无信息量）
+                    restart_count += 1
+                    if restart_count % 3 == 1:
+                        log(f"[调试] 悬浮层绘制进程已退出，自动重启（累计第 {restart_count} 次）", "WARN")
                 with _helper_lock:
                     _helper_proc = _spawn_helper()
         except Exception as e:

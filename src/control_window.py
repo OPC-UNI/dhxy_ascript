@@ -235,6 +235,22 @@ def save_xiuluo_hezi(on):
     return {"status": "success"}
 
 
+# ---- 修罗检查队伍（UI 开关，KeyValue 持久化；关闭时领取前跳过全部
+#      队伍检查，默认关闭——用户确认每轮回程后开面板检查耗时 5~7s） ----
+_XIULUO_CHECK_TEAM_KEY = "xiuluo_check_team"
+
+
+def load_xiuluo_check_team():
+    """读取修罗检查队伍开关（首次默认关闭）。"""
+    return bool(KeyValue.get(_XIULUO_CHECK_TEAM_KEY, False))
+
+
+def save_xiuluo_check_team(on):
+    """保存修罗检查队伍开关，返回操作结果。"""
+    KeyValue.save(_XIULUO_CHECK_TEAM_KEY, bool(on))
+    return {"status": "success"}
+
+
 # ---- 战斗设置（人物/召唤兽默认战斗动作，UI 单选项，KeyValue 持久化） ----
 # 人物：技能面板 3 行 × 5 列共 15 格 + 攻击/防御/捕捉/逃跑/无
 CHAR_BATTLE_ACTIONS = ([f"技能{r}-{c}" for r in range(1, 4) for c in range(1, 6)]
@@ -310,6 +326,7 @@ class ControlWindow(WebWindow):
         self.expose(self.save_xiuluo_min)
         self.expose(self.save_xiuluo_races)
         self.expose(self.save_xiuluo_hezi)
+        self.expose(self.save_xiuluo_check_team)
         self.expose(self.save_wubei_min)
         self.expose(self.save_wubei_hezi)
         self.expose(self.save_debug_overlay)
@@ -318,6 +335,7 @@ class ControlWindow(WebWindow):
         self.expose(self.stop_task)
         self.expose(self.reset_task)
         self.expose(self.verify_xiuluo_return)
+        self.expose(self.verify_xiuluo_claim)
         # 任务状态/日志回流接线：TaskManager → 主窗口状态 + 日志窗口
         self._tm.set_callbacks(on_status=self.sync_status, on_log=self.add_logs)
 
@@ -332,6 +350,7 @@ class ControlWindow(WebWindow):
                 "battle": load_battle_actions(),
                 "xiuluo": load_xiuluo_settings(),
                 "xiuluo_hezi": load_xiuluo_hezi(),
+                "xiuluo_check_team": load_xiuluo_check_team(),
                 "wubei": {"min_members": load_wubei_min(),
                           "hezi": load_wubei_hezi()},
                 "debug_overlay": load_debug_overlay()}
@@ -367,6 +386,10 @@ class ControlWindow(WebWindow):
     def save_xiuluo_hezi(self, on):
         """修罗设置变更：保存自动抢盒子开关状态。"""
         return save_xiuluo_hezi(on)
+
+    def save_xiuluo_check_team(self, on):
+        """修罗设置变更：保存检查队伍开关状态。"""
+        return save_xiuluo_check_team(on)
 
     def save_wubei_min(self, value):
         """五倍设置变更：保存最少人数。"""
@@ -430,6 +453,51 @@ class ControlWindow(WebWindow):
                          daemon=True, name="xiuluo-verify").start()
         return {"status": "success",
                 "msg": "验证已开始：开背包 → 任务储物格 → 悬停回城符 2 秒 → 关背包"}
+
+    def verify_xiuluo_claim(self):
+        """高级设置-修罗领取验证按钮：与实际领取流程一致，但到绿色选项
+        处仅悬停不点击（点击即领取）——验证走位/按钮识别/对话框/选项
+        识别整条链路，最后点击屏幕中间关闭对话框，不领取任务。
+        """
+        if self._tm.is_running():
+            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if self._verifying:
+            return {"status": "error", "msg": "验证进行中，请稍候"}
+        win = game.find_main_window()
+        if win is None:
+            return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
+        if not _game_window_clickable(win):
+            return {"status": "error", "msg": "游戏窗口被其他窗口遮挡，请将游戏窗口置于前台后再验证"}
+        self._verifying = True
+        threading.Thread(target=self._run_claim_verify, args=(win,),
+                         daemon=True, name="xiuluo-claim-verify").start()
+        return {"status": "success",
+                "msg": "验证已开始：走位 → 领取按钮 → 对话框选项（悬停不点击）→ 关对话框"}
+
+    def _run_claim_verify(self, win):
+        """领取验证线程体：跑修罗领取链路（选项悬停代替点击），结果回推页面与日志窗。"""
+        from . import xiuluo  # 延迟导入：xiuluo 反向导入本模块（避免循环）
+        try:
+            self.add_logs(["[验证] 开始验证修罗领取（选项仅悬停不点击，最后关闭对话框）..."])
+            ok, info = xiuluo.verify_claim_flow(win)
+        except Exception as e:
+            ok, info = False, f"验证异常: {e}"
+        try:
+            self.add_logs([f"[验证] 结果: {info}"])
+        except Exception:
+            pass
+        self._notify_claim_verify_result(ok, info)
+        self._verifying = False
+
+    def _notify_claim_verify_result(self, ok, info):
+        """领取验证结果回推页面（高级设置-领取验证行的结果文案）。"""
+        if self.webview_instance:
+            try:
+                ok_js = "true" if ok else "false"
+                self.webview_instance.evaluate_js(
+                    f"if(window.onClaimVerifyResult){{window.onClaimVerifyResult({ok_js}, {json.dumps(info)});}}")
+            except Exception:
+                pass
 
     def _run_verify(self, win):
         """验证线程体：跑修罗返程链路（悬停代替点击），结果回推页面与日志窗。"""

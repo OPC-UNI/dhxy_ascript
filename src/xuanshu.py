@@ -568,13 +568,26 @@ def _dialog_text_present(items, dtxt):
                for line in [t[0] for t in items] + [joined])
 
 
-def _confirm_task_gone(win, title):
+def _confirm_task_gone(win, title, fallback_texts=()):
     """确认任务确实从追踪面板消失（连续轮询未见且无战斗遮挡）。
 
     OCR 偶发漏读（标题误读、面板瞬时遮挡）会误判任务消失——五环实测
     误判「任务消失」导致完成次数虚增、任务提前结束；战斗画面遮挡追踪
     面板时 OCR 必然读不到任务，战斗中不计入确认窗口（延长窗口等战斗
     结束后再观察）。返回 True=确认消失（任务完成）。
+
+    fallback_texts：标题漏检防误判兜底——修罗实测标题行整个被区域
+    OCR 漏检（彩色徽标前缀），领取后首次检查即误判「任务消失」，
+    3s 假完成一轮、下一轮卡等 20s 领取按钮（任务激活时按钮不出现）。
+    内容链接行「前往…消灭修罗」检测稳定，面板左区内出现任一兜底
+    串即判定任务仍在（立刻中止确认）。
+
+    战斗结束后的延迟优化（实测战斗画面已清 → 返程启动等 3~4s）：
+    战斗线程的 2s 结束确认（防回合间隙误判）与任务消失确认原本串行，
+    合计 4~6s。现在战斗画面已清但战斗线程确认未完成时先行收集证据
+    （面板可读就 OCR；任务还在则立即中止，不影响正确性），最终判定
+    仍以战斗线程确认为门——回合间隙的画面空档期间计数会被「战斗画面
+    再出现」分支清零，不会累积成误判。
     """
     deadline = time.time() + TASK_GONE_CONFIRM_TIMEOUT
     # 延长总上限：战斗/截窗失败不断延长窗口的硬顶（约为基本窗口 4 倍）。
@@ -589,18 +602,33 @@ def _confirm_task_gone(win, title):
             deadline = time.time() + TASK_GONE_CONFIRM_TIMEOUT
             time.sleep(TASK_GONE_POLL_INTERVAL)
             continue
-        if is_in_battle_frame(img) or battle_watch_in_battle():
-            # 战斗画面遮挡追踪面板：本帧不作判定，延长确认窗口。
-            # 双信号：本帧模板匹配 + 战斗监控线程的确认状态——单帧
-            # 匹配在战斗动画间隙（操作条/横幅不显示）会漏判（实测
-            # 2.5 分钟战斗中被误判任务消失完成）
+        if is_in_battle_frame(img):
+            # 战斗画面又出现（回合间隙结束/战斗未真结束）：此前计数作废，
+            # 延长确认窗口。单帧匹配在战斗动画间隙会漏判（实测 2.5 分钟
+            # 战斗中被误判任务消失完成），因此最终判定还须战斗线程确认
+            gone_polls = 0
             deadline = time.time() + TASK_GONE_CONFIRM_TIMEOUT
             time.sleep(2.0)
             continue
         items, img_np = game_map.ocr_regions(img, (FOLLOW_TRACK_REGION,))
         if task_tracker.find_task(task_tracker.group_tasks(items), title) is not None:
             return False  # 任务重新出现：此前为漏读，继续跟踪
+        if fallback_texts:
+            # 标题行被区域 OCR 漏检时 find_task 找不到任务：用内容链接行
+            # 兜底串判定任务仍在（修罗「前往…消灭修罗」检测稳定，
+            # 面板左区+只在任务存在时出现），立刻中止确认防假完成
+            for txt, rect, score in items:
+                if score >= 0.55 and rect[0] < task_tracker.PANEL_MAX_X \
+                        and any(ft in txt for ft in fallback_texts):
+                    return False
         gone_polls += 1
+        if battle_watch_in_battle():
+            # 画面已清但战斗线程的 2s 结束确认未完成：证据已收集
+            # （任务还在则上面已 return False），不最终判定，
+            # 等战斗线程确认后的下一次轮询立即出结论
+            deadline = time.time() + TASK_GONE_CONFIRM_TIMEOUT
+            time.sleep(TASK_GONE_POLL_INTERVAL)
+            continue
         if gone_polls >= TASK_GONE_CONFIRM_POLLS:
             return True
         time.sleep(TASK_GONE_POLL_INTERVAL)
@@ -681,8 +709,8 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
             items, img_np = game_map.ocr_regions(img, FOLLOW_OCR_REGIONS)
         task = task_tracker.find_task(task_tracker.group_tasks(items), title)
         if task is None:
-            if _confirm_task_gone(win, title):
-                return True, f"任务已从任务追踪中消失（完成，共 {rounds} 轮）"
+            if _confirm_task_gone(win, title, fallback_keywords):
+                return True, f"任务已从任务追踪中消失（本轮跟踪 {rounds} 次点击）"
             continue  # 瞬时漏读：任务仍在，继续跟踪
         sig = _sig_of(items, img_np, task)
         if last_clicked_sig is not None and _signatures_similar(sig, last_clicked_sig) \
@@ -739,8 +767,8 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 items, img_np = game_map.ocr_regions(img, (FOLLOW_TRACK_REGION,))
                 task2 = task_tracker.find_task(task_tracker.group_tasks(items), title)
                 if task2 is None:
-                    if _confirm_task_gone(win, title):
-                        return True, f"任务已从任务追踪中消失（完成，共 {rounds} 轮）"
+                    if _confirm_task_gone(win, title, fallback_keywords):
+                        return True, f"任务已从任务追踪中消失（本轮跟踪 {rounds} 次点击）"
                     changed_once = False  # 面板瞬时不可读：回退正常轮询
                     continue
                 sig2 = _sig_of(items, img_np, task2)
@@ -787,8 +815,8 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 continue
             task2 = task_tracker.find_task(task_tracker.group_tasks(items), title)
             if task2 is None:
-                if _confirm_task_gone(win, title):
-                    return True, f"任务已从任务追踪中消失（完成，共 {rounds} 轮）"
+                if _confirm_task_gone(win, title, fallback_keywords):
+                    return True, f"任务已从任务追踪中消失（本轮跟踪 {rounds} 次点击）"
                 changed_once = False  # 瞬时漏读：任务仍在，继续等待
                 continue
             sig2 = _sig_of(items, img_np, task2)

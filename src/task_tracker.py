@@ -221,27 +221,39 @@ def task_count(win):
     return len(read_tasks(win))
 
 
-def has_task_in(items, img_np, title):
-    """在 OCR 结果中判断追踪面板是否存在指定任务（判定规则见 has_task）。"""
+def has_task_in(items, img_np, title, fallback_texts=()):
+    """在 OCR 结果中判断追踪面板是否存在指定任务（判定规则见 has_task）。
+
+    fallback_texts：标题 OCR 不可靠时的兜底匹配串（修罗实测：标题
+    「修罗任务[常规玩法]」的彩色徽标前缀导致区域 OCR 整行漏检，
+    has_task 误报失败——用内容链接行「前往…消灭修罗」兜底，该行
+    区域 OCR 检测稳定且仅在任务存在时出现；允许绿色（链接行本身
+    是绿色，标题判定才排除绿色）。
+    """
     for txt, rect, score in items:
         if title in txt and score >= 0.55 and rect[0] < PANEL_MAX_X:
             if not is_green_text(img_np, rect):
                 return True
+    for ft in fallback_texts:
+        for txt, rect, score in items:
+            if ft in txt and score >= 0.55 and rect[0] < PANEL_MAX_X:
+                return True
     return False
 
 
-def has_task(win, title):
+def has_task(win, title, fallback_texts=()):
     """判断任务追踪中是否存在指定任务。
 
     判定为追踪面板标题：位于窗口左区（x<PANEL_MAX_X）且非绿色链接文案，
     避免把居中对话框里的绿色选项误判为任务。
+    fallback_texts：标题 OCR 漏检时的兜底匹配串（见 has_task_in）。
     只 OCR 追踪面板区域（全窗 2.2s → 区域约 0.9s）。
     """
     img = win.capture(force_activate=False)
     if img is None:
         return False
     items, img_np = game_map.ocr_regions(img, (TRACK_REGION,))
-    return has_task_in(items, img_np, title)
+    return has_task_in(items, img_np, title, fallback_texts)
 
 
 def find_task(tasks, title):
@@ -283,14 +295,15 @@ def _keyword_fallback(items, img_np, keywords, arect):
     """在追踪面板区域内按关键词兜底查找绿字行（锚点内容采集失败时）。
 
     搜索范围：面板左区（x<PANEL_MAX_X，排除居中对话框）、锚点行下方
-    （容 OCR 纵向抖动），不过滤标题行判定（子目标行可能被误判为标题行）。
-    返回 (txt, rect) 或 None。
+    （容 OCR 纵向抖动；arect 为 None 时不限纵向——标题行被区域 OCR
+    整行漏检、锚点定位失败时用）；不过滤标题行判定（子目标行可能被
+    误判为标题行）。返回 (txt, rect) 或 None。
     """
     cands = []
     for txt, rect, score in items:
         if score < 0.55 or rect[0] >= PANEL_MAX_X:
             continue
-        if rect[1] < arect[3] - 30:  # 锚点行下方（容抖动）
+        if arect is not None and rect[1] < arect[3] - 30:  # 锚点行下方（容抖动）
             continue
         if not any(kw in txt for kw in keywords):
             continue
@@ -342,19 +355,46 @@ def track_task(win, title, text=None, green_index=0, retries=4, retry_interval=1
                 return False, "窗口截图失败"
             items, img_np = game_map.ocr_regions(img, OCR_REGIONS)
 
-        # 任务锚点行：任意包含标题文案的行（兼容无方括号的标题）。
-        # 优先取追踪面板左区内的行，避免居中对话框里的「五环」文案抢先
+        # 任务锚点行：优先取标题格式行（含方括号短行，_is_title_line），
+        # 无标题格式行再回退任意包含标题文案的行（兼容无方括号标题）。
+        # 修罗实测：「狂风修罗」（无方括号的干扰行）抢先成为锚点后，
+        # 内容采集在真实标题「修罗任务[常规玩法]」处中断，内容恒 0 行
+        # → 4 次渲染重试空转 ~8s 后放弃整轮。优先取追踪面板左区内的行，
+        # 避免居中对话框里的文案抢先
         anchor_idx = None
         for i, (txt, rect, score) in enumerate(items):
-            if title in txt and score >= 0.55 and rect[0] < PANEL_MAX_X:
+            if _is_title_line(txt) and title in txt and score >= 0.55 \
+                    and rect[0] < PANEL_MAX_X:
                 anchor_idx = i
                 break
+        if anchor_idx is None:
+            for i, (txt, rect, score) in enumerate(items):
+                if title in txt and score >= 0.55 and rect[0] < PANEL_MAX_X:
+                    anchor_idx = i
+                    break
+        if anchor_idx is None:
+            for i, (txt, rect, score) in enumerate(items):
+                if _is_title_line(txt) and title in txt and score >= 0.55:
+                    anchor_idx = i
+                    break
         if anchor_idx is None:
             for i, (txt, rect, score) in enumerate(items):
                 if title in txt and score >= 0.55:
                     anchor_idx = i
                     break
         if anchor_idx is None:
+            # 标题行被区域 OCR 漏检（修罗实测：彩色徽标前缀致整行缺失）
+            # 时，用关键词兜底直接点面板左区的绿字链接行（内容行即
+            # 跟踪目标，无锚点纵向约束）——否则跟踪失败整轮重试
+            if fallback_keywords:
+                fb = _keyword_fallback(items, img_np, fallback_keywords, None)
+                if fb is not None:
+                    txt, rect = fb
+                    cx, cy = green_text_center(img_np, rect)
+                    human_click(win, cx, cy)
+                    log(f"[任务追踪] 已点击「{title}」绿色文案（标题漏检兜底）: "
+                        f"{txt} @ ({cx},{cy})", "SYS")
+                    return True, f"已跟踪「{title}」（标题漏检兜底: {txt}）"
             return False, f"任务追踪中未找到「{title}」"
         arect = items[anchor_idx][1]
         last_img_np = img_np
