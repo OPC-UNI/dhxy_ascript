@@ -40,7 +40,7 @@ import numpy as np
 from ascript.windows.system import R  # 资源路由（模板路径）
 from ascript.windows.hardware.keyboard import Keyboard  # Alt+C 飞行/刷新（领取验证兜底）
 
-from .app_utils import human_click, human_move, log, move_away
+from .app_utils import human_click, human_move, log, move_away, norm_text
 from . import task_tracker  # 任务追踪面板操作
 from . import map as game_map  # 地图操作（世界地图/小地图/位置识别）
 from . import team  # 组队检查（领取前队伍人数检查，仅队长生效）
@@ -54,8 +54,9 @@ from .control_window import (load_task_counts, load_xiuluo_settings,
                              load_xiuluo_check_team,
                              load_xiuluo_auto_wuyi,
                              load_xiuluo_wuyi_interval)  # 任务次数上限/修罗设置/自动巫医
-from .xuanshu import (follow_task,  # 任务跟踪（绿字点击寻路/战斗跳过/附加对话处理）
-                      _dialog_text_present)  # 对话框文案检测（复用玄枢轶闻）
+from .xuanshu import follow_task  # 任务跟踪（绿字点击寻路/战斗跳过/附加对话处理）
+from .dialog_common import (_dialog_text_present, _norm_dialog_present,
+                            SCREEN_CENTER_POS)  # 对话框共享组件
 
 # 任务模式与追踪面板标题（2026-10-08 日志+截图实测确认）
 TASK_MODE = "修罗"           # 控制面板任务模式名（任务次数配置键）
@@ -85,7 +86,6 @@ CLAIM_OPTION_TAIL = "要我帮忙吗"               # 选项换行渲染时的�
                                               # 永不单行命中，两次全靠尾部/兜底）
 CLAIM_COUNT_TEXT = "今日已完成次数"            # 领取后对话框中的完成次数文案（辅助记录完成次数）
 TEAM_WARNING_TEXT = "修罗的战斗力异常强大，千万要找齐伙伴再一同消灭。"  # 队伍数量小于 3 的提示（实测文案）
-SCREEN_CENTER_POS = (689, 415)                # 屏幕中间（游戏窗口中心，同 kezhan/xuanshu，点击关闭/推进对话框）
 CLAIM_ARRIVE_TIMEOUT = 90                     # 寻路到领取点的超时
 CLAIM_BUTTON_TIMEOUT = 20                     # 到达后等待领取任务按钮出现的超时
 CLAIM_DIALOG_TIMEOUT = 15                     # 领取对话框处理超时
@@ -125,7 +125,6 @@ _task_gone_last_round = False   # 上一轮任务消失已确认（follow_task �
 
 # ---- 战斗（战斗操作由 battle.watch_loop 线程负责） ----
 BATTLE_END_POLL = 2.0            # 等待战斗结束的轮询间隔
-BATTLE_END_TIMEOUT = 600         # 等待战斗结束的超时兜底
 
 # ---- 返程（用户流程：背包任务储物格 → 修罗回城符右键 → 回灵兽村） ----
 BOX_TASK_ICON = "box_task.png"                    # 背包任务储物格按钮（未选中态，点击打开）
@@ -143,10 +142,6 @@ RETURN_POLL_INTERVAL = 0.5       # 返程轮询间隔（打开动画约 0.4s，�
 TASK_BOX_OFFSET = (351, 305)
 TASK_BOX_BAND_MARGIN = 55
 
-# 骨架阶段占位标记：流程函数未实现时返回该描述，主循环据此退出避免空转；
-# 实现逐个填充后该分支自然不再触发
-STUB_INFO = "流程待实现"
-
 # 领取后对话框「今日已完成次数：N」的完成次数解析（OCR 可能把冒号误读，兼容）
 _CLAIM_COUNT_RE = re.compile(re.escape(CLAIM_COUNT_TEXT) + r"\s*[:：]?\s*(\d+)")
 
@@ -156,11 +151,9 @@ def _near_wuyi_spot(pos):
 
     小距离移动场景：附近定义必须严格，宽松容差会漏判偏移（用户确认）。
     """
-    if pos is None:
-        return False
-    return (pos[0].strip() == LINGSHOUCUN
-            and abs(pos[1] - WUYI_SPOT[0]) <= WUYI_NEAR_TOLERANCE
-            and abs(pos[2] - WUYI_SPOT[1]) <= WUYI_NEAR_TOLERANCE)
+    return game_map.is_at_position(pos, LINGSHOUCUN,
+                                  WUYI_SPOT[0], WUYI_SPOT[1],
+                                  WUYI_NEAR_TOLERANCE)
 
 
 def _run_wuyi_chain(win, hover_before_click=False, skip_condition=False,
@@ -291,11 +284,8 @@ def verify_wuyi_flow(win):
 
 def _near_claim_spot(pos, tolerance):
     """判断位置是否在灵兽村领取点附近（地名精确匹配，容差抗 OCR 噪声）。"""
-    if pos is None:
-        return False
-    return (pos[0].strip() == LINGSHOUCUN
-            and abs(pos[1] - CLAIM_SPOT[0]) <= tolerance
-            and abs(pos[2] - CLAIM_SPOT[1]) <= tolerance)
+    return game_map.is_at_position(pos, LINGSHOUCUN,
+                                  CLAIM_SPOT[0], CLAIM_SPOT[1], tolerance)
 
 
 def _find_claim_entry(win):
@@ -345,15 +335,15 @@ def _find_claim_option(items, img_np):
     避免误点追踪面板的绿字链接。点击与验证（悬停）共用本函数。
     """
     needles = (re.sub(r"[^\w]", "", CLAIM_DIALOG_OPTION),  # 完整文案（单行渲染时）
-               _norm_text(CLAIM_OPTION_TAIL),             # 尾部（换行渲染时实测命中）
-               _norm_text("帮忙"))                        # 最后兜底
+               norm_text(CLAIM_OPTION_TAIL),             # 尾部（换行渲染时实测命中）
+               norm_text("帮忙"))                        # 最后兜底
     for needle in needles:
         for txt, rect, score in items:
             if score >= 0.55 and needle in re.sub(r"[^\w]", "", txt) \
                     and rect[0] >= task_tracker.PANEL_MAX_X \
                     and task_tracker.is_green_text(img_np, rect):
                 cx, cy = task_tracker.green_text_center(img_np, rect, prefer_underline=False)
-                return cx, cy, txt, needle == _norm_text("帮忙")
+                return cx, cy, txt, needle == norm_text("帮忙")
     return None
 
 
@@ -370,21 +360,11 @@ def _click_claim_option(win, items, img_np):
     return True
 
 
-def _norm_text(s):
-    """去标点/空格/特殊字符（保留中文与字母数字），匹配前统一规范化。
-
-    OCR 对标点误读常见（「，」读成「；」、句号变逗号等），去标点后
-    再做模糊匹配可大幅降低漏配。
-    """
-    return re.sub(r"[^\w]", "", s)
-
-
 def _handle_team_warning(win, items, img_np):
     """对话框出现「修罗的战斗力异常强大…」：队伍数量小于 3，
     点击屏幕中间一次关闭对话框。返回是否已处理。
     """
-    norm_items = [(_norm_text(t), r, s) for t, r, s in items]
-    if not _dialog_text_present(norm_items, _norm_text(TEAM_WARNING_TEXT)):
+    if not _norm_dialog_present(items, TEAM_WARNING_TEXT):
         return False
     human_click(win, SCREEN_CENTER_POS[0], SCREEN_CENTER_POS[1])
     log("[修罗] 队伍数量小于 3，已点击屏幕中间关闭提示对话框", "WARN")
@@ -603,13 +583,18 @@ def _claim_task(win):
     # 重试无效，Alt+C 后仍检索不到即判定领取失败，不再长窗空等。
     # 期间处理队伍不足提示对话框（点击选项后队伍掉到 3 人以下时出现）
     deadline = time.time() + CLAIM_VERIFY_WAIT
-    while not task_tracker.has_task(win, TASK_TITLE, TASK_FALLBACK_TEXTS) \
-            and time.time() < deadline:
+    # 每轮询截一帧 + 双区域 OCR 一次：任务出现与队伍提示判定同帧复用
+    # （原每轮询 2 次截图 + 2 次区域 OCR）
+    while time.time() < deadline:
         img = win.capture(force_activate=False)
-        if img is not None:
-            items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
-            if _handle_team_warning(win, items, img_np):
-                return False, "队伍数量小于 3，无法领取（已关闭提示对话框）"
+        if img is None:
+            time.sleep(1.0)
+            continue
+        items, img_np = game_map.ocr_regions(img, task_tracker.OCR_REGIONS)
+        if task_tracker.has_task_in(items, img_np, TASK_TITLE, TASK_FALLBACK_TEXTS):
+            break
+        if _handle_team_warning(win, items, img_np):
+            return False, "队伍数量小于 3，无法领取（已关闭提示对话框）"
         time.sleep(1.0)
     if task_tracker.has_task(win, TASK_TITLE, TASK_FALLBACK_TEXTS):
         tail = f"（{CLAIM_COUNT_TEXT}：{count}）" if count is not None else ""
@@ -657,9 +642,9 @@ def _handle_fight_dialog(win, items, img_np):
     返回是否已处理。
     """
     global _fight_via_kanda
-    needle = _norm_text(FIGHT_DIALOG_OPTION)
+    needle = norm_text(FIGHT_DIALOG_OPTION)
     for txt, rect, score in items:
-        if score >= 0.55 and needle in _norm_text(txt) \
+        if score >= 0.55 and needle in norm_text(txt) \
                 and rect[0] >= task_tracker.PANEL_MAX_X \
                 and task_tracker.is_green_text(img_np, rect):
             cx, cy = task_tracker.green_text_center(img_np, rect, prefer_underline=False)
@@ -683,7 +668,7 @@ def _follow_to_done(win):
     return ok, info
 
 
-def _wait_battle_end(win, timeout=BATTLE_END_TIMEOUT):
+def _wait_battle_end(win, timeout=60):  # 等待战斗结束的超时（调用点均显式传 60）
     """战斗：等待当前战斗结束（战斗操作由 battle.watch_loop 线程自动完成）。
 
     轮询 is_in_battle 直到战斗画面消失；超时返回失败防止卡死。
@@ -977,8 +962,6 @@ def run_loop(win, cycle_interval=1.0):
     1. 完成任务次数达到设置的次数上限（通用设置-任务次数）
     2. 领取时出现每日次数已满（TODO: 具体文案待确认）
     返回结束原因描述。
-
-    骨架阶段：流程函数返回 STUB_INFO（未实现）时直接结束任务，避免空转。
     """
     global _fight_via_kanda, _team_checked, _task_gone_last_round
     max_rounds = load_task_counts().get(TASK_MODE, 0)
@@ -1047,8 +1030,6 @@ def run_loop(win, cycle_interval=1.0):
             # 1.3 领取任务
             ok, info = _claim_task(win)
             if not ok:
-                if info == STUB_INFO:
-                    return f"修罗任务流程尚未实现（{info}），结束任务"
                 if check_team and _team_checked:
                     # 已通过队伍检查仍领取失败（如队长被转移、按钮未出现）：
                     # 补一次队伍检查恢复状态感知，非队长转保持模式
@@ -1071,8 +1052,6 @@ def run_loop(win, cycle_interval=1.0):
         #      战斗由战斗监控线程自动操作、跟踪中自动跳过）
         ok, info = _follow_to_done(win)
         if not ok:
-            if info == STUB_INFO:
-                return f"修罗任务流程尚未实现（{info}），结束任务"
             log(f"[修罗] {info}", "WARN")
             time.sleep(cycle_interval)
             continue
@@ -1082,8 +1061,6 @@ def run_loop(win, cycle_interval=1.0):
         if _fight_via_kanda:
             ok, info = _return_to_npc(win)
             if not ok:
-                if info == STUB_INFO:
-                    return f"修罗任务流程尚未实现（{info}），结束任务"
                 log(f"[修罗] {info}", "WARN")
                 time.sleep(cycle_interval)
                 continue

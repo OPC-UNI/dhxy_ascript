@@ -19,18 +19,14 @@
 """
 import difflib
 import os
-import re
 import time
-from collections import Counter
-from functools import lru_cache
 
 import cv2
 import numpy as np
 from ascript.windows.hardware.mouse import Mouse
 from ascript.windows.window.Window import WindowCaptureFormat
 
-from .app_utils import log, human_click, move_away
-from . import bag  # 物品栏开关
+from .app_utils import log, human_click, move_away, norm_text
 from . import map as game_map  # 地图操作（世界地图/小地图/位置识别）
 from . import task_tracker  # 任务追踪面板操作
 from .battle import (is_in_battle, is_in_battle_frame,
@@ -149,7 +145,6 @@ TASK_GONE_CONFIRM_POLLS = 2        # 连续未见的轮询次数（面板区域 
 TASK_GONE_POLL_INTERVAL = 1.0      # 确认轮询间隔（秒）
 # 跟踪轮询的 OCR 区域见 task_tracker（TRACK_REGION/DIALOG_REGION/OCR_REGIONS）
 FOLLOW_TRACK_REGION = task_tracker.TRACK_REGION
-FOLLOW_DIALOG_REGION = task_tracker.DIALOG_REGION
 FOLLOW_OCR_REGIONS = task_tracker.OCR_REGIONS
 
 
@@ -160,14 +155,6 @@ def _at_target(pos):
     return game_map.is_at_position(pos, LUOYANG_CITY,
                                    TASK_MAP_POS[0], TASK_MAP_POS[1],
                                    MAP_POS_TOLERANCE)
-
-
-def _close_scene_panels(win):
-    """关闭场景中可能打开的界面：小地图、世界地图、物品栏。"""
-    game_map.close_maps(win)
-    if bag.is_bag_open(win):
-        ok, info = bag.close_bag(win)
-        log(f"[玄枢轶闻] 物品栏{info}", "SYS" if ok else "WARN")
 
 
 def wait_arrive(win, timeout=ARRIVE_TIMEOUT):
@@ -210,15 +197,10 @@ def wait_arrive(win, timeout=ARRIVE_TIMEOUT):
     return False, f"等待寻路完成超时（{timeout}s）"
 
 
-def _norm_text(s):
-    """去标点/空格（保留中文与字母数字），匹配前统一规范化（同 kezhan）。"""
-    return re.sub(r"[^\w]", "", s)
-
-
 def _jiantianpan_active(items):
     """追踪面板是否出现监天盘子任务文案（跨行拼接后模糊匹配）。"""
     panel_txt = "".join(t for t, r, _ in items if r[0] < task_tracker.PANEL_MAX_X)
-    return _fuzzy_contains(_norm_text(panel_txt), JIANTIANPAN_TRACK_TEXT)
+    return _fuzzy_contains(norm_text(panel_txt), JIANTIANPAN_TRACK_TEXT)
 
 
 def _at_huoyun_target(pos):
@@ -313,8 +295,8 @@ def _handle_jiantianpan(win, items, img_np):
 from .dialog_common import (_click_green_option_once as _dc_click_green_option_once,
                             _click_dialog_option_by_index as _dc_click_dialog_option_by_index,
                             _click_screen_center as _dc_click_screen_center,
-                            _fuzzy_contains, _char_counts,
-                            _dialog_text_present)
+                            _fuzzy_contains, _dialog_text_present,
+                            close_scene_panels)
 
 
 def _click_green_option_once(win, items, img_np, text):
@@ -325,11 +307,6 @@ def _click_green_option_once(win, items, img_np, text):
 def _click_dialog_option_by_index(win, items, dtxt, idx):
     """玄枢轶闻前缀包装（共享实现在 dialog_common）。"""
     return _dc_click_dialog_option_by_index(win, items, dtxt, idx, "玄枢轶闻")
-
-
-def _click_screen_center(win, times=DIALOG_SKIP_CLICKS):
-    """玄枢轶闻前缀包装（共享实现在 dialog_common）。"""
-    return _dc_click_screen_center(win, times=times, prefix="玄枢轶闻")
 
 
 def _click_dialog_green_option(win, text, timeout=DIALOG_TIMEOUT, abort_text=None):
@@ -344,7 +321,7 @@ def _click_dialog_green_option(win, text, timeout=DIALOG_TIMEOUT, abort_text=Non
         if img is None:
             time.sleep(1.0)
             continue
-        items, img_np = game_map.ocr_regions(img, task_tracker.OCR_REGIONS)
+        items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
         if abort_text and _dialog_text_present(items, abort_text):
             return False, f"检测到「{abort_text}」"
         if _click_green_option_once(win, items, img_np, text):
@@ -371,7 +348,7 @@ def navigate_to_task(win):
         return False, "当前战斗中，跳过本轮寻路", None
 
     # 场景前置：清理残留地图（小地图在上层，先关）与物品栏
-    _close_scene_panels(win)
+    close_scene_panels(win, "玄枢轶闻")
 
     # 识别失败一律当不在目标坐标处理：不按 Alt+C 重试（重试无收益
     # 且拖慢轮次），直接走世界地图路径，寻路完成后位置自然恢复
@@ -383,7 +360,8 @@ def navigate_to_task(win):
         name, x, y = pos
         loc = f"{name}[{x},{y}]"
 
-    if _at_target(pos):
+    at_target = _at_target(pos)
+    if at_target:
         log(f"[玄枢轶闻] 已在任务位置附近（{loc}），跳过寻路", "SYS")
     elif name == LUOYANG_CITY:
         ok, info = game_map.open_mini_map(win)
@@ -396,12 +374,12 @@ def navigate_to_task(win):
             return False, info, None
         log(f"[玄枢轶闻] 不在洛阳城（{loc}），经世界地图前往洛阳城", "SYS")
 
-    if not _at_target(pos):
+    if not at_target:
         human_click(win, MAP_CLICK_POS[0], MAP_CLICK_POS[1])
         log(f"[玄枢轶闻] 已点击小地图任务点，自动寻路中", "SYS")
         time.sleep(1.0)  # 等待自动寻路启动
         # 清理：关闭仍打开的小地图（点击任务点后仍打开）、世界地图（通常已自动关闭）与物品栏
-        _close_scene_panels(win)
+        close_scene_panels(win, "玄枢轶闻")
 
     # 等待寻路完成
     ok, info = wait_arrive(win)
@@ -511,7 +489,7 @@ def _play_chuyijuebao(win, timeout=CHUYIJUEBAO_TIMEOUT):
     """
     deadline = time.time() + timeout
     # 场景前置：关闭可能遮挡的背包/小地图/世界地图
-    _close_scene_panels(win)
+    close_scene_panels(win, "玄枢轶闻")
 
     if not CHUYIJUEBAO_DEBUG:
         pt = game_map.find_template(win, CHUYIJUEBAO_START_ICON)
@@ -535,7 +513,7 @@ def _play_chuyijuebao(win, timeout=CHUYIJUEBAO_TIMEOUT):
         # 兜底：关闭可能弹出的背包/地图面板（5 秒一次）
         if now - last_panel_check >= 5.0:
             last_panel_check = now
-            _close_scene_panels(win)
+            close_scene_panels(win, "玄枢轶闻")
         if CHUYIJUEBAO_DEBUG:
             # 调试模式：不点击鼠标，标注检测框并保存截图（每秒一张）
             if now - last_debug_save >= 1.0:
@@ -937,7 +915,7 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                     if _dialog_text_present(items, dtxt):
                         # 命中即固定连点推进（多屏对话无需枚举后续文案，
                         # 漏推进由下一轮询 OCR 自愈）
-                        _click_screen_center(win)
+                        _dc_click_screen_center(win, prefix="玄枢轶闻")
                         handled = True
                         break
             if not handled:

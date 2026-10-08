@@ -2,6 +2,7 @@
 import os
 import pathlib
 import random
+import re
 import subprocess
 import threading
 import time
@@ -129,3 +130,12 @@ def move_away(win):
     （选项变色后绿色占比下降，二次 OCR 会漏判/误判——用户实测）。
     """
     human_move(win.rect.left + 20, win.rect.top + win.rect.height - 20)
+
+
+def norm_text(s):
+    """去标点/空格/特殊字符（保留中文与字母数字），匹配前统一规范化。
+
+    OCR 对标点误读常见（「，」读成「；」、句号变逗号等），去标点后
+    再做精确/模糊匹配可大幅降低漏配（各任务模块共用，勿再本地复制）。
+    """
+    return re.sub(r"[^\w]", "", s)

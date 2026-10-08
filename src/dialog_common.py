@@ -12,8 +12,10 @@ from collections import Counter
 from functools import lru_cache
 import difflib
 
-from .app_utils import log, human_click, move_away
+from .app_utils import log, human_click, move_away, norm_text
 from . import task_tracker  # 面板左区边界与绿色文字判定
+from . import bag  # 物品栏开关（close_scene_panels 用）
+from . import map as game_map  # 地图开关（close_scene_panels 用）
 
 
 # ---- 共享对话框常量 ----
@@ -134,3 +136,21 @@ def _dialog_text_present(items, dtxt):
     joined = "".join(t[0] for t in items)
     return any(_fuzzy_contains(line, dtxt)
                for line in [t[0] for t in items] + [joined])
+
+
+def _norm_dialog_present(items, dtxt):
+    """规范化（去标点）后的对话框文案模糊匹配（见 norm_text）。"""
+    norm_items = [(norm_text(t), r, s) for t, r, s in items]
+    return _dialog_text_present(norm_items, norm_text(dtxt))
+
+
+def close_scene_panels(win, prefix=""):
+    """关闭场景中可能打开的界面：小地图、世界地图、物品栏。
+
+    prefix：日志前缀（如「客栈」「玄枢轶闻」）。
+    """
+    tag = f"[{prefix}] " if prefix else ""
+    game_map.close_maps(win)
+    if bag.is_bag_open(win):
+        ok, info = bag.close_bag(win)
+        log(f"{tag}物品栏{info}", "SYS" if ok else "WARN")

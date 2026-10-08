@@ -24,15 +24,16 @@ import time
 
 from ascript.windows.hardware.mouse import Mouse
 
-from .app_utils import log, human_click, human_move, move_away
+from .app_utils import log, human_click, human_move, move_away, norm_text
 from . import bag  # 背包操作（储物格切换搜索）
 from . import map as game_map  # 地图操作（世界地图/小地图/位置识别）
 from . import task_tracker  # 任务追踪面板操作
 from .battle import is_in_battle, is_in_battle_frame  # 战斗状态判定（统一在 battle.py 中实现）
 from . import debug_overlay  # 调试信息悬浮层（任务进度更新）
 from .control_window import load_task_counts  # 任务次数上限（通用设置）
-from .xuanshu import (follow_task, _click_dialog_green_option,
-                      _dialog_text_present)  # 复用玄枢轶闻的任务跟踪/对话框逻辑
+from .xuanshu import follow_task, _click_dialog_green_option  # 复用玄枢轶闻的任务跟踪/对话框逻辑
+from .dialog_common import (_dialog_text_present,
+                            close_scene_panels)  # 对话框共享组件
 
 # 任务追踪面板中的任务标题
 WUHUAN_TITLE = "五环"
@@ -106,14 +107,6 @@ class DailyComplete(Exception):
     """检测到今日五环任务全部完成的恭喜对话框。"""
 
 
-def _close_scene_panels(win):
-    """关闭场景中可能打开的界面：小地图、世界地图、物品栏。"""
-    game_map.close_maps(win)
-    if bag.is_bag_open(win):
-        ok, info = bag.close_bag(win)
-        log(f"[五环] 物品栏{info}", "SYS" if ok else "WARN")
-
-
 def _wait_template(win, icon, timeout):
     """等待模板出现（战斗中跳过等待）；返回是否出现。
 
@@ -137,13 +130,32 @@ def _wait_template(win, icon, timeout):
 def _near_pos(pos, target):
     """判断位置是否在目标地图坐标附近（地名精确匹配，容差抗 OCR 噪声）。
 
-    精确匹配避免误判相邻地图（如「长安城东」不是「长安」）。
+    精确匹配避免误判相邻地图（如「长安城东」不是「长安」）；
+    复用 game_map.is_at_position（地名由正则提取不含空白，原 strip 无实际作用）。
     """
-    if pos is None:
-        return False
-    return (pos[0].strip() == CHANGAN_CITY
-            and abs(pos[1] - target[0]) <= MAP_POS_TOLERANCE
-            and abs(pos[2] - target[1]) <= MAP_POS_TOLERANCE)
+    return game_map.is_at_position(pos, CHANGAN_CITY,
+                                   target[0], target[1], MAP_POS_TOLERANCE)
+
+
+def _wait_near(win, target, timeout, desc, interval):
+    """等待走到长安目标坐标附近（战斗中跳过）。返回 (是否到达, 描述)。
+
+    interval 为轮询间隔（到达判定非防抖点，1~2s 由调用方按场景传入）。
+    """
+    deadline = time.time() + timeout
+    polls = 0
+    while time.time() < deadline:
+        if is_in_battle(win):
+            time.sleep(interval)
+            continue
+        pos = game_map.read_map_position(win)
+        if _near_pos(pos, target):
+            return True, pos
+        polls += 1
+        if polls % 5 == 0:
+            log(f"[五环] 前往{desc}中... 当前位置: {pos or '识别失败'}", "INFO")
+        time.sleep(interval)
+    return False, f"寻路到{desc}超时（未到达长安 {target[0]},{target[1]} 附近）"
 
 
 def _buy_equipments(win):
@@ -160,23 +172,12 @@ def _buy_equipments(win):
     human_click(win, CLOTH_SHOP_WALK_POS[0], CLOTH_SHOP_WALK_POS[1])
     log("[五环] 已点击小地图布店位置，自动寻路中", "SYS")
     time.sleep(1.0)  # 等待自动寻路启动
-    _close_scene_panels(win)
+    close_scene_panels(win, "五环")
     # 等待到达布店门口（长安 130,128 附近）后再进入，避免未到位就点击
-    deadline = time.time() + CLOTH_SHOP_ARRIVE_TIMEOUT
-    polls = 0
-    while time.time() < deadline:
-        if is_in_battle(win):
-            time.sleep(1.0)
-            continue
-        pos = game_map.read_map_position(win)
-        if _near_pos(pos, CLOTH_SHOP_TARGET_POS):
-            break
-        polls += 1
-        if polls % 5 == 0:
-            log(f"[五环] 前往布店中... 当前位置: {pos or '识别失败'}", "INFO")
-        time.sleep(1.0)
-    else:
-        return False, f"寻路到布店超时（未到达长安 {CLOTH_SHOP_TARGET_POS[0]},{CLOTH_SHOP_TARGET_POS[1]} 附近）"
+    ok, info = _wait_near(win, CLOTH_SHOP_TARGET_POS, CLOTH_SHOP_ARRIVE_TIMEOUT,
+                          "布店", 1.0)
+    if not ok:
+        return False, info
     log("[五环] 已到达布店门口", "SYS")
     # 进入服装店：点入口 → 点老板坐标开始对话 → 对话框出现「我想买点东西」
     deadline = time.time() + SHOP_ENTER_TIMEOUT
@@ -209,40 +210,32 @@ def _buy_equipments(win):
     return True, f"已购买 {EQUIPMENT_COUNT} 件 2 级装备"
 
 
+def _click_green_option_if(win, items, img_np, pred):
+    """点击满足谓词的对话框绿色选项（x≥PANEL_MAX_X），成功返回 True。
+
+    限定对话框区域避免误点追踪面板的绿字链接；点击后移走鼠标
+    （悬停变色会干扰后续绿字判定）。
+    """
+    for txt, rect, score in items:
+        if score >= 0.55 and pred(txt) \
+                and rect[0] >= task_tracker.PANEL_MAX_X \
+                and task_tracker.is_green_text(img_np, rect):
+            cx, cy = task_tracker.green_text_center(img_np, rect, prefer_underline=False)
+            human_click(win, cx, cy)
+            log(f"[五环] 已点击绿色选项「{txt}」", "SYS")
+            move_away(win)  # 鼠标停留选项上会使其悬停变色，干扰后续绿字判定
+            return True
+    return False
+
+
 def _click_green_option(win, items, img_np, text):
     """点击指定文案的绿色选项（忽略标点差异的子串匹配），成功返回 True。
 
     OCR 对中文标点误读常见（如「，」读成「；」），去标点后按子串匹配。
-    限定对话框区域（x≥PANEL_MAX_X），避免误点追踪面板的绿字链接。
     """
-    needle = re.sub(r"[^\w]", "", text)
-    for txt, rect, score in items:
-        if score >= 0.55 and needle in re.sub(r"[^\w]", "", txt) \
-                and rect[0] >= task_tracker.PANEL_MAX_X \
-                and task_tracker.is_green_text(img_np, rect):
-            cx, cy = task_tracker.green_text_center(img_np, rect, prefer_underline=False)
-            human_click(win, cx, cy)
-            log(f"[五环] 已点击绿色选项「{txt}」", "SYS")
-            move_away(win)  # 鼠标停留选项上会使其悬停变色，干扰后续绿字判定
-            return True
-    return False
-
-
-def _click_wuhuan_option_once(win, items, img_np):
-    """点击领取对话框中的绿色选项（含「五环」或「帮助」），成功返回 True。
-
-    限定对话框区域（x≥PANEL_MAX_X），避免误点追踪面板的绿字链接。
-    """
-    for txt, rect, score in items:
-        if score >= 0.55 and ("五环" in txt or "帮助" in txt) \
-                and rect[0] >= task_tracker.PANEL_MAX_X \
-                and task_tracker.is_green_text(img_np, rect):
-            cx, cy = task_tracker.green_text_center(img_np, rect, prefer_underline=False)
-            human_click(win, cx, cy)
-            log(f"[五环] 已点击绿色选项「{txt}」", "SYS")
-            move_away(win)  # 鼠标停留选项上会使其悬停变色，干扰后续绿字判定
-            return True
-    return False
+    needle = norm_text(text)
+    return _click_green_option_if(win, items, img_np,
+                                  lambda t: needle in norm_text(t))
 
 
 def _claim_task(win):
@@ -262,23 +255,12 @@ def _claim_task(win):
     human_click(win, YUNYOU_MAP_POS[0], YUNYOU_MAP_POS[1])
     log("[五环] 已点击小地图云游大师位置，自动寻路中", "SYS")
     time.sleep(1.0)  # 等待自动寻路启动
-    _close_scene_panels(win)
+    close_scene_panels(win, "五环")
     # 等待到达云游大师附近（长安 88,175 附近）后再点击领取按钮，避免未到位就点击
-    deadline = time.time() + CLAIM_ARRIVE_TIMEOUT
-    polls = 0
-    while time.time() < deadline:
-        if is_in_battle(win):
-            time.sleep(2.0)
-            continue
-        pos = game_map.read_map_position(win)
-        if _near_pos(pos, YUNYOU_TARGET_POS):
-            break
-        polls += 1
-        if polls % 5 == 0:
-            log(f"[五环] 前往云游大师中... 当前位置: {pos or '识别失败'}", "INFO")
-        time.sleep(2.0)
-    else:
-        return False, f"寻路到云游大师超时（未到达长安 {YUNYOU_TARGET_POS[0]},{YUNYOU_TARGET_POS[1]} 附近）"
+    ok, info = _wait_near(win, YUNYOU_TARGET_POS, CLAIM_ARRIVE_TIMEOUT,
+                          "云游大师", 2.0)
+    if not ok:
+        return False, info
     log("[五环] 已到达云游大师附近", "SYS")
     # 等待领取任务按钮出现并点击
     if not _wait_template(win, TASK_LINGQU_CHANGAN_ICON, CLAIM_BUTTON_TIMEOUT):
@@ -289,18 +271,20 @@ def _claim_task(win):
     human_click(win, pt[0], pt[1])
     log("[五环] 已点击领取任务", "SYS")
     # 对话框：活力值不足则点击「那可不行，我一会再来。」结束任务；
-    # 正常则点击「我可以帮助这些人」完成领取
+    # 正常则点击「我可以帮助这些人」完成领取。
+    # 每轮询截一帧 + 双区域 OCR 一次（面板+对话框，~1.2s），任务出现与
+    # 对话框判定同帧复用（原每轮询 2 次截图 + 全帧 OCR ~930ms，实测浪费）
     deadline = time.time() + CLAIM_DIALOG_TIMEOUT
     claimed = False
     while time.time() < deadline:
-        if task_tracker.has_task(win, WUHUAN_TITLE):
-            claimed = True
-            break
         img = win.capture(force_activate=False)
         if img is None:
             time.sleep(0.2)
             continue
-        items, img_np = game_map.ocr_image(img)
+        items, img_np = game_map.ocr_regions(img, task_tracker.OCR_REGIONS)
+        if task_tracker.has_task_in(items, img_np, WUHUAN_TITLE):
+            claimed = True
+            break
         if _dialog_text_present(items, DAILY_LIMIT_TEXT):
             log(f"[五环] 检测到「{DAILY_LIMIT_TEXT}」", "SYS")
             return False, DAILY_LIMIT_INFO
@@ -308,18 +292,16 @@ def _claim_task(win):
             claimed = True
             # 活力值不足/今日两次已满提示在点击领取选项之后出现：重新截帧并轮询几秒。
             # 任务出现在追踪面板 = 领取成功，限次/活力对话框不会再出现 → 提前退出
-            # （否则成功路径白白等满 4s 窗口，日志实测 ~5s 空档）；OCR 限对话框区域
-            # （全帧 ~930ms vs 区域 ~100-170ms），绿色选项点击依赖的全图坐标与
-            # 像素判定由 ocr_regions 的全图黑底 img_np 保证。
+            # （否则成功路径白白等满 4s 窗口，日志实测 ~5s 空档）
             vdeadline = time.time() + 4
             while time.time() < vdeadline:
-                if task_tracker.has_task(win, WUHUAN_TITLE):
-                    break
                 img = win.capture(force_activate=False)
                 if img is None:
                     time.sleep(0.5)
                     continue
-                items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
+                items, img_np = game_map.ocr_regions(img, task_tracker.OCR_REGIONS)
+                if task_tracker.has_task_in(items, img_np, WUHUAN_TITLE):
+                    break
                 if _dialog_text_present(items, DAILY_LIMIT_TEXT):
                     log(f"[五环] 检测到「{DAILY_LIMIT_TEXT}」", "SYS")
                     return False, DAILY_LIMIT_INFO
@@ -334,16 +316,19 @@ def _claim_task(win):
         # 兜底：OCR 噪声导致指定文案未匹配时，点含「五环/帮助」的绿色选项
         deadline = time.time() + CLAIM_DIALOG_TIMEOUT
         while time.time() < deadline:
-            if task_tracker.has_task(win, WUHUAN_TITLE):
+            img = win.capture(force_activate=False)
+            if img is None:
+                time.sleep(0.5)
+                continue
+            items, img_np = game_map.ocr_regions(img, task_tracker.OCR_REGIONS)
+            if task_tracker.has_task_in(items, img_np, WUHUAN_TITLE):
                 claimed = True
                 break
-            img = win.capture(force_activate=False)
-            if img is not None:
-                items, img_np = game_map.ocr_image(img)
-                if _dialog_text_present(items, DAILY_LIMIT_TEXT):
-                    log(f"[五环] 检测到「{DAILY_LIMIT_TEXT}」", "SYS")
-                    return False, DAILY_LIMIT_INFO
-                _click_wuhuan_option_once(win, items, img_np)
+            if _dialog_text_present(items, DAILY_LIMIT_TEXT):
+                log(f"[五环] 检测到「{DAILY_LIMIT_TEXT}」", "SYS")
+                return False, DAILY_LIMIT_INFO
+            _click_green_option_if(win, items, img_np,
+                                   lambda t: "五环" in t or "帮助" in t)
             time.sleep(0.5)
     if not claimed:
         return False, "领取对话框处理失败"
@@ -351,13 +336,17 @@ def _claim_task(win):
     # （点击领取选项后 NPC 回复「互助友爱…请明天再来」时任务不会出现）。
     # 任务渲染较慢，实测 15s 压线（日志 19:09），放宽到 25s
     deadline = time.time() + CLAIM_VERIFY_TIMEOUT
-    while not task_tracker.has_task(win, WUHUAN_TITLE) and time.time() < deadline:
+    while time.time() < deadline:
         img = win.capture(force_activate=False)
-        if img is not None:
-            items, _ = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
-            if _dialog_text_present(items, DAILY_LIMIT_TEXT):
-                log(f"[五环] 检测到「{DAILY_LIMIT_TEXT}」", "SYS")
-                return False, DAILY_LIMIT_INFO
+        if img is None:
+            time.sleep(1.0)
+            continue
+        items, img_np = game_map.ocr_regions(img, task_tracker.OCR_REGIONS)
+        if task_tracker.has_task_in(items, img_np, WUHUAN_TITLE):
+            break
+        if _dialog_text_present(items, DAILY_LIMIT_TEXT):
+            log(f"[五环] 检测到「{DAILY_LIMIT_TEXT}」", "SYS")
+            return False, DAILY_LIMIT_INFO
         time.sleep(1.0)
     if not task_tracker.has_task(win, WUHUAN_TITLE):
         return False, "已点击领取选项，但任务追踪中未检测到任务"
@@ -481,7 +470,7 @@ def _wuhuan_text_key(items, img_np):
         return ""
     parts = [task["title"]]
     for ln in task["lines"]:
-        stripped = re.sub(r"[^\w]", "", ln[0])
+        stripped = norm_text(ln[0])
         if not stripped:
             continue
         if _DIGITS_ONLY_RE.match(stripped):

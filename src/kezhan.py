@@ -20,7 +20,6 @@
 已实现手动寻路（世界地图 → 洛阳城 → 小地图 (620,317) → 到达 220,195 附近
 → 检查阿旺 awang.png）；提交物品/无跟踪两类特殊任务后续单独处理。
 """
-import re
 import time
 
 import cv2
@@ -28,18 +27,19 @@ import numpy as np
 from ascript.windows.hardware.keyboard import Keyboard
 from ascript.windows.system import R
 
-from .app_utils import log, human_click, move_away
+from .app_utils import log, human_click, move_away, norm_text
 from . import bag  # 物品栏开关
 from . import map as game_map  # 地图操作（世界地图/小地图/位置识别）
 from . import task_tracker  # 任务追踪面板操作
-from .battle import is_in_battle  # 战斗状态判定（统一在 battle.py 中实现）
+from .battle import is_in_battle, is_in_battle_frame  # 战斗状态判定（统一在 battle.py 中实现）
 from . import debug_overlay  # 调试信息悬浮层（任务进度更新）
 from .control_window import load_task_counts  # 任务次数上限（通用设置）
 from .xuanshu import follow_task  # 共享跟踪引擎（kezhan 对 xuanshu 的唯一依赖）
 from .dialog_common import (_click_green_option_once, _dialog_text_present,
-                            _fuzzy_contains, DAILY_LIMIT_TEXT, DAILY_LIMIT_INFO,
-                            DIALOG_LOSE_TEXTS, DIALOG_SKIP_CLICKS,
-                            SCREEN_CENTER_POS)
+                            _norm_dialog_present, close_scene_panels,
+                            _click_screen_center, _fuzzy_contains,
+                            DAILY_LIMIT_TEXT, DAILY_LIMIT_INFO,
+                            DIALOG_LOSE_TEXTS)
 
 # 任务追踪面板中的任务标题
 TASK_MODE = "客栈"       # 控制面板任务模式名（任务次数配置键）
@@ -165,21 +165,6 @@ BIWU_REDO_INTERVAL = 15                       # 寻路完成后最短重做间�
 _biwu_last_done = 0.0                         # 上次比武场寻路完成时间（防重复触发）
 
 
-def _norm_text(s):
-    """去标点/空格/特殊字符（保留中文与字母数字），匹配前统一规范化。
-
-    OCR 对标点误读常见（「，」读成「；」、句号变逗号等），去标点后
-    再做精确/模糊匹配可大幅降低漏配。
-    """
-    return re.sub(r"[^\w]", "", s)
-
-
-def _norm_dialog_present(items, dtxt):
-    """规范化（去标点等）后的对话框文案模糊匹配（见 _norm_text）。"""
-    norm_items = [(_norm_text(t), r, s) for t, r, s in items]
-    return _dialog_text_present(norm_items, _norm_text(dtxt))
-
-
 def _at_inn(win):
     """判断是否已在洛阳客栈（位置地名精确匹配）。"""
     pos = game_map.read_position_with_recovery(win)
@@ -204,19 +189,21 @@ def _find_zhanggui(win):
     return pt
 
 
-def _close_scene_panels(win):
-    """关闭场景中可能打开的界面：小地图、世界地图、物品栏。"""
-    game_map.close_maps(win)
-    if bag.is_bag_open(win):
-        ok, info = bag.close_bag(win)
-        log(f"[客栈] 物品栏{info}", "SYS" if ok else "WARN")
-
-
 def _click_fast_travel_option(win, items, img_np):
     """检测快送对话框并点击绿色选项「快送我去」；点击成功返回 True。"""
     if not _norm_dialog_present(items, FAST_DIALOG_TEXT):
         return False
     return _click_green_option_once(win, items, img_np, FAST_DIALOG_OPTION, prefix="客栈")
+
+
+def _try_fast_travel(win, img):
+    """在当前帧检测快送对话框并点击「快送我去」；点击成功返回 True。
+
+    快送对话框为居中对话框，区域 OCR（全帧 930ms → 区域 ~100ms）；
+    帧由调用方提供（清理前预查与等待循环两处共用）。
+    """
+    items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
+    return _click_fast_travel_option(win, items, img_np)
 
 
 def _go_to_inn(win):
@@ -230,7 +217,7 @@ def _go_to_inn(win):
     if is_in_battle(win):
         return False, "战斗中，跳过本轮寻路"
 
-    _close_scene_panels(win)
+    close_scene_panels(win, "客栈")
     # 世界地图 → 点击洛阳城，打开洛阳小地图
     ok, info = game_map.open_mini_map_city(win, game_map.WORLD_MAP_LUOYANG_ICON,
                                            LUOYANG_CITY)
@@ -241,31 +228,27 @@ def _go_to_inn(win):
     time.sleep(1.0)  # 等待寻路/对话框响应
     # 先查快送对话框再清理地图：清理的右键回退点可能落在对话框上将其点掉
     img = win.capture(force_activate=False)
-    if img is not None:
-        # 快送对话框为居中对话框，区域 OCR（全帧 930ms → 区域 ~100ms）
-        items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
-        if _click_fast_travel_option(win, items, img_np):
-            log("[客栈] 已点击「快送我去」，等待传送", "SYS")
-            time.sleep(2.0)  # 等待传送完成
-            return True, "已点击快送选项，传送洛阳客栈"
-    _close_scene_panels(win)
+    if img is not None and _try_fast_travel(win, img):
+        log("[客栈] 已点击「快送我去」，等待传送", "SYS")
+        time.sleep(2.0)  # 等待传送完成
+        return True, "已点击快送选项，传送洛阳客栈"
+    close_scene_panels(win, "客栈")
 
-    # 等待：快送对话框 / 到达洛阳客栈 / 寻路结束（位置稳定）
+    # 等待：快送对话框 / 到达洛阳客栈 / 寻路结束（位置稳定）。
+    # 每轮询截一帧：战斗跳过与快送对话框判定同帧复用（原每轮询 3 次截图）
     deadline = time.time() + ARRIVE_TIMEOUT
     last = None
     unchanged = 0
     polls = 0
     while time.time() < deadline:
-        if is_in_battle(win):
+        img = win.capture(force_activate=False)
+        if img is not None and is_in_battle_frame(img):
             time.sleep(2.0)
             continue
-        img = win.capture(force_activate=False)
-        if img is not None:
-            items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
-            if _click_fast_travel_option(win, items, img_np):
-                log("[客栈] 已点击「快送我去」，等待传送", "SYS")
-                time.sleep(2.0)  # 等待传送完成
-                return True, "已点击快送选项，传送洛阳客栈"
+        if img is not None and _try_fast_travel(win, img):
+            log("[客栈] 已点击「快送我去」，等待传送", "SYS")
+            time.sleep(2.0)  # 等待传送完成
+            return True, "已点击快送选项，传送洛阳客栈"
         # 位置识别（寻路等待期间不做 Alt+C 恢复：Alt+C 会打断自动寻路，
         # 失败跳过本轮即可），同时判定是否已到客栈
         pos = game_map.read_map_position(win)
@@ -322,19 +305,9 @@ def _has_task(win):
     return task_tracker.has_task(win, TASK_TITLE)
 
 
-def _click_screen_center(win, times=DIALOG_SKIP_CLICKS):
-    """点击屏幕中间若干次（推进 NPC 对话），「客栈」前缀包装（共享实现在 dialog_common）。"""
-    from .dialog_common import _click_screen_center as _dc
-    return _dc(win, times=times, prefix="客栈")
-
-
 def _near_luoyang(pos, target):
-    """判断是否在洛阳城目标坐标附近（±5 容差）。"""
-    if pos is None:
-        return False
-    return (pos[0].strip() == LUOYANG_CITY
-            and abs(pos[1] - target[0]) <= 5
-            and abs(pos[2] - target[1]) <= 5)
+    """判断是否在洛阳城目标坐标附近（±5 容差；复用 game_map.is_at_position）。"""
+    return game_map.is_at_position(pos, LUOYANG_CITY, target[0], target[1], 5)
 
 
 def _find_awang(win):
@@ -400,7 +373,7 @@ def _walk_to_luoyang_pos(win, click_pos, target_pos, timeout, desc):
     pos = game_map.read_position_with_recovery(win)
     if _near_luoyang(pos, target_pos):
         return True, f"已在{desc}附近"
-    _close_scene_panels(win)
+    close_scene_panels(win, "客栈")
     if pos is not None and pos[0].strip() == LUOYANG_CITY:
         # 已在洛阳城：无需打开世界地图，直接打开小地图
         ok, info = game_map.open_mini_map(win)
@@ -412,7 +385,7 @@ def _walk_to_luoyang_pos(win, click_pos, target_pos, timeout, desc):
     human_click(win, click_pos[0], click_pos[1])
     log(f"[客栈] 已点击洛阳小地图 {click_pos}，前往{desc}", "SYS")
     time.sleep(1.0)  # 等待自动寻路启动
-    _close_scene_panels(win)
+    close_scene_panels(win, "客栈")
     # 等待到达目标附近
     deadline = time.time() + timeout
     polls = 0
@@ -490,7 +463,7 @@ def _order_green_state(items, img_np):
     """
     pl, pt_, pr, pb = TRACK_PANEL_REGION
     kw_lines = [(txt, rect) for txt, rect, _ in items
-                if any(kw in _norm_text(txt) for kw in GREEN_CLICK_ORDER)
+                if any(kw in norm_text(txt) for kw in GREEN_CLICK_ORDER)
                 and rect[0] < pr and pt_ <= rect[1] <= pb]
     if not kw_lines:
         return [], [], (0, 0)
@@ -499,12 +472,9 @@ def _order_green_state(items, img_np):
     r = max(rect[2] for _, rect in kw_lines)
     b = max(rect[3] for _, rect in kw_lines)
     region = img_np[t:b, l:r].astype(int)
-    g = region[:, :, 1]
-    rr = region[:, :, 0]
-    bb = region[:, :, 2]
-    mask = (g > 90) & (g > rr + 30) & (g > bb + 30)
+    mask = task_tracker.green_mask(region, 90)
     # 文本中存在的顺序关键词（各行拼接后规范化查找，抗跨行拆分）
-    joined = _norm_text("".join(txt for txt, _ in kw_lines))
+    joined = norm_text("".join(txt for txt, _ in kw_lines))
     kw_seq = [kw for kw in GREEN_CLICK_ORDER if kw in joined]
     if not mask.any() or not kw_seq:
         return [], [], (l, t)
@@ -677,7 +647,7 @@ def _handle_follow_extras(win, items, img_np):
         if any(_norm_dialog_present(items, t) for t in DIALOG_LOSE_TEXTS):
             matched = [t for t in DIALOG_LOSE_TEXTS if _norm_dialog_present(items, t)]
             log(f"[客栈] 检测到「你输了/平局」对话（命中 {matched}），先关闭对话框", "SYS")
-            _click_screen_center(win, times=1)
+            _click_screen_center(win, times=1, prefix="客栈")
             time.sleep(0.3)  # 等待对话框关闭
             # 诊断：转储关闭后的对话框区域文案与追踪面板标题（复现排查用）
             try:
@@ -733,11 +703,11 @@ def _click_green_option_fuzzy(win, items, img_np, text):
     优先精确子串；否则相似度 ≥0.8 兜底（实测区域裁剪 OCR 会把
     「阴阳有序，此事义不容辞。」读成「…此事文不容辞，」，精确匹配漏掉）。
     """
-    nopt = _norm_text(text)
+    nopt = norm_text(text)
     for txt, rect, score in items:
         if score < 0.55 or rect[0] < task_tracker.PANEL_MAX_X:
             continue  # 限定对话框区域，避免误点追踪面板的绿字链接
-        ntxt = _norm_text(txt)
+        ntxt = norm_text(txt)
         if nopt in ntxt or _fuzzy_contains(ntxt, nopt, threshold=0.8):
             if task_tracker.is_green_text(img_np, rect):
                 cx, cy = task_tracker.green_text_center(img_np, rect,
@@ -756,7 +726,7 @@ def _click_green_option_fallback(win, items, img_np, qtxt):
     """
     qrect = None
     for txt, rect, _ in items:
-        if _fuzzy_contains(_norm_text(txt), _norm_text(qtxt), threshold=0.85):
+        if _fuzzy_contains(norm_text(txt), norm_text(qtxt), threshold=0.85):
             qrect = rect
             break
     if qrect is None:
@@ -767,10 +737,7 @@ def _click_green_option_fallback(win, items, img_np, qtxt):
     region = img_np[y0:y0 + 80, x0:x1].astype(int)
     if region.size == 0:
         return False
-    g = region[:, :, 1]
-    r = region[:, :, 0]
-    b = region[:, :, 2]
-    mask = (g > 120) & (g > r + 30) & (g > b + 30)
+    mask = task_tracker.green_mask(region, 120)
     n, _, stats, _ = cv2.connectedComponentsWithStats(mask.astype(np.uint8),
                                                       connectivity=8)
     cands = []
@@ -797,8 +764,9 @@ def _handle_dialog_options(win, items, img_np):
     领取对话链与跟踪期间（follow_task 的附加对话处理回调）均使用，
     返回是否已处理。
     """
+    norm_items = [(norm_text(t), r, s) for t, r, s in items]
     for dtxt, opt in DIALOG_OPTION_MAP.items():
-        if not _norm_dialog_present(items, dtxt):
+        if not _dialog_text_present(norm_items, norm_text(dtxt)):
             continue
         if _click_green_option_fuzzy(win, items, img_np, opt):
             log(f"[客栈] 检测到任务对话，已点击绿色选项「{opt}」", "SYS")
@@ -808,9 +776,9 @@ def _handle_dialog_options(win, items, img_np):
             log("[客栈] 检测到任务对话（选项 OCR 不可识别，绿字块兜底点击）", "SYS")
             return True
     for dtxt in DIALOG_SKIP_TEXTS:
-        if _norm_dialog_present(items, dtxt):
+        if _dialog_text_present(norm_items, norm_text(dtxt)):
             # 命中即固定连点推进（多屏对话无需枚举后续文案）
-            _click_screen_center(win)
+            _click_screen_center(win, prefix="客栈")
             return True
     return False
 
@@ -857,6 +825,16 @@ def _claim_task(win, pt):
     return False, f"点击掌柜后未领取到客栈任务（对话链超时 {CLAIM_CHAIN_TIMEOUT}s）"
 
 
+def _follow_kezhan(win):
+    """客栈 follow_task 统一参数调用（四象顺序绿字点击 + 附加对话处理）。"""
+    ok, info = follow_task(win, TASK_TITLE, prefix="客栈",
+                           extra_dialog_handler=_handle_follow_extras,
+                           green_order=GREEN_CLICK_ORDER,
+                           progress_key=_order_progress_key,
+                           green_picker=_pick_order_green)
+    return ("done", info) if ok else ("fail", info)
+
+
 def run_cycle(win):
     """执行一轮客栈任务检查：有任务则跟踪到完成，无任务则领取。
 
@@ -894,12 +872,7 @@ def run_cycle(win):
             ok, info = _walk_to_biwu(win)
             _biwu_last_done = time.time()
             log(f"[客栈] 比武场寻路: {info}", "SYS" if ok else "WARN")
-        ok, info = follow_task(win, TASK_TITLE, prefix="客栈",
-                               extra_dialog_handler=_handle_follow_extras,
-                               green_order=GREEN_CLICK_ORDER,
-                               progress_key=_order_progress_key,
-                               green_picker=_pick_order_green)
-        return ("done", info) if ok else ("fail", info)
+        return _follow_kezhan(win)
 
     # 没有任务 → 前往洛阳客栈找掌柜并领取任务
     pt, info = _ensure_zhanggui(win)
@@ -908,23 +881,13 @@ def run_cycle(win):
     # 到达客栈后领前复核：任务其实还在（此前误判）→ 直接跟踪，不点掌柜
     if _has_task(win):
         log("[客栈] 领前复核发现任务仍在追踪中，改为直接跟踪", "WARN")
-        ok, info = follow_task(win, TASK_TITLE, prefix="客栈",
-                               extra_dialog_handler=_handle_follow_extras,
-                               green_order=GREEN_CLICK_ORDER,
-                               progress_key=_order_progress_key,
-                               green_picker=_pick_order_green)
-        return ("done", info) if ok else ("fail", info)
+        return _follow_kezhan(win)
     ok, info = _claim_task(win, pt)
     if not ok:
         return ("daily_limit", info) if info == DAILY_LIMIT_INFO else ("fail", info)
 
     # 领取成功：紧接着跟踪任务，不等轮次间隔
-    ok, info = follow_task(win, TASK_TITLE, prefix="客栈",
-                           extra_dialog_handler=_handle_follow_extras,
-                           green_order=GREEN_CLICK_ORDER,
-                           progress_key=_order_progress_key,
-                           green_picker=_pick_order_green)
-    return ("done", info) if ok else ("fail", info)
+    return _follow_kezhan(win)
 
 
 def run_loop(win, cycle_interval=1.0):

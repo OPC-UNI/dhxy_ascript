@@ -15,7 +15,7 @@ import time
 
 import numpy as np
 
-from .app_utils import log, human_click
+from .app_utils import log, human_click, norm_text
 from . import map as game_map  # OCR 能力复用
 
 # 绿色文案判定参数：G 通道显著高于 R/B 即视为绿色文字
@@ -48,7 +48,7 @@ OCR_REGIONS = (TRACK_REGION, DIALOG_REGION)
 TRACK_OCR_REGION = (0, 200, 430, 600)
 
 
-def _green_mask(region, min_g):
+def green_mask(region, min_g):
     """绿色像素掩码（G 通道亮度与色相判定）。"""
     g = region[:, :, 1].astype(int)
     r = region[:, :, 0].astype(int)
@@ -61,7 +61,7 @@ def green_ratio(img_np, rect, min_g=GREEN_MIN_G):
     region = img_np[rect[1]:rect[3], rect[0]:rect[2]]
     if region.size == 0:
         return 0.0
-    return float(_green_mask(region, min_g).mean())
+    return float(green_mask(region, min_g).mean())
 
 
 def bright_green_ratio(img_np, rect):
@@ -131,7 +131,7 @@ def green_text_center(img_np, rect, prefer_underline=True):
         y1 = min(img_np.shape[0], rect[3] + 4)
         x0 = max(0, rect[0] - 2)
         x1 = min(img_np.shape[1], rect[2] + 4)
-        mask = _green_mask(img_np[y0:y1, x0:x1], GREEN_BRIGHT_MIN)
+        mask = green_mask(img_np[y0:y1, x0:x1], GREEN_BRIGHT_MIN)
         for y_row in range(mask.shape[0] - 1, -1, -1):
             cols = np.where(mask[y_row])[0]
             if cols.size < 20 or _longest_run_len(cols) < 20:
@@ -141,7 +141,7 @@ def green_text_center(img_np, rect, prefer_underline=True):
             return cx, cy
     # 亮绿/绿色像素：最长连续列段横向中心、绿色像素纵向中心（落在文字本体上）
     for min_g in (GREEN_BRIGHT_MIN, GREEN_MIN_G):
-        mask = _green_mask(region, min_g)
+        mask = green_mask(region, min_g)
         cols = np.where(mask.any(axis=0))[0]
         rows = np.where(mask.any(axis=1))[0]
         if cols.size:
@@ -295,7 +295,7 @@ def task_signature(task):
     比较前剔除标点与空白（如「…玄石」与「…玄石。」视为相同）。
     """
     first = task["lines"][0][0] if task["lines"] else ""
-    return re.sub(r"[^\w]", "", f"{task['title']}|{first}")
+    return norm_text(f"{task['title']}|{first}")
 
 
 def _keyword_fallback(items, img_np, keywords, arect):
