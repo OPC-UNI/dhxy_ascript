@@ -14,7 +14,7 @@ ControlWindow 基于 WebWindow（pywebview），页面为 res/ui/control_window.
 
 功能约定：
 - 启动/停止：桥接调用 TaskManager 启停任务子进程（升级强杀保证线程全清）
-- 重置：停止当前任务，并把模式恢复默认（五环）
+- 重置：停止当前任务，并把所有设置恢复默认（见 reset_settings）
 - 关闭（X）：取消关闭并隐藏到托盘（_on_closing），任务继续运行；
   真正退出须先 close_window() 放行（_real_close），否则窗口永不销毁
 - 调试信息开关：控制游戏窗口悬浮层（任务侧读取），同时控制日志窗口显隐；
@@ -235,7 +235,7 @@ def save_xiuluo_hezi(on):
     return {"status": "success"}
 
 
-# ---- 高性能模式（UI 开关，通用设置，KeyValue 持久化，默认关闭；
+# ---- 高性能模式（UI 开关，通用设置，KeyValue 持久化，默认开启；
 #      开启后各任务模块固定位置 UI（按钮/对话框选项）首次识别记录
 #      坐标，后续直接按坐标点击 + 效果校验，失败回退识别路径——
 #      位置漂移/窗口缩放时自动失效并自愈；旧修罗键自动迁移） ----
@@ -244,11 +244,11 @@ _XIULUO_HIGH_PERF_KEY_OLD = "xiuluo_high_perf"
 
 
 def load_high_perf():
-    """读取高性能开关（首次默认关闭；旧修罗高性能键自动迁移到通用键）。"""
+    """读取高性能开关（首次默认开启；旧修罗高性能键自动迁移到通用键）。"""
     if KeyValue.get(_HIGH_PERF_KEY) is None \
             and KeyValue.get(_XIULUO_HIGH_PERF_KEY_OLD) is not None:
         KeyValue.save(_HIGH_PERF_KEY, bool(KeyValue.get(_XIULUO_HIGH_PERF_KEY_OLD)))
-    return bool(KeyValue.get(_HIGH_PERF_KEY, False))
+    return bool(KeyValue.get(_HIGH_PERF_KEY, True))
 
 
 def save_high_perf(on):
@@ -320,7 +320,7 @@ CHAR_BATTLE_ACTIONS = ([f"技能{r}-{c}" for r in range(1, 4) for c in range(1, 
 # 召唤兽：技能 6 格 + 攻击/防御/逃跑/无（召唤兽不能捕捉）
 BEAST_BATTLE_ACTIONS = [f"技能{i}" for i in range(1, 7)] + ["攻击", "防御", "逃跑", "无"]
 _BATTLE_KEYS = {"char": "battle_char_action", "beast": "battle_beast_action"}
-_DEFAULT_BATTLE = {"char": "攻击", "beast": "攻击"}
+_DEFAULT_BATTLE = {"char": "技能3-5", "beast": "攻击"}
 
 
 def load_battle_actions():
@@ -342,6 +342,54 @@ def save_battle_action(target, value):
         return {"status": "error", "msg": "INVALID_VALUE"}
     KeyValue.save(_BATTLE_KEYS[target], value)
     return {"status": "success"}
+
+
+# ---- 自动使用法门（UI 开关，KeyValue 持久化，默认关闭；开启后每场
+#      战斗第 1 回合操作条出现时先点一次法门坐标再继续配置的战斗
+#      操作——坐标标定见 battle.FAMEN_CLICK_POS） ----
+_AUTO_FAMEN_KEY = "auto_famen"
+
+
+def load_auto_famen():
+    """读取自动使用法门开关（首次默认关闭）。"""
+    return bool(KeyValue.get(_AUTO_FAMEN_KEY, False))
+
+
+def save_auto_famen(on):
+    """保存自动使用法门开关，返回操作结果。"""
+    KeyValue.save(_AUTO_FAMEN_KEY, bool(on))
+    return {"status": "success"}
+
+
+def reset_settings():
+    """把所有设置恢复为默认值（重置按钮用）。
+
+    默认值与各 load 函数一致：模式五环、次数按 TASK_COUNT_DEFAULTS、
+    摄妖香开、血蓝阈值 40、战斗动作 人物技能3-5/召唤兽攻击、修罗
+    最少人数 5 + 种族 男人男鬼、五倍最少人数 5、抢盒子/检查队伍/
+    调试悬浮关、高性能开、自动巫医开（间隔 5）、自动使用法门关、
+    主题浅色。
+    """
+    save_task_mode(_DEFAULT_MODE)
+    for mode, default in TASK_COUNT_DEFAULTS.items():
+        save_task_count(mode, default)
+    save_use_sheyaoxiang(True)
+    for name in _THRESHOLD_KEYS:
+        save_threshold(name, DEFAULT_THRESHOLD)
+    for target in _BATTLE_KEYS:
+        save_battle_action(target, _DEFAULT_BATTLE[target])
+    save_xiuluo_min(XIULUO_MIN_DEFAULT)
+    save_xiuluo_races(XIULUO_RACES_DEFAULT)
+    save_wubei_min(WUBEI_MIN_DEFAULT)
+    save_wubei_hezi(False)
+    save_xiuluo_hezi(False)
+    save_high_perf(True)
+    save_xiuluo_check_team(False)
+    save_xiuluo_auto_wuyi(True)
+    save_xiuluo_wuyi_interval(5)
+    save_auto_famen(False)
+    save_debug_overlay(False)
+    save_ui_theme("light")
 
 
 class _ApiBridge:
@@ -395,6 +443,7 @@ class ControlWindow(WebWindow):
         self.expose(self.save_wubei_min)
         self.expose(self.save_wubei_hezi)
         self.expose(self.save_debug_overlay)
+        self.expose(self.save_auto_famen)
         self.expose(self.save_ui_theme)
         self.expose(self.start_task)
         self.expose(self.stop_task)
@@ -424,6 +473,7 @@ class ControlWindow(WebWindow):
                 "high_perf": load_high_perf(),
                 "wubei": {"min_members": load_wubei_min(),
                           "hezi": load_wubei_hezi()},
+                "auto_famen": load_auto_famen(),
                 "debug_overlay": load_debug_overlay()}
 
     def save_battle_action(self, target, value):
@@ -445,6 +495,10 @@ class ControlWindow(WebWindow):
     def save_use_sheyaoxiang(self, on):
         """摄妖香开关变更：保存开关状态。"""
         return save_use_sheyaoxiang(on)
+
+    def save_auto_famen(self, on):
+        """战斗设置变更：保存自动使用法门开关状态。"""
+        return save_auto_famen(on)
 
     def save_xiuluo_min(self, value):
         """修罗设置变更：保存最少人数。"""
@@ -505,11 +559,11 @@ class ControlWindow(WebWindow):
         return self._tm.stop()
 
     def reset_task(self):
-        """重置按钮：停止当前任务，并把模式恢复默认（五环）。"""
+        """重置按钮：停止当前任务，并把所有设置恢复默认。"""
         result = self._tm.stop()
         if result.get("status") != "success":
             return result
-        save_task_mode(_DEFAULT_MODE)
+        reset_settings()
         return {"status": "success", "mode": load_task_mode()}
 
     def verify_xiuluo_return(self):

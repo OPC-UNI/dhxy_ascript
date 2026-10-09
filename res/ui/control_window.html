@@ -49,11 +49,13 @@
         .btn:hover:not(:disabled) { filter: brightness(1.2); }
         .btn:disabled { opacity: 0.35; cursor: not-allowed; }
         .th-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+        /* 任务选择：单选框隐藏、整卡点击选择；选中态（边框+文字主题色）
+           与运行中高亮一致，未选择的任务在运行中置灰 */
+        .task-radio input[type="radio"] { display: none; }
         .task-radio input:disabled + span { opacity: 0.35; }
-        /* 运行中：已选择的任务保持高亮差异显示（文字/边框），未选择的置灰 */
-        .task-radio input:checked:disabled + span { opacity: 1; color: var(--accent); }
-        .task-group:has(input:checked:disabled) { border-color: var(--accent); }
-        .task-radio:has(input:disabled) { cursor: not-allowed; }
+        .task-radio input:checked + span { opacity: 1; color: var(--accent); }
+        .task-group:has(input:checked) { border-color: var(--accent); }
+        .task-group:has(input:disabled) { cursor: not-allowed; }
         #btn-reset { border-color: var(--warn); color: var(--warn); }
         #btn-reset.armed { background: var(--warn); color: #fff; }
         #btn-theme { border-color: var(--accent); color: var(--accent); margin-left: auto; }
@@ -88,9 +90,15 @@
         .radio-grid label { display: flex; align-items: center; gap: 5px; cursor: pointer; user-select: none; }
         .radio-grid input[type="radio"] { accent-color: var(--accent); cursor: pointer; }
         .radio-grid input[type="checkbox"] { accent-color: var(--accent); cursor: pointer; }
-        /* 战斗设置：5 列小字号，容纳 技能1-1 等标签 */
-        .battle-grid { grid-template-columns: repeat(5, 1fr); gap: 6px 4px; font-size: 12px; }
-        .switch-row { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: 13px; font-family: "微软雅黑"; cursor: pointer; user-select: none; }
+        /* 战斗动作：类型单选横排（法术/攻击/防御/捕捉/逃跑/无）+ 法术技能下拉 */
+        .battle-action-row { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; font-family: "微软雅黑"; color: var(--text); }
+        .battle-action-row label { display: flex; align-items: center; gap: 4px; cursor: pointer; user-select: none; }
+        .battle-action-row input[type="radio"] { accent-color: var(--accent); cursor: pointer; }
+        .skill-select { background: var(--panel2); color: var(--text); border: 1px solid var(--border2); border-radius: 4px; padding: 2px 6px; min-width: 110px; font-size: 13px; font-family: "微软雅黑"; cursor: pointer; }
+        /* 设置条目式布局：文本居左、开关居右（DOM 为 track+文本，行反转
+           后文本先行；input:checked 相邻兄弟选择器不受 DOM 顺序影响） */
+        .switch-row { display: flex; flex-direction: row-reverse; align-items: center; justify-content: space-between; gap: 8px; color: var(--text); font-size: 13px; font-family: "微软雅黑"; cursor: pointer; user-select: none; }
+        .switch-row span:not(.switch-track) { flex: 1; min-width: 0; }
         .switch-row input { display: none; }
         .switch-track {
             width: 40px; height: 20px; border-radius: 10px; background: var(--border2);
@@ -111,26 +119,19 @@
         .th-btn:hover { background: var(--border); color: var(--accent); }
         .th-val { width: 32px; text-align: center; color: var(--accent); font-family: 'Consolas', monospace; }
         /* ---- 任务设置：每任务一组（模式单选 + 次数步进） ---- */
+        /* 任务条目：卡片加高便于整卡点击；条目间隔收紧（覆盖 tab-panel 默认 12px） */
+        #panel-task { gap: 6px; }
         .task-group {
             width: 100%; display: flex; flex-direction: row; align-items: center;
             gap: 10px; background: var(--panel); border: 1px solid var(--border);
-            border-radius: 8px; padding: 8px 12px;
+            border-radius: 8px; padding: 14px 12px; cursor: pointer;
         }
         .task-radio {
             flex: 1; display: flex; align-items: center; gap: 6px;
             color: var(--text); font-size: 13px; font-family: "微软雅黑";
             cursor: pointer; user-select: none;
         }
-        .task-radio input[type="radio"] { accent-color: var(--accent); cursor: pointer; }
         .task-count { display: flex; align-items: center; gap: 6px; }
-        /* ---- 血量蓝量：小卡片式（2 列） ---- */
-        .th-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; width: 100%; }
-        .count-card {
-            display: flex; flex-direction: column; align-items: center; gap: 6px;
-            background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; padding: 8px 4px;
-        }
-        .cc-name { color: var(--text); font-size: 13px; font-family: "微软雅黑"; }
-        .cc-ctrl { display: flex; align-items: center; gap: 6px; }
         /* ---- 分组框（通用/高级设置） ---- */
         .group-box {
             width: 100%; display: flex; flex-direction: column; gap: 10px;
@@ -138,11 +139,13 @@
             padding: 10px 12px;
         }
         .group-title { color: var(--accent); font-size: 13px; font-family: "微软雅黑"; }
-        .group-row { display: flex; align-items: center; gap: 8px; }
+        /* 设置条目行：文本居左、控件居右（与开关行统一） */
+        .group-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+        .group-ctrl { display: flex; align-items: center; gap: 6px; }
         /* ---- 修罗回程验证行 ---- */
         .verify-row { display: flex; align-items: center; gap: 8px; }
         #verify-result { color: var(--text); font-size: 12px; font-family: "微软雅黑"; flex: 1; word-break: break-all; }
-        .group-label { color: var(--text); font-size: 13px; font-family: "微软雅黑"; width: 84px; flex-shrink: 0; }
+        .group-label { color: var(--text); font-size: 13px; font-family: "微软雅黑"; flex: 1; min-width: 0; }
         .group-hint { color: var(--text-dim); font-size: 11px; font-family: "微软雅黑"; }
         .group-sub { color: var(--text-dim); font-size: 12px; font-family: "微软雅黑"; }
         /* 种族选择：独立成行，4 列全宽（12 项 3 行） */
@@ -244,17 +247,19 @@
                 </label>
                 <div class="group-row">
                     <span class="group-label">巫医间隔</span>
-                    <button class="th-btn" onclick="xiuluoWuyiInterval(-1)">−</button>
-                    <span class="th-val" id="xiuluo-wuyi-interval">5</span>
-                    <button class="th-btn" onclick="xiuluoWuyiInterval(1)">＋</button>
-                    <span class="group-hint">轮（1~90）</span>
+                    <div class="group-ctrl">
+                        <button class="th-btn" onclick="xiuluoWuyiInterval(-1)">−</button>
+                        <span class="th-val" id="xiuluo-wuyi-interval">5</span>
+                        <button class="th-btn" onclick="xiuluoWuyiInterval(1)">＋</button>
+                    </div>
                 </div>
                 <div class="group-row">
                     <span class="group-label">最少人数</span>
-                    <button class="th-btn" onclick="xiuluoMin(-1)">−</button>
-                    <span class="th-val" id="xiuluo-min">5</span>
-                    <button class="th-btn" onclick="xiuluoMin(1)">＋</button>
-                    <span class="group-hint">3~5</span>
+                    <div class="group-ctrl">
+                        <button class="th-btn" onclick="xiuluoMin(-1)">−</button>
+                        <span class="th-val" id="xiuluo-min">5</span>
+                        <button class="th-btn" onclick="xiuluoMin(1)">＋</button>
+                    </div>
                 </div>
                 <div class="group-sub">必须有的种族</div>
                 <div class="radio-grid race-grid" id="xiuluo-race-grid"></div>
@@ -269,10 +274,11 @@
                 <div class="group-title">五倍设置</div>
                 <div class="group-row">
                     <span class="group-label">最少人数</span>
-                    <button class="th-btn" onclick="wubeiMin(-1)">−</button>
-                    <span class="th-val" id="wubei-min">5</span>
-                    <button class="th-btn" onclick="wubeiMin(1)">＋</button>
-                    <span class="group-hint">1~5（仅队长生效）</span>
+                    <div class="group-ctrl">
+                        <button class="th-btn" onclick="wubeiMin(-1)">−</button>
+                        <span class="th-val" id="wubei-min">5</span>
+                        <button class="th-btn" onclick="wubeiMin(1)">＋</button>
+                    </div>
                 </div>
                 <label class="switch-row">
                     <input type="checkbox" id="wubei-hezi">
@@ -283,49 +289,59 @@
             <!-- 血量蓝量分组 -->
             <div class="group-box">
                 <div class="group-title">血量蓝量阈值（步进 5%）</div>
-                <div class="th-grid">
-                    <div class="count-card">
-                        <div class="cc-name">人物红条</div>
-                        <div class="cc-ctrl">
-                            <button class="th-btn" onclick="th('char_hp', -5)">−</button>
-                            <span class="th-val" id="th-char_hp">40%</span>
-                            <button class="th-btn" onclick="th('char_hp', 5)">＋</button>
-                        </div>
+                <div class="group-row">
+                    <span class="group-label">人物红条</span>
+                    <div class="group-ctrl">
+                        <button class="th-btn" onclick="th('char_hp', -5)">−</button>
+                        <span class="th-val" id="th-char_hp">40%</span>
+                        <button class="th-btn" onclick="th('char_hp', 5)">＋</button>
                     </div>
-                    <div class="count-card">
-                        <div class="cc-name">人物蓝条</div>
-                        <div class="cc-ctrl">
-                            <button class="th-btn" onclick="th('char_mp', -5)">−</button>
-                            <span class="th-val" id="th-char_mp">40%</span>
-                            <button class="th-btn" onclick="th('char_mp', 5)">＋</button>
-                        </div>
+                </div>
+                <div class="group-row">
+                    <span class="group-label">人物蓝条</span>
+                    <div class="group-ctrl">
+                        <button class="th-btn" onclick="th('char_mp', -5)">−</button>
+                        <span class="th-val" id="th-char_mp">40%</span>
+                        <button class="th-btn" onclick="th('char_mp', 5)">＋</button>
                     </div>
-                    <div class="count-card">
-                        <div class="cc-name">召唤兽红条</div>
-                        <div class="cc-ctrl">
-                            <button class="th-btn" onclick="th('beast_hp', -5)">−</button>
-                            <span class="th-val" id="th-beast_hp">40%</span>
-                            <button class="th-btn" onclick="th('beast_hp', 5)">＋</button>
-                        </div>
+                </div>
+                <div class="group-row">
+                    <span class="group-label">召唤兽红条</span>
+                    <div class="group-ctrl">
+                        <button class="th-btn" onclick="th('beast_hp', -5)">−</button>
+                        <span class="th-val" id="th-beast_hp">40%</span>
+                        <button class="th-btn" onclick="th('beast_hp', 5)">＋</button>
                     </div>
-                    <div class="count-card">
-                        <div class="cc-name">召唤兽蓝条</div>
-                        <div class="cc-ctrl">
-                            <button class="th-btn" onclick="th('beast_mp', -5)">−</button>
-                            <span class="th-val" id="th-beast_mp">40%</span>
-                            <button class="th-btn" onclick="th('beast_mp', 5)">＋</button>
-                        </div>
+                </div>
+                <div class="group-row">
+                    <span class="group-label">召唤兽蓝条</span>
+                    <div class="group-ctrl">
+                        <button class="th-btn" onclick="th('beast_mp', -5)">−</button>
+                        <span class="th-val" id="th-beast_mp">40%</span>
+                        <button class="th-btn" onclick="th('beast_mp', 5)">＋</button>
                     </div>
                 </div>
             </div>
-            <!-- 战斗动作分组：人物与召唤兽（单选，由 JS 动态生成） -->
+            <!-- 战斗动作分组：人物/召唤兽类型单选 + 法术技能下拉（由 JS 动态生成） -->
             <div class="group-box">
-                <div class="group-title">人物战斗动作</div>
-                <div class="radio-grid battle-grid" id="battle-char-grid"></div>
-            </div>
-            <div class="group-box">
-                <div class="group-title">召唤兽战斗动作</div>
-                <div class="radio-grid battle-grid" id="battle-beast-grid"></div>
+                <div class="group-title">战斗动作</div>
+                <div class="group-sub">人物</div>
+                <div class="battle-action-row" id="battle-char-actions"></div>
+                <div class="group-row" id="battle-char-skill-row">
+                    <span class="group-label">法术技能</span>
+                    <select class="skill-select" id="battle-char-skill"></select>
+                </div>
+                <div class="group-sub">召唤兽</div>
+                <div class="battle-action-row" id="battle-beast-actions"></div>
+                <div class="group-row" id="battle-beast-skill-row">
+                    <span class="group-label">法术技能</span>
+                    <select class="skill-select" id="battle-beast-skill"></select>
+                </div>
+                <label class="switch-row">
+                    <input type="checkbox" id="auto-famen">
+                    <span class="switch-track"></span>
+                    <span>自动使用法门（每场战斗第 1 回合先点一次法门坐标）</span>
+                </label>
             </div>
         </div>
         <!-- 高级设置：调试信息（悬浮显示 + 右侧吸附日志窗口，切换后数秒生效） -->
@@ -384,6 +400,7 @@
         const xiuluoCheckTeam = document.getElementById('xiuluo-check-team');
         const xiuluoAutoWuyi = document.getElementById('xiuluo-auto-wuyi');
         const highPerf = document.getElementById('high-perf');
+        const autoFamen = document.getElementById('auto-famen');
         const xiuluoWuyiIntervalEl = document.getElementById('xiuluo-wuyi-interval');
         const wubeiHezi = document.getElementById('wubei-hezi');
         const btnVerifyXiuluo = document.getElementById('btn-verify-xiuluo');
@@ -398,33 +415,66 @@
         const wubeiReturnVerifyResultEl = document.getElementById('wubei-return-verify-result');
         let verifying = false;  // 验证请求在途标记（防连点，回程/领取/巫医共用）
 
-        // 战斗设置选项：人物 3 行 × 5 列技能 + 攻击/防御/捕捉/逃跑/无；召唤兽 6 技能 + 攻击/防御/逃跑/无
-        const CHAR_BATTLE = [];
-        for (let r = 1; r <= 3; r++) for (let c = 1; c <= 5; c++) CHAR_BATTLE.push('技能' + r + '-' + c);
-        CHAR_BATTLE.push('攻击', '防御', '捕捉', '逃跑', '无');
-        const BEAST_BATTLE = [];
-        for (let i = 1; i <= 6; i++) BEAST_BATTLE.push('技能' + i);
-        BEAST_BATTLE.push('攻击', '防御', '逃跑', '无');
+        // 战斗设置：类型单选（法术/攻击/防御/捕捉/逃跑/无）+ 选「法术」时
+        // 显示技能下拉（人物 3 列 × 5 行；召唤兽 6 技能、不能捕捉）。
+        // 存储值语义不变：法术存「技能C-R」/「技能N」，其余存类型本身。
+        // 初始默认：人物=法术 技能3-5，召唤兽=攻击（配置加载前展示用，
+        // 用 defaultChecked/生成前赋值避免触发 change 保存，防止覆盖已存配置）
+        const CHAR_SKILLS = [];
+        for (let r = 1; r <= 3; r++) for (let c = 1; c <= 5; c++) CHAR_SKILLS.push('技能' + r + '-' + c);
+        const BEAST_SKILLS = [];
+        for (let i = 1; i <= 6; i++) BEAST_SKILLS.push('技能' + i);
+        const BATTLE_TYPES = { char: ['法术', '攻击', '防御', '捕捉', '逃跑', '无'],
+                               beast: ['法术', '攻击', '防御', '逃跑', '无'] };
+        const DEFAULT_BATTLE = { char: '技能3-5', beast: '攻击' };
 
-        // 动态生成人物/召唤兽战斗动作单选网格，变更立即保存
-        function buildBattleGrid(container, name, options) {
-            options.forEach(opt => {
+        // 动态生成战斗动作类型单选 + 法术技能下拉，变更立即保存
+        function buildBattleActions(name, container, skillRow, skillSel, skills, initial) {
+            const store = () => {
+                const type = container.querySelector('input:checked');
+                const v = (type && type.value === '法术') ? skillSel.value
+                    : (type ? type.value : '攻击');
+                callPython('save_battle_action', name, v);
+            };
+            BATTLE_TYPES[name].forEach(t => {
                 const label = document.createElement('label');
                 const input = document.createElement('input');
                 input.type = 'radio';
                 input.name = 'battle-' + name;
-                input.value = opt;
+                input.value = t;
+                if (t === (initial.startsWith('技能') ? '法术' : initial)) {
+                    input.defaultChecked = true;  // 生成期默认，不触发 change
+                }
                 input.addEventListener('change', () => {
-                    if (input.checked) callPython('save_battle_action', name, opt);
+                    if (!input.checked) return;
+                    skillRow.hidden = (t !== '法术');
+                    store();
                 });
                 label.appendChild(input);
-                label.appendChild(document.createTextNode(opt));
+                label.appendChild(document.createTextNode(t));
                 container.appendChild(label);
             });
-            return container;
+            skills.forEach(s => {
+                const opt = document.createElement('option');
+                opt.value = s;
+                opt.textContent = s;
+                skillSel.appendChild(opt);
+            });
+            if (initial.startsWith('技能')) skillSel.value = initial;  // 监听前赋值不触发
+            skillSel.addEventListener('change', store);
+            skillRow.hidden = !initial.startsWith('技能');
+            return { container, skillRow, skillSel };
         }
-        const charBattleGrid = buildBattleGrid(document.getElementById('battle-char-grid'), 'char', CHAR_BATTLE);
-        const beastBattleGrid = buildBattleGrid(document.getElementById('battle-beast-grid'), 'beast', BEAST_BATTLE);
+        const charBattle = buildBattleActions('char',
+            document.getElementById('battle-char-actions'),
+            document.getElementById('battle-char-skill-row'),
+            document.getElementById('battle-char-skill'), CHAR_SKILLS,
+            DEFAULT_BATTLE.char);
+        const beastBattle = buildBattleActions('beast',
+            document.getElementById('battle-beast-actions'),
+            document.getElementById('battle-beast-skill-row'),
+            document.getElementById('battle-beast-skill'), BEAST_SKILLS,
+            DEFAULT_BATTLE.beast);
 
         // 修罗设置：必须有的种族多选框（全部种族可选，变更立即保存）
         const XIULUO_RACES = ['男人', '女人', '男鬼', '女鬼', '男仙', '女仙', '男魔', '女魔', '男巫', '女巫', '男龙', '女龙'];
@@ -515,58 +565,70 @@
             });
         });
 
-        // 页面初始化：恢复上次选择的主题、任务模式、摄妖香开关与各条阈值
-        window.addEventListener('onPythonReady', async () => {
-            try {
-                const info = await callPython('get_init_data');
-                if (info) {
-                    applyTheme(info.theme === 'light' ? 'light' : 'dark');
-                    if (info.mode) {
-                        const radio = [...modeRadios].find(el => el.value === info.mode);
-                        if (radio) radio.checked = true;
-                    }
-                    useSyx.checked = !!info.use_sheyaoxiang;
-                    debugOverlay.checked = !!info.debug_overlay;
-                    xiuluoHezi.checked = !!info.xiuluo_hezi;
-                    xiuluoCheckTeam.checked = !!info.xiuluo_check_team;
-                    xiuluoAutoWuyi.checked = !!info.xiuluo_auto_wuyi;
-                    highPerf.checked = !!info.high_perf;
-                    if (info.xiuluo_wuyi_interval) {
-                        xiuluoWuyiIntervalEl.innerText = info.xiuluo_wuyi_interval;
-                    }
-                    wubeiHezi.checked = !!(info.wubei && info.wubei.hezi);
-                    const ths = info.thresholds || {};
-                    for (const key of ['char_hp', 'char_mp', 'beast_hp', 'beast_mp']) {
-                        const el = document.getElementById('th-' + key);
-                        if (el && ths[key] !== undefined) el.innerText = ths[key] + '%';
-                    }
-                    const counts = info.task_counts || {};
-                    for (const mode of ['五环', '客栈', '修罗', '五倍', '玄枢轶闻', '名望']) {
-                        const el = document.getElementById('cnt-' + mode);
-                        if (el && counts[mode] !== undefined) el.innerText = counts[mode];
-                    }
-                    const battle = info.battle || {};
-                    for (const [name, grid] of [['char', charBattleGrid], ['beast', beastBattleGrid]]) {
-                        if (battle[name]) {
-                            const radio = grid.querySelector('input[value="' + battle[name] + '"]');
-                            if (radio) radio.checked = true;
-                        }
-                    }
-                    const xl = info.xiuluo || {};
-                    if (xl.min_members) {
-                        document.getElementById('xiuluo-min').innerText = xl.min_members;
-                    }
-                    const wb = info.wubei || {};
-                    if (wb.min_members) {
-                        document.getElementById('wubei-min').innerText = wb.min_members;
-                    }
-                    if (xl.races) {
-                        xiuluoRaceGrid.querySelectorAll('input').forEach(el => {
-                            el.checked = xl.races.includes(el.value);
-                        });
-                    }
+        // 全量同步设置到页面（初始化与重置后共用）：主题、任务模式、
+        // 各开关、巫医间隔、血蓝阈值、任务次数、战斗动作、修罗/五倍设置
+        async function syncInitData() {
+            const info = await callPython('get_init_data');
+            if (!info) return;
+            applyTheme(info.theme === 'light' ? 'light' : 'dark');
+            if (info.mode) {
+                const radio = [...modeRadios].find(el => el.value === info.mode);
+                if (radio) radio.checked = true;
+            }
+            useSyx.checked = !!info.use_sheyaoxiang;
+            debugOverlay.checked = !!info.debug_overlay;
+            xiuluoHezi.checked = !!info.xiuluo_hezi;
+            xiuluoCheckTeam.checked = !!info.xiuluo_check_team;
+            xiuluoAutoWuyi.checked = !!info.xiuluo_auto_wuyi;
+            highPerf.checked = !!info.high_perf;
+            autoFamen.checked = !!info.auto_famen;
+            if (info.xiuluo_wuyi_interval) {
+                xiuluoWuyiIntervalEl.innerText = info.xiuluo_wuyi_interval;
+            }
+            wubeiHezi.checked = !!(info.wubei && info.wubei.hezi);
+            const ths = info.thresholds || {};
+            for (const key of ['char_hp', 'char_mp', 'beast_hp', 'beast_mp']) {
+                const el = document.getElementById('th-' + key);
+                if (el && ths[key] !== undefined) el.innerText = ths[key] + '%';
+            }
+            const counts = info.task_counts || {};
+            for (const mode of ['五环', '客栈', '修罗', '五倍', '玄枢轶闻', '名望']) {
+                const el = document.getElementById('cnt-' + mode);
+                if (el && counts[mode] !== undefined) el.innerText = counts[mode];
+            }
+            const battle = info.battle || {};
+            for (const [name, b] of [['char', charBattle], ['beast', beastBattle]]) {
+                const v = battle[name];
+                if (!v) continue;
+                const isSkill = /^技能/.test(v);
+                const type = isSkill ? '法术' : v;
+                // 先设技能下拉再勾选类型：勾选会触发 change 立即保存，
+                // 顺序反了会把存储值覆盖成下拉默认第一项
+                if (isSkill) b.skillSel.value = v;
+                const radio = b.container.querySelector('input[value="' + type + '"]');
+                if (radio) {
+                    radio.checked = true;
+                    b.skillRow.hidden = (type !== '法术');
                 }
-            } catch (e) {}
+            }
+            const xl = info.xiuluo || {};
+            if (xl.min_members) {
+                document.getElementById('xiuluo-min').innerText = xl.min_members;
+            }
+            const wb = info.wubei || {};
+            if (wb.min_members) {
+                document.getElementById('wubei-min').innerText = wb.min_members;
+            }
+            if (xl.races) {
+                xiuluoRaceGrid.querySelectorAll('input').forEach(el => {
+                    el.checked = xl.races.includes(el.value);
+                });
+            }
+        }
+
+        // 页面初始化：恢复上次的所有设置
+        window.addEventListener('onPythonReady', async () => {
+            try { await syncInitData(); } catch (e) {}
         });
 
         // 阈值步进：±5%，范围 5~95，变更立即保存
@@ -598,6 +660,22 @@
             });
         });
 
+        // 任务条目整卡点击选择（单选框已隐藏）；次数步进按钮不触发选择。
+        // 注意：脚本设置 radio.checked 不触发 change 事件（Edge/WebView2
+        // 实测，change 只在用户交互时派发）——保存必须直接调用，
+        // 不能依赖 change 监听（change 监听仅作可见控件路径的兜底）
+        document.querySelectorAll('.task-group').forEach(group => {
+            group.addEventListener('click', e => {
+                if (running) return;
+                if (e.target.closest('.th-btn')) return;
+                const radio = group.querySelector('input[name="task-mode"]');
+                if (radio && !radio.checked) {
+                    radio.checked = true;
+                    callPython('save_task_mode', radio.value);
+                }
+            });
+        });
+
         // 摄妖香开关变更：立即保存
         useSyx.addEventListener('change', () => {
             callPython('save_use_sheyaoxiang', useSyx.checked);
@@ -626,6 +704,11 @@
         // 高性能模式开关变更：立即保存（下次任务启动生效）
         highPerf.addEventListener('change', () => {
             callPython('save_high_perf', highPerf.checked);
+        });
+
+        // 自动使用法门开关变更：立即保存（下次任务启动生效）
+        autoFamen.addEventListener('change', () => {
+            callPython('save_auto_famen', autoFamen.checked);
         });
 
         // 修罗自动巫医间隔步进：±1，范围 1~90，变更立即保存
@@ -830,10 +913,7 @@
             const r = await callPython('reset_task');
             if (r && r.status === 'success') {
                 running = false;
-                if (r.mode) {
-                    const radio = [...modeRadios].find(el => el.value === r.mode);
-                    if (radio) radio.checked = true;
-                }
+                await syncInitData();  // 所有设置已重置为默认，全量刷新页面
                 update();
             }
         }
