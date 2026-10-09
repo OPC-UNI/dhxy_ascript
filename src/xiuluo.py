@@ -41,6 +41,7 @@ from ascript.windows.system import R  # 资源路由（模板路径）
 from ascript.windows.hardware.keyboard import Keyboard  # Alt+C 飞行/刷新（领取验证兜底）
 
 from .app_utils import human_click, human_move, log, move_away, norm_text
+from . import app_utils  # 高性能模式共享设施（固定位置缓存点击）
 from . import task_tracker  # 任务追踪面板操作
 from . import map as game_map  # 地图操作（世界地图/小地图/位置识别）
 from . import team  # 组队检查（领取前队伍人数检查，仅队长生效）
@@ -53,8 +54,7 @@ from .battle import _find_wuyi_option  # 「全部医治和修复」选项定位
 from .control_window import (load_task_counts, load_xiuluo_settings,
                              load_xiuluo_check_team,
                              load_xiuluo_auto_wuyi,
-                             load_xiuluo_wuyi_interval,
-                             load_xiuluo_high_perf)  # 任务次数上限/修罗设置/自动巫医/高性能
+                             load_xiuluo_wuyi_interval)  # 任务次数上限/修罗设置/自动巫医
 from .xuanshu import follow_task  # 任务跟踪（绿字点击寻路/战斗跳过/附加对话处理）
 from .dialog_common import (_dialog_text_present, _norm_dialog_present,
                             SCREEN_CENTER_POS)  # 对话框共享组件
@@ -101,9 +101,12 @@ WUYI_SPOT = (115, 72)                         # 巫医 NPC 位置（用户实测
 WUYI_MAP_POS = (610, 442)                     # 小地图上巫医位置的点击点（窗口相对坐标，用户实测）
 WUYI_NEAR_TOLERANCE = 11                       # 巫医附近的判定容差（严格：小距离移动，
                                               # 宽松容差会漏判偏移——用户确认）
-WUYI_ARRIVE_TIMEOUT = 10                      # 寻路后等待巫医 NPC 可见的超时（用户 2026-10-09：
-                                              # NPC 识别不到不长时间等待，快速失败走后续流程——
-                                              # 巫医失败本就不阻断领取后跟踪，缩短空等）
+WUYI_ARRIVE_TIMEOUT = 8                       # 走到巫医坐标附近的超时（领取点距巫医很近，
+                                              # 实测走位 2~3s；位置 ±5/NPC 模板可见/位置由
+                                              # 可读变缺失均算到达——单次尝试，用户 2026-10-09
+                                              # 确认：走到附近超时 24s 不合理，压缩上限）
+WUYI_NPC_TIMEOUT = 3                          # 到达后识别巫医 NPC 模板的窗口：3s 内未识别到
+                                              # 即本次取消，下次轮到再试（用户 2026-10-09 确认）
 WUYI_HANDLE_TIMEOUT = 15                      # 点击 NPC 后等待战斗线程处理对话框的超时
 CLAIM_VERIFY_WAIT = 5                         # 领取后任务进入追踪的正常轮询时长（秒）：
                                               # 超时未检索到 → 按一次 Alt+C 飞行后仅再检索一次，
@@ -125,28 +128,10 @@ _task_gone_last_round = False   # 上一轮任务消失已确认（follow_task �
                                 # （区域 OCR ~0.9s）；仅进程首轮/上轮跟踪失败
                                 # 未确认时才检查（续跑场景）
 
-# ---- 高性能模式（用户 2026-10-09，通用设置开关默认关）：固定位置 UI
-#      （背包按钮/领取选项/看打选项）首次识别记录坐标，后续按坐标直点
-#      + 效果校验，失败回退识别路径；缓存按窗口尺寸做键，缩放自动失效 ----
-_high_perf = False               # 开关状态（run_loop 启动时读取）
-_fixed_pos_cache = {}            # key -> (窗口宽, 窗口高, x, y)
+# ---- 高性能模式（通用设置开关，共享设施见 app_utils：领取选项/看打
+#      选项固定位置缓存点击 + 效果校验 + 识别回退；背包按钮缓存已下沉
+#      到 bag.open_bag，各任务模块共用） ----
 _fight_cached_used = False       # 当前这次看打对话框出现已试过缓存点击
-HIGH_PERF_DIALOG_WAIT = 1.8      # 高性能：领取入口点击后等待对话框渲染的
-                                 # 固定延时（正常 ~1.5s 即出，免 OCR 轮询）
-
-
-def _cache_get(key, win):
-    """读取固定位置缓存坐标；窗口尺寸不匹配（缩放/换窗口）视为失效返回 None。"""
-    entry = _fixed_pos_cache.get(key)
-    if entry is None:
-        return None
-    w, h, x, y = entry
-    return (x, y) if (w, h) == (win.rect.width, win.rect.height) else None
-
-
-def _cache_set(key, win, x, y):
-    """记录固定位置坐标（识别路径点击成功时调用，位置漂移自愈）。"""
-    _fixed_pos_cache[key] = (win.rect.width, win.rect.height, int(x), int(y))
 
 # ---- 战斗（战斗操作由 battle.watch_loop 线程负责） ----
 BATTLE_END_POLL = 2.0            # 等待战斗结束的轮询间隔
@@ -190,7 +175,10 @@ def _run_wuyi_chain(win, hover_before_click=False, report_condition=False,
        report_condition=True（验证模式）时检查召唤兽红条/蓝条并仅
        报告（不影响执行，只读检查不触发右键回满）
     2. 位置检查：是否在灵兽村 (115,72) 附近（严格容差 ±5）
-    3. 不在 → 打开小地图点击 (610,442) 寻路 → 关闭地图（顺带背包）
+    3. 不在 → 打开小地图点击 (610,442) 寻路 → 等待走到坐标附近
+       （位置 ±5 / NPC 模板可见 / 位置由可读变缺失均算到达，超时 8s
+       即取消）→ 到达后 3s 窗口识别 NPC 模板（未识别到即本次取消，
+       下次轮到再试——用户 2026-10-09 确认）
     4. 点击巫医 NPC（xiuluo_lingshoucunwuyi.png）打开医治对话框。
        真实流程：等待战斗线程点击「全部医治和修复」（battle.py 已有
        完整逻辑，无需重复实现——对话框出现→消失即处理完成）；
@@ -202,8 +190,8 @@ def _run_wuyi_chain(win, hover_before_click=False, report_condition=False,
 
     到达/点击的最终真信号是对话框出现：坐标 OCR 不可靠（实测走完
     站在 NPC 旁位置显示缺失，坐标判定卡死到达循环），NPC 模板远距离
-    也会命中（使者教训）——点击后对话框未出现判定距离不够，小地图
-    再走一次重试（与领取入口同款兜底）。
+    也会命中（使者教训）。单次尝试（用户 2026-10-09 确认）：找不到
+    NPC/对话框未出现即本次取消，下次轮到再试——失败不阻塞修罗主流程。
     返回 (是否成功, 描述)。
     """
     if is_in_battle(win):
@@ -218,75 +206,95 @@ def _run_wuyi_chain(win, hover_before_click=False, report_condition=False,
     if pos is None:
         pos = game_map.read_position_with_recovery(win)
     need_walk = not _near_wuyi_spot(pos)
-    # 3~5. 走位 → NPC 点击 → 对话框；对话框未出现判定距离不够，
-    #      小地图再走一次重试（最多两次点击尝试）
-    for attempt in (1, 2):
-        if attempt == 2 or need_walk:
-            ok, info = game_map.open_mini_map(win)
-            if not ok:
-                return False, info
-            human_click(win, WUYI_MAP_POS[0], WUYI_MAP_POS[1])
-            log("[修罗][巫医] 已点击小地图巫医位置，自动寻路中", "SYS")
-            time.sleep(1.0)
-            game_map.close_maps(win)
-        # 等待 NPC 模板可见（到达直接信号，不依赖坐标）
-        pt = None
+    # 3. 走位（需要时）：小地图点击巫医位置，等待走到坐标附近
+    #    （位置 ±5 或 NPC 模板可见均算到达——坐标 OCR 不可靠时
+    #    模板兜底，原实现教训）
+    if need_walk:
+        ok, info = game_map.open_mini_map(win)
+        if not ok:
+            return False, info
+        human_click(win, WUYI_MAP_POS[0], WUYI_MAP_POS[1])
+        log("[修罗][巫医] 已点击小地图巫医位置，自动寻路中", "SYS")
+        time.sleep(1.0)
+        game_map.close_maps(win)
         deadline = time.time() + WUYI_ARRIVE_TIMEOUT
+        arrived = False
+        pos_seen = False
         while time.time() < deadline:
             if is_in_battle(win):
                 time.sleep(2.0)
                 continue
-            pt = game_map.find_template(win, WUYI_NPC_ICON)
-            if pt is not None:
+            if game_map.find_template(win, WUYI_NPC_ICON) is not None:
+                arrived = True
+                break
+            pos2 = game_map.read_map_position(win)
+            if _near_wuyi_spot(pos2):
+                arrived = True
+                break
+            if pos2 is not None:
+                pos_seen = True  # 位置可读说明仍在路上
+            elif pos_seen:
+                # 位置由可读变为缺失：实测走到巫医旁位置显示会消失
+                # （站在 NPC 旁坐标判定卡死到达循环的根因），视为已到达，
+                # 转入 3s 识别窗口——识别不到快速失败
+                arrived = True
                 break
             time.sleep(2.0)
-        if pt is None:
-            if attempt == 1:
-                log("[修罗][巫医] 未检测到巫医 NPC，小地图寻路后重试", "WARN")
-                need_walk = True
-                continue
-            return False, f"未找到巫医 NPC（待补充 {WUYI_NPC_ICON} 模板或位置有误）"
-        if hover_before_click:
-            human_move(win.rect.left + pt[0], win.rect.top + pt[1])
-            log(f"[修罗][验证] 已移动鼠标到巫医 NPC ({pt[0]}, {pt[1]})，"
-                f"已定位到（验证时序与真实流程一致）", "SYS")
-        human_click(win, pt[0], pt[1])
-        log(f"[修罗][巫医] 已点击巫医 NPC ({pt[0]}, {pt[1]})，等待医治对话框处理", "SYS")
-        # 等待对话框出现并处理（出现→消失）
-        deadline = time.time() + WUYI_HANDLE_TIMEOUT
-        appeared = False
-        option_clicked = False
-        while time.time() < deadline:
-            img = win.capture(force_activate=False)
-            if img is None:
-                time.sleep(0.5)
-                continue
-            items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
-            # 与 battle.py 的巫医判定同款调用（内部模糊匹配，无需预规范化）
-            has_dialog = any(_dialog_text_present(items, t) for t in WUYI_DIALOG_TEXTS)
-            if has_dialog:
-                appeared = True
-                if click_option_self and not option_clicked:
-                    # 验证模式：主进程无战斗线程，自行点击医治选项
-                    # （与真实环境的战斗线程行为等效）
-                    pt_opt = _find_wuyi_option(items, img_np)
-                    if pt_opt is not None:
-                        human_click(win, pt_opt[0], pt_opt[1])
-                        log(f"[修罗][验证] 已点击「全部医治和修复」"
-                            f"@ ({pt_opt[0]}, {pt_opt[1]})", "SYS")
-                        option_clicked = True
-                time.sleep(1.0)
-                continue
-            if appeared:
-                log("[修罗][巫医] 医治对话框已处理完毕", "SYS")
-                return True, "自动巫医完成"
+        if not arrived:
+            return False, "走到巫医坐标附近超时（本次取消）"
+    # 4. 到达后 3s 窗口识别 NPC 模板（0.5s 轮询覆盖待机动画波动相位）；
+    #    未识别到即本次取消（用户 2026-10-09 确认：3s 含识别，最长 3s）
+    pt = None
+    deadline = time.time() + WUYI_NPC_TIMEOUT
+    while time.time() < deadline:
+        if is_in_battle(win):
+            time.sleep(2.0)
+            continue
+        pt = game_map.find_template(win, WUYI_NPC_ICON)
+        if pt is not None:
+            break
+        time.sleep(0.5)
+    if pt is None:
+        return False, f"到达后 {WUYI_NPC_TIMEOUT}s 内未识别到巫医 NPC（本次取消）"
+    if hover_before_click:
+        human_move(win.rect.left + pt[0], win.rect.top + pt[1])
+        log(f"[修罗][验证] 已移动鼠标到巫医 NPC ({pt[0]}, {pt[1]})，"
+            f"已定位到（验证时序与真实流程一致）", "SYS")
+    human_click(win, pt[0], pt[1])
+    log(f"[修罗][巫医] 已点击巫医 NPC ({pt[0]}, {pt[1]})，等待医治对话框处理", "SYS")
+    # 等待对话框出现并处理（出现→消失）
+    deadline = time.time() + WUYI_HANDLE_TIMEOUT
+    appeared = False
+    option_clicked = False
+    while time.time() < deadline:
+        img = win.capture(force_activate=False)
+        if img is None:
             time.sleep(0.5)
+            continue
+        items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
+        # 与 battle.py 的巫医判定同款调用（内部模糊匹配，无需预规范化）
+        has_dialog = any(_dialog_text_present(items, t) for t in WUYI_DIALOG_TEXTS)
+        if has_dialog:
+            appeared = True
+            if click_option_self and not option_clicked:
+                # 验证模式：主进程无战斗线程，自行点击医治选项
+                # （与真实环境的战斗线程行为等效）
+                pt_opt = _find_wuyi_option(items, img_np)
+                if pt_opt is not None:
+                    human_click(win, pt_opt[0], pt_opt[1])
+                    log(f"[修罗][验证] 已点击「全部医治和修复」"
+                        f"@ ({pt_opt[0]}, {pt_opt[1]})", "SYS")
+                    option_clicked = True
+            time.sleep(1.0)
+            continue
         if appeared:
-            return True, "医治对话框已出现（战斗线程将继续处理）"
-        # 对话框未出现：距离不够 → 走一次再重试
-        log("[修罗][巫医] 点击后未出现对话框（距离不够），小地图重定位后重试", "WARN")
-        need_walk = True
-    return False, "点击巫医后未出现医治对话框（重定位后仍无）"
+            log("[修罗][巫医] 医治对话框已处理完毕", "SYS")
+            return True, "自动巫医完成"
+        time.sleep(0.5)
+    if appeared:
+        return True, "医治对话框已出现（战斗线程将继续处理）"
+    # 对话框未出现（距离不够）：本次取消，下次轮到再试
+    return False, "点击巫医后未出现医治对话框（本次取消）"
 
 
 def _auto_wuyi(win):
@@ -372,7 +380,7 @@ def _click_claim_option(win, items, img_np):
     human_click(win, cx, cy)
     suffix = "（兜底匹配）" if fallback else ""
     log(f"[修罗] 已点击绿色选项「{txt}」{suffix}", "SYS")
-    _cache_set("claim_option", win, cx, cy)
+    app_utils.fixed_pos_set("claim_option", win, cx, cy)
     move_away(win)  # 鼠标停留选项上会使其悬停变色，干扰后续绿字判定
     return True
 
@@ -517,8 +525,9 @@ def _click_entry_ensuring_dialog(win, log_tag="[修罗]", hover_before_click=Fal
         # 高性能：领取选项坐标已缓存 → 跳过对话框 OCR 轮询，固定等待
         # 渲染后由 _claim_task 直接按坐标点选项（点不中由「任务进追踪」
         # 校验循环内识别补点兜底，无 seen 帧返回）
-        if _high_perf and _cache_get("claim_option", win) is not None:
-            time.sleep(HIGH_PERF_DIALOG_WAIT)
+        if app_utils.high_perf_on() \
+                and app_utils.fixed_pos_get("claim_option", win) is not None:
+            time.sleep(app_utils.HIGH_PERF_DIALOG_WAIT)
             dialog_seen = True
             break
         # 等待对话框出现：轮询选项（正常 ~1.5s 即出）；首次尝试短窗口，
@@ -603,11 +612,8 @@ def _claim_task(win):
     # 生效与否由「任务进追踪」校验循环判定并识别补点兜底
     used_cached = False
     if seen is None:
-        pos = _cache_get("claim_option", win)
-        if pos is not None:
-            human_click(win, pos[0], pos[1])
-            log(f"[修罗][高性能] 已按缓存坐标点击领取选项 ({pos[0]}, {pos[1]})", "SYS")
-            used_cached = True
+        used_cached = app_utils.high_perf_click(win, "claim_option",
+                                                "领取选项", prefix="[修罗] ")
     if not used_cached:
         claimed = False
         if seen is not None:
@@ -731,14 +737,11 @@ def _handle_fight_dialog(win, items, img_np):
     if not present:
         _fight_cached_used = False  # 对话框消失：重置，下次出现再用缓存
         return False
-    if _high_perf and not _fight_cached_used:
-        pos = _cache_get("fight_option", win)
-        if pos is not None:
-            _fight_cached_used = True
-            human_click(win, pos[0], pos[1])
-            log(f"[修罗][高性能] 已按缓存坐标点击「看打！」({pos[0]}, {pos[1]})", "SYS")
-            _fight_via_kanda = True
-            return True
+    if not _fight_cached_used and app_utils.high_perf_click(
+            win, "fight_option", "「看打！」", prefix="[修罗] "):
+        _fight_cached_used = True
+        _fight_via_kanda = True
+        return True
     for txt, rect, score in items:
         if score >= 0.55 and needle in norm_text(txt) \
                 and rect[0] >= task_tracker.PANEL_MAX_X \
@@ -746,7 +749,7 @@ def _handle_fight_dialog(win, items, img_np):
             cx, cy = task_tracker.green_text_center(img_np, rect, prefer_underline=False)
             human_click(win, cx, cy)
             log(f"[修罗] 已点击「看打！」进入战斗", "SYS")
-            _cache_set("fight_option", win, cx, cy)
+            app_utils.fixed_pos_set("fight_option", win, cx, cy)
             _fight_via_kanda = True
             return True
     return False
@@ -794,29 +797,10 @@ def _open_task_box(win):
     搜索条带限定匹配范围（带区全未命中才全帧兜底）。
     """
     if not bag.is_bag_open(win):
-        opened = False
-        if _high_perf:
-            # 高性能：背包按钮坐标已缓存 → 直点 + 面板标志校验；
-            # 未打开回退识别流程（识别成功后记录按钮位置）
-            pos = _cache_get("bag_btn", win)
-            if pos is not None:
-                human_click(win, pos[0], pos[1])
-                deadline = time.time() + 2.0
-                while time.time() < deadline:
-                    if bag.is_bag_open(win):
-                        opened = True
-                        break
-                    time.sleep(0.4)
-                if opened:
-                    log(f"[修罗][高性能] 已按缓存坐标打开背包 ({pos[0]}, {pos[1]})", "SYS")
-        if not opened:
-            ok, info = bag.open_bag(win)
-            if not ok:
-                return False, f"打开背包失败: {info}"
-            if _high_perf:
-                pt = game_map.find_template(win, bag.BAG_ICON)
-                if pt is not None:
-                    _cache_set("bag_btn", win, pt[0], pt[1])
+        # 高性能背包按钮缓存已下沉到 bag.open_bag（各任务模块共用）
+        ok, info = bag.open_bag(win)
+        if not ok:
+            return False, f"打开背包失败: {info}"
     else:
         log("[修罗] 背包已打开，跳过开包", "INFO")
     # 以 bag_box（面板标志）为锚点计算任务储物格按钮的搜索条带
@@ -1083,11 +1067,10 @@ def run_loop(win, cycle_interval=1.0):
     2. 领取时出现每日次数已满（TODO: 具体文案待确认）
     返回结束原因描述。
     """
-    global _fight_via_kanda, _team_checked, _task_gone_last_round, _high_perf
+    global _fight_via_kanda, _team_checked, _task_gone_last_round
     max_rounds = load_task_counts().get(TASK_MODE, 0)
     log(f"[修罗] 任务次数上限: {max_rounds if max_rounds > 0 else '不限'}", "SYS")
-    _high_perf = load_xiuluo_high_perf()
-    log(f"[修罗] 高性能模式: {'开（固定位置缓存点击，失败自动回退识别）' if _high_perf else '关'}", "SYS")
+    # 高性能模式开关由 main.task_start 按通用设置置位（共享设施）
     # 检查队伍开关（通用设置-修罗设置，默认关闭）：关闭时领取前跳过
     # 全部队伍检查（非队长判定/人数监控），直接走位领取
     check_team = load_xiuluo_check_team()

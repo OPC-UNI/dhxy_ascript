@@ -30,7 +30,9 @@ from src.task_manager import TaskManager  # 任务子进程管理（启停/强�
 from src.control_window import (ControlWindow, load_task_mode,
                                 load_use_sheyaoxiang,
                                 load_debug_overlay,
-                                load_battle_actions)  # 网页控制窗口（启动/停止/重置、配置持久化）
+                                load_battle_actions,
+                                load_high_perf)  # 网页控制窗口（启动/停止/重置、配置持久化）
+from src import app_utils  # 通用工具（日志、高性能模式共享设施）
 from src.app_utils import log, toast, log_file_path  # 日志与系统通知
 from src import game  # 游戏窗口操作
 from src import bag  # 背包操作
@@ -77,6 +79,10 @@ def task_start():
     log(f"[配置] 使用摄妖香: {'开' if use_sheyaoxiang else '关'}", "SYS")
     log(f"[配置] 人物战斗动作: {battle_actions['char']}，召唤兽战斗动作: {battle_actions['beast']}", "SYS")
     log(f"[配置] 调试信息悬浮: {'开' if load_debug_overlay() else '关'}", "SYS")
+    # 高性能模式（通用设置开关）：置位共享设施，各任务模块据此启用
+    # 固定位置缓存点击（主进程验证流程不受影响，恒为识别路径）
+    app_utils.set_high_perf(load_high_perf())
+    log(f"[配置] 高性能模式: {'开（固定位置缓存点击）' if app_utils.high_perf_on() else '关'}", "SYS")
     # 调试悬浮层初始状态：任务模式与战斗配置（战斗场次/进度由各模块实时更新）
     debug_overlay.set_task(mode)
     debug_overlay.set_config(battle_actions["char"], battle_actions["beast"])

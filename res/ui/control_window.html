@@ -48,6 +48,8 @@
         }
         .btn:hover:not(:disabled) { filter: brightness(1.2); }
         .btn:disabled { opacity: 0.35; cursor: not-allowed; }
+        .th-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+        .task-radio input:disabled + span { opacity: 0.35; }
         #btn-reset { border-color: var(--warn); color: var(--warn); }
         #btn-theme { border-color: var(--accent); color: var(--accent); margin-left: auto; }
         #btn-start { border-color: var(--accent); color: var(--accent); }
@@ -206,7 +208,7 @@
                 </div>
             </div>
         </div>
-        <!-- 通用设置：摄妖香开关 + 修罗/五倍分组 + 血量蓝量阈值 + 人物/召唤兽战斗动作 -->
+        <!-- 通用设置：摄妖香开关 + 高性能 + 修罗/五倍分组 + 血量蓝量阈值 + 人物/召唤兽战斗动作 -->
         <div class="tab-panel" id="panel-general">
             <!-- 摄妖香分组 -->
             <div class="group-box">
@@ -217,47 +219,51 @@
                     <span>自动使用</span>
                 </label>
             </div>
-            <!-- 修罗设置分组：检查队伍开关 + 最少人数 + 必须有的种族（仅队长时生效） -->
+            <!-- 通用分组：高性能模式（各任务模块固定位置 UI 缓存点击，默认关闭） -->
             <div class="group-box">
-                <div class="group-title">修罗设置（仅队长时生效）</div>
+                <div class="group-title">通用</div>
+                <label class="switch-row">
+                    <input type="checkbox" id="high-perf">
+                    <span class="switch-track"></span>
+                    <span>高性能模式（固定位置缓存点击，失败自动回退识别）</span>
+                </label>
+            </div>
+            <!-- 修罗设置分组：检查队伍开关 + 最少人数 + 必须有的种族 -->
+            <div class="group-box">
+                <div class="group-title">修罗设置</div>
                 <label class="switch-row">
                     <input type="checkbox" id="xiuluo-check-team">
                     <span class="switch-track"></span>
-                    <span>检查队伍（关闭后领取前跳过全部队伍检查，默认关闭）</span>
+                    <span>检查队伍（默认关闭）</span>
                 </label>
                 <label class="switch-row">
                     <input type="checkbox" id="xiuluo-auto-wuyi">
                     <span class="switch-track"></span>
-                    <span>自动巫医（每 N 轮领取后无条件医治，血蓝正常也照常，默认开启）</span>
-                </label>
-                <label class="switch-row">
-                    <input type="checkbox" id="xiuluo-high-perf">
-                    <span class="switch-track"></span>
-                    <span>高性能模式（背包/领取选项/看打选项首次识别后缓存坐标直点，失败自动回退识别，默认关闭）</span>
+                    <span>自动巫医（每 N 轮一次，默认开启）</span>
                 </label>
                 <div class="group-row">
                     <span class="group-label">巫医间隔</span>
                     <button class="th-btn" onclick="xiuluoWuyiInterval(-1)">−</button>
                     <span class="th-val" id="xiuluo-wuyi-interval">5</span>
                     <button class="th-btn" onclick="xiuluoWuyiInterval(1)">＋</button>
-                    <span class="group-hint">轮（范围 1~90）</span>
+                    <span class="group-hint">轮（1~90）</span>
                 </div>
                 <div class="group-row">
                     <span class="group-label">最少人数</span>
                     <button class="th-btn" onclick="xiuluoMin(-1)">−</button>
                     <span class="th-val" id="xiuluo-min">5</span>
                     <button class="th-btn" onclick="xiuluoMin(1)">＋</button>
-                    <span class="group-hint">范围 3~5</span>
+                    <span class="group-hint">3~5</span>
                 </div>
                 <div class="group-sub">必须有的种族</div>
                 <div class="radio-grid race-grid" id="xiuluo-race-grid"></div>
                 <label class="switch-row">
                     <input type="checkbox" id="xiuluo-hezi">
                     <span class="switch-track"></span>
-                    <span>自动抢盒子（仅非队长时生效，队长一定抢）</span>
+                    <span>自动抢盒子（仅非队长生效）</span>
                 </label>
             </div>
-            <!-- 五倍设置分组：最少人数（仅队长时生效）+ 自动抢盒子（仅非队长时生效） -->
+            <!-- 五倍设置分组：最少人数 + 自动抢盒子 -->
             <div class="group-box">
                 <div class="group-title">五倍设置</div>
                 <div class="group-row">
@@ -265,17 +271,17 @@
                     <button class="th-btn" onclick="wubeiMin(-1)">−</button>
                     <span class="th-val" id="wubei-min">5</span>
                     <button class="th-btn" onclick="wubeiMin(1)">＋</button>
-                    <span class="group-hint">范围 1~5（仅队长时生效）</span>
+                    <span class="group-hint">1~5（仅队长生效）</span>
                 </div>
                 <label class="switch-row">
                     <input type="checkbox" id="wubei-hezi">
                     <span class="switch-track"></span>
-                    <span>自动抢盒子（仅非队长时生效，队长一定抢）</span>
+                    <span>自动抢盒子（仅非队长生效）</span>
                 </label>
             </div>
             <!-- 血量蓝量分组 -->
             <div class="group-box">
-                <div class="group-title">血量蓝量设置（步进5%）</div>
+                <div class="group-title">血量蓝量阈值（步进 5%）</div>
                 <div class="th-grid">
                     <div class="count-card">
                         <div class="cc-name">人物红条</div>
@@ -369,12 +375,13 @@
         const btnStart = document.getElementById('btn-start');
         const btnTheme = document.getElementById('btn-theme');
         const modeRadios = document.querySelectorAll('input[name="task-mode"]');
+        const countBtns = document.querySelectorAll('.task-count .th-btn');
         const useSyx = document.getElementById('use-syx');
         const debugOverlay = document.getElementById('debug-overlay');
         const xiuluoHezi = document.getElementById('xiuluo-hezi');
         const xiuluoCheckTeam = document.getElementById('xiuluo-check-team');
         const xiuluoAutoWuyi = document.getElementById('xiuluo-auto-wuyi');
-        const xiuluoHighPerf = document.getElementById('xiuluo-high-perf');
+        const highPerf = document.getElementById('high-perf');
         const xiuluoWuyiIntervalEl = document.getElementById('xiuluo-wuyi-interval');
         const wubeiHezi = document.getElementById('wubei-hezi');
         const btnVerifyXiuluo = document.getElementById('btn-verify-xiuluo');
@@ -389,12 +396,12 @@
         const wubeiReturnVerifyResultEl = document.getElementById('wubei-return-verify-result');
         let verifying = false;  // 验证请求在途标记（防连点，回程/领取/巫医共用）
 
-        // 战斗设置选项：人物 3 行 × 5 列技能 + 攻击/防御/捕捉/逃跑/无；召唤兽 5 技能 + 攻击/防御/逃跑/无
+        // 战斗设置选项：人物 3 行 × 5 列技能 + 攻击/防御/捕捉/逃跑/无；召唤兽 6 技能 + 攻击/防御/逃跑/无
         const CHAR_BATTLE = [];
         for (let r = 1; r <= 3; r++) for (let c = 1; c <= 5; c++) CHAR_BATTLE.push('技能' + r + '-' + c);
         CHAR_BATTLE.push('攻击', '防御', '捕捉', '逃跑', '无');
         const BEAST_BATTLE = [];
-        for (let i = 1; i <= 5; i++) BEAST_BATTLE.push('技能' + i);
+        for (let i = 1; i <= 6; i++) BEAST_BATTLE.push('技能' + i);
         BEAST_BATTLE.push('攻击', '防御', '逃跑', '无');
 
         // 动态生成人物/召唤兽战斗动作单选网格，变更立即保存
@@ -462,6 +469,9 @@
             statusEl.className = running ? 'running' : '';
             btnStart.innerText = running ? '停 止' : '启 动';
             btnStart.classList.toggle('running', running);
+            // 运行期间任务模式与次数不可更改（用户确认：只能停止后修改）
+            modeRadios.forEach(radio => { radio.disabled = running; });
+            countBtns.forEach(btn => { btn.disabled = running; });
         }
 
         // 启动/停止切换：调用 Python 侧 TaskManager（防连点；Python 侧另有 BUSY 守卫）
@@ -518,7 +528,7 @@
                     xiuluoHezi.checked = !!info.xiuluo_hezi;
                     xiuluoCheckTeam.checked = !!info.xiuluo_check_team;
                     xiuluoAutoWuyi.checked = !!info.xiuluo_auto_wuyi;
-                    xiuluoHighPerf.checked = !!info.xiuluo_high_perf;
+                    highPerf.checked = !!info.high_perf;
                     if (info.xiuluo_wuyi_interval) {
                         xiuluoWuyiIntervalEl.innerText = info.xiuluo_wuyi_interval;
                     }
@@ -569,6 +579,7 @@
         // 任务次数步进：±1，下限 0，部分模式有上限（五环2/客栈20/玄枢轶闻5/名望5），变更立即保存
         const COUNT_MAX = {'五环': 2, '客栈': 20, '玄枢轶闻': 5, '名望': 5};
         async function count(mode, delta) {
+            if (running) return;  // 运行期间不可修改（按钮已禁用，双保险）
             const el = document.getElementById('cnt-' + mode);
             const cur = parseInt(el.innerText);
             const val = Math.min(COUNT_MAX[mode] || Infinity, Math.max(0, cur + delta));
@@ -577,9 +588,10 @@
             if (r && r.status === 'success') el.innerText = r.count;
         }
 
-        // 单选变更：立即保存选择
+        // 单选变更：立即保存选择（运行期间禁用，双保险）
         modeRadios.forEach(radio => {
             radio.addEventListener('change', () => {
+                if (running) return;
                 if (radio.checked) callPython('save_task_mode', radio.value);
             });
         });
@@ -609,9 +621,9 @@
             callPython('save_xiuluo_auto_wuyi', xiuluoAutoWuyi.checked);
         });
 
-        // 修罗高性能模式开关变更：立即保存（下次任务启动生效）
-        xiuluoHighPerf.addEventListener('change', () => {
-            callPython('save_xiuluo_high_perf', xiuluoHighPerf.checked);
+        // 高性能模式开关变更：立即保存（下次任务启动生效）
+        highPerf.addEventListener('change', () => {
+            callPython('save_high_perf', highPerf.checked);
         });
 
         // 修罗自动巫医间隔步进：±1，范围 1~90，变更立即保存

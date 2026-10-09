@@ -28,6 +28,7 @@ from ascript.windows.hardware.keyboard import Keyboard
 from ascript.windows.system import R
 
 from .app_utils import log, human_click, move_away, norm_text
+from . import app_utils  # 高性能模式共享设施（固定位置缓存点击）
 from . import bag  # 物品栏开关
 from . import map as game_map  # 地图操作（世界地图/小地图/位置识别）
 from . import task_tracker  # 任务追踪面板操作
@@ -59,12 +60,13 @@ NAV_MAX_ATTEMPTS = 3                 # 前往客栈的最多尝试轮数（防�
 ALT6_RETRY_WAIT = 1.5                # Alt+6 后等待画面刷新的时间（秒）
 # 领取任务对话框中的绿色选项（点击掌柜后出现）
 DIALOG_OPTION_LINGQU = "接取客栈任务"
+YAOCHI_DIALOG_OPTION = "广寒宫我熟悉的很，包在我身上！"  # 瑶池对话选项（高性能快速链用）
 DIALOG_TIMEOUT = 10                  # 等待对话框出现的超时（秒）
 # 任务对话处理（对话框文案 → 点击的绿色选项，同 xuanshu.DIALOG_OPTION_MAP）：
 # 对话框出现相应文案时，点击其绿色选项推进。领取对话链与跟踪期间均按此处理，
 # 后续新增对话直接在此追加条目。
 DIALOG_OPTION_MAP = {
-    "瑶池近日要办迎仙大会，宴上那道琉璃映月羹": "广寒宫我熟悉的很，包在我身上！",
+    "瑶池近日要办迎仙大会，宴上那道琉璃映月羹": YAOCHI_DIALOG_OPTION,
     "少侠有什么事吗": "客栈任务",
     "有空我请你喝瑶池鲜酿": "那我就坐等瑶池鲜酿了",
     "被镇于修罗古城中的妖邪近日隐隐躁动": "修罗出世非同小可，我这便前去加固封印",
@@ -175,7 +177,8 @@ def _find_zhanggui(win):
     """查找掌柜模板；未找到时按 Alt+6 后重试一次。返回 (x, y) 或 None。
 
     模板实测匹配 0.806，NPC 待机动画会小幅波动，阈值取 0.75 留余量
-    （实测 0.7 以上无其他误匹配）。
+    （实测 0.7 以上无其他误匹配）。掌柜随站位渲染位置变化，必须识图
+    定位，不缓存。
     """
     pt = game_map.find_template(win, ZHANGGUI_ICON, threshold=0.75)
     if pt is not None:
@@ -713,6 +716,8 @@ def _click_green_option_fuzzy(win, items, img_np, text):
                 cx, cy = task_tracker.green_text_center(img_np, rect,
                                                         prefer_underline=False)
                 human_click(win, cx, cy)
+                # 高性能：记录选项固定位置（按标准文案做键，漂移自愈）
+                app_utils.fixed_pos_set(f"option_{text}", win, cx, cy)
                 log(f"[客栈] 已点击对话框绿色选项「{txt}」@({cx},{cy})", "SYS")
                 move_away(win)  # 鼠标停留选项上会使其悬停变色，干扰后续绿字判定
                 return True
@@ -796,6 +801,26 @@ def _claim_task(win, pt):
     """
     human_click(win, pt[0], pt[1])
     log(f"[客栈] 已点击掌柜 @({pt[0]},{pt[1]})", "SYS")
+    # 高性能快速链：对话链固定（掌柜 → 「接取客栈任务」→ 瑶池对话
+    # 「广寒宫我熟悉的很，包在我身上！」），选项坐标齐备时按固定延时
+    # 连点（免 OCR 轮询，实测点击掌柜→点接取选项 6s+），任务进追踪即
+    # 成功；未成功回退识别对话链（瑶池对话不出现时第二击无害）
+    if app_utils.high_perf_on():
+        pos_lingqu = app_utils.fixed_pos_get(f"option_{DIALOG_OPTION_LINGQU}", win)
+        pos_yaochi = app_utils.fixed_pos_get(f"option_{YAOCHI_DIALOG_OPTION}", win)
+        if pos_lingqu is not None and pos_yaochi is not None:
+            time.sleep(app_utils.HIGH_PERF_DIALOG_WAIT)
+            human_click(win, pos_lingqu[0], pos_lingqu[1])
+            log(f"[客栈][高性能] 已按缓存坐标点击「{DIALOG_OPTION_LINGQU}」", "SYS")
+            time.sleep(app_utils.HIGH_PERF_DIALOG_WAIT)
+            human_click(win, pos_yaochi[0], pos_yaochi[1])
+            log(f"[客栈][高性能] 已按缓存坐标点击「{YAOCHI_DIALOG_OPTION}」", "SYS")
+            deadline = time.time() + 4
+            while time.time() < deadline:
+                if _has_task(win):
+                    return True, "已领取客栈任务（高性能）"
+                time.sleep(0.5)
+            log("[客栈][高性能] 缓存连点后任务未进追踪，回退识别对话链", "WARN")
     # 每轮询：截图 1 次 + 限对话框区域 OCR（全帧 ~930ms → 区域 ~100-170ms，
     # 实测点击掌柜→点击「接取客栈任务」间隔 6s+，其中每轮 ~2.9s 全耗在
     # has_task 前置检查与全帧 OCR）；has_task（追踪区 OCR ~0.9s）限频到

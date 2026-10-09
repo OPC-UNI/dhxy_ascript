@@ -4,6 +4,7 @@ import time
 from ascript.windows.system import R
 from ascript.windows.screen.find_images import FindImages
 from .app_utils import log, human_click
+from . import app_utils  # 高性能模式共享设施（背包按钮缓存）
 
 # 背包按钮模板（res/img/bag.png，34x34，实测匹配度 0.999）
 BAG_ICON = "bag.png"
@@ -150,17 +151,30 @@ def open_bag(win):
     点击后轮询 bag_box 模板出现：出现=打开成功；1.5s 内未出现=重试一次
     （仅一次）。注意背包按钮是开关切换：若此前已是打开状态，第一次
     点击会关闭，检测失败后重试点击即可恢复打开，流程自愈。
-    返回 (是否成功, 描述)。
+    高性能：按钮坐标缓存后首轮直点（识别打开成功后记录位置），
+    未打开回退识别流程。返回 (是否成功, 描述)。
     """
     for attempt in (1, 2):
-        r = _match_template(win, BAG_ICON)
-        if r is None:
-            return False, "未找到背包按钮"
-        human_click(win, r.x, r.y)
+        r = None
+        cached = False
+        if attempt == 1 and app_utils.high_perf_on():
+            pos = app_utils.fixed_pos_get("bag_btn", win)
+            if pos is not None:
+                human_click(win, pos[0], pos[1])
+                log(f"[背包][高性能] 已按缓存坐标点击背包按钮 ({pos[0]}, {pos[1]})", "SYS")
+                cached = True
+        if not cached:
+            r = _match_template(win, BAG_ICON)
+            if r is None:
+                return False, "未找到背包按钮"
+            human_click(win, r.x, r.y)
         deadline = time.time() + _BAG_TOGGLE_TIMEOUT
         while time.time() < deadline:
             if is_bag_open(win):
-                return True, f"第{attempt}次点击成功（匹配度 {r.confidence:.2f}）"
+                if r is not None:
+                    app_utils.fixed_pos_set("bag_btn", win, r.x, r.y)
+                desc = "高性能缓存" if cached else f"匹配度 {r.confidence:.2f}"
+                return True, f"第{attempt}次点击成功（{desc}）"
             time.sleep(_BAG_TOGGLE_POLL)
         log(f"[背包] 第{attempt}次点击后未检测到背包面板，重试一次...", "WARN")
     return False, "两次尝试后仍未检测到背包面板"

@@ -235,21 +235,25 @@ def save_xiuluo_hezi(on):
     return {"status": "success"}
 
 
-# ---- 修罗高性能模式（UI 开关，KeyValue 持久化，默认关闭；
-#      开启后固定位置 UI（背包按钮/领取选项/看打选项）首次识别记录
+# ---- 高性能模式（UI 开关，通用设置，KeyValue 持久化，默认关闭；
+#      开启后各任务模块固定位置 UI（按钮/对话框选项）首次识别记录
 #      坐标，后续直接按坐标点击 + 效果校验，失败回退识别路径——
-#      位置漂移/窗口缩放时自动失效并自愈） ----
-_XIULUO_HIGH_PERF_KEY = "xiuluo_high_perf"
+#      位置漂移/窗口缩放时自动失效并自愈；旧修罗键自动迁移） ----
+_HIGH_PERF_KEY = "high_perf"
+_XIULUO_HIGH_PERF_KEY_OLD = "xiuluo_high_perf"
 
 
-def load_xiuluo_high_perf():
-    """读取修罗高性能开关（首次默认关闭）。"""
-    return bool(KeyValue.get(_XIULUO_HIGH_PERF_KEY, False))
+def load_high_perf():
+    """读取高性能开关（首次默认关闭；旧修罗高性能键自动迁移到通用键）。"""
+    if KeyValue.get(_HIGH_PERF_KEY) is None \
+            and KeyValue.get(_XIULUO_HIGH_PERF_KEY_OLD) is not None:
+        KeyValue.save(_HIGH_PERF_KEY, bool(KeyValue.get(_XIULUO_HIGH_PERF_KEY_OLD)))
+    return bool(KeyValue.get(_HIGH_PERF_KEY, False))
 
 
-def save_xiuluo_high_perf(on):
-    """保存修罗高性能开关，返回操作结果。"""
-    KeyValue.save(_XIULUO_HIGH_PERF_KEY, bool(on))
+def save_high_perf(on):
+    """保存高性能开关，返回操作结果。"""
+    KeyValue.save(_HIGH_PERF_KEY, bool(on))
     return {"status": "success"}
 
 
@@ -313,8 +317,8 @@ def save_xiuluo_wuyi_interval(value):
 # 人物：技能面板 3 行 × 5 列共 15 格 + 攻击/防御/捕捉/逃跑/无
 CHAR_BATTLE_ACTIONS = ([f"技能{r}-{c}" for r in range(1, 4) for c in range(1, 6)]
                        + ["攻击", "防御", "捕捉", "逃跑", "无"])
-# 召唤兽：技能 5 格 + 攻击/防御/逃跑/无（召唤兽不能捕捉）
-BEAST_BATTLE_ACTIONS = [f"技能{i}" for i in range(1, 6)] + ["攻击", "防御", "逃跑", "无"]
+# 召唤兽：技能 6 格 + 攻击/防御/逃跑/无（召唤兽不能捕捉）
+BEAST_BATTLE_ACTIONS = [f"技能{i}" for i in range(1, 7)] + ["攻击", "防御", "逃跑", "无"]
 _BATTLE_KEYS = {"char": "battle_char_action", "beast": "battle_beast_action"}
 _DEFAULT_BATTLE = {"char": "攻击", "beast": "攻击"}
 
@@ -387,7 +391,7 @@ class ControlWindow(WebWindow):
         self.expose(self.save_xiuluo_check_team)
         self.expose(self.save_xiuluo_auto_wuyi)
         self.expose(self.save_xiuluo_wuyi_interval)
-        self.expose(self.save_xiuluo_high_perf)
+        self.expose(self.save_high_perf)
         self.expose(self.save_wubei_min)
         self.expose(self.save_wubei_hezi)
         self.expose(self.save_debug_overlay)
@@ -417,7 +421,7 @@ class ControlWindow(WebWindow):
                 "xiuluo_check_team": load_xiuluo_check_team(),
                 "xiuluo_auto_wuyi": load_xiuluo_auto_wuyi(),
                 "xiuluo_wuyi_interval": load_xiuluo_wuyi_interval(),
-                "xiuluo_high_perf": load_xiuluo_high_perf(),
+                "high_perf": load_high_perf(),
                 "wubei": {"min_members": load_wubei_min(),
                           "hezi": load_wubei_hezi()},
                 "debug_overlay": load_debug_overlay()}
@@ -466,9 +470,9 @@ class ControlWindow(WebWindow):
         """修罗设置变更：保存自动巫医间隔（轮）。"""
         return save_xiuluo_wuyi_interval(value)
 
-    def save_xiuluo_high_perf(self, on):
-        """修罗设置变更：保存高性能模式开关状态。"""
-        return save_xiuluo_high_perf(on)
+    def save_high_perf(self, on):
+        """通用设置变更：保存高性能模式开关状态。"""
+        return save_high_perf(on)
 
     def save_wubei_min(self, value):
         """五倍设置变更：保存最少人数。"""

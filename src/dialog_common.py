@@ -13,6 +13,7 @@ from functools import lru_cache
 import difflib
 
 from .app_utils import log, human_click, move_away, norm_text
+from . import app_utils  # 高性能模式共享设施（选项坐标缓存记录）
 from . import task_tracker  # 面板左区边界与绿色文字判定
 from . import bag  # 物品栏开关（close_scene_panels 用）
 from . import map as game_map  # 地图开关（close_scene_panels 用）
@@ -47,6 +48,9 @@ def _click_green_option_once(win, items, img_np, text, prefix=""):
                 and task_tracker.is_green_text(img_np, rect):
             cx, cy = task_tracker.green_text_center(img_np, rect, prefer_underline=False)
             human_click(win, cx, cy)
+            # 高性能：记录选项固定位置（按文案做键，各任务模块共用；
+            # 位置漂移时由本路径自然刷新）
+            app_utils.fixed_pos_set(f"option_{text}", win, cx, cy)
             log(f"{tag}已点击对话框绿色选项「{txt}」@({cx},{cy})", "SYS")
             move_away(win)  # 鼠标停留选项上会使其悬停变色，干扰后续绿字判定
             return True

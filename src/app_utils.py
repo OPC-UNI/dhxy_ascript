@@ -139,3 +139,51 @@ def norm_text(s):
     再做精确/模糊匹配可大幅降低漏配（各任务模块共用，勿再本地复制）。
     """
     return re.sub(r"[^\w]", "", s)
+
+
+# ---- 高性能模式共享设施（固定位置 UI 坐标缓存） ----
+# 各任务模块共用：任务进程启动时由 main.task_start 按通用设置置位；
+# 主进程（验证流程等）恒为 False，始终走识别路径。
+_high_perf = False
+_fixed_pos_cache = {}  # key -> (窗口宽, 窗口高, x, y)
+# 高性能：入口点击后等待对话框渲染的固定延时（实测正常 ~1.5s 即出，
+# 免 OCR 轮询）
+HIGH_PERF_DIALOG_WAIT = 1.8
+
+
+def set_high_perf(on):
+    """设置高性能开关（任务进程启动时调用一次）。"""
+    global _high_perf
+    _high_perf = bool(on)
+
+
+def high_perf_on():
+    """高性能开关是否开启（关闭时全部缓存设施退化为识别路径）。"""
+    return _high_perf
+
+
+def fixed_pos_get(key, win):
+    """读取固定位置缓存坐标；窗口尺寸不匹配（缩放/换窗口）视为失效返回 None。"""
+    entry = _fixed_pos_cache.get(key)
+    if entry is None:
+        return None
+    w, h, x, y = entry
+    return (x, y) if (w, h) == (win.rect.width, win.rect.height) else None
+
+
+def fixed_pos_set(key, win, x, y):
+    """记录固定位置坐标（识别路径成功时调用，位置漂移自愈）。"""
+    _fixed_pos_cache[key] = (win.rect.width, win.rect.height, int(x), int(y))
+
+
+def high_perf_click(win, key, label, prefix=""):
+    """高性能缓存点击：有缓存坐标即点击并返回 True（调用方自行校验
+    效果并按需回退识别路径）；开关关闭或无缓存返回 False 不点击。"""
+    if not _high_perf:
+        return False
+    pos = fixed_pos_get(key, win)
+    if pos is None:
+        return False
+    human_click(win, pos[0], pos[1])
+    log(f"{prefix}[高性能] 已按缓存坐标点击{label} ({pos[0]}, {pos[1]})", "SYS")
+    return True

@@ -25,6 +25,7 @@ import time
 from ascript.windows.hardware.mouse import Mouse
 
 from .app_utils import log, human_click, human_move, move_away, norm_text
+from . import app_utils  # 高性能模式共享设施（固定位置缓存点击）
 from . import bag  # 背包操作（储物格切换搜索）
 from . import map as game_map  # 地图操作（世界地图/小地图/位置识别）
 from . import task_tracker  # 任务追踪面板操作
@@ -211,10 +212,10 @@ def _buy_equipments(win):
 
 
 def _click_green_option_if(win, items, img_np, pred):
-    """点击满足谓词的对话框绿色选项（x≥PANEL_MAX_X），成功返回 True。
+    """点击满足谓词的对话框绿色选项（x≥PANEL_MAX_X）。
 
     限定对话框区域避免误点追踪面板的绿字链接；点击后移走鼠标
-    （悬停变色会干扰后续绿字判定）。
+    （悬停变色会干扰后续绿字判定）。返回点击坐标 (cx, cy) 或 None。
     """
     for txt, rect, score in items:
         if score >= 0.55 and pred(txt) \
@@ -224,18 +225,23 @@ def _click_green_option_if(win, items, img_np, pred):
             human_click(win, cx, cy)
             log(f"[五环] 已点击绿色选项「{txt}」", "SYS")
             move_away(win)  # 鼠标停留选项上会使其悬停变色，干扰后续绿字判定
-            return True
-    return False
+            return cx, cy
+    return None
 
 
 def _click_green_option(win, items, img_np, text):
-    """点击指定文案的绿色选项（忽略标点差异的子串匹配），成功返回 True。
+    """点击指定文案的绿色选项（忽略标点差异的子串匹配）。
 
     OCR 对中文标点误读常见（如「，」读成「；」），去标点后按子串匹配。
+    识别点击成功即记录选项固定位置（高性能模式缓存用，位置漂移自愈）。
+    返回点击坐标 (cx, cy) 或 None。
     """
     needle = norm_text(text)
-    return _click_green_option_if(win, items, img_np,
-                                  lambda t: needle in norm_text(t))
+    pos = _click_green_option_if(win, items, img_np,
+                                 lambda t: needle in norm_text(t))
+    if pos is not None:
+        app_utils.fixed_pos_set(f"option_{text}", win, pos[0], pos[1])
+    return pos
 
 
 def _claim_task(win):
@@ -262,7 +268,8 @@ def _claim_task(win):
     if not ok:
         return False, info
     log("[五环] 已到达云游大师附近", "SYS")
-    # 等待领取任务按钮出现并点击
+    # 等待领取任务按钮出现并点击（按钮随站位渲染位置变化，必须识图
+    # 定位，不缓存）
     if not _wait_template(win, TASK_LINGQU_CHANGAN_ICON, CLAIM_BUTTON_TIMEOUT):
         return False, "到达后未出现领取任务按钮"
     pt = game_map.find_template(win, TASK_LINGQU_CHANGAN_ICON)
@@ -270,6 +277,14 @@ def _claim_task(win):
         return False, "领取任务按钮出现后又消失，未点击"
     human_click(win, pt[0], pt[1])
     log("[五环] 已点击领取任务", "SYS")
+    # 高性能：领取选项坐标已缓存 → 固定等待渲染后直点（免首轮 OCR）；
+    # 生效与否由下方任务出现轮询判定并兜底
+    if app_utils.high_perf_on():
+        pos = app_utils.fixed_pos_get(f"option_{CLAIM_DIALOG_OPTION}", win)
+        if pos is not None:
+            time.sleep(app_utils.HIGH_PERF_DIALOG_WAIT)
+            human_click(win, pos[0], pos[1])
+            log(f"[五环][高性能] 已按缓存坐标点击「{CLAIM_DIALOG_OPTION}」 ({pos[0]}, {pos[1]})", "SYS")
     # 对话框：活力值不足则点击「那可不行，我一会再来。」结束任务；
     # 正常则点击「我可以帮助这些人」完成领取。
     # 每轮询截一帧 + 双区域 OCR 一次（面板+对话框，~1.2s），任务出现与

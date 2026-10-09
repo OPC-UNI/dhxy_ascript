@@ -26,6 +26,7 @@ from ascript.windows.system import R
 from ascript.windows.screen.find_images import FindImages
 
 from .app_utils import human_click, log
+from . import app_utils  # 高性能模式共享设施（固定位置缓存点击）
 
 # 地图位置文字区域（窗口相对坐标，左上角）
 MAP_POS_REGION = (45, 60, 222, 90)
@@ -357,10 +358,23 @@ def is_mini_map_open(win):
 
 
 def open_world_map(win):
-    """点击世界地图按钮打开世界地图。返回 (是否成功, 描述)。"""
+    """点击世界地图按钮打开世界地图。返回 (是否成功, 描述)。
+
+    高性能：按钮坐标缓存后直点；未打开回退识别点击（并刷新缓存）。
+    """
+    cached = app_utils.high_perf_click(win, "world_map_btn",
+                                       "世界地图按钮", prefix="[地图] ")
+    deadline = time.time() + 2.0
+    while time.time() < deadline:
+        time.sleep(0.3)
+        if is_world_map_open(win):
+            return True, "世界地图已打开（高性能缓存）" if cached else "世界地图已打开"
+    if cached:
+        log("[地图][高性能] 缓存点击未打开世界地图，回退识别", "WARN")
     pt = find_template(win, WORLD_MAP_ICON)
     if pt is None:
         return False, "未找到世界地图按钮"
+    app_utils.fixed_pos_set("world_map_btn", win, pt[0], pt[1])
     human_click(win, pt[0], pt[1])
     # 轮询等待打开（实测约 0.5s 即开；替代固定 1.5s 等待，打开即返回）
     deadline = time.time() + 2.0
@@ -388,13 +402,25 @@ def open_mini_map_city(win, city_icon, city_label):
     """打开世界地图并点击指定城市，打开该城市的小地图。
 
     世界地图点击城市后自动关闭（实测）。返回 (是否成功, 描述)。
+    高性能：城市图标坐标（世界地图布局固定）缓存后直点；未打开
+    回退识别点击（并刷新缓存）。
     """
     ok, info = open_world_map(win)
     if not ok:
         return False, info
+    key = f"city_{city_icon}"
+    cached = app_utils.high_perf_click(win, key, f"{city_label}图标", prefix="[地图] ")
+    deadline = time.time() + 3
+    while not is_mini_map_open(win) and time.time() < deadline:
+        time.sleep(0.3)
+    if is_mini_map_open(win):
+        return True, f"{city_label}小地图已打开"
+    if cached:
+        log(f"[地图][高性能] 缓存点击未打开{city_label}小地图，回退识别", "WARN")
     pt = find_template(win, city_icon)
     if pt is None:
         return False, f"世界地图中未找到{city_label}"
+    app_utils.fixed_pos_set(key, win, pt[0], pt[1])
     human_click(win, pt[0], pt[1])
     # 轮询等待小地图打开（替代固定 1.5s 等待，打开即返回）
     deadline = time.time() + 3
