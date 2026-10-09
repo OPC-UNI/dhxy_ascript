@@ -151,19 +151,6 @@ def _near_claim_spot(pos, tolerance):
                                    CLAIM_SPOT[0], CLAIM_SPOT[1], tolerance)
 
 
-def _find_claim_entry(win):
-    """查找领取入口（领取任务按钮或降魔侍卫），返回 (pt, 来源) 或 (None, None)。
-
-    两个入口识别到任一即可点击领取（用户确认：NPC 也可点击）。
-    """
-    for icon, label in ((LINGQU_ICON, "领取任务按钮"),
-                        (XIANGMOSHIWEI_ICON, "降魔侍卫")):
-        pt = game_map.find_template(win, icon)
-        if pt is not None:
-            return pt, label
-    return None, None
-
-
 def _wait_claim_entry(win, timeout):
     """等待领取入口出现（按钮或降魔侍卫），返回 (pt, 来源) 或 (None, None)。
 
@@ -270,8 +257,10 @@ def _walk_to_claim_spot(win):
     到达判定优先用直接信号（领取任务按钮可见 = 已到领取点）——
     位置 OCR 坐标不可靠时按钮判据兜底（修罗实测教训：区域快引擎
     把 111,90 误读为 11,90，玩家站在领取点却被判定未到达）。
-    位置读取失败（传送后加载画面遮挡）时先等待恢复（最多 8s），
-    不立即误走导航；等待期间不按 Alt+C（该键是位置显示开关）。
+    位置读取失败也按不在附近处理，直接走地图寻路（用户 2026-10-09
+    确认）：加载/渲染等待由 open_mini_map_city 的轮询吸收，原 8s
+    等待 + Alt+C 恢复实测整段空转（且 Alt+C 是位置显示开关，
+    加载期误按会关掉显示——此处不再按）。
     返回 (是否成功, 描述)。
     """
     if is_in_battle(win):
@@ -281,15 +270,8 @@ def _walk_to_claim_spot(win):
     # 且远距离也可能命中，不能作到达判据（修罗使者教训）
     if game_map.find_template(win, LINGQU_ICON) is not None:
         return True, "已在领取点附近（领取按钮可见）"
-    # 位置读取：失败时等待传送加载恢复（最多 8s，期间不按 Alt+C）
+    # 位置读取：失败按不在附近处理，直接走地图寻路（不等待不 Alt+C）
     pos = game_map.read_map_position(win)
-    if pos is None:
-        deadline = time.time() + 8
-        while pos is None and time.time() < deadline:
-            time.sleep(2.0)
-            pos = game_map.read_map_position(win)
-        if pos is None:
-            pos = game_map.read_position_with_recovery(win)  # 最后按一次 Alt+C 恢复
     if _near_claim_spot(pos, CLAIM_NEAR_TOLERANCE):
         return True, "已在领取点附近"
     if pos is None or pos[0].strip() != BAOXIANGGUO:
@@ -329,23 +311,61 @@ def _walk_to_claim_spot(win):
     return False, f"寻路到领取点超时（未到达宝象国 {CLAIM_SPOT[0]},{CLAIM_SPOT[1]} 附近）"
 
 
+def _relocate_to_claim_spot(win):
+    """小地图点击领取点坐标重新寻路（领取校验兜底，修罗同款）。
+
+    领取已点但任务追踪未出现时调用：重走一次领取点坐标可能触发任务
+    渲染。与 _walk_to_claim_spot 的区别：无条件走小地图（不判断位置，
+    通常在领取点原地重走，几秒即回）。返回 (是否成功, 描述)。
+    """
+    if is_in_battle(win):
+        return False, "战斗中，跳过重走"
+    ok, info = game_map.open_mini_map(win)
+    if not ok:
+        return False, info
+    human_click(win, BAOXIANG_MAP_POS[0], BAOXIANG_MAP_POS[1])
+    log("[五倍] 已点击宝象国小地图领取点位置，重新寻路（领取校验兜底）", "SYS")
+    time.sleep(1.0)
+    game_map.close_maps(win)
+    deadline = time.time() + CLAIM_ARRIVE_TIMEOUT
+    polls = 0
+    while time.time() < deadline:
+        if is_in_battle(win):
+            time.sleep(2.0)
+            continue
+        if game_map.find_template(win, LINGQU_ICON) is not None:
+            return True, "已重走到领取点附近（领取按钮可见）"
+        pos = game_map.read_map_position(win)
+        if _near_claim_spot(pos, WALK_ARRIVE_TOLERANCE):
+            return True, "已重走到领取点附近"
+        polls += 1
+        if polls % 5 == 0:
+            log(f"[五倍] 重走领取点中... 当前位置: {pos or '识别失败'}", "INFO")
+        time.sleep(2.0)
+    return False, "重走领取点超时"
+
+
 def _click_entry_ensuring_dialog(win, log_tag="[五倍]", hover_before_click=False):
     """点击领取入口（按钮或降魔侍卫）并确保对话框出现；未出现判定坐标不对：
     打开小地图点击领取点坐标重定位后重试一次（修罗同款兜底路径）。
 
     hover_before_click：点击前先移动鼠标定位入口（无延时，验证时序与真实流程一致）。
-    返回 (是否成功, 描述, 来源, 坐标)；成功时对话框已打开（选项可见）。
+    返回 (是否成功, 描述, 来源, 坐标, 对话框帧)；成功时对话框已打开
+    （选项可见），对话框帧 (items, img_np) 供领取流程同帧点选项——
+    免重截+重 OCR。
     """
     dialog_seen = False
     appear_timeout = CLAIM_DIALOG_APPEAR_TIMEOUT
     src2 = pt2 = None
+    seen_frame = None
     for attempt in (1, 2):
-        pt, src = _wait_claim_entry(win, CLAIM_BUTTON_TIMEOUT)
-        if pt is None:
-            return False, "到达后未出现领取任务按钮/降魔侍卫", None, None
-        pt2, src2 = _find_claim_entry(win)
+        # 入口坐标直接用等待循环最近一帧的匹配结果点击：等待刚命中后
+        # 再补一次识别（旧双检）会因 NPC 动画/镜头未稳出现「出现后又
+        # 消失」假失败（修罗实测到达秒级报错未点击）；点不中由对话框
+        # 出现判定兜底（小地图重定位重试）
+        pt2, src2 = _wait_claim_entry(win, CLAIM_BUTTON_TIMEOUT)
         if pt2 is None:
-            return False, "领取入口出现后又消失，未点击", None, None
+            return False, "到达后未出现领取任务按钮/降魔侍卫", None, None, None
         if hover_before_click:
             human_move(win.rect.left + pt2[0], win.rect.top + pt2[1])
             log(f"{log_tag} 已移动鼠标到{src2} ({pt2[0]}, {pt2[1]})，"
@@ -363,6 +383,7 @@ def _click_entry_ensuring_dialog(win, log_tag="[五倍]", hover_before_click=Fal
             items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
             if _find_claim_option(items, img_np) is not None:
                 dialog_seen = True
+                seen_frame = (items, img_np)
                 break
             time.sleep(0.3)
         if dialog_seen:
@@ -372,7 +393,7 @@ def _click_entry_ensuring_dialog(win, log_tag="[五倍]", hover_before_click=Fal
             log(f"{log_tag} 点击后未出现对话框（坐标不对），打开小地图重定位", "WARN")
             ok, info = game_map.open_mini_map(win)
             if not ok:
-                return False, info, None, None
+                return False, info, None, None, None
             human_click(win, BAOXIANG_MAP_POS[0], BAOXIANG_MAP_POS[1])
             log(f"{log_tag} 已点击宝象国小地图领取点位置，重新寻路中", "SYS")
             time.sleep(1.0)
@@ -389,47 +410,57 @@ def _click_entry_ensuring_dialog(win, log_tag="[五倍]", hover_before_click=Fal
                 time.sleep(2.0)
             appear_timeout = CLAIM_DIALOG_TIMEOUT
     if not dialog_seen:
-        return False, "点击领取入口后对话框始终未出现（小地图重定位后仍无）", src2, pt2
-    return True, f"已点击{src2}", src2, pt2
+        return False, "点击领取入口后对话框始终未出现（小地图重定位后仍无）", src2, pt2, None
+    return True, f"已点击{src2}", src2, pt2, seen_frame
 
 
 def _claim_task(win):
-    """在领取点附近领取五倍任务（前提：已走到领取点附近）。返回 (是否成功, 描述)。
+    """在领取点附近领取五倍任务（前提：已走到领取点附近）。
 
     识图 wubei_lingqu.png / wubei_xiangmoshiwei.png 点击 → 对话框点绿色
     选项「除魔卫国，义不容辞」→ 校验任务出现在追踪面板。
+
+    返回 (是否成功, 描述, 校验帧)：校验帧为任务进追踪的确认帧
+    （items, img_np），供 follow_task 首轮复用免重复截图+OCR；
+    Alt+C 兜底路径无帧返回 None。
+
+    领取时序优化（与修罗同款，实测一轮入口点击→选项点击 4s、选项点击
+    →已领取判定 4s、判定→追踪点击 2s）：
+    1. 选项点击直接复用「对话框已出现」的同一帧（免重截+重 OCR）
+    2. 校验循环内确认任务出现即返回，不再重复一次 has_task 全量检查
     """
     if is_in_battle(win):
-        return False, "战斗中，跳过本轮领取"
+        return False, "战斗中，跳过本轮领取", None
     # 识图领取入口（按钮或降魔侍卫）并点击；点击后对话框未出现
     # （短窗口内选项不可见）判定坐标不对：打开小地图点击领取点坐标
     # 重定位后重试一次（修罗同款兜底路径）
-    ok, info, _src2, _pt2 = _click_entry_ensuring_dialog(win)
+    ok, info, _src2, _pt2, seen = _click_entry_ensuring_dialog(win)
     if not ok:
-        return False, info
-    # 对话框：点绿色选项「除魔卫国，义不容辞」完成领取
-    # 每轮询：截图 1 次 + 限对话框区域 OCR（全帧 ~930ms → 区域 ~100-170ms，
-    # 绿色选项点击依赖的全图坐标/像素判定由 ocr_regions 全图黑底 img_np
-    # 保证）；完整文案与「不容辞」兜底在同一帧先后尝试（OCR 把选项拆成
+        return False, info, None
+    # 对话框：点绿色选项「除魔卫国，义不容辞」完成领取——直接用
+    # 「对话框已出现」的同一帧点击（帧上已确认选项可见，点同一帧
+    # 与 0.3s 后重截重 OCR 再点等价）；未点中再走短窗轮询兜底。
+    # 完整文案与「不容辞」兜底在同一帧先后尝试（OCR 把选项拆成
     # 两行时完整串永远匹配不上——修罗实测教训）
+    items, img_np = seen
+    claimed = _click_claim_option(win, items, img_np)
     deadline = time.time() + CLAIM_DIALOG_TIMEOUT
-    claimed = False
-    while time.time() < deadline:
+    while not claimed and time.time() < deadline:
         img = win.capture(force_activate=False)
         if img is None:
             time.sleep(0.3)
             continue
         items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
-        if _click_claim_option(win, items, img_np):
-            claimed = True
-            break
+        claimed = _click_claim_option(win, items, img_np)
         time.sleep(0.3)
     if not claimed:
-        return False, "领取对话框处理失败"
-    # 校验任务出现在追踪面板：正常轮询 CLAIM_VERIFY_WAIT 秒；未出现则
-    # 按一次 Alt+C（飞行/刷新界面状态）后仅再检索一次——修罗实测多次
-    # 重试无效，Alt+C 后仍检索不到即判定领取失败，不再长窗空等
+        return False, "领取对话框处理失败", None
+    # 校验任务出现在追踪面板：正常轮询 CLAIM_VERIFY_WAIT 秒；任务
+    # 出现即确认（不再重复一次 has_task 全量检查）；未出现则按一次
+    # Alt+C（飞行/刷新界面状态）后仅再检索一次——修罗实测多次重试
+    # 无效，Alt+C 后仍检索不到即判定领取失败，不再长窗空等
     deadline = time.time() + CLAIM_VERIFY_WAIT
+    found_frame = None
     while time.time() < deadline:
         img = win.capture(force_activate=False)
         if img is None:
@@ -437,18 +468,27 @@ def _claim_task(win):
             continue
         items, img_np = game_map.ocr_regions(img, task_tracker.OCR_REGIONS)
         if task_tracker.has_task_in(items, img_np, TASK_TITLE, TASK_FALLBACK_TEXTS):
+            found_frame = (items, img_np)
             break
         time.sleep(1.0)
-    if task_tracker.has_task(win, TASK_TITLE, TASK_FALLBACK_TEXTS):
-        return True, "五倍任务已领取"
+    if found_frame is not None:
+        return True, "五倍任务已领取", found_frame
     # 未检索到：按 Alt+C 飞行后再次检索（仅一次，多次重试无效）
     Keyboard.key_hot("alt", "c")
     log("[五倍] 任务追踪未检索到任务，按 Alt+C 飞行后再次检索", "WARN")
     time.sleep(1.0)
     if task_tracker.has_task(win, TASK_TITLE, TASK_FALLBACK_TEXTS):
         log("[五倍] Alt+C 飞行后任务已出现在追踪面板", "SYS")
-        return True, "五倍任务已领取"
-    # Alt+C 后仍无：不再重试，直接失败（下一轮 has_task 检查兜底，
+        return True, "五倍任务已领取", None
+    # Alt+C 后仍无：小地图重走领取点坐标后再次检索（修罗同款，用户
+    # 2026-10-09 确认：重走可能触发任务渲染，不直接判失败）
+    ok2, info2 = _relocate_to_claim_spot(win)
+    if not ok2:
+        log(f"[五倍] {info2}", "WARN")
+    elif task_tracker.has_task(win, TASK_TITLE, TASK_FALLBACK_TEXTS):
+        log("[五倍] 重走领取点后任务已出现在追踪面板", "SYS")
+        return True, "五倍任务已领取", None
+    # 重走后仍无：不再重试，直接失败（下一轮 has_task 检查兜底，
     # 任务若随后渲染出现会以续跑方式被拾起）
     try:
         titles = [t["title"] for t in task_tracker.read_tasks(win)]
@@ -456,7 +496,7 @@ def _claim_task(win):
             f"{' / '.join(titles) if titles else '(无标题行)'}", "WARN")
     except Exception:
         pass
-    return False, "已点击领取选项，但任务追踪中未检测到任务（Alt+C 飞行后仍无）"
+    return False, "已点击领取选项，但任务追踪中未检测到任务（Alt+C 飞行后仍无）", None
 
 
 def _handle_fight_dialog(win, items, img_np):
@@ -482,16 +522,19 @@ def _handle_fight_dialog(win, items, img_np):
     return False
 
 
-def _follow_to_done(win):
+def _follow_to_done(win, first_items=None):
     """寻路 + 对话开打 + 战斗：跟踪任务直到本轮完成。
 
     复用 xuanshu.follow_task：绿字点击自动寻路、对话开打走附加对话处理
     （点击「看打！」进入战斗）、战斗由战斗监控线程操作且跟踪中自动跳过。
+    first_items：领取校验刚确认任务出现的 (items, img_np) 帧，首轮
+    跳过截图+OCR 立即点击追踪绿字。
     返回 (是否成功, 描述)。
     """
     ok, info = follow_task(win, TASK_TITLE, prefix="五倍",
                            extra_dialog_handler=_handle_fight_dialog,
-                           fallback_keywords=TASK_FALLBACK_TEXTS)
+                           fallback_keywords=TASK_FALLBACK_TEXTS,
+                           first_items=first_items)
     return ok, info
 
 
@@ -746,7 +789,7 @@ def verify_claim_flow(win):
         return False, info
     # 2. 领取入口：鼠标定位 → 点击打开对话框；点击后对话框未出现则
     #    小地图重定位后重试（与领取流程共用同一兜底助手）
-    ok, info, src2, pt2 = _click_entry_ensuring_dialog(
+    ok, info, src2, pt2, _frame = _click_entry_ensuring_dialog(
         win, log_tag="[五倍][验证]", hover_before_click=True)
     if not ok:
         return False, info
@@ -810,6 +853,7 @@ def run_loop(win, cycle_interval=1.0):
             #    上一轮已确认任务完成（follow_task 以任务消失为完成判据）时，
             #    本轮开始必然无任务——has_task（区域 OCR ~0.9s）只在可能
             #    续跑时检查（进程首轮或上轮跟踪失败未确认完成）
+            claim_items = None  # 领取校验帧（续跑路径无，跟踪首轮自行截图+OCR）
             if not _task_gone_last_round and task_tracker.has_task(win, TASK_TITLE, TASK_FALLBACK_TEXTS):
                 log("[五倍] 任务追踪中已有五倍任务，直接跟踪", "SYS")
             else:
@@ -849,8 +893,8 @@ def run_loop(win, cycle_interval=1.0):
                                     else TEAM_CHECK_RETRY_INTERVAL)
                         log(f"[五倍] {info}，暂不领取（持续监控队伍人数）", "WARN")
                         time.sleep(interval)
-                # 领取任务
-                ok, info = _claim_task(win)
+                # 领取任务（校验帧随返回值带出，跟踪首轮复用免重复 OCR）
+                ok, info, claim_items = _claim_task(win)
                 if not ok:
                     if _team_checked:
                         # 已通过队伍检查仍领取失败（如队长被转移、入口未出现）：
@@ -866,8 +910,9 @@ def run_loop(win, cycle_interval=1.0):
                 _fight_via_kanda = False  # 新一轮开始：重置「看打！」进入战斗标记
             # 2~4. 寻路 / 对话开打 / 战斗：由任务跟踪统一驱动
             #     （寻路点击绿字自动进行，对话开打走附加对话处理，
-            #      战斗由战斗监控线程自动操作、跟踪中自动跳过）
-            ok, info = _follow_to_done(win)
+            #      战斗由战斗监控线程自动操作、跟踪中自动跳过）；
+            #     领取校验帧传入后首轮跳过截图+OCR 立即点击绿字
+            ok, info = _follow_to_done(win, first_items=claim_items)
             if not ok:
                 log(f"[五倍] {info}", "WARN")
                 time.sleep(cycle_interval)
