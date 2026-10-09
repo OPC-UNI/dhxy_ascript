@@ -69,7 +69,7 @@ TASK_LINGQU_CHANGAN_ICON = "task_lingqu_changan.png"  # 长安云游大师的领
 # ---- 提交装备（给与）流程 ----
 SUBMIT_DIALOG_TEXT = "我在这里练级，打了好久都打不过夜叉和猪怪。"  # 提交装备对话文案
 SUBMIT_DIALOG_OPTION = "刚好我这里有，送你啦"              # 对话绿色选项
-GIVE_ICON = "give.png"                              # 给与面板标志（27.png，32x213）
+GIVE_ICON = "give_title.png"          # 给与面板标志（横幅「给与」静态标题区，32x114）
 GIVE_BTN_ICON = "give_btn.png"                      # 给与按钮（28.png，OCR 读作「给子」）
 XIANGLIAN_ICON = "fuzhuangdian_xianglian.png"       # 项链（与商店/给与面板行格式相同，实测给与面板匹配 1.0）
 MISSING_EQUIPMENT_INFO = "缺少五环装备"              # 终止原因描述
