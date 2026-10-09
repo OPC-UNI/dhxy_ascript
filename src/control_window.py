@@ -235,6 +235,24 @@ def save_xiuluo_hezi(on):
     return {"status": "success"}
 
 
+# ---- 修罗高性能模式（UI 开关，KeyValue 持久化，默认关闭；
+#      开启后固定位置 UI（背包按钮/领取选项/看打选项）首次识别记录
+#      坐标，后续直接按坐标点击 + 效果校验，失败回退识别路径——
+#      位置漂移/窗口缩放时自动失效并自愈） ----
+_XIULUO_HIGH_PERF_KEY = "xiuluo_high_perf"
+
+
+def load_xiuluo_high_perf():
+    """读取修罗高性能开关（首次默认关闭）。"""
+    return bool(KeyValue.get(_XIULUO_HIGH_PERF_KEY, False))
+
+
+def save_xiuluo_high_perf(on):
+    """保存修罗高性能开关，返回操作结果。"""
+    KeyValue.save(_XIULUO_HIGH_PERF_KEY, bool(on))
+    return {"status": "success"}
+
+
 # ---- 修罗检查队伍（UI 开关，KeyValue 持久化；关闭时领取前跳过全部
 #      队伍检查，默认关闭——用户确认每轮回程后开面板检查耗时 5~7s） ----
 _XIULUO_CHECK_TEAM_KEY = "xiuluo_check_team"
@@ -252,7 +270,7 @@ def save_xiuluo_check_team(on):
 
 
 # ---- 修罗自动巫医（UI 开关+间隔，KeyValue 持久化；默认开启、每 5 轮
-#      一次——领取任务后召唤兽血蓝低于阈值时前往巫医 NPC 医治） ----
+#      一次——每 N 轮领取后无条件前往巫医 NPC 医治，血蓝正常也照常） ----
 _XIULUO_AUTO_WUYI_KEY = "xiuluo_auto_wuyi"
 _XIULUO_WUYI_INTERVAL_KEY = "xiuluo_wuyi_interval"
 _WUYI_INTERVAL_MIN = 1
@@ -369,6 +387,7 @@ class ControlWindow(WebWindow):
         self.expose(self.save_xiuluo_check_team)
         self.expose(self.save_xiuluo_auto_wuyi)
         self.expose(self.save_xiuluo_wuyi_interval)
+        self.expose(self.save_xiuluo_high_perf)
         self.expose(self.save_wubei_min)
         self.expose(self.save_wubei_hezi)
         self.expose(self.save_debug_overlay)
@@ -398,6 +417,7 @@ class ControlWindow(WebWindow):
                 "xiuluo_check_team": load_xiuluo_check_team(),
                 "xiuluo_auto_wuyi": load_xiuluo_auto_wuyi(),
                 "xiuluo_wuyi_interval": load_xiuluo_wuyi_interval(),
+                "xiuluo_high_perf": load_xiuluo_high_perf(),
                 "wubei": {"min_members": load_wubei_min(),
                           "hezi": load_wubei_hezi()},
                 "debug_overlay": load_debug_overlay()}
@@ -445,6 +465,10 @@ class ControlWindow(WebWindow):
     def save_xiuluo_wuyi_interval(self, value):
         """修罗设置变更：保存自动巫医间隔（轮）。"""
         return save_xiuluo_wuyi_interval(value)
+
+    def save_xiuluo_high_perf(self, on):
+        """修罗设置变更：保存高性能模式开关状态。"""
+        return save_xiuluo_high_perf(on)
 
     def save_wubei_min(self, value):
         """五倍设置变更：保存最少人数。"""

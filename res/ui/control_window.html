@@ -228,7 +228,12 @@
                 <label class="switch-row">
                     <input type="checkbox" id="xiuluo-auto-wuyi">
                     <span class="switch-track"></span>
-                    <span>自动巫医（领取后召唤兽血蓝低于阈值时医治，默认开启）</span>
+                    <span>自动巫医（每 N 轮领取后无条件医治，血蓝正常也照常，默认开启）</span>
+                </label>
+                <label class="switch-row">
+                    <input type="checkbox" id="xiuluo-high-perf">
+                    <span class="switch-track"></span>
+                    <span>高性能模式（背包/领取选项/看打选项首次识别后缓存坐标直点，失败自动回退识别，默认关闭）</span>
                 </label>
                 <div class="group-row">
                     <span class="group-label">巫医间隔</span>
@@ -369,6 +374,7 @@
         const xiuluoHezi = document.getElementById('xiuluo-hezi');
         const xiuluoCheckTeam = document.getElementById('xiuluo-check-team');
         const xiuluoAutoWuyi = document.getElementById('xiuluo-auto-wuyi');
+        const xiuluoHighPerf = document.getElementById('xiuluo-high-perf');
         const xiuluoWuyiIntervalEl = document.getElementById('xiuluo-wuyi-interval');
         const wubeiHezi = document.getElementById('wubei-hezi');
         const btnVerifyXiuluo = document.getElementById('btn-verify-xiuluo');
@@ -512,6 +518,7 @@
                     xiuluoHezi.checked = !!info.xiuluo_hezi;
                     xiuluoCheckTeam.checked = !!info.xiuluo_check_team;
                     xiuluoAutoWuyi.checked = !!info.xiuluo_auto_wuyi;
+                    xiuluoHighPerf.checked = !!info.xiuluo_high_perf;
                     if (info.xiuluo_wuyi_interval) {
                         xiuluoWuyiIntervalEl.innerText = info.xiuluo_wuyi_interval;
                     }
@@ -600,6 +607,11 @@
         // 修罗自动巫医开关变更：立即保存（下次任务启动生效）
         xiuluoAutoWuyi.addEventListener('change', () => {
             callPython('save_xiuluo_auto_wuyi', xiuluoAutoWuyi.checked);
+        });
+
+        // 修罗高性能模式开关变更：立即保存（下次任务启动生效）
+        xiuluoHighPerf.addEventListener('change', () => {
+            callPython('save_xiuluo_high_perf', xiuluoHighPerf.checked);
         });
 
         // 修罗自动巫医间隔步进：±1，范围 1~90，变更立即保存
