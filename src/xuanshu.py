@@ -27,6 +27,7 @@ from ascript.windows.hardware.mouse import Mouse
 from ascript.windows.window.Window import WindowCaptureFormat
 
 from .app_utils import log, human_click, move_away, norm_text
+from . import app_utils  # 高性能模式共享设施（固定位置缓存点击）
 from . import map as game_map  # 地图操作（世界地图/小地图/位置识别）
 from . import task_tracker  # 任务追踪面板操作
 from .battle import (is_in_battle, is_in_battle_frame,
@@ -41,7 +42,7 @@ TASK_TITLE = "玄枢轶闻"
 LUOYANG_CITY = "洛阳城"
 TASK_MAP_POS = (93, 125)            # 任务位置（洛阳城坐标；None 表示目标非坐标）
 MAP_POS_TOLERANCE = 5               # 坐标判定容差（±5 像素）
-MAP_CLICK_POS = (399, 438)          # 小地图上任务位置对应的点击点（窗口相对坐标）
+MAP_CLICK_POS = (399, 435)          # 小地图上任务位置对应的点击点（窗口相对坐标）
 TASK_LINGQU_ICON = "task_lingqu.png"           # 领取任务按钮模板
 ARRIVE_TIMEOUT = 90                 # 等待寻路完成的超时（秒）
 # 领取任务对话框中的绿色选项（两步）
@@ -53,13 +54,16 @@ DIALOG_OPTIONS = ["注入玄蕴试试看"]
 # ---- 监天盘子任务（追踪文案「使用监天盘寻找石妖踪迹」出现即触发）----
 JIANTIANPAN_TRACK_TEXT = "使用监天盘寻找石妖踪迹"  # 任务追踪触发文案
 JIANTIANPAN_WORLD_ICON = "shijie_huoyungebi.png"  # 世界地图「火云戈壁」标签模板
-JIANTIANPAN_MAP_CLICK_POS = (759, 431)            # 火云戈壁小地图点击点（寻路到目标附近）
+JIANTIANPAN_MAP_CLICK_POS = (759, 435)            # 火云戈壁小地图点击点（寻路到目标附近）
 JIANTIANPAN_TARGET_POS = (183, 81)                # 目标坐标（火云戈壁）
-JIANTIANPAN_ARRIVE_TOLERANCE = 3                  # 到达容差（严格：仙药只在目标附近出现）
+JIANTIANPAN_ARRIVE_TOLERANCE = 4                  # 到达容差（严格：仙药只在目标附近出现）
 JIANTIANPAN_ARRIVE_TIMEOUT = 90                   # 寻路等待超时（秒）
 JIANTIANPAN_ICON = "xuanshu_jiantianpan.png"      # 监天盘模板
 JIANTIANPAN_CLICK_TIMEOUT = 10                    # 到达后等待监天盘出现的超时（秒）
-XIANYAO_ICON = "xuanshu_xianyao.png"              # 仙药模板（使用监天盘后出现）
+TANYAO_ICON = "xuanshu_tanyao.png"                # 探妖按钮模板（使用监天盘后出现，
+                                                  # 用户素材 21.png，实测匹配 1.0）
+TANYAO_TIMEOUT = 10                               # 点击监天盘后等待探妖出现的超时（秒）
+XIANYAO_ICON = "xuanshu_xianyao.png"              # 仙药模板（点击探妖后出现）
 XIANYAO_TIMEOUT = 20                              # 等待仙药出现的超时（秒）
 JIANTIANPAN_REDO_INTERVAL = 20                    # 流程失败后最短重做间隔（秒，防紧循环）
 _jiantianpan_last_done = 0.0                      # 上次流程执行时间戳
@@ -254,7 +258,8 @@ def _handle_jiantianpan(win, items, img_np):
 
     追踪出现「使用监天盘寻找石妖踪迹」时执行：
     世界地图点火云戈壁 → 小地图点 (744,441) 寻路 → 严格等待到达
-    火云戈壁 183,81 附近 → 点击监天盘 → 等待仙药出现并点击。
+    火云戈壁 183,81 附近 → 点击监天盘 → 点击探妖（用户 2026-10-09
+    提供模板）→ 等待仙药出现并点击。
     已在目标附近时跳过寻路直接点监天盘（失败重试幂等）。
     流程失败后 JIANTIANPAN_REDO_INTERVAL 内不重试（防紧循环）。
     返回是否已处理（执行过流程即 True，即使失败）。
@@ -282,6 +287,11 @@ def _handle_jiantianpan(win, items, img_np):
             return True
         log(f"[玄枢轶闻] {info}", "SYS")
     ok, info = _click_template_wait(win, JIANTIANPAN_ICON, "监天盘", JIANTIANPAN_CLICK_TIMEOUT)
+    if not ok:
+        log(f"[玄枢轶闻] {info}", "WARN")
+        return True
+    # 使用监天盘后点「探妖」（同一右下角按钮区，用户 2026-10-09 确认顺序）
+    ok, info = _click_template_wait(win, TANYAO_ICON, "探妖", TANYAO_TIMEOUT)
     if not ok:
         log(f"[玄枢轶闻] {info}", "WARN")
         return True
@@ -314,8 +324,16 @@ def _click_dialog_green_option(win, text, timeout=DIALOG_TIMEOUT, abort_text=Non
     """等待对话框出现，点击其中指定文案的绿色选项。
 
     等待期间若出现 abort_text 文案（如每日次数已满）则提前中止。
-    返回 (是否成功, 描述)。
+    高性能：选项坐标已缓存 → 固定等待渲染后直点（免 OCR 轮询；
+    abort 文案检测由调用方下游校验兜底）。返回 (是否成功, 描述)。
     """
+    if app_utils.high_perf_on():
+        pos = app_utils.fixed_pos_get(f"option_{text}", win)
+        if pos is not None:
+            time.sleep(app_utils.HIGH_PERF_DIALOG_WAIT)
+            human_click(win, pos[0], pos[1])
+            log(f"[玄枢轶闻][高性能] 已按缓存坐标点击「{text}」 ({pos[0]}, {pos[1]})", "SYS")
+            return True, f"已按缓存坐标点击对话框绿色选项「{text}」"
     deadline = time.time() + timeout
     while time.time() < deadline:
         img = win.capture(force_activate=False)
@@ -388,7 +406,7 @@ def navigate_to_task(win):
         return False, info, None
     log(f"[玄枢轶闻] {info}", "SYS")
 
-    # 领取任务
+    # 领取任务（按钮随站位渲染位置变化，必须识图定位，不缓存）
     pt = game_map.find_template(win, TASK_LINGQU_ICON)
     if pt is None:
         return False, "已到达但未找到领取任务按钮", None
