@@ -1118,6 +1118,10 @@ def run_loop(win, cycle_interval=1.0):
                 log(f"[修罗] {info}", "WARN")
                 time.sleep(cycle_interval)
                 continue
+            if not check_team:
+                # 关闭队伍检查：不开面板判定身份，任务自行寻路即视为
+                # 队长（抢盒子的队长规则依赖此记录，见 battle._handle_hezi）
+                team.record_leader_status(True)
             if check_team and not _team_checked:
                 # 1.2 首次领取：到达后持续监控队伍人数（人留在领取点）：
                 #     满足最少人数才领取；队长被转移则转非队长保持模式；
@@ -1146,6 +1150,7 @@ def run_loop(win, cycle_interval=1.0):
                 time.sleep(cycle_interval)
                 continue
             log(f"[修罗] {info}", "SYS")
+            team.record_leader_status(True)  # 领取成功必为队长（关闭检查队伍时抢盒子队长规则靠此记录）
             _team_checked = True  # 首次领取成功：后续轮次跳过队伍检查
             _fight_via_kanda = False  # 新一轮开始：重置「看打！」进入战斗标记
             # 自动巫医：每 N 轮领取后无条件前往巫医 NPC 医治，

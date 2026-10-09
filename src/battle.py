@@ -53,7 +53,8 @@ from . import task_tracker  # 对话框区域与绿色选项定位（巫医对�
 from . import debug_overlay  # 调试信息悬浮层（战斗场次更新）
 from . import team  # 队伍身份（抢盒子的队长规则）
 from .control_window import (load_battle_actions, load_task_mode,
-                             load_xiuluo_hezi, load_wubei_hezi)
+                             load_xiuluo_hezi, load_wubei_hezi,
+                             load_auto_famen)
 
 # ---- 战斗 UI 坐标与模板（窗口相对坐标，用户实测） ----
 ATTACK_POS = (366, 415)        # 攻击按钮位置；技能选择后也在此位置再点一次
@@ -74,6 +75,10 @@ BAR_BUTTON_THRESHOLD = 0.85    # 操作条按钮匹配阈值（非战斗画面�
 # 窗口相对坐标——首尾实测 技能1 (588,300)、技能6 (588,410)，中间
 # 平均分布（6 点 5 段，步进 22px）
 BEAST_SKILL_POS = {f"技能{i + 1}": (588, 300 + 22 * i) for i in range(6)}
+
+# ---- 自动使用法门（开关见通用设置；坐标用户稍后标定） ----
+FAMEN_CLICK_POS = None    # 法门点击坐标（窗口相对坐标）；None=未标定不点击
+_famen_missing_logged = False  # 开关开但坐标未标定：仅记录一次，避免刷日志
 
 # ---- 时序参数（秒） ----
 WATCH_POLL_INTERVAL = 0.5   # 战斗监控轮询间隔（单帧判定 + 快速匹配后 0.5s 无压力，
@@ -405,6 +410,31 @@ def _do_action(win, action, label, frame=None, round_no=None):
     return True
 
 
+def _click_famen(win, bar_ready=False):
+    """自动使用法门：每场战斗第 1 回合点一次法门坐标（开关开启时）。
+
+    bar_ready=False 时先等操作条出现（fashu 可见）；首场战斗操作条
+    已确认出现时传 True 免重复等待。坐标 FAMEN_CLICK_POS 未标定
+    （None）时跳过并仅记录一次。每场战斗调用一次（首场在
+    handle_battle 内、后续场次在 watch_loop 进场时）。
+    """
+    if not load_auto_famen():
+        return
+    global _famen_missing_logged
+    if FAMEN_CLICK_POS is None:
+        if not _famen_missing_logged:
+            _famen_missing_logged = True
+            log("[战斗] 法门：开关已开启但坐标未标定（FAMEN_CLICK_POS=None），"
+                "本场不点法门", "WARN")
+        return
+    if not bar_ready and not _wait_icon(win, FASHU_ICON, ROUND_BAR_TIMEOUT,
+                                        want_found=True):
+        log("[战斗] 法门：未等到第 1 回合操作条，本场不点法门", "WARN")
+        return
+    human_click(win, FAMEN_CLICK_POS[0], FAMEN_CLICK_POS[1])
+    log(f"[战斗] 法门：已点击法门 @ ({FAMEN_CLICK_POS[0]},{FAMEN_CLICK_POS[1]})", "SYS")
+
+
 def handle_battle(win):
     """处理首场战斗：第 1 回合按配置操作，操作完成后点击自动。
 
@@ -439,6 +469,10 @@ def handle_battle(win):
                 if canceled:
                     round1_frame = None  # 取消自动后操作条已变化，帧失效
             log(f"[战斗] 当前为第 1 回合" if round_1 else "[战斗] 当前非第 1 回合", "INFO")
+        # 自动使用法门：第 1 回合先点一次法门坐标（每场一次），
+        # 然后继续原流程的战斗操作（操作条已确认出现，免重复等待）
+        if rounds == 1 and round_1:
+            _click_famen(win, bar_ready=True)
         # 非第 1 回合：点击自动按钮，剩余回合交由游戏自动战斗
         if not (rounds == 1 and round_1):
             if _click_template(win, AUTO_ICON):
@@ -589,7 +623,8 @@ def _handle_hezi(win):
 
     开关规则：仅修罗/五倍模式执行；抢盒子开关只在**非队长**时生效，
     是队长则**一定抢**（队长规则优先）。身份以最近一次队伍检查结果
-    为准（team.known_leader，任务模块 check_team_min 会更新）。
+    为准（team.known_leader：开队伍检查时 check_team_min 更新；关闭
+    检查队伍时任务寻路/领取成功即记队长）。
     性能（见 CLAUDE.md 性能规则）：5 秒节奏单帧检查；两段匹配——先
     盒子后按钮，按钮只有盒子命中才匹配；点击后冷却防重复。
     盒子出现位置暂未标定条带（素材为裁剪图无绝对坐标），全帧匹配
@@ -662,11 +697,15 @@ def watch_loop(win):
                             pending_auto = (result != "auto_ok")
                             if pending_auto:
                                 log("[战斗] 首场结束未挂上自动，下一场进场补点一次", "WARN")
-                        elif battle_no % AUTO_REASSERT_EVERY == 1:
-                            _click_auto_once(win)  # 每 5 场：点一次自动
-                        elif pending_auto:
-                            _click_auto_once(win)  # 首场未挂上自动：本场进场补点
-                            pending_auto = False
+                        else:
+                            # 自动使用法门：每场战斗第 1 回合点一次
+                            # （首场由 handle_battle 内处理）
+                            _click_famen(win)
+                            if battle_no % AUTO_REASSERT_EVERY == 1:
+                                _click_auto_once(win)  # 每 5 场：点一次自动
+                            elif pending_auto:
+                                _click_auto_once(win)  # 首场未挂上自动：本场进场补点
+                                pending_auto = False
                         # 其余场次：不操作，等待游戏自动战斗结束
             else:
                 in_polls = 0
