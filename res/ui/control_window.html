@@ -342,6 +342,18 @@
                 </div>
                 <div class="group-hint">与实际流程一致、时序无额外延时，且都不改变任务状态：回程=定位回城符不点击；领取=点击领取按钮开对话框、选项仅定位不点击、点屏幕中间关闭；巫医=走位到 NPC、定位后点击打开对话框（医治选项由战斗线程处理）。任务运行中不可验证。</div>
             </div>
+            <div class="group-box">
+                <div class="group-title">五倍验证</div>
+                <div class="verify-row">
+                    <button id="btn-verify-wubei-claim" class="btn" onclick="verifyWubeiClaim()">验证五倍领取任务</button>
+                    <span id="wubei-claim-verify-result"></span>
+                </div>
+                <div class="verify-row">
+                    <button id="btn-verify-wubei-return" class="btn" onclick="verifyWubeiReturn()">验证五倍回程</button>
+                    <span id="wubei-return-verify-result"></span>
+                </div>
+                <div class="group-hint">与实际流程一致、时序无额外延时，且不改变任务状态：领取=走位到宝象国领取点 → 点击领取入口（领取任务按钮/降魔侍卫）打开对话框 → 选项「除魔卫国，义不容辞」仅定位不点击 → 点拒绝选项「事态严重，我等退散」关闭对话框；回程=定位回城符不点击（回城符模板待提供，缺失时报模板未提供）。任务运行中不可验证。</div>
+            </div>
         </div>
     </div>
 
@@ -365,6 +377,10 @@
         const claimVerifyResultEl = document.getElementById('claim-verify-result');
         const btnVerifyXiuluoWuyi = document.getElementById('btn-verify-xiuluo-wuyi');
         const wuyiVerifyResultEl = document.getElementById('wuyi-verify-result');
+        const btnVerifyWubeiClaim = document.getElementById('btn-verify-wubei-claim');
+        const wubeiClaimVerifyResultEl = document.getElementById('wubei-claim-verify-result');
+        const btnVerifyWubeiReturn = document.getElementById('btn-verify-wubei-return');
+        const wubeiReturnVerifyResultEl = document.getElementById('wubei-return-verify-result');
         let verifying = false;  // 验证请求在途标记（防连点，回程/领取/巫医共用）
 
         // 战斗设置选项：人物 3 行 × 5 列技能 + 攻击/防御/捕捉/逃跑/无；召唤兽 5 技能 + 攻击/防御/逃跑/无
@@ -693,6 +709,68 @@
             btnVerifyXiuluoWuyi.disabled = false;
             wuyiVerifyResultEl.style.color = ok ? 'var(--accent)' : '#ff5f5f';
             wuyiVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+        };
+
+        // 五倍领取验证：与修罗领取验证同模式，结果经 onWubeiClaimVerifyResult 异步回推
+        async function verifyWubeiClaim() {
+            if (verifying) return;
+            verifying = true;
+            btnVerifyWubeiClaim.disabled = true;
+            wubeiClaimVerifyResultEl.style.color = 'var(--text)';
+            wubeiClaimVerifyResultEl.innerText = '验证中...';
+            try {
+                const r = await callPython('verify_wubei_claim');
+                if (!r || r.status !== 'success') {
+                    wubeiClaimVerifyResultEl.style.color = '#ff5f5f';
+                    wubeiClaimVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
+                    verifying = false;
+                    btnVerifyWubeiClaim.disabled = false;
+                }
+            } catch (e) {
+                wubeiClaimVerifyResultEl.style.color = '#ff5f5f';
+                wubeiClaimVerifyResultEl.innerText = '验证请求异常';
+                verifying = false;
+                btnVerifyWubeiClaim.disabled = false;
+            }
+        }
+
+        // Python 侧调用：五倍领取验证结束回推结果
+        window.onWubeiClaimVerifyResult = function (ok, info) {
+            verifying = false;
+            btnVerifyWubeiClaim.disabled = false;
+            wubeiClaimVerifyResultEl.style.color = ok ? 'var(--accent)' : '#ff5f5f';
+            wubeiClaimVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+        };
+
+        // 五倍回程验证：与修罗回程验证同模式，结果经 onWubeiReturnVerifyResult 异步回推
+        async function verifyWubeiReturn() {
+            if (verifying) return;
+            verifying = true;
+            btnVerifyWubeiReturn.disabled = true;
+            wubeiReturnVerifyResultEl.style.color = 'var(--text)';
+            wubeiReturnVerifyResultEl.innerText = '验证中...';
+            try {
+                const r = await callPython('verify_wubei_return');
+                if (!r || r.status !== 'success') {
+                    wubeiReturnVerifyResultEl.style.color = '#ff5f5f';
+                    wubeiReturnVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
+                    verifying = false;
+                    btnVerifyWubeiReturn.disabled = false;
+                }
+            } catch (e) {
+                wubeiReturnVerifyResultEl.style.color = '#ff5f5f';
+                wubeiReturnVerifyResultEl.innerText = '验证请求异常';
+                verifying = false;
+                btnVerifyWubeiReturn.disabled = false;
+            }
+        }
+
+        // Python 侧调用：五倍回程验证结束回推结果
+        window.onWubeiReturnVerifyResult = function (ok, info) {
+            verifying = false;
+            btnVerifyWubeiReturn.disabled = false;
+            wubeiReturnVerifyResultEl.style.color = ok ? 'var(--accent)' : '#ff5f5f';
+            wubeiReturnVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
         };
 
         // Python 侧（任务状态联动）调用，用于同步页面显示

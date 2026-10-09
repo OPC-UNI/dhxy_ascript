@@ -379,6 +379,8 @@ class ControlWindow(WebWindow):
         self.expose(self.verify_xiuluo_return)
         self.expose(self.verify_xiuluo_claim)
         self.expose(self.verify_xiuluo_wuyi)
+        self.expose(self.verify_wubei_claim)
+        self.expose(self.verify_wubei_return)
         # 任务状态/日志回流接线：TaskManager → 主窗口状态 + 日志窗口
         self._tm.set_callbacks(on_status=self.sync_status, on_log=self.add_logs)
 
@@ -586,6 +588,96 @@ class ControlWindow(WebWindow):
             pass
         self._notify_claim_verify_result(ok, info)
         self._verifying = False
+
+    def verify_wubei_claim(self):
+        """高级设置-五倍领取验证按钮：与五倍领取流程一致，但到绿色选项
+        处仅移动鼠标定位不点击（点击即领取）——验证走位/入口识别/对话框/
+        选项识别整条链路，最后点击屏幕中间关闭对话框，不领取任务。
+        """
+        if self._tm.is_running():
+            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if self._verifying:
+            return {"status": "error", "msg": "验证进行中，请稍候"}
+        win = game.find_main_window()
+        if win is None:
+            return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
+        if not _game_window_clickable(win):
+            return {"status": "error", "msg": "游戏窗口被其他窗口遮挡，请将游戏窗口置于前台后再验证"}
+        self._verifying = True
+        threading.Thread(target=self._run_wubei_claim_verify, args=(win,),
+                         daemon=True, name="wubei-claim-verify").start()
+        return {"status": "success",
+                "msg": "验证已开始：走位 → 领取入口 → 对话框选项（仅定位不点击）→ 关对话框"}
+
+    def _run_wubei_claim_verify(self, win):
+        """五倍领取验证线程体：跑五倍领取链路（选项悬停代替点击），结果回推页面与日志窗。"""
+        from . import wubei  # 延迟导入：wubei 反向导入本模块（避免循环）
+        try:
+            self.add_logs(["[验证] 开始验证五倍领取（选项仅定位不点击，最后关闭对话框）..."])
+            ok, info = wubei.verify_claim_flow(win)
+        except Exception as e:
+            ok, info = False, f"验证异常: {e}"
+        try:
+            self.add_logs([f"[验证] 结果: {info}"])
+        except Exception:
+            pass
+        self._notify_wubei_claim_verify_result(ok, info)
+        self._verifying = False
+
+    def _notify_wubei_claim_verify_result(self, ok, info):
+        """五倍领取验证结果回推页面（高级设置-五倍领取验证行的结果文案）。"""
+        if self.webview_instance:
+            try:
+                ok_js = "true" if ok else "false"
+                self.webview_instance.evaluate_js(
+                    f"if(window.onWubeiClaimVerifyResult){{window.onWubeiClaimVerifyResult({ok_js}, {json.dumps(info)});}}")
+            except Exception:
+                pass
+
+    def verify_wubei_return(self):
+        """高级设置-五倍回程验证按钮：与实际返程流程一致，但不右键使用
+        回城符——仅将鼠标移动到回城符上定位（不点击）后关闭背包，供人工
+        确认整条链路（开背包 → 任务储物格 → 回城符识别）是否正确。
+        """
+        if self._tm.is_running():
+            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if self._verifying:
+            return {"status": "error", "msg": "验证进行中，请稍候"}
+        win = game.find_main_window()
+        if win is None:
+            return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
+        if not _game_window_clickable(win):
+            return {"status": "error", "msg": "游戏窗口被其他窗口遮挡，请将游戏窗口置于前台后再验证"}
+        self._verifying = True
+        threading.Thread(target=self._run_wubei_return_verify, args=(win,),
+                         daemon=True, name="wubei-return-verify").start()
+        return {"status": "success",
+                "msg": "验证已开始：开背包 → 任务储物格 → 定位回城符（不点击）→ 关背包"}
+
+    def _run_wubei_return_verify(self, win):
+        """五倍回程验证线程体：跑五倍返程链路（悬停代替点击），结果回推页面与日志窗。"""
+        from . import wubei  # 延迟导入：wubei 反向导入本模块（避免循环）
+        try:
+            self.add_logs(["[验证] 开始验证五倍回程（不点击回城符，定位后关闭背包）..."])
+            ok, info = wubei.verify_return_flow(win)
+        except Exception as e:
+            ok, info = False, f"验证异常: {e}"
+        try:
+            self.add_logs([f"[验证] 结果: {info}"])
+        except Exception:
+            pass
+        self._notify_wubei_return_verify_result(ok, info)
+        self._verifying = False
+
+    def _notify_wubei_return_verify_result(self, ok, info):
+        """五倍回程验证结果回推页面（高级设置-五倍回程验证行的结果文案）。"""
+        if self.webview_instance:
+            try:
+                ok_js = "true" if ok else "false"
+                self.webview_instance.evaluate_js(
+                    f"if(window.onWubeiReturnVerifyResult){{window.onWubeiReturnVerifyResult({ok_js}, {json.dumps(info)});}}")
+            except Exception:
+                pass
 
     def _notify_claim_verify_result(self, ok, info):
         """领取验证结果回推页面（高级设置-领取验证行的结果文案）。"""
