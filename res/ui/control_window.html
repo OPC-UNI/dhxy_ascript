@@ -50,7 +50,12 @@
         .btn:disabled { opacity: 0.35; cursor: not-allowed; }
         .th-btn:disabled { opacity: 0.35; cursor: not-allowed; }
         .task-radio input:disabled + span { opacity: 0.35; }
+        /* 运行中：已选择的任务保持高亮差异显示（文字/边框），未选择的置灰 */
+        .task-radio input:checked:disabled + span { opacity: 1; color: var(--accent); }
+        .task-group:has(input:checked:disabled) { border-color: var(--accent); }
+        .task-radio:has(input:disabled) { cursor: not-allowed; }
         #btn-reset { border-color: var(--warn); color: var(--warn); }
+        #btn-reset.armed { background: var(--warn); color: #fff; }
         #btn-theme { border-color: var(--accent); color: var(--accent); margin-left: auto; }
         #btn-start { border-color: var(--accent); color: var(--accent); }
         #btn-start.running { border-color: #ff5f5f; color: #ff5f5f; }
@@ -210,18 +215,14 @@
         </div>
         <!-- 通用设置：摄妖香开关 + 高性能 + 修罗/五倍分组 + 血量蓝量阈值 + 人物/召唤兽战斗动作 -->
         <div class="tab-panel" id="panel-general">
-            <!-- 摄妖香分组 -->
+            <!-- 通用分组：摄妖香 + 高性能模式 -->
             <div class="group-box">
-                <div class="group-title">摄妖香</div>
+                <div class="group-title">通用</div>
                 <label class="switch-row">
                     <input type="checkbox" id="use-syx">
                     <span class="switch-track"></span>
-                    <span>自动使用</span>
+                    <span>自动使用摄妖香</span>
                 </label>
-            </div>
-            <!-- 通用分组：高性能模式（各任务模块固定位置 UI 缓存点击，默认关闭） -->
-            <div class="group-box">
-                <div class="group-title">通用</div>
                 <label class="switch-row">
                     <input type="checkbox" id="high-perf">
                     <span class="switch-track"></span>
@@ -374,6 +375,7 @@
         const statusEl = document.getElementById('status');
         const btnStart = document.getElementById('btn-start');
         const btnTheme = document.getElementById('btn-theme');
+        const btnReset = document.getElementById('btn-reset');
         const modeRadios = document.querySelectorAll('input[name="task-mode"]');
         const countBtns = document.querySelectorAll('.task-count .th-btn');
         const useSyx = document.getElementById('use-syx');
@@ -808,7 +810,23 @@
             debugOverlay.checked = !!on;
         };
 
+        // 重置：二次确认（首次点击进入「确认重置？」待确认态，3s 未确认自动还原）
+        let resetArm = false;
         async function reset() {
+            if (!resetArm) {
+                resetArm = true;
+                btnReset.innerText = '确认重置？';
+                btnReset.classList.add('armed');
+                setTimeout(() => {
+                    resetArm = false;
+                    btnReset.innerText = '重 置';
+                    btnReset.classList.remove('armed');
+                }, 3000);
+                return;
+            }
+            resetArm = false;
+            btnReset.innerText = '重 置';
+            btnReset.classList.remove('armed');
             const r = await callPython('reset_task');
             if (r && r.status === 'success') {
                 running = false;
