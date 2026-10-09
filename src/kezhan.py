@@ -103,35 +103,73 @@ DIALOG_OPTION_MAP = {
     "你！你也是它们派来的！（猴精龇牙咧嘴直扑而来）":"只能先制服它再说了。",
     "有位整天云游的逍遥散仙刚向我发了份求助，说他家那只宝贝坐骑被蓬莱的":"小事一桩，包在我身上。",
     "看来这就是那困住灵兔的封印了。":"消耗灵气，破除封印",
-    "多谢少侠，嘿嘿，老夫还要赶去赴瑶池仙会，后会有期！":"您老慢走"
+    "多谢少侠，嘿嘿，老夫还要赶去赴瑶池仙会，后会有期！":"您老慢走",
+    "绣娘苏巧儿的母亲突发急症，城中大夫皆束手无策":"性命攸关，我这就去求见孙神医。",
+    "这帖药需分三次煎服：首服吊命，次服通脉，三服固本。切记要用晨露煎煮":"神医妙手仁心，我代苏家谢过！",
+    "可谁知目前那双手，绣出了长安城最美的牡丹，却绣不出自己的安康……":"将九转还魂汤交给巧儿姑娘",
+    "嗯！等娘亲醒了，我一定要把新学的双面绣法绣给她看……":"巧儿姑娘手艺精湛，待夫人醒来见到你的绣品，定会欣慰不已。",
+    "说来有趣，昨日蟠桃园土地公来此小酌，临走时竟将他的地灵勘舆盘落在这":"土地公竟如此大意，我这就给他送去。",
+    "坏了坏了！莫不是昨日贪杯，把勘舆盘落在客栈了？":"老人家可是在寻此物？",
+    "这我就不便告知少侠了……天机不可泄露啊！不过老夫还有个不情之请":"好，不就是跑个腿嘛，我都习惯了。",
+    "少侠这么快就回来了，办事果然效率，还得是你呀！":"这是蟠桃园土地让我带给你的礼物，也不知道是啥东西。",
+    "嘿嘿，我就知道他会送我东西，那个……我要拆礼物了":"行，我走，小气鬼！",
+    "女儿国落胎泉近来夜夜传来婴孩啼哭，扰得附近居民夜不能寐。少侠不如前":"夜半哭声必有冤情，我这就去落胎泉看个究竟。",
+    "下次...下次一定要平平安安地来做娘亲的孩子..":"哎",
+    "洛阳城突发诡异瘾症，已有多人出现癫狂症状":"救人要紧，我这就前往隐林涧。",
+    "少侠来正是时候！此次癔症乃瘴气入心所致，患者先是神智昏沉，继而狂性":"还请孙神医即刻配药，让城中百姓免受癔症之苦。",
 
 }
-# 需要点击屏幕中间跳过的对话框文案（出现则连点屏幕中间推进对话，
-# 同 xuanshu.DIALOG_SKIP_TEXTS）；实测遇到无选项的对话在此追加
-# ---- 高等食材给与（婉儿姑娘送货任务；给与流程参考五环提交装备） ----
+# 需要点击屏幕中间跳过的对话框文案 → 点击次数（出现则连点屏幕中间推进
+# 对话，同 xuanshu.DIALOG_SKIP_TEXTS）；不同文案要推进的屏数不同，次数
+# 按文案单独设置（可选 2/3/4/5/6 次），默认先统一 4 次，实测后逐条校准；
+# 遇到无选项的对话在此追加
+DIALOG_SKIP_TEXTS = {
+    "少侠来得正及时！这月华霜蕊灵气充盈，正是宴上所需": 4,
+    "附近的妖邪已被我清理干净了。": 4,
+    "莫要过来": 4,
+    "你怎么也跟过来": 4,
+    "有个身份不明的孩童逢人便问花花的下落": 4,
+    "你又来找我干嘛": 4,
+    "我本是溪边一颗石子，花花自幼便叼着我在草地上打滚。那段被它捧在爪间": 4,
+    "少侠可是为苏家娘子而来？今晨我已诊过脉象，":2,
+    "少侠终于来了！娘亲为了供我学绣艺，日夜赶工熬坏了眼睛":1,
+    "巧儿姑娘莫要难过，如今有孙神医的药，定能转危为安。":1,
+    "哎呦！正是此物！":6,
+    "四象归位，怨气已平，去告知": 4,
+    "世间皆负我……人人都欺我……": 4,
+    "娘亲...为什么不要我...":6,
+    "灵兽村近日打算举办一场名为“灵兽大冒险”的竞技活动，到时记得去参加": 4,
+    "隐林涧那边我已经通知完毕": 4,
+    "搞定了。": 4,
+    "少侠有何事": 4,
+    "姑娘的夫君想必快回来了吧？": 4,
+    "就是这里了，我看此地风水不差，这次我定能赢你！": 4,
+    "来来来，这次咱们比谁的点数小，一局定胜负！": 4,
+    "走开，都走开": 4,
+    "你赢了": 4,
+}
+# ---- 物品给与（高等食材→婉儿姑娘 / 九转还魂汤→苏巧儿；给与流程参考五环提交装备） ----
 GAODENGSHICAI_ICON = "kezhan_gaodengshicai.png"  # 高等食材物品（给与面板检索）
-GIVE_ICON = "give.png"          # 给与面板标志（与五环共用模板）
+JIUZHUAN_ICON = "kezhan__jiuzhuanhuanhuntang.png"  # 九转还魂汤物品（给与面板检索）
+TAOZHI_ICON = "kezhan_taozhi.png"  # 桃枝物品（给与面板检索）
+YIHELIPIN_ICON = "kezhan_yihelipin.png"  # 一盒礼品物品（给与面板检索）
+GIVE_TITLE_ICON = "give_title.png"  # 给与面板标志（横幅「给与」静态标题区）
+# 旧 GIVE_ICON=give.png（32x213 整条横幅）含随物品类别变化的动态区，实测
+# 苏巧儿面板 0.906 → 桃枝面板 0.665 低于 0.8 阈值，面板检查会误判未打开；
+# 改用横幅静态标题区模板（各面板类型 1.000/0.999 唯一命中）
 GIVE_BTN_ICON = "give_btn.png"  # 给与按钮（与五环共用模板，OCR 读作「给子」）
 GIVE_PANEL_TIMEOUT = 10         # 等待给与面板出现的超时
-DIALOG_SKIP_TEXTS = ["少侠来得正及时！这月华霜蕊灵气充盈，正是宴上所需",
-                     "附近的妖邪已被我清理干净了。",
-                     "莫要过来",
-                     "你怎么也跟过来",
-                     "有个身份不明的孩童逢人便问花花的下落",
-                     "你又来找我干嘛",
-                     "我本是溪边一颗石子，花花自幼便叼着我在草地上打滚。那段被它捧在爪间",
-                     "四象归位，怨气已平，去告知",
-                     "世间皆负我……人人都欺我……",
-                     "灵兽村近日打算举办一场名为“灵兽大冒险”的竞技活动，到时记得去参加",
-                     "隐林涧那边我已经通知完毕",
-                     "搞定了。",
-                     "少侠有何事",
-                    "姑娘的夫君想必快回来了吧？",
-                    "就是这里了，我看此地风水不差，这次我定能赢你！",
-                    "来来来，这次咱们比谁的点数小，一局定胜负！",
-                    "走开，都走开",
-                    "你赢了"
-                     ]
+# 给与面板底部 NPC 行区域（实测「NPC：苏巧儿」位于 (543,579)-(647,598)，
+# 窗口 1378x831 校准，留余量）；识别给与对象决定检索哪件物品
+GIVE_PANEL_NPC_REGION = (520, 565, 680, 615)
+# NPC 行关键词 → (物品模板, 物品名)；新增给与任务在此追加即可
+GIVE_NPC_ITEMS = {
+    "苏巧儿": (JIUZHUAN_ICON, "九转还魂汤"),
+    "婉儿姑娘": (GAODENGSHICAI_ICON, "高等食材"),
+    "蟠桃园": (TAOZHI_ICON, "桃枝"),
+    "掌柜": (YIHELIPIN_ICON, "一盒礼品"),
+}
+GIVE_DEFAULT_ITEM = (GAODENGSHICAI_ICON, "高等食材")  # NPC 行识别失败时的兜底物品
 # 任务追踪多绿字点击顺序（四象镇魂：按 青龙→白虎→朱雀→玄武 依次加固封印）；
 # 关键词未命中时自动退回点第一个绿字，不影响其他任务
 GREEN_CLICK_ORDER = ["青龙", "白虎", "朱雀", "玄武"]
@@ -157,6 +195,7 @@ TRACK_PANEL_REGION = (0, 200, 260, 600)
 # 任务追踪面板顶部小区域（标题行；客栈任务恒为面板首个任务，拍虫时快速检查用）
 TRACK_TITLE_REGION = (0, 200, 260, 330)
 _awang_missing_logged = False                 # 模板缺失仅记录一次，避免刷日志
+_order_mismatch_logged = False                # 四象文本词/绿色词簇数不一致仅记录一次
 _dali_last_done = 0.0                         # 上次大理寺寻路完成时间（防重复触发）
 # ---- 特殊任务步骤：阿旺朝比武场方向跑（追踪文案出现时寻路到比武场） ----
 BIWU_TRACK_TEXT = "阿旺朝洛阳城比武场方向跑"     # 任务追踪文案（出现即需寻路）
@@ -454,11 +493,13 @@ def _order_green_state(items, img_np):
     """四象任务绿字状态：返回 (仍绿关键词列表, 词簇中心列表, 区域原点)。
 
     对含顺序关键词的 OCR 行取并集区域做绿字掩码（只保留绿像素）；
-    绿字列连通簇按阅读顺序排列，与「文本中存在的顺序关键词」尾部对齐
-    （封印按序完成、完成的关键词变红，仍绿的必为关键词序列的后缀），
-    从而在文字不变、仅颜色变化时也能精确判定每个关键词的绿字状态。
-    词级判定不受 OCR 行合并/拆分抖动影响（关键词从各行拼接规范化
-    文本中查找）。无顺序关键词的任务返回空。
+    绿字列连通簇按阅读顺序排列，仍绿关键词 = 完整顺序 GREEN_CLICK_ORDER
+    的后缀 n 个（n = 绿色词簇数；封印按序完成、完成的关键词变红，
+    仍绿的必为后缀），从而在文字不变、仅颜色变化时也能精确判定每个
+    关键词的绿字状态。词级判定不受 OCR 行合并/拆分抖动影响（关键词
+    从各行拼接规范化文本中查找）；文本只用于定位搜索区域，不参与
+    词簇对齐（OCR 漏读个别字会使文本词数少于词簇数，错位点击）。
+    无顺序关键词的任务返回空。
 
     只取任务追踪面板内的行：对话框文案（如判官解释四象顺序）也可能含
     关键词，会把对话框的绿字选项误当成封印关键词（实测点到了 (711,391)
@@ -500,12 +541,28 @@ def _order_green_state(items, img_np):
         else:
             words.append(c[:])
     comps = [((w[0] + w[2]) // 2, (w[1] + w[3]) // 2) for w in words]
-    # 仍绿关键词 = 关键词序列尾部 n 个（按序完成 → 绿的必为后缀）
-    n = min(len(comps), len(kw_seq))
+    # 仍绿关键词 = 完整顺序的后缀 n 个，n = 绿色词簇数（按序完成 →
+    # 绿的必为后缀）。不能按文本关键词数量对齐：OCR 会漏读个别字
+    # （实测「白」偶发丢失 → 文本 3 词 vs 词簇 4 个），文本对齐会把
+    # 词簇与关键词错位——白虎位置被当青龙点击、进度键在
+    # 「青龙,朱雀,玄武」与「青龙,白虎,朱雀,玄武」间来回翻转
+    # （2026-10-09 实测蹦跳点击根因）。
+    global _order_mismatch_logged
+    if len(comps) != len(kw_seq) and not _order_mismatch_logged:
+        _order_mismatch_logged = True
+        log(f"[客栈] 四象文本词({len(kw_seq)})与绿色词簇({len(comps)})数不一致"
+            f"（OCR 漏读），按词簇数对齐", "WARN")
+    n = len(comps)
     if n == 0:
         return [], [], (l, t)
-    green_kws = kw_seq[-n:]
-    return green_kws, comps[-n:], (l, t)
+    if n > len(GREEN_CLICK_ORDER):
+        # 词簇多于顺序关键词（区域内混入关键词之外的绿字）：退回
+        # 文本对齐（旧逻辑），此类场景需实测重新标定
+        n = min(n, len(kw_seq))
+        green_kws = kw_seq[-n:]
+        return green_kws, comps[-n:], (l, t)
+    green_kws = GREEN_CLICK_ORDER[-n:]
+    return green_kws, comps, (l, t)
 
 
 def _order_progress_key(items, img_np):
@@ -522,8 +579,8 @@ def _pick_order_green(items, img_np):
     """精确选中最早的绿字顺序关键词并返回窗口坐标点击点。
 
     行级选择无法区分同一行内的多个绿字（如 白虎 已红而同行的 朱雀
-    仍绿），绿字词簇按阅读顺序与关键词后缀一一对应，取最早仍绿的
-    关键词词簇中心点击。未命中返回 None（回退 track_task 行级选择）。
+    仍绿），绿字词簇按阅读顺序与完整顺序的后缀一一对应，取最早仍绿
+    的关键词词簇中心点击。未命中返回 None（回退 track_task 行级选择）。
     """
     green_kws, centers, (l, t) = _order_green_state(items, img_np)
     if not green_kws or not centers:
@@ -637,9 +694,9 @@ def _handle_follow_extras(win, items, img_np):
             _biwu_last_done = time.time()
             log(f"[客栈] 比武场寻路: {info}", "SYS" if ok else "WARN")
             return True
-        # 高等食材给与：给与面板打开时跨轮询续接（对话选项点击在
+        # 物品给与：给与面板打开时跨轮询续接（对话选项点击在
         # DIALOG_OPTION_MAP 中处理，点击后弹出给与面板在此完成）
-        if _handle_gaodengshicai_give(win):
+        if _handle_give_panel(win):
             return True
         # 战斗失败/平局对话框：先关闭对话框，再重新点击任务追踪绿字
         # 推进（参考 xuanshu 同款处理）。follow 的共享处理在内层等待
@@ -675,20 +732,53 @@ def _handle_follow_extras(win, items, img_np):
     return _handle_dialog_options(win, items, img_np)
 
 
-def _handle_gaodengshicai_give(win):
-    """给与面板已打开时完成高等食材给与（参考五环 _do_give）。
+def _give_item_for_npc(win):
+    """OCR 给与面板 NPC 行，返回应给与的物品 (模板名, 名称)。
 
-    检索高等食材（含储物格切换）→ 点击选中 → 点击给与按钮完成。
+    按 GIVE_NPC_ITEMS 关键词匹配（实测面板底部文案「NPC：苏巧儿」）。
+    识别失败时返回 GIVE_DEFAULT_ITEM 并输出 OCR 原文便于校准。
+    """
+    img = win.capture(force_activate=False)
+    if img is not None:
+        items, _ = game_map.ocr_region(img, GIVE_PANEL_NPC_REGION)
+        for txt, _, score in items:
+            if score < 0.55:
+                continue
+            ntxt = norm_text(txt)
+            for key, item in GIVE_NPC_ITEMS.items():
+                if key in ntxt:
+                    return item
+        txts = [t for t, _, s in items if s >= 0.55]
+        log(f"[客栈] 给与面板 NPC 行未识别出对象（OCR: {txts or '(无)'}），"
+            f"按默认物品处理", "WARN")
+    return GIVE_DEFAULT_ITEM
+
+
+def _handle_give_panel(win):
+    """给与面板已打开时完成物品给与（参考五环 _do_give）。
+
+    按面板 NPC 行识别给与对象（巧儿→九转还魂汤，婉儿→高等食材）
+    → 检索物品（含储物格切换）→ 点击选中 → 点击给与按钮完成。
     物品未找到/按钮未出现时返回 True（面板仍在，下次轮询续接重试）。
     返回是否已处理。
     """
-    if game_map.find_template(win, GIVE_ICON) is None:
+    if game_map.find_template(win, GIVE_TITLE_ICON) is None:
         return False
-    item, desc = bag.find_item_with_slots(win, GAODENGSHICAI_ICON, "高等食材")
+    icon, label = _give_item_for_npc(win)
+    item, desc = bag.find_item_with_slots(win, icon, label)
+    if item is None:
+        # 对象识别有误兜底：直接检测其余物品（不再切换储物格）
+        for alt_icon, alt_label in GIVE_NPC_ITEMS.values():
+            if alt_icon == icon:
+                continue
+            alts = bag.find_item_in_bag(win, alt_icon)
+            if alts:
+                item, desc, label = alts[0], "对象识别兜底", alt_label
+                break
     if item is None:
         log(f"[客栈] {desc}", "WARN")
         return True
-    log(f"[客栈] 找到高等食材（{desc}，匹配度 {item.confidence:.2f}），点击选中", "SYS")
+    log(f"[客栈] 找到{label}（{desc}，匹配度 {item.confidence:.2f}），点击选中", "SYS")
     human_click(win, item.x, item.y)
     time.sleep(0.5)  # 等待选中
     pt = game_map.find_template(win, GIVE_BTN_ICON)
@@ -696,7 +786,7 @@ def _handle_gaodengshicai_give(win):
         log("[客栈] 未找到给与按钮，等待下次轮询重试", "WARN")
         return True
     human_click(win, pt[0], pt[1])
-    log("[客栈] 已点击给与按钮，高等食材给与完成", "SYS")
+    log(f"[客栈] 已点击给与按钮，{label}给与完成", "SYS")
     return True
 
 
@@ -780,10 +870,10 @@ def _handle_dialog_options(win, items, img_np):
         if _click_green_option_fallback(win, items, img_np, dtxt):
             log("[客栈] 检测到任务对话（选项 OCR 不可识别，绿字块兜底点击）", "SYS")
             return True
-    for dtxt in DIALOG_SKIP_TEXTS:
+    for dtxt, clicks in DIALOG_SKIP_TEXTS.items():
         if _dialog_text_present(norm_items, norm_text(dtxt)):
-            # 命中即固定连点推进（多屏对话无需枚举后续文案）
-            _click_screen_center(win, prefix="客栈")
+            # 命中即按文案对应次数连点推进（多屏对话无需枚举后续文案）
+            _click_screen_center(win, times=clicks, prefix="客栈")
             return True
     return False
 
