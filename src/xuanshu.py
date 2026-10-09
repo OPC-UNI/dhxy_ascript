@@ -41,7 +41,7 @@ TASK_TITLE = "玄枢轶闻"
 LUOYANG_CITY = "洛阳城"
 TASK_MAP_POS = (93, 125)            # 任务位置（洛阳城坐标；None 表示目标非坐标）
 MAP_POS_TOLERANCE = 5               # 坐标判定容差（±5 像素）
-MAP_CLICK_POS = (399, 442)          # 小地图上任务位置对应的点击点（窗口相对坐标）
+MAP_CLICK_POS = (399, 438)          # 小地图上任务位置对应的点击点（窗口相对坐标）
 TASK_LINGQU_ICON = "task_lingqu.png"           # 领取任务按钮模板
 ARRIVE_TIMEOUT = 90                 # 等待寻路完成的超时（秒）
 # 领取任务对话框中的绿色选项（两步）
