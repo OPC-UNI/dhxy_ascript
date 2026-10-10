@@ -209,6 +209,23 @@ def save_wubei_min(value):
 _WUBEI_HEZI_KEY = "wubei_auto_hezi"
 
 
+# ---- 五倍检查队伍（UI 开关，KeyValue 持久化；对齐修罗：默认关闭，
+#      关闭时领取前跳过全部队伍检查直接领取，寻路/领取成功即记录
+#      队长身份供抢盒子的队长规则使用） ----
+_WUBEI_CHECK_TEAM_KEY = "wubei_check_team"
+
+
+def load_wubei_check_team():
+    """读取五倍检查队伍开关（首次默认关闭，对齐修罗）。"""
+    return bool(KeyValue.get(_WUBEI_CHECK_TEAM_KEY, False))
+
+
+def save_wubei_check_team(on):
+    """保存五倍检查队伍开关，返回操作结果。"""
+    KeyValue.save(_WUBEI_CHECK_TEAM_KEY, bool(on))
+    return {"status": "success"}
+
+
 def load_wubei_hezi():
     """读取五倍自动抢盒子开关（首次默认关闭）。"""
     return bool(KeyValue.get(_WUBEI_HEZI_KEY, False))
@@ -382,6 +399,7 @@ def reset_settings():
     save_xiuluo_races(XIULUO_RACES_DEFAULT)
     save_wubei_min(WUBEI_MIN_DEFAULT)
     save_wubei_hezi(False)
+    save_wubei_check_team(False)
     save_xiuluo_hezi(False)
     save_high_perf(True)
     save_xiuluo_check_team(False)
@@ -442,6 +460,7 @@ class ControlWindow(WebWindow):
         self.expose(self.save_high_perf)
         self.expose(self.save_wubei_min)
         self.expose(self.save_wubei_hezi)
+        self.expose(self.save_wubei_check_team)
         self.expose(self.save_debug_overlay)
         self.expose(self.save_auto_famen)
         self.expose(self.save_ui_theme)
@@ -472,7 +491,8 @@ class ControlWindow(WebWindow):
                 "xiuluo_wuyi_interval": load_xiuluo_wuyi_interval(),
                 "high_perf": load_high_perf(),
                 "wubei": {"min_members": load_wubei_min(),
-                          "hezi": load_wubei_hezi()},
+                          "hezi": load_wubei_hezi(),
+                          "check_team": load_wubei_check_team()},
                 "auto_famen": load_auto_famen(),
                 "debug_overlay": load_debug_overlay()}
 
@@ -535,6 +555,10 @@ class ControlWindow(WebWindow):
     def save_wubei_hezi(self, on):
         """五倍设置变更：保存自动抢盒子开关状态。"""
         return save_wubei_hezi(on)
+
+    def save_wubei_check_team(self, on):
+        """五倍设置变更：保存检查队伍开关状态。"""
+        return save_wubei_check_team(on)
 
     def save_debug_overlay(self, on):
         """调试信息开关变更：保存开关状态，并同步日志窗口显隐。"""

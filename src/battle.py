@@ -76,9 +76,9 @@ BAR_BUTTON_THRESHOLD = 0.85    # 操作条按钮匹配阈值（非战斗画面�
 # 平均分布（6 点 5 段，步进 22px）
 BEAST_SKILL_POS = {f"技能{i + 1}": (588, 300 + 22 * i) for i in range(6)}
 
-# ---- 自动使用法门（开关见通用设置；坐标用户稍后标定） ----
-FAMEN_CLICK_POS = None    # 法门点击坐标（窗口相对坐标）；None=未标定不点击
-_famen_missing_logged = False  # 开关开但坐标未标定：仅记录一次，避免刷日志
+# ---- 自动使用法门（开关见通用设置；坐标用户标定） ----
+FAMEN_CLICK_POS = (1319, 711)  # 法门点击坐标（窗口相对坐标，用户标定）
+_famen_missing_logged = False  # 坐标未标定时仅记录一次（防御性保留，避免刷日志）
 
 # ---- 时序参数（秒） ----
 WATCH_POLL_INTERVAL = 0.5   # 战斗监控轮询间隔（单帧判定 + 快速匹配后 0.5s 无压力，

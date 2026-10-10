@@ -285,6 +285,11 @@
                     <span class="switch-track"></span>
                     <span>自动抢盒子（仅非队长生效）</span>
                 </label>
+                <label class="switch-row">
+                    <input type="checkbox" id="wubei-check-team">
+                    <span class="switch-track"></span>
+                    <span>检查队伍（默认关闭，同修罗）</span>
+                </label>
             </div>
             <!-- 血量蓝量分组 -->
             <div class="group-box">
@@ -403,6 +408,7 @@
         const autoFamen = document.getElementById('auto-famen');
         const xiuluoWuyiIntervalEl = document.getElementById('xiuluo-wuyi-interval');
         const wubeiHezi = document.getElementById('wubei-hezi');
+        const wubeiCheckTeam = document.getElementById('wubei-check-team');
         const btnVerifyXiuluo = document.getElementById('btn-verify-xiuluo');
         const verifyResultEl = document.getElementById('verify-result');
         const btnVerifyXiuluoClaim = document.getElementById('btn-verify-xiuluo-claim');
@@ -586,6 +592,7 @@
                 xiuluoWuyiIntervalEl.innerText = info.xiuluo_wuyi_interval;
             }
             wubeiHezi.checked = !!(info.wubei && info.wubei.hezi);
+            wubeiCheckTeam.checked = !!(info.wubei && info.wubei.check_team);
             const ths = info.thresholds || {};
             for (const key of ['char_hp', 'char_mp', 'beast_hp', 'beast_mp']) {
                 const el = document.getElementById('th-' + key);
@@ -724,6 +731,11 @@
         // 五倍自动抢盒子开关变更：立即保存（下次任务启动生效）
         wubeiHezi.addEventListener('change', () => {
             callPython('save_wubei_hezi', wubeiHezi.checked);
+        });
+
+        // 五倍检查队伍开关变更：立即保存（下次任务启动生效）
+        wubeiCheckTeam.addEventListener('change', () => {
+            callPython('save_wubei_check_team', wubeiCheckTeam.checked);
         });
 
         // 修罗回程验证：Python 侧后台线程执行，结果经 onVerifyResult 异步回推

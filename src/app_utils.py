@@ -146,9 +146,9 @@ def norm_text(s):
 # 主进程（验证流程等）恒为 False，始终走识别路径。
 _high_perf = False
 _fixed_pos_cache = {}  # key -> (窗口宽, 窗口高, x, y)
-# 高性能：入口点击后等待对话框渲染的固定延时（实测正常 ~1.5s 即出，
+# 高性能：入口点击后等待对话框渲染的固定延时（用户实测 500ms 即出，
 # 免 OCR 轮询）
-HIGH_PERF_DIALOG_WAIT = 1.8
+HIGH_PERF_DIALOG_WAIT = 0.5
 
 
 def set_high_perf(on):
@@ -174,6 +174,11 @@ def fixed_pos_get(key, win):
 def fixed_pos_set(key, win, x, y):
     """记录固定位置坐标（识别路径成功时调用，位置漂移自愈）。"""
     _fixed_pos_cache[key] = (win.rect.width, win.rect.height, int(x), int(y))
+
+
+def fixed_pos_clear(key):
+    """清除固定位置缓存（缓存点击校验失败时调用，下轮回退识别路径）。"""
+    _fixed_pos_cache.pop(key, None)
 
 
 def high_perf_click(win, key, label, prefix=""):
