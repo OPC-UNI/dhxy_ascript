@@ -8,7 +8,9 @@
 - open_world_map / close_world_map：世界地图开关
 - open_mini_map：打开当前地图的小地图（点击地图位置区域）
 - open_mini_map_city：打开世界地图并点击指定城市，打开该城市的小地图
-- close_mini_map / close_maps：小地图/全部地图关闭（小地图左键、世界地图右键模板位置，画布兜底）
+- close_mini_map / close_maps：关闭小地图/世界地图（小地图左键模板位置、
+  世界地图右键模板位置；世界地图带 1s 确认等待，复检仍打开才点击——
+  防关闭动画瞬态误检右键取消寻路）
 - find_template：模板查找（返回窗口相对坐标）
 
 坐标约定：全部使用窗口相对坐标，由调用方通过 human_click 转屏幕坐标。
@@ -36,6 +38,10 @@ WORLD_MAP_ICON = "item_map_shijie.png"
 WORLD_MAP_LUOYANG_ICON = "shijie_luoyang.png"  # 洛阳城（实测匹配 0.991）
 WORLD_MAP_CHANGAN_ICON = "shijie_changan.png"         # 长安城（五环任务实测）
 # 世界地图打开标志模板（实测匹配 0.95，右键其位置可关闭）
+# 小地图面板匹配区域（右上区）：面板可拖动但 58 帧实测均在
+# (900-1100, 150-300)；锄遗聚宝小游戏等面板含相似图标，会误匹配到
+# 屏幕中部（实测 (559,395)/(606,613) 连点不关），区域外匹配忽略
+MINI_MAP_REGION = (800, 0, 1378, 400)
 WORLD_MAP_OPEN_ICON = "map_shijie_open.png"
 # 小地图打开标志模板（实测匹配 0.95；左键其位置可关闭）
 MINI_MAP_OPEN_ICON = "map_xiaoditu_open.png"
@@ -375,6 +381,7 @@ def open_world_map(win):
     if pt is None:
         return False, "未找到世界地图按钮"
     app_utils.fixed_pos_set("world_map_btn", win, pt[0], pt[1])
+    log(f"[地图] 打开世界地图: 点击按钮 @ ({pt[0]},{pt[1]})", "INFO")
     human_click(win, pt[0], pt[1])
     # 轮询等待打开（实测约 0.5s 即开；替代固定 1.5s 等待，打开即返回）
     deadline = time.time() + 2.0
@@ -389,6 +396,7 @@ def open_mini_map(win):
     """点击地图位置区域打开当前地图的小地图。返回 (是否成功, 描述)。"""
     cx = (MAP_POS_REGION[0] + MAP_POS_REGION[2]) // 2
     cy = (MAP_POS_REGION[1] + MAP_POS_REGION[3]) // 2
+    log(f"[地图] 打开小地图: 点击位置区域 @ ({cx},{cy})", "INFO")
     human_click(win, cx, cy)
     deadline = time.time() + 3
     while not is_mini_map_open(win) and time.time() < deadline:
@@ -421,6 +429,7 @@ def open_mini_map_city(win, city_icon, city_label):
     if pt is None:
         return False, f"世界地图中未找到{city_label}"
     app_utils.fixed_pos_set(key, win, pt[0], pt[1])
+    log(f"[地图] 打开{city_label}小地图: 点击城市图标 @ ({pt[0]},{pt[1]})", "INFO")
     human_click(win, pt[0], pt[1])
     # 轮询等待小地图打开（替代固定 1.5s 等待，打开即返回）
     deadline = time.time() + 3
@@ -431,42 +440,97 @@ def open_mini_map_city(win, city_icon, city_label):
     return True, f"{city_label}小地图已打开"
 
 
-def close_map_if_open(win, icon, label, fallbacks=(), primary_button="secondary"):
+def close_map_if_open(win, icon, label, fallbacks=(), primary_button="secondary",
+                      close_retries=3, confirm_wait=0.0, match_region=None):
     """检测地图（模板）是否打开，打开则点击模板位置关闭。
 
-    先以 primary_button 点击模板位置（小地图左键、世界地图右键）；
-    若仍打开，依次右键回退点（画布区域）。
-    返回 (是否成功, 描述)。
+    双帧确认后才点击（防瞬时误检）；confirm_wait > 0 时再等复检一次
+    （世界地图用：点击城市/小地图目标后世界地图有时自动关闭、有时
+    仍打开——动画期的瞬态匹配会在复检时消失，避免误点击落到游戏
+    世界取消寻路；复检仍在才点击）。
+    match_region：匹配位置约束 (l,t,r,b)。小地图面板可拖动但实测
+    限于右上区；锄遗聚宝小游戏等面板含相似图标会误匹配到屏幕中部
+    （实测 (559,395)/(606,613) 连点不关），区域外匹配直接忽略。
+    主点击（小地图左键、世界地图右键）后轮询复检，未关闭则重试主
+    点击（关闭动画期间不误判），多次主点击仍未关闭才走画布兜底。
+    注意：画布兜底右键会点到游戏世界、取消寻路（实测阻塞寻路），
+    调用方按需传入（世界地图全屏面板右键落在面板上安全；小地图
+    不传兜底——没关不影响移动，下轮流程自愈）。
+    返回 (是否成功, 描述)。全部点击与复检结果打日志（排查多点一次）。
     """
-    pt = find_template(win, icon)
-    if pt is None:
+    def _find():
+        if match_region is None:
+            return find_template(win, icon)
+        img = win.capture(force_activate=False)
+        if img is None:
+            return None
+        frame = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
+        return match_frame_np(frame, icon, region=match_region, fallback=False)
+
+    pt = _find()
+    if pt is None or _find() is None:
+        log(f"[地图] 关闭{label}: 双帧确认未打开，不点击", "INFO")
         return False, f"{label}未打开，无需关闭"
-    human_click(win, pt[0], pt[1], button=primary_button)
-    time.sleep(1.0)  # 等待关闭动画
-    if find_template(win, icon) is None:
-        btn = "左" if primary_button == "primary" else "右"
-        return True, f"{label}已在模板位置{btn}键关闭"
+    if confirm_wait > 0:
+        time.sleep(confirm_wait)
+        pt2 = _find()
+        if pt2 is None:
+            log(f"[地图] 关闭{label}: 确认等待后已自动关闭（动画瞬态），不点击", "INFO")
+            return True, f"{label}已自动关闭，无需点击"
+        pt = pt2
+    btn = "左" if primary_button == "primary" else "右"
+    for attempt in range(close_retries):
+        log(f"[地图] 关闭{label}: 第 {attempt + 1}/{close_retries} 次"
+            f"{btn}键点击模板位置 @ ({pt[0]},{pt[1]})", "INFO")
+        human_click(win, pt[0], pt[1], button=primary_button)
+        deadline = time.time() + 1.0  # 轮询复检替代固定等待（关闭动画约 1s）
+        while time.time() < deadline:
+            time.sleep(0.3)
+            if _find() is None:
+                log(f"[地图] 关闭{label}: 复检已关闭（第 {attempt + 1} 次点击生效）", "INFO")
+                return True, f"{label}已在模板位置{btn}键关闭"
+        pt = _find()  # 仍在：位置可能漂移，重取后重试主点击
+        if pt is None:
+            log(f"[地图] 关闭{label}: 复检时已关闭", "INFO")
+            return True, f"{label}已关闭"
+        log(f"[地图] 关闭{label}: 点击后仍检测到打开（新位置 ({pt[0]},{pt[1]})），重试", "WARN")
     for x, y in list(fallbacks):
+        log(f"[地图] 关闭{label}: 主点击重试 {close_retries} 次未关闭，"
+            f"右键画布兜底 @ ({x},{y})", "WARN")
         human_click(win, x, y, button="secondary")
-        time.sleep(1.0)  # 等待关闭动画
-        if find_template(win, icon) is None:
-            return True, f"{label}已右键关闭（画布回退点({x},{y})）"
-    return False, f"{label}关闭失败"
+        deadline = time.time() + 1.0
+        while time.time() < deadline:
+            time.sleep(0.3)
+            if _find() is None:
+                log(f"[地图] 关闭{label}: 画布兜底已关闭", "INFO")
+                return True, f"{label}已右键关闭（画布回退点({x},{y})）"
+    return False, f"{label}关闭失败（已重试 {close_retries} 次主点击）"
 
 
 def close_world_map(win):
-    """关闭世界地图（若打开）：模板位置右键，画布兜底。返回 (是否成功, 描述)。"""
+    """关闭世界地图（若打开）：模板位置右键，画布兜底。返回 (是否成功, 描述)。
+
+    带 1s 确认等待：点击城市/小地图目标后世界地图有时自动关闭、有时
+    仍打开（用户实测）——等待后复检仍在才点击，动画期的瞬态匹配
+    （误检点击会落到游戏世界取消寻路）在复检时消失、不点击。
+    """
     return close_map_if_open(win, WORLD_MAP_OPEN_ICON, "世界地图",
-                             fallbacks=(MAP_CANVAS_POS,), primary_button="secondary")
+                             fallbacks=(MAP_CANVAS_POS,), primary_button="secondary",
+                             confirm_wait=1.0)
 
 
 def close_mini_map(win):
-    """关闭小地图（若打开）：模板位置左键，画布右键兜底。返回 (是否成功, 描述)。"""
+    """关闭小地图（若打开）：模板位置左键，无画布兜底（右键会点到
+    游戏世界取消寻路）。匹配限定右上区（MINI_MAP_REGION）——小地图
+    面板可拖动但限于右上，锄遗聚宝小游戏等面板的相似图标误匹配在
+    屏幕中部时直接忽略。返回 (是否成功, 描述)。"""
     return close_map_if_open(win, MINI_MAP_OPEN_ICON, "小地图",
-                             fallbacks=(MAP_CANVAS_POS,), primary_button="primary")
+                             primary_button="primary",
+                             match_region=MINI_MAP_REGION)
 
 
 def close_maps(win):
-    """关闭所有打开的地图（小地图在上层，先关）。"""
+    """关闭打开的地图（小地图在上层，先关）。世界地图关闭带 1s 确认
+    等待（见 close_world_map），只在复检仍打开时点击。"""
     close_mini_map(win)
     close_world_map(win)
