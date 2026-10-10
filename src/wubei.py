@@ -354,23 +354,32 @@ def _walk_to_claim_spot(win):
     time.sleep(1.0)  # 等待自动寻路启动
     game_map.close_maps(win)
     # 等待到达：按钮可见优先（直接信号），坐标 ±5 作为次级判据
-    # （坐标误读时按钮判据兜底）
+    # （坐标误读时按钮判据兜底）。每轮询只截一帧：战斗判定与按钮
+    # 匹配共用（is_in_battle_frame + match_frame_np）；位置 OCR 为
+    # 次级判据限频每 3 轮询一次（按钮判据覆盖绝大多数到达）
     deadline = time.time() + CLAIM_ARRIVE_TIMEOUT
     polls = 0
+    _walk_pos = None
     while time.time() < deadline:
-        if is_in_battle(win):
+        img = win.capture(force_activate=False)
+        if img is None:
             time.sleep(2.0)
             continue
-        if game_map.find_template(win, LINGQU_ICON) is not None:
+        if is_in_battle_frame(img):
+            time.sleep(2.0)
+            continue
+        frame = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
+        if game_map.match_frame_np(frame, LINGQU_ICON, fallback=False) is not None:
             log("[五倍] 已到达领取点附近（领取按钮可见）", "SYS")
             return True, "已到达领取点附近"
-        pos = game_map.read_map_position(win)
-        if _near_claim_spot(pos, WALK_ARRIVE_TOLERANCE):
-            log("[五倍] 已到达领取点附近", "SYS")
-            return True, "已到达领取点附近"
         polls += 1
+        if polls % 3 == 1:
+            _walk_pos = game_map.read_map_position(win)
+            if _near_claim_spot(_walk_pos, WALK_ARRIVE_TOLERANCE):
+                log("[五倍] 已到达领取点附近", "SYS")
+                return True, "已到达领取点附近"
         if polls % 5 == 0:
-            log(f"[五倍] 前往领取点中... 当前位置: {pos or '识别失败'}", "INFO")
+            log(f"[五倍] 前往领取点中... 当前位置: {_walk_pos or '识别失败'}", "INFO")
         time.sleep(2.0)
     return False, f"寻路到领取点超时（未到达宝象国 {CLAIM_SPOT[0]},{CLAIM_SPOT[1]} 附近）"
 
@@ -695,8 +704,30 @@ def _handle_xianxingjing_track(win, items, img_np):
             _reset_xianxingjing_state()
         return False
     _xj_missing = 0
-    pos = game_map.read_map_position(win)
     now = time.time()
+    # phase 1：已用镜，等白龙马对话框（出现时上游处理器负责，本机
+    # 冻结宽限窗口；模板未匹配时对话框持续存在，不能误点链接）。
+    # 位置无关，跳过位置读取（区域 OCR ~150ms/轮询）
+    if _xj_phase == 1:
+        if _dialog_text_present(items, XIANXINGJING_DIALOG_TEXT):
+            _xj_grace_start = now
+            return False
+        if now - _xj_grace_start < XIANXINGJING_GRACE:
+            return False
+        # 宽限已过未出对话框：本处失败 → 点寻路链接去下一处（位置会变，
+        # 回等到达）；点链接时读一次位置作移动验证起点（仅此一次）
+        pos = game_map.read_map_position(win)
+        if _click_xianxingjing_walk(win, items, img_np):
+            log("[五倍] 显形镜：本处未触发对话框，已点寻路链接前往下一处", "WARN")
+            _xj_phase = 0
+            _xj_stable = 0
+            _xj_need_move = True    # 须位置变化（寻路启动）后才允许再次用镜
+            _xj_walk_from = pos if pos is not None else _xj_last_pos
+            return True
+        log("[五倍] 显形镜：追踪面板未找到寻路链接，下轮询重试", "WARN")
+        return False
+    # phase 0：等到达（需要位置）
+    pos = game_map.read_map_position(win)
     if pos is None:
         return False
     if _xj_last_pos is not None and abs(pos[1] - _xj_last_pos[1]) <= 3 \
@@ -705,51 +736,33 @@ def _handle_xianxingjing_track(win, items, img_np):
     else:
         _xj_stable = 1
     _xj_last_pos = pos
-    if _xj_phase == 0:
-        # 点寻路链接后须位置先变化（寻路启动）才允许再次用镜：链接
-        # 点击未生效时位置不动，直接再次用镜会白耗 A/B 配额
-        if _xj_need_move:
-            if _xj_walk_from is not None and (
-                    abs(pos[1] - _xj_walk_from[1]) > 5
-                    or abs(pos[2] - _xj_walk_from[2]) > 5):
-                _xj_need_move = False
-                _xj_stable = 0  # 移动开始：重新累计到达稳定
-            else:
-                return False
-        if _xj_stable < XIANXINGJING_ARRIVE_POLLS:
-            return False  # 还在寻路
-        if _xj_use_count >= XIANXINGJING_USE_MAX:
-            if not _xj_warned:
-                _xj_warned = True
-                log("[五倍] 显形镜：A、B 两处均未触发白龙马对话框，请人工检查", "WARN")
+    # 点寻路链接后须位置先变化（寻路启动）才允许再次用镜：链接
+    # 点击未生效时位置不动，直接再次用镜会白耗 A/B 配额
+    if _xj_need_move:
+        if _xj_walk_from is not None and (
+                abs(pos[1] - _xj_walk_from[1]) > 5
+                or abs(pos[2] - _xj_walk_from[2]) > 5):
+            _xj_need_move = False
+            _xj_stable = 0  # 移动开始：重新累计到达稳定
+        else:
             return False
-        # 已到达（位置连续稳定）：点追踪面板「显形镜」文案用镜
-        log(f"[五倍] 显形镜：已到达（位置稳定），点击追踪文案用镜"
-            f"（第 {_xj_use_count + 1}/{XIANXINGJING_USE_MAX} 处）", "SYS")
-        if _click_xianxingjing_use(win, items, img_np):
-            _xj_use_count += 1
-            _xj_phase = 1
-            _xj_grace_start = now
-            _xj_stable = 0
-            return True
-        log("[五倍] 显形镜：追踪面板未找到显形镜文案，下轮询重试", "WARN")
+    if _xj_stable < XIANXINGJING_ARRIVE_POLLS:
+        return False  # 还在寻路
+    if _xj_use_count >= XIANXINGJING_USE_MAX:
+        if not _xj_warned:
+            _xj_warned = True
+            log("[五倍] 显形镜：A、B 两处均未触发白龙马对话框，请人工检查", "WARN")
         return False
-    # phase 1：已用镜，等白龙马对话框（出现时上游处理器负责，本机
-    # 冻结宽限窗口；模板未匹配时对话框持续存在，不能误点链接）
-    if _dialog_text_present(items, XIANXINGJING_DIALOG_TEXT):
+    # 已到达（位置连续稳定）：点追踪面板「显形镜」文案用镜
+    log(f"[五倍] 显形镜：已到达（位置稳定），点击追踪文案用镜"
+        f"（第 {_xj_use_count + 1}/{XIANXINGJING_USE_MAX} 处）", "SYS")
+    if _click_xianxingjing_use(win, items, img_np):
+        _xj_use_count += 1
+        _xj_phase = 1
         _xj_grace_start = now
-        return False
-    if now - _xj_grace_start < XIANXINGJING_GRACE:
-        return False
-    # 宽限已过未出对话框：本处失败 → 点寻路链接去下一处（位置会变，回等到达）
-    if _click_xianxingjing_walk(win, items, img_np):
-        log("[五倍] 显形镜：本处未触发对话框，已点寻路链接前往下一处", "WARN")
-        _xj_phase = 0
         _xj_stable = 0
-        _xj_need_move = True    # 须位置变化（寻路启动）后才允许再次用镜
-        _xj_walk_from = pos
         return True
-    log("[五倍] 显形镜：追踪面板未找到寻路链接，下轮询重试", "WARN")
+    log("[五倍] 显形镜：追踪面板未找到显形镜文案，下轮询重试", "WARN")
     return False
 
 
