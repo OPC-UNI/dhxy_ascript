@@ -787,6 +787,8 @@ def _give_item_for_npc(win):
             for key, item in GIVE_NPC_ITEMS.items():
                 if key in ntxt:
                     return item, npc_txt
+        if QIANLAOSI_NAME in npc_txt:
+            return GIVE_DEFAULT_ITEM, npc_txt  # 钱老四：特殊给与由调用方分支处理，不告警
         txts = [t for t, _, s in items if s >= 0.55]
         log(f"[客栈] 给与面板 NPC 行未识别出对象（OCR: {txts or '(无)'}），"
             f"按默认物品处理", "WARN")
