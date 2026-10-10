@@ -417,8 +417,12 @@ def _click_famen(win, bar_ready=False):
     已确认出现时传 True 免重复等待。坐标 FAMEN_CLICK_POS 未标定
     （None）时跳过并仅记录一次。每场战斗调用一次（首场在
     handle_battle 内、后续场次在 watch_loop 进场时）。
+    仅人物动作为法术（技能X-Y）时生效：法门只对法术生效（用户确认），
+    攻击/防御/捕捉等动作点了无效。
     """
     if not load_auto_famen():
+        return
+    if not load_battle_actions()["char"].startswith("技能"):
         return
     global _famen_missing_logged
     if FAMEN_CLICK_POS is None:
