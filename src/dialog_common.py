@@ -34,6 +34,21 @@ OPTION_ROW_STEP = 18
 OPTION_X_OFFSET = 1
 
 
+def green_option_center(img_np, rect, opt_len, line_len):
+    """选项点击中心：全行绿字中心；OCR 行合并了相邻文字时（line_len
+    明显长于选项长度）按字符比例取行左部选项自身中心。
+
+    实测「玄枢轶闻我想领取通用玄宝」合并成一行，全行绿字中心 520
+    偏离选项自身中心 470 点不中，且毒化高性能缓存（客栈/五环/修罗/
+    玄枢轶闻共用的统一修正）。opt_len/line_len 建议传规范化后长度。
+    """
+    cx, cy = task_tracker.green_text_center(img_np, rect, prefer_underline=False)
+    if line_len > opt_len + 2:
+        frac = min(opt_len / line_len, 1.0)
+        cx = rect[0] + int((rect[2] - rect[0]) * frac / 2)
+    return cx, cy
+
+
 def _click_green_option_once(win, items, img_np, text, prefix=""):
     """单帧检测并点击指定文案的绿色选项；点击成功返回 True。
 
@@ -46,7 +61,7 @@ def _click_green_option_once(win, items, img_np, text, prefix=""):
     for txt, rect, score in items:
         if text in txt and score >= 0.55 and rect[0] >= task_tracker.PANEL_MAX_X \
                 and task_tracker.is_green_text(img_np, rect):
-            cx, cy = task_tracker.green_text_center(img_np, rect, prefer_underline=False)
+            cx, cy = green_option_center(img_np, rect, len(text), len(txt))
             human_click(win, cx, cy)
             # 高性能：记录选项固定位置（按文案做键，各任务模块共用；
             # 位置漂移时由本路径自然刷新）

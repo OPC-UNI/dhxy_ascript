@@ -40,7 +40,7 @@ from .dialog_common import (_click_green_option_once, _dialog_text_present,
                             _norm_dialog_present, close_scene_panels,
                             _click_screen_center, _fuzzy_contains,
                             DAILY_LIMIT_TEXT, DAILY_LIMIT_INFO,
-                            DIALOG_LOSE_TEXTS)
+                            DIALOG_LOSE_TEXTS, green_option_center)
 
 # 任务追踪面板中的任务标题
 TASK_MODE = "客栈"       # 控制面板任务模式名（任务次数配置键）
@@ -803,8 +803,8 @@ def _click_green_option_fuzzy(win, items, img_np, text):
         ntxt = norm_text(txt)
         if nopt in ntxt or _fuzzy_contains(ntxt, nopt, threshold=0.8):
             if task_tracker.is_green_text(img_np, rect):
-                cx, cy = task_tracker.green_text_center(img_np, rect,
-                                                        prefer_underline=False)
+                # 合并行按比例取选项自身中心（见 dialog_common.green_option_center）
+                cx, cy = green_option_center(img_np, rect, len(nopt), len(ntxt))
                 human_click(win, cx, cy)
                 # 高性能：记录选项固定位置（按标准文案做键，漂移自愈）
                 app_utils.fixed_pos_set(f"option_{text}", win, cx, cy)

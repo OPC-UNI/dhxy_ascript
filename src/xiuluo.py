@@ -57,7 +57,8 @@ from .control_window import (load_task_counts, load_xiuluo_settings,
                              load_xiuluo_wuyi_interval)  # 任务次数上限/修罗设置/自动巫医
 from .xuanshu import follow_task  # 任务跟踪（绿字点击寻路/战斗跳过/附加对话处理）
 from .dialog_common import (_dialog_text_present, _norm_dialog_present,
-                            SCREEN_CENTER_POS)  # 对话框共享组件
+                            SCREEN_CENTER_POS,
+                            green_option_center)  # 对话框共享组件
 
 # 任务模式与追踪面板标题（2026-10-08 日志+截图实测确认）
 TASK_MODE = "修罗"           # 控制面板任务模式名（任务次数配置键）
@@ -362,9 +363,30 @@ def _find_claim_option(items, img_np):
             if score >= 0.55 and needle in re.sub(r"[^\w]", "", txt) \
                     and rect[0] >= task_tracker.PANEL_MAX_X \
                     and task_tracker.is_green_text(img_np, rect):
-                cx, cy = task_tracker.green_text_center(img_np, rect, prefer_underline=False)
+                # 合并行按比例取选项自身中心（见 dialog_common.green_option_center）
+                ntxt = re.sub(r"[^\w]", "", txt)
+                cx, cy = green_option_center(img_np, rect, len(needle), len(ntxt))
                 return cx, cy, txt, needle == norm_text("帮忙")
     return None
+
+
+def _wait_claim_option_signal(win, timeout=CLAIM_DIALOG_APPEAR_TIMEOUT):
+    """轮询领取对话框选项出现的直接信号（对话框区域 OCR ~150ms/次）。
+
+    高性能路径用：替代固定 HIGH_PERF_DIALOG_WAIT 等待——选项渲染
+    完成即返回（渲染快时提前点、慢时最多等 timeout，不再点空）。
+    返回选项是否出现（不影响调用方继续走既有兜底）。
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        time.sleep(0.3)
+        img = win.capture(force_activate=False)
+        if img is None:
+            continue
+        items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
+        if _find_claim_option(items, img_np) is not None:
+            return True
+    return False
 
 
 def _click_claim_option(win, items, img_np):
@@ -527,7 +549,11 @@ def _click_entry_ensuring_dialog(win, log_tag="[修罗]", hover_before_click=Fal
         # 校验循环内识别补点兜底，无 seen 帧返回）
         if app_utils.high_perf_on() \
                 and app_utils.fixed_pos_get("claim_option", win) is not None:
-            time.sleep(app_utils.HIGH_PERF_DIALOG_WAIT)
+            # 高性能：跳过全量对话框轮询，改为轮询「选项出现」的直接信号
+            # （对话框渲染实测 ~1.5s）：选项一渲染完成即返回，由
+            # _claim_task 按缓存坐标点选项（点不中由校验循环识别补点
+            # 兜底）。替代固定 1.8s 等待——渲染快时提前点、慢时不点空
+            _wait_claim_option_signal(win)
             dialog_seen = True
             break
         # 等待对话框出现：轮询选项（正常 ~1.5s 即出）；首次尝试短窗口，

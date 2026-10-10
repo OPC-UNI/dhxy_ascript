@@ -320,20 +320,69 @@ def _click_dialog_option_by_index(win, items, dtxt, idx):
     return _dc_click_dialog_option_by_index(win, items, dtxt, idx, "玄枢轶闻")
 
 
+def _option_present(items, text):
+    """选项行是否可见（以 text 开头的行，限定对话框区域）。"""
+    return any(t.startswith(text) and s >= 0.55
+               and r[0] >= task_tracker.PANEL_MAX_X
+               for t, r, s in items)
+
+
+def _wait_option_visible(win, text, abort_text, timeout=4.0):
+    """等对话框渲染出选项行（以 text 开头）；期间出现 abort_text 返回 False。"""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        img = win.capture(force_activate=False)
+        if img is None:
+            time.sleep(0.5)
+            continue
+        items, _ = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
+        if abort_text and _dialog_text_present(items, abort_text):
+            return False
+        if _option_present(items, text):
+            return True
+        time.sleep(0.5)
+    return False
+
+
+def _option_gone(win, text, timeout=3.0):
+    """点击后选项行是否消失（对话框已推进）。"""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        img = win.capture(force_activate=False)
+        if img is None:
+            time.sleep(0.5)
+            continue
+        items, _ = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
+        if not _option_present(items, text):
+            return True
+        time.sleep(0.5)
+    return False
+
+
 def _click_dialog_green_option(win, text, timeout=DIALOG_TIMEOUT, abort_text=None):
     """等待对话框出现，点击其中指定文案的绿色选项。
 
     等待期间若出现 abort_text 文案（如每日次数已满）则提前中止。
-    高性能：选项坐标已缓存 → 固定等待渲染后直点（免 OCR 轮询；
-    abort 文案检测由调用方下游校验兜底）。返回 (是否成功, 描述)。
+    高性能：选项坐标已缓存 → 先等选项渲染出现（点前确认）→ 按缓存
+    坐标点击 → 点后确认选项消失（推进）；任一步不满足则清缓存回退
+    OCR 识别路径（缓存中心被合并行毒化的实测教训；点后单端校验会把
+    「点击已生效、对话框快速推进」误判为未生效）。返回 (是否成功, 描述)。
     """
     if app_utils.high_perf_on():
         pos = app_utils.fixed_pos_get(f"option_{text}", win)
         if pos is not None:
-            time.sleep(app_utils.HIGH_PERF_DIALOG_WAIT)
-            human_click(win, pos[0], pos[1])
-            log(f"[玄枢轶闻][高性能] 已按缓存坐标点击「{text}」 ({pos[0]}, {pos[1]})", "SYS")
-            return True, f"已按缓存坐标点击对话框绿色选项「{text}」"
+            if _wait_option_visible(win, text, abort_text):
+                time.sleep(0.3)  # 渲染稳定
+                human_click(win, pos[0], pos[1])
+                log(f"[玄枢轶闻][高性能] 已按缓存坐标点击「{text}」 ({pos[0]}, {pos[1]})", "SYS")
+                if _option_gone(win, text):
+                    return True, f"已按缓存坐标点击对话框绿色选项「{text}」"
+                app_utils.fixed_pos_clear(f"option_{text}")
+                log(f"[玄枢轶闻][高性能] 缓存坐标点击「{text}」未生效，清缓存回退识别", "WARN")
+            else:
+                app_utils.fixed_pos_clear(f"option_{text}")
+                log(f"[玄枢轶闻][高性能] 点击前选项「{text}」未出现"
+                    f"（对话框未开或状态已变），清缓存回退识别", "WARN")
     deadline = time.time() + timeout
     while time.time() < deadline:
         img = win.capture(force_activate=False)

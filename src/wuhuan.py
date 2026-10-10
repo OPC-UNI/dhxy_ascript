@@ -34,7 +34,8 @@ from . import debug_overlay  # 调试信息悬浮层（任务进度更新）
 from .control_window import load_task_counts  # 任务次数上限（通用设置）
 from .xuanshu import follow_task, _click_dialog_green_option  # 复用玄枢轶闻的任务跟踪/对话框逻辑
 from .dialog_common import (_dialog_text_present,
-                            close_scene_panels)  # 对话框共享组件
+                            close_scene_panels,
+                            green_option_center)  # 对话框共享组件
 
 # 任务追踪面板中的任务标题
 WUHUAN_TITLE = "五环"
@@ -211,17 +212,20 @@ def _buy_equipments(win):
     return True, f"已购买 {EQUIPMENT_COUNT} 件 2 级装备"
 
 
-def _click_green_option_if(win, items, img_np, pred):
+def _click_green_option_if(win, items, img_np, pred, needle=None):
     """点击满足谓词的对话框绿色选项（x≥PANEL_MAX_X）。
 
     限定对话框区域避免误点追踪面板的绿字链接；点击后移走鼠标
-    （悬停变色会干扰后续绿字判定）。返回点击坐标 (cx, cy) 或 None。
+    （悬停变色会干扰后续绿字判定）。needle 为选项文案（规范化后）：
+    行合并相邻文字时按比例取选项自身中心（防缓存毒化）。
+    返回点击坐标 (cx, cy) 或 None。
     """
     for txt, rect, score in items:
         if score >= 0.55 and pred(txt) \
                 and rect[0] >= task_tracker.PANEL_MAX_X \
                 and task_tracker.is_green_text(img_np, rect):
-            cx, cy = task_tracker.green_text_center(img_np, rect, prefer_underline=False)
+            opt_len = len(needle) if needle else 0
+            cx, cy = green_option_center(img_np, rect, opt_len, len(norm_text(txt)))
             human_click(win, cx, cy)
             log(f"[五环] 已点击绿色选项「{txt}」", "SYS")
             move_away(win)  # 鼠标停留选项上会使其悬停变色，干扰后续绿字判定
@@ -238,16 +242,43 @@ def _click_green_option(win, items, img_np, text):
     """
     needle = norm_text(text)
     pos = _click_green_option_if(win, items, img_np,
-                                 lambda t: needle in norm_text(t))
+                                 lambda t: needle in norm_text(t), needle=needle)
     if pos is not None:
         app_utils.fixed_pos_set(f"option_{text}", win, pos[0], pos[1])
     return pos
+
+
+def _handle_claim_blockers(win, items, img_np):
+    """领取对话链中的结束条件对话框：今日两次已满/活力值不足。
+
+    活力值不足点「那可不行，我一会再来。」后结束任务（选项点击即
+    返回结束）；所有领取轮询路径（主循环/选项后窗口/兜底/校验）
+    每轮询调用，避免高性能缓存直点后选项不可见时漏检。
+    返回 (是否结束, 结束描述或 None)。
+    """
+    if _dialog_text_present(items, DAILY_LIMIT_TEXT):
+        log(f"[五环] 检测到「{DAILY_LIMIT_TEXT}」", "SYS")
+        return True, DAILY_LIMIT_INFO
+    if _dialog_text_present(items, VITALITY_DIALOG_TEXT):
+        if _click_green_option(win, items, img_np, VITALITY_DIALOG_OPTION):
+            log("[五环] 活力值不足，已点击「那可不行，我一会再来。」", "SYS")
+            return True, VITALITY_LIMIT_INFO
+    return False, None
 
 
 def _claim_task(win):
     """到云游大师领取五环任务。返回 (是否成功, 描述)。"""
     if is_in_battle(win):
         return False, "战斗中，跳过本轮领取"
+    # 入口防御：上一轮遗留的限次/活力对话框未关闭时（如高性能直点后
+    # 领取失败），会挡住后续小地图打开——先检测并处理（每轮一次
+    # 对话框区域 OCR，约 100-170ms）
+    img = win.capture(force_activate=False)
+    if img is not None:
+        items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
+        ended, info = _handle_claim_blockers(win, items, img_np)
+        if ended:
+            return False, info
     # 确保在长安：不在则世界地图点长安（打开长安小地图）
     if not game_map.is_in_map(win, CHANGAN_CITY):
         ok, info = game_map.open_mini_map_city(win, game_map.WORLD_MAP_CHANGAN_ICON, "长安")
@@ -300,9 +331,9 @@ def _claim_task(win):
         if task_tracker.has_task_in(items, img_np, WUHUAN_TITLE):
             claimed = True
             break
-        if _dialog_text_present(items, DAILY_LIMIT_TEXT):
-            log(f"[五环] 检测到「{DAILY_LIMIT_TEXT}」", "SYS")
-            return False, DAILY_LIMIT_INFO
+        ended, info = _handle_claim_blockers(win, items, img_np)
+        if ended:
+            return False, info
         if _click_green_option(win, items, img_np, CLAIM_DIALOG_OPTION):
             claimed = True
             # 活力值不足/今日两次已满提示在点击领取选项之后出现：重新截帧并轮询几秒。
@@ -317,13 +348,9 @@ def _claim_task(win):
                 items, img_np = game_map.ocr_regions(img, task_tracker.OCR_REGIONS)
                 if task_tracker.has_task_in(items, img_np, WUHUAN_TITLE):
                     break
-                if _dialog_text_present(items, DAILY_LIMIT_TEXT):
-                    log(f"[五环] 检测到「{DAILY_LIMIT_TEXT}」", "SYS")
-                    return False, DAILY_LIMIT_INFO
-                if _dialog_text_present(items, VITALITY_DIALOG_TEXT):
-                    if _click_green_option(win, items, img_np, VITALITY_DIALOG_OPTION):
-                        log("[五环] 活力值不足，已点击「那可不行，我一会再来。」", "SYS")
-                        return False, VITALITY_LIMIT_INFO
+                ended, info = _handle_claim_blockers(win, items, img_np)
+                if ended:
+                    return False, info
                 time.sleep(0.8)
             break
         time.sleep(0.5)
@@ -339,9 +366,9 @@ def _claim_task(win):
             if task_tracker.has_task_in(items, img_np, WUHUAN_TITLE):
                 claimed = True
                 break
-            if _dialog_text_present(items, DAILY_LIMIT_TEXT):
-                log(f"[五环] 检测到「{DAILY_LIMIT_TEXT}」", "SYS")
-                return False, DAILY_LIMIT_INFO
+            ended, info = _handle_claim_blockers(win, items, img_np)
+            if ended:
+                return False, info
             _click_green_option_if(win, items, img_np,
                                    lambda t: "五环" in t or "帮助" in t)
             time.sleep(0.5)
@@ -359,9 +386,9 @@ def _claim_task(win):
         items, img_np = game_map.ocr_regions(img, task_tracker.OCR_REGIONS)
         if task_tracker.has_task_in(items, img_np, WUHUAN_TITLE):
             break
-        if _dialog_text_present(items, DAILY_LIMIT_TEXT):
-            log(f"[五环] 检测到「{DAILY_LIMIT_TEXT}」", "SYS")
-            return False, DAILY_LIMIT_INFO
+        ended, info = _handle_claim_blockers(win, items, img_np)
+        if ended:
+            return False, info
         time.sleep(1.0)
     if not task_tracker.has_task(win, WUHUAN_TITLE):
         return False, "已点击领取选项，但任务追踪中未检测到任务"
