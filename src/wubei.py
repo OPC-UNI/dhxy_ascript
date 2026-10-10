@@ -53,7 +53,8 @@ from . import map as game_map  # 地图操作（世界地图/小地图/位置识
 from . import team  # 组队检查（领取前队伍人数检查，仅队长生效）
 from . import bag  # 背包操作（打开/关闭背包、任务储物格）
 from . import debug_overlay  # 调试信息悬浮层（任务进度更新）
-from .battle import is_in_battle, is_in_battle_frame  # 战斗状态判定（统一在 battle.py 中实现）
+from .battle import (is_in_battle, is_in_battle_frame,
+                     watch_in_battle as battle_watch_in_battle)  # 战斗状态判定（统一在 battle.py 中实现）
 from .control_window import (load_task_counts,  # 任务次数上限
                              load_wubei_min,  # 五倍设置：最少人数
                              load_wubei_check_team)  # 五倍设置：检查队伍开关
@@ -657,6 +658,76 @@ def _click_xianxingjing_walk(win, items, img_np):
     return False
 
 
+# ---- 黄袍怪多杀任务（追踪「前往xxx消灭黄袍怪」；用户确认每杀之间
+#      追踪签名不变，仅最后一次杀完后任务消失——follow 不会重点链接，
+#      须在战斗结束后主动重点链接走下一处） ----
+HUANGPAOGUAI_LINK_KEYWORD = "黄袍"  # 追踪链接关键词（单字「袍」前半，抗 OCR 误读）
+HUANGPAOGUAI_RECLICK_DELAY = 5.0    # 战斗结束后等结算过渡再点链接（秒）。
+# 5s > follow 任务消失确认（2 轮询 ≈4s）：最后一次杀完后任务消失确认
+# 先完成，只有任务仍在（确实还需再杀）才会重点链接，不会点空
+_hpg_was_in_battle = False   # 上一轮询是否在战斗（检测战斗结束沿）
+_hpg_need_click = False      # 战斗结束后待重点链接
+_hpg_battle_end_at = 0.0     # 战斗结束时间（结算过渡起点）
+_hpg_missing = 0             # 关键词连续消失轮询数（≥2 视为任务结束）
+
+
+def _reset_huangpaoguai_state():
+    """黄袍怪状态机复位（任务领取成功后调用，防跨任务残留）。"""
+    global _hpg_was_in_battle, _hpg_need_click, _hpg_battle_end_at, _hpg_missing
+    _hpg_was_in_battle = False
+    _hpg_need_click = False
+    _hpg_battle_end_at = 0.0
+    _hpg_missing = 0
+
+
+def _click_track_link(win, items, img_np, keyword):
+    """点击任务追踪面板中含关键词的绿字行（文本矩形中心，点文字）。"""
+    for txt, rect, score in items:
+        if score < 0.55 or rect[0] >= task_tracker.PANEL_MAX_X:
+            continue
+        if keyword not in txt or not task_tracker.is_green_text(img_np, rect):
+            continue
+        cx, cy = (rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2
+        human_click(win, cx, cy)
+        log(f"[五倍] 已点击追踪链接「{txt}」@({cx},{cy})", "SYS")
+        move_away(win)
+        return True
+    return False
+
+
+def _handle_huangpaoguai(win, items, img_np):
+    """黄袍怪多杀任务：每场战斗结束后追踪签名不变，follow 不会重点
+    链接——战斗结束（共享标志沿）且追踪仍有黄袍怪链接时，等结算
+    过渡后重点链接走下一处。任务消失（最后一次杀完）由 follow 的
+    消失确认收尾。返回是否已处理（点击了链接）。
+    """
+    global _hpg_was_in_battle, _hpg_need_click, _hpg_battle_end_at, _hpg_missing
+    sig = "".join(norm_text(t) for t, r, s in items
+                  if s >= 0.55 and r[0] < task_tracker.PANEL_MAX_X)
+    if HUANGPAOGUAI_LINK_KEYWORD not in sig:
+        _hpg_missing += 1
+        if _hpg_missing >= 2:
+            _reset_huangpaoguai_state()  # 任务阶段结束：状态复位
+        return False
+    _hpg_missing = 0
+    in_battle = battle_watch_in_battle
+    if not in_battle and _hpg_was_in_battle:
+        # 战斗刚结束：等结算过渡后重点链接（下一处）
+        _hpg_need_click = True
+        _hpg_battle_end_at = time.time()
+    _hpg_was_in_battle = in_battle
+    if not _hpg_need_click:
+        return False
+    if time.time() - _hpg_battle_end_at < HUANGPAOGUAI_RECLICK_DELAY:
+        return False
+    if _click_track_link(win, items, img_np, HUANGPAOGUAI_LINK_KEYWORD):
+        log("[五倍] 黄袍怪：战斗结束后已重点追踪链接，前往下一处", "SYS")
+        _hpg_need_click = False
+        return True
+    log("[五倍] 黄袍怪：追踪面板未找到黄袍怪链接，下轮询重试", "WARN")
+    return False
+
+
 def _handle_xianxingjing(win, items, img_np):
     """显形镜查探：白龙马对话框出现时先连点屏幕中间两次关闭遮挡
     文字（对话框文字挡住任务按钮模板），随后窗口内识别点击模板
@@ -795,12 +866,15 @@ def _handle_fight_dialog(win, items, img_np):
 
 def _handle_follow_extras(win, items, img_np):
     """跟随期间的附加对话处理：白龙马对话框（点任务按钮）优先，
-    其次显形镜 A→B 回退（用镜/换点），最后对话开打选项。"""
+    其次显形镜 A→B 回退（用镜/换点），再次对话开打选项
+    （证明实力/消灭它），最后黄袍怪多杀重点链接。"""
     if _handle_xianxingjing(win, items, img_np):
         return True
     if _handle_xianxingjing_track(win, items, img_np):
         return True
-    return _handle_fight_dialog(win, items, img_np)
+    if _handle_fight_dialog(win, items, img_np):
+        return True
+    return _handle_huangpaoguai(win, items, img_np)
 
 
 def _follow_to_done(win, first_items=None):
@@ -1211,6 +1285,7 @@ def run_loop(win, cycle_interval=1.0):
                 team.record_leader_status(True)  # 领取成功必为队长（关闭检查队伍时抢盒子队长规则靠此记录）
                 _team_checked = True  # 首次领取成功：后续轮次跳过队伍检查
                 _reset_xianxingjing_state()  # 新任务：显形镜状态机复位
+                _reset_huangpaoguai_state()  # 新任务：黄袍怪状态机复位
                 _fight_via_kanda = False  # 新一轮开始：重置「看打！」进入战斗标记
             # 2~4. 寻路 / 对话开打 / 战斗：由任务跟踪统一驱动
             #     （寻路点击绿字自动进行，对话开打走附加对话处理，
