@@ -117,6 +117,26 @@ DIALOG_OPTION_MAP = {
     "下次...下次一定要平平安安地来做娘亲的孩子..":"哎",
     "洛阳城突发诡异瘾症，已有多人出现癫狂症状":"救人要紧，我这就前往隐林涧。",
     "少侠来正是时候！此次癔症乃瘴气入心所致，患者先是神智昏沉，继而狂性":"还请孙神医即刻配药，让城中百姓免受癔症之苦。",
+    "商行提取货物，代为运送？":"举手之劳，包在我身上。",
+    "我处现有三类物资待运：其一为节庆用品":"节庆用品",
+    "少侠可是为我们送物资而来？":"物资都在这里了。",
+    "这批物资来得太及时了！我国“百花节”正缺这些筹备庆典。真是多谢少侠":"小事一桩，不必言谢。",
+    "女儿国太师近日每夜被厉鬼入梦侵扰，以致心神俱疲，政务都耽搁了":"好说，我这便动身。",
+    "这法阵马上便成，你休要坏我大事！":"原来太师的噩梦是你这妖僧搞的鬼！看打！",
+    "难怪当日他执意要在泉眼处布阵……此贼必与当年因触犯国法被逐的妖道有":"那妖僧日后可能再来生乱，太师还需小心为上。",
+    "连老渔民晒的鱼干都要抢走三成。村民敢怒不敢言，少侠可愿":"梆梆帮，什么破名字",
+    "我看你像是来找事儿的！不过一一我就是一帮派喽啰，只负责收保护费":"你们还真是分工明确",
+    "对对对！梆梆帮收保护费啦！不给钱的就要挨两拳！嗯，你是来交保护费的":"我是来梆梆揍你两拳的！",
+    "长寿村有个钱老四在办“有奖问答”，可村民们都说此人惯会耍赖":"还有这等无赖？我定要让他愿赌服输。",
+    "瞧一瞧看一看了！有奖问答！只需要压上点银子，能连续答对三题便可十倍":"给你银子，我倒是要试试",
+    "好嘞，少侠可有准备好？":"准备好了。",
+    "请听第一题：孙悟空的“如意金箍棒”原是大禹治水时的什么工具？":"定海神针",
+    "再听第二题：牛魔王的坐骑是什么？":"避水金睛兽",
+    "再听第三题：金角大王和银角大王原本是谁的童子？":"太上老君",
+    "嗯，再听第四题：乌鸡国国王被谁推入井中？":"青毛狮子精",
+    "最后一题：沙僧的武器是什么？":"降妖宝杖",
+    "这群刁民……好汉不吃眼前亏，我先溜了！":"下次再用这种小伎俩行骗定要好好收拾他一顿……"
+    
 
 }
 # 需要点击屏幕中间跳过的对话框文案 → 点击次数（出现则连点屏幕中间推进
@@ -126,6 +146,7 @@ DIALOG_OPTION_MAP = {
 DIALOG_SKIP_TEXTS = {
     "少侠来得正及时！这月华霜蕊灵气充盈，正是宴上所需": 4,
     "附近的妖邪已被我清理干净了。": 4,
+    "少侠可是受客栈所托，前往女儿国送货的？":2,
     "莫要过来": 4,
     "你怎么也跟过来": 4,
     "有个身份不明的孩童逢人便问花花的下落": 4,
@@ -134,11 +155,16 @@ DIALOG_SKIP_TEXTS = {
     "少侠可是为苏家娘子而来？今晨我已诊过脉象，":2,
     "少侠终于来了！娘亲为了供我学绣艺，日夜赶工熬坏了眼睛":1,
     "巧儿姑娘莫要难过，如今有孙神医的药，定能转危为安。":1,
+    "你这和尚在这里鬼鬼祟祟的做什么？":1,
+    "看来那妖僧乃假冒之人，意在催动落胎泉怨气为祸。如今虽已败退":1,
+    "你是来交保护费的还是来找事儿的？":2,
+    "梆梆给你两拳帮收保护费啦！不给钱的就要挨...挨...下一句词儿是啥来着":2,
+    "哎……少侠答错了！":5,
     "哎呦！正是此物！":6,
     "四象归位，怨气已平，去告知": 4,
     "世间皆负我……人人都欺我……": 4,
     "娘亲...为什么不要我...":6,
-    "灵兽村近日打算举办一场名为“灵兽大冒险”的竞技活动，到时记得去参加": 4,
+    "灵兽村近日打算举办一场名为“灵兽大冒险”的竞技活动，到时记得去参加": 3,
     "隐林涧那边我已经通知完毕": 4,
     "搞定了。": 4,
     "少侠有何事": 4,
@@ -148,6 +174,10 @@ DIALOG_SKIP_TEXTS = {
     "走开，都走开": 4,
     "你赢了": 4,
 }
+# ---- 奇遇对话框（多选项恒点第一个；选项文案随奇遇变化不映射固定文案） ----
+QIYU_DIALOG_TEXTS = ["阴风骤起",   # 第一幕：妖僧现身（三选项 护太师/破阵/远退）
+                     "耳旁有异响",  # 第二幕：硬抗咒光后（两选项 退开/刺向源头）
+                     "伤势过重"]   # 结局幕：远退后摔伤（单选项「我知道了」）
 # ---- 物品给与（高等食材→婉儿姑娘 / 九转还魂汤→苏巧儿；给与流程参考五环提交装备） ----
 GAODENGSHICAI_ICON = "kezhan_gaodengshicai.png"  # 高等食材物品（给与面板检索）
 JIUZHUAN_ICON = "kezhan__jiuzhuanhuanhuntang.png"  # 九转还魂汤物品（给与面板检索）
@@ -168,8 +198,14 @@ GIVE_NPC_ITEMS = {
     "婉儿姑娘": (GAODENGSHICAI_ICON, "高等食材"),
     "蟠桃园": (TAOZHI_ICON, "桃枝"),
     "掌柜": (YIHELIPIN_ICON, "一盒礼品"),
+    "女儿国": (YIHELIPIN_ICON, "一盒礼品"),
 }
 GIVE_DEFAULT_ITEM = (GAODENGSHICAI_ICON, "高等食材")  # NPC 行识别失败时的兜底物品
+# ---- 钱老四给与（问答斗智任务：面板无物品检索，输入 1000 银两参加活动） ----
+QIANLAOSI_NAME = "钱老四"
+QIANLAOSI_AMOUNT = "1000"
+QIANLAOSI_INPUT_POS = (665, 553)  # 银两输入框中心（15.png 实测 (586-745,540-567)）
+_qianlaosi_given = False          # 已点给与按钮（防面板关闭前重复点击二次给与）
 # 任务追踪多绿字点击顺序（四象镇魂：按 青龙→白虎→朱雀→玄武 依次加固封印）；
 # 关键词未命中时自动退回点第一个绿字，不影响其他任务
 GREEN_CLICK_ORDER = ["青龙", "白虎", "朱雀", "玄武"]
@@ -733,38 +769,68 @@ def _handle_follow_extras(win, items, img_np):
 
 
 def _give_item_for_npc(win):
-    """OCR 给与面板 NPC 行，返回应给与的物品 (模板名, 名称)。
+    """OCR 给与面板 NPC 行，返回 (物品元组, 规范化 NPC 文案)。
 
     按 GIVE_NPC_ITEMS 关键词匹配（实测面板底部文案「NPC：苏巧儿」）。
-    识别失败时返回 GIVE_DEFAULT_ITEM 并输出 OCR 原文便于校准。
+    识别失败时返回默认物品并输出 OCR 原文便于校准。NPC 文案供
+    钱老四等特殊给与分支判断。
     """
     img = win.capture(force_activate=False)
+    npc_txt = ""
     if img is not None:
         items, _ = game_map.ocr_region(img, GIVE_PANEL_NPC_REGION)
         for txt, _, score in items:
             if score < 0.55:
                 continue
             ntxt = norm_text(txt)
+            npc_txt += ntxt
             for key, item in GIVE_NPC_ITEMS.items():
                 if key in ntxt:
-                    return item
+                    return item, npc_txt
         txts = [t for t, _, s in items if s >= 0.55]
         log(f"[客栈] 给与面板 NPC 行未识别出对象（OCR: {txts or '(无)'}），"
             f"按默认物品处理", "WARN")
-    return GIVE_DEFAULT_ITEM
+    return GIVE_DEFAULT_ITEM, npc_txt
+
+
+def _give_money_qianlaosi(win):
+    """钱老四给与（问答斗智任务）：点银两输入框 → 全选清空 → 输入
+    1000 → 点给与按钮。返回是否已处理（面板仍在时同样返回 True，
+    由调用方的已给与标记防重复点击）。"""
+    human_click(win, QIANLAOSI_INPUT_POS[0], QIANLAOSI_INPUT_POS[1])
+    time.sleep(0.3)
+    Keyboard.key_hot("ctrl", "a")  # 全选清空默认值
+    Keyboard.input(QIANLAOSI_AMOUNT)
+    time.sleep(0.3)
+    pt = game_map.find_template(win, GIVE_BTN_ICON)
+    if pt is None:
+        log("[客栈] 钱老四给与：未找到给与按钮，等待下次轮询重试", "WARN")
+        return True
+    human_click(win, pt[0], pt[1])
+    log(f"[客栈] 钱老四给与：已输入 {QIANLAOSI_AMOUNT} 银两并点击给与按钮", "SYS")
+    return True
 
 
 def _handle_give_panel(win):
     """给与面板已打开时完成物品给与（参考五环 _do_give）。
 
-    按面板 NPC 行识别给与对象（巧儿→九转还魂汤，婉儿→高等食材）
-    → 检索物品（含储物格切换）→ 点击选中 → 点击给与按钮完成。
+    按面板 NPC 行识别给与对象（巧儿→九转还魂汤，婉儿→高等食材；
+    钱老四→输入 1000 银两特殊给与）→ 检索物品（含储物格切换）
+    → 点击选中 → 点击给与按钮完成。
     物品未找到/按钮未出现时返回 True（面板仍在，下次轮询续接重试）。
     返回是否已处理。
     """
+    global _qianlaosi_given
     if game_map.find_template(win, GIVE_TITLE_ICON) is None:
+        _qianlaosi_given = False  # 面板已关闭：复位防重复给与标记
         return False
-    icon, label = _give_item_for_npc(win)
+    (icon, label), npc_txt = _give_item_for_npc(win)
+    if QIANLAOSI_NAME in npc_txt:
+        if _qianlaosi_given:
+            return True  # 已点过给与按钮：等面板关闭，不重复点击
+        if _give_money_qianlaosi(win):
+            _qianlaosi_given = True
+        return True
     item, desc = bag.find_item_with_slots(win, icon, label)
     if item is None:
         # 对象识别有误兜底：直接检测其余物品（不再切换储物格）
@@ -852,13 +918,56 @@ def _click_green_option_fallback(win, items, img_np, qtxt):
     return True
 
 
+def _handle_qiyu_dialog(win, items, img_np):
+    """奇遇对话框：多个选项时恒点第一个（选项文案随奇遇变化，不能
+    映射固定文案——实测三选项「以身作障，护太师周全/舍人破阵，
+    断祸乱之根/抽身远退，明哲保身」）。
+
+    定位问题行后，点击其下方第一条选项行（阅读序）。注意：奇遇
+    选项为浅色文字非绿色（实测 BGR ≈190,191,205，is_green_text
+    会全部排除），点文本矩形中心；加 200px 距离上限防误点远处
+    NPC 名。
+    返回是否已处理。
+    """
+    for qtxt in QIYU_DIALOG_TEXTS:
+        qrect = None
+        for txt, rect, _ in items:
+            if norm_text(qtxt) in norm_text(txt):
+                qrect = rect
+                break
+        if qrect is None:
+            continue
+        cands = []
+        for txt, rect, score in items:
+            if score < 0.55 or rect[0] < task_tracker.PANEL_MAX_X:
+                continue  # 只认对话框区域
+            if rect[1] <= qrect[3] or rect[1] - qrect[3] > 200:
+                continue  # 问题行下方 200px 内
+            if rect[0] - qrect[0] < 100:
+                continue  # 故事/注释行左对齐排除（选项缩进实测 126-181px）
+            cands.append((rect, txt))
+        cands.sort(key=lambda c: (c[0][1], c[0][0]))  # 阅读序取第一个
+        if not cands:
+            return False
+        rect, txt = cands[0]
+        cx, cy = (rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2
+        human_click(win, cx, cy)
+        log(f"[客栈] 奇遇对话框：已点击第一个选项「{txt}」@({cx},{cy})", "SYS")
+        move_away(win)
+        return True
+    return False
+
+
 def _handle_dialog_options(win, items, img_np):
-    """处理任务对话：DIALOG_OPTION_MAP 绿字选项优先，其次按
-    DIALOG_SKIP_TEXTS 连点屏幕中间跳过（同 xuanshu 的处理顺序）。
+    """处理任务对话：奇遇对话框（多选项点第一个）优先，其次
+    DIALOG_OPTION_MAP 绿字选项，再按 DIALOG_SKIP_TEXTS 连点屏幕
+    中间跳过（同 xuanshu 的处理顺序）。
 
     领取对话链与跟踪期间（follow_task 的附加对话处理回调）均使用，
     返回是否已处理。
     """
+    if _handle_qiyu_dialog(win, items, img_np):
+        return True
     norm_items = [(norm_text(t), r, s) for t, r, s in items]
     for dtxt, opt in DIALOG_OPTION_MAP.items():
         if not _dialog_text_present(norm_items, norm_text(dtxt)):
