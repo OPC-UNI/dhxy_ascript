@@ -73,6 +73,17 @@ from .xuanshu import follow_task  # 任务跟踪（绿字点击寻路/战斗跳�
 TASK_MODE = "五倍"
 TASK_TITLE = "魔任务"
 TASK_FALLBACK_TEXTS = ()  # 兜底匹配串待用户提供任务内容实测后补充
+# 锁妖网捕捉任务：追踪文案出现即无法自动推进（须点任务栏物品捕捉），
+# 重新领取任务替换（用户 2026-10-11 确认游戏允许重领替换）
+SUOYAOWANG_TRACK_TEXT = "使用任务栏的锁妖网捕捉"
+
+
+class ReplaceTaskError(Exception):
+    """任务无法自动推进，需重新领取替换（如锁妖网捕捉任务）。
+
+    follow_task 约定：附加处理回调抛出的异常向上传播，供调用方做
+    任务级终止——_handle_follow_extras 检测到替换文案时抛出。
+    """
 
 # ---- 领取任务（宝象国，用户实测） ----
 BAOXIANGGUO = "宝象国"                              # 位置识别地名（精确匹配）
@@ -81,7 +92,7 @@ LINGQU_ICON = "wubei_lingqu.png"                   # 五倍领取任务按钮（
 XIANGMOSHIWEI_ICON = "wubei_xiangmoshiwei.png"     # 降魔侍卫 NPC（用户素材 19.png，
                                                    # 待机动画致分数波动，轮询重试覆盖）
 CLAIM_SPOT = (86, 86)                              # 领取点地图坐标（用户实测 86,86 附近）
-CLAIM_NEAR_TOLERANCE = 22                          # 已在领取点附近判定容差（用户步 1.1）
+CLAIM_NEAR_TOLERANCE = 15                          # 已在领取点附近判定容差（用户步 1.1）
 WALK_ARRIVE_TOLERANCE = 5                          # 寻路到达判定容差（用户步 1.2，更严格：
                                                    # 走动中识图点击容易点不到）
 BAOXIANG_MAP_POS = (514, 483)                      # 宝象国小地图上领取点位置的点击点（窗口相对坐标，用户实测）
@@ -92,6 +103,15 @@ DECLINE_DIALOG_OPTION = "事态严重，我等退散"          # 领取对话框
                                                    # 点拒绝选项关闭（不领取）
 CLAIM_ARRIVE_TIMEOUT = 90                          # 寻路到领取点的超时
 CLAIM_BUTTON_TIMEOUT = 20                          # 到达后等待领取入口出现的超时
+ENTRY_FIRST_WAIT = 4.5                             # 入口首轮等待：位置近判定可能误判
+                                                   # （回城符落点距领取点约 12.5 单位，
+                                                   # 超出可点击范围，入口不会出现）；
+                                                   # 4.5s = 3 次 1.5s 轮询，覆盖 NPC
+                                                   # 待机动画相位波动（在范围内时最多
+                                                   # 2-3 次轮询必命中），未出现即小地图
+                                                   # 重走领取点——重走寻路最多 ~2s，
+                                                   # 宁可早点重走（实测 2026-10-11 16:16
+                                                   # 空等 20s 无入口，手动走位才恢复）
 CLAIM_DIALOG_TIMEOUT = 15                          # 领取对话框处理超时
 CLAIM_DIALOG_APPEAR_TIMEOUT = 4                    # 点击领取入口后等待对话框出现的短窗口
                                                    # （正常 ~1.5s 即出）：超时未见选项判定
@@ -136,6 +156,25 @@ _xj_need_move = False   # 点寻路链接后须位置先变化才允许再次用
 _xj_walk_from = None    # 寻路链接点击时的位置（验证移动起点）
 _xj_dialog_clicked_at = 0.0  # 白龙马对话框屏幕中间连点时间（冷却防连点）
 _xj_dismissed_at = 0.0       # 对话框关闭时间（此后窗口内找模板点击）
+# ---- 白龙马任务按钮点击失败恢复（用户 2026-10-11 实测）：
+# 关闭遮挡文字的点地点击会让人物走动，走远后点任务按钮无效（模板
+# 可见但点击不生效）；或模板始终被遮挡不出现。恢复：点寻路链接
+# 走回本处 → 到达后重点模板；多次恢复仍失败 → 重新领取替换任务
+# （ReplaceTaskError → run_loop 走领取分支） ----
+XIANXINGJING_BTN_WAIT = 5.0        # 点模板后等对话出现的判定窗（秒）
+XIANXINGJING_BTN_MISS_MAX = 6      # 对话框关闭后连续无模板轮询数（约 6s）→ 走回重试
+XIANXINGJING_RECOVER_MAX = 2       # 走回重点次数上限 → 重新领取替换任务
+XIANXINGJING_RECOVER_TIMEOUT = 30  # 单次恢复（走回+到达）总超时（秒）
+_xj_btn_clicked_at = 0.0    # 模板点击时间（判定窗起点）
+_xj_btn_missing = 0         # 对话框关闭后连续无模板轮询数
+_xj_recover_tries = 0       # 走回重点次数
+_xj_recover_walk = False    # 恢复中：已点寻路链接等到达
+_xj_recover_from = None     # 走回点击时的位置（验证移动起点）
+_xj_recover_moved = False   # 走回移动已开始（位置变化 >5）
+_xj_recover_stable = 0      # 到达位置稳定计数
+_xj_recover_last = None     # 恢复期上次位置
+_xj_recover_start = 0.0     # 本次恢复起点时间
+_xj_need_replace = False    # 恢复失败：请求重新领取替换任务（run_loop 轮次开始消费）
 
 
 def _reset_xianxingjing_state():
@@ -143,6 +182,9 @@ def _reset_xianxingjing_state():
     global _xj_phase, _xj_stable, _xj_last_pos, _xj_use_count, \
         _xj_grace_start, _xj_warned, _xj_missing, _xj_need_move, _xj_walk_from, \
         _xj_dialog_clicked_at, _xj_dismissed_at
+    global _xj_btn_clicked_at, _xj_btn_missing, _xj_recover_tries, _xj_recover_walk
+    global _xj_recover_from, _xj_recover_moved, _xj_recover_stable, _xj_recover_last
+    global _xj_recover_start, _xj_need_replace
     _xj_phase = 0
     _xj_stable = 0
     _xj_last_pos = None
@@ -154,6 +196,16 @@ def _reset_xianxingjing_state():
     _xj_walk_from = None
     _xj_dialog_clicked_at = 0.0
     _xj_dismissed_at = 0.0
+    _xj_btn_clicked_at = 0.0
+    _xj_btn_missing = 0
+    _xj_recover_tries = 0
+    _xj_recover_walk = False
+    _xj_recover_from = None
+    _xj_recover_moved = False
+    _xj_recover_stable = 0
+    _xj_recover_last = None
+    _xj_recover_start = 0.0
+    _xj_need_replace = False
 
 # ---- 领取前队伍检查 ----
 TEAM_CHECK_RETRY_INTERVAL = 10  # 队长人数不足时的重试间隔（秒）
@@ -210,6 +262,30 @@ def _near_claim_spot(pos, tolerance):
                                    CLAIM_SPOT[0], CLAIM_SPOT[1], tolerance)
 
 
+def _track_has_suoyaowang(items):
+    """任务追踪文案是否要求使用任务栏的锁妖网捕捉。
+
+    只认追踪面板区域行（x<PANEL_MAX_X）：对话框/故事文本提及锁妖网
+    不触发（如 NPC 对话引导用网）；面板各行拼接后模糊匹配，
+    抗跨行拆分与 OCR 个别字误读。
+    """
+    panel = [(norm_text(t), r, s) for t, r, s in items
+             if r[0] < task_tracker.PANEL_MAX_X]
+    return _dialog_text_present(panel, norm_text(SUOYAOWANG_TRACK_TEXT))
+
+
+def _suoyaowang_task_tracked(win):
+    """任务追踪文案是否为锁妖网捕捉任务（需重新领取替换）。
+
+    OCR 追踪面板区域一次；截图失败按否处理（下一轮再查）。
+    """
+    img = win.capture(force_activate=False)
+    if img is None:
+        return False
+    items, _ = game_map.ocr_regions(img, (task_tracker.TRACK_OCR_REGION,))
+    return _track_has_suoyaowang(items)
+
+
 def _wait_claim_entry(win, timeout):
     """等待领取入口出现（按钮或降魔侍卫），返回 (pt, 来源) 或 (None, None)。
 
@@ -218,6 +294,7 @@ def _wait_claim_entry(win, timeout):
     1.5s 轮询重复采样覆盖波动相位。
     """
     deadline = time.time() + timeout
+    polls = 0
     while time.time() < deadline:
         img = win.capture(force_activate=False)
         if img is None:
@@ -232,6 +309,9 @@ def _wait_claim_entry(win, timeout):
                             (XIANGMOSHIWEI_ICON, "降魔侍卫")):
             if found[icon] is not None:
                 return found[icon], label
+        polls += 1
+        if polls % 7 == 0:  # 约 10s 输出一次，避免等待期日志完全静默
+            log("[五倍] 等待领取入口出现中...", "INFO")
         time.sleep(1.5)
     return None, None
 
@@ -423,6 +503,11 @@ def _click_entry_ensuring_dialog(win, log_tag="[五倍]", hover_before_click=Fal
     """点击领取入口（按钮或降魔侍卫）并确保对话框出现；未出现判定坐标不对：
     打开小地图点击领取点坐标重定位后重试一次（修罗同款兜底路径）。
 
+    入口本身未出现（首轮等待超时）也走小地图重走领取点兜底：位置近
+    判定可能误判（回城符落点距领取点约 12.5 单位，超出可点击范围，
+    入口不会出现），重走后仍在领取点即再等一轮入口（实测 2026-10-11
+    16:16 空等 20s 无入口，手动走位才恢复）。
+
     hover_before_click：点击前先移动鼠标定位入口（无延时，验证时序与真实流程一致）。
     返回 (是否成功, 描述, 来源, 坐标, 对话框帧)；成功时对话框已打开
     （选项可见），对话框帧 (items, img_np) 供领取流程同帧点选项——
@@ -437,9 +522,19 @@ def _click_entry_ensuring_dialog(win, log_tag="[五倍]", hover_before_click=Fal
         # 再补一次识别（旧双检）会因 NPC 动画/镜头未稳出现「出现后又
         # 消失」假失败（修罗实测到达秒级报错未点击）；点不中由对话框
         # 出现判定兜底（小地图重定位重试）
-        pt2, src2 = _wait_claim_entry(win, CLAIM_BUTTON_TIMEOUT)
+        wait_timeout = ENTRY_FIRST_WAIT if attempt == 1 else CLAIM_BUTTON_TIMEOUT
+        pt2, src2 = _wait_claim_entry(win, wait_timeout)
         if pt2 is None:
-            return False, "到达后未出现领取任务按钮/降魔侍卫", None, None, None
+            if attempt == 1:
+                # 入口未出现：小地图重走领取点（原地或短途，几秒即回）
+                # 后重试一次，不再空等整轮（见函数 docstring 实测教训）
+                log(f"{log_tag} 等待入口 {wait_timeout}s 未出现，小地图重走领取点后重试", "WARN")
+                ok, info = _relocate_to_claim_spot(win)
+                if not ok:
+                    log(f"{log_tag} {info}", "WARN")
+                    return False, "到达后未出现领取任务按钮/降魔侍卫", None, None, None
+                continue
+            return False, "到达后未出现领取任务按钮/降魔侍卫（重走领取点后仍无）", None, None, None
         if hover_before_click:
             human_move(win.rect.left + pt2[0], win.rect.top + pt2[1])
             log(f"{log_tag} 已移动鼠标到{src2} ({pt2[0]}, {pt2[1]})，"
@@ -614,11 +709,13 @@ def _click_xianxingjing_use(win, items, img_np):
     return True
 
 
-def _last_green_cluster_center(img_np, rect):
-    """行内最右侧绿色文字簇的中心（寻路行的 B 位置链接）。
+def _last_green_cluster_center(img_np, rect, first=False):
+    """行内最右侧（first=True 时最左侧）绿色文字簇的中心（寻路行的
+    A/B 位置链接）。
 
     实测寻路行「前往[A]、[B]处使用」含两个绿色链接（x 60-108 与
-    126-174），整行中心落在两链接间隙——A 失败后应点最右簇（B）。
+    126-174），整行中心落在两链接间隙——A 失败去 B 点最右簇（B）；
+    走回恢复须回到本处：A 处点最左簇、B 处点最右簇。
     无绿色簇时回退行矩形中心。
     """
     region = img_np[rect[1]:rect[3], rect[0]:rect[2]].astype(int)
@@ -630,7 +727,8 @@ def _last_green_cluster_center(img_np, rect):
     best = None
     for i in range(1, n):
         x, y, w, h, area = stats[i]
-        if w >= 4 and area >= 10 and (best is None or x > best[0]):
+        if w >= 4 and area >= 10 and (best is None
+                                      or (x < best[0] if first else x > best[0])):
             best = (x, y, w, h)
     if best is None:
         return (rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2
@@ -638,10 +736,11 @@ def _last_green_cluster_center(img_np, rect):
     return rect[0] + x + w // 2, rect[1] + y + h // 2
 
 
-def _click_xianxingjing_walk(win, items, img_np):
-    """点击任务追踪面板中的寻路链接（前往…处），用于 A 失败后去 B。
+def _click_xianxingjing_walk(win, items, img_np, first=False):
+    """点击任务追踪面板中的寻路链接（前往…处）。
 
-    优先含「前往」的绿字行；点击其最右侧绿色簇（B 链接）中心。
+    优先含「前往」的绿字行；first=True 点击最左绿色簇（A 位置，
+    走回恢复用），默认点击最右侧簇（B 链接，A 失败后去 B 用）。
     """
     cands = [(t, r) for t, r, s in items
              if s >= 0.55 and r[0] < task_tracker.PANEL_MAX_X
@@ -650,7 +749,7 @@ def _click_xianxingjing_walk(win, items, img_np):
         return False
     for txt, rect in cands:
         if "前往" in txt:
-            cx, cy = _last_green_cluster_center(img_np, rect)
+            cx, cy = _last_green_cluster_center(img_np, rect, first=first)
             human_click(win, cx, cy)
             log(f"[五倍] 显形镜：已点击寻路链接「{txt}」前往下一处 @({cx},{cy})", "SYS")
             move_away(win)
@@ -662,21 +761,33 @@ def _click_xianxingjing_walk(win, items, img_np):
 #      追踪签名不变，仅最后一次杀完后任务消失——follow 不会重点链接，
 #      须在战斗结束后主动重点链接走下一处） ----
 HUANGPAOGUAI_LINK_KEYWORD = "黄袍"  # 追踪链接关键词（单字「袍」前半，抗 OCR 误读）
-HUANGPAOGUAI_RECLICK_DELAY = 5.0    # 战斗结束后等结算过渡再点链接（秒）。
-# 5s > follow 任务消失确认（2 轮询 ≈4s）：最后一次杀完后任务消失确认
-# 先完成，只有任务仍在（确实还需再杀）才会重点链接，不会点空
+# 重点链接时机：结束沿（watch 标志翻转，滞后真实战斗结束约 2s）后
+# 等最短 1s 跳过画面残留，链接在 OCR 中可见（面板已渲染）即点——
+# 固定 5s 等待是旧设计的预估常量且从未线上生效（旧 bug 致处理器
+# 从不触发），结算过渡由「链接可见才点」自然吸收；首点若被结算
+# 弹窗吞掉（面板在弹窗下层可见时会点空），按冷却重试自愈。
+HUANGPAOGUAI_RECLICK_MIN = 1.0      # 结束沿后的最短等待（秒）
+HUANGPAOGUAI_RECLICK_COOLDOWN = 3.0  # 点击重试冷却（秒）
+HUANGPAOGUAI_RECLICK_MAX_TRIES = 3   # 每次结束沿最多点击尝试次数
+HUANGPAOGUAI_RECLICK_TIMEOUT = 15.0  # 结束沿后重点链接总超时（面板持续无链接
+                                     # 即任务已消失，放弃；下一场战斗重新武装）
 _hpg_was_in_battle = False   # 上一轮询是否在战斗（检测战斗结束沿）
 _hpg_need_click = False      # 战斗结束后待重点链接
-_hpg_battle_end_at = 0.0     # 战斗结束时间（结算过渡起点）
+_hpg_battle_end_at = 0.0     # 战斗结束时间（结束沿起点）
+_hpg_clicked_at = 0.0        # 最近一次链接点击时间（冷却用）
+_hpg_click_tries = 0         # 本次结束沿的点击尝试次数
 _hpg_missing = 0             # 关键词连续消失轮询数（≥2 视为任务结束）
 
 
 def _reset_huangpaoguai_state():
     """黄袍怪状态机复位（任务领取成功后调用，防跨任务残留）。"""
     global _hpg_was_in_battle, _hpg_need_click, _hpg_battle_end_at, _hpg_missing
+    global _hpg_clicked_at, _hpg_click_tries
     _hpg_was_in_battle = False
     _hpg_need_click = False
     _hpg_battle_end_at = 0.0
+    _hpg_clicked_at = 0.0
+    _hpg_click_tries = 0
     _hpg_missing = 0
 
 
@@ -700,59 +811,223 @@ def _handle_huangpaoguai(win, items, img_np):
     链接——战斗结束（共享标志沿）且追踪仍有黄袍怪链接时，等结算
     过渡后重点链接走下一处。任务消失（最后一次杀完）由 follow 的
     消失确认收尾。返回是否已处理（点击了链接）。
+
+    战斗沿判定必须先于关键词判定：战斗期间任务追踪面板被战斗画面
+    遮挡，关键词必然消失——先判关键词会提前返回，_hpg_was_in_battle
+    永远置不上 True，战斗结束沿永远检不到（2026-10-11 实测多杀任务
+    卡死、任务恒在追踪的根因）。关键词消失计数只在非战斗时累计；
+    点击等待中放宽到 6 次（结算过渡期面板可能暂不可读，勿误复位）。
     """
     global _hpg_was_in_battle, _hpg_need_click, _hpg_battle_end_at, _hpg_missing
+    global _hpg_clicked_at, _hpg_click_tries
+    in_battle = battle_watch_in_battle()  # 注意：watch_in_battle 是函数，须调用取实时值
+    if in_battle:
+        # 战斗中：面板隐藏不判关键词，只记战斗状态供结束沿判定
+        _hpg_was_in_battle = True
+        return False
+    if _hpg_was_in_battle:
+        # 战斗刚结束：重新武装重点链接（点击时机见常量注释）
+        _hpg_was_in_battle = False
+        _hpg_need_click = True
+        _hpg_battle_end_at = time.time()
+        _hpg_clicked_at = 0.0  # 冷却清零：结束沿后的首点不受上次冷却限制
+        _hpg_click_tries = 0
     sig = "".join(norm_text(t) for t, r, s in items
                   if s >= 0.55 and r[0] < task_tracker.PANEL_MAX_X)
     if HUANGPAOGUAI_LINK_KEYWORD not in sig:
         _hpg_missing += 1
-        if _hpg_missing >= 2:
-            _reset_huangpaoguai_state()  # 任务阶段结束：状态复位
+        if not _hpg_need_click:
+            if _hpg_missing >= 2:
+                _reset_huangpaoguai_state()  # 任务阶段结束：状态复位
+            return False
+        # 待点击期间关键词缺失：结算画面遮挡面板或任务已消失（正常
+        # 由 follow 消失确认收尾）；超时放弃等待，防状态残留
+        if time.time() - _hpg_battle_end_at > HUANGPAOGUAI_RECLICK_TIMEOUT:
+            log("[五倍] 黄袍怪：重点链接超时（面板持续无链接，任务可能已消失），放弃等待", "WARN")
+            _reset_huangpaoguai_state()
         return False
     _hpg_missing = 0
-    in_battle = battle_watch_in_battle
-    if not in_battle and _hpg_was_in_battle:
-        # 战斗刚结束：等结算过渡后重点链接（下一处）
-        _hpg_need_click = True
-        _hpg_battle_end_at = time.time()
-    _hpg_was_in_battle = in_battle
     if not _hpg_need_click:
         return False
-    if time.time() - _hpg_battle_end_at < HUANGPAOGUAI_RECLICK_DELAY:
+    elapsed = time.time() - _hpg_battle_end_at
+    if elapsed < HUANGPAOGUAI_RECLICK_MIN:
         return False
+    if elapsed > HUANGPAOGUAI_RECLICK_TIMEOUT:
+        if _hpg_click_tries == 0:
+            # 一次都没点成（面板持续无链接）：任务已消失，放弃等待。
+            # 点成过则只是走路较久，静默停止重试，下一场战斗重新武装
+            log("[五倍] 黄袍怪：重点链接超时（面板持续无链接，任务可能已消失），放弃等待", "WARN")
+            _reset_huangpaoguai_state()
+        return False
+    now = time.time()
+    if _hpg_clicked_at and now - _hpg_clicked_at < HUANGPAOGUAI_RECLICK_COOLDOWN:
+        return False  # 点过才计冷却；首点不受限
+    if _hpg_click_tries >= HUANGPAOGUAI_RECLICK_MAX_TRIES:
+        return False  # 尝试次数用尽：等下一场战斗结束沿重新武装
     if _click_track_link(win, items, img_np, HUANGPAOGUAI_LINK_KEYWORD):
-        log("[五倍] 黄袍怪：战斗结束后已重点追踪链接，前往下一处", "SYS")
-        _hpg_need_click = False
+        _hpg_clicked_at = now
+        _hpg_click_tries += 1
+        if _hpg_click_tries == 1:
+            log("[五倍] 黄袍怪：战斗结束后已重点追踪链接，前往下一处", "SYS")
+        else:
+            log(f"[五倍] 黄袍怪：重新点击追踪链接（第 {_hpg_click_tries} 次，"
+                f"前次可能被结算画面吞掉）", "INFO")
         return True
     log("[五倍] 黄袍怪：追踪面板未找到黄袍怪链接，下轮询重试", "WARN")
     return False
 
 
+def _xj_fight_dialog_open(items):
+    """点模板后对话是否已打开：对话框区域出现开打选项文案
+    （FIGHT_DIALOG_OPTIONS）即视为点击生效。NPC 名字标签等短行
+    不满足，避免误判（模板点击成功信号必须可靠）。"""
+    for opt in FIGHT_DIALOG_OPTIONS:
+        needle = norm_text(opt)
+        for txt, rect, score in items:
+            if score >= 0.55 and rect[0] >= task_tracker.PANEL_MAX_X \
+                    and needle in norm_text(txt):
+                return True
+    return False
+
+
+def _start_xj_recover(win, items, img_np, now, reason):
+    """显形镜按钮失败恢复：点寻路链接走回本处，到达后重点模板。
+
+    本处对应的寻路链接簇：A（第 1 次用镜）点最左簇，B 点最右簇。
+    超过次数上限 → 置 _xj_need_replace 并抛 ReplaceTaskError
+    （重新领取替换任务）。返回是否已启动恢复。
+    """
+    global _xj_recover_tries, _xj_recover_walk, _xj_recover_from, \
+        _xj_recover_moved, _xj_recover_stable, _xj_recover_start, _xj_need_replace
+    if _xj_recover_tries >= XIANXINGJING_RECOVER_MAX:
+        _xj_need_replace = True
+        raise ReplaceTaskError(f"显形镜任务异常（{reason}，多次走回重试仍失败）")
+    pos = game_map.read_map_position(win)  # 点击前读位置（移动验证起点）
+    if not _click_xianxingjing_walk(win, items, img_np, first=_xj_use_count < 2):
+        log("[五倍] 显形镜：追踪面板未找到寻路链接，下轮询重试", "WARN")
+        return False
+    _xj_recover_tries += 1
+    _xj_recover_walk = True
+    _xj_recover_moved = False
+    _xj_recover_stable = 0
+    _xj_recover_from = pos
+    _xj_recover_start = now
+    log(f"[五倍] 显形镜：{reason}，已点寻路链接走回本处重试"
+        f"（第 {_xj_recover_tries}/{XIANXINGJING_RECOVER_MAX} 次）", "WARN")
+    return True
+
+
+def _xj_recover_poll(win, now):
+    """恢复中轮询：验证走回移动 → 到达（位置连续稳定）→ 重新打开
+    模板搜索窗口重点。超时放弃本轮恢复（计数保留）。"""
+    global _xj_recover_walk, _xj_recover_moved, _xj_recover_stable, _xj_recover_last
+    global _xj_dismissed_at, _xj_btn_missing
+    if now - _xj_recover_start > XIANXINGJING_RECOVER_TIMEOUT:
+        log("[五倍] 显形镜：走回恢复超时，放弃本轮重试", "WARN")
+        _xj_recover_walk = False
+        return
+    pos = game_map.read_map_position(win)
+    if pos is None:
+        return
+    if not _xj_recover_moved:
+        if _xj_recover_from is not None and (
+                abs(pos[1] - _xj_recover_from[1]) > 5
+                or abs(pos[2] - _xj_recover_from[2]) > 5):
+            _xj_recover_moved = True
+            _xj_recover_stable = 0
+        return
+    if _xj_recover_last is not None and abs(pos[1] - _xj_recover_last[1]) <= 3 \
+            and abs(pos[2] - _xj_recover_last[2]) <= 3:
+        _xj_recover_stable += 1
+    else:
+        _xj_recover_stable = 1
+    _xj_recover_last = pos
+    if _xj_recover_stable < XIANXINGJING_ARRIVE_POLLS:
+        return
+    # 已到达：重新打开模板搜索窗口重点（对话框文字若仍在，由主流程
+    # 关闭分支处理）
+    _xj_recover_walk = False
+    _xj_recover_stable = 0
+    _xj_btn_missing = 0
+    _xj_dismissed_at = now
+    log("[五倍] 显形镜：已走回本处（位置稳定），重新识别白龙马任务按钮", "SYS")
+
+
 def _handle_xianxingjing(win, items, img_np):
-    """显形镜查探：白龙马对话框出现时先连点屏幕中间两次关闭遮挡
-    文字（对话框文字挡住任务按钮模板），随后窗口内识别点击模板
-    开始对话；开打选项（证明实力/消灭它）由 _handle_fight_dialog
-    处理。对话框持续存在时按 3 秒冷却重试。返回是否已处理。
+    """显形镜查探：白龙马对话框出现时先点屏幕中间关闭遮挡文字
+    （对话框文字挡住任务按钮模板），随后窗口内识别点击模板开始对话；
+    开打选项（证明实力/消灭它）由 _handle_fight_dialog 处理。
+    对话框持续存在时按 3 秒冷却重试。
+
+    点击失败恢复（用户 2026-10-11 实测）：关闭遮挡文字的点地点击会
+    让人物走动，走远后点任务按钮无效（模板可见但点击不生效）；或
+    模板始终被遮挡不出现。判定窗内对话未打开/模板连续缺失 → 点寻路
+    链接走回本处 → 到达后重点模板；超过 RECOVER_MAX 次 → 抛
+    ReplaceTaskError 重新领取替换任务。返回是否已处理。
     """
     global _xj_dialog_clicked_at, _xj_dismissed_at
+    global _xj_btn_clicked_at, _xj_btn_missing, _xj_recover_walk, _xj_recover_tries
+    now = time.time()
+    if battle_watch_in_battle():
+        _xj_btn_clicked_at = 0.0  # 战斗中：判定窗冻结，战斗流程接管
+        return False
     if _dialog_text_present(items, XIANXINGJING_DIALOG_TEXT):
-        now = time.time()
+        # 白龙马对话框：点屏幕中间关闭遮挡文字（3s 冷却防连点；
+        # 点地点击可能让人物走动——走远由恢复机制兜底）
         if now - _xj_dialog_clicked_at >= 3.0:
             _xj_dialog_clicked_at = now
-            _click_screen_center(win, times=2, prefix="五倍")
+            _click_screen_center(win, times=1, prefix="五倍")
             _xj_dismissed_at = now  # 关闭后开始窗口内找模板
-            log("[五倍] 显形镜：白龙马对话框已出现，已连点屏幕中间两次关闭", "SYS")
+            log("[五倍] 显形镜：白龙马对话框已出现，已点屏幕中间关闭遮挡文字", "SYS")
         return True
-    # 对话框文字已消失：刚关闭过的窗口内识别点击任务按钮模板
-    if time.time() - _xj_dismissed_at < XIANXINGJING_TEMPLATE_WINDOW:
-        pt = game_map.find_template(win, XIANXINGJING_TASK_ICON)
-        if pt is not None:
-            human_click(win, pt[0], pt[1])
-            log(f"[五倍] 显形镜：已点击白龙马任务按钮 @ ({pt[0]},{pt[1]})，开始对话", "SYS")
-            move_away(win)
-            _xj_dismissed_at = 0.0  # 已点击：关闭找模板窗口
+    # 判定窗：刚点过模板，等对话打开（开打选项出现即点击生效）
+    if _xj_btn_clicked_at:
+        if _xj_fight_dialog_open(items):
+            _xj_btn_clicked_at = 0.0  # 对话已打开：恢复状态复位
+            _xj_btn_missing = 0
+            _xj_recover_tries = 0
+            return False
+        if now - _xj_btn_clicked_at < XIANXINGJING_BTN_WAIT:
+            return False  # 窗内静默等待
+        # 判定窗超时：点击未生效（人物已走远）→ 走回恢复
+        _xj_btn_clicked_at = 0.0
+        if _start_xj_recover(win, items, img_np, now,
+                             "点击任务按钮未触发对话"):
             return True
-        return False  # 模板暂未出现：不阻塞其他处理，下轮询继续找
+        return False
+    sig_panel = "".join(norm_text(t) for t, r, s in items
+                        if s >= 0.55 and r[0] < task_tracker.PANEL_MAX_X)
+    if XIANXINGJING_LINK_KEYWORD not in sig_panel:
+        # 非显形镜阶段：不计数不恢复（防其他任务误触发）
+        _xj_btn_missing = 0
+        return False
+    # 恢复中：等到达（阶段已结束时放弃）
+    if _xj_recover_walk:
+        _xj_recover_poll(win, now)
+        return False
+    # 开打对话已打开（如证明实力）：不找模板不计数，交由开打处理
+    if _xj_fight_dialog_open(items):
+        _xj_btn_missing = 0
+        return False
+    # 对话框已关闭：窗口内找模板点击；窗口过期后仍继续计数
+    # （连续缺失达上限即走回恢复）
+    pt = None
+    if now - _xj_dismissed_at < XIANXINGJING_TEMPLATE_WINDOW:
+        pt = game_map.find_template(win, XIANXINGJING_TASK_ICON)
+    if pt is not None:
+        human_click(win, pt[0], pt[1])
+        log(f"[五倍] 显形镜：已点击白龙马任务按钮 @ ({pt[0]},{pt[1]})，开始对话", "SYS")
+        move_away(win)
+        _xj_dismissed_at = 0.0  # 已点击：关闭找模板窗口
+        _xj_btn_clicked_at = now  # 开始判定窗
+        _xj_btn_missing = 0
+        return True
+    _xj_btn_missing += 1
+    if _xj_btn_missing >= XIANXINGJING_BTN_MISS_MAX:
+        _xj_btn_missing = 0
+        if _start_xj_recover(win, items, img_np, now,
+                             "白龙马任务按钮未出现"):
+            return True
     return False
 
 
@@ -765,6 +1040,11 @@ def _handle_xianxingjing_track(win, items, img_np):
     """
     global _xj_phase, _xj_stable, _xj_last_pos, _xj_use_count, \
         _xj_grace_start, _xj_warned, _xj_missing, _xj_need_move, _xj_walk_from
+    global _xj_recover_walk
+    if battle_watch_in_battle():
+        return False  # 战斗中：面板隐藏不可点链接（防宽限过期后战斗期空点）
+    if _xj_recover_walk:
+        return False  # 按钮点击恢复进行中：走回流程由 _handle_xianxingjing 独占
     sig = "".join(norm_text(t) for t, r, s in items
                   if s >= 0.55 and r[0] < task_tracker.PANEL_MAX_X)
     if XIANXINGJING_LINK_KEYWORD not in sig:
@@ -778,9 +1058,11 @@ def _handle_xianxingjing_track(win, items, img_np):
     now = time.time()
     # phase 1：已用镜，等白龙马对话框（出现时上游处理器负责，本机
     # 冻结宽限窗口；模板未匹配时对话框持续存在，不能误点链接）。
-    # 位置无关，跳过位置读取（区域 OCR ~150ms/轮询）
+    # 开打对话（点模板后出现）同样冻结——点模板已生效时不能按
+    # 宽限过期误走去 B。位置无关，跳过位置读取（区域 OCR ~150ms/轮询）
     if _xj_phase == 1:
-        if _dialog_text_present(items, XIANXINGJING_DIALOG_TEXT):
+        if _dialog_text_present(items, XIANXINGJING_DIALOG_TEXT) \
+                or _xj_fight_dialog_open(items):
             _xj_grace_start = now
             return False
         if now - _xj_grace_start < XIANXINGJING_GRACE:
@@ -867,7 +1149,14 @@ def _handle_fight_dialog(win, items, img_np):
 def _handle_follow_extras(win, items, img_np):
     """跟随期间的附加对话处理：白龙马对话框（点任务按钮）优先，
     其次显形镜 A→B 回退（用镜/换点），再次对话开打选项
-    （证明实力/消灭它），最后黄袍怪多杀重点链接。"""
+    （证明实力/消灭它），最后黄袍怪多杀重点链接。
+
+    追踪文案出现「使用任务栏的锁妖网捕捉」时抛 ReplaceTaskError
+    （follow_task 约定：回调抛异常向上传播，供调用方做任务级终止）——
+    该任务须点任务栏物品捕捉，无法自动推进，由主循环重新领取替换。
+    """
+    if _track_has_suoyaowang(items):
+        raise ReplaceTaskError(SUOYAOWANG_TRACK_TEXT)
     if _handle_xianxingjing(win, items, img_np):
         return True
     if _handle_xianxingjing_track(win, items, img_np):
@@ -1200,7 +1489,7 @@ def run_loop(win, cycle_interval=1.0):
     结束条件：完成任务次数达到设置的次数上限（通用设置-任务次数）。
     返回结束原因描述。
     """
-    global _fight_via_kanda, _team_checked, _task_gone_last_round
+    global _fight_via_kanda, _team_checked, _task_gone_last_round, _xj_need_replace
     max_rounds = load_task_counts().get(TASK_MODE, 0)
     log(f"[五倍] 任务次数上限: {max_rounds if max_rounds > 0 else '不限'}", "SYS")
     min_members = load_wubei_min()
@@ -1225,9 +1514,20 @@ def run_loop(win, cycle_interval=1.0):
             #    本轮开始必然无任务——has_task（区域 OCR ~0.9s）只在可能
             #    续跑时检查（进程首轮或上轮跟踪失败未确认完成）
             claim_items = None  # 领取校验帧（续跑路径无，跟踪首轮自行截图+OCR）
-            if not _task_gone_last_round and task_tracker.has_task(win, TASK_TITLE, TASK_FALLBACK_TEXTS):
+            # 锁妖网捕捉/显形镜按钮恢复失败：即使追踪中已有任务也走
+            # 领取分支重新领取替换（用户 2026-10-11 确认游戏允许重领替换）
+            task_exists = (not _task_gone_last_round
+                           and task_tracker.has_task(win, TASK_TITLE, TASK_FALLBACK_TEXTS))
+            suoyaowang = _suoyaowang_task_tracked(win) if task_exists else False
+            xj_replace = _xj_need_replace
+            _xj_need_replace = False  # 消费替换请求（本轮走领取分支）
+            need_replace = task_exists and (suoyaowang or xj_replace)
+            if task_exists and not need_replace:
                 log("[五倍] 任务追踪中已有五倍任务，直接跟踪", "SYS")
             else:
+                if need_replace:
+                    log(f"[五倍] 任务为「{SUOYAOWANG_TRACK_TEXT}」，重新领取替换任务" if suoyaowang
+                        else "[五倍] 显形镜任务按钮点击失败，重新领取替换任务", "WARN")
                 if _task_gone_last_round:
                     _task_gone_last_round = False
                     log("[五倍] 上一轮已确认任务完成，跳过任务检查，直接领取", "INFO")
@@ -1291,7 +1591,12 @@ def run_loop(win, cycle_interval=1.0):
             #     （寻路点击绿字自动进行，对话开打走附加对话处理，
             #      战斗由战斗监控线程自动操作、跟踪中自动跳过）；
             #     领取校验帧传入后首轮跳过截图+OCR 立即点击绿字
-            ok, info = _follow_to_done(win, first_items=claim_items)
+            try:
+                ok, info = _follow_to_done(win, first_items=claim_items)
+            except ReplaceTaskError as e:
+                log(f"[五倍] 检测到「{e}」，中断跟踪，下一轮重新领取替换", "WARN")
+                time.sleep(cycle_interval)
+                continue
             if not ok:
                 log(f"[五倍] {info}", "WARN")
                 time.sleep(cycle_interval)
