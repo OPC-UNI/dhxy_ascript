@@ -88,6 +88,7 @@ DIALOG_SKIP_TEXTS = ["你是做嘛的？莫来惹老子！"
                      ,"少侠可是来替小乔试装的？"
                      ,"看少侠的表情，旺小乔不满意？"
                      ,"少侠的脸色有点难看"
+                     ,"留香阁的凤姑娘探听到了一些有关玄石的消息"  # 领取后 NPC 追问（无选项，须屏幕中间推进）
                      ]
 # 特定对话框出现时点击的绿色选项（对话框文案 → 绿字选项）
 DIALOG_OPTION_MAP = {
@@ -310,9 +311,9 @@ from .dialog_common import (_click_green_option_once as _dc_click_green_option_o
                             close_scene_panels)
 
 
-def _click_green_option_once(win, items, img_np, text):
-    """玄枢轶闻前缀包装（共享实现在 dialog_common）。"""
-    return _dc_click_green_option_once(win, items, img_np, text, "玄枢轶闻")
+def _click_green_option_once(win, items, img_np, text, prefix="玄枢轶闻"):
+    """前缀包装（共享实现在 dialog_common；默认玄枢轶闻前缀）。"""
+    return _dc_click_green_option_once(win, items, img_np, text, prefix)
 
 
 def _click_dialog_option_by_index(win, items, dtxt, idx):
@@ -477,19 +478,27 @@ def navigate_to_task(win):
 
     # 校验任务追踪中出现玄枢轶闻任务；期间检测每日次数已满文案
     # （满 5 次提示出现在点击「领取玄枢轶闻」之后）。
-    # 面板优先：只 OCR 追踪面板区域（约 0.9s）等任务出现；任务未出现时
-    # 再补查对话框区域检测每日次数已满文案（旧逻辑每轮两次全窗 OCR 约 5.4s）。
     # 命中时把 OCR 结果带回，供 follow_task 复用，省一次截图+OCR
     deadline = time.time() + DIALOG_TIMEOUT
     while time.time() < deadline:
         img = win.capture(force_activate=False)
         if img is not None:
             items, img_np = game_map.ocr_regions(img, (task_tracker.TRACK_REGION,))
-            if task_tracker.has_task_in(items, img_np, TASK_TITLE):
-                return True, "已领取任务", (items, img_np)
             items2, _ = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
             if _dialog_text_present(items2, DAILY_LIMIT_TEXT):
                 return False, DAILY_LIMIT_INFO, None
+            if task_tracker.has_task_in(items, img_np, TASK_TITLE):
+                # 任务刚出现时领取对话框还在切换/面板刚渲染，布局可能未稳定
+                # （实测首帧坐标点击落空、未开始寻路）：等待约 1.5s 后重新
+                # 截帧 OCR，把稳定帧带回 follow_task 保证首次点击落点准确
+                time.sleep(1.5)
+                img2 = win.capture(force_activate=False)
+                if img2 is not None:
+                    items3, img_np3 = game_map.ocr_regions(
+                        img2, (task_tracker.TRACK_REGION,))
+                    if task_tracker.has_task_in(items3, img_np3, TASK_TITLE):
+                        return True, "已领取任务", (items3, img_np3)
+                return True, "已领取任务", (items, img_np)  # 复检失败按首帧返回
         time.sleep(0.2)
     return False, "已点击领取玄枢轶闻，但任务追踪中未检测到任务", None
 
@@ -732,14 +741,15 @@ def _confirm_task_gone(win, title, fallback_texts=()):
 def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶闻",
                 extra_dialog_handler=None, green_order=None, progress_key=None,
                 green_picker=None, fallback_keywords=None, first_items=None,
-                signature_key=None, ignore_empty_key=False):
+                signature_key=None, ignore_empty_key=False, skip_texts=None):
     """循环跟踪任务直到完成（prefix 供其他任务复用，如五环）。
 
     每轮：点击任务当前第一个绿色文案 → 等待任务信息变化（内容更新）
     → 进入下一轮；任务从追踪面板消失即完成。
-    等待期间处理对话框（DIALOG_OPTION_MAP 指定绿字、DIALOG_SKIP_TEXTS
-    点屏幕中间跳过、DIALOG_OPTIONS 已知绿字、战斗失败「你输了」点击任务绿字推进）
-    与锄遗聚宝小游戏。
+    等待期间处理对话框（DIALOG_OPTION_MAP 指定绿字、skip_texts
+    点屏幕中间跳过（None 用默认 DIALOG_SKIP_TEXTS，() 禁用——
+    五环等自有对话处理的调用方禁用，防误触）、DIALOG_OPTIONS 已知绿字、
+    战斗失败「你输了」点击任务绿字推进）与锄遗聚宝小游戏。
     战斗中跳过识别（任务追踪与坐标不可用），等待战斗结束。
 
     extra_dialog_handler：附加对话框处理回调 (win, items, img_np) → 是否已处理，
@@ -979,16 +989,17 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 else:
                     log(f"[{prefix}] 「你输了/平局」对话中任务绿字点击失败: {info3}", "WARN")
             if not handled:
-                for dtxt in DIALOG_SKIP_TEXTS:
+                for dtxt in (DIALOG_SKIP_TEXTS if skip_texts is None else skip_texts):
                     if _dialog_text_present(items, dtxt):
                         # 命中即固定连点推进（多屏对话无需枚举后续文案，
-                        # 漏推进由下一轮询 OCR 自愈）
-                        _dc_click_screen_center(win, prefix="玄枢轶闻")
+                        # 漏推进由下一轮询 OCR 自愈）；命中文案打日志便于排查
+                        log(f"[{prefix}] 跳过对话命中文案「{dtxt}」", "SYS")
+                        _dc_click_screen_center(win, prefix=prefix)
                         handled = True
                         break
             if not handled:
                 for opt in DIALOG_OPTIONS:
-                    if _click_green_option_once(win, items, img_np, opt):
+                    if _click_green_option_once(win, items, img_np, opt, prefix=prefix):
                         break
         else:
             return False, f"第 {rounds} 轮跟踪后任务信息无变化（超时）"

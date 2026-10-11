@@ -54,7 +54,7 @@ from . import debug_overlay  # 调试信息悬浮层（战斗场次更新）
 from . import team  # 队伍身份（抢盒子的队长规则）
 from .control_window import (load_battle_actions, load_task_mode,
                              load_xiuluo_hezi, load_wubei_hezi,
-                             load_auto_famen)
+                             load_auto_famen, load_auto_refill)
 
 # ---- 战斗 UI 坐标与模板（窗口相对坐标，用户实测） ----
 ATTACK_POS = (366, 415)        # 攻击按钮位置；技能选择后也在此位置再点一次
@@ -571,7 +571,12 @@ def _handle_wuyi_dialog(win):
         return False
     l, t, r, b = task_tracker.DIALOG_REGION
     roi = np.asarray(img)[t:b, l:r]
-    if _wuyi_prev_roi is not None and not _wuyi_option_missing_warned:
+    # 尺寸防护：窗口瞬时切换（最小化/缩放/遮挡裁切）会返回异常尺寸帧，
+    # 与上一帧形状不符时直接差分会广播异常，且 _wuyi_prev_roi 永不更新
+    # → 每轮询永久抛异常刷屏（实测 (330,412,3) vs (330,580,3)）。形状
+    # 不符时跳过差分、以新帧为基线自愈
+    if _wuyi_prev_roi is not None and not _wuyi_option_missing_warned \
+            and _wuyi_prev_roi.shape == roi.shape:
         diff = float(np.abs(roi.astype(np.int16)
                             - _wuyi_prev_roi.astype(np.int16)).mean())
         if diff < WUYI_DIFF_THRESHOLD:
@@ -721,8 +726,11 @@ def watch_loop(win):
                         in_battle = False
                         _watch_in_battle = False  # 任务侧共享状态
                         log(f"[战斗] 第 {battle_no} 场战斗结束", "SYS")
-                        status_bars.check_all_bars(win)
-                        debug_overlay.set_bars(status_bars.last_summary())  # 悬浮层血蓝摘要
+                        # 战后补血蓝受通用设置开关门控（默认开）：关闭时
+                        # 不检测血蓝条、不自动右键回满
+                        if load_auto_refill():
+                            status_bars.check_all_bars(win)
+                            debug_overlay.set_bars(status_bars.last_summary())  # 悬浮层血蓝摘要
                         # 战后立即检查：先补血蓝（上一步），再巫医对话框/修罗盒子
                         last_wuyi_check = 0.0
                         last_hezi_check = 0.0

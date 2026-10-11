@@ -274,6 +274,23 @@ def save_high_perf(on):
     return {"status": "success"}
 
 
+# ---- 战斗结束自动补血量蓝量（UI 开关，通用设置，KeyValue 持久化，
+#      默认开启；关闭后战斗结束不再检测血蓝条、不自动右键回满——
+#      battle.watch_loop 战后分支门控） ----
+_AUTO_REFILL_KEY = "auto_refill"
+
+
+def load_auto_refill():
+    """读取战斗结束自动补血量蓝量开关（首次默认开启）。"""
+    return bool(KeyValue.get(_AUTO_REFILL_KEY, True))
+
+
+def save_auto_refill(on):
+    """保存战斗结束自动补血量蓝量开关，返回操作结果。"""
+    KeyValue.save(_AUTO_REFILL_KEY, bool(on))
+    return {"status": "success"}
+
+
 # ---- 修罗检查队伍（UI 开关，KeyValue 持久化；关闭时领取前跳过全部
 #      队伍检查，默认关闭——用户确认每轮回程后开面板检查耗时 5~7s） ----
 _XIULUO_CHECK_TEAM_KEY = "xiuluo_check_team"
@@ -384,8 +401,8 @@ def reset_settings():
     默认值与各 load 函数一致：模式五环、次数按 TASK_COUNT_DEFAULTS、
     摄妖香开、血蓝阈值 40、战斗动作 人物技能3-5/召唤兽攻击、修罗
     最少人数 5 + 种族 男人男鬼、五倍最少人数 5、抢盒子/检查队伍/
-    调试悬浮关、高性能开、自动巫医开（间隔 5）、自动使用法门关、
-    主题浅色。
+    调试悬浮关、高性能开、自动补血蓝开、自动巫医开（间隔 5）、
+    自动使用法门关、主题浅色。
     """
     save_task_mode(_DEFAULT_MODE)
     for mode, default in TASK_COUNT_DEFAULTS.items():
@@ -402,6 +419,7 @@ def reset_settings():
     save_wubei_check_team(False)
     save_xiuluo_hezi(False)
     save_high_perf(True)
+    save_auto_refill(True)
     save_xiuluo_check_team(False)
     save_xiuluo_auto_wuyi(True)
     save_xiuluo_wuyi_interval(5)
@@ -458,6 +476,7 @@ class ControlWindow(WebWindow):
         self.expose(self.save_xiuluo_auto_wuyi)
         self.expose(self.save_xiuluo_wuyi_interval)
         self.expose(self.save_high_perf)
+        self.expose(self.save_auto_refill)
         self.expose(self.save_wubei_min)
         self.expose(self.save_wubei_hezi)
         self.expose(self.save_wubei_check_team)
@@ -490,6 +509,7 @@ class ControlWindow(WebWindow):
                 "xiuluo_auto_wuyi": load_xiuluo_auto_wuyi(),
                 "xiuluo_wuyi_interval": load_xiuluo_wuyi_interval(),
                 "high_perf": load_high_perf(),
+                "auto_refill": load_auto_refill(),
                 "wubei": {"min_members": load_wubei_min(),
                           "hezi": load_wubei_hezi(),
                           "check_team": load_wubei_check_team()},
@@ -547,6 +567,10 @@ class ControlWindow(WebWindow):
     def save_high_perf(self, on):
         """通用设置变更：保存高性能模式开关状态。"""
         return save_high_perf(on)
+
+    def save_auto_refill(self, on):
+        """通用设置变更：保存战斗结束自动补血量蓝量开关状态。"""
+        return save_auto_refill(on)
 
     def save_wubei_min(self, value):
         """五倍设置变更：保存最少人数。"""

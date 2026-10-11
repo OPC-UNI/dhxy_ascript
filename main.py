@@ -31,13 +31,15 @@ from src.control_window import (ControlWindow, load_task_mode,
                                 load_use_sheyaoxiang,
                                 load_debug_overlay,
                                 load_battle_actions,
-                                load_high_perf)  # 网页控制窗口（启动/停止/重置、配置持久化）
+                                load_high_perf,
+                                load_auto_refill)  # 网页控制窗口（启动/停止/重置、配置持久化）
 from src import app_utils  # 通用工具（日志、高性能模式共享设施）
 from src.app_utils import log, toast, log_file_path  # 日志与系统通知
 from src import game  # 游戏窗口操作
 from src import bag  # 背包操作
 from src import battle  # 战斗自动化（战斗监控与人物/召唤兽操作）
 from src import xuanshu  # 玄枢轶闻任务自动化
+from src import task_tracker  # 任务追踪面板操作（启动时判断是否已有跟踪中的任务）
 from src import wuhuan  # 五环任务自动化
 from src import kezhan  # 客栈任务自动化
 from src import team  # 组队功能（任务前置退队）
@@ -79,6 +81,7 @@ def task_start():
     log(f"[配置] 使用摄妖香: {'开' if use_sheyaoxiang else '关'}", "SYS")
     log(f"[配置] 人物战斗动作: {battle_actions['char']}，召唤兽战斗动作: {battle_actions['beast']}", "SYS")
     log(f"[配置] 调试信息悬浮: {'开' if load_debug_overlay() else '关'}", "SYS")
+    log(f"[配置] 战斗结束自动补血蓝: {'开' if load_auto_refill() else '关'}", "SYS")
     # 高性能模式（通用设置开关）：置位共享设施，各任务模块据此启用
     # 固定位置缓存点击（主进程验证流程不受影响，恒为识别路径）
     app_utils.set_high_perf(load_high_perf())
@@ -169,10 +172,13 @@ def task_start():
 
         # 5. 玄枢轶闻主循环（该模式且已登录时执行：跟踪完成 → 继续领取 → 往复）
         #    循环正常结束（次数上限/每日次数已满）时任务进程退出，面板自动显示已停止
-        #    任务前置：退出队伍（队长解散/队员离开），单人状态执行
+        #    任务前置：退出队伍（队长解散/队员离开），单人状态执行。
+        #    已有跟踪中的任务时跳过退队直接续跑（退队只服务于领取流程，
+        #    续跑无需检查队伍信息——用户确认）
         if logged_in and mode == "玄枢轶闻":
-            ok, info = team.leave_or_disband_team(main_win)
-            log(f"[组队] 任务前置退队：{info}", "SYS" if ok else "WARN")
+            if not task_tracker.has_task(main_win, xuanshu.TASK_TITLE):
+                ok, info = team.leave_or_disband_team(main_win)
+                log(f"[组队] 任务前置退队：{info}", "SYS" if ok else "WARN")
             info = xuanshu.run_loop(main_win)
             log(f"[玄枢轶闻] 任务循环结束：{info}", "SYS")
             debug_overlay.shutdown()

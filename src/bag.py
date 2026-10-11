@@ -16,6 +16,10 @@ BAG_ICON = "bag.png"
 BAG_BOX_ICON = "bag_box.png"
 # 摄妖香物品图标模板（res/img/sheyaoxiang.png，49x48，实测匹配度 1.0）
 SHEYAOXIANG_ICON = "sheyaoxiang.png"
+# 摄妖香匹配阈值：0.8 实测漏检（真实图标渲染分数 0.79 起步，见
+# 2026-10-11 10:27 日志），按用户要求降到 0.69（仅摄妖香，其他
+# 物品保持 0.8——给与/购买物品误匹配代价高）
+SHEYAOXIANG_THRESHOLD = 0.69
 # 背包储物格切换按钮模板（res/img/box_one_close.png，26x27）
 BOX_ONE_CLOSE_ICON = "box_one_close.png"
 # 储物格切换的纵向偏移：以 box_one_close 为基准向下 35px 递增，
@@ -84,12 +88,13 @@ def is_bag_open(win):
     return _find_bag_box(win) is not None
 
 
-def find_item_in_bag(win, icon_name):
+def find_item_in_bag(win, icon_name, threshold=0.8):
     """在游戏窗口中查找指定物品图标（背包打开状态下）。
 
-    返回匹配结果列表，未找到返回空列表。
+    threshold：匹配阈值（默认 0.8；摄妖香等渲染分数偏低的物品
+    由调用方按需放宽）。返回匹配结果列表，未找到返回空列表。
     """
-    return _match_all_template(win, icon_name)
+    return _match_all_template(win, icon_name, threshold=threshold)
 
 
 def find_box_one_close(win):
@@ -97,10 +102,11 @@ def find_box_one_close(win):
     return _match_template(win, BOX_ONE_CLOSE_ICON)
 
 
-def find_item_with_slots(win, icon_name, label):
+def find_item_with_slots(win, icon_name, label, threshold=0.8):
     """在背包中查找指定物品，未找到时切换储物格再找。
 
-    流程：
+    threshold：匹配阈值（默认 0.8；摄妖香等渲染分数偏低的物品
+    由调用方按需放宽）。流程：
     1. 直接检测（命中即返回）
     2. 未命中：低阈值诊断匹配度并记日志（区分"没检测到"与"匹配度不足"），
        等待 0.5s 复检一次——背包刚打开时物品图标可能尚未渲染完
@@ -109,17 +115,21 @@ def find_item_with_slots(win, icon_name, label):
        点击，最多 4 个储物格；每次操作前等待 100ms
     返回 (MatchResult 或 None, 过程描述)。
     """
-    items = find_item_in_bag(win, icon_name)
+    items = find_item_in_bag(win, icon_name, threshold=threshold)
     if items:
         return items[0], "直接检测到"
 
     # 诊断：低阈值再查，看当前储物格上是否只是匹配度不足（日志可见，便于排查）
+    # 并记下最优匹配位置——区分「图标在真实位置但渲染分数低」与
+    # 「图标缺失、低分匹配是画面其他位置的误匹配」（位置判据）
     near = _match_all_template(win, icon_name, threshold=0.6)
-    best = max((r.confidence for r in near), default=0.0)
-    log(f"[背包] {label}直接检测未命中（低阈值最优匹配度 {best:.2f}），"
+    best_r = max(near, key=lambda r: r.confidence) if near else None
+    best = best_r.confidence if best_r is not None else 0.0
+    loc = f" @({best_r.x},{best_r.y})" if best_r is not None else ""
+    log(f"[背包] {label}直接检测未命中（低阈值最优匹配度 {best:.2f}{loc}），"
         f"等待 0.5s 复检", "INFO")
     time.sleep(0.5)
-    items = find_item_in_bag(win, icon_name)
+    items = find_item_in_bag(win, icon_name, threshold=threshold)
     if items:
         return items[0], "复检检测到"
 
@@ -134,15 +144,20 @@ def find_item_with_slots(win, icon_name, label):
             f"（box_one_close 下方 {offset}px）", "INFO")
         human_click(win, base.x, y)
         time.sleep(0.1)  # 等待储物格界面切换
-        items = find_item_in_bag(win, icon_name)
+        items = find_item_in_bag(win, icon_name, threshold=threshold)
         if items:
             return items[0], f"切换储物格 {i + 1} 后检测到"
     return None, f"切换 {len(SLOT_OFFSETS)} 个储物格后仍未检测到{label}"
 
 
 def find_sheyaoxiang_with_slots(win):
-    """在背包中查找摄妖香（含储物格切换搜索），返回 (MatchResult 或 None, 描述)。"""
-    return find_item_with_slots(win, SHEYAOXIANG_ICON, "摄妖香")
+    """在背包中查找摄妖香（含储物格切换搜索），返回 (MatchResult 或 None, 描述)。
+
+    阈值 0.69：摄妖香图标实测渲染分数 0.79 起步（2026-10-11 10:27
+    日志），0.8 会漏检（见 SHEYAOXIANG_THRESHOLD）。
+    """
+    return find_item_with_slots(win, SHEYAOXIANG_ICON, "摄妖香",
+                                threshold=SHEYAOXIANG_THRESHOLD)
 
 
 def open_bag(win):

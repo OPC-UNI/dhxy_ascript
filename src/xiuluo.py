@@ -446,6 +446,13 @@ def _walk_to_claim_spot(win):
     pos = game_map.read_map_position(win)
     if _near_claim_spot(pos, CLAIM_NEAR_TOLERANCE):
         return True, "已在领取点附近"
+    if pos is None and game_map.find_template(win, LINGSHOUCUN_SHIZHE_ICON) is not None:
+        # 坐标读取失败时的使者模板兜底（用户 2026-10-11 确认的记忆路径）：
+        # 使者可见即视为已在领取点附近，直接进入领取点击（双模板入口）；
+        # 距离过远点击不出现对话框时由 _click_entry_ensuring_dialog 的
+        # 小地图重定位兜底自愈。正常坐标可读时不受影响（远距离误判
+        # 由坐标判据拦截）
+        return True, "已在领取点附近（坐标识别失败，使者可见）"
     if pos is None or pos[0].strip() != LINGSHOUCUN:
         # 不在灵兽村：世界地图点击灵兽村图标，打开灵兽村小地图
         ok, info = game_map.open_mini_map_city(win, WORLD_MAP_LINGSHOUCUN_ICON,
