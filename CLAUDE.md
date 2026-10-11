@@ -96,7 +96,9 @@ Do not write `FindImages.find("some/path.png")` for a template that does not exi
 
 轮询/判定是热路径。实现新功能或修改旧功能时必须遵守（实测数据与示例见 docs/performance.md）：
 
-1. **每轮询只截一帧**：等待/判定循环内禁止「is_in_battle(win) 截一帧 + find_template(win) 再截一帧」的模式；截一帧后同帧复用（is_in_battle_frame / find_template_in / match_frame_np）
+1. **每轮询只截一帧**：等待/判定循环内禁止「is_in_battle(win) 截一帧 + find_template(win) 再截一帧」的模式；截一帧后同帧复用（is_in_battle_frame / find_template_in / match_frame_np）。两个落地模式：
+   - **决策点单帧三件套**：`is_in_battle_frame(img)` ≡ `is_in_battle(win)`（同判定，battle.py 明示）；`match_frame_np(bgr, icon)` ≡ `find_template(win, icon)`（同算法同 0.8 阈值同中心返回）；`read_map_position(win, img=帧)` 传已截帧（OCR 走 RGB、模板走 BGR）
+   - **extras 处理链共享帧**：follow 每轮询调一次 extras 链，链内各处理器以 `id(items)` 为键共享一帧与位置读取结果（帧全等复用时 items 对象也复用，缓存帧恰为同像素帧，复用正确；位置 None 也缓存防重复截窗）。参考 wubei `_xj_frame`/`_xj_pos`；kezhan/xiuluo/wuhuan 的 extras 处理器新增判定时同样套用
 2. **轮询截图一律 force_activate=False**（禁止抢前台焦点）；模板热路径用 OPENCV(BGR) 帧；OCR 与绿字判定路径必须保持 PIL(RGB) 帧——BGR 帧会把绿字颜色判定搞反
 3. **模板匹配用 map.py 快速接口**（match_frame_np / best_match_np / match_frame_multi，模板自动缓存）；新增检测点必须配搜索条带（ROI，从真实截图标定、留 ≥50px 余量），带区全未命中才全帧兜底，且兜底必须限频（参考 FULL_CHECK_INTERVAL=3s）——否则非目标场景每轮询付全帧成本（实测 20ms vs 137ms）
 4. **相似模板互匹配一律双模板比分数**（各自分数达标且更高者胜），禁止单模板阈值判定（队伍解散/离开按钮、第1/第2回合横幅均为教训）；新模板必须真图验证 + 非目标图交叉验证（目标帧 ≥0.9 唯一命中、非目标帧低于阈值）

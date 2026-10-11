@@ -93,6 +93,15 @@ def log(msg, level="INFO"):
             pass  # 文件日志失败不影响自动化流程
 
 
+# 全局输入互斥：战斗监控线程（战后血蓝右键/巫医点击/盒子点击）与任务
+# 线程（追踪链接/对话框/领取点击）共享物理鼠标，无锁时「移动+点击」序列
+# 会被交错——A 线程移动后 B 线程插入移动，A 的点击落在 B 的目标上
+# （审计实测风险：误右键背包物品=使用物品）。RLock 可重入：human_click
+# 内调 human_move 的二次获取不阻塞；锁内仅 40~90ms 移动+一次点击，
+# 不会饿死 0.5s 轮询的战斗线程。
+_INPUT_LOCK = threading.RLock()
+
+
 def human_move(target_x: int, target_y: int, duration: float = None):
     """直接移动到屏幕坐标（无轨迹），保持极短耗时。
 
@@ -101,15 +110,17 @@ def human_move(target_x: int, target_y: int, duration: float = None):
         target_y: 目标屏幕 Y 坐标
         duration: 移动耗时（秒），None 时随机 40~90 毫秒
     """
-    if duration is None:
-        duration = random.uniform(0.04, 0.09)
-    Mouse.mouse_move(target_x, target_y, move_duration=duration)
+    with _INPUT_LOCK:
+        if duration is None:
+            duration = random.uniform(0.04, 0.09)
+        Mouse.mouse_move(target_x, target_y, move_duration=duration)
 
 
 def human_click(win, x: int, y: int, button: str = "primary"):
     """拟人化点击：平滑弧线移动到窗口相对坐标并点击。
 
     落点带 ±2px 随机偏移，模拟人手的不精确性。
+    移动+点击整体持锁（见 _INPUT_LOCK），防止与其他线程的点击序列交错。
 
     Args:
         win: Window 对象（用于窗口相对坐标转屏幕坐标）
@@ -117,10 +128,11 @@ def human_click(win, x: int, y: int, button: str = "primary"):
         y: 窗口相对 Y 坐标
         button: 鼠标按键，'primary' 左键 / 'secondary' 右键
     """
-    sx = win.rect.left + x + random.randint(-2, 2)
-    sy = win.rect.top + y + random.randint(-2, 2)
-    human_move(sx, sy)
-    Mouse.click(button=button)
+    with _INPUT_LOCK:
+        sx = win.rect.left + x + random.randint(-2, 2)
+        sy = win.rect.top + y + random.randint(-2, 2)
+        human_move(sx, sy)
+        Mouse.click(button=button)
 
 
 def move_away(win):

@@ -914,8 +914,9 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 last_poll_img = img
             # 附加对话框处理优先：战斗中也可能出现任务对话（如五环提交装备），
             # 此时任务追踪不可用，等战斗结束后再继续识别
+            extras_handled = False
             if extra_dialog_handler is not None:
-                extra_dialog_handler(win, items, img_np)
+                extras_handled = extra_dialog_handler(win, items, img_np)
             # 战斗中：跳过本轮识别（任务追踪与坐标不可用）；复用本帧
             if is_in_battle_frame(img):
                 continue
@@ -963,7 +964,11 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 continue
             changed_once = False
             # 对话框处理：特定对话框指定绿字 → 点屏幕中间跳过 → 已知绿字选项
-            # 文案匹配为模糊匹配（逐行与全文拼接，抗 OCR 个别字误读与换行拆分）
+            # 文案匹配为模糊匹配（逐行与全文拼接，抗 OCR 个别字误读与换行拆分）。
+            # extras 已处理过本帧（如点过开打选项/追踪链接）时跳过——
+            # 防止回调点击后的陈旧帧继续命中内置表造成同帧双点（审计契约问题 1）
+            if extras_handled:
+                continue
             handled = False
             for dtxt, opt in DIALOG_OPTION_MAP.items():
                 if _dialog_text_present(items, dtxt):

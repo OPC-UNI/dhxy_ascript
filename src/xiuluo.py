@@ -768,6 +768,25 @@ def _check_team_ready(win):
     return status, info
 
 
+def _check_team_with_retry(win, tries=3):
+    """队伍检查带瞬态失败重试（与五倍同款，审计 B5）：截窗失败/面板
+    打不开可能是瞬时问题，一次失败即转非队长保持模式会把队长永久
+    挂起。瞬态类失败短间隔重试，连续 N 次才按 not_leader 处理；
+    明确的非队长判定（面板打开且无解散按钮）不重试。"""
+    last = ("not_leader", "队伍检查未执行")
+    for i in range(tries):
+        status, info = _check_team_ready(win)
+        last = (status, info)
+        if status != "not_leader":
+            return status, info
+        if "队长无法判定" not in info and "截图失败" not in info:
+            return status, info  # 明确非队长（面板打开且无解散按钮）
+        if i < tries - 1:
+            log(f"[修罗] {info}，瞬态失败重试（{i + 1}/{tries - 1}）", "WARN")
+            time.sleep(2.0)
+    return last
+
+
 def _handle_fight_dialog(win, items, img_np):
     """对话开打：跟踪期间出现对话 → 点击绿色选项「看打！」进入战斗。
 
@@ -1183,7 +1202,7 @@ def run_loop(win, cycle_interval=1.0):
                            or _near_claim_spot(game_map.read_map_position(win),
                                                CLAIM_NEAR_TOLERANCE))
                 if not at_spot:
-                    status, info = _check_team_ready(win)
+                    status, info = _check_team_with_retry(win)
                     if status == "not_leader":
                         _keep_alive(info)
             # 1.1 队长：队伍是否满都先走到领取点附近
@@ -1201,7 +1220,7 @@ def run_loop(win, cycle_interval=1.0):
                 #     满足最少人数才领取；队长被转移则转非队长保持模式；
                 #     识别失败是 OCR 噪声，短间隔重查（不等满 10 秒）
                 while True:
-                    status, info = _check_team_ready(win)
+                    status, info = _check_team_with_retry(win)
                     if status == "not_leader":
                         _keep_alive(info)
                     if status == "ready":
@@ -1217,7 +1236,7 @@ def run_loop(win, cycle_interval=1.0):
                 if check_team and _team_checked:
                     # 已通过队伍检查仍领取失败（如队长被转移、按钮未出现）：
                     # 补一次队伍检查恢复状态感知，非队长转保持模式
-                    status, info2 = _check_team_ready(win)
+                    status, info2 = _check_team_with_retry(win)
                     if status == "not_leader":
                         _keep_alive(info2)
                 log(f"[修罗] {info}", "WARN")
