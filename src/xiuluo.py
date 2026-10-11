@@ -128,6 +128,11 @@ _task_gone_last_round = False   # 上一轮任务消失已确认（follow_task �
                                 # 下一轮开始必然无任务，跳过 has_task 检查
                                 # （区域 OCR ~0.9s）；仅进程首轮/上轮跟踪失败
                                 # 未确认时才检查（续跑场景）
+_returned_last_round = False    # 上一轮返程成功（回城符已使用、落点必在
+                                # 灵兽村）：下一轮领取时位置识别失败改为
+                                # 轮询等待加载完成，不误走世界地图寻路
+                                # （实测 12:30 传送加载超 8s 白走地图 ~11s）；
+                                # 进入领取流程时消耗复位，仅对紧邻轮次生效
 
 # ---- 高性能模式（通用设置开关，共享设施见 app_utils：领取选项/看打
 #      选项固定位置缓存点击 + 效果校验 + 识别回退；背包按钮缓存已下沉
@@ -418,7 +423,7 @@ def _handle_team_warning(win, items, img_np):
     return True
 
 
-def _walk_to_claim_spot(win):
+def _walk_to_claim_spot(win, just_returned=False):
     """寻路到灵兽村领取点附近（与队伍人数无关，队长身份下执行）。
 
     用户流程：已在领取点 110,90 附近（±15）→ 跳过寻路；
@@ -433,6 +438,10 @@ def _walk_to_claim_spot(win):
     寻路（用户 2026-10-09 确认）：加载/渲染等待由 open_mini_map_city
     的轮询吸收，原 8s 等待 + Alt+C 恢复实测整段空转（且 Alt+C 是
     位置显示开关，加载期误按会关掉显示——此处不再按）。
+    just_returned=True（上一轮返程成功，落点必在灵兽村）时例外：
+    位置识别失败极可能是传送加载未完成（实测 12:30 加载超 8s，
+    按钮也未渲染），改为轮询等待按钮/位置出现（RETURN_LOAD_TIMEOUT
+    上限），超时才走世界地图寻路兜底——不再白走地图。
     返回 (是否成功, 描述)。
     """
     if is_in_battle(win):
@@ -442,17 +451,27 @@ def _walk_to_claim_spot(win):
     # 距离过远点击不出现对话框），按钮只在可点击范围内出现
     if game_map.find_template(win, LINGQU_ICON) is not None:
         return True, "已在领取点附近（领取按钮可见）"
-    # 位置读取：失败按不在附近处理，直接走地图寻路（不等待不 Alt+C）
+    # 位置读取：失败按不在附近处理，直接走地图寻路（不等待不 Alt+C）。
+    # 坐标未识别时不使用使者模板兜底——使者远距离也可见，远处命中会
+    # 误判已在领取点、点击无效（用户 2026-10-11 确认）：到达判定只认
+    # 领取按钮（仅在可点击范围内出现）
     pos = game_map.read_map_position(win)
     if _near_claim_spot(pos, CLAIM_NEAR_TOLERANCE):
         return True, "已在领取点附近"
-    if pos is None and game_map.find_template(win, LINGSHOUCUN_SHIZHE_ICON) is not None:
-        # 坐标读取失败时的使者模板兜底（用户 2026-10-11 确认的记忆路径）：
-        # 使者可见即视为已在领取点附近，直接进入领取点击（双模板入口）；
-        # 距离过远点击不出现对话框时由 _click_entry_ensuring_dialog 的
-        # 小地图重定位兜底自愈。正常坐标可读时不受影响（远距离误判
-        # 由坐标判据拦截）
-        return True, "已在领取点附近（坐标识别失败，使者可见）"
+    if pos is None and just_returned:
+        # 刚返程：位置识别失败大概率是传送加载未完成（回城符落点
+        # 必在灵兽村，不会在别处）。只识别一次（同帧做按钮匹配 +
+        # 位置 OCR，不轮询）：加载未完成则落入下方世界地图寻路
+        # 兜底——该路径实测加载期可用（12:30），寻路走完加载也
+        # 完成，慢加载的等待由兜底路径自然吸收。返程后原地不动
+        # 不会进战斗，无需战斗判定（用户 2026-10-11 确认）
+        img = win.capture(force_activate=False)
+        if img is not None:
+            if game_map.find_template_in(img, LINGQU_ICON) is not None:
+                return True, "已在领取点附近（领取按钮可见，等待传送加载完成）"
+            pos2 = game_map.read_map_position(win, img=img)
+            if _near_claim_spot(pos2, CLAIM_NEAR_TOLERANCE):
+                return True, "已在领取点附近（等待传送加载完成）"
     if pos is None or pos[0].strip() != LINGSHOUCUN:
         # 不在灵兽村：世界地图点击灵兽村图标，打开灵兽村小地图
         ok, info = game_map.open_mini_map_city(win, WORLD_MAP_LINGSHOUCUN_ICON,
@@ -702,7 +721,7 @@ def _claim_task(win):
         if used_cached and _find_claim_option(items, img_np) is not None:
             _click_claim_option(win, items, img_np)
             used_cached = False
-        time.sleep(1.0)
+        time.sleep(0.5)
     if found_frame is not None:
         tail = f"（{CLAIM_COUNT_TEXT}：{count}）" if count is not None else ""
         return True, f"修罗任务已领取{tail}", found_frame
@@ -927,24 +946,41 @@ def _close_return_panels(win):
 
     先截一帧批量检测三项是否全未打开（常见场景：回城符使用后界面已
     自行关闭）：全未打开直接返回，1 次截图替代 4~6 次带截图的逐项检测
-    （实测逐项 ~110ms/两项 + 关包检测 ~140ms）；任一打开才走既有关闭流程。
+    （实测逐项 ~110ms/两项 + 关包检测 ~140ms）。
+    批量帧进一步分流：返程场景地图几乎恒未打开（实测每轮小地图/世界
+    地图双帧确认均「未打开」空转 ~1s）——地图未打开时直接跳过
+    close_maps 的双帧确认，只走关包；确实打开才走既有关闭流程
+    （返程流程不使用地图，批量帧判未打开后不会瞬态再开）。
+    截图失败时走完整关闭流程（各函数自带截图重试），保持原行为。
     """
     img = win.capture(force_activate=False)
-    if img is not None:
-        frame = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
-        found = game_map.match_frame_multi(
-            frame, (game_map.WORLD_MAP_OPEN_ICON,
-                    game_map.MINI_MAP_OPEN_ICON,
-                    bag.BAG_BOX_ICON))
-        if not any(found.values()):
-            log("[修罗] 世界地图/小地图/背包均未打开，无需关闭", "INFO")
-            return
-    game_map.close_maps(win)
-    ok, info = bag.close_bag(win)
-    if ok:
-        log(f"[修罗] {info}", "SYS")
-    else:
-        log(f"[修罗] 背包关闭失败: {info}", "WARN")
+    if img is None:
+        game_map.close_maps(win)
+        ok, info = bag.close_bag(win)
+        if ok:
+            log(f"[修罗] {info}", "SYS")
+        else:
+            log(f"[修罗] 背包关闭失败: {info}", "WARN")
+        return
+    frame = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
+    found = game_map.match_frame_multi(
+        frame, (game_map.WORLD_MAP_OPEN_ICON,
+                game_map.MINI_MAP_OPEN_ICON,
+                bag.BAG_BOX_ICON))
+    maps_open = found[game_map.WORLD_MAP_OPEN_ICON] is not None \
+        or found[game_map.MINI_MAP_OPEN_ICON] is not None
+    bag_open = found[bag.BAG_BOX_ICON] is not None
+    if not maps_open and not bag_open:
+        log("[修罗] 世界地图/小地图/背包均未打开，无需关闭", "INFO")
+        return
+    if maps_open:
+        game_map.close_maps(win)
+    if bag_open:
+        ok, info = bag.close_bag(win)
+        if ok:
+            log(f"[修罗] {info}", "SYS")
+        else:
+            log(f"[修罗] 背包关闭失败: {info}", "WARN")
 
 
 def _return_to_npc(win):
@@ -976,14 +1012,15 @@ def _return_to_npc(win):
     _close_return_panels(win)
     # 传送后位置识别（短时等待加载完成，仅供日志与下一轮领取判断；
     # 5s 上限为实测校准值——实测加载超 3s 时 3s 时限识别失败，
-    # 且失败后下一轮领取会误走世界地图寻路兜底）
+    # 且失败后下一轮领取会误走世界地图寻路兜底）。0.5s 轮询：
+    # 加载完成即识别，较 1.0s 最多省 0.5s 空等
     deadline = time.time() + 5
     pos = None
     while time.time() < deadline:
         pos = game_map.read_map_position(win)
         if pos is not None:
             break
-        time.sleep(1.0)
+        time.sleep(0.5)
     if pos is not None:
         log(f"[修罗] 返程后位置: {pos[0]} {pos[1]},{pos[2]}", "SYS")
     else:
@@ -1100,7 +1137,7 @@ def run_loop(win, cycle_interval=1.0):
     2. 领取时出现每日次数已满（TODO: 具体文案待确认）
     返回结束原因描述。
     """
-    global _fight_via_kanda, _team_checked, _task_gone_last_round
+    global _fight_via_kanda, _team_checked, _task_gone_last_round, _returned_last_round
     max_rounds = load_task_counts().get(TASK_MODE, 0)
     log(f"[修罗] 任务次数上限: {max_rounds if max_rounds > 0 else '不限'}", "SYS")
     # 高性能模式开关由 main.task_start 按通用设置置位（共享设施）
@@ -1131,6 +1168,10 @@ def run_loop(win, cycle_interval=1.0):
             if _task_gone_last_round:
                 _task_gone_last_round = False
                 log("[修罗] 上一轮已确认任务完成，跳过任务检查，直接领取", "INFO")
+            # 刚返程标记：进入领取流程即消耗复位（仅紧邻轮次生效；
+            # 位置识别失败时等待传送加载完成，见 _walk_to_claim_spot）
+            just_returned = _returned_last_round
+            _returned_last_round = False
             # 队伍检查受「检查队伍」开关门控（默认关闭=完全跳过），且仅在
             # 首次领取前执行（_team_checked 置位后跳过）：每轮回程后开面板
             # 检查耗时 5~7s，首次领取成功后不再重复
@@ -1146,7 +1187,7 @@ def run_loop(win, cycle_interval=1.0):
                     if status == "not_leader":
                         _keep_alive(info)
             # 1.1 队长：队伍是否满都先走到领取点附近
-            ok, info = _walk_to_claim_spot(win)
+            ok, info = _walk_to_claim_spot(win, just_returned=just_returned)
             if not ok:
                 log(f"[修罗] {info}", "WARN")
                 time.sleep(cycle_interval)
@@ -1209,6 +1250,7 @@ def run_loop(win, cycle_interval=1.0):
                 log(f"[修罗] {info}", "WARN")
                 time.sleep(cycle_interval)
                 continue
+            _returned_last_round = True  # 下一轮领取：位置失败等加载（见 _walk_to_claim_spot）
         done += 1
         total = max_rounds if max_rounds > 0 else "∞"
         debug_overlay.set_progress(f"{done}/{total}")

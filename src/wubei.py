@@ -81,7 +81,7 @@ LINGQU_ICON = "wubei_lingqu.png"                   # 五倍领取任务按钮（
 XIANGMOSHIWEI_ICON = "wubei_xiangmoshiwei.png"     # 降魔侍卫 NPC（用户素材 19.png，
                                                    # 待机动画致分数波动，轮询重试覆盖）
 CLAIM_SPOT = (86, 86)                              # 领取点地图坐标（用户实测 86,86 附近）
-CLAIM_NEAR_TOLERANCE = 15                          # 已在领取点附近判定容差（用户步 1.1）
+CLAIM_NEAR_TOLERANCE = 22                          # 已在领取点附近判定容差（用户步 1.1）
 WALK_ARRIVE_TOLERANCE = 5                          # 寻路到达判定容差（用户步 1.2，更严格：
                                                    # 走动中识图点击容易点不到）
 BAOXIANG_MAP_POS = (514, 483)                      # 宝象国小地图上领取点位置的点击点（窗口相对坐标，用户实测）

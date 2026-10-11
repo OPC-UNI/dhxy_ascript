@@ -21,7 +21,8 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from rapidocr_onnxruntime import RapidOCR
+from rapidocr import RapidOCR  # 新版引擎（rapidocr 3.x，PP-OCRv5/v6 模型）
+from rapidocr.utils.typings import OCRVersion
 
 from ascript.windows.hardware.keyboard import Keyboard
 from ascript.windows.system import R
@@ -54,6 +55,41 @@ _MAP_POS_RE = re.compile(r"([一-鿿]{2,})\s*[\[［]\s*(\d+)\s*[,，]\s*(\d+)\s*
 _engine = None
 _region_engine = None
 
+# OCR 引擎版本设置（用户 2026-10-11）：rapidocr 3.x params 以点路径
+# 覆盖配置。Det/Rec 默认已是最新 PP-OCRv6 small（新包默认值），
+# Cls 按设置传 PP-OCRv5。日志级别压到 error：战斗期对话框区域无文字时
+# 引擎打「text detection result is empty」WARNING，属设计内噪声；
+# RapidOCR 初始化会用配置值重置自身日志级别（rapidocr/main.py __init__），
+# 必须经 params 传入而非外部 setLevel（会被覆盖）。
+_OCR_PARAMS = {"Cls.ocr_version": OCRVersion.PPOCRV5,
+               "Global.log_level": "error"}
+# 区域快配置引擎参数（对应旧版 det_limit_type='max'/det_limit_side_len=736/
+# use_angle_cls=False）：区域按原尺寸检测（默认 'min' 会把小区域放大到
+# 736 最小边再检测，实测双区域 1344ms→944ms）；游戏 UI 全是水平文本，
+# 关闭角度分类。Det/Rec 模型路径保持默认（null = 自动下载的官方模型）
+_REGION_OCR_PARAMS = {
+    "Cls.ocr_version": OCRVersion.PPOCRV5,
+    "Det.limit_type": "max",
+    "Det.limit_side_len": 736,
+    "Global.use_cls": False,
+    "Global.log_level": "error",
+}
+
+
+def _engine_items(res):
+    """新版引擎输出（RapidOCROutput）转为 [(txt, rect, score), ...]。
+
+    boxes 为 (N,4,2) 数组，rect 取 [left, top, right, bottom]。
+    """
+    items = []
+    if res is not None and res.txts is not None:
+        for box, txt, score in zip(res.boxes, res.txts, res.scores):
+            bl, bt = float(box[0][0]), float(box[0][1])
+            br, bb = float(box[2][0]), float(box[2][1])
+            items.append((str(txt), [int(bl), int(bt), int(br), int(bb)],
+                          float(score)))
+    return items
+
 
 def ocr_regions(img, regions):
     """OCR 识别多个区域并合并结果，返回 (items, img_np)。
@@ -69,40 +105,28 @@ def ocr_regions(img, regions):
     full_np = np.asarray(img)
     if not regions:
         if _engine is None:
-            _engine = RapidOCR()
+            _engine = RapidOCR(params=_OCR_PARAMS)
         img_np = full_np
-        result, _ = _engine(img_np)
-        items = []
-        if result:
-            for box, txt, score in result:
-                bl, bt = float(box[0][0]), float(box[0][1])
-                br, bb = float(box[2][0]), float(box[2][1])
-                items.append((str(txt), [int(bl), int(bt), int(br), int(bb)],
-                              float(score)))
+        items = _engine_items(_engine(img_np))
         items.sort(key=lambda x: x[1][1])
         return items, img_np
-    # 区域 OCR 用快配置引擎：det_limit_type='max'/736 下区域按原尺寸检测
+    # 区域 OCR 用快配置引擎：limit_type='max'/736 下区域按原尺寸检测
     # （默认 'min'/736 会把小区域放大到 736 最小边再检测，实测双区域
     # 1344ms→944ms、面板区 -29%、对话框区 -52%）。快配置下部分行置信度
     # 降低（如问答选项「金乌」0.66→0.58），下游 score 门槛已统一降至 0.55。
-    # use_angle_cls=False：游戏 UI 全是水平文本，角度分类只判 0/180 度翻转，
+    # use_cls=False：游戏 UI 全是水平文本，角度分类只判 0/180 度翻转，
     # 关掉实测双区域 277→138ms（-50%），识别框数不变
     if _region_engine is None:
-        _region_engine = RapidOCR(det_model_path=None, det_limit_type="max",
-                                  det_limit_side_len=736, use_angle_cls=False)
+        _region_engine = RapidOCR(params=_REGION_OCR_PARAMS)
     img_np = np.zeros_like(full_np)
     items = []
     for l, t, r, b in regions:
         crop = full_np[t:b, l:r]
         img_np[t:b, l:r] = crop
-        result, _ = _region_engine(crop)
-        if result:
-            for box, txt, score in result:
-                bl, bt = float(box[0][0]), float(box[0][1])
-                br, bb = float(box[2][0]), float(box[2][1])
-                items.append((str(txt),
-                              [l + int(bl), t + int(bt), l + int(br), t + int(bb)],
-                              float(score)))
+        for txt, rect, score in _engine_items(_region_engine(crop)):
+            items.append((txt,
+                          [l + rect[0], t + rect[1], l + rect[2], t + rect[3]],
+                          score))
     items.sort(key=lambda x: x[1][1])
     return items, img_np
 
@@ -118,14 +142,14 @@ def ocr_image(img):
 
 
 def warmup_ocr():
-    """预热 OCR 引擎（首次调用需加载 det/cls/rec 模型，一次性约 1s）。"""
+    """预热 OCR 引擎（首次调用需加载 det/cls/rec 模型，一次性约 1s；
+    新版引擎首次会下载官方模型，网络耗时另计——建议首次运行前联网）。"""
     global _engine, _region_engine
     if _engine is None:
-        _engine = RapidOCR()
+        _engine = RapidOCR(params=_OCR_PARAMS)
         _engine(np.zeros((32, 32, 3), dtype=np.uint8))
     if _region_engine is None:
-        _region_engine = RapidOCR(det_model_path=None, det_limit_type="max",
-                                  det_limit_side_len=736, use_angle_cls=False)
+        _region_engine = RapidOCR(params=_REGION_OCR_PARAMS)
         _region_engine(np.zeros((32, 32, 3), dtype=np.uint8))
 
 
@@ -142,15 +166,17 @@ def _clean_map_pos(text):
     return cleaned.strip(" ,，[]［］")
 
 
-def read_map_position(win):
+def read_map_position(win, img=None):
     """OCR 地图位置区域（MAP_POS_REGION），返回 (地名, x, y)；失败返回 None。
 
     地名统一繁转简（世界地图用繁体，位置文案两种都可能出现）。
     用区域快配置引擎直接检测：原实现裁剪后走全精度引擎，det 'min' 会把
     30px 高的区域放大到 736 最小边再检测（177x30 → 4336x736，极慢），
     快引擎按原尺寸检测，位置文字约 18-20px 可稳定识别。
+    img：调用方已截取的帧（PIL），传入则跳过截图（轮询复用帧）。
     """
-    img = win.capture(force_activate=False)
+    if img is None:
+        img = win.capture(force_activate=False)
     if img is None:
         return None
     items, _ = ocr_region(img, MAP_POS_REGION)
