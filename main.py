@@ -32,7 +32,8 @@ from src.control_window import (ControlWindow, load_task_mode,
                                 load_debug_overlay,
                                 load_battle_actions,
                                 load_high_perf,
-                                load_auto_refill)  # 网页控制窗口（启动/停止/重置、配置持久化）
+                                load_auto_refill,
+                                load_clear_screen)  # 网页控制窗口（启动/停止/重置、配置持久化）
 from src import app_utils  # 通用工具（日志、高性能模式共享设施）
 from src.app_utils import log, toast, log_file_path  # 日志与系统通知
 from src import game  # 游戏窗口操作
@@ -47,6 +48,7 @@ from src import xiuluo  # 修罗任务自动化
 from src import wubei  # 五倍任务自动化
 from src import status_bars  # 人物/召唤兽血蓝条检测
 from src import debug_overlay  # 调试信息悬浮层（游戏窗口上绘制任务/配置/进度）
+from src import clear_screen  # 启动清屏（Alt+6 屏蔽玩家 + Alt+5 屏蔽摊位）
 from src import map as game_map  # 地图操作（OCR 引擎预热等）
 
 
@@ -82,6 +84,7 @@ def task_start():
     log(f"[配置] 人物战斗动作: {battle_actions['char']}，召唤兽战斗动作: {battle_actions['beast']}", "SYS")
     log(f"[配置] 调试信息悬浮: {'开' if load_debug_overlay() else '关'}", "SYS")
     log(f"[配置] 战斗结束自动补血蓝: {'开' if load_auto_refill() else '关'}", "SYS")
+    log(f"[配置] 启动清屏: {'开' if load_clear_screen() else '关'}", "SYS")
     # 高性能模式（通用设置开关）：置位共享设施，各任务模块据此启用
     # 固定位置缓存点击（主进程验证流程不受影响，恒为识别路径）
     app_utils.set_high_perf(load_high_perf())
@@ -152,7 +155,13 @@ def task_start():
 
         logged_in = bool(tab and tab != game.GAME_TITLE)
         if not logged_in:
-            log("[检查] 未登录，跳过摄妖香/玄枢轶闻/血蓝条检查", "WARN")
+            log("[检查] 未登录，跳过清屏/摄妖香/玄枢轶闻/血蓝条检查", "WARN")
+
+        # 2.5 清屏（通用设置开关，默认开启；每次任务启动执行一次）：
+        #     Alt+6 屏蔽非队伍玩家 + Alt+5 屏蔽摊位，供后续任务干净执行
+        if logged_in and load_clear_screen():
+            ok, info = clear_screen.run_clear_screen(main_win)
+            log(f"[清屏] {info}", "SYS" if ok else "WARN")
 
         # 3. 摄妖香流程（开关开启且已登录时执行一次）
         if logged_in and use_sheyaoxiang:

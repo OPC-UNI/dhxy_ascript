@@ -291,6 +291,23 @@ def save_auto_refill(on):
     return {"status": "success"}
 
 
+# ---- 启动清屏（UI 开关，通用设置，KeyValue 持久化，默认开启；
+#      每次任务启动时执行一次：Alt+6 屏蔽非队伍玩家 + Alt+5 屏蔽摊位，
+#      实现见 src/clear_screen.py） ----
+_CLEAR_SCREEN_KEY = "clear_screen"
+
+
+def load_clear_screen():
+    """读取启动清屏开关（首次默认开启）。"""
+    return bool(KeyValue.get(_CLEAR_SCREEN_KEY, True))
+
+
+def save_clear_screen(on):
+    """保存启动清屏开关，返回操作结果。"""
+    KeyValue.save(_CLEAR_SCREEN_KEY, bool(on))
+    return {"status": "success"}
+
+
 # ---- 修罗检查队伍（UI 开关，KeyValue 持久化；关闭时领取前跳过全部
 #      队伍检查，默认关闭——用户确认每轮回程后开面板检查耗时 5~7s） ----
 _XIULUO_CHECK_TEAM_KEY = "xiuluo_check_team"
@@ -401,8 +418,8 @@ def reset_settings():
     默认值与各 load 函数一致：模式五环、次数按 TASK_COUNT_DEFAULTS、
     摄妖香开、血蓝阈值 40、战斗动作 人物技能3-5/召唤兽攻击、修罗
     最少人数 5 + 种族 男人男鬼、五倍最少人数 5、抢盒子/检查队伍/
-    调试悬浮关、高性能开、自动补血蓝开、自动巫医开（间隔 5）、
-    自动使用法门关、主题浅色。
+    调试悬浮关、高性能开、自动补血蓝开、启动清屏开、自动巫医开
+    （间隔 5）、自动使用法门关、主题浅色。
     """
     save_task_mode(_DEFAULT_MODE)
     for mode, default in TASK_COUNT_DEFAULTS.items():
@@ -420,6 +437,7 @@ def reset_settings():
     save_xiuluo_hezi(False)
     save_high_perf(True)
     save_auto_refill(True)
+    save_clear_screen(True)
     save_xiuluo_check_team(False)
     save_xiuluo_auto_wuyi(True)
     save_xiuluo_wuyi_interval(5)
@@ -477,6 +495,7 @@ class ControlWindow(WebWindow):
         self.expose(self.save_xiuluo_wuyi_interval)
         self.expose(self.save_high_perf)
         self.expose(self.save_auto_refill)
+        self.expose(self.save_clear_screen)
         self.expose(self.save_wubei_min)
         self.expose(self.save_wubei_hezi)
         self.expose(self.save_wubei_check_team)
@@ -491,6 +510,7 @@ class ControlWindow(WebWindow):
         self.expose(self.verify_xiuluo_wuyi)
         self.expose(self.verify_wubei_claim)
         self.expose(self.verify_wubei_return)
+        self.expose(self.verify_clear_screen)
         # 任务状态/日志回流接线：TaskManager → 主窗口状态 + 日志窗口
         self._tm.set_callbacks(on_status=self.sync_status, on_log=self.add_logs)
 
@@ -510,6 +530,7 @@ class ControlWindow(WebWindow):
                 "xiuluo_wuyi_interval": load_xiuluo_wuyi_interval(),
                 "high_perf": load_high_perf(),
                 "auto_refill": load_auto_refill(),
+                "clear_screen": load_clear_screen(),
                 "wubei": {"min_members": load_wubei_min(),
                           "hezi": load_wubei_hezi(),
                           "check_team": load_wubei_check_team()},
@@ -571,6 +592,10 @@ class ControlWindow(WebWindow):
     def save_auto_refill(self, on):
         """通用设置变更：保存战斗结束自动补血量蓝量开关状态。"""
         return save_auto_refill(on)
+
+    def save_clear_screen(self, on):
+        """通用设置变更：保存启动清屏开关状态。"""
+        return save_clear_screen(on)
 
     def save_wubei_min(self, value):
         """五倍设置变更：保存最少人数。"""
@@ -806,6 +831,50 @@ class ControlWindow(WebWindow):
                 ok_js = "true" if ok else "false"
                 self.webview_instance.evaluate_js(
                     f"if(window.onWubeiReturnVerifyResult){{window.onWubeiReturnVerifyResult({ok_js}, {json.dumps(info)});}}")
+            except Exception:
+                pass
+
+    def verify_clear_screen(self):
+        """高级设置-清屏验证按钮：执行真实清屏流程（Alt+6 屏蔽非队伍
+        玩家 + Alt+5 屏蔽摊位，真实按键；结束时两个屏蔽均处于开启态，
+        与任务启动时的清屏结果一致）。流程自带游戏窗口激活与前台账校验，
+        故不做遮挡检查（热键经前台窗口送达，而非点击屏幕坐标）。
+        """
+        if self._tm.is_running():
+            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if self._verifying:
+            return {"status": "error", "msg": "验证进行中，请稍候"}
+        win = game.find_main_window()
+        if win is None:
+            return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
+        self._verifying = True
+        threading.Thread(target=self._run_clear_screen_verify, args=(win,),
+                         daemon=True, name="clear-screen-verify").start()
+        return {"status": "success",
+                "msg": "验证已开始：激活游戏 → Alt+6 屏蔽玩家 → Alt+5 屏蔽摊位（真实按键，结束均为屏蔽开启态）"}
+
+    def _run_clear_screen_verify(self, win):
+        """清屏验证线程体：跑真实清屏流程，结果回推页面与日志窗。"""
+        from . import clear_screen  # 延迟导入：与其余验证模块保持一致
+        try:
+            self.add_logs(["[验证] 开始验证清屏（Alt+6 屏蔽玩家 + Alt+5 屏蔽摊位）..."])
+            ok, info = clear_screen.run_clear_screen(win)
+        except Exception as e:
+            ok, info = False, f"验证异常: {e}"
+        try:
+            self.add_logs([f"[验证] 结果: {info}"])
+        except Exception:
+            pass
+        self._notify_clear_screen_verify_result(ok, info)
+        self._verifying = False
+
+    def _notify_clear_screen_verify_result(self, ok, info):
+        """清屏验证结果回推页面（高级设置-清屏验证行的结果文案）。"""
+        if self.webview_instance:
+            try:
+                ok_js = "true" if ok else "false"
+                self.webview_instance.evaluate_js(
+                    f"if(window.onClearScreenVerifyResult){{window.onClearScreenVerifyResult({ok_js}, {json.dumps(info)});}}")
             except Exception:
                 pass
 

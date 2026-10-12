@@ -236,6 +236,11 @@
                     <span class="switch-track"></span>
                     <span>战斗结束自动补血量蓝量（默认开启）</span>
                 </label>
+                <label class="switch-row">
+                    <input type="checkbox" id="clear-screen">
+                    <span class="switch-track"></span>
+                    <span>启动时自动清屏（屏蔽其他玩家和摊位，默认开启）</span>
+                </label>
             </div>
             <!-- 修罗设置分组：检查队伍开关 + 最少人数 + 必须有的种族 -->
             <div class="group-box">
@@ -392,6 +397,14 @@
                 </div>
                 <div class="group-hint">与实际流程一致、时序无额外延时，且不改变任务状态：领取=走位到宝象国领取点 → 点击领取入口（领取任务按钮/降魔侍卫）打开对话框 → 选项「除魔卫国，义不容辞」仅定位不点击 → 点拒绝选项「事态严重，我等退散」关闭对话框；回程=定位回城符不点击（回城符模板待提供，缺失时报模板未提供）。任务运行中不可验证。</div>
             </div>
+            <div class="group-box">
+                <div class="group-title">清屏验证</div>
+                <div class="verify-row">
+                    <button id="btn-verify-clear-screen" class="btn" onclick="verifyClearScreen()">验证清屏</button>
+                    <span id="clear-screen-verify-result"></span>
+                </div>
+                <div class="group-hint">执行真实清屏流程：激活游戏窗口 → 按 Alt+6 屏蔽非队伍玩家 → 按 Alt+5 屏蔽摊位（真实按键，可能短暂取消再开启），结束时两个屏蔽均处于开启态，与任务启动清屏结果一致。游戏窗口未在前台时跳过并提示。任务运行中不可验证。</div>
+            </div>
         </div>
     </div>
 
@@ -411,6 +424,7 @@
         const xiuluoAutoWuyi = document.getElementById('xiuluo-auto-wuyi');
         const highPerf = document.getElementById('high-perf');
         const autoRefill = document.getElementById('auto-refill');
+        const clearScreen = document.getElementById('clear-screen');
         const autoFamen = document.getElementById('auto-famen');
         const xiuluoWuyiIntervalEl = document.getElementById('xiuluo-wuyi-interval');
         const wubeiHezi = document.getElementById('wubei-hezi');
@@ -425,6 +439,8 @@
         const wubeiClaimVerifyResultEl = document.getElementById('wubei-claim-verify-result');
         const btnVerifyWubeiReturn = document.getElementById('btn-verify-wubei-return');
         const wubeiReturnVerifyResultEl = document.getElementById('wubei-return-verify-result');
+        const btnVerifyClearScreen = document.getElementById('btn-verify-clear-screen');
+        const clearScreenVerifyResultEl = document.getElementById('clear-screen-verify-result');
         let verifying = false;  // 验证请求在途标记（防连点，回程/领取/巫医共用）
 
         // 战斗设置：类型单选（法术/攻击/防御/捕捉/逃跑/无）+ 选「法术」时
@@ -594,6 +610,7 @@
             xiuluoAutoWuyi.checked = !!info.xiuluo_auto_wuyi;
             highPerf.checked = !!info.high_perf;
             autoRefill.checked = !!info.auto_refill;
+            clearScreen.checked = !!info.clear_screen;
             autoFamen.checked = !!info.auto_famen;
             if (info.xiuluo_wuyi_interval) {
                 xiuluoWuyiIntervalEl.innerText = info.xiuluo_wuyi_interval;
@@ -724,6 +741,11 @@
         // 结束实时读取，下次战斗结束即生效）
         autoRefill.addEventListener('change', () => {
             callPython('save_auto_refill', autoRefill.checked);
+        });
+
+        // 启动清屏开关变更：立即保存（下次任务启动生效）
+        clearScreen.addEventListener('change', () => {
+            callPython('save_clear_screen', clearScreen.checked);
         });
 
         // 自动使用法门开关变更：立即保存（下次任务启动生效）
@@ -905,6 +927,38 @@
             btnVerifyWubeiReturn.disabled = false;
             wubeiReturnVerifyResultEl.style.color = ok ? 'var(--accent)' : '#ff5f5f';
             wubeiReturnVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+        };
+
+        // 清屏验证：与回程/领取验证同模式，结果经 onClearScreenVerifyResult 异步回推
+        async function verifyClearScreen() {
+            if (verifying) return;
+            verifying = true;
+            btnVerifyClearScreen.disabled = true;
+            clearScreenVerifyResultEl.style.color = 'var(--text)';
+            clearScreenVerifyResultEl.innerText = '验证中...';
+            try {
+                const r = await callPython('verify_clear_screen');
+                if (!r || r.status !== 'success') {
+                    clearScreenVerifyResultEl.style.color = '#ff5f5f';
+                    clearScreenVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
+                    verifying = false;
+                    btnVerifyClearScreen.disabled = false;
+                }
+                // 成功：等待 Python 侧 onClearScreenVerifyResult 回推最终结果
+            } catch (e) {
+                clearScreenVerifyResultEl.style.color = '#ff5f5f';
+                clearScreenVerifyResultEl.innerText = '验证请求异常';
+                verifying = false;
+                btnVerifyClearScreen.disabled = false;
+            }
+        }
+
+        // Python 侧调用：清屏验证结束回推结果
+        window.onClearScreenVerifyResult = function (ok, info) {
+            verifying = false;
+            btnVerifyClearScreen.disabled = false;
+            clearScreenVerifyResultEl.style.color = ok ? 'var(--accent)' : '#ff5f5f';
+            clearScreenVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
         };
 
         // Python 侧（任务状态联动）调用，用于同步页面显示
