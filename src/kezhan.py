@@ -48,6 +48,13 @@ TASK_MODE = "客栈"       # 控制面板任务模式名（任务次数配置键
 TASK_TITLE = "客栈任务"  # 追踪面板标题匹配串（如 月宫采珍【客栈任务】）
 # 注意：不能只匹配「客栈」——地图位置文案 洛阳客栈[18,12] 也含「客栈」，
 # 会被 track_task 误作任务锚点（实测第 12 轮跟踪失败根因）
+# 任务结束文案（用户 2026-10-12 确认）：出现即表示客栈任务已结束，
+# 终止任务循环（与「少侠已经完成5次任务」的每日上限同待遇）
+KEZHAN_END_TEXT = "我这里已经没有你可以做的事情了，明天再来找我。"
+
+
+class DailyLimitError(Exception):
+    """客栈任务已结束（无更多任务可做），终止任务循环。"""
 
 # ---- 前往洛阳客栈找掌柜 ----
 KEZHAN_MAP = "洛阳客栈"               # 位置识别地名（精确匹配）
@@ -168,9 +175,17 @@ DIALOG_OPTION_MAP = {
     "请听民生类第一题：“五谷丰登”中的“五谷”，通常不包括以下哪一种？":"瓜",
     "再听民生类第二题：“瑞雪兆丰年”，主要是因为积雪对农田有什么好处？":"冻死害虫，保温保墒",
     "再听民生类第三题：“柴米油盐酱醋茶”，常被用来泛指什么？":"日常生活",
-    "哎呀呀！少侠学识如海，奈何今日运道似沙……不过别灰心，下次少侠定能":"怎么感觉被骗了"
-
-
+    "哎呀呀！少侠学识如海，奈何今日运道似沙……不过别灰心，下次少侠定能":"怎么感觉被骗了",
+    "据说那玄石乃上古修罗遗落的神器碎片所化，沉寂于修罗古城已千年。玄枢":"既然如此，我这就前去一探。",
+    "少侠说的在理，那我便回玄枢阁复命了，告辞。":"后会有期。",
+    "近日兰若寺不太平，有位书生冤魂常在暗处出没，逢人便要考问诗文，答不":"我上知天文下知地理，倒是要去领教领教。",
+    "哼，来得正好！本公子最见不得胸无点墨之辈。你若能通过我的三题之试，":"请出题！",
+    "请听第一题：子曰：学而时习之，不亦说乎？有朋自远方来，不亦乐乎？人":"不亦君子乎",
+    "再听第二题：下列哪项不是大唐科举的常设科目？":"八股文",
+    "再听第三题：三人行，必有我师焉。择其善者而从之，":"其不善者而改之",
+    "再听第四题：“诗仙”指的是哪位唐代诗人？":"李白",
+    "最后一题：我国传统历法中，用来表示季节更替和农事活动的“二十四节气":"太阳在黄道上的运行位置",
+    "唉！这执念困我太久，的确该放下了......多谢点拨，我们来世文坛再会。":"来世再会！"
 }
 # 需要点击屏幕中间跳过的对话框文案 → 点击次数（出现则连点屏幕中间推进
 # 对话，同 xuanshu.DIALOG_SKIP_TEXTS）；不同文案要推进的屏数不同，次数
@@ -180,6 +195,10 @@ DIALOG_SKIP_TEXTS = {
     "少侠来得正及时！这月华霜蕊灵气充盈，正是宴上所需": 4,
     "附近的妖邪已被我清理干净了。": 4,
     "少侠可是受客栈所托，前往女儿国送货的？":2,
+    "想不到阁下竟是饱学之士，在下佩服。":2,
+    "四象归位，怨气已平":1,
+    "少侠可曾探得什么线索？":4,
+    "十年寒窗苦，一朝付火海！我不甘心！便是做鬼我也要考上功名！":2,
     "莫要过来": 4,
     "你怎么也跟过来": 4,
     "有个身份不明的孩童逢人便问花花的下落": 4,
@@ -212,6 +231,7 @@ DIALOG_SKIP_TEXTS = {
     "来来来，这次咱们比谁的点数小，一局定胜负！": 4,
     "走开，都走开": 4,
     "你赢了": 4,
+    "近日玄枢阁收到密报，有上古玄石重现天日，正在广招能人前往探寻。少侠":2,
     "哎一一哟！又一位才俊登台！本届大会由洛阳府衙、多宝阁、东山商行联合":2,
     # 「少侠……」空屏（空等归人送食材时婉儿姑娘的停顿屏，实测无选项，
     # 点 1 次屏幕中间即推进；漏推进由下一轮询自愈）。
@@ -975,16 +995,20 @@ def _find_qrect(items, qtxt):
     """定位问题行矩形：先整键逐行模糊匹配；拼接键（NPC 名+台词，
     如「小云姑娘姐姐」）逐行匹配不到时，用键的后缀逐行匹配
     （台词行是键的尾部），取最靠下（y 最大）的命中行。
-    找不到返回 None。
+    只认对话框区域行（x≥PANEL_MAX_X）：任务追踪面板可能含与对话框
+    相同的文案（如步骤「四象归位，怨气已平，去告知判官」），
+    面板行命中不应触发选项点击。找不到返回 None。
     """
+    dlg = [(t, r, s) for t, r, s in items
+           if r[0] >= task_tracker.PANEL_MAX_X]
     nqtxt = norm_text(qtxt)
-    for txt, rect, _ in items:
+    for txt, rect, _ in dlg:
         if _fuzzy_contains(norm_text(txt), nqtxt, threshold=0.85):
             return rect
     best = None
     for i in range(1, len(nqtxt) - 1):
         suf = nqtxt[i:]
-        for txt, rect, _ in items:
+        for txt, rect, _ in dlg:
             ntxt = norm_text(txt)
             if len(ntxt) >= 2 and _fuzzy_contains(ntxt, suf, threshold=0.9) \
                     and (best is None or rect[1] > best[1]):
@@ -1083,8 +1107,9 @@ def _handle_quiz_options(win, items, img_np):
     for qkw, ans in QUIZ_ANSWER_MAP.items():
         qrect = None
         for txt, rect, _ in items:
-            if _fuzzy_contains(norm_text(txt), norm_text(qkw), threshold=0.85):
-                qrect = rect
+            if rect[0] >= task_tracker.PANEL_MAX_X \
+                    and _fuzzy_contains(norm_text(txt), norm_text(qkw), threshold=0.85):
+                qrect = rect  # 只认对话框区域（追踪面板同文案不触发）
                 break
         if qrect is None:
             continue
@@ -1141,8 +1166,9 @@ def _handle_qiyu_dialog(win, items, img_np):
     for qtxt in QIYU_DIALOG_TEXTS:
         qrect = None
         for txt, rect, _ in items:
-            if norm_text(qtxt) in norm_text(txt):
-                qrect = rect
+            if rect[0] >= task_tracker.PANEL_MAX_X \
+                    and norm_text(qtxt) in norm_text(txt):
+                qrect = rect  # 只认对话框区域（追踪面板同文案不触发）
                 break
         if qrect is None:
             continue
@@ -1175,11 +1201,22 @@ def _handle_dialog_options(win, items, img_np):
     领取对话链与跟踪期间（follow_task 的附加对话处理回调）均使用，
     返回是否已处理。
     """
+    # 任务结束文案：出现即终止任务（对话框区域限定，追踪面板同文案
+    # 不触发；抛异常向上传播，run_loop 捕获后结束任务循环）
+    if _dialog_text_present(
+            [(norm_text(t), r, s) for t, r, s in items
+             if r[0] >= task_tracker.PANEL_MAX_X],
+            norm_text(KEZHAN_END_TEXT)):
+        raise DailyLimitError("客栈任务已结束（我这里已经没有你可以做的事情了，明天再来找我）")
     if _handle_qiyu_dialog(win, items, img_np):
         return True
     if _handle_quiz_options(win, items, img_np):
         return True
-    norm_items = [(norm_text(t), r, s) for t, r, s in items]
+    # 选项/跳过匹配只认对话框区域行（x≥PANEL_MAX_X）：任务追踪面板
+    # 可能含与对话框相同的文案（如步骤「四象归位，怨气已平，去告知
+    # 判官」），面板行命中不应触发点击（用户 2026-10-12 确认）
+    norm_items = [(norm_text(t), r, s) for t, r, s in items
+                  if r[0] >= task_tracker.PANEL_MAX_X]
     for dtxt, opt in DIALOG_OPTION_MAP.items():
         if not _dialog_text_present(norm_items, norm_text(dtxt)):
             continue
@@ -1335,7 +1372,8 @@ def run_loop(win, cycle_interval=1.0):
 
     结束条件（满足其一即返回结束原因，任务随之停止）：
     1. 完成任务次数达到设置的次数上限（通用设置-任务次数）
-    2. 领取任务时出现「请明天再来」文案（每日次数已满，同玄枢轶闻）
+    2. 出现结束文案（「少侠已经完成5次任务」/「我这里已经没有你可以
+       做的事情了，明天再来找我」）→ 每日次数已满/任务链结束
     3. 在洛阳客栈找不到掌柜（Alt+6 与兜底点击 (530,593) 后仍无）→ 终止任务
     返回结束原因描述。
     """
@@ -1346,7 +1384,11 @@ def run_loop(win, cycle_interval=1.0):
     while True:
         round_no += 1
         log(f"[客栈] ==== 第 {round_no} 轮 ====", "SYS")
-        status, info = run_cycle(win)
+        try:
+            status, info = run_cycle(win)
+        except DailyLimitError as e:
+            log(f"[客栈] {e}（已完成 {done} 次）", "SYS")
+            return str(e)
         if status == "done":
             done += 1
             total = max_rounds if max_rounds > 0 else "∞"
