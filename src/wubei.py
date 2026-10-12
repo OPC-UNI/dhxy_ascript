@@ -874,18 +874,22 @@ _hpg_battle_end_at = 0.0     # 战斗结束时间（结束沿起点）
 _hpg_clicked_at = 0.0        # 最近一次链接点击时间（冷却用）
 _hpg_click_tries = 0         # 本次结束沿的点击尝试次数
 _hpg_missing = 0             # 关键词连续消失轮询数（≥2 视为任务结束）
+_hpg_task_seen = False       # 本轮跟踪中面板出现过「黄袍」关键词（多杀任务）：
+                             # 返程前复查据此选择 4s 窗口（防瞬时为空误判）还是
+                             # 单次检查（其他任务，对齐修罗，每轮省 ~4s）
 
 
 def _reset_huangpaoguai_state():
     """黄袍怪状态机复位（任务领取成功后调用，防跨任务残留）。"""
     global _hpg_was_in_battle, _hpg_need_click, _hpg_battle_end_at, _hpg_missing
-    global _hpg_clicked_at, _hpg_click_tries
+    global _hpg_clicked_at, _hpg_click_tries, _hpg_task_seen
     _hpg_was_in_battle = False
     _hpg_need_click = False
     _hpg_battle_end_at = 0.0
     _hpg_clicked_at = 0.0
     _hpg_click_tries = 0
     _hpg_missing = 0
+    _hpg_task_seen = False
 
 
 def _click_track_link(win, items, img_np, keyword):
@@ -916,7 +920,7 @@ def _handle_huangpaoguai(win, items, img_np):
     点击等待中放宽到 6 次（结算过渡期面板可能暂不可读，勿误复位）。
     """
     global _hpg_was_in_battle, _hpg_need_click, _hpg_battle_end_at, _hpg_missing
-    global _hpg_clicked_at, _hpg_click_tries
+    global _hpg_clicked_at, _hpg_click_tries, _hpg_task_seen
     in_battle = battle_watch_in_battle()  # 注意：watch_in_battle 是函数，须调用取实时值
     if in_battle:
         # 战斗中：面板隐藏不判关键词，只记战斗状态供结束沿判定
@@ -944,6 +948,7 @@ def _handle_huangpaoguai(win, items, img_np):
             _reset_huangpaoguai_state()
         return False
     _hpg_missing = 0
+    _hpg_task_seen = True  # 本轮跟踪见过黄袍关键词：返程前复查用 4s 窗口
     if not _hpg_need_click:
         return False
     elapsed = time.time() - _hpg_battle_end_at
@@ -1130,7 +1135,13 @@ def _handle_xianxingjing(win, items, img_np):
         return False
     # 对话框已关闭：窗口内找模板点击；窗口过期后仍继续计数
     # （连续缺失达上限即走回恢复）。共享帧上模板匹配（性能审计 A：
-    # 原 find_template 自行截窗 ~170ms/轮询，改同帧 match_frame_np）
+    # 原 find_template 自行截窗 ~170ms/轮询，改同帧 match_frame_np）。
+    # 仅当白龙马对话框出现过并已关闭（_xj_dismissed_at 置位）才计数：
+    # 用镜后对话框从未出现是 A→B 回退路径（跟踪处理器负责走下一处），
+    # 不存在任务按钮，走回重试无意义且与回退打架（实测 2026-10-12
+    # 15:39:19 用镜未出对话框却误触第 2 次走回）
+    if _xj_dismissed_at <= 0:
+        return False
     pt = None
     if now - _xj_dismissed_at < XIANXINGJING_TEMPLATE_WINDOW:
         _, bgr = _xj_frame(win, items)
@@ -1311,9 +1322,18 @@ def _follow_to_done(win, first_items=None):
                            extra_dialog_handler=_handle_follow_extras,
                            fallback_keywords=TASK_FALLBACK_TEXTS,
                            first_items=first_items,
-                           skip_texts=())  # 禁用 xuanshu 默认跳过表（玄枢轶闻
-                                          # 专属文案，五倍自有对话处理——审计问题 2）
+                           skip_texts=(),  # 禁用 xuanshu 默认跳过表（玄枢轶闻
+                                           # 专属文案，五倍自有对话处理——审计问题 2）
+                           pre_click_handler=_handle_pre_click)
     return ok, info
+
+
+def _handle_pre_click(win, items, img_np):
+    """点击追踪绿字前的替换检查：锁妖网任务在寻路开始前拦截，人物
+    不起步直接进入替换领取（原流程先点链接开始寻路、内层轮询才
+    检测到——实测 2026-10-12 15:50 白走一段再折返）。"""
+    if _track_has_suoyaowang(items):
+        raise ReplaceTaskError(SUOYAOWANG_TRACK_TEXT)
 
 
 def _open_task_box(win):
@@ -1637,14 +1657,15 @@ def run_loop(win, cycle_interval=1.0):
        不满足 10 秒重查（人留在领取点，只开队伍面板检查）
     4. 队伍检查仅首次领取前执行一次（_team_checked）：首次领取成功后
        后续轮次直接走位领取，不再开面板（每轮省 5~7s）；领取失败时
-       补查一次队伍状态，队长被转移则转非队长保持模式
+       补查一次队伍状态——非队长转保持模式，人数不足恢复领取前
+       监控（等人数满足再领取），检查通过则下轮直接重试领取
     5. 任务追踪中已有五倍任务（续跑）→ 跳过领取，直接跟踪
 
     结束条件：完成任务次数达到设置的次数上限（通用设置-任务次数）。
     返回结束原因描述。
     """
     global _fight_via_kanda, _team_checked, _task_gone_last_round, _xj_need_replace, \
-        _replace_fail_streak
+        _replace_fail_streak, _hpg_task_seen
     max_rounds = load_task_counts().get(TASK_MODE, 0)
     log(f"[五倍] 任务次数上限: {max_rounds if max_rounds > 0 else '不限'}", "SYS")
     min_members = load_wubei_min()
@@ -1742,11 +1763,18 @@ def run_loop(win, cycle_interval=1.0):
                 ok, info, claim_items = _claim_task(win)
                 if not ok:
                     if check_team and _team_checked:
-                        # 已通过队伍检查仍领取失败（如队长被转移、入口未出现）：
-                        # 补一次队伍检查恢复状态感知，非队长转保持模式
+                        # 领取失败统一处理（用户 2026-10-12 确认，与修罗一致）：
+                        # 首次领取前检查队伍，后续轮次跳过；领取失败时补查
+                        # 一次——非队长转保持模式；人数不足复位 _team_checked，
+                        # 恢复领取前监控（等待人数满足后再领取，不再每轮
+                        # 盲点领取）；检查通过（如「对方很强大」非人数问题）
+                        # 则保持跳过检查，下轮直接重试领取
                         status, info2 = _check_team_with_retry(win)
                         if status == "not_leader":
                             _keep_alive(info2)
+                        elif status == "wait":
+                            _team_checked = False
+                            log("[五倍] 领取失败且队伍人数不足，恢复领取前队伍监控", "WARN")
                     if need_replace:
                         _replace_fail_streak += 1
                         if _replace_fail_streak >= REPLACE_FAIL_LIMIT:
@@ -1786,16 +1814,21 @@ def run_loop(win, cycle_interval=1.0):
                 continue
             # 5. 返程：战斗结束且任务追踪中确实没有任务才返程（用户确认：
             #    黄袍怪任务要杀多次，两场战斗之间追踪可能瞬时为空，follow
-            #    的消失确认会误判完成——返程前 4s 窗口内连续复查，任一帧
-            #    任务仍在即不返程并恢复跟踪。单次检查会撞上面板未渲染的
-            #    空档（审计问题 5：计数虚增 + 剩余杀数丢失）
-            recheck_deadline = time.time() + 4.0
-            still_tracked = False
-            while time.time() < recheck_deadline:
-                if task_tracker.has_task(win, TASK_TITLE, TASK_FALLBACK_TEXTS):
-                    still_tracked = True
-                    break
-                time.sleep(1.0)
+            #    的消失确认会误判完成——黄袍怪轮次返程前 4s 窗口内连续复查，
+            #    任一帧任务仍在即不返程并恢复跟踪。其他任务单次检查
+            #    （对齐修罗；无条件 4s 窗口实测拖慢每轮返程 ~4s，
+            #    2026-10-12 按 _hpg_task_seen 门控）
+            if _hpg_task_seen:
+                recheck_deadline = time.time() + 4.0
+                still_tracked = False
+                while time.time() < recheck_deadline:
+                    if task_tracker.has_task(win, TASK_TITLE, TASK_FALLBACK_TEXTS):
+                        still_tracked = True
+                        break
+                    time.sleep(1.0)
+            else:
+                still_tracked = task_tracker.has_task(win, TASK_TITLE,
+                                                      TASK_FALLBACK_TEXTS)
             if still_tracked:
                 _task_gone_last_round = False  # 恢复跟踪：下一轮 has_task 续跑
                 log("[五倍] 返程前复查任务仍在追踪（多杀任务），跳过返程继续跟踪", "WARN")

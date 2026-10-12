@@ -741,7 +741,8 @@ def _confirm_task_gone(win, title, fallback_texts=()):
 def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶闻",
                 extra_dialog_handler=None, green_order=None, progress_key=None,
                 green_picker=None, fallback_keywords=None, first_items=None,
-                signature_key=None, ignore_empty_key=False, skip_texts=None):
+                signature_key=None, ignore_empty_key=False, skip_texts=None,
+                pre_click_handler=None):
     """循环跟踪任务直到完成（prefix 供其他任务复用，如五环）。
 
     每轮：点击任务当前第一个绿色文案 → 等待任务信息变化（内容更新）
@@ -755,6 +756,8 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
     extra_dialog_handler：附加对话框处理回调 (win, items, img_np) → 是否已处理，
     供其他任务注入专属对话流程（如五环的提交装备）；回调中抛出的异常向上传播，
     供调用方做任务级终止。
+    pre_click_handler：点击任务绿字前的检查回调 (win, items, img_np)，可抛异常
+    终止跟踪（如五倍锁妖网任务在寻路开始前拦截，人物不起步直接替换领取）。
     green_order：多个可点击绿字须按序点击时的顺序关键词列表
     （如 青龙→白虎→朱雀→玄武），传给 track_task；None 时点第一个绿字。
     progress_key：进度判定回调 (items, img_np) → str。任务推进可能只改变
@@ -832,6 +835,12 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 extra_dialog_handler(win, items, img_np)
             time.sleep(FOLLOW_POLL_INTERVAL)
             continue
+        # 点击前检查（可选回调，可抛异常终止跟踪）：在点任务绿字之前
+        # 调用——需要替换的任务（如锁妖网）在寻路开始前拦截，人物
+        # 不起步、原地进入替换领取（原流程先点链接开始寻路，内层轮询
+        # 才检测到，白走一段再折返）
+        if pre_click_handler is not None:
+            pre_click_handler(win, items, img_np)
         # 进度键基线：直接用当前帧（点击前捕获；点击后目标可能立刻完成
         # 变色，首个轮询才建基线会漏检该变化导致卡住）
         pre_key = progress_key(items, img_np) if progress_key is not None else None

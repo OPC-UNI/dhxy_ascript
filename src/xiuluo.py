@@ -1239,7 +1239,8 @@ def run_loop(win, cycle_interval=1.0):
     不满足 10 秒重查（人留在领取点，只开队伍面板检查）
     4. 队伍检查仅首次领取前执行一次（_team_checked）：首次领取成功后
     后续轮次直接走位领取，不再开面板（每轮省 5~7s）；领取失败时
-    补查一次队伍状态，队长被转移则转非队长保持模式
+    补查一次队伍状态——非队长转保持模式，人数不足恢复领取前
+    监控（等人数满足再领取），检查通过则下轮直接重试领取
 
     结束条件（满足其一即返回结束原因，任务随之停止）：
     1. 完成任务次数达到设置的次数上限（通用设置-任务次数）
@@ -1324,11 +1325,18 @@ def run_loop(win, cycle_interval=1.0):
             ok, info, claim_items = _claim_task(win)
             if not ok:
                 if check_team and _team_checked:
-                    # 已通过队伍检查仍领取失败（如队长被转移、按钮未出现）：
-                    # 补一次队伍检查恢复状态感知，非队长转保持模式
+                    # 领取失败统一处理（用户 2026-10-12 确认，与五倍一致）：
+                    # 首次领取前检查队伍，后续轮次跳过；领取失败时补查
+                    # 一次——非队长转保持模式；人数不足复位 _team_checked，
+                    # 恢复领取前监控（等待人数满足后再领取，不再每轮
+                    # 盲点领取）；检查通过（如「对方很强大」非人数问题）
+                    # 则保持跳过检查，下轮直接重试领取
                     status, info2 = _check_team_with_retry(win)
                     if status == "not_leader":
                         _keep_alive(info2)
+                    elif status == "wait":
+                        _team_checked = False
+                        log("[修罗] 领取失败且队伍人数不足，恢复领取前队伍监控", "WARN")
                 log(f"[修罗] {info}", "WARN")
                 time.sleep(cycle_interval)
                 continue
