@@ -80,7 +80,11 @@ def find_bag_box(win):
 # 开/关背包的轮询参数：点击后轮询面板标志出现/消失（替代固定 1.5s
 # 等待——面板动画约 0.4s 完成，成功路径平均省 ~1s；1.5s 为超时上限）
 _BAG_TOGGLE_POLL = 0.4
-_BAG_TOGGLE_TIMEOUT = 1.5
+_BAG_TOGGLE_TIMEOUT = 4.0   # 单次点击后的等待窗口：加宽覆盖战斗结束后
+                            # 结算/掉落类弹窗的瞬态遮挡（实测 ~6s 内吞掉
+                            # 点击），同时消除慢开超时后重点把刚打开的
+                            # 背包关掉的自伤；正常打开 <1s 即检测到返回，
+                            # 正常路径零耗时增加
 
 
 def is_bag_open(win):
@@ -163,13 +167,16 @@ def find_sheyaoxiang_with_slots(win):
 def open_bag(win):
     """点击背包并验证打开。
 
-    点击后轮询 bag_box 模板出现：出现=打开成功；1.5s 内未出现=重试一次
-    （仅一次）。注意背包按钮是开关切换：若此前已是打开状态，第一次
-    点击会关闭，检测失败后重试点击即可恢复打开，流程自愈。
+    点击后轮询 bag_box 模板出现：出现=打开成功；未出现=重试（最多
+    3 次、单次等待 4s——覆盖战斗结束后结算/掉落类弹窗的瞬态遮挡，
+    实测 2026-10-12 弹窗 ~6s 内吞掉两次点击、地图 1s 后正常打开）。
+    注意背包按钮是开关切换：若此前已是打开状态，第一次点击会关闭，
+    检测失败后重试点击即可恢复打开，流程自愈；等待窗口加宽也消除
+    「慢开超时后重点把刚打开的背包关掉」的自伤。
     高性能：按钮坐标缓存后首轮直点（识别打开成功后记录位置），
     未打开回退识别流程。返回 (是否成功, 描述)。
     """
-    for attempt in (1, 2):
+    for attempt in (1, 2, 3):
         r = None
         cached = False
         if attempt == 1 and app_utils.high_perf_on():
@@ -192,15 +199,26 @@ def open_bag(win):
                 return True, f"第{attempt}次点击成功（{desc}）"
             time.sleep(_BAG_TOGGLE_POLL)
         log(f"[背包] 第{attempt}次点击后未检测到背包面板，重试一次...", "WARN")
-    return False, "两次尝试后仍未检测到背包面板"
+    # 诊断：OCR 屏幕中央区域，记录遮挡物文案（弹窗类型排查用）
+    try:
+        from . import map as _gm
+        img = win.capture(force_activate=False)
+        if img is not None:
+            items, _ = _gm.ocr_regions(img, ((400, 200, 980, 500),))
+            txts = [t for t, _, s in items if s >= 0.55][:4]
+            log(f"[背包] 开包失败诊断，屏幕中央文案: {txts or '(无)'}", "WARN")
+    except Exception:
+        pass
+    return False, "三次尝试后仍未检测到背包面板"
 
 
 def close_bag(win):
     """右键点击背包面板关闭背包。
 
     识别到 bag_box 后记录坐标，关闭时移动到该位置右键点击（游戏面板
-    支持右键关闭）。点击后轮询 bag_box 消失：消失=关闭成功；1.5s 内
-    仍存在=重试一次。返回 (是否成功, 描述)。
+    支持右键关闭）。点击后轮询 bag_box 消失：消失=关闭成功；未消失
+    =重试一次（等待窗口同 open_bag，正常关闭 <1s 即返回）。
+    返回 (是否成功, 描述)。
     """
     for attempt in (1, 2):
         box = _find_bag_box(win)

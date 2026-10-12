@@ -148,9 +148,28 @@ DIALOG_OPTION_MAP = {
     "唉，罢了，终究是我太过执着。愿他此生……得偿所愿，平安喜乐吧":"愿你来世，能被温柔以待…",
     "近日有个天竺武士在长安擂台摆擂，口出狂言说我大唐无人能敌":"这就去教训教训他。",
     "嗬！又来个不知深浅的！我这天竺秘传的瑜伽体术，岂是你们唐人的花拳绣":"啰里啰嗦的，看打！",
-    "别、别瞎说，我没招你没惹你，你可千万别跟我动手啊，小心我讹你医药费":"瞅你这点本事，算了，赶紧从我眼前消失。"
+    "别、别瞎说，我没招你没惹你，你可千万别跟我动手啊，小心我讹你医药费":"瞅你这点本事，算了，赶紧从我眼前消失。",
+    "女儿国一位独居女子近来夜夜难眠，总说房中有黑影游荡、耳畔私语不断，":"夜不安枕，定有缘由。我这就去查看。",
+    "恐怖的鬼魂不要":"看来就是你在搞鬼，看打！",
+    # 妆匣遗思·小云姑娘「姐姐--」的选项是省略号「……」：norm_text 去
+    # 标点后为空，模糊/绿字块兜底都匹配不了，走 _click_green_dots_below
+    # 点阵兜底（六点亮绿 2x2px 点阵，实测 y410 x440-465）。键用 NPC
+    # 名+台词拼接（裸「姐姐」会误配所有含「姐姐」的对话，如
+    # 「等等！这气息…是晴儿姐姐？！」）；值「……」仅作语义标注。
+    "小云姑娘姐姐":"……",
+    "洛阳城正举办幸运五十二”答题大会，少侠博闻强识，不如替咱们客栈带":"你还真会占便宜，成，我这就去凑个热闹。",
+    "规则简单的很！少侠只需连闯三关一一智多星考你经史，多智星问你天象，":"好说！",
+    "请听经史类第一题：神话中，用五彩石补天的是哪位上古女神？":"女娲",
+    "再听经史类第二题：“千里送鹅毛”的下半句俗语是？":"礼轻情意重",
+    "再听经史类第三题：“完璧归赵”这个典故中，主角是谁？":"蔺相如",
+    "请听天象类第一题：传统二十四节气中，紧跟在“清明”之后的是？":"谷雨",
+    "再听天象类第二题：“银河”在民间传说里，又常被称为什么？":"天河",
+    "再听天象类第三题：古代用来计时的“日晷”，主要利用的是什么投影原理":"太阳",
+    "请听民生类第一题：“五谷丰登”中的“五谷”，通常不包括以下哪一种？":"瓜",
+    "再听民生类第二题：“瑞雪兆丰年”，主要是因为积雪对农田有什么好处？":"冻死害虫，保温保墒",
+    "再听民生类第三题：“柴米油盐酱醋茶”，常被用来泛指什么？":"日常生活",
+    "哎呀呀！少侠学识如海，奈何今日运道似沙……不过别灰心，下次少侠定能":"怎么感觉被骗了"
 
-    
 
 }
 # 需要点击屏幕中间跳过的对话框文案 → 点击次数（出现则连点屏幕中间推进
@@ -164,6 +183,7 @@ DIALOG_SKIP_TEXTS = {
     "莫要过来": 4,
     "你怎么也跟过来": 4,
     "有个身份不明的孩童逢人便问花花的下落": 4,
+    "又来个送银子的？我纵横江湖十载，骰盅一响黄金万两！少侠是来给我添彩":2,
     "你又来找我干嘛": 4,
     "我本是溪边一颗石子，花花自幼便叼着我在草地上打滚。那段被它捧在爪间": 4,
     "少侠可是为苏家娘子而来？今晨我已诊过脉象，":2,
@@ -175,9 +195,11 @@ DIALOG_SKIP_TEXTS = {
     "梆梆给你两拳帮收保护费啦！不给钱的就要挨...挨...下一句词儿是啥来着":2,
     "哎……少侠答错了！":5,
     "你是何人？":4,
+    "恭喜少侠通过考验！来来来一一金指针停何处，福气便落谁家！":2,
     "哎呦！正是此物！":6,
-    "四象归位，怨气已平，去告知": 4,
     "世间皆负我……人人都欺我……": 3,
+    "等等！这气息…是晴儿姐姐？！":4,
+    "恭喜少侠通关智多星的考验！接下来请前往多智星处接受下一轮考验！":1,
     "娘亲...为什么不要我...":6,
     "灵兽村近日打算举办一场名为“灵兽大冒险”的竞技活动，到时记得去参加": 3,
     "你、你要干嘛？我可和刚刚那个说大话的家伙不认识！":2,
@@ -190,6 +212,14 @@ DIALOG_SKIP_TEXTS = {
     "来来来，这次咱们比谁的点数小，一局定胜负！": 4,
     "走开，都走开": 4,
     "你赢了": 4,
+    "哎一一哟！又一位才俊登台！本届大会由洛阳府衙、多宝阁、东山商行联合":2,
+    # 「少侠……」空屏（空等归人送食材时婉儿姑娘的停顿屏，实测无选项，
+    # 点 1 次屏幕中间即推进；漏推进由下一轮询自愈）。
+    # 不能只配「少侠」：norm_text 去标点后「少侠……」只剩「少侠」，模糊
+    # 匹配会命中所有含「少侠」的对话框（掌柜「少侠有什么事吗」等）。
+    # 用 NPC 名行+台词的拼接键（_dialog_text_present 会对全行拼接做
+    # 匹配）唯一锁定本屏；其他 NPC 的裸「少侠……」空屏同法追加。
+    "婉儿姑娘少侠": 1,
     # 「少侠……」空屏（空等归人送食材时婉儿姑娘的停顿屏，实测无选项，
     # 点 1 次屏幕中间即推进；漏推进由下一轮询自愈）。
     # 不能只配「少侠」：norm_text 去标点后「少侠……」只剩「少侠」，模糊
@@ -201,7 +231,30 @@ DIALOG_SKIP_TEXTS = {
 # ---- 奇遇对话框（多选项恒点第一个；选项文案随奇遇变化不映射固定文案） ----
 QIYU_DIALOG_TEXTS = ["阴风骤起",   # 第一幕：妖僧现身（三选项 护太师/破阵/远退）
                      "耳旁有异响",  # 第二幕：硬抗咒光后（两选项 退开/刺向源头）
-                     "伤势过重"]   # 结局幕：远退后摔伤（单选项「我知道了」）
+                     "伤势过重",   # 结局幕：远退后摔伤（单选项「我知道了」）
+                     # 妆匣遗思奇遇（实测 2026-10-12）：晴儿魂魄被吸入怪异
+                     # 法器（三选项 飞身击碎法器/环视寻找法器主人/抽身远离，
+                     # 恒点第一个「飞身而起，直接击碎法器」）
+                     "刺耳尖叫",
+                     # 同一奇遇下一幕：纵身而起时四周传出厉喝「此物碰不得」
+                     # （两选项 攻势不减执意击落/闻声收势凝神戒备，
+                     # 恒点第一个「攻势不减，执意击落」）
+                     "此物碰不得",
+                     # 答题大会奇遇（实测 2026-10-12）：组织者见官差来查
+                     # （三选项 上前举报/讨要封口费/默默离开，
+                     # 恒点第一个「赶紧上前向官差举报」）
+                     "奖池银箱",
+                     "官差面前举报",
+                     "调查需要时间",
+                     "客栈奇遇"]
+# ---- 答题致富问答题（多星智；选项为纵向排列的单字，OCR 会把整列
+#      合并成一条竖框——实测「稻麦瓜」识别为一个高矩形）----
+# 问题关键词 → 正确选项单字。选项顺序若被游戏打乱，按「字在合并
+# 文本中的位置」定位，不受顺序影响。新题在此追加。
+QUIZ_ANSWER_MAP = {
+    # 民生类第一题：「五谷」通常不包括哪一种（五谷=稻黍稷麦菽，瓜不是谷物）
+    "五谷丰登": "瓜",
+}
 # ---- 物品给与（高等食材→婉儿姑娘 / 九转还魂汤→苏巧儿；给与流程参考五环提交装备） ----
 GAODENGSHICAI_ICON = "kezhan_gaodengshicai.png"  # 高等食材物品（给与面板检索）
 JIUZHUAN_ICON = "kezhan__jiuzhuanhuanhuntang.png"  # 九转还魂汤物品（给与面板检索）
@@ -899,6 +952,8 @@ def _click_green_option_fuzzy(win, items, img_np, text):
     「阴阳有序，此事义不容辞。」读成「…此事文不容辞，」，精确匹配漏掉）。
     """
     nopt = norm_text(text)
+    if not nopt:
+        return False  # 纯标点选项（如省略号「……」）：norm 后为空，交给点阵兜底
     for txt, rect, score in items:
         if score < 0.55 or rect[0] < task_tracker.PANEL_MAX_X:
             continue  # 限定对话框区域，避免误点追踪面板的绿字链接
@@ -916,21 +971,40 @@ def _click_green_option_fuzzy(win, items, img_np, text):
     return False
 
 
+def _find_qrect(items, qtxt):
+    """定位问题行矩形：先整键逐行模糊匹配；拼接键（NPC 名+台词，
+    如「小云姑娘姐姐」）逐行匹配不到时，用键的后缀逐行匹配
+    （台词行是键的尾部），取最靠下（y 最大）的命中行。
+    找不到返回 None。
+    """
+    nqtxt = norm_text(qtxt)
+    for txt, rect, _ in items:
+        if _fuzzy_contains(norm_text(txt), nqtxt, threshold=0.85):
+            return rect
+    best = None
+    for i in range(1, len(nqtxt) - 1):
+        suf = nqtxt[i:]
+        for txt, rect, _ in items:
+            ntxt = norm_text(txt)
+            if len(ntxt) >= 2 and _fuzzy_contains(ntxt, suf, threshold=0.9) \
+                    and (best is None or rect[1] > best[1]):
+                best = rect
+    return best
+
+
 def _click_green_option_fallback(win, items, img_np, qtxt):
     """选项 OCR 不可识别（如单字「哎」）时兜底：定位问题行，点击其下方
     80px 内的第一个亮绿文字块（选项链接为亮绿，世界暗绿噪点被过滤）。
     返回是否已点击。
     """
-    qrect = None
-    for txt, rect, _ in items:
-        if _fuzzy_contains(norm_text(txt), norm_text(qtxt), threshold=0.85):
-            qrect = rect
-            break
+    qrect = _find_qrect(items, qtxt)
     if qrect is None:
         return False
     x0 = qrect[0] - 20
     y0 = qrect[3]
-    x1 = qrect[2] + 300
+    # 右界封顶 800：对话框右侧边缘的绿色装饰条（实测 x 956-980，
+    # 24x56 绿块）会被旧 x1=qrect[2]+300 纳入误点；选项实测最右 ~780
+    x1 = min(qrect[2] + 300, 800)
     region = img_np[y0:y0 + 80, x0:x1].astype(int)
     if region.size == 0:
         return False
@@ -952,6 +1026,105 @@ def _click_green_option_fallback(win, items, img_np, qtxt):
     log(f"[客栈] 选项「{qtxt}」OCR 不可识别，按问题行下方绿字块点击 @({cx},{cy})", "SYS")
     move_away(win)  # 鼠标停留选项上会使其悬停变色，干扰后续绿字判定
     return True
+
+
+def _click_green_dots_below(win, items, img_np, qtxt):
+    """省略号等纯标点选项兜底：OCR 不识别纯标点行（「……」norm 后为空），
+    且圆点阵单点仅 ~2x2px（实测妆匣遗思小云姑娘「姐姐--」下方
+    六点省略号，亮绿 (0,208,17)），绿字块兜底的 w≥6/h≥6/area≥15
+    过滤会漏——按绿色像素行聚类，点击最大像素簇中心。
+    返回是否已点击。
+    """
+    qrect = _find_qrect(items, qtxt)
+    if qrect is None:
+        return False
+    x0 = qrect[0] - 20
+    y0 = qrect[3]
+    x1 = min(qrect[2] + 300, 800)  # 同绿字块兜底：排除右侧绿色装饰条
+    region = img_np[y0:y0 + 80, x0:x1].astype(int)
+    if region.size == 0:
+        return False
+    mask = task_tracker.green_mask(region, 90)
+    ys, xs = np.where(mask)
+    if len(xs) < 3:
+        return False
+    # 按行聚类（y 差 ≤3 合并；点阵 2px 高、正文块 14px 高均聚合为簇）
+    clusters = []
+    for py, px in sorted(zip(ys.tolist(), xs.tolist())):
+        for c in clusters:
+            if c["ymin"] - 3 <= py <= c["ymax"] + 3:
+                c["pts"].append((py, px))
+                c["ymin"] = min(c["ymin"], py)
+                c["ymax"] = max(c["ymax"], py)
+                break
+        else:
+            clusters.append({"pts": [(py, px)], "ymin": py, "ymax": py})
+    if not clusters:
+        return False
+    best = max(clusters, key=lambda c: len(c["pts"]))
+    xs2 = [p[1] for p in best["pts"]]
+    ys2 = [p[0] for p in best["pts"]]
+    cx = x0 + (min(xs2) + max(xs2)) // 2
+    cy = y0 + (min(ys2) + max(ys2)) // 2
+    human_click(win, cx, cy)
+    log(f"[客栈] 选项「{qtxt}」为绿色点阵省略号（OCR 不可识别），"
+        f"点击点阵中心 @({cx},{cy})", "SYS")
+    move_away(win)  # 鼠标停留选项上会使其悬停变色，干扰后续绿字判定
+    return True
+
+
+def _handle_quiz_options(win, items, img_np):
+    """答题致富单字选项问答：选项为纵向排列的单字（稻/麦/瓜），OCR
+    会把整列合并成一条竖框（实测「稻麦瓜」一个高矩形）。按问题
+    关键词查 QUIZ_ANSWER_MAP 的正确选项字：合并框时从框内文字定位
+    该字序号、按框高等分点击该段中心（游戏打乱选项顺序也不受影响）；
+    逐行识别（未合并）时直接点命中行。返回是否已处理。
+    """
+    for qkw, ans in QUIZ_ANSWER_MAP.items():
+        qrect = None
+        for txt, rect, _ in items:
+            if _fuzzy_contains(norm_text(txt), norm_text(qkw), threshold=0.85):
+                qrect = rect
+                break
+        if qrect is None:
+            continue
+        nans = norm_text(ans)
+        merged = None
+        single = None
+        for txt, rect, score in items:
+            if score < 0.55 or rect[0] < task_tracker.PANEL_MAX_X:
+                continue
+            if rect[1] < qrect[3] - 4 or rect[1] - qrect[3] > 200:
+                continue  # 问题行下方 200px 内
+            h = rect[3] - rect[1]
+            w = rect[2] - rect[0]
+            ntxt = norm_text(txt)
+            if h >= 40 and w <= 60 and len(ntxt) >= 2:
+                merged = (ntxt, rect)  # 合并竖框（≥3 字堆叠）
+                break
+            if len(ntxt) == 1 and ntxt == nans:
+                single = rect
+        if merged is not None:
+            ntxt, rect = merged
+            pos = ntxt.find(nans)
+            if pos < 0:
+                continue
+            n = len(ntxt)
+            cx = (rect[0] + rect[2]) // 2
+            cy = rect[1] + int((rect[3] - rect[1]) * (pos + 0.5) / n)
+            human_click(win, cx, cy)
+            log(f"[客栈] 答题选项合并竖框「{ntxt}」，答案「{ans}」为第"
+                f" {pos + 1}/{n} 项 @({cx},{cy})", "SYS")
+            move_away(win)
+            return True
+        if single is not None:
+            cx = (single[0] + single[2]) // 2
+            cy = (single[1] + single[3]) // 2
+            human_click(win, cx, cy)
+            log(f"[客栈] 答题选项单行命中答案「{ans}」@({cx},{cy})", "SYS")
+            move_away(win)
+            return True
+    return False
 
 
 def _handle_qiyu_dialog(win, items, img_np):
@@ -1004,6 +1177,8 @@ def _handle_dialog_options(win, items, img_np):
     """
     if _handle_qiyu_dialog(win, items, img_np):
         return True
+    if _handle_quiz_options(win, items, img_np):
+        return True
     norm_items = [(norm_text(t), r, s) for t, r, s in items]
     for dtxt, opt in DIALOG_OPTION_MAP.items():
         if not _dialog_text_present(norm_items, norm_text(dtxt)):
@@ -1014,6 +1189,11 @@ def _handle_dialog_options(win, items, img_np):
         # 选项 OCR 不可识别（如单字「哎」）：按问题行下方绿字块点击
         if _click_green_option_fallback(win, items, img_np, dtxt):
             log("[客栈] 检测到任务对话（选项 OCR 不可识别，绿字块兜底点击）", "SYS")
+            return True
+        # 纯标点选项（如省略号「……」）：OCR 不识别、点阵单点 ~2x2px
+        # 绿字块过滤也漏——按绿色像素行聚类点击点阵中心
+        if _click_green_dots_below(win, items, img_np, dtxt):
+            log("[客栈] 检测到任务对话（省略号点阵选项，点阵兜底点击）", "SYS")
             return True
     for dtxt, clicks in DIALOG_SKIP_TEXTS.items():
         if _dialog_text_present(norm_items, norm_text(dtxt)):

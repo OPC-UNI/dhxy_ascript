@@ -37,6 +37,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from PIL import Image  # 对话框区域 2x 放大重识别（看打选项 OCR 漏检兜底）
 from ascript.windows.system import R  # 资源路由（模板路径）
 from ascript.windows.hardware.keyboard import Keyboard  # Alt+C 飞行/刷新（领取验证兜底）
 
@@ -80,6 +81,10 @@ LINGQU_ICON = "xiuluo_lingqu.png"             # 修罗领取任务按钮（15.pn
 LINGSHOUCUN_SHIZHE_ICON = "xiuluo_lingshoucunshizhe.png"  # 灵兽村使者 NPC（识别到也可点击领取）
 CLAIM_SPOT = (111, 90)                        # 领取点地图坐标（用户实测 111,90 附近）
 CLAIM_NEAR_TOLERANCE = 15                     # 已在领取点附近判定容差（用户步 1.1）
+CLAIM_NEAR_BTN_GRACE = 3.0                    # 位置近但按钮不可见时的渲染短窗口（秒）：
+                                              # 窗口内按钮出现即免寻路，仍无走小地图重走
+                                              # （实测返程落点 101,83 距领取点 12.2 单位，
+                                              # 按钮不出现，旧逻辑入口空等 20s 需人工走位）
 WALK_ARRIVE_TOLERANCE = 5                     # 寻路到达判定容差（用户步 1.2，更严格：
                                               # 走动中识图点击容易点不到）
 LINGSHOU_MAP_POS = (627, 396)                 # 灵兽村小地图上领取点位置的点击点（窗口相对坐标，用户实测）
@@ -90,6 +95,12 @@ CLAIM_COUNT_TEXT = "今日已完成次数"            # 领取后对话框中的
 TEAM_WARNING_TEXT = "修罗的战斗力异常强大，千万要找齐伙伴再一同消灭。"  # 队伍数量小于 3 的提示（实测文案）
 CLAIM_ARRIVE_TIMEOUT = 90                     # 寻路到领取点的超时
 CLAIM_BUTTON_TIMEOUT = 20                     # 到达后等待领取任务按钮出现的超时
+ENTRY_FIRST_WAIT = 4.5                         # 入口首轮等待：位置近判定可能误判（超出
+                                               # 可点击范围入口不会出现），首轮只等 4.5s
+                                               # （3 次 1.5s 轮询覆盖模板相位），未出现即
+                                               # 小地图重走领取点再等一轮（五倍同款，
+                                               # 实测 2026-10-12 修罗第 70 轮空等 20s
+                                               # 需人工走位才恢复）
 CLAIM_DIALOG_TIMEOUT = 15                     # 领取对话框处理超时
 CLAIM_DIALOG_APPEAR_TIMEOUT = 4               # 点击领取入口后等待对话框出现的短窗口
                                               # （正常 ~1.5s 即出）：超时未见选项判定
@@ -457,7 +468,18 @@ def _walk_to_claim_spot(win, just_returned=False):
     # 领取按钮（仅在可点击范围内出现）
     pos = game_map.read_map_position(win)
     if _near_claim_spot(pos, CLAIM_NEAR_TOLERANCE):
-        return True, "已在领取点附近"
+        # 位置近但按钮不可见：可能是位置误读，或超出可点击范围
+        # （实测返程落点 101,83 距领取点 12.2 单位处按钮不出现——
+        # 旧逻辑直接判「已在附近」跳过寻路，入口等待 20s 空转、
+        # 2026-10-12 第 70 轮手动走位才恢复）。给按钮 3s 渲染短窗口
+        # （返程加载后按钮可能延迟出现），窗口内出现即免寻路，
+        # 仍无则走小地图重走兜底（五倍同款）。
+        deadline = time.time() + CLAIM_NEAR_BTN_GRACE
+        while time.time() < deadline:
+            if game_map.find_template(win, LINGQU_ICON) is not None:
+                return True, "已在领取点附近（领取按钮可见）"
+            time.sleep(0.5)
+        log("[修罗] 位置近但领取按钮未出现，改走小地图重走领取点", "WARN")
     if pos is None and just_returned:
         # 刚返程：位置识别失败大概率是传送加载未完成（回城符落点
         # 必在灵兽村，不会在别处）。只识别一次（同帧做按钮匹配 +
@@ -561,9 +583,20 @@ def _click_entry_ensuring_dialog(win, log_tag="[修罗]", hover_before_click=Fal
         # 再补一次识别（旧双检）会因标记动画/镜头未稳出现「出现后又
         # 消失」假失败（实测到达秒级报错未点击）；点不中由对话框出现
         # 判定兜底（小地图重定位重试）
-        pt2, src2 = _wait_claim_entry(win, CLAIM_BUTTON_TIMEOUT)
+        wait_timeout = ENTRY_FIRST_WAIT if attempt == 1 else CLAIM_BUTTON_TIMEOUT
+        pt2, src2 = _wait_claim_entry(win, wait_timeout)
         if pt2 is None:
-            return False, "到达后未出现领取任务按钮/灵兽村使者", None, None, None
+            if attempt == 1:
+                # 入口未出现：小地图重走领取点（原地或短途，几秒即回）
+                # 后重试一次，不再空等整轮（2026-10-12 实测第 70 轮
+                # 空等 20s 失败、需人工走位才恢复——五倍同款自愈）
+                log(f"{log_tag} 等待入口 {wait_timeout}s 未出现，小地图重走领取点后重试", "WARN")
+                ok, info = _relocate_to_claim_spot(win)
+                if not ok:
+                    log(f"{log_tag} {info}", "WARN")
+                    return False, "到达后未出现领取任务按钮/灵兽村使者", None, None, None
+                continue
+            return False, "到达后未出现领取任务按钮/灵兽村使者（重走领取点后仍无）", None, None, None
         if hover_before_click:
             human_move(win.rect.left + pt2[0], win.rect.top + pt2[1])
             log(f"{log_tag} 已移动鼠标到{src2} ({pt2[0]}, {pt2[1]})，"
@@ -787,6 +820,58 @@ def _check_team_with_retry(win, tries=3):
     return last
 
 
+_fight_fb_last_at = 0.0  # 兜底 2x OCR 冷却（防无选项对话框每轮询白耗）
+
+
+def _click_fight_option_fallback(win, items, img_np):
+    """「看打！」选项偶发未被区域 OCR 检出时的兜底（实测 90 轮 2 次：
+    区域快引擎漏检选项行，全帧引擎可读——选项行与故事行紧贴时 det
+    偶发吞掉）。对对话框区域 2x 放大重识别一次（巫医同款：选项字小
+    时放大后 det 可检出）；只有真正识别到绿色「看打」文字才点击——
+    不猜像素（像素兜底实测误点场景绿块 3 次，2026-10-12 废弃）。
+    对话框区域有故事行（≥120px 宽非绿文本）才尝试；5s 冷却防无选项
+    对话框（如队伍警告）每轮询白耗 2x OCR。返回是否已点击。
+    """
+    global _fight_fb_last_at
+    has_story = any(s >= 0.55 and r[0] >= task_tracker.PANEL_MAX_X
+                    and r[2] - r[0] >= 120
+                    and not task_tracker.is_green_text(img_np, r)
+                    for t, r, s in items)
+    if not has_story:
+        return False
+    now = time.time()
+    if now - _fight_fb_last_at < 5.0:
+        return False
+    _fight_fb_last_at = now
+    img = win.capture(force_activate=False)
+    if img is None:
+        return False
+    l, t, r, b = task_tracker.DIALOG_REGION
+    crop = img.crop((l, t, r, b)).resize(((r - l) * 2, (b - t) * 2),
+                                         Image.LANCZOS)
+    items2, _ = game_map.ocr_image(crop)
+    needle = norm_text(FIGHT_DIALOG_OPTION)
+    for txt, rect, score in items2:
+        if score < 0.55 or needle not in norm_text(txt):
+            continue
+        # 映射回窗口坐标；限定对话框区域 + 绿字判定
+        rect2 = [l + rect[0] // 2, t + rect[1] // 2,
+                 l + rect[2] // 2, t + rect[3] // 2]
+        if rect2[0] < task_tracker.PANEL_MAX_X:
+            continue
+        frame = np.asarray(img)[:, :, :3]
+        if not task_tracker.is_green_text(frame, rect2):
+            continue
+        cx, cy = task_tracker.green_text_center(frame, rect2,
+                                                prefer_underline=False)
+        human_click(win, cx, cy)
+        log(f"[修罗] 「看打！」选项未识别（OCR 漏检），2x 放大重识别点击 @({cx},{cy})", "WARN")
+        app_utils.fixed_pos_set("fight_option", win, cx, cy)
+        move_away(win)
+        return True
+    return False
+
+
 def _handle_fight_dialog(win, items, img_np):
     """对话开打：跟踪期间出现对话 → 点击绿色选项「看打！」进入战斗。
 
@@ -807,6 +892,11 @@ def _handle_fight_dialog(win, items, img_np):
                   for txt, rect, score in items)
     if not present:
         _fight_cached_used = False  # 对话框消失：重置，下次出现再用缓存
+        # 选项行偶发被区域 OCR 漏检（实测 90 轮 2 次，凤巢七层无名
+        # 小妖「想要阻止我…」对话框）：有故事行时按像素兜底点绿字块
+        if _click_fight_option_fallback(win, items, img_np):
+            _fight_via_kanda = True
+            return True
         return False
     if not _fight_cached_used and app_utils.high_perf_click(
             win, "fight_option", "「看打！」", prefix="[修罗] "):
