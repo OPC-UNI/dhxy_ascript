@@ -5,6 +5,7 @@ __pycache__/
 dist/
 build/
 *.spec
+*.egg-info/
 # 运行时状态（框架缓存 / 用户上次选择的任务模式）
 path_cache.json
 config.json

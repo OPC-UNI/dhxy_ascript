@@ -470,7 +470,7 @@ class ControlWindow(WebWindow):
     TaskManager 回调推送（sync_status / add_logs → 日志窗口）。
     """
 
-    def __init__(self, tm, title="啄木鸟"):
+    def __init__(self, tm, title="啄木鸟", license_info=None):
         super().__init__(R.ui("control_window.html"))
         self._tm = tm
         self._title = title
@@ -478,6 +478,7 @@ class ControlWindow(WebWindow):
         self._real_close = threading.Event()  # 置位后 X/销毁真正放行（退出路径）
         self._debug_on = load_debug_overlay()  # 调试信息开关：控制日志窗口显隐
         self._verifying = False  # 修罗回程验证进行中标记（防连点）
+        self._license_info = license_info or {}  # 授权信息（高级设置-授权信息展示）
         self.log_win = LogWindow()
         self.log_win.set_debug_off_callback(self._on_log_window_closed)
         self.log_win.apply_theme(load_ui_theme())  # 初始主题与主面板一致
@@ -511,6 +512,7 @@ class ControlWindow(WebWindow):
         self.expose(self.verify_wubei_claim)
         self.expose(self.verify_wubei_return)
         self.expose(self.verify_clear_screen)
+        self.expose(self.unbind_license)
         # 任务状态/日志回流接线：TaskManager → 主窗口状态 + 日志窗口
         self._tm.set_callbacks(on_status=self.sync_status, on_log=self.add_logs)
 
@@ -535,7 +537,8 @@ class ControlWindow(WebWindow):
                           "hezi": load_wubei_hezi(),
                           "check_team": load_wubei_check_team()},
                 "auto_famen": load_auto_famen(),
-                "debug_overlay": load_debug_overlay()}
+                "debug_overlay": load_debug_overlay(),
+                "license": self._license_info}
 
     def save_battle_action(self, target, value):
         """战斗设置变更：保存人物/召唤兽默认战斗动作。"""
@@ -626,6 +629,16 @@ class ControlWindow(WebWindow):
     def start_task(self):
         """启动按钮：启动任务子进程。"""
         return self._tm.start()
+
+    def unbind_license(self):
+        """高级设置-解绑激活码：清除本地缓存激活码，下次启动重新激活。
+
+        当前会话授权状态不受影响（每次启动均在线验证，不依赖本机缓存
+        之外的会话态）。
+        """
+        KeyValue.remove("license_cache_no")
+        return {"status": "success",
+                "msg": "已解绑本地激活码，重启软件后输入新卡密激活"}
 
     def stop_task(self):
         """停止按钮：停止任务子进程（升级强杀，保证任务线程全清）。"""

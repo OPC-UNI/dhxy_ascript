@@ -16,9 +16,18 @@ Runtime.wait 驻留线程防止程序自行退出（托盘「彻底退出」→ 
 - src/task_manager.py    任务子进程管理（启停、升级强杀、日志回流）
 - src/control_window.py  网页控制窗口（启动/停止/重置、任务模式选择、内嵌日志）
 """
+import os
 import sys
 import threading
 import time
+
+# ---- 打包环境路径引导 ----
+# 打包后本文件位于 site-packages/dhxy2/main.py，src 子包随包安装为
+# dhxy2/src，不在模块搜索路径上；将本文件所在目录插入 sys.path，使
+# `import src` 在打包环境与源码环境（项目根目录）行为一致。
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if os.path.isdir(os.path.join(_HERE, "src")):
+    sys.path.insert(0, _HERE)
 import pystray
 from PIL import Image
 import uiautomation as auto  # UIA 需要线程内 COM 初始化
@@ -253,34 +262,101 @@ def task_stop():
     log("资源释放完毕，安全退出。", "SYS")
 
 
+def _license_info(auth_win):
+    """整理授权信息供面板展示（状态 + 到期时间）。
+
+    字段来源：SDK 激活窗口同款数据——license_data.status（1=有效/2=过期）、
+    license_data.expire（到期时间字符串）、app_info.is_free（免费版标记）。
+    """
+    data = auth_win.license_data or {}
+    info = {"status": "未知", "expire": ""}
+    if data.get("status") == 1:
+        info["status"] = "已激活"
+        info["expire"] = str(data.get("expire") or "")
+    elif (auth_win.app_info or {}).get("is_free") == 1:
+        info["status"] = "免费版"
+    elif data.get("status") == 2:
+        info["status"] = "已过期"
+    return info
+
+
+def _parse_expire(expire):
+    """解析到期时间字符串，返回 datetime.date 或 None（格式未知时保守）。"""
+    if not expire:
+        return None
+    import datetime
+    text = str(expire).strip()
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S"):
+        try:
+            return datetime.datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _days_left(expire):
+    """距到期剩余天数（到期时间无法解析时返回 None）。"""
+    date = _parse_expire(expire)
+    if date is None:
+        return None
+    import datetime
+    return (date - datetime.date.today()).days
+
+
 if __name__ == '__main__':
     # ---- 授权守门员：未激活不允许进入主程序 ----
-    # 先静默在线校验：免费版直接放行；本地缓存激活码在线验证通过则不弹窗。
-    # 校验失败再弹激活窗口（阻塞），激活成功或关闭窗口后才继续
+    # 先静默在线校验（每次启动都需在线验证，achttp 闭源后端）：免费版直接
+    # 放行；本地缓存激活码在线验证通过则不弹窗。校验失败（无缓存/无效/
+    # 过期/网络异常）再弹激活窗口（阻塞），激活成功或关闭窗口后才继续。
+    # 注意：授权窗口必须独占一次 webview.start()——主程序装配必须在此之后。
+    debug_auth = os.environ.get("ASCRIPT_DEBUG_AUTH") == "1"  # 强制弹激活窗口（授权联调用）
     auth_win = LicenseWindow(app_id="23651")
     silent_ok = False
-    try:
-        auth_win.get_app_info()
-        cached_key = auth_win.get_cached_key()
-        if cached_key:
-            auth_win.activate_key(cached_key)
-        silent_ok = auth_win.start_app() is True
-    except Exception as e:
-        print(f"[授权] 静默校验异常: {e}")
-    if not silent_ok:
+    deny_info = ""  # 静默被拒原因（用于弹窗前提示）
+    if debug_auth:
+        print("[授权] 调试模式：跳过静默校验，直接进入激活窗口")
+    else:
+        for attempt in range(3):  # 网络波动重试；明确拒绝（无效/过期）不重试
+            try:
+                auth_win.get_app_info()
+                cached_key = auth_win.get_cached_key()
+                if cached_key:
+                    auth_win.activate_key(cached_key)
+                result = auth_win.start_app()
+                if result is True:
+                    silent_ok = True
+                    break
+                deny_info = (result or {}).get("error", "授权未通过")
+                break
+            except Exception as e:
+                deny_info = f"无法连接授权服务器：{e}"
+                print(f"[授权] 在线校验异常（第 {attempt + 1}/3 次）: {e}")
+                if attempt < 2:
+                    time.sleep(2)
+    if silent_ok:
+        info = _license_info(auth_win)
+        print(f"[授权] 校验通过：状态 {info['status']}"
+              + (f"，到期 {info['expire']}" if info["expire"] else ""))
+        days_left = _days_left(info["expire"])
+        if days_left is not None and 0 <= days_left <= 7:
+            print(f"[授权] 提醒：卡密将在 {days_left} 天后到期，请及时续费")
+    else:
+        toast("AScript 授权",
+              f"未授权或授权已过期，请在弹出的窗口中输入卡密激活（{deny_info}）")
         # 阻塞式激活窗口：窗口内 start_app 校验通过会关闭窗口并置 _return_value=True
         auth_win.show(title="软件授权激活", width=400, height=500)
     if not auth_win._return_value:
         print("授权未通过，程序退出。")
         sys.exit(0)
-    print("授权通过，启动主程序...")
+    license_info = _license_info(auth_win)
+    print(f"授权通过（{license_info['status']}），启动主程序...")
 
     # ---- 授权通过后装配主程序 ----
     # 必须放在 __main__ 内：Windows spawn 子进程会重新导入本模块但不执行此段
     # （解决打包后子进程重复启动问题）；同时保证授权窗口阶段 webview 窗口
     # 列表里只有授权窗口自己，其关闭即结束该次消息循环
     tm = TaskManager(task_start, task_stop)
-    control_win = ControlWindow(tm)  # 构造内已接线 tm 的状态/日志回调
+    control_win = ControlWindow(tm, license_info=license_info)  # 构造内已接线 tm 的状态/日志回调
     control_win.prepare()            # 创建唯一窗口（uid='master'）
 
     # 托盘：显示/隐藏控制窗口 + 彻底退出（Runtime.stop 触发退出清理）

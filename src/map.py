@@ -61,7 +61,12 @@ _region_engine = None
 # 引擎打「text detection result is empty」WARNING，属设计内噪声；
 # RapidOCR 初始化会用配置值重置自身日志级别（rapidocr/main.py __init__），
 # 必须经 params 传入而非外部 setLevel（会被覆盖）。
+# 模型目录指向 res/models（打包随包分发，2026-10-12）：文件已存在则
+# 跳过联网下载（打包环境曾缺 rapidocr 依赖致启动崩溃），目录缺失时
+# rapidocr 会自动创建并从 modelscope 下载兜底。
+_OCR_MODEL_DIR = R.res("models")
 _OCR_PARAMS = {"Cls.ocr_version": OCRVersion.PPOCRV5,
+               "Global.model_root_dir": _OCR_MODEL_DIR,
                "Global.log_level": "error"}
 # 区域快配置引擎参数（对应旧版 det_limit_type='max'/det_limit_side_len=736/
 # use_angle_cls=False）：区域按原尺寸检测（默认 'min' 会把小区域放大到
@@ -71,6 +76,7 @@ _REGION_OCR_PARAMS = {
     "Cls.ocr_version": OCRVersion.PPOCRV5,
     "Det.limit_type": "max",
     "Det.limit_side_len": 736,
+    "Global.model_root_dir": _OCR_MODEL_DIR,
     "Global.use_cls": False,
     "Global.log_level": "error",
 }

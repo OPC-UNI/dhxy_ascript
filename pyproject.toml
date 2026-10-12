@@ -11,16 +11,18 @@ requires-python = ">=3.9"
 license = {text = "MIT"}
 dependencies = [
     "ascript",
-#    "rapidocr==3.5.0",
-#    "onnxruntime==1.23.2"
+    "rapidocr==3.10.0",
+    "onnxruntime==1.30.0"
 ]
 
 [tool.setuptools]
 # 【硬映射核心】
 # 这里的含义是：创建一个名为 "dhxy2" 的虚拟包，
 # 并告诉系统它的源代码就在当前根目录 "."
+# 注意：src 子包必须列入 packages，否则打包产物缺失全部业务模块
+# （2026-10-12 教训：只列 dhxy2 时打包后启动报 ModuleNotFoundError: src）
 package-dir = {"dhxy2" = "."}
-packages = ["dhxy2"]
+packages = ["dhxy2", "dhxy2.src"]
 
 include-package-data = true
 

@@ -362,6 +362,22 @@
         <!-- 高级设置：调试信息（悬浮显示 + 右侧吸附日志窗口，切换后数秒生效） -->
         <div class="tab-panel" id="panel-advanced">
             <div class="group-box">
+                <div class="group-title">授权信息</div>
+                <div class="group-row">
+                    <span class="group-label">授权状态</span>
+                    <span class="group-sub" id="license-status">-</span>
+                </div>
+                <div class="group-row">
+                    <span class="group-label">到期时间</span>
+                    <span class="group-sub" id="license-expire">-</span>
+                </div>
+                <div class="group-row">
+                    <span class="group-label">更换卡密</span>
+                    <button class="btn" id="btn-unbind" onclick="unbindLicense()">解绑激活码</button>
+                </div>
+                <div class="group-hint" id="license-msg"></div>
+            </div>
+            <div class="group-box">
                 <div class="group-title">调试信息</div>
                 <label class="switch-row">
                     <input type="checkbox" id="debug-overlay">
@@ -441,6 +457,10 @@
         const wubeiReturnVerifyResultEl = document.getElementById('wubei-return-verify-result');
         const btnVerifyClearScreen = document.getElementById('btn-verify-clear-screen');
         const clearScreenVerifyResultEl = document.getElementById('clear-screen-verify-result');
+        const licenseStatusEl = document.getElementById('license-status');
+        const licenseExpireEl = document.getElementById('license-expire');
+        const btnUnbind = document.getElementById('btn-unbind');
+        const licenseMsgEl = document.getElementById('license-msg');
         let verifying = false;  // 验证请求在途标记（防连点，回程/领取/巫医共用）
 
         // 战斗设置：类型单选（法术/攻击/防御/捕捉/逃跑/无）+ 选「法术」时
@@ -612,6 +632,11 @@
             autoRefill.checked = !!info.auto_refill;
             clearScreen.checked = !!info.clear_screen;
             autoFamen.checked = !!info.auto_famen;
+            const lic = info.license || {};
+            if (lic.status) {
+                licenseStatusEl.innerText = lic.status;
+                licenseExpireEl.innerText = lic.expire || '—';
+            }
             if (info.xiuluo_wuyi_interval) {
                 xiuluoWuyiIntervalEl.innerText = info.xiuluo_wuyi_interval;
             }
@@ -971,6 +996,24 @@
         window.setDebugSwitch = function (on) {
             debugOverlay.checked = !!on;
         };
+
+        // 解绑激活码：二次确认（同重置按钮模式），清除本地缓存后重启生效
+        let unbindArm = false;
+        async function unbindLicense() {
+            if (!unbindArm) {
+                unbindArm = true;
+                btnUnbind.innerText = '确认解绑？';
+                setTimeout(() => {
+                    unbindArm = false;
+                    btnUnbind.innerText = '解绑激活码';
+                }, 3000);
+                return;
+            }
+            unbindArm = false;
+            btnUnbind.innerText = '解绑激活码';
+            const r = await callPython('unbind_license');
+            licenseMsgEl.innerText = (r && r.msg) || '操作失败';
+        }
 
         // 重置：二次确认（首次点击进入「确认重置？」待确认态，3s 未确认自动还原）
         let resetArm = false;
