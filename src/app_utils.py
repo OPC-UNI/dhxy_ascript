@@ -1,16 +1,12 @@
-"""通用工具：日志输出、Windows toast 通知、拟人化鼠标操作。"""
+"""通用工具：日志输出、拟人化鼠标操作。"""
 import os
 import pathlib
 import random
 import re
-import subprocess
 import threading
 import time
 
 from ascript.windows.hardware.mouse import Mouse
-
-# toast 使用的 AppId（Windows PowerShell 官方 AppId，无需注册）
-_APP_ID = "{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe"
 
 # ---- 本地日志文件（开发调试用：日志落盘到工程目录 logs/，运行中/结束后
 # 可直接读取文件排查问题，无需翻浮动窗口日志面板）----
@@ -19,31 +15,6 @@ _LOG_FILE = None       # 当前日志文件路径（按日期滚动）
 _LOG_FH = None         # 当前日志文件句柄（惰性打开，每行 flush）
 _LOG_DATE = ""         # 句柄对应的日期（跨天滚动用）
 _LOG_LOCK = threading.Lock()  # 战斗监控线程与任务主线程都会打日志
-
-
-def _xml_escape(s: str) -> str:
-    """转义 toast XML 中的特殊字符。"""
-    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-
-def toast(title: str, message: str):
-    """弹出 Windows 右下角 toast 提示，不阻塞当前流程。"""
-    script = f"""
-[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
-[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
-$APP_ID = '{_APP_ID}'
-$xml = New-Object Windows.Data.Xml.Dom.XmlDocument
-$xml.LoadXml('<toast><visual><binding template="ToastGeneric"><text>{_xml_escape(title)}</text><text>{_xml_escape(message)}</text></binding></visual></toast>')
-$toast = New-Object Windows.UI.Notifications.ToastNotification $xml
-[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($APP_ID).Show($toast)
-"""
-    try:
-        subprocess.Popen(
-            ["powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command", script],
-            creationflags=subprocess.CREATE_NO_WINDOW,
-        )
-    except Exception as e:
-        print(f">>> [提示] toast 通知发送失败: {e}")
 
 
 def _open_log_file():

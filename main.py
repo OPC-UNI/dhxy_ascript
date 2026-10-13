@@ -5,7 +5,7 @@
 Runtime.wait 驻留线程防止程序自行退出（托盘「彻底退出」→ Runtime.stop 清理退出）。
 
 模块划分（main.py 之外的代码均在 src/ 下）：
-- src/app_utils.py       通用工具（日志、toast）
+- src/app_utils.py       通用工具（日志、拟人化鼠标操作）
 - src/game.py            游戏窗口操作（窗口查找、登录 Tab 监听）
 - src/bag.py             背包操作（打开背包、物品检测与点击）
 - src/battle.py          战斗自动化（战斗监控与人物/召唤兽操作）
@@ -53,7 +53,7 @@ from src.control_window import (ControlWindow, load_task_mode,
                                 load_auto_refill,
                                 load_clear_screen)  # 网页控制窗口（启动/停止/重置、配置持久化）
 from src import app_utils  # 通用工具（日志、高性能模式共享设施）
-from src.app_utils import log, toast, log_file_path  # 日志与系统通知
+from src.app_utils import log, log_file_path  # 日志
 from src import game  # 游戏窗口操作
 from src import bag  # 背包操作
 from src import battle  # 战斗自动化（战斗监控与人物/召唤兽操作）
@@ -123,7 +123,6 @@ def task_start():
     windows = game.check_game_window()
     if windows:
         msg = f"已检测到「{game.GAME_TITLE}」窗口，共 {len(windows)} 个"
-        toast("AScript 窗口检查", msg)
         log(f"[检查] {msg}")
         for w in windows:
             r = w.rect
@@ -138,7 +137,6 @@ def task_start():
             log("[检查] 未找到主窗口（游戏可能已最小化或未登录）", "WARN")
     else:
         msg = f"未检测到「{game.GAME_TITLE}」窗口，请确认游戏已启动"
-        toast("AScript 窗口检查", msg)
         log(f"[检查] {msg}", "WARN")
 
     # ---- 启动检查（仅执行一次，不做循环检查） ----
@@ -362,8 +360,8 @@ if __name__ == '__main__':
         if days_left is not None and 0 <= days_left <= 7:
             print(f"[授权] 提醒：卡密将在 {days_left} 天后到期，请及时续费")
     else:
-        toast("AScript 授权",
-              f"未授权或授权已过期，请在弹出的窗口中输入卡密激活（{deny_info}）")
+        log(f"[授权] 未授权或授权已过期，请在弹出的窗口中输入卡密激活（{deny_info}）",
+            "WARN")
         # 阻塞式激活窗口：窗口内 start_app 校验通过会关闭窗口并置 _return_value=True
         auth_win.show(title="软件授权激活", width=400, height=500)
     if not auth_win._return_value:
