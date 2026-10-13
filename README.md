@@ -14,7 +14,7 @@
 
 ## 使用方式
 
-1. 环境：Windows 10+，Python 3.9+，安装 AScript Windows SDK 与项目依赖（建议虚拟环境）
+1. 环境：Windows 10+，Python 3.9+，安装依赖 `pip install -r requirements.txt`（建议虚拟环境）
 2. 启动游戏《大话西游2经典版》并登录角色
 3. 运行 `python main.py`（首次启动按提示激活授权），打开控制面板
 4. 面板中选择任务模式与次数 → 点「启动」开始执行；任务中可随时「停止」，「重置」恢复全部默认设置

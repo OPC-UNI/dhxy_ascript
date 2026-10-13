@@ -1,0 +1,5 @@
+# 构建/运行依赖（CI 与本地开发共用；runtime 其余库由 ascript 的依赖声明传递解析）
+ascript
+rapidocr==3.10.0
+onnxruntime==1.30.0
+nuitka

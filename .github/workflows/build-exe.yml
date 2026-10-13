@@ -15,12 +15,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
 
-      - name: 安装依赖（ascript 的依赖声明会传递解析其余运行时库）
+      - name: 安装依赖（ascript 的依赖声明会传递解析其余运行时库；pip 缓存随 requirements.txt 哈希自动管理）
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
-          pip install ascript rapidocr==3.10.0 onnxruntime==1.30.0 nuitka
+          pip install -r requirements.txt
 
       - name: Ensure Dependency Walker (depends.exe) is available
         shell: pwsh
