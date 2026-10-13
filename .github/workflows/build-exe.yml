@@ -8,7 +8,7 @@ on:
 jobs:
   build:
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
 
@@ -111,6 +111,7 @@ jobs:
 
           Write-Host "Using depends.exe: $($dep.Source)"
           python -m nuitka --mode=onefile --windows-console-mode=disable `
+            --nofollow-import-to=numpy,PIL,cv2,onnxruntime,shapely `
             --include-package=src `
             --include-module=rapidocr.main `
             --include-package=comtypes `
