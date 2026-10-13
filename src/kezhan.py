@@ -19,7 +19,9 @@
 跟踪与玄枢轶闻一致：点击任务追踪绿字下划线文案推进，战斗等待战斗线程处理
 （follow_task 战斗中自动跳过识别）。特殊任务步骤「前往洛阳城大理寺墙外附近」
 已实现手动寻路（世界地图 → 洛阳城 → 小地图 (620,317) → 到达 220,195 附近
-→ 检查阿旺 awang.png）；提交物品/无跟踪两类特殊任务后续单独处理。
+→ 检查阿旺 awang.png）；神秘宝箱（追踪文案「前面出现一个神秘宝箱，快去」
+出现时双模板匹配宝箱点击，到达遮挡时点屏幕中间让人物离开后再匹配）；
+提交物品/无跟踪两类特殊任务后续单独处理。
 """
 import time
 
@@ -189,7 +191,16 @@ DIALOG_OPTION_MAP = {
     "嘿嘿，天机不可泄露，少侠只管去小二那里收取物资按时送到即可。":"还搞得神神秘秘的...也罢，我这就送去。",
     "您路上千万稳着些，这包东西娇贵，可经不起颠簸！":"放心吧，我稳得很！",
     "孙婆婆，这是客栈掌柜托我给您带的物资，您清点一下看看。":"将物资交给孙婆婆",
-    "嗐，哪有什么玄机！不过是些洛阳特产的薏米与百合，老身用来为大家熬安":"原是如此，我看那掌柜就是故意拿我寻开心的……"
+    "嗐，哪有什么玄机！不过是些洛阳特产的薏米与百合，老身用来为大家熬安":"原是如此，我看那掌柜就是故意拿我寻开心的……",
+    "流州境内近来有精怪作祟，此怪飘忽诡谲，似有未了执念。少侠可愿前去查":"没问题，既有蹊跷，我自当去探个明白。",
+    "嘿嘿，就是你……你就是那最后一人！把你的头颅……借我一用！":"怎么还突然动手了？",
+    "不重要了……只愿来世……能以真面目与他相遇……":"唉，又是一个被情所困的精怪……",
+    "傲来国的木匠传来急信，说他为女儿国赶制的一批机关家具正缺几种关键材":"没问题，我这就动身。",
+    "少侠小心！这屏风装着二十七道连环锁，碰错一处就要重装半日……对了，":"正是。",
+    "多谢少侠！这是我给女儿国制作百鸟朝凤梳妆台一一这梳妆台卯时镜面会映":"成，那你忙着，我先告辞",
+    "少侠听说没？那花果山呐，近来宝光冲天！可邪门的是，去寻宝的人个个都":"这宝贝合该与我有缘，我去看看！",
+    "这是……万般寻觅，终是一场空的意思？":"这位空空兄倒是名副其实，害得我白跑一趟！"
+
 }
 # 需要点击屏幕中间跳过的对话框文案 → 点击次数（出现则连点屏幕中间推进
 # 对话，同 xuanshu.DIALOG_SKIP_TEXTS）；不同文案要推进的屏数不同，次数
@@ -199,6 +210,7 @@ DIALOG_SKIP_TEXTS = {
     "少侠来得正及时！这月华霜蕊灵气充盈，正是宴上所需": 4,
     "附近的妖邪已被我清理干净了。": 4,
     "少侠可是受客栈所托，前往女儿国送货的？":2,
+    "找到了！这宝箱藏得如此隐秘……呃，里面怎么只有一张字条？":2,
     "想不到阁下竟是饱学之士，在下佩服。":2,
     "四象归位，怨气已平":1,
     "少侠来此有什么事吗？":1,
@@ -208,6 +220,8 @@ DIALOG_SKIP_TEXTS = {
     "莫要过来": 4,
     "你怎么也跟过来": 4,
     "有个身份不明的孩童逢人便问花花的下落": 4,
+    "九百九十九……还差一个……就差最后一个……":2,
+    "你口口声声说差一个，究竟所为何事？":3,
     "有劳少侠了，正是老身所需之物。":2,
     "又来个送银子的？我纵横江湖十载，骰盅一响黄金万两！少侠是来给我添彩":2,
     "你又来找我干嘛": 4,
@@ -292,6 +306,7 @@ GAODENGSHICAI_ICON = "kezhan_gaodengshicai.png"  # 高等食材物品（给与�
 JIUZHUAN_ICON = "kezhan__jiuzhuanhuanhuntang.png"  # 九转还魂汤物品（给与面板检索）
 TAOZHI_ICON = "kezhan_taozhi.png"  # 桃枝物品（给与面板检索）
 YIHELIPIN_ICON = "kezhan_yihelipin.png"  # 一盒礼品物品（给与面板检索）
+JIGUANCAILIAO_ICON = "kezhan_jiguancailiao.png"
 GIVE_TITLE_ICON = "give_title.png"  # 给与面板标志（横幅「给与」静态标题区）
 # 旧 GIVE_ICON=give.png（32x213 整条横幅）含随物品类别变化的动态区，实测
 # 苏巧儿面板 0.906 → 桃枝面板 0.665 低于 0.8 阈值，面板检查会误判未打开；
@@ -308,6 +323,7 @@ GIVE_NPC_ITEMS = {
     "蟠桃园": (TAOZHI_ICON, "桃枝"),
     "掌柜": (YIHELIPIN_ICON, "一盒礼品"),
     "女儿国": (YIHELIPIN_ICON, "一盒礼品"),
+    "木匠": (JIGUANCAILIAO_ICON, "机关材料"),
 }
 GIVE_DEFAULT_ITEM = (GAODENGSHICAI_ICON, "高等食材")  # NPC 行识别失败时的兜底物品
 # ---- 钱老四给与（问答斗智任务：面板无物品检索，输入 1000 银两参加活动） ----
@@ -349,6 +365,16 @@ BIWU_TARGET_POS = (244, 12)                   # 到达目标（洛阳城坐标�
 BIWU_ARRIVE_TIMEOUT = 120                     # 寻路等待超时（秒）
 BIWU_REDO_INTERVAL = 15                       # 寻路完成后最短重做间隔
 _biwu_last_done = 0.0                         # 上次比武场寻路完成时间（防重复触发）
+# ---- 特殊任务步骤：神秘宝箱（追踪文案出现即执行开启流程） ----
+BAOXIANG_TRACK_TEXT = "前面出现一个神秘宝箱，快去"   # 任务追踪文案（出现即执行宝箱流程）
+BAOXIANG_ICONS = ("kezhan_baoxiang1.png",    # 宝箱双模板（用户实测提供，两形态）
+                  "kezhan_baoxiang2.png")
+BAOXIANG_THRESHOLD = 0.69                    # 模板匹配阈值（用户指定）
+BAOXIANG_APPROACH_TIMEOUT = 20               # 接近阶段轮询超时（秒；宝箱在人物前方，步行短）
+BAOXIANG_STEP_OFF_TIMEOUT = 15               # 点屏幕中间后等待人物离开宝箱的轮询超时（秒）
+BAOXIANG_CONFIRM_TIMEOUT = 6                 # 点击宝箱后确认追踪文案消失的超时（秒）
+BAOXIANG_REDO_INTERVAL = 15                  # 一次流程结束后的最短重做间隔（秒，防重复触发）
+_baoxiang_last_done = 0.0                    # 上次宝箱流程结束时间（防重复触发）
 
 
 def _at_inn(win):
@@ -644,6 +670,12 @@ def _task_needs_biwu_walk(task):
             and _norm_dialog_present(task["lines"], BIWU_TRACK_TEXT))
 
 
+def _task_needs_baoxiang(task):
+    """判断任务追踪文案是否出现「前面出现一个神秘宝箱，快去」。"""
+    return (task is not None
+            and _norm_dialog_present(task["lines"], BAOXIANG_TRACK_TEXT))
+
+
 def _order_green_state(items, img_np):
     """四象任务绿字状态：返回 (仍绿关键词列表, 词簇中心列表, 区域原点)。
 
@@ -828,6 +860,103 @@ def _play_duchong(win):
     return True, f"拍毒虫超时结束（共拍 {clicked} 只）"
 
 
+def _match_baoxiang(img):
+    """神秘宝箱双模板比分数匹配。
+
+    宝箱是世界对象，屏上位置随人物站位变化，无固定条带——全帧匹配；
+    仅在宝箱流程内轮询（有界、每 0.5s 一帧），不进 follow 热路径。
+    两张模板各自取全局最高分，均达标时取分高者（相似模板互匹配
+    双模板比分数，防单模板阈值误判）。返回窗口相对坐标或 None。
+    """
+    frame = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
+    best_score, best_pt = 0.0, None
+    for icon in BAOXIANG_ICONS:
+        score, pt = game_map.best_match_np(frame, icon)
+        if score > best_score:
+            best_score, best_pt = score, pt
+    return best_pt if best_score >= BAOXIANG_THRESHOLD else None
+
+
+def _baoxiang_done(win):
+    """宝箱步骤完成判定：追踪文案消失或整个客栈任务消失。
+
+    仅 OCR 追踪面板区域（~100-170ms）；截图失败返回 False（未完成）。
+    """
+    img = win.capture(force_activate=False)
+    if img is None:
+        return False
+    items, _ = game_map.ocr_region(img, task_tracker.TRACK_REGION)
+    task = task_tracker.find_task(task_tracker.group_tasks(items), TASK_TITLE)
+    if task is None:
+        return True  # 整个客栈任务已消失（宝箱为最后一步）
+    return not _norm_dialog_present(task["lines"], BAOXIANG_TRACK_TEXT)
+
+
+def _confirm_baoxiang_done(win):
+    """点击宝箱后确认完成：追踪文案从面板消失。"""
+    deadline = time.time() + BAOXIANG_CONFIRM_TIMEOUT
+    while time.time() < deadline:
+        if _baoxiang_done(win):
+            return True
+        time.sleep(1.0)
+    return False
+
+
+def _open_shenmi_baoxiang(win):
+    """神秘宝箱流程（用户实测 2026-10-13）：
+
+    点击任务追踪绿字寻路（follow 每轮已点，此处兜底续走）→ 轮询双
+    模板匹配（接近途中宝箱已可见则直接点击）→ 超时视为已到达、人物
+    遮挡宝箱——点屏幕中间让人物离开 → 再轮询匹配点击。点击后确认
+    追踪文案消失即完成（任务从追踪中消失）。
+    返回 (是否完成, 描述)。
+    """
+    # 兜底点击绿字确保寻路进行（follow 本轮已点过；重复点击重发同一
+    # 寻路目标，人物已在途/已到达时无副作用）
+    ok0, info0 = task_tracker.track_task(win, TASK_TITLE,
+                                         green_order=GREEN_CLICK_ORDER,
+                                         green_picker=_pick_order_green)
+    if not ok0:
+        log(f"[客栈] 宝箱流程：绿字点击未成功（{info0}），继续轮询匹配", "WARN")
+    # 阶段一：接近途中直接匹配（宝箱在人物前方，步行通常短暂）
+    deadline = time.time() + BAOXIANG_APPROACH_TIMEOUT
+    while time.time() < deadline:
+        img = win.capture(force_activate=False)
+        if img is None:
+            time.sleep(0.5)
+            continue
+        if is_in_battle_frame(img):
+            return False, "战斗开始，宝箱流程中断"
+        pt = _match_baoxiang(img)
+        if pt is not None:
+            human_click(win, pt[0], pt[1])
+            log(f"[客栈] 神秘宝箱已点击 @({pt[0]},{pt[1]})", "SYS")
+            if _confirm_baoxiang_done(win):
+                return True, "神秘宝箱已开启，追踪文案消失"
+            return False, "宝箱已点击但追踪文案未消失，稍后重试"
+        time.sleep(0.5)
+    # 阶段二：到达后人物遮挡宝箱——点屏幕中间让人物离开，再匹配
+    _click_screen_center(win, times=1, prefix="客栈")
+    log("[客栈] 已点屏幕中间，等待人物离开宝箱", "SYS")
+    deadline = time.time() + BAOXIANG_STEP_OFF_TIMEOUT
+    while time.time() < deadline:
+        img = win.capture(force_activate=False)
+        if img is None:
+            time.sleep(0.5)
+            continue
+        if is_in_battle_frame(img):
+            return False, "战斗开始，宝箱流程中断"
+        pt = _match_baoxiang(img)
+        if pt is not None:
+            human_click(win, pt[0], pt[1])
+            log(f"[客栈] 神秘宝箱已点击 @({pt[0]},{pt[1]})", "SYS")
+            if _confirm_baoxiang_done(win):
+                return True, "神秘宝箱已开启，追踪文案消失"
+            return False, "宝箱已点击但追踪文案未消失，稍后重试"
+        time.sleep(0.5)
+    return False, "两个阶段均未匹配到神秘宝箱"
+
+
 def _handle_follow_extras(win, items, img_np):
     """follow 期间的附加处理。
 
@@ -837,7 +966,7 @@ def _handle_follow_extras(win, items, img_np):
     导致「莫要过来」跳过从未触发）。
     返回是否已处理。
     """
-    global _dali_last_done, _biwu_last_done
+    global _dali_last_done, _biwu_last_done, _baoxiang_last_done
     task = task_tracker.find_task(task_tracker.group_tasks(items), TASK_TITLE)
     if not is_in_battle(win):
         # 拍毒虫小游戏暂不处理（毒虫模板未匹配成功，先人工操作）：
@@ -858,6 +987,13 @@ def _handle_follow_extras(win, items, img_np):
             ok, info = _walk_to_biwu(win)
             _biwu_last_done = time.time()
             log(f"[客栈] 比武场寻路: {info}", "SYS" if ok else "WARN")
+            return True
+        if _task_needs_baoxiang(task) \
+                and time.time() - _baoxiang_last_done >= BAOXIANG_REDO_INTERVAL:
+            # 宝箱流程阻塞执行，本轮 items 已过期，不再做对话处理
+            ok, info = _open_shenmi_baoxiang(win)
+            _baoxiang_last_done = time.time()
+            log(f"[客栈] 神秘宝箱: {info}", "SYS" if ok else "WARN")
             return True
         # 物品给与：给与面板打开时跨轮询续接（对话选项点击在
         # DIALOG_OPTION_MAP 中处理，点击后弹出给与面板在此完成）
