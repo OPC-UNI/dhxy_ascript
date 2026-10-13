@@ -160,12 +160,13 @@
         <button id="btn-theme" class="btn" onclick="toggleTheme()">深 色</button>
     </div>
     <div class="tab-bar">
-        <div class="tab active" data-tab="task">任务设置</div>
+        <div class="tab active" data-tab="task">任务列表</div>
+        <div class="tab" data-tab="taskcfg">任务设置</div>
         <div class="tab" data-tab="general">通用设置</div>
         <div class="tab" data-tab="advanced">高级设置</div>
     </div>
     <div class="body">
-        <!-- 任务设置：每任务一组（模式单选 + 任务次数步进） -->
+        <!-- 任务列表：每任务一组（模式单选 + 任务次数步进） -->
         <div class="tab-panel active" id="panel-task">
             <div class="task-group">
                 <label class="task-radio"><input type="radio" name="task-mode" value="五环"><span>五环</span></label>
@@ -216,32 +217,8 @@
                 </div>
             </div>
         </div>
-        <!-- 通用设置：摄妖香开关 + 高性能 + 修罗/五倍分组 + 血量蓝量阈值 + 人物/召唤兽战斗动作 -->
-        <div class="tab-panel" id="panel-general">
-            <!-- 通用分组：摄妖香 + 高性能模式 -->
-            <div class="group-box">
-                <div class="group-title">通用</div>
-                <label class="switch-row">
-                    <input type="checkbox" id="use-syx">
-                    <span class="switch-track"></span>
-                    <span>自动使用摄妖香</span>
-                </label>
-                <label class="switch-row">
-                    <input type="checkbox" id="high-perf">
-                    <span class="switch-track"></span>
-                    <span>高性能模式（固定位置缓存点击，失败自动回退识别）</span>
-                </label>
-                <label class="switch-row">
-                    <input type="checkbox" id="auto-refill">
-                    <span class="switch-track"></span>
-                    <span>战斗结束自动补血量蓝量（默认开启）</span>
-                </label>
-                <label class="switch-row">
-                    <input type="checkbox" id="clear-screen">
-                    <span class="switch-track"></span>
-                    <span>启动时自动清屏（屏蔽其他玩家和摊位，默认开启）</span>
-                </label>
-            </div>
+        <!-- 任务设置：各任务专属配置（修罗/五倍，后续其他任务设置同样收纳于此） -->
+        <div class="tab-panel" id="panel-taskcfg">
             <!-- 修罗设置分组：检查队伍开关 + 最少人数 + 必须有的种族 -->
             <div class="group-box">
                 <div class="group-title">修罗设置</div>
@@ -301,6 +278,34 @@
                     <span>检查队伍（默认关闭，同修罗）</span>
                 </label>
             </div>
+        </div>
+        <!-- 通用设置：摄妖香开关 + 高性能 + 血量蓝量阈值 + 人物/召唤兽战斗动作 -->
+        <div class="tab-panel" id="panel-general">
+            <!-- 通用分组：摄妖香 + 高性能模式 -->
+            <div class="group-box">
+                <div class="group-title">通用</div>
+                <label class="switch-row">
+                    <input type="checkbox" id="use-syx">
+                    <span class="switch-track"></span>
+                    <span>自动使用摄妖香</span>
+                </label>
+                <label class="switch-row">
+                    <input type="checkbox" id="high-perf">
+                    <span class="switch-track"></span>
+                    <span>高性能模式（固定位置缓存点击，失败自动回退识别）</span>
+                </label>
+                <label class="switch-row">
+                    <input type="checkbox" id="auto-refill">
+                    <span class="switch-track"></span>
+                    <span>战斗结束自动补血量蓝量（默认开启）</span>
+                </label>
+                <label class="switch-row">
+                    <input type="checkbox" id="clear-screen">
+                    <span class="switch-track"></span>
+                    <span>启动时自动清屏（屏蔽其他玩家和摊位，默认开启）</span>
+                </label>
+            </div>
+            <!-- 修罗/五倍配置已移至「任务设置」页签 -->
             <!-- 血量蓝量分组 -->
             <div class="group-box">
                 <div class="group-title">血量蓝量阈值（步进 5%）</div>
@@ -361,6 +366,25 @@
         </div>
         <!-- 高级设置：调试信息（悬浮显示 + 右侧吸附日志窗口，切换后数秒生效） -->
         <div class="tab-panel" id="panel-advanced">
+            <div class="group-box">
+                <div class="group-title">使用环境</div>
+                <div class="group-row">
+                    <span class="group-label">适配主题</span>
+                    <span class="group-sub" id="env-theme">水墨</span>
+                </div>
+                <div class="group-row">
+                    <span class="group-label">适配分辨率</span>
+                    <span class="group-sub" id="env-adapt-res">1378 × 831</span>
+                </div>
+                <div class="group-row">
+                    <span class="group-label">当前窗口分辨率</span>
+                    <span class="group-sub" id="env-cur-res">-</span>
+                </div>
+                <div class="group-row">
+                    <span class="group-label">设备 ID</span>
+                    <span class="group-sub" id="env-device-id">-</span>
+                </div>
+            </div>
             <div class="group-box">
                 <div class="group-title">授权信息</div>
                 <div class="group-row">
@@ -461,6 +485,10 @@
         const licenseExpireEl = document.getElementById('license-expire');
         const btnUnbind = document.getElementById('btn-unbind');
         const licenseMsgEl = document.getElementById('license-msg');
+        const envThemeEl = document.getElementById('env-theme');
+        const envAdaptResEl = document.getElementById('env-adapt-res');
+        const envCurResEl = document.getElementById('env-cur-res');
+        const envDeviceIdEl = document.getElementById('env-device-id');
         let verifying = false;  // 验证请求在途标记（防连点，回程/领取/巫医共用）
 
         // 战斗设置：类型单选（法术/攻击/防御/捕捉/逃跑/无）+ 选「法术」时
@@ -604,14 +632,26 @@
             if (r && r.status === 'success') applyTheme(next);
         }
 
-        // Tab 切换（默认选中任务设置）
+        // Tab 切换（默认选中任务列表；打开高级设置时刷新使用环境）
         document.querySelectorAll('.tab').forEach(tab => {
             tab.addEventListener('click', () => {
                 document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t === tab));
                 document.querySelectorAll('.tab-panel').forEach(p =>
                     p.classList.toggle('active', p.id === 'panel-' + tab.dataset.tab));
+                if (tab.dataset.tab === 'advanced') refreshEnv();
             });
         });
+
+        // 使用环境（高级设置）：主题/适配分辨率为常量，当前窗口分辨率
+        // 与设备 ID 每次打开页签时从主进程刷新
+        async function refreshEnv() {
+            const env = await callPython('get_env_info');
+            if (!env) return;
+            if (env.theme) envThemeEl.innerText = env.theme;
+            if (env.adapt_res) envAdaptResEl.innerText = env.adapt_res;
+            envCurResEl.innerText = env.cur_res || '-';
+            envDeviceIdEl.innerText = env.device_id || '-';
+        }
 
         // 全量同步设置到页面（初始化与重置后共用）：主题、任务模式、
         // 各开关、巫医间隔、血蓝阈值、任务次数、战斗动作、修罗/五倍设置
@@ -637,6 +677,11 @@
                 licenseStatusEl.innerText = lic.status;
                 licenseExpireEl.innerText = lic.expire || '—';
             }
+            const env = info.env || {};
+            if (env.theme) envThemeEl.innerText = env.theme;
+            if (env.adapt_res) envAdaptResEl.innerText = env.adapt_res;
+            envCurResEl.innerText = env.cur_res || '-';
+            envDeviceIdEl.innerText = env.device_id || '-';
             if (info.xiuluo_wuyi_interval) {
                 xiuluoWuyiIntervalEl.innerText = info.xiuluo_wuyi_interval;
             }

@@ -28,6 +28,7 @@ import threading
 import webview
 from pathlib import Path
 from ascript.windows.system import R
+from ascript.windows.system.device import Device
 from ascript.windows.system.key_value import KeyValue
 from ascript.windows.ui import WebWindow
 from src.log_window import LogWindow
@@ -37,6 +38,10 @@ from . import game  # 游戏窗口查找（修罗回程验证用；game 不反�
 TASK_MODES = ["五环", "客栈", "修罗", "五倍", "玄枢轶闻", "名望"]
 _DEFAULT_MODE = TASK_MODES[0]  # 五环
 _MODE_KEY = "task_mode"
+
+# ---- 使用环境（高级设置-使用环境展示；只读信息） ----
+ENV_THEME = "水墨"               # 已适配的游戏 UI 主题
+ENV_ADAPT_RES = (1378, 831)      # 坐标标定的窗口分辨率（实测布局基准）
 # 是否使用摄妖香（UI 开关，KeyValue 持久化）
 _USE_SHEYAOXIANG_KEY = "use_sheyaoxiang"
 # 调试信息悬浮显示（UI 开关，KeyValue 持久化；游戏窗口上绘制任务/配置/进度）
@@ -513,8 +518,25 @@ class ControlWindow(WebWindow):
         self.expose(self.verify_wubei_return)
         self.expose(self.verify_clear_screen)
         self.expose(self.unbind_license)
+        self.expose(self.get_env_info)
         # 任务状态/日志回流接线：TaskManager → 主窗口状态 + 日志窗口
         self._tm.set_callbacks(on_status=self.sync_status, on_log=self.add_logs)
+
+    def get_env_info(self):
+        """使用环境信息（高级设置-使用环境展示）：适配主题/分辨率、
+        当前游戏窗口分辨率与设备 ID。"""
+        cur = "未检测到游戏窗口"
+        win = game.find_main_window()
+        if win is not None:
+            cur = f"{win.rect.width} × {win.rect.height}"
+        try:
+            device_id = Device.id()
+        except Exception:
+            device_id = "获取失败"
+        return {"theme": ENV_THEME,
+                "adapt_res": f"{ENV_ADAPT_RES[0]} × {ENV_ADAPT_RES[1]}",
+                "cur_res": cur,
+                "device_id": device_id}
 
     def get_init_data(self):
         """页面初始化数据：主题、任务模式、任务次数、摄妖香开关、各条
@@ -538,7 +560,8 @@ class ControlWindow(WebWindow):
                           "check_team": load_wubei_check_team()},
                 "auto_famen": load_auto_famen(),
                 "debug_overlay": load_debug_overlay(),
-                "license": self._license_info}
+                "license": self._license_info,
+                "env": self.get_env_info()}
 
     def save_battle_action(self, target, value):
         """战斗设置变更：保存人物/召唤兽默认战斗动作。"""

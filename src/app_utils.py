@@ -7,6 +7,7 @@ import threading
 import time
 
 from ascript.windows.hardware.mouse import Mouse
+from ascript.windows.system.key_value import KeyValue
 
 # ---- 本地日志文件（开发调试用：日志落盘到工程目录 logs/，运行中/结束后
 # 可直接读取文件排查问题，无需翻浮动窗口日志面板）----
@@ -132,12 +133,38 @@ _fixed_pos_cache = {}  # key -> (窗口宽, 窗口高, x, y)
 # 高性能：入口点击后等待对话框渲染的固定延时（用户实测 500ms 即出，
 # 免 OCR 轮询）
 HIGH_PERF_DIALOG_WAIT = 0.5
+# 高性能缓存持久化键（钝化到 config.json，重启后直接可用，无需每次
+# 启动先跑识别路径建立缓存；坐标是窗口相对值，窗口移动不影响）
+_HIGH_PERF_CACHE_KEY = "high_perf_cache"
+
+
+def _persist_high_perf_cache():
+    """把固定位置缓存写入配置。
+
+    KeyValue 是整文件覆写：任务子进程保存前必须重读合并，否则会拿
+    启动时的旧快照覆盖面板进程运行中新保存的设置（实测风险点）。
+    """
+    try:
+        KeyValue._load_data()  # 合并面板进程的最新保存，防跨进程覆盖
+        KeyValue.save(_HIGH_PERF_CACHE_KEY,
+                      {k: list(v) for k, v in _fixed_pos_cache.items()})
+    except Exception as e:
+        log(f"[高性能] 缓存持久化失败: {e}", "WARN")
 
 
 def set_high_perf(on):
-    """设置高性能开关（任务进程启动时调用一次）。"""
+    """设置高性能开关（任务进程启动时调用一次）；开启时加载持久化缓存。"""
     global _high_perf
     _high_perf = bool(on)
+    if _high_perf:
+        try:
+            data = KeyValue.get(_HIGH_PERF_CACHE_KEY, {}) or {}
+            for key, entry in data.items():
+                if (isinstance(entry, (list, tuple)) and len(entry) == 4
+                        and all(isinstance(v, int) for v in entry)):
+                    _fixed_pos_cache[key] = tuple(entry)
+        except Exception:
+            pass  # 缓存加载失败不影响运行（回退识别路径自建缓存）
 
 
 def high_perf_on():
@@ -155,13 +182,15 @@ def fixed_pos_get(key, win):
 
 
 def fixed_pos_set(key, win, x, y):
-    """记录固定位置坐标（识别路径成功时调用，位置漂移自愈）。"""
+    """记录固定位置坐标（识别路径成功时调用，位置漂移自愈），并持久化。"""
     _fixed_pos_cache[key] = (win.rect.width, win.rect.height, int(x), int(y))
+    _persist_high_perf_cache()
 
 
 def fixed_pos_clear(key):
     """清除固定位置缓存（缓存点击校验失败时调用，下轮回退识别路径）。"""
-    _fixed_pos_cache.pop(key, None)
+    if _fixed_pos_cache.pop(key, None) is not None:
+        _persist_high_perf_cache()
 
 
 def high_perf_click(win, key, label, prefix=""):
