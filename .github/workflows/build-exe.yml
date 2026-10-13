@@ -1,0 +1,77 @@
+# 独立 exe 打包（Nuitka onefile，Windows）
+#
+# 触发方式：
+#   1. 手动：GitHub 仓库 Actions 页 → 选本工作流 → Run workflow 按钮
+#   2. 打 tag 自动：git tag v1.0.0 && git push origin v1.0.0
+#      （自动构建并发布到 GitHub Releases）
+#   3. 需要每次推送 main 都构建时，取消下面 branches 注释（会持续消耗
+#      构建额度，私有仓库每月免费 2000 分钟）
+#
+# 产物说明：artifact/Release 中的 zip 内含 zhuomuniao.exe 与 res/ 目录，
+# 解压后 exe 必须与 res/ 同目录运行（资源路由按 exe 所在目录解析）。
+#
+# 与本地构建的差异：GitHub windows 镜像自带 MSVC，Nuitka 直接使用，
+# 无需本地配方里的 ziglang/CC 环境变量（见 memory: nuitka-exe-build-recipe）。
+name: Build Windows exe
+
+on:
+  workflow_dispatch: {}
+  push:
+    tags: ["v*"]
+    # branches: [main]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: 安装依赖（ascript 的依赖声明会传递解析其余运行时库）
+        run: pip install ascript rapidocr==3.10.0 onnxruntime==1.30.0 nuitka
+
+      - name: Nuitka 构建（onefile、无控制台窗口）
+        run: >
+          python -m nuitka --mode=onefile --windows-console-mode=disable
+          --include-package=src
+          --include-module=rapidocr.main
+          --include-package=comtypes
+          --include-package-data=ascript
+          --include-package-data=webview
+          --include-package-data=rapidocr
+          --include-package-data=onnxruntime
+          --include-package-data=cv2
+          --include-package-data=numpy
+          --include-package-data=pythonnet
+          --include-package-data=clr_loader
+          --include-package-data=pystray
+          --include-package-data=Crypto
+          --windows-icon-from-ico=res/img/logo.ico
+          --output-filename=zhuomuniao.exe
+          --output-dir=dist_exe
+          main.py
+
+      - name: 收集产物（exe + res 同目录打包）
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release_pkg | Out-Null
+          Copy-Item dist_exe/zhuomuniao.exe release_pkg/
+          Copy-Item res release_pkg/ -Recurse
+          Compress-Archive -Path release_pkg/* -DestinationPath zhuomuniao-windows.zip
+
+      - name: 上传构建产物（Actions 页面下载）
+        uses: actions/upload-artifact@v4
+        with:
+          name: zhuomuniao-windows-${{ github.ref_name }}
+          path: zhuomuniao-windows.zip
+
+      - name: 发布到 GitHub Release（仅打 tag 时）
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: zhuomuniao-windows.zip
+          generate_release_notes: true

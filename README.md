@@ -51,3 +51,4 @@
 - **新功能上线须同步更新本 README 的功能列表**（完成后从「规划」表移入）
 - 日志双写 `logs/` 目录（日期文件），排查问题直接读日志文件
 - 排查任务问题先用面板「高级设置」里的验证按钮逐链路验证
+- **独立 exe 打包**：GitHub Actions 自动构建（`.github/workflows/build-exe.yml`），手动触发或打 `v*` tag 自动构建并发布 Release；产物为 zip（exe + res 同目录，解压即用）。本地构建配方见 Nuitka onefile（需 ziglang 提供编译器）

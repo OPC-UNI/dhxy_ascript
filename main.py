@@ -16,6 +16,7 @@ Runtime.wait 驻留线程防止程序自行退出（托盘「彻底退出」→ 
 - src/task_manager.py    任务子进程管理（启停、升级强杀、日志回流）
 - src/control_window.py  网页控制窗口（启动/停止/重置、任务模式选择、内嵌日志）
 """
+import multiprocessing  # freeze_support：冻结打包下 spawn 子进程（任务/悬浮层）用
 import os
 import sys
 import threading
@@ -304,6 +305,18 @@ def _days_left(expire):
 
 
 if __name__ == '__main__':
+    # 冻结打包（Nuitka/PyInstaller）下 spawn 子进程（任务进程/悬浮层绘制）
+    # 会重新执行本二进制，须调用 freeze_support 正确处理（源码环境为空操作）
+    multiprocessing.freeze_support()
+
+    # 悬浮层绘制进程入口：冻结打包下子进程以「二进制 + 本参数」启动
+    # （见 debug_overlay._spawn_helper，exe 不支持解释器 -c 方式），
+    # 跳过授权门直接进入绘制循环
+    if "--overlay-helper" in sys.argv:
+        from src.debug_overlay import _helper_main
+        _helper_main()
+        sys.exit(0)
+
     # ---- 授权守门员：未激活不允许进入主程序 ----
     # 先静默在线校验（每次启动都需在线验证，achttp 闭源后端）：免费版直接
     # 放行；本地缓存激活码在线验证通过则不弹窗。校验失败（无缓存/无效/

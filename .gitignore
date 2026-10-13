@@ -16,3 +16,4 @@ debug_overlay_helper_exit.txt
 team_race_glyphs*.npz
 # 本地日志文件（开发调试用，log 同时落盘到 logs/）
 logs/
+dist_exe/

@@ -165,11 +165,18 @@ def _spawn_helper():
     派生子进程（daemonic processes are not allowed to have children）；
     用 subprocess 直接启动解释器运行 _helper_main 绕开该限制。
     工作目录设为项目目录（状态文件路径与父进程一致），无控制台窗口。
+    冻结打包（Nuitka）下 exe 不识别「解释器 -c 代码」启动方式：
+    改以「二进制 + --overlay-helper」启动（main.__main__ 识别该参数
+    直接进入绘制循环）。
     """
     root = str(pathlib.Path.cwd())
-    code = ("import sys; sys.path.insert(0, {root!r}); "
-            "from src.debug_overlay import _helper_main; _helper_main()").format(root=root)
-    return subprocess.Popen([sys.executable, "-c", code], cwd=root,
+    if getattr(sys, "frozen", False):
+        args = [sys.executable, "--overlay-helper"]
+    else:
+        code = ("import sys; sys.path.insert(0, {root!r}); "
+                "from src.debug_overlay import _helper_main; _helper_main()").format(root=root)
+        args = [sys.executable, "-c", code]
+    return subprocess.Popen(args, cwd=root,
                             creationflags=subprocess.CREATE_NO_WINDOW)
 
 
