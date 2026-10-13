@@ -32,41 +32,80 @@ jobs:
           python-version: "3.13"
 
       - name: 安装依赖（ascript 的依赖声明会传递解析其余运行时库）
-        run: pip install ascript rapidocr==3.10.0 onnxruntime==1.30.0 nuitka
-      
-      # .github/workflows/build-exe.yml
-
-      - name: Install Dependency Walker
         shell: pwsh
         run: |
-          choco install dependencywalker -y
-          $depWalkerPath = "${env:ProgramFiles}\Dependency Walker"
-          if (Test-Path $depWalkerPath) {
-            "$depWalkerPath" >> $env:GITHUB_PATH
-            $env:Path += ";$depWalkerPath"
+          python -m pip install --upgrade pip
+          pip install ascript rapidocr==3.10.0 onnxruntime==1.30.0 nuitka
+
+      - name: Ensure Dependency Walker (depends.exe) is available
+        shell: pwsh
+        run: |
+          # If depends.exe is already on PATH, prefer it.
+          $dep = Get-Command depends.exe -ErrorAction SilentlyContinue
+          if (-not $dep) {
+            if (Get-Command choco -ErrorAction SilentlyContinue) {
+              choco install dependencywalker -y
+            }
           }
-          where.exe depends.exe
+
+          $candidatePaths = @(
+            "$env:ProgramFiles\Dependency Walker",
+            "$env:ProgramFiles(x86)\Dependency Walker",
+            "$env:ProgramData\chocolatey\lib\dependencywalker\tools",
+            "$env:ProgramData\chocolatey\bin"
+          )
+
+          $depPath = $null
+          foreach ($p in $candidatePaths) {
+            if (Test-Path $p) {
+              $found = Get-ChildItem -Path $p -Filter depends.exe -Recurse -ErrorAction SilentlyContinue |
+                       Select-Object -First 1
+              if ($found) {
+                $depPath = $found.DirectoryName
+                break
+              }
+            }
+          }
+
+          # Final fallback: search the entire drive for depends.exe
+          if (-not $depPath) {
+            $found = Get-ChildItem -Path C:\ -Filter depends.exe -Recurse -ErrorAction SilentlyContinue |
+                     Select-Object -First 1
+            if ($found) {
+              $depPath = $found.DirectoryName
+            }
+          }
+
+          if ($depPath) {
+            Write-Host "Dependency Walker found at: $depPath"
+            $depPath | Out-File -Encoding utf8 -Append -FilePath $env:GITHUB_PATH
+            where.exe depends.exe
+          } else {
+            Write-Error "depends.exe not found. Nuitka requires Dependency Walker for onefile builds on Windows."
+            exit 1
+          }
 
       - name: Nuitka 构建（onefile、无控制台窗口）
-        run: >
-          python -m nuitka --mode=onefile --windows-console-mode=disable
-          --include-package=src
-          --include-module=rapidocr.main
-          --include-package=comtypes
-          --include-package-data=ascript
-          --include-package-data=webview
-          --include-package-data=rapidocr
-          --include-package-data=onnxruntime
-          --include-package-data=cv2
-          --include-package-data=numpy
-          --include-package-data=pythonnet
-          --include-package-data=clr_loader
-          --include-package-data=pystray
-          --include-package-data=Crypto
-          --windows-icon-from-ico=res/img/logo.ico
-          --output-filename=zhuomuniao.exe
-          --output-dir=dist_exe
-          main.py
+        shell: pwsh
+        run: |
+          python -m nuitka --mode=onefile --windows-console-mode=disable `
+            --include-package=src `
+            --include-module=rapidocr.main `
+            --include-package=comtypes `
+            --include-package-data=ascript `
+            --include-package-data=webview `
+            --include-package-data=rapidocr `
+            --include-package-data=onnxruntime `
+            --include-package-data=cv2 `
+            --include-package-data=numpy `
+            --include-package-data=pythonnet `
+            --include-package-data=clr_loader `
+            --include-package-data=pystray `
+            --include-package-data=Crypto `
+            --windows-icon-from-ico=res/img/logo.ico `
+            --output-filename=zhuomuniao.exe `
+            --output-dir=dist_exe `
+            main.py
 
       - name: 收集产物（exe + res 同目录打包）
         shell: pwsh
