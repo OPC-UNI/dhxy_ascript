@@ -68,22 +68,25 @@ jobs:
           }
           $depPath = Split-Path $dep
           $env:PATH = "$depPath;$env:PATH"
-          $depPath | Out-File -Encoding utf8 -Append -FilePath $env:GITHUB_PATH
+          # 必须无 BOM：utf8 带 BOM 时 runner 读出的路径被 BOM 字符污染，
+          # 下一步骤 PATH 找不到 depends.exe（实测仍触发 Nuitka 重新下载）
+          $depPath | Out-File -Encoding utf8NoBOM -Append -FilePath $env:GITHUB_PATH
           Write-Host "Dependency Walker found at: $dep"
           where.exe depends.exe
 
       - name: Nuitka 构建（onefile、无控制台窗口）
         shell: pwsh
         run: |
-          # 这里双重确认，避免 PATH 丢失
+          # 双重确认：不在 PATH 时放行，由 Nuitka 的
+          # --assume-yes-for-downloads 自动下载兜底
           $dep = Get-Command depends.exe -ErrorAction SilentlyContinue
           if (-not $dep) {
-            Write-Error "depends.exe is still not available in the Nuitka step."
-            exit 1
+            Write-Host "depends.exe not on PATH; Nuitka will auto-download it."
+          } else {
+            Write-Host "Using depends.exe: $($dep.Source)"
           }
-
-          Write-Host "Using depends.exe: $($dep.Source)"
           python -m nuitka --mode=onefile --windows-console-mode=disable `
+            --assume-yes-for-downloads `
             --nofollow-import-to=numpy,PIL,cv2,onnxruntime,shapely `
             --include-package=src `
             --include-module=rapidocr.main `
