@@ -258,6 +258,22 @@ def _click_green_option(win, items, img_np, text):
     return pos
 
 
+def _daily_complete_open(win):
+    """每日完成对话框是否打开（「恭喜你完成了今天五环任务」）。
+
+    完成对话框可能在 follow 收尾后弹出——任务消失返回后无人再查，
+    流程会继续领取（实测 2026-10-13 对话框已开但流程仍在反复尝试
+    领取，世界地图被对话框遮挡打不开）。须排除单次恭喜对话框
+    （含「还能再完成」特征即非每日完成）。
+    """
+    img = win.capture(force_activate=False)
+    if img is None:
+        return False
+    items, _ = game_map.ocr_region(img, task_tracker.DIALOG_REGION)
+    return (_dialog_text_present(items, COMPLETE_DIALOG_TEXT)
+            and not _dialog_text_present(items, CONGRATS_MARK_TEXT))
+
+
 def _handle_claim_blockers(win, items, img_np):
     """领取对话链中的结束条件对话框：今日两次已满/活力值不足。
 
@@ -578,6 +594,11 @@ def run_loop(win, cycle_interval=3.0):
             time.sleep(3.0)
             continue
         log(f"[五环] ==== 第 {round_no} 轮 ====", "SYS")
+        # 每日完成对话框检查（每轮开头）：见 _daily_complete_open——
+        # 命中即今日两次五环均已完成，直接结束任务
+        if _daily_complete_open(win):
+            log(f"[五环] {COMPLETE_INFO}（含本轮共 {done + 1} 次），结束任务", "SYS")
+            return f"{COMPLETE_INFO}，结束五环任务（已完成 {done + 1} 次）"
         # 任务追踪中已有「五环[五环]」任务：直接跟踪，跳过领取
         if task_tracker.has_task(win, WUHUAN_TITLE):
             log("[五环] 任务追踪中已有五环任务，直接跟踪", "SYS")

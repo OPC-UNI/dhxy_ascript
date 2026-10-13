@@ -41,11 +41,16 @@ def green_option_center(img_np, rect, opt_len, line_len):
     实测「玄枢轶闻我想领取通用玄宝」合并成一行，全行绿字中心 520
     偏离选项自身中心 470 点不中，且毒化高性能缓存（客栈/五环/修罗/
     玄枢轶闻共用的统一修正）。opt_len/line_len 建议传规范化后长度。
+    纵向合并（两个选项行堆叠成高框，如「接取客栈任务了解任务详情」，
+    实测偶现点错第二项）：高框时纵向同样按比例取上部选项自身中心，
+    全行绿字纵向中心会落到第二项上。
     """
     cx, cy = task_tracker.green_text_center(img_np, rect, prefer_underline=False)
     if line_len > opt_len + 2:
         frac = min(opt_len / line_len, 1.0)
         cx = rect[0] + int((rect[2] - rect[0]) * frac / 2)
+        if rect[3] - rect[1] > 30:
+            cy = rect[1] + int((rect[3] - rect[1]) * frac / 2)
     return cx, cy
 
 

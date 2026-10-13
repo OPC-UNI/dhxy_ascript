@@ -33,6 +33,19 @@ jobs:
 
       - name: 安装依赖（ascript 的依赖声明会传递解析其余运行时库）
         run: pip install ascript rapidocr==3.10.0 onnxruntime==1.30.0 nuitka
+      
+      # .github/workflows/build-exe.yml
+
+      - name: Install Dependency Walker
+        shell: pwsh
+        run: |
+          choco install dependencywalker -y
+          $depWalkerPath = "${env:ProgramFiles}\Dependency Walker"
+          if (Test-Path $depWalkerPath) {
+            "$depWalkerPath" >> $env:GITHUB_PATH
+            $env:Path += ";$depWalkerPath"
+          }
+          where.exe depends.exe
 
       - name: Nuitka 构建（onefile、无控制台窗口）
         run: >

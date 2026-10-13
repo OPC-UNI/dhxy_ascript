@@ -151,6 +151,29 @@ def green_text_center(img_np, rect, prefer_underline=True):
     return (rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2
 
 
+def has_underline(img_np, rect):
+    """文字框底边 ±3px 内是否存在实线亮绿下划线（≥20px 连续列段）。
+
+    下划线是任务追踪链接的专属标记（可能只覆盖行尾的可点击部分）：
+    描述行与链接行同为绿字时用它区分（客栈答题任务描述行「洛阳城正
+    举办幸运五十二答题」与链接行「大会，去找答题大赛主办人」均绿，
+    按首个绿行点击点错——实测 2026-10-13）。检测规则与
+    green_text_center 的下划线定位一致：文字行笔画连排实测 ≤13px、
+    下划线实测 ≥30px，20px 阈值可区分；邻行文字顶部（行距仅 ~18px）
+    会落进检测窗口但连排长度不达标，不构成误判。
+    """
+    y0 = max(0, rect[3] - 3)
+    y1 = min(img_np.shape[0], rect[3] + 4)
+    x0 = max(0, rect[0] - 2)
+    x1 = min(img_np.shape[1], rect[2] + 4)
+    mask = green_mask(img_np[y0:y1, x0:x1], GREEN_BRIGHT_MIN)
+    for y_row in range(mask.shape[0]):
+        cols = np.where(mask[y_row])[0]
+        if cols.size >= 20 and _longest_run_len(cols) >= 20:
+            return True
+    return False
+
+
 def _is_title_line(txt):
     """标题行判定：短行且含方括号，且括号段内不含数字。
 
@@ -460,6 +483,15 @@ def track_task(win, title, text=None, green_index=0, retries=4, retry_interval=1
                 coord_pool = [it for it in pool if MAP_COORD_RE.search(it[0])]
                 if coord_pool:
                     pool = coord_pool
+                else:
+                    # 无坐标链接（如客栈「去找答题大赛主办人」）：下划线
+                    # 是链接专属标记，带下划线的行才是点击目标——描述行
+                    # 同为绿字时按首个绿行点击会点错（实测 2026-10-13
+                    # 点中「洛阳城正举办幸运五十二答题」描述行）
+                    underline_pool = [it for it in pool
+                                      if has_underline(img_np, it[1])]
+                    if underline_pool:
+                        pool = underline_pool
             tgt = pool[min(green_index, len(pool) - 1)]
             wrap_note = ""
             if green_order:
