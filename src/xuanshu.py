@@ -738,6 +738,27 @@ def _confirm_task_gone(win, title, fallback_texts=()):
     return True  # 确认窗口内始终未见任务：视为完成
 
 
+def _confirm_guard_dialog(win, img, extra_dialog_handler):
+    """确认轮询跳出前的对话框复核（负面条件检查）。
+
+    确认轮询只 OCR 追踪面板（快速路径），但跳出后要点击任务绿字——
+    确认窗口期可能弹出对话（如五环到达 NPC 的开场白，实测 2026-10-13
+    跳出点击「去找长安」绿字时对话正打开）。补 OCR 对话框区域交给
+    extras 处理：命中（对话被处理）返回 True，调用方回退正常轮询；
+    无 extras 或未命中返回 False 放行。
+    本守卫只作辅助检查：extras 抛出的业务异常（MissingEquipment/
+    DailyComplete 等）一律吞掉放行——正常轮询路径仍会按设计处理，
+    守卫里提前触发会把「给与面板关闭动画残留」误判成任务终止。
+    """
+    if extra_dialog_handler is None:
+        return False
+    try:
+        items_d, _ = game_map.ocr_region(img, task_tracker.DIALOG_REGION)
+        return bool(extra_dialog_handler(win, items_d, np.asarray(img)))
+    except Exception:
+        return False
+
+
 def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶闻",
                 extra_dialog_handler=None, green_order=None, progress_key=None,
                 green_picker=None, fallback_keywords=None, first_items=None,
@@ -900,6 +921,14 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                     key_changed = False  # 空键为过渡帧，不作信号
                 if changed_kind == "text":
                     if text_changed and _signatures_similar(sig2, changed_sig):
+                        # 跳出前复核对话框：确认轮询只 OCR 追踪面板（快速
+                        # 路径），而确认窗口期可能弹出对话（如五环到达 NPC
+                        # 的开场白，实测 2026-10-13）——补 OCR 对话框区域
+                        # 交给 extras 处理，命中则回退正常轮询，避免对着
+                        # 打开中的对话框点任务绿字
+                        if _confirm_guard_dialog(win, img, extra_dialog_handler):
+                            changed_once = False
+                            continue
                         log(f"[{prefix}] 变化确认: 任务签名「{sig}」→「{sig2}」", "INFO")
                         progressed = True
                         last_items = (items, img_np)
@@ -907,6 +936,9 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                     changed_once = False
                     continue
                 if key_changed and key == changed_key:
+                    if _confirm_guard_dialog(win, img, extra_dialog_handler):
+                        changed_once = False
+                        continue
                     log(f"[{prefix}] 变化确认: 进度键「{baseline_key}」→「{key}」", "INFO")
                     progressed = True
                     last_items = (items, img_np)
@@ -926,6 +958,13 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
             extras_handled = False
             if extra_dialog_handler is not None:
                 extras_handled = extra_dialog_handler(win, items, img_np)
+            if extras_handled:
+                # extras 已处理（关闭对话框/点选项/点链接）：本帧是处理
+                # 前的陈旧帧，签名变化与对话框判定均不可信，推迟到下一
+                # 轮询（实测 2026-10-13 五环：开场白对话与面板变化同帧，
+                # 若继续用陈旧帧跳出点击任务绿字会误点打开中的对话框）
+                changed_once = False
+                continue
             # 战斗中：跳过本轮识别（任务追踪与坐标不可用）；复用本帧
             if is_in_battle_frame(img):
                 continue

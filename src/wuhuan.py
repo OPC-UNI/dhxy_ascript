@@ -34,6 +34,7 @@ from . import debug_overlay  # 调试信息悬浮层（任务进度更新）
 from .control_window import load_task_counts  # 任务次数上限（通用设置）
 from .xuanshu import follow_task, _click_dialog_green_option  # 复用玄枢轶闻的任务跟踪/对话框逻辑
 from .dialog_common import (_dialog_text_present,
+                            _click_screen_center,
                             close_scene_panels,
                             green_option_center)  # 对话框共享组件
 
@@ -70,6 +71,15 @@ TASK_LINGQU_CHANGAN_ICON = "task_lingqu_changan.png"  # 长安云游大师的领
 # ---- 提交装备（给与）流程 ----
 SUBMIT_DIALOG_TEXT = "我在这里练级，打了好久都打不过夜叉和猪怪。"  # 提交装备对话文案
 SUBMIT_DIALOG_OPTION = "刚好我这里有，送你啦"              # 对话绿色选项
+# 任务开场白对话（到达 NPC 自动弹出，无选项）：「李冰冰的替身…遇到了
+# 麻烦，快去帮助他吧」——点屏幕中间推进（见 _handle_submit_dialog 开头）
+INTRO_DIALOG_TEXT = "快去帮助他吧"
+# 本轮跟踪是否出现过单次完成恭喜对话框「恭喜你完成了一次五环任务，
+# 今日还能再完成一次…」——完成次数的计数信号（用户确认：完成提示以
+# 对话框文案为准）。「任务从追踪中消失」只是面板现象，可能瞬时不可读
+# 误判（实测 2026-10-13 08:46:36 面板空 2~3s 被误判完成计 1 次，
+# 任务实际仍在），未见恭喜对话框的消失不计完成（run_loop 据此过滤）
+_congrats_seen_this_follow = False
 GIVE_ICON = "give_title.png"          # 给与面板标志（横幅「给与」静态标题区，32x114）
 GIVE_BTN_ICON = "give_btn.png"                      # 给与按钮（28.png，OCR 读作「给子」）
 XIANGLIAN_ICON = "fuzhuangdian_xianglian.png"       # 项链（与商店/给与面板行格式相同，实测给与面板匹配 1.0）
@@ -434,10 +444,24 @@ def _handle_submit_dialog(win, items, img_np):
     # 「恭喜你完成了一次五环任务（今日还能再完成一次）」是单次完成的
     # 恭喜对话框，与每日完成文案相近，OCR 误读时模糊匹配会混淆，
     # 含「还能再完成」特征即非每日完成，不得结束任务
-    if _dialog_text_present(items, COMPLETE_DIALOG_TEXT) \
-            and not _dialog_text_present(items, CONGRATS_MARK_TEXT):
-        log(f"[五环] 检测到「{COMPLETE_DIALOG_TEXT}」，今日五环任务已完成", "SYS")
-        raise DailyComplete()
+    if _dialog_text_present(items, COMPLETE_DIALOG_TEXT):
+        if not _dialog_text_present(items, CONGRATS_MARK_TEXT):
+            log(f"[五环] 检测到「{COMPLETE_DIALOG_TEXT}」，今日五环任务已完成", "SYS")
+            raise DailyComplete()
+        # 单次完成恭喜对话框（含「还能再完成」区分特征）：本轮真实完成
+        # 的计数信号——置位标记，run_loop 据此计数（完成提示以对话框
+        # 文案为准，用户 2026-10-13 确认）
+        global _congrats_seen_this_follow
+        _congrats_seen_this_follow = True
+        log("[五环] 检测到单次完成恭喜对话框，本轮完成", "SYS")
+        return True
+    # 任务开场白对话（到达 NPC 自动弹出，无选项）：点屏幕中间推进一次
+    # （多页对话由下一轮询自愈）。必须先于跟踪绿字处理——开场白与追踪
+    # 面板变化常同窗口期出现，不处理会对着打开中的对话框点任务绿字
+    # （实测 2026-10-13：点击「去找长安」绿字时开场白对话正打开）
+    if _dialog_text_present(items, INTRO_DIALOG_TEXT):
+        _click_screen_center(win, times=1, prefix="五环")
+        return True
     # 阶段二优先：给与面板已打开（对话已处理过），继续完成给与
     if game_map.find_template(win, GIVE_ICON) is not None:
         return _do_give(win)
@@ -573,6 +597,7 @@ def run_loop(win, cycle_interval=3.0):
         # 提交装备步骤：由 follow_task 的附加对话处理回调接管
         # signature_key：行序无关签名（碎片行翻转不再引起重复点击）
         # ignore_empty_key：到达 NPC 链接变暗的过渡帧不作变化信号
+        _congrats_seen_this_follow = False  # 每轮跟踪前复位完成信号
         try:
             ok, info = follow_task(win, WUHUAN_TITLE, prefix="五环",
                                    timeout=WUHUAN_FOLLOW_TIMEOUT,
@@ -590,7 +615,18 @@ def run_loop(win, cycle_interval=3.0):
             log(f"[五环] {COMPLETE_INFO}（含本轮共 {done + 1} 次），结束任务", "SYS")
             return f"{COMPLETE_INFO}，结束五环任务（已完成 {done + 1} 次）"
         if not ok:
-            log(f"[五环] {info}", "WARN")
+            if _congrats_seen_this_follow:
+                # 完成恭喜对话框已出现：本轮真实完成，follow 收尾失败
+                # 不影响计数（完成信号以对话框文案为准，用户确认）
+                log(f"[五环] {info}（已出现完成恭喜对话框，照常计入）", "WARN")
+            else:
+                log(f"[五环] {info}", "WARN")
+                time.sleep(cycle_interval)
+                continue
+        elif not _congrats_seen_this_follow:
+            # 任务从追踪中消失但未出现完成恭喜对话框：面板瞬时不可读
+            # 的误判，不计完成（下轮 has_task 重检，任务仍在则直接续跑）
+            log(f"[五环] {info} 但未出现完成恭喜对话框，判为面板瞬时不可读，不计完成", "WARN")
             time.sleep(cycle_interval)
             continue
         done += 1
