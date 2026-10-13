@@ -17,4 +17,6 @@ team_race_glyphs*.npz
 # 本地日志文件（开发调试用，log 同时落盘到 logs/）
 logs/
 dist_exe/
+# 外挂重型依赖（CI 构建生成：numpy/onnxruntime 不编译进 exe，随包分发）
+pylibs/
 tmp_err_img.png

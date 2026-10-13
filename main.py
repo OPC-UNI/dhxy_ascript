@@ -29,6 +29,14 @@ import time
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if os.path.isdir(os.path.join(_HERE, "src")):
     sys.path.insert(0, _HERE)
+# ---- 外挂重型依赖引导（pylibs）----
+# numpy/onnxruntime C 编译量巨大，打包时用 --nofollow-import-to 排除出 exe，
+# 以 exe 同目录 pylibs/ 随包分发；冻结模式下插入 sys.path 供运行时导入。
+# Nuitka 不设置 sys.frozen，注入的 __compiled__ 全局是冻结态的唯一可靠标志。
+if "__compiled__" in globals():
+    _pylibs = os.path.join(os.path.dirname(sys.executable), "pylibs")
+    if os.path.isdir(_pylibs):
+        sys.path.insert(0, _pylibs)
 import pystray
 from PIL import Image
 import uiautomation as auto  # UIA 需要线程内 COM 初始化

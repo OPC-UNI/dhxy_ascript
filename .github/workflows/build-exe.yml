@@ -87,16 +87,15 @@ jobs:
           }
           python -m nuitka --mode=onefile --windows-console-mode=disable `
             --assume-yes-for-downloads `
-            --nofollow-import-to=numpy,PIL,cv2,onnxruntime,shapely `
+            --no-deployment-flag=excluded-module-usage `
+            --nofollow-import-to=numpy,onnxruntime `
             --include-package=src `
             --include-module=rapidocr.main `
             --include-package=comtypes `
             --include-package-data=ascript `
             --include-package-data=webview `
             --include-package-data=rapidocr `
-            --include-package-data=onnxruntime `
             --include-package-data=cv2 `
-            --include-package-data=numpy `
             --include-package-data=pythonnet `
             --include-package-data=clr_loader `
             --include-package-data=pystray `
@@ -106,12 +105,31 @@ jobs:
             --output-dir=dist_exe `
             main.py
 
-      - name: 收集产物（exe + res 同目录打包）
+      - name: 组装 pylibs（numpy/onnxruntime 排除出 exe，随包分发）
+        shell: pwsh
+        run: |
+          # --nofollow-import-to 排除的包运行时由 main.py 冻结分支从 pylibs 加载
+          # （--no-deployment-flag=excluded-module-usage 关掉 4.3 的 ImportError
+          # 守卫后才走正常导入）。复制源码 + 原生 .pyd/.dll（numpy.libs 含
+          # OpenBLAS，onnxruntime 自带 onnxruntime.dll），剔除 __pycache__。
+          $purelib = python -c "import sysconfig; print(sysconfig.get_paths()['purelib'])"
+          New-Item -ItemType Directory -Force pylibs | Out-Null
+          Copy-Item "$purelib/numpy" pylibs/ -Recurse
+          Copy-Item "$purelib/numpy.libs" pylibs/ -Recurse
+          Copy-Item "$purelib/onnxruntime" pylibs/ -Recurse
+          Get-ChildItem pylibs -Recurse -Directory -Filter __pycache__ |
+            Remove-Item -Recurse -Force
+          $size = (Get-ChildItem pylibs -Recurse -File |
+            Measure-Object -Property Length -Sum).Sum
+          Write-Host "pylibs total: $([math]::Round($size/1MB, 1)) MB"
+
+      - name: 收集产物（exe + res + pylibs 同目录打包）
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force release_pkg | Out-Null
           Copy-Item dist_exe/zhuomuniao.exe release_pkg/
           Copy-Item res release_pkg/ -Recurse
+          Copy-Item pylibs release_pkg/ -Recurse
           Compress-Archive -Path release_pkg/* -DestinationPath zhuomuniao-windows.zip
 
       - name: 上传构建产物（Actions 页面下载）
