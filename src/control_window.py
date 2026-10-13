@@ -130,18 +130,18 @@ def save_task_count(mode, value):
     return {"status": "success", "count": value}
 
 
-# ---- 血蓝条阈值设置（各条独立，步进 5%，默认 40%） ----
+# ---- 血蓝条阈值设置（各条独立，步进 5%，默认 50%） ----
 _THRESHOLD_KEYS = {
     "char_hp": "threshold_char_hp",
     "char_mp": "threshold_char_mp",
     "beast_hp": "threshold_beast_hp",
     "beast_mp": "threshold_beast_mp",
 }
-DEFAULT_THRESHOLD = 40
+DEFAULT_THRESHOLD = 50
 
 
 def load_thresholds():
-    """读取各条血蓝阈值（百分比，默认 40）。"""
+    """读取各条血蓝阈值（百分比，默认 50）。"""
     return {name: KeyValue.get(key, DEFAULT_THRESHOLD)
             for name, key in _THRESHOLD_KEYS.items()}
 
@@ -421,7 +421,7 @@ def reset_settings():
     """把所有设置恢复为默认值（重置按钮用）。
 
     默认值与各 load 函数一致：模式五环、次数按 TASK_COUNT_DEFAULTS、
-    摄妖香开、血蓝阈值 40、战斗动作 人物技能3-5/召唤兽攻击、修罗
+    摄妖香开、血蓝阈值 50、战斗动作 人物技能3-5/召唤兽攻击、修罗
     最少人数 5 + 种族 男人男鬼、五倍最少人数 5、抢盒子/检查队伍/
     调试悬浮关、高性能开、自动补血蓝开、启动清屏开、自动巫医开
     （间隔 5）、自动使用法门关、主题浅色。
