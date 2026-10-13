@@ -27,79 +27,50 @@ jobs:
       - name: Ensure Dependency Walker (depends.exe) is available
         shell: pwsh
         run: |
-          # 1) 强制把 common Chocolatey bin 加入当前 shell 的 PATH
-          $chocoBin = "C:\ProgramData\chocolatey\bin"
-          if (Test-Path $chocoBin) {
-            $env:PATH = "$chocoBin;$env:PATH"
-          }
-
-          # 2) 如果还没找到，优先安装
+          # 注意：不要用 choco 安装（dependencywalker 包的安装脚本在 runner
+          # 上挂起，实测卡 1h57m 于「Performing other installation steps」）；
+          # 也不要执行 depends.exe /? 自检（GUI 程序会阻塞 shell）。
+          # 顺序：PATH → 常见位置快查 → 官方 x64 zip 下载（稳定快速）。
           $dep = Get-Command depends.exe -ErrorAction SilentlyContinue
           if (-not $dep) {
-            if (Get-Command choco -ErrorAction SilentlyContinue) {
-              Write-Host "Installing Dependency Walker via Chocolatey..."
-              choco install dependencywalker -y --force
-            }
-          }
-
-          # 3) 先查常见位置
-          $candidatePaths = @(
-            "C:\ProgramData\chocolatey\bin",
-            "$env:ProgramFiles\Dependency Walker",
-            "$env:ProgramFiles(x86)\Dependency Walker",
-            "$env:ProgramData\chocolatey\lib\dependencywalker\tools",
-            "$env:ProgramData\chocolatey\lib\dependencywalker\tools\"
-          )
-
-          $depPath = $null
-          foreach ($p in $candidatePaths) {
-            if (Test-Path $p) {
-              $found = Get-ChildItem -Path $p -Filter depends.exe -Recurse -ErrorAction SilentlyContinue |
-                       Select-Object -First 1
-              if ($found) {
-                $depPath = $found.DirectoryName
-                break
+            $candidatePaths = @(
+              "C:\ProgramData\chocolatey\bin",
+              "$env:ProgramFiles\Dependency Walker",
+              "$env:ProgramFiles(x86)\Dependency Walker",
+              "$env:ProgramData\chocolatey\lib\dependencywalker\tools"
+            )
+            foreach ($p in $candidatePaths) {
+              if (Test-Path $p) {
+                $found = Get-ChildItem -Path $p -Filter depends.exe -Recurse -ErrorAction SilentlyContinue |
+                         Select-Object -First 1
+                if ($found) {
+                  $dep = $found.FullName
+                  break
+                }
               }
             }
           }
-
-          # 4) 最后兜底：下载官方 Dependency Walker x64 zip
-          if (-not $depPath) {
+          if (-not $dep) {
             Write-Host "depends.exe not found locally; downloading official x64 zip..."
-            $downloadUrl = "https://www.dependencywalker.com/depends22_x64.zip"
             $zipPath = Join-Path $env:RUNNER_TEMP "depends22_x64.zip"
             $extractDir = Join-Path $env:RUNNER_TEMP "DependencyWalker"
-
-            Invoke-WebRequest -Uri $downloadUrl -OutFile $zipPath -UseBasicParsing
-            if (Test-Path $zipPath) {
-              Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
-            }
-
+            Invoke-WebRequest -Uri "https://www.dependencywalker.com/depends22_x64.zip" -OutFile $zipPath -UseBasicParsing
+            Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
             $found = Get-ChildItem -Path $extractDir -Filter depends.exe -Recurse -ErrorAction SilentlyContinue |
                      Select-Object -First 1
             if ($found) {
-              $depPath = $found.DirectoryName
+              $dep = $found.FullName
             }
           }
-
-          # 5) 失败时退出
-          if (-not $depPath) {
+          if (-not $dep) {
             Write-Error "depends.exe not found. Nuitka requires Dependency Walker for onefile builds on Windows."
             exit 1
           }
-
-          # 6) 关键：在当前 shell 中立即刷新 PATH；否则当前 step 里 Nuitka 仍然看不到
+          $depPath = Split-Path $dep
           $env:PATH = "$depPath;$env:PATH"
-
-          # 7) 让后续步骤也能看到它
           $depPath | Out-File -Encoding utf8 -Append -FilePath $env:GITHUB_PATH
-
-          Write-Host "Dependency Walker found at: $depPath"
-          Write-Host "Updated PATH: $env:PATH"
+          Write-Host "Dependency Walker found at: $dep"
           where.exe depends.exe
-
-          # 8) 额外检测：确认该 exe 确实能执行
-          & (Get-Command depends.exe).Source /? | Out-Null
 
       - name: Nuitka 构建（onefile、无控制台窗口）
         shell: pwsh
