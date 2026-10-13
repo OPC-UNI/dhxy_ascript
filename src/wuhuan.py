@@ -627,7 +627,7 @@ def run_loop(win, cycle_interval=3.0):
                                    progress_key=_wuhuan_progress_key,
                                    signature_key=_wuhuan_text_key,
                                    ignore_empty_key=True,
-                                   skip_texts=())
+                                   skip_texts={})
         except MissingEquipment as e:
             log(f"[五环] {MISSING_EQUIPMENT_INFO}（{e}），结束任务", "SYS")
             return f"{MISSING_EQUIPMENT_INFO}，结束五环任务（已完成 {done} 次）"

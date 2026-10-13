@@ -74,22 +74,25 @@ from .dialog_common import (DAILY_LIMIT_TEXT, DAILY_LIMIT_INFO,
                             SCREEN_CENTER_POS,
                             OPTION_FIRST_OFFSET, OPTION_ROW_STEP, OPTION_X_OFFSET)
 # 每日任务次数已满的对话文案（出现即结束任务循环）
-# 需要点击屏幕中间跳过的对话框文案（出现则连点屏幕中间推进对话）
-DIALOG_SKIP_TEXTS = ["你是做嘛的？莫来惹老子！"
-                     ,"多帮助新人，神仙都会感谢你的！"
-                     ,"受害者所闻那水鬼之声出自善口技者之音，你幼时曾学过口技，又时常与人"
-                     ,"第二起案子中，被打捞的尸体手脚被渔人结牢牢捆住，那渔人结并非常人所"
-                     ,"少侠运气不错"
-                     ,"翠花说的难道是这块石头？但是."
-                     ,"刚刚是你再说话？"
-                     ,"准备好接受地理方面的考验了么"
-                     ,"少侠准备好接受考验了么"
-                     ,"少侠准备好接受常识类学问的考验了么"
-                     ,"少侠可是来替小乔试装的？"
-                     ,"看少侠的表情，旺小乔不满意？"
-                     ,"少侠的脸色有点难看"
-                     ,"留香阁的凤姑娘探听到了一些有关玄石的消息"  # 领取后 NPC 追问（无选项，须屏幕中间推进）
-                     ]
+# 需要点击屏幕中间跳过的对话框文案 → 点击次数（出现则连点屏幕中间推进
+# 对话，同 kezhan.DIALOG_SKIP_TEXTS）；不同文案要推进的屏数不同，次数
+# 按文案单独设置，默认先统一 4 次（DIALOG_SKIP_CLICKS），实测后逐条校准
+DIALOG_SKIP_TEXTS = {
+    "你是做嘛的？莫来惹老子！": 2,
+    "多帮助新人，神仙都会感谢你的！": 4,
+    "受害者所闻那水鬼之声出自善口技者之音，你幼时曾学过口技，又时常与人": 4,
+    "第二起案子中，被打捞的尸体手脚被渔人结牢牢捆住，那渔人结并非常人所": 4,
+    "少侠运气不错": 4,
+    "翠花说的难道是这块石头？但是.": 4,
+    "刚刚是你再说话？": 4,
+    "准备好接受地理方面的考验了么": 4,
+    "少侠准备好接受考验了么": 4,
+    "少侠准备好接受常识类学问的考验了么": 4,
+    "少侠可是来替小乔试装的？": 4,
+    "看少侠的表情，旺小乔不满意？": 4,
+    "少侠的脸色有点难看": 4,
+    "留香阁的凤姑娘探听到了一些有关玄石的消息": 4,  # 领取后 NPC 追问（无选项，须屏幕中间推进）
+}
 # 特定对话框出现时点击的绿色选项（对话框文案 → 绿字选项）
 DIALOG_OPTION_MAP = {
     "什么江中劫货？休要血口喷人，你有证据吗？": "指明口技之事",
@@ -769,8 +772,9 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
     每轮：点击任务当前第一个绿色文案 → 等待任务信息变化（内容更新）
     → 进入下一轮；任务从追踪面板消失即完成。
     等待期间处理对话框（DIALOG_OPTION_MAP 指定绿字、skip_texts
-    点屏幕中间跳过（None 用默认 DIALOG_SKIP_TEXTS，() 禁用——
-    五环等自有对话处理的调用方禁用，防误触）、DIALOG_OPTIONS 已知绿字、
+    点屏幕中间跳过（None 用默认 DIALOG_SKIP_TEXTS，{} 禁用——
+    五环等自有对话处理的调用方禁用，防误触；文案→点击次数字典，
+    不同文案按屏数配置不同连点次数）、DIALOG_OPTIONS 已知绿字、
     战斗失败「你输了」点击任务绿字推进）与锄遗聚宝小游戏。
     战斗中跳过识别（任务追踪与坐标不可用），等待战斗结束。
 
@@ -1042,12 +1046,15 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 else:
                     log(f"[{prefix}] 「你输了/平局」对话中任务绿字点击失败: {info3}", "WARN")
             if not handled:
-                for dtxt in (DIALOG_SKIP_TEXTS if skip_texts is None else skip_texts):
+                for dtxt, clicks in (DIALOG_SKIP_TEXTS.items()
+                                     if skip_texts is None
+                                     else skip_texts.items()):
                     if _dialog_text_present(items, dtxt):
-                        # 命中即固定连点推进（多屏对话无需枚举后续文案，
-                        # 漏推进由下一轮询 OCR 自愈）；命中文案打日志便于排查
-                        log(f"[{prefix}] 跳过对话命中文案「{dtxt}」", "SYS")
-                        _dc_click_screen_center(win, prefix=prefix)
+                        # 命中即按文案对应次数连点推进（多屏对话无需枚举
+                        # 后续文案，漏推进由下一轮询 OCR 自愈）；命中文案
+                        # 打日志便于排查
+                        log(f"[{prefix}] 跳过对话命中文案「{dtxt}」，连点 {clicks} 次", "SYS")
+                        _dc_click_screen_center(win, times=clicks, prefix=prefix)
                         handled = True
                         break
             if not handled:
