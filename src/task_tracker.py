@@ -89,6 +89,21 @@ def _longest_run_center(cols):
     return best_start + best_len // 2
 
 
+def _col_runs(cols):
+    """列号序列拆为连续段，返回 [(start, end), ...]（升序）。"""
+    runs = []
+    if not len(cols):
+        return runs
+    start = prev = cols[0]
+    for c in cols[1:]:
+        if c != prev + 1:
+            runs.append((int(start), int(prev)))
+            start = c
+        prev = c
+    runs.append((int(start), int(prev)))
+    return runs
+
+
 def _longest_run_len(cols):
     """最长连续列段长度（下划线实线判定；文字行笔画为散碎列）。"""
     best = run = 0
@@ -123,47 +138,56 @@ def green_text_center(img_np, rect, prefer_underline=True):
         # 下划线检测：下划线是文字下方的一行实线亮绿。下划线可能只覆盖
         # 行尾的可点击部分——如「去找大唐边境(193,144)惯骗」仅「惯骗」
         # 带下划线、其余绿字不可点击，必须点在下划线段上。
-        # OCR 框常把下划线排除在框外（框底即文字底，下划线位于框底 ±3px 内），
-        # 换行碎片行（如 [3/5]）的文字紧邻其下但笔画散碎。
-        # 规则：框底 ±3px 内找含 ≥20px 连续亮绿列段的行（文字行笔画连排
-        # 实测 ≤13px，下划线实测 ≥30px），取最低行，点击列段中心上方 2px。
+        # OCR 框底常贴文字底，下划线落在框底下方 0~6px（五环折行链接
+        # 实测续行下划线在框底 4px 外、旧 ±3px 窗口漏检——2026-10-14）。
+        # 规则：框底 -3~+8px 内找含 ≥20px 连续亮绿列段的行（文字行笔画
+        # 连排实测 ≤13px，下划线实测 ≥30px），自上而下取首个命中行
+        # （窗口下探后下方邻行文字顶部会落进来，先命中自己框底的下划线
+        # 可避开），点击列段中心上方 2px。
         y0 = max(0, rect[3] - 3)
-        y1 = min(img_np.shape[0], rect[3] + 4)
+        y1 = min(img_np.shape[0], rect[3] + 9)
         x0 = max(0, rect[0] - 2)
         x1 = min(img_np.shape[1], rect[2] + 4)
         mask = green_mask(img_np[y0:y1, x0:x1], GREEN_BRIGHT_MIN)
-        for y_row in range(mask.shape[0] - 1, -1, -1):
+        for y_row in range(mask.shape[0]):
             cols = np.where(mask[y_row])[0]
             if cols.size < 20 or _longest_run_len(cols) < 20:
                 continue
             cx = int(x0 + _longest_run_center(cols))
             cy = int(y0 + y_row - 2)  # 下划线上方 2px，容 ±2px 点击抖动
             return cx, cy
-    # 亮绿/绿色像素：最长连续列段横向中心、绿色像素纵向中心（落在文字本体上）
+    # 亮绿/绿色像素回退：链接是行尾部分（描述+链接同行，如「去找大唐
+    # 边境(193,144)惯骗」仅「惯骗」可点击）——下划线未检测到时取最右侧
+    # 文字块中心（≥8px 段优先），落在行尾链接上而非描述行中间
+    # （五环折行链接 2026-10-14 实测点中描述文字 (101,253)）
     for min_g in (GREEN_BRIGHT_MIN, GREEN_MIN_G):
         mask = green_mask(region, min_g)
         cols = np.where(mask.any(axis=0))[0]
         rows = np.where(mask.any(axis=1))[0]
         if cols.size:
-            cx = int(rect[0] + _longest_run_center(cols))
+            runs = _col_runs(cols)
+            tail = [r for r in runs if r[1] - r[0] + 1 >= 8] or runs
+            cx = int(rect[0] + (tail[-1][0] + tail[-1][1]) // 2)
             cy = int(rect[1] + (rows.min() + rows.max()) // 2)
             return cx, cy
     return (rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2
 
 
 def has_underline(img_np, rect):
-    """文字框底边 ±3px 内是否存在实线亮绿下划线（≥20px 连续列段）。
+    """文字框底边 -3~+8px 内是否存在实线亮绿下划线（≥20px 连续列段）。
 
     下划线是任务追踪链接的专属标记（可能只覆盖行尾的可点击部分）：
     描述行与链接行同为绿字时用它区分（客栈答题任务描述行「洛阳城正
     举办幸运五十二答题」与链接行「大会，去找答题大赛主办人」均绿，
     按首个绿行点击点错——实测 2026-10-13）。检测规则与
-    green_text_center 的下划线定位一致：文字行笔画连排实测 ≤13px、
-    下划线实测 ≥30px，20px 阈值可区分；邻行文字顶部（行距仅 ~18px）
-    会落进检测窗口但连排长度不达标，不构成误判。
+    green_text_center 的下划线定位一致（窗口一致、均自上而下扫描）：
+    文字行笔画连排实测 ≤13px、下划线实测 ≥30px，20px 阈值可区分；
+    下划线可落在框底 0~6px 外（折行续行实测 4px 外——2026-10-14），
+    故窗口下探到 +8；邻行文字顶部（行距仅 ~18px）会落进检测窗口但
+    连排长度不达标，不构成误判。
     """
     y0 = max(0, rect[3] - 3)
-    y1 = min(img_np.shape[0], rect[3] + 4)
+    y1 = min(img_np.shape[0], rect[3] + 9)
     x0 = max(0, rect[0] - 2)
     x1 = min(img_np.shape[1], rect[2] + 4)
     mask = green_mask(img_np[y0:y1, x0:x1], GREEN_BRIGHT_MIN)
@@ -480,18 +504,19 @@ def track_task(win, title, text=None, green_index=0, retries=4, retry_interval=1
             # 保持关键词选择，不受坐标约束
             coord_pool = None
             if green_order is None:
+                # 下划线优先：下划线是链接专属标记，带下划线的行才是点击
+                # 目标——描述行同为绿字时按坐标行/首个绿行点击会点错
+                # （客栈答题描述行 2026-10-13、五环折行链接 2026-10-14
+                # 实测）。折行链接（「…(166,222)食婴」+「鬼手下的手下」）
+                # 坐标行的 OCR 框可能裁掉行尾链接、下划线落框外检测不到，
+                # 而续行下划线完整——先按下划线选行，再在其中按坐标收紧
+                underline_pool = [it for it in pool
+                                  if has_underline(img_np, it[1])]
+                if underline_pool:
+                    pool = underline_pool
                 coord_pool = [it for it in pool if MAP_COORD_RE.search(it[0])]
                 if coord_pool:
                     pool = coord_pool
-                else:
-                    # 无坐标链接（如客栈「去找答题大赛主办人」）：下划线
-                    # 是链接专属标记，带下划线的行才是点击目标——描述行
-                    # 同为绿字时按首个绿行点击会点错（实测 2026-10-13
-                    # 点中「洛阳城正举办幸运五十二答题」描述行）
-                    underline_pool = [it for it in pool
-                                      if has_underline(img_np, it[1])]
-                    if underline_pool:
-                        pool = underline_pool
             tgt = pool[min(green_index, len(pool) - 1)]
             wrap_note = ""
             if green_order:
@@ -520,8 +545,12 @@ def track_task(win, title, text=None, green_index=0, retries=4, retry_interval=1
                     if coord_pool:
                         cluster = [it for it in cluster if MAP_COORD_RE.search(it[0])]
                     if len(cluster) > 1:
-                        tgt = max(cluster, key=lambda it: bright_green_ratio(img_np, it[1])
-                                  or green_ratio(img_np, it[1]))
+                        # 跨行绿字簇内：下划线行优先（链接专属标记，折行
+                        # 链接的下划线常只落在续行上），再比亮绿占比
+                        tgt = max(cluster, key=lambda it: (
+                            has_underline(img_np, it[1]),
+                            bright_green_ratio(img_np, it[1])
+                            or green_ratio(img_np, it[1])))
                         wrap_note = " + ".join(f"「{t[0]}」" for t in cluster if t is not tgt)
                         wrap_note += "(跨行绿字)"
             cx, cy = green_text_center(img_np, tgt[1])
