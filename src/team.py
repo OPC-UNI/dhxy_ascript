@@ -48,6 +48,9 @@ from .dialog_common import _dialog_text_present, _click_screen_center
 
 # ---- 模板（res/img，用户截图提供） ----
 ZUDUI_ITEM_ICON = "zudui_item.png"        # 组队按钮（点击弹出组队菜单）
+ZUDUI_ITEM2_ICON = "zudui_item2.png"      # 组队按钮-申请待处理态（有人申请加入时按钮
+                                           # 变样；出现即确定性队长，点击直接弹出
+                                           # 申请加入面板而非菜单——用户 2026-10-14 实测）
 DUIWU_XINXI_ICON = "duiwuxinxi.png"       # 菜单「队伍信息」（已组队时菜单中出现）
 JIESAN_DUIWU_ICON = "jiesanduiwu.png"     # 队伍面板「解散队伍」按钮（仅队长可见）
 DUIWU_MIANBAN_ICON = "duiwumianban.png"   # 队伍面板标志（面板已打开判定）
@@ -157,6 +160,15 @@ def _apply_panel_flag(img):
                                      _TEMPLATE_THRESHOLD)
 
 
+def has_pending_apply(img):
+    """画面中是否存在申请人证据：申请加入面板已开，或组队按钮为
+    申请待处理态（zudui_item2）。供监控循环决定是否先走补人。"""
+    if _apply_panel_flag(img) is not None:
+        return True
+    return game_map.find_template_in(img, ZUDUI_ITEM2_ICON,
+                                     _TEMPLATE_THRESHOLD) is not None
+
+
 def _apply_rows(img, fx, fy):
     """申请人列表行（面板标志下方固定偏移区域 OCR；排除表头）。
 
@@ -203,10 +215,17 @@ def _fill_team_loop(win, target, max_allow):
         return False, "窗口截图失败"
     flag = _apply_panel_flag(img)
     if flag is None:
-        # 面板未开：点击组队按钮（人数不足时弹出申请加入面板而非菜单）
-        pt = game_map.find_template(win, ZUDUI_ITEM_ICON, _TEMPLATE_THRESHOLD)
-        if pt is None:
-            return False, "未找到组队按钮（zudui_item）"
+        # 面板未开：点击组队按钮。按钮为申请待处理态（zudui_item2，
+        # 有人申请加入）时点击直接弹出申请加入面板——该状态即确定性
+        # 队长（用户实测）；普通态点击弹出组队菜单
+        pt = game_map.find_template(win, ZUDUI_ITEM2_ICON, _TEMPLATE_THRESHOLD)
+        if pt is not None:
+            record_leader_status(True)
+            log("[组队] 组队按钮为申请待处理态（zudui_item2），队长确认，点击打开申请面板", "INFO")
+        else:
+            pt = game_map.find_template(win, ZUDUI_ITEM_ICON, _TEMPLATE_THRESHOLD)
+            if pt is None:
+                return False, "未找到组队按钮（zudui_item/zudui_item2）"
         human_click(win, pt[0], pt[1])
         flag = None
         for _ in range(APPLY_PANEL_WAIT_TRIES):
@@ -309,15 +328,24 @@ def _ensure_menu_open(win):
         return True, img
     pt = game_map.find_template(win, ZUDUI_ITEM_ICON, _TEMPLATE_THRESHOLD)
     if pt is None:
-        # 诊断：组队按钮未命中——记录当前帧最佳匹配分（区分「按钮被
-        # 遮挡/换屏」分数极低 与「渲染差异」分数略低于阈值），并存
+        # 按钮可能处于申请待处理态（zudui_item2，有人申请加入）：
+        # 该状态点击打开的是申请加入面板而非菜单，菜单打不开——直接
+        # 返回，由监控循环先走补人（用户 2026-10-14 实测根因）
+        diag = win.capture(force_activate=False)
+        if diag is not None and game_map.find_template_in(
+                diag, ZUDUI_ITEM2_ICON, _TEMPLATE_THRESHOLD) is not None:
+            log("[组队] 组队按钮为申请待处理态（zudui_item2），菜单无法打开，应先补人", "INFO")
+            return False, None
+        # 诊断：组队按钮两个形态都未命中——记录最佳匹配分（区分「按钮
+        # 被遮挡/换屏」分数极低 与「渲染差异」分数略低于阈值），并存
         # 现场截图（tmp_err_img.png，gitignore 已忽略）供人工排查
         try:
-            diag = win.capture(force_activate=False)
             if diag is not None:
                 score, _pos = game_map.best_match_in(diag, ZUDUI_ITEM_ICON)
-                log(f"[组队] 组队按钮（zudui_item）未命中：最佳匹配 {score:.2f} "
-                    f"（阈值 {_TEMPLATE_THRESHOLD}），现场已存 tmp_err_img.png", "WARN")
+                score2, _ = game_map.best_match_in(diag, ZUDUI_ITEM2_ICON)
+                log(f"[组队] 组队按钮未命中：zudui_item 最佳 {score:.2f}、"
+                    f"zudui_item2 最佳 {score2:.2f}（阈值 {_TEMPLATE_THRESHOLD}），"
+                    f"现场已存 tmp_err_img.png", "WARN")
                 try:
                     diag.save("tmp_err_img.png")
                 except Exception:

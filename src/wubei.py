@@ -1614,23 +1614,30 @@ def _keep_alive(info):
 
 
 def _monitor_team_and_fill(win):
-    """队长缺人监控循环（领取前与被拒后共用）：查人数 → 缺人则从
-    申请加入面板允许一名申请人 → 立即重查；无申请人时按间隔重查；
-    人满返回（调用方随即领取）；非队长转保持模式（不返回）。
+    """队长缺人监控循环（领取前与被拒后共用）。
+
+    每轮先看申请人证据（申请面板已开，或组队按钮为 zudui_item2
+    申请待处理态——有人申请时按钮变样且该态即确定性队长，用户实测）：
+    有则先补人（允许一名申请人后立即重查），无则查人数——缺人按
+    间隔重查、人满返回（调用方随即领取）；非队长转保持模式（不返回）。
+
+    先补后查的原因：按钮处于申请态时菜单打不开（点击弹的是申请面板），
+    查人数走菜单路径必失败；补完申请人后按钮恢复普通态，查人数才可用。
 
     间隔：识别失败（OCR 噪声）3s 短重查，缺人无申请人 10s 重查。
     """
     while True:
+        img = win.capture(force_activate=False)
+        if img is not None and team.has_pending_apply(img):
+            ok_fill, fill_info = team.fill_team(win, target=5, max_allow=1)
+            log(f"[五倍] 补人: {fill_info}", "SYS" if ok_fill else "INFO")
+            if ok_fill:
+                continue  # 已补一人，立即重查
         status, info = _check_team_with_retry(win)
         if status == "not_leader":
             _keep_alive(info)  # 无限循环，用户手动停止
         if status == "ready":
             return
-        # 缺人：尝试补一人（申请面板允许一名申请人，成功立即重查）
-        ok_fill, fill_info = team.fill_team(win, target=5, max_allow=1)
-        log(f"[五倍] 补人: {fill_info}", "SYS" if ok_fill else "INFO")
-        if ok_fill:
-            continue  # 已补一人，立即重查人数
         interval = (TEAM_RECOG_RETRY_INTERVAL if "识别失败" in info
                     else TEAM_CHECK_RETRY_INTERVAL)
         log(f"[五倍] {info}，暂无申请人可补，{interval}s 后重查", "WARN")
