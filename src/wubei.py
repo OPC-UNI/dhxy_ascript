@@ -1635,7 +1635,15 @@ def _monitor_team_and_fill(win):
                 continue  # 已补一人，立即重查
         status, info = _check_team_with_retry(win)
         if status == "not_leader":
-            _keep_alive(info)  # 无限循环，用户手动停止
+            if team.is_definitive_not_leader(info):
+                _keep_alive(info)  # 无限循环，用户手动停止
+            # 瞬态失败（遮挡/加载/按钮未命中等）：不退出监控，按间隔
+            # 持续重查——瞬时问题不应把队长永久降级
+            interval = (TEAM_RECOG_RETRY_INTERVAL if "识别失败" in info
+                        else TEAM_CHECK_RETRY_INTERVAL)
+            log(f"[五倍] {info}（瞬态失败，{interval}s 后重查）", "WARN")
+            time.sleep(interval)
+            continue
         if status == "ready":
             return
         interval = (TEAM_RECOG_RETRY_INTERVAL if "识别失败" in info
@@ -1775,8 +1783,12 @@ def run_loop(win, cycle_interval=1.0):
                                                    CLAIM_NEAR_TOLERANCE))
                     if not at_spot:
                         status, info = _check_team_with_retry(win)
-                        if status == "not_leader":
+                        if status == "not_leader" \
+                                and team.is_definitive_not_leader(info):
                             _keep_alive(info)
+                        elif status == "not_leader":
+                            log(f"[五倍] {info}（瞬态失败，不判定身份，"
+                                f"继续走位由监控循环重查）", "WARN")
                 # 队伍是否满都先走到领取点附近（缺人由监控循环补）
                 ok, info = _walk_to_claim_spot(win)
                 if not ok:

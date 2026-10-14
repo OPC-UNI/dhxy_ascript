@@ -1304,8 +1304,12 @@ def run_loop(win, cycle_interval=1.0):
                                                CLAIM_NEAR_TOLERANCE))
                 if not at_spot:
                     status, info = _check_team_with_retry(win)
-                    if status == "not_leader":
+                    if status == "not_leader" \
+                            and team.is_definitive_not_leader(info):
                         _keep_alive(info)
+                    elif status == "not_leader":
+                        log(f"[修罗] {info}（瞬态失败，不判定身份，"
+                            f"继续走位由监控循环重查）", "WARN")
             # 1.1 队长：队伍是否满都先走到领取点附近
             ok, info = _walk_to_claim_spot(win, just_returned=just_returned)
             if not ok:
@@ -1323,7 +1327,15 @@ def run_loop(win, cycle_interval=1.0):
                 while True:
                     status, info = _check_team_with_retry(win)
                     if status == "not_leader":
-                        _keep_alive(info)
+                        if team.is_definitive_not_leader(info):
+                            _keep_alive(info)
+                        # 瞬态失败（遮挡/加载等）：不退出监控，按间隔重查
+                        interval = (TEAM_RECOG_RETRY_INTERVAL
+                                    if "识别失败" in info
+                                    else TEAM_CHECK_RETRY_INTERVAL)
+                        log(f"[修罗] {info}（瞬态失败，{interval}s 后重查）", "WARN")
+                        time.sleep(interval)
+                        continue
                     if status == "ready":
                         log(f"[修罗] {info}", "SYS")
                         break
@@ -1342,11 +1354,14 @@ def run_loop(win, cycle_interval=1.0):
                     # 盲点领取）；检查通过（如「对方很强大」非人数问题）
                     # 则保持跳过检查，下轮直接重试领取
                     status, info2 = _check_team_with_retry(win)
-                    if status == "not_leader":
+                    if status == "not_leader" \
+                            and team.is_definitive_not_leader(info2):
                         _keep_alive(info2)
                     elif status == "wait":
                         _team_checked = False
                         log("[修罗] 领取失败且队伍人数不足，恢复领取前队伍监控", "WARN")
+                    elif status == "not_leader":
+                        log(f"[修罗] {info2}（瞬态失败，不判定身份）", "WARN")
                 log(f"[修罗] {info}", "WARN")
                 time.sleep(cycle_interval)
                 continue
