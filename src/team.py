@@ -840,14 +840,21 @@ def check_team_min(win, min_members=None):
         members = []
     if not ok:
         return "wait", "成员识别失败", members
-    # 种族文案从成员分析结果取（_count_members_frame 用的是取消选中前
-    # 的帧，选中态下第 1 列种族读不到会误报「未识别到种族」）
-    race_txt = "、".join(r for r, _ in members if r and r != "?") or "未识别到种族"
+    # 种族/等级文案从成员分析结果取（_count_members_frame 用的是取消选中前
+    # 的帧，选中态下第 1 列种族读不到会误报「未识别到种族」）。
+    # 日志按成员逐条列「种族 等级」（用户 2026-10-14 要求；面板无名称列）
+    member_parts = []
+    for r, lv in members:
+        if r and r != "?":
+            member_parts.append(f"{r} {lv}" if lv else r)
+        elif lv:
+            member_parts.append(f"? {lv}")
+    member_txt = "、".join(member_parts) or "未识别到成员"
     if min_members is not None and count < min_members:
         log(f"[组队] 队伍不满足条件: 人数不足（{count}/{min_members}）"
-            f"（当前 {count} 人: {race_txt}）", "WARN")
-        return "wait", f"队伍人数不足（{count}/{min_members}，当前: {race_txt}）", members
-    return "ready", f"队伍满足人数要求（{count} 人: {race_txt}）", members
+            f"（当前 {count} 人: {member_txt}）", "WARN")
+        return "wait", f"队伍人数不足（{count}/{min_members}，当前: {member_txt}）", members
+    return "ready", f"队伍满足人数要求（{count} 人: {member_txt}）", members
 
 
 def update_overlay_team(status, info, members):
