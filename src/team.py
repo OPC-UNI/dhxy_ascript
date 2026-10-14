@@ -284,7 +284,7 @@ def _fill_team_loop(win, target, max_allow):
             if img is None:
                 time.sleep(0.5)
                 continue
-            items, _ = game_map.ocr_region(img, (task_tracker.DIALOG_REGION,))
+            items, _ = game_map.ocr_region(img, task_tracker.DIALOG_REGION)
             if _dialog_text_present(items, APPLY_FAIL_TEXT):
                 fail = True
                 break
