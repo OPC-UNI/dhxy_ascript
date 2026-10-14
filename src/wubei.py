@@ -57,7 +57,8 @@ from . import debug_overlay  # 调试信息悬浮层（任务进度更新）
 from .battle import (is_in_battle, is_in_battle_frame,
                      watch_in_battle as battle_watch_in_battle)  # 战斗状态判定（统一在 battle.py 中实现）
 from .control_window import (load_task_counts,  # 任务次数上限
-                             load_wubei_check_team)  # 五倍设置：检查队伍开关
+                             load_wubei_check_team,  # 五倍设置：检查队伍开关
+                             load_wubei_shout_text)  # 五倍设置：缺人自动喊话内容
 from .dialog_common import (SCREEN_CENTER_POS, green_option_center,
                             _dialog_text_present,
                             _click_screen_center)  # 对话框共享组件（屏幕中间点击/选项中心/文案检测）
@@ -272,6 +273,9 @@ def _reset_xianxingjing_state():
 TEAM_CHECK_RETRY_INTERVAL = 10  # 缺人且无申请人可补时的重查间隔（秒）
 TEAM_RECOG_RETRY_INTERVAL = 3   # 成员识别失败（OCR 噪声）时的重试间隔（秒）：
                                 # 识别失败≠人数不足，等满 10s 纯属空转
+SHOUT_MIN_INTERVAL = 30         # 缺人自动喊话最短间隔（秒，防刷屏）
+_shout_text = ""                # 本轮喊话内容（run_loop 从设置加载；空=不喊话）
+_shout_last_at = 0.0            # 上次喊话时间（跨监控调用保持间隔）
 
 # ---- 返程（用户流程：背包任务储物格 → 五倍回城符右键 → 回宝象国；
 #      逻辑与修罗完全一致，仅回城符模板不同——待用户提供） ----
@@ -1614,6 +1618,23 @@ def _keep_alive(info):
         time.sleep(1)
 
 
+def _shout_recruit(win):
+    """缺人自动喊话：Enter 打开聊天输入 → 输入内容（中文自动走剪贴板
+    粘贴，Keyboard.input 内置）→ Enter 发送。
+
+    发送到游戏当前默认频道（如需世界频道请预先在游戏内切换默认频道）。
+    """
+    global _shout_last_at
+    Keyboard.key("enter")
+    time.sleep(0.4)  # 等待聊天输入框打开
+    Keyboard.input(_shout_text)
+    time.sleep(0.4)
+    Keyboard.key("enter")  # 发送
+    time.sleep(0.4)
+    _shout_last_at = time.time()
+    log(f"[五倍] 已自动喊话: {_shout_text}", "SYS")
+
+
 def _monitor_team_and_fill(win):
     """队长缺人监控循环（领取前与被拒后共用）。
 
@@ -1649,6 +1670,13 @@ def _monitor_team_and_fill(win):
             return
         interval = (TEAM_RECOG_RETRY_INTERVAL if "识别失败" in info
                     else TEAM_CHECK_RETRY_INTERVAL)
+        # 缺人自动喊话（间隔限频；有申请人正在补时走上面的补人分支，
+        # 不喊话）
+        if _shout_text and time.time() - _shout_last_at >= SHOUT_MIN_INTERVAL:
+            try:
+                _shout_recruit(win)
+            except Exception as e:
+                log(f"[五倍] 喊话失败: {e}", "WARN")
         log(f"[五倍] {info}，暂无申请人可补，{interval}s 后重查", "WARN")
         time.sleep(interval)
 
@@ -1721,7 +1749,7 @@ def run_loop(win, cycle_interval=1.0):
     返回结束原因描述。
     """
     global _fight_via_kanda, _team_checked, _task_gone_last_round, _xj_need_replace, \
-        _replace_fail_streak, _hpg_task_seen
+        _replace_fail_streak, _hpg_task_seen, _shout_text
     max_rounds = load_task_counts().get(TASK_MODE, 0)
     log(f"[五倍] 任务次数上限: {max_rounds if max_rounds > 0 else '不限'}", "SYS")
     log(f"[五倍] 领取点宝象国 {CLAIM_SPOT[0]},{CLAIM_SPOT[1]}，队伍固定 5 人", "SYS")
@@ -1730,6 +1758,9 @@ def run_loop(win, cycle_interval=1.0):
     # 关闭时跳过全部队伍检查直接领取（可能不是队长，被拒也不补人）
     check_team = load_wubei_check_team()
     log(f"[五倍] 检查队伍: {'开（领取前监控补人）' if check_team else '关（跳过队伍检查）'}", "SYS")
+    _shout_text = (load_wubei_shout_text() or "").strip()
+    if _shout_text:
+        log(f"[五倍] 缺人自动喊话: {_shout_text}（最短间隔 {SHOUT_MIN_INTERVAL}s）", "SYS")
 
     done = app_utils.task_progress_done(win, TASK_MODE)  # 当天已完成（跨重启持久）
     if done:

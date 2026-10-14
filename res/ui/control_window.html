@@ -269,6 +269,17 @@
                     <span class="switch-track"></span>
                     <span>检查队伍（队伍固定 5 人，缺人自动补）</span>
                 </label>
+                <div class="group-row">
+                    <span class="group-label">喊话内容</span>
+                    <div class="group-ctrl">
+                        <input type="text" id="wubei-shout" maxlength="40"
+                               placeholder="缺人时自动喊话（留空=不喊话）"
+                               style="background: var(--panel); border: 1px solid var(--border);
+                                      color: var(--text); border-radius: 4px; padding: 5px 8px;
+                                      font-size: 12px; font-family: inherit; width: 170px;">
+                    </div>
+                </div>
+                <div class="group-hint">缺人时每 30 秒自动喊话一次（Enter 打开聊天输入发送）</div>
             </div>
         </div>
         <!-- 通用设置：摄妖香开关 + 高性能 + 血量蓝量阈值 + 人物/召唤兽战斗动作 -->
@@ -470,6 +481,7 @@
         const xiuluoWuyiIntervalEl = document.getElementById('xiuluo-wuyi-interval');
         const wubeiHezi = document.getElementById('wubei-hezi');
         const wubeiCheckTeam = document.getElementById('wubei-check-team');
+        const wubeiShout = document.getElementById('wubei-shout');
         const btnVerifyXiuluo = document.getElementById('btn-verify-xiuluo');
         const verifyResultEl = document.getElementById('verify-result');
         const btnVerifyXiuluoClaim = document.getElementById('btn-verify-xiuluo-claim');
@@ -690,6 +702,9 @@
             }
             wubeiHezi.checked = !!(info.wubei && info.wubei.hezi);
             wubeiCheckTeam.checked = !!(info.wubei && info.wubei.check_team);
+            if (info.wubei && info.wubei.shout !== undefined) {
+                wubeiShout.value = info.wubei.shout;
+            }
             const ths = info.thresholds || {};
             for (const key of ['char_hp', 'char_mp', 'beast_hp', 'beast_mp']) {
                 const el = document.getElementById('th-' + key);
@@ -840,6 +855,12 @@
         // 五倍检查队伍开关变更：立即保存（下次任务启动生效）
         wubeiCheckTeam.addEventListener('change', () => {
             callPython('save_wubei_check_team', wubeiCheckTeam.checked);
+        });
+        wubeiShout.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') wubeiShout.blur();  // 回车确认（失焦触发保存）
+        });
+        wubeiShout.addEventListener('change', () => {
+            callPython('save_wubei_shout_text', wubeiShout.value);
         });
 
         // 修罗回程验证：Python 侧后台线程执行，结果经 onVerifyResult 异步回推

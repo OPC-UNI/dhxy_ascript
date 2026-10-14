@@ -211,6 +211,22 @@ def save_wubei_check_team(on):
     return {"status": "success"}
 
 
+# ---- 五倍缺人自动喊话（UI 文本输入，KeyValue 持久化；空内容=不喊话） ----
+_WUBEI_SHOUT_KEY = "wubei_shout_text"
+WUBEI_SHOUT_DEFAULT = "百次五倍来人，效率队"
+
+
+def load_wubei_shout_text():
+    """读取五倍喊话内容（默认「百次五倍来人，效率队」；空=不喊话）。"""
+    return str(KeyValue.get(_WUBEI_SHOUT_KEY, WUBEI_SHOUT_DEFAULT))
+
+
+def save_wubei_shout_text(text):
+    """保存五倍喊话内容（长度上限 40 字），返回操作结果。"""
+    KeyValue.save(_WUBEI_SHOUT_KEY, str(text)[:40])
+    return {"status": "success"}
+
+
 def load_wubei_hezi():
     """读取五倍自动抢盒子开关（首次默认关闭）。"""
     return bool(KeyValue.get(_WUBEI_HEZI_KEY, False))
@@ -418,6 +434,7 @@ def reset_settings():
     save_xiuluo_races(XIULUO_RACES_DEFAULT)
     save_wubei_hezi(False)
     save_wubei_check_team(False)
+    save_wubei_shout_text(WUBEI_SHOUT_DEFAULT)
     save_xiuluo_hezi(False)
     save_high_perf(True)
     save_auto_refill(True)
@@ -483,6 +500,7 @@ class ControlWindow(WebWindow):
         self.expose(self.save_clear_screen)
         self.expose(self.save_wubei_hezi)
         self.expose(self.save_wubei_check_team)
+        self.expose(self.save_wubei_shout_text)
         self.expose(self.save_debug_overlay)
         self.expose(self.save_auto_famen)
         self.expose(self.save_ui_theme)
@@ -547,7 +565,8 @@ class ControlWindow(WebWindow):
                 "auto_refill": load_auto_refill(),
                 "clear_screen": load_clear_screen(),
                 "wubei": {"hezi": load_wubei_hezi(),
-                          "check_team": load_wubei_check_team()},
+                          "check_team": load_wubei_check_team(),
+                          "shout": load_wubei_shout_text()},
                 "auto_famen": load_auto_famen(),
                 "debug_overlay": load_debug_overlay(),
                 "license": self._license_info,
@@ -620,6 +639,10 @@ class ControlWindow(WebWindow):
     def save_wubei_check_team(self, on):
         """五倍设置变更：保存检查队伍开关状态。"""
         return save_wubei_check_team(on)
+
+    def save_wubei_shout_text(self, text):
+        """五倍设置变更：保存缺人自动喊话内容（空=不喊话）。"""
+        return save_wubei_shout_text(text)
 
     def save_debug_overlay(self, on):
         """调试信息开关变更：保存开关状态，并同步日志窗口显隐。"""
