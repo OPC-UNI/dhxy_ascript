@@ -1676,7 +1676,12 @@ def run_loop(win, cycle_interval=1.0):
     check_team = load_wubei_check_team()
     log(f"[五倍] 检查队伍: {'开（领取前检查队伍）' if check_team else '关（跳过队伍检查，直接领取）'}", "SYS")
 
-    done = 0
+    done = app_utils.task_progress_done(win, TASK_MODE)  # 当天已完成（跨重启持久）
+    if done:
+        log(f"[五倍] 恢复当天进度: 已完成 {done} 次", "SYS")
+    if 0 < max_rounds <= done:
+        log(f"[五倍] 当天进度已达上限 {done}/{max_rounds}，无需再执行", "SYS")
+        return f"已完成 {done} 次五倍任务，达到次数上限 {max_rounds}"
     round_no = 0
     while True:
         try:
@@ -1844,6 +1849,7 @@ def run_loop(win, cycle_interval=1.0):
                     time.sleep(cycle_interval)
                     continue
             done += 1
+            app_utils.task_progress_add(win, TASK_MODE, done)
             total = max_rounds if max_rounds > 0 else "∞"
             debug_overlay.set_progress(f"{done}/{total}")
             log(f"[五倍] 本轮五倍任务完成（{done}/{total}）", "SYS")

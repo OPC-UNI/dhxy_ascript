@@ -113,6 +113,28 @@ def _ensure_window_binding():
         log("[绑定] 未选择窗口，本次按自动选择运行", "WARN")
 
 
+def _sheyaoxiang_watchdog(win):
+    """摄妖香定时续用线程（任务子进程内 daemon 线程，随进程强杀终止）。
+
+    每分钟检查一次到期状态；到期时持全局输入锁执行完整使用流程
+    （与任务/战斗线程的点击互斥），成功后记录时间。战斗中同样
+    执行——物品栏战斗中可打开，用户要求不漏用。失败不记录时间，
+    下一分钟自动重试直到成功。
+    """
+    while True:
+        time.sleep(60)
+        try:
+            if not app_utils.sheyaoxiang_due(win):
+                continue
+            with app_utils._INPUT_LOCK:
+                ok, info = bag.use_sheyaoxiang(win)
+                if ok:
+                    app_utils.sheyaoxiang_mark_used(win)
+                log(f"[摄妖香] 定时续用: {info}", "SYS" if ok else "WARN")
+        except Exception as e:
+            log(f"[摄妖香] 定时续用异常: {e}", "WARN")
+
+
 def task_start():
     """业务逻辑入口函数（顶层函数，spawn 按引用 pickle）。
 
@@ -200,19 +222,39 @@ def task_start():
         if not logged_in:
             log("[检查] 未登录，跳过清屏/摄妖香/玄枢轶闻/血蓝条检查", "WARN")
 
-        # 2.5 清屏（通用设置开关，默认开启；每次任务启动执行一次）：
-        #     Alt+6 屏蔽非队伍玩家 + Alt+5 屏蔽摊位，供后续任务干净执行
+        # 2.5 清屏（通用设置开关，默认开启）：
+        #     Alt+6 屏蔽非队伍玩家 + Alt+5 屏蔽摊位，供后续任务干净执行。
+        #     窗口句柄与角色均未变化时跳过（屏蔽状态在游戏侧持续，
+        #     重复按键无收益且有误触风险；换窗口/换角色自动重新清屏）
         if logged_in and load_clear_screen():
-            ok, info = clear_screen.run_clear_screen(main_win)
-            log(f"[清屏] {info}", "SYS" if ok else "WARN")
-
-        # 3. 摄妖香流程（开关开启且已登录时执行一次）
-        if logged_in and use_sheyaoxiang:
-            ok, info = bag.use_sheyaoxiang(main_win)
-            if ok:
-                log(f"[摄妖香] {info}", "SYS")
+            if app_utils.clear_screen_skip(main_win):
+                log("[清屏] 窗口与角色未变化，跳过启动清屏", "INFO")
             else:
-                log(f"[摄妖香] {info}", "WARN")
+                ok, info = clear_screen.run_clear_screen(main_win)
+                log(f"[清屏] {info}", "SYS" if ok else "WARN")
+                if ok:
+                    app_utils.clear_screen_mark(main_win)
+
+        # 3. 摄妖香流程（开关开启且已登录；一次使用有效 1 小时）：
+        #    上次使用距今超过 1 小时才重新使用（角色维度持久化，
+        #    重启后一小时内不重复使用）
+        if logged_in and use_sheyaoxiang:
+            if not app_utils.sheyaoxiang_due(main_win):
+                log("[摄妖香] 距上次使用不足 1 小时，跳过", "INFO")
+            else:
+                ok, info = bag.use_sheyaoxiang(main_win)
+                if ok:
+                    app_utils.sheyaoxiang_mark_used(main_win)
+                    log(f"[摄妖香] {info}", "SYS")
+                else:
+                    log(f"[摄妖香] {info}", "WARN")
+        # 3.5 摄妖香定时续用：任务持续运行时每小时检查一次，到期自动
+        #     补用（战斗中同样可用——物品栏战斗中可打开，用户要求不漏用；
+        #     全局输入锁与任务/战斗线程互斥，不打断当前点击）
+        if logged_in and use_sheyaoxiang:
+            threading.Thread(
+                target=_sheyaoxiang_watchdog, args=(main_win,),
+                daemon=True, name="sheyaoxiang-watchdog").start()
 
         # 4. 战斗监控线程（已登录时启动，任何模式下自动执行人物/召唤兽战斗操作；
         #    启动日志由 watch_loop 内部输出，此处不重复打）

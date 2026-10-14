@@ -80,8 +80,8 @@ from .dialog_common import (DAILY_LIMIT_TEXT, DAILY_LIMIT_INFO,
 DIALOG_SKIP_TEXTS = {
     "你是做嘛的？莫来惹老子！": 2,
     "多帮助新人，神仙都会感谢你的！": 4,
-    "受害者所闻那水鬼之声出自善口技者之音，你幼时曾学过口技，又时常与人": 4,
-    "第二起案子中，被打捞的尸体手脚被渔人结牢牢捆住，那渔人结并非常人所": 4,
+    "受害者所闻那水鬼之声出自善口技者之音，你幼时曾学过口技，又时常与人": 1,
+    "第二起案子中，被打捞的尸体手脚被渔人结牢牢捆住，那渔人结并非常人所": 1,
     "少侠运气不错": 4,
     "翠花说的难道是这块石头？但是.": 4,
     "刚刚是你再说话？": 4,
@@ -590,10 +590,11 @@ def _play_chuyijuebao(win, timeout=CHUYIJUEBAO_TIMEOUT):
             last_icon_check = now
             if game_map.find_template(win, CHUYIJUEBAO_ICON) is None:
                 return True, f"锄遗聚宝结束（共消除 {clicked} 个）"
-        # 兜底：关闭可能弹出的背包/地图面板（5 秒一次）
+        # 兜底：关闭可能弹出的背包/地图面板（5 秒一次；quiet——未打开
+        # 不点击的路径不打日志，避免小游戏期间每 5 秒刷 2 条 INFO）
         if now - last_panel_check >= 5.0:
             last_panel_check = now
-            close_scene_panels(win, "玄枢轶闻")
+            close_scene_panels(win, "玄枢轶闻", quiet=True)
         if CHUYIJUEBAO_DEBUG:
             # 调试模式：不点击鼠标，标注检测框并保存截图（每秒一张）
             if now - last_debug_save >= 1.0:
@@ -1105,7 +1106,12 @@ def run_loop(win, cycle_interval=3.0):
     """
     max_rounds = load_task_counts().get(TASK_TITLE, 0)
     log(f"[玄枢轶闻] 任务次数上限: {max_rounds if max_rounds > 0 else '不限'}", "SYS")
-    done = 0
+    done = app_utils.task_progress_done(win, TASK_TITLE)  # 当天已完成（跨重启持久）
+    if done:
+        log(f"[玄枢轶闻] 恢复当天进度: 已完成 {done} 次", "SYS")
+    if 0 < max_rounds <= done:
+        log(f"[玄枢轶闻] 当天进度已达上限 {done}/{max_rounds}，无需再执行", "SYS")
+        return f"已完成 {done} 次玄枢轶闻任务，达到次数上限 {max_rounds}"
     round_no = 0
     while True:
         round_no += 1
@@ -1113,6 +1119,7 @@ def run_loop(win, cycle_interval=3.0):
         status, info = run_cycle(win)
         if status == "done":
             done += 1
+            app_utils.task_progress_add(win, TASK_TITLE, done)
             total = max_rounds if max_rounds > 0 else "∞"
             debug_overlay.set_progress(f"{done}/{total}")
             log(f"[玄枢轶闻] {info}（{done}/{total}）", "SYS")

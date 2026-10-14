@@ -168,13 +168,14 @@ def _norm_dialog_present(items, dtxt):
     return _dialog_text_present(norm_items, norm_text(dtxt))
 
 
-def close_scene_panels(win, prefix=""):
+def close_scene_panels(win, prefix="", quiet=False):
     """关闭场景中可能打开的界面：小地图、世界地图、物品栏。
 
     prefix：日志前缀（如「客栈」「玄枢轶闻」）。
+    quiet：周期性兜底检查用——地图「未打开不点击」路径不再打日志。
     """
     tag = f"[{prefix}] " if prefix else ""
-    game_map.close_maps(win)
+    game_map.close_maps(win, quiet=quiet)
     if bag.is_bag_open(win):
         ok, info = bag.close_bag(win)
         log(f"{tag}物品栏{info}", "SYS" if ok else "WARN")

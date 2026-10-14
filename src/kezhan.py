@@ -1551,7 +1551,12 @@ def run_loop(win, cycle_interval=1.0):
     """
     max_rounds = load_task_counts().get(TASK_MODE, 0)
     log(f"[客栈] 任务次数上限: {max_rounds if max_rounds > 0 else '不限'}", "SYS")
-    done = 0
+    done = app_utils.task_progress_done(win, TASK_MODE)  # 当天已完成（跨重启持久）
+    if done:
+        log(f"[客栈] 恢复当天进度: 已完成 {done} 次", "SYS")
+    if 0 < max_rounds <= done:
+        log(f"[客栈] 当天进度已达上限 {done}/{max_rounds}，无需再执行", "SYS")
+        return f"已完成 {done} 次客栈任务，达到次数上限 {max_rounds}"
     round_no = 0
     while True:
         round_no += 1
@@ -1563,6 +1568,7 @@ def run_loop(win, cycle_interval=1.0):
             return str(e)
         if status == "done":
             done += 1
+            app_utils.task_progress_add(win, TASK_MODE, done)
             total = max_rounds if max_rounds > 0 else "∞"
             debug_overlay.set_progress(f"{done}/{total}")
             log(f"[客栈] {info}（{done}/{total}）", "SYS")

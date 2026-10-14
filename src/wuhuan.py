@@ -584,7 +584,12 @@ def run_loop(win, cycle_interval=3.0):
             return f"准备阶段失败：{info}"
         log(f"[五环] {info}", "SYS")
 
-    done = 0
+    done = app_utils.task_progress_done(win, WUHUAN_TITLE)  # 当天已完成（跨重启持久）
+    if done:
+        log(f"[五环] 恢复当天进度: 已完成 {done} 次", "SYS")
+    if 0 < max_rounds <= done:
+        log(f"[五环] 当天进度已达上限 {done}/{max_rounds}，无需再执行", "SYS")
+        return f"已完成 {done} 次五环任务，达到次数上限 {max_rounds}"
     round_no = 0
     while True:
         round_no += 1
@@ -651,6 +656,7 @@ def run_loop(win, cycle_interval=3.0):
             time.sleep(cycle_interval)
             continue
         done += 1
+        app_utils.task_progress_add(win, WUHUAN_TITLE, done)
         total = max_rounds if max_rounds > 0 else "∞"
         debug_overlay.set_progress(f"{done}/{total}")
         log(f"[五环] {info}（{done}/{total}）", "SYS")

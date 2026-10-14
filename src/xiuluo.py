@@ -1262,7 +1262,12 @@ def run_loop(win, cycle_interval=1.0):
         + (f"（每 {wuyi_interval} 轮）" if auto_wuyi else ""), "SYS")
     log(f"[修罗] 检查队伍: {'开（领取前检查队伍）' if check_team else '关（跳过队伍检查，直接领取）'}", "SYS")
 
-    done = 0
+    done = app_utils.task_progress_done(win, TASK_MODE)  # 当天已完成（跨重启持久）
+    if done:
+        log(f"[修罗] 恢复当天进度: 已完成 {done} 次", "SYS")
+    if 0 < max_rounds <= done:
+        log(f"[修罗] 当天进度已达上限 {done}/{max_rounds}，无需再执行", "SYS")
+        return f"已完成 {done} 次修罗任务，达到次数上限 {max_rounds}"
     round_no = 0
     while True:
         round_no += 1
@@ -1369,6 +1374,7 @@ def run_loop(win, cycle_interval=1.0):
                 continue
             _returned_last_round = True  # 下一轮领取：位置失败等加载（见 _walk_to_claim_spot）
         done += 1
+        app_utils.task_progress_add(win, TASK_MODE, done)
         total = max_rounds if max_rounds > 0 else "∞"
         debug_overlay.set_progress(f"{done}/{total}")
         log(f"[修罗] 本轮修罗任务完成（{done}/{total}）", "SYS")

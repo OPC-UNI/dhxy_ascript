@@ -193,6 +193,111 @@ def fixed_pos_clear(key):
         _persist_high_perf_cache()
 
 
+# ---- 角色维度运行时状态（按窗口账号 ID 键控，跨重启持久） ----
+# 摄妖香 1 小时有效期、当天任务完成进度、清屏幂等标记均按角色记录：
+# 键 = 窗口标题中的「（ID：xxx）」（未登录/无 ID 时退完整标题）。
+def char_key(win):
+    """角色键：窗口标题中的账号 ID 片段；无 ID 时回退完整标题。"""
+    title = getattr(win, "title", "") or ""
+    m = re.search(r"ID：(\d+)", title)
+    return f"（ID：{m.group(1)}）" if m else title
+
+
+def _char_state_get(key, ckey, default=None):
+    """读取角色维度状态（损坏数据按未记录处理）。"""
+    try:
+        data = KeyValue.get(key, {}) or {}
+        return data.get(ckey, default)
+    except Exception:
+        return default
+
+
+def _char_state_set(key, ckey, value):
+    """写入角色维度状态（保存前重读合并，防任务子进程整文件覆写
+    面板进程运行中保存的设置——同高性能缓存持久化的坑）。"""
+    try:
+        KeyValue._load_data()  # 合并面板进程的最新保存
+        data = KeyValue.get(key, {}) or {}
+        data[ckey] = value
+        KeyValue.save(key, data)
+    except Exception as e:
+        log(f"[状态] {key} 持久化失败: {e}", "WARN")
+
+
+# ---- 摄妖香 1 小时有效期管理 ----
+SHEYAOXIANG_VALID_SEC = 3600                    # 一次使用有效 1 小时（用户实测）
+_SHEYAOXIANG_KEY = "sheyaoxiang_last_use"       # {char_key: 使用时间戳}
+
+
+def sheyaoxiang_due(win):
+    """该角色摄妖香是否到期需重新使用（从未使用/记录损坏视为到期）。"""
+    last = _char_state_get(_SHEYAOXIANG_KEY, char_key(win))
+    if not isinstance(last, (int, float)):
+        return True
+    return time.time() - last >= SHEYAOXIANG_VALID_SEC
+
+
+def sheyaoxiang_mark_used(win):
+    """记录该角色已使用摄妖香（成功使用后调用）。"""
+    _char_state_set(_SHEYAOXIANG_KEY, char_key(win), time.time())
+
+
+# ---- 当天任务完成进度持久化（停止/重启不重置完成度） ----
+_TASK_PROGRESS_KEY = "task_progress"  # {char_key: {"date": "YYYY-MM-DD", "modes": {mode: done}}}
+
+
+def task_progress_done(win, mode):
+    """该角色当天该任务已完成的次数（跨重启持久；跨天自动清零）。"""
+    ckey = char_key(win)
+    today = time.strftime("%Y-%m-%d")
+    try:
+        data = KeyValue.get(_TASK_PROGRESS_KEY, {}) or {}
+        entry = data.get(ckey, {})
+        if not isinstance(entry, dict) or entry.get("date") != today:
+            return 0
+        return int(entry.get("modes", {}).get(mode, 0) or 0)
+    except Exception:
+        return 0
+
+
+def task_progress_add(win, mode, done):
+    """记录该角色当天任务完成次数（done 为含本轮总数）。"""
+    ckey = char_key(win)
+    today = time.strftime("%Y-%m-%d")
+    try:
+        KeyValue._load_data()  # 合并面板进程的最新保存
+        data = KeyValue.get(_TASK_PROGRESS_KEY, {}) or {}
+        entry = data.get(ckey, {})
+        if not isinstance(entry, dict) or entry.get("date") != today:
+            entry = {"date": today, "modes": {}}
+        entry.setdefault("modes", {})[mode] = int(done)
+        data[ckey] = entry
+        KeyValue.save(_TASK_PROGRESS_KEY, data)
+    except Exception as e:
+        log(f"[进度] {mode} 进度持久化失败: {e}", "WARN")
+
+
+# ---- 启动清屏幂等（窗口句柄与角色均未变化时跳过） ----
+_CLEAR_SCREEN_KEY = "clear_screen_state"  # {char_key: hwnd}
+
+
+def clear_screen_skip(win):
+    """窗口句柄与角色均未变化时跳过启动清屏（重复按键无收益且有
+    误触风险；窗口重开/换角色后句柄变化，自动重新清屏）。"""
+    hwnd = getattr(win, "hwnd", None)
+    if not hwnd:
+        return False
+    return _char_state_get(_CLEAR_SCREEN_KEY, char_key(win)) == int(hwnd)
+
+
+def clear_screen_mark(win):
+    """记录该角色已清屏的窗口句柄。"""
+    hwnd = getattr(win, "hwnd", None)
+    if not hwnd:
+        return
+    _char_state_set(_CLEAR_SCREEN_KEY, char_key(win), int(hwnd))
+
+
 def high_perf_click(win, key, label, prefix=""):
     """高性能缓存点击：有缓存坐标即点击并返回 True（调用方自行校验
     效果并按需回退识别路径）；开关关闭或无缓存返回 False 不点击。"""
