@@ -25,8 +25,10 @@ ControlWindow 基于 WebWindow（pywebview），页面为 res/ui/control_window.
 """
 import json
 import threading
+import time
 import webview
 from pathlib import Path
+from ascript.windows.hardware.keyboard import Keyboard
 from ascript.windows.system import R
 from ascript.windows.system.device import Device
 from ascript.windows.system.key_value import KeyValue
@@ -521,6 +523,7 @@ class ControlWindow(WebWindow):
         self.expose(self.verify_wubei_claim)
         self.expose(self.verify_wubei_return)
         self.expose(self.verify_clear_screen)
+        self.expose(self.verify_shout)
         self.expose(self.unbind_license)
         self.expose(self.get_env_info)
         self.expose(self.unbind_window)
@@ -886,6 +889,40 @@ class ControlWindow(WebWindow):
                     f"if(window.onWubeiReturnVerifyResult){{window.onWubeiReturnVerifyResult({ok_js}, {json.dumps(info)});}}")
             except Exception:
                 pass
+
+    def verify_shout(self):
+        """高级设置-喊话测试：向游戏聊天发送一次五倍喊话内容（验证
+        发送链路；与验证按钮同款约束——任务运行中拒绝、游戏须前台）。"""
+        if self._tm.is_running():
+            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        text = load_wubei_shout_text().strip()
+        if not text:
+            return {"status": "error", "msg": "喊话内容为空，请先在任务设置-五倍设置中填写"}
+        win = game.find_main_window()
+        if win is None:
+            return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
+        if not _game_window_clickable(win):
+            return {"status": "error", "msg": "游戏窗口被其他窗口遮挡，请将游戏窗口置于前台后再验证"}
+        threading.Thread(target=self._run_shout_test, args=(win, text),
+                         daemon=True, name="shout-test").start()
+        return {"status": "success", "msg": f"喊话测试已开始：{text}"}
+
+    def _run_shout_test(self, win, text):
+        """喊话测试线程体：激活游戏窗口 → Enter 打开聊天输入 → 输入
+        内容 → Enter 发送（与任务内喊话同链路），结果推日志窗。"""
+        try:
+            self.add_logs([f"[喊话测试] 发送中: {text}"])
+            win.activate()  # 键盘事件须游戏前台（不点击，避免误触世界）
+            time.sleep(0.5)
+            Keyboard.key("enter")
+            time.sleep(0.4)
+            Keyboard.input(text)
+            time.sleep(0.4)
+            Keyboard.key("enter")
+            time.sleep(0.4)
+            self.add_logs([f"[喊话测试] 已发送: {text}（请查看游戏公屏）"])
+        except Exception as e:
+            self.add_logs([f"[喊话测试] 发送失败: {e}"])
 
     def verify_clear_screen(self):
         """高级设置-清屏验证按钮：执行真实清屏流程（Alt+6 屏蔽非队伍
