@@ -55,6 +55,7 @@ from .battle import is_in_battle, is_in_battle_frame  # 战斗状态判定（统
 from .battle import WUYI_DIALOG_TEXTS  # 巫医对话框文案（自动巫医等待判定）
 from .battle import _find_wuyi_option  # 「全部医治和修复」选项定位（验证模式自行点击）
 from .control_window import (load_task_counts, load_xiuluo_settings,
+                             load_xiuluo_shout_switch,
                              load_xiuluo_check_team,
                              load_xiuluo_auto_wuyi,
                              load_xiuluo_wuyi_interval)  # 任务次数上限/修罗设置/自动巫医
@@ -1364,8 +1365,9 @@ def run_loop(win, cycle_interval=1.0):
     log(f"[修罗] 自动巫医: {'开' if auto_wuyi else '关'}"
         + (f"（每 {wuyi_interval} 轮）" if auto_wuyi else ""), "SYS")
     log(f"[修罗] 检查队伍: {'开（领取前检查队伍）' if check_team else '关（跳过队伍检查，直接领取）'}", "SYS")
-    _shout_text = _build_shout_text()
-    log(f"[修罗] 缺人自动喊话: {_shout_text}（最短间隔 {SHOUT_MIN_INTERVAL}s）", "SYS")
+    _shout_text = _build_shout_text() if load_xiuluo_shout_switch() else ""
+    if _shout_text:
+        log(f"[修罗] 缺人自动喊话: 开（{_shout_text}，最短间隔 {SHOUT_MIN_INTERVAL}s）", "SYS")
 
     done = app_utils.task_progress_done(win, TASK_MODE)  # 当天已完成（跨重启持久）
     if done:

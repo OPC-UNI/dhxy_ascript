@@ -221,19 +221,20 @@ def save_wubei_check_team(on):
     return {"status": "success"}
 
 
-# ---- 五倍缺人自动喊话（UI 文本输入，KeyValue 持久化；空内容=不喊话） ----
-_WUBEI_SHOUT_KEY = "wubei_shout_text"
-WUBEI_SHOUT_DEFAULT = "百次五倍来人，效率队"
+# ---- 五倍缺人自动喊话（UI 开关，KeyValue 持久化；默认关闭。
+#      喊话内容为固定值（wubei.py WUBEI_SHOUT_DEFAULT），不再对外
+#      保留内容设置——用户 2026-10-14 确认） ----
+_WUBEI_SHOUT_SWITCH_KEY = "wubei_shout"
 
 
-def load_wubei_shout_text():
-    """读取五倍喊话内容（默认「百次五倍来人，效率队」；空=不喊话）。"""
-    return str(KeyValue.get(_WUBEI_SHOUT_KEY, WUBEI_SHOUT_DEFAULT))
+def load_wubei_shout_switch():
+    """读取五倍缺人自动喊话开关（首次默认关闭）。"""
+    return bool(KeyValue.get(_WUBEI_SHOUT_SWITCH_KEY, False))
 
 
-def save_wubei_shout_text(text):
-    """保存五倍喊话内容（长度上限 40 字），返回操作结果。"""
-    KeyValue.save(_WUBEI_SHOUT_KEY, str(text)[:40])
+def save_wubei_shout_switch(on):
+    """保存五倍缺人自动喊话开关，返回操作结果。"""
+    KeyValue.save(_WUBEI_SHOUT_SWITCH_KEY, bool(on))
     return {"status": "success"}
 
 
@@ -337,6 +338,22 @@ def save_xiuluo_check_team(on):
 
 # ---- 修罗自动巫医（UI 开关+间隔，KeyValue 持久化；默认开启、每 5 轮
 #      一次——每 N 轮领取后无条件前往巫医 NPC 医治，血蓝正常也照常） ----
+# ---- 修罗缺人自动喊话（UI 开关，KeyValue 持久化；默认关闭。
+#      喊话内容按必须种族拼装（xiuluo._build_shout_text），无内容设置） ----
+_XIULUO_SHOUT_SWITCH_KEY = "xiuluo_shout"
+
+
+def load_xiuluo_shout_switch():
+    """读取修罗缺人自动喊话开关（首次默认关闭）。"""
+    return bool(KeyValue.get(_XIULUO_SHOUT_SWITCH_KEY, False))
+
+
+def save_xiuluo_shout_switch(on):
+    """保存修罗缺人自动喊话开关，返回操作结果。"""
+    KeyValue.save(_XIULUO_SHOUT_SWITCH_KEY, bool(on))
+    return {"status": "success"}
+
+
 _XIULUO_AUTO_WUYI_KEY = "xiuluo_auto_wuyi"
 _XIULUO_WUYI_INTERVAL_KEY = "xiuluo_wuyi_interval"
 _WUYI_INTERVAL_MIN = 1
@@ -444,8 +461,9 @@ def reset_settings():
     save_xiuluo_races(XIULUO_RACES_DEFAULT)
     save_wubei_hezi(False)
     save_wubei_check_team(False)
-    save_wubei_shout_text(WUBEI_SHOUT_DEFAULT)
+    save_wubei_shout_switch(False)
     save_xiuluo_hezi(False)
+    save_xiuluo_shout_switch(False)
     save_high_perf(True)
     save_auto_refill(True)
     save_clear_screen(True)
@@ -510,7 +528,8 @@ class ControlWindow(WebWindow):
         self.expose(self.save_clear_screen)
         self.expose(self.save_wubei_hezi)
         self.expose(self.save_wubei_check_team)
-        self.expose(self.save_wubei_shout_text)
+        self.expose(self.save_wubei_shout_switch)
+        self.expose(self.save_xiuluo_shout_switch)
         self.expose(self.save_debug_overlay)
         self.expose(self.save_auto_famen)
         self.expose(self.save_ui_theme)
@@ -577,7 +596,8 @@ class ControlWindow(WebWindow):
                 "clear_screen": load_clear_screen(),
                 "wubei": {"hezi": load_wubei_hezi(),
                           "check_team": load_wubei_check_team(),
-                          "shout": load_wubei_shout_text()},
+                          "shout": load_wubei_shout_switch()},
+                "xiuluo_shout": load_xiuluo_shout_switch(),
                 "auto_famen": load_auto_famen(),
                 "debug_overlay": load_debug_overlay(),
                 "license": self._license_info,
@@ -651,9 +671,13 @@ class ControlWindow(WebWindow):
         """五倍设置变更：保存检查队伍开关状态。"""
         return save_wubei_check_team(on)
 
-    def save_wubei_shout_text(self, text):
-        """五倍设置变更：保存缺人自动喊话内容（空=不喊话）。"""
-        return save_wubei_shout_text(text)
+    def save_wubei_shout_switch(self, on):
+        """五倍设置变更：保存缺人自动喊话开关状态。"""
+        return save_wubei_shout_switch(on)
+
+    def save_xiuluo_shout_switch(self, on):
+        """修罗设置变更：保存缺人自动喊话开关状态。"""
+        return save_xiuluo_shout_switch(on)
 
     def save_debug_overlay(self, on):
         """调试信息开关变更：保存开关状态，并同步日志窗口显隐。"""
@@ -903,9 +927,8 @@ class ControlWindow(WebWindow):
             from . import xiuluo  # 延迟导入：xiuluo 反向导入本模块（避免循环）
             text = xiuluo._build_shout_text()
         else:
-            text = load_wubei_shout_text().strip()
-            if not text:
-                return {"status": "error", "msg": "喊话内容为空，请先在任务设置-五倍设置中填写"}
+            from . import wubei  # 延迟导入：wubei 反向导入本模块（避免循环）
+            text = wubei.WUBEI_SHOUT_DEFAULT
         win = game.find_main_window()
         if win is None:
             return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}

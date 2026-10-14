@@ -58,7 +58,7 @@ from .battle import (is_in_battle, is_in_battle_frame,
                      watch_in_battle as battle_watch_in_battle)  # 战斗状态判定（统一在 battle.py 中实现）
 from .control_window import (load_task_counts,  # 任务次数上限
                              load_wubei_check_team,  # 五倍设置：检查队伍开关
-                             load_wubei_shout_text)  # 五倍设置：缺人自动喊话内容
+                             load_wubei_shout_switch)  # 五倍设置：缺人自动喊话开关
 from .dialog_common import (SCREEN_CENTER_POS, green_option_center,
                             _dialog_text_present,
                             _click_screen_center)  # 对话框共享组件（屏幕中间点击/选项中心/文案检测）
@@ -274,7 +274,10 @@ TEAM_CHECK_RETRY_INTERVAL = 10  # 缺人且无申请人可补时的重查间隔�
 TEAM_RECOG_RETRY_INTERVAL = 3   # 成员识别失败（OCR 噪声）时的重试间隔（秒）：
                                 # 识别失败≠人数不足，等满 10s 纯属空转
 SHOUT_MIN_INTERVAL = 30         # 缺人自动喊话最短间隔（秒，防刷屏）
-_shout_text = ""                # 本轮喊话内容（run_loop 从设置加载；空=不喊话）
+WUBEI_SHOUT_DEFAULT = "百次五倍来人，效率队"  # 喊话固定内容（不对外保留设置，
+                                              # 用户 2026-10-14 确认；游戏聊天
+                                              # 拦截连续加号，内容不得带 +）
+_shout_text = ""                # 本轮喊话内容（开关开启时=固定内容；关=空不喊话）
 _shout_last_at = 0.0            # 上次喊话时间（跨监控调用保持间隔）
 
 # ---- 返程（用户流程：背包任务储物格 → 五倍回城符右键 → 回宝象国；
@@ -1763,9 +1766,9 @@ def run_loop(win, cycle_interval=1.0):
     # 关闭时跳过全部队伍检查直接领取（可能不是队长，被拒也不补人）
     check_team = load_wubei_check_team()
     log(f"[五倍] 检查队伍: {'开（领取前监控补人）' if check_team else '关（跳过队伍检查）'}", "SYS")
-    _shout_text = (load_wubei_shout_text() or "").strip()
+    _shout_text = WUBEI_SHOUT_DEFAULT if load_wubei_shout_switch() else ""
     if _shout_text:
-        log(f"[五倍] 缺人自动喊话: {_shout_text}（最短间隔 {SHOUT_MIN_INTERVAL}s）", "SYS")
+        log(f"[五倍] 缺人自动喊话: 开（{_shout_text}，最短间隔 {SHOUT_MIN_INTERVAL}s）", "SYS")
 
     done = app_utils.task_progress_done(win, TASK_MODE)  # 当天已完成（跨重启持久）
     if done:
