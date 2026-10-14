@@ -55,7 +55,8 @@ from . import bag  # 背包操作（打开/关闭背包、任务储物格）
 from . import debug_overlay  # 调试信息悬浮层（任务进度更新）
 from .battle import (is_in_battle, is_in_battle_frame,
                      watch_in_battle as battle_watch_in_battle)  # 战斗状态判定（统一在 battle.py 中实现）
-from .control_window import load_task_counts  # 任务次数上限
+from .control_window import (load_task_counts,  # 任务次数上限
+                             load_wubei_check_team)  # 五倍设置：检查队伍开关
 from .dialog_common import (SCREEN_CENTER_POS, green_option_center,
                             _dialog_text_present,
                             _click_screen_center)  # 对话框共享组件（屏幕中间点击/选项中心/文案检测）
@@ -266,6 +267,11 @@ def _reset_xianxingjing_state():
     _xj_recover_start = 0.0
     _xj_need_replace = False
 
+# ---- 领取前队伍检查（检查队伍开关开启时；队伍固定 5 人） ----
+TEAM_CHECK_RETRY_INTERVAL = 10  # 缺人且无申请人可补时的重查间隔（秒）
+TEAM_RECOG_RETRY_INTERVAL = 3   # 成员识别失败（OCR 噪声）时的重试间隔（秒）：
+                                # 识别失败≠人数不足，等满 10s 纯属空转
+
 # ---- 返程（用户流程：背包任务储物格 → 五倍回城符右键 → 回宝象国；
 #      逻辑与修罗完全一致，仅回城符模板不同——待用户提供） ----
 BOX_TASK_ICON = "box_task.png"                    # 背包任务储物格按钮（未选中态，点击打开）
@@ -284,6 +290,9 @@ TASK_BOX_OFFSET = (351, 305)
 TASK_BOX_BAND_MARGIN = 55
 
 _fight_via_kanda = False        # 本轮战斗是否由「看打！」进入（决定战后是否返程）
+_team_checked = False           # 队伍检查已通过（首次领取成功后置位）：
+                                # 任务中不再主动开面板检查队伍，直到领取
+                                # 被拒（前途凶险）才重入监控补人循环
 _task_gone_last_round = False   # 上一轮任务消失已确认（follow_task 完成判据）：
                                 # 下一轮开始必然无任务，跳过 has_task 检查
                                 # （区域 OCR ~0.9s）；仅进程首轮/上轮跟踪失败
@@ -680,7 +689,7 @@ def _click_entry_ensuring_dialog(win, log_tag="[五倍]", hover_before_click=Fal
     return True, f"已点击{src2}", src2, pt2, seen_frame
 
 
-def _claim_task(win):
+def _claim_task(win, allow_fill=False):
     """在领取点附近领取五倍任务（前提：已走到领取点附近）。
 
     识图 wubei_lingqu.png / wubei_xiangmoshiwei.png 点击 → 对话框点绿色
@@ -742,15 +751,18 @@ def _claim_task(win):
             continue
         items, img_np = game_map.ocr_regions(img, task_tracker.OCR_REGIONS)
         # 领取被拒：队伍人数不足（游戏要求组满 5 人）。点屏幕中间关闭
-        # 提示框 → 从申请加入面板允许一名申请人 → 返回外层下轮重试
-        # 领取（游戏裁判法：任务出现=成功，再弹框=继续补人）
+        # 提示框。检查队伍开关开启时重入监控补人循环（查人数 → 补人
+        # → 重查，人满返回后下轮重试领取）；开关关闭不补人（可能不是
+        # 队长），仅重试领取
         if _dialog_text_present(items, FULL_TEAM_DIALOG_TEXT):
-            log("[五倍] 领取被拒：队伍人数不足，关闭提示并补人", "WARN")
             human_click(win, SCREEN_CENTER_POS[0], SCREEN_CENTER_POS[1])
             time.sleep(0.3)  # 等待提示框关闭
-            ok_fill, fill_info = team.fill_team(win, target=5, max_allow=1)
-            log(f"[五倍] 补人: {fill_info}", "SYS" if ok_fill else "WARN")
-            return False, "队伍人数不足，领取被拒（已尝试补人，下轮重试领取）", None
+            if allow_fill:
+                log("[五倍] 领取被拒：队伍人数不足，进入监控补人循环", "WARN")
+                _monitor_team_and_fill(win)  # 人满才返回；非队长不返回（保持模式）
+                return False, "队伍已补齐（监控循环判定），下轮重试领取", None
+            log("[五倍] 领取被拒：队伍人数不足（检查队伍开关关闭，不补人）", "WARN")
+            return False, "队伍人数不足，领取被拒（未开启检查队伍开关）", None
         if task_tracker.has_task_in(items, img_np, TASK_TITLE, TASK_FALLBACK_TEXTS):
             found_frame = (items, img_np)
             break
@@ -1553,6 +1565,72 @@ def verify_return_flow(win):
     return True, f"验证通过：回城符位于 ({pt[0]}, {pt[1]})"
 
 
+def _check_team_ready(win):
+    """领取前队伍检查（队伍固定 5 人，一次面板开关）。
+
+    检查结果顺带更新调试悬浮层「队伍」行（身份 + 成员信息）。
+    返回 (状态, 描述)；状态见 team.check_team_min：
+    ready 可领取 / wait 人数不足 / not_leader 非队长或队长无法判定。
+    """
+    status, info, members = team.check_team_min(win, min_members=5)
+    team.update_overlay_team(status, info, members)
+    return status, info
+
+
+def _check_team_with_retry(win, tries=3):
+    """队伍检查带瞬态失败重试（审计 B5）：截窗失败/面板打不开可能是
+    瞬时问题，一次失败即转非队长保持模式会把队长永久挂起（仅一条
+    SYS 日志，需人工重启）。瞬态类失败短间隔重试，连续 N 次才按
+    not_leader 处理；明确的非队长判定（面板打开且无解散按钮）不重试。
+    """
+    last = ("not_leader", "队伍检查未执行")
+    for i in range(tries):
+        status, info = _check_team_ready(win)
+        last = (status, info)
+        if status != "not_leader":
+            return status, info
+        if "队长无法判定" not in info and "截图失败" not in info:
+            return status, info  # 明确非队长（面板打开且无解散按钮）
+        if i < tries - 1:
+            log(f"[五倍] {info}，瞬态失败重试（{i + 1}/{tries - 1}）", "WARN")
+            time.sleep(2.0)
+    return last
+
+
+def _keep_alive(info):
+    """非队长：核心流程不执行，保持任务运行（战斗线程自动操作）。
+
+    用户手动停止时任务进程被回收，无需自行退出。
+    """
+    log(f"[五倍] {info}，跳过核心流程，仅保持战斗线程运行", "SYS")
+    while True:
+        time.sleep(1)
+
+
+def _monitor_team_and_fill(win):
+    """队长缺人监控循环（领取前与被拒后共用）：查人数 → 缺人则从
+    申请加入面板允许一名申请人 → 立即重查；无申请人时按间隔重查；
+    人满返回（调用方随即领取）；非队长转保持模式（不返回）。
+
+    间隔：识别失败（OCR 噪声）3s 短重查，缺人无申请人 10s 重查。
+    """
+    while True:
+        status, info = _check_team_with_retry(win)
+        if status == "not_leader":
+            _keep_alive(info)  # 无限循环，用户手动停止
+        if status == "ready":
+            return
+        # 缺人：尝试补一人（申请面板允许一名申请人，成功立即重查）
+        ok_fill, fill_info = team.fill_team(win, target=5, max_allow=1)
+        log(f"[五倍] 补人: {fill_info}", "SYS" if ok_fill else "INFO")
+        if ok_fill:
+            continue  # 已补一人，立即重查人数
+        interval = (TEAM_RECOG_RETRY_INTERVAL if "识别失败" in info
+                    else TEAM_CHECK_RETRY_INTERVAL)
+        log(f"[五倍] {info}，暂无申请人可补，{interval}s 后重查", "WARN")
+        time.sleep(interval)
+
+
 def verify_claim_flow(win):
     """验证五倍领取流程（高级设置-验证按钮，主进程调用）。
 
@@ -1608,22 +1686,28 @@ def verify_claim_flow(win):
 def run_loop(win, cycle_interval=1.0):
     """五倍主循环：领任务 → 寻路 → 对话开打 → 战斗 → 返程 → 循环领取。
 
-    领取逻辑（用户确认，参考修罗）：
-    1. 领取前不做主动队伍检查（游戏要求组满 5 人，被动兜底）：领取
-       被拒弹「前途凶险…」时自动从申请加入面板补人（team.fill_team，
-       每允许一人重试一次领取），见 _claim_task 内检测
-    2. 走到领取点附近（队伍是否满都先走位）；寻路/领取成功即记录
-       队长身份（抢盒子的队长规则用）
+    领取逻辑（用户确认，队伍固定 5 人）：
+    1. 检查队伍开关开启时：首次领取前判定队长身份（非队长仅保持
+       战斗线程）；队长走到领取点后进入监控循环——查人数，缺人则
+       从申请加入面板允许一名申请人并立即重查，人满才领取
+    2. 首次领取成功后不再主动检查队伍（_team_checked），直到领取
+       被拒弹「前途凶险…」才重入监控补人循环（同上）；开关关闭时
+       被拒不补人（可能不是队长），仅重试领取
     3. 任务追踪中已有五倍任务（续跑）→ 跳过领取，直接跟踪
 
     结束条件：完成任务次数达到设置的次数上限（通用设置-任务次数）。
     返回结束原因描述。
     """
-    global _fight_via_kanda, _task_gone_last_round, _xj_need_replace, \
+    global _fight_via_kanda, _team_checked, _task_gone_last_round, _xj_need_replace, \
         _replace_fail_streak, _hpg_task_seen
     max_rounds = load_task_counts().get(TASK_MODE, 0)
     log(f"[五倍] 任务次数上限: {max_rounds if max_rounds > 0 else '不限'}", "SYS")
-    log(f"[五倍] 领取点宝象国 {CLAIM_SPOT[0]},{CLAIM_SPOT[1]}，队伍要求 5 人（不足自动补人）", "SYS")
+    log(f"[五倍] 领取点宝象国 {CLAIM_SPOT[0]},{CLAIM_SPOT[1]}，队伍固定 5 人", "SYS")
+    # 检查队伍开关（任务设置-五倍设置，默认关闭）：开启时领取前判定
+    # 队长身份并监控人数（缺人自动补），非队长仅保持战斗线程；
+    # 关闭时跳过全部队伍检查直接领取（可能不是队长，被拒也不补人）
+    check_team = load_wubei_check_team()
+    log(f"[五倍] 检查队伍: {'开（领取前监控补人）' if check_team else '关（跳过队伍检查）'}", "SYS")
 
     done = app_utils.task_progress_done(win, TASK_MODE)  # 当天已完成（跨重启持久）
     if done:
@@ -1667,16 +1751,35 @@ def run_loop(win, cycle_interval=1.0):
                 if _task_gone_last_round:
                     _task_gone_last_round = False
                     log("[五倍] 上一轮已确认任务完成，跳过任务检查，直接领取", "INFO")
-                # 队伍是否满都先走到领取点附近（人数不足由领取被拒的
-                # 被动兜底补人，不做事前开面板检查）
+                # 首次领取前队长判定（检查队伍开关 + _team_checked 双门控；
+                # 关闭开关时完全跳过，对齐修罗）：已在领取点附近时跳过
+                # 非队长判定（返程落点就在领取点，监控循环马上会检查——
+                # 先查再走位会让面板连续开合两次，一次开合实测 5~7s）；
+                # 不在领取点则先判定身份，非队长不白走寻路
+                if check_team and not _team_checked:
+                    at_spot = (game_map.find_template(win, LINGQU_ICON) is not None
+                               or _near_claim_spot(game_map.read_map_position(win),
+                                                   CLAIM_NEAR_TOLERANCE))
+                    if not at_spot:
+                        status, info = _check_team_with_retry(win)
+                        if status == "not_leader":
+                            _keep_alive(info)
+                # 队伍是否满都先走到领取点附近（缺人由监控循环补）
                 ok, info = _walk_to_claim_spot(win)
                 if not ok:
                     log(f"[五倍] {info}", "WARN")
                     time.sleep(cycle_interval)
                     continue
-                # 不开面板判定身份：任务自行寻路即视为队长（抢盒子的
-                # 队长规则依赖此记录，见 battle._handle_hezi）
-                team.record_leader_status(True)
+                if not check_team:
+                    # 关闭队伍检查：不开面板判定身份，任务自行寻路即视为
+                    # 队长（抢盒子的队长规则依赖此记录，见 battle._handle_hezi）
+                    team.record_leader_status(True)
+                if check_team and not _team_checked:
+                    # 首次领取：监控循环（查人数 → 缺人补一名申请人 →
+                    # 立即重查；人满才继续领取；非队长转保持模式不返回）
+                    log("[五倍] 首次领取前进入队伍监控循环（缺人自动补）", "SYS")
+                    _monitor_team_and_fill(win)
+                    log("[五倍] 队伍已满 5 人，开始领取", "SYS")
                 # 替换校验（审计问题 3/5）：替换分支领取时旧任务仍在
                 # 追踪面板，领取校验 has_task 恒真——领取后比对任务内容
                 # 签名，签名未变化即替换未生效。连续失败达上限终止任务，
@@ -1685,9 +1788,9 @@ def run_loop(win, cycle_interval=1.0):
                 if need_replace:
                     t = task_tracker.get_task(win, TASK_TITLE)
                     prev_sig = task_tracker.task_signature(t) if t is not None else None
-                # 领取任务（校验帧随返回值带出，跟踪首轮复用免重复 OCR）
-                # 队伍不足时 _claim_task 内自动补人（每轮允许一名申请人）
-                ok, info, claim_items = _claim_task(win)
+                # 领取任务（校验帧随返回值带出，跟踪首轮复用免重复 OCR）；
+                # 队伍不足被拒时按开关决定是否重入监控补人循环
+                ok, info, claim_items = _claim_task(win, allow_fill=check_team)
                 if not ok:
                     if need_replace:
                         _replace_fail_streak += 1
@@ -1708,6 +1811,7 @@ def run_loop(win, cycle_interval=1.0):
                 _replace_fail_streak = 0  # 领取/替换成功：失败计数清零
                 log(f"[五倍] {info}", "SYS")
                 team.record_leader_status(True)  # 领取成功必为队长（抢盒子队长规则靠此记录）
+                _team_checked = True  # 首次领取成功：任务中不再主动检查队伍
                 _reset_xianxingjing_state()  # 新任务：显形镜状态机复位
                 _reset_huangpaoguai_state()  # 新任务：黄袍怪状态机复位
                 _fight_via_kanda = False  # 新一轮开始：重置「看打！」进入战斗标记

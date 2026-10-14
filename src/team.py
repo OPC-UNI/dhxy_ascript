@@ -187,9 +187,17 @@ def fill_team(win, target=5, max_allow=1):
        等待检测「对方已经加入其他队伍」提示（屏幕中间；出现则点掉、
        该申请人记失败换下一个）→ 成功判定 = 无失败提示且该行从
        列表消失（行仍在说明允许未生效，同样换下一个）
-    3. 返回 (是否允许了至少一人, 描述)；调用方随后重试领取，以游戏
+    3. 结束关闭申请加入面板（不留面板遮挡后续流程），返回
+       (是否允许了至少一人, 描述)；调用方随后重试领取，以游戏
        的「前途凶险」对话框作最终裁判（每允许一人重试一次）
     """
+    try:
+        return _fill_team_loop(win, target, max_allow)
+    finally:
+        _close_apply_panel(win)
+
+
+def _fill_team_loop(win, target, max_allow):
     img = win.capture(force_activate=False)
     if img is None:
         return False, "窗口截图失败"
