@@ -1260,11 +1260,11 @@ def _shout_recruit(win):
     """
     global _shout_last_at
     Keyboard.key("enter")
-    time.sleep(0.4)  # 等待聊天输入框打开
+    time.sleep(0.6)  # 等待聊天输入框打开
     Keyboard.input(_shout_text)
-    time.sleep(0.4)
+    time.sleep(0.8)  # 等待剪贴板粘贴完成（中文走 Ctrl+V 粘贴，需落地时间）
     Keyboard.key("enter")  # 发送
-    time.sleep(0.4)
+    time.sleep(0.5)
     _shout_last_at = time.time()
     log(f"[修罗] 已自动喊话: {_shout_text}", "SYS")
 

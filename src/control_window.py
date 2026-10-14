@@ -923,11 +923,11 @@ class ControlWindow(WebWindow):
             win.activate()  # 键盘事件须游戏前台（不点击，避免误触世界）
             time.sleep(0.5)
             Keyboard.key("enter")
-            time.sleep(0.4)
+            time.sleep(0.6)  # 等待聊天输入框打开
             Keyboard.input(text)
-            time.sleep(0.4)
+            time.sleep(0.8)  # 等待剪贴板粘贴完成（与任务内喊话同时序）
             Keyboard.key("enter")
-            time.sleep(0.4)
+            time.sleep(0.5)
             self.add_logs([f"[喊话测试] 已发送: {text}（请查看游戏公屏）"])
         except Exception as e:
             self.add_logs([f"[喊话测试] 发送失败: {e}"])
