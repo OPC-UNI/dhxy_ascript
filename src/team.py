@@ -28,6 +28,7 @@
 - handle_join_requests：申请列表界面与同意/拒绝按钮定位
 - apply_to_team：世界场景中「申请队伍」招募玩家的识别
 """
+import difflib
 import os
 import pathlib
 import re
@@ -40,7 +41,7 @@ from ascript.windows.hardware.keyboard import Keyboard
 from ascript.windows.system import R
 from ascript.windows.screen.find_images import FindImages
 
-from .app_utils import log, human_click, human_move
+from .app_utils import log, human_click, human_move, norm_text
 from . import map as game_map  # 找图与 OCR 能力复用
 from . import debug_overlay  # 调试信息悬浮层（队伍信息行更新）
 from . import task_tracker  # 对话框区域 OCR（允许失败提示检测）
@@ -216,8 +217,22 @@ def _apply_rows(img, fx, fy):
                          None)
         if name_line is None:
             name_line = c["lines"][0]
-        rows.append({"yc": c["yc"], "name": name_line[0], "rect": name_line[1]})
+        # 身份 = 名字+等级的规范化文本拼接（OCR 抖动缓冲：单行读错时
+        # 另一行仍可匹配；y 坐标在行位移后失效，不能作身份）
+        identity = norm_text(name_line[0])
+        for txt, _r in c["lines"]:
+            if _parse_level(txt) is not None:
+                identity += norm_text(txt)
+        rows.append({"yc": c["yc"], "name": name_line[0],
+                     "id": identity, "rect": name_line[1]})
     return rows
+
+
+def _same_applicant(id1, id2):
+    """两申请人身份是否同一人（模糊比对，抗 OCR 抖动）。"""
+    if not id1 or not id2:
+        return False
+    return difflib.SequenceMatcher(None, id1, id2).ratio() >= 0.7
 
 
 def fill_team(win, target=5, max_allow=1):
@@ -275,8 +290,9 @@ def _fill_team_loop(win, target, max_allow):
                 # 按钮弹的是普通菜单）——返回后由监控循环等待并重查
                 return False, "暂无申请人（申请加入面板未出现）"
             return False, "申请加入面板未出现"
-    failed = set()  # 失败过的申请人行（按行 y 中心标记——OCR 对同一
-                    # 申请人每次可能读到名字或等级，文案不稳定不能作键）
+    failed = set()  # 失败过的申请人身份（名字+等级规范化文本）。y 坐标
+                    # 在允许成功后列表整体上移时失效（实测误判失败并
+                    # 误跳过下一个人），不能作键；身份用模糊比对
     allowed = 0
     while allowed < max_allow:
         if img is None:
@@ -285,7 +301,8 @@ def _fill_team_loop(win, target, max_allow):
                 break
         rows = _apply_rows(img, flag[0], flag[1])
         tgt = next((r for r in rows
-                    if not any(abs(r["yc"] - fy_) <= 6 for fy_ in failed)), None)
+                    if not any(_same_applicant(r["id"], fid) for fid in failed)),
+                   None)
         if tgt is None:
             return (allowed > 0,
                     f"已允许 {allowed} 名申请人后无可选申请人"
@@ -313,15 +330,16 @@ def _fill_team_loop(win, target, max_allow):
             time.sleep(0.5)
         if fail:
             log(f"[组队] 允许「{tgt['name']}」失败（对方已加入其他队伍），换下一个", "WARN")
-            failed.add(tgt["yc"])
+            failed.add(tgt["id"])
             time.sleep(0.5)  # 失败提示自动消失（不点屏幕中间——用户确认无需点击）
             continue
-        # 成功校验：该行从列表消失（行仍在说明允许未生效）
+        # 成功校验：该申请人从列表消失（按身份模糊比对——允许成功后
+        # 列表整体上移，y 坐标不能作判据）
         img2 = win.capture(force_activate=False)
         rows2 = _apply_rows(img2, flag[0], flag[1]) if img2 is not None else []
-        if any(abs(r["yc"] - tgt["yc"]) <= 10 for r in rows2):
-            log(f"[组队] 允许「{tgt['name']}」后该行仍在，视为未生效换下一个", "WARN")
-            failed.add(tgt["yc"])
+        if any(_same_applicant(r["id"], tgt["id"]) for r in rows2):
+            log(f"[组队] 允许「{tgt['name']}」后该申请人仍在，视为未生效换下一个", "WARN")
+            failed.add(tgt["id"])
             continue
         allowed += 1
         log(f"[组队] 已允许「{tgt['name']}」加入队伍（本轮第 {allowed} 人）", "SYS")
