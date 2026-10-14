@@ -1581,7 +1581,9 @@ def _check_team_with_retry(win, tries=3):
     """队伍检查带瞬态失败重试（审计 B5）：截窗失败/面板打不开可能是
     瞬时问题，一次失败即转非队长保持模式会把队长永久挂起（仅一条
     SYS 日志，需人工重启）。瞬态类失败短间隔重试，连续 N 次才按
-    not_leader 处理；明确的非队长判定（面板打开且无解散按钮）不重试。
+    not_leader 处理；明确的非队长判定（面板打开且无解散按钮）与
+    未组队（菜单中无「队伍信息」）不重试——未组队是确定性状态，
+    重试纯空转（实测 2 次 × 5s 后仍转保持模式）。
     """
     last = ("not_leader", "队伍检查未执行")
     for i in range(tries):
@@ -1589,8 +1591,9 @@ def _check_team_with_retry(win, tries=3):
         last = (status, info)
         if status != "not_leader":
             return status, info
-        if "队长无法判定" not in info and "截图失败" not in info:
-            return status, info  # 明确非队长（面板打开且无解散按钮）
+        if "队长无法判定" not in info and "截图失败" not in info \
+                and "未组队" not in info:
+            return status, info  # 明确非队长（面板打开且无解散按钮 / 未组队）
         if i < tries - 1:
             log(f"[五倍] {info}，瞬态失败重试（{i + 1}/{tries - 1}）", "WARN")
             time.sleep(2.0)
