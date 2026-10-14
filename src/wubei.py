@@ -1322,7 +1322,7 @@ def _follow_to_done(win, first_items=None):
                            extra_dialog_handler=_handle_follow_extras,
                            fallback_keywords=TASK_FALLBACK_TEXTS,
                            first_items=first_items,
-                           skip_texts=(),  # 禁用 xuanshu 默认跳过表（玄枢轶闻
+                           skip_texts={},  # 禁用 xuanshu 默认跳过表（玄枢轶闻
                                            # 专属文案，五倍自有对话处理——审计问题 2）
                            pre_click_handler=_handle_pre_click)
     return ok, info
