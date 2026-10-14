@@ -813,9 +813,12 @@ def _check_team_with_retry(win, tries=3):
         last = (status, info)
         if status != "not_leader":
             return status, info
-        if "队长无法判定" not in info and "截图失败" not in info \
-                and "未组队" not in info:
-            return status, info  # 明确非队长（面板打开且无解散按钮 / 未组队）
+        # 未组队是确定性状态（没组队就没有队长）——注意其提示带
+        # 「队长无法判定」前缀，必须先于瞬态判定短路返回
+        if "未组队" in info:
+            return status, info
+        if "队长无法判定" not in info and "截图失败" not in info:
+            return status, info  # 明确非队长（面板打开且无解散按钮）
         if i < tries - 1:
             log(f"[修罗] {info}，瞬态失败重试（{i + 1}/{tries - 1}）", "WARN")
             time.sleep(2.0)
