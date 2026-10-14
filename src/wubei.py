@@ -1625,6 +1625,11 @@ def _shout_recruit(win):
     发送到游戏当前默认频道（如需世界频道请预先在游戏内切换默认频道）。
     """
     global _shout_last_at
+    # 先激活游戏窗口：键盘事件只进前台窗口（用户测试时焦点常在面板/
+    # 编辑器，偶现喊话静默丢失——与喊话测试按钮同款前置，实测按钮
+    # 路径从不失败而任务路径偶现，差异即此激活）
+    win.activate()
+    time.sleep(0.5)
     Keyboard.key("enter")
     time.sleep(0.6)  # 等待聊天输入框打开
     Keyboard.input(_shout_text)

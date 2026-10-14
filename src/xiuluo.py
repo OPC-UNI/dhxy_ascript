@@ -1259,6 +1259,10 @@ def _shout_recruit(win):
     日志有喊话但游戏无消息，代码 diff 无区别，差异在游戏侧状态）。
     """
     global _shout_last_at
+    # 先激活游戏窗口：键盘事件只进前台窗口（与五倍同款修复——
+    # 偶现喊话静默丢失的头号嫌疑，喊话测试按钮因带激活从不失败）
+    win.activate()
+    time.sleep(0.5)
     Keyboard.key("enter")
     time.sleep(0.6)  # 等待聊天输入框打开
     Keyboard.input(_shout_text)
