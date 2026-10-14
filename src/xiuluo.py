@@ -9,12 +9,14 @@
        不在灵兽村 → 世界地图点击灵兽村图标 → 小地图点击 (603,392) 寻路；
        在灵兽村但不在领取点附近 → 直接打开小地图点击 (603,392) 寻路
        寻路等待到达 110,90（±5，更严格：走动中识图点击容易点不到）
-   1.2 到达后持续监控队伍人数（通用设置-修罗设置，仅队长生效）：
-       满足最少人数才领取（本步不检查种族）；不满足 10 秒后重查，
-       人留在领取点；队长被转移则转 1.0 非队长模式
+   1.2 到达后进入队伍监控循环（通用设置-修罗设置，仅队长生效）：
+       查人数（最少人数按设置）→ 缺人从申请加入面板允许申请人
+       （每允许一人立即重查；无申请人 10 秒后重查）→ 人满才领取；
+       队长被转移则转 1.0 非队长模式
    1.3 识图 liuluo_lingqu.png 点击 → 对话框点绿色选项「闲来无事，要我帮忙吗」
        → 校验任务出现在追踪面板；若出现「修罗的战斗力异常强大…」提示
-       （队伍数量小于 3）→ 点击屏幕中间一次关闭对话框，本轮领取失败
+       （队伍数量小于 3）→ 点击屏幕中间一次关闭对话框；检查队伍开启
+       时重入 1.2 监控补人循环（人满下轮重试领取），关闭时本轮领取失败
    1.4 领取后对话框「今日已完成次数：N」解析已完成次数（辅助完成次数记录）
 2. 寻路：点击任务追踪绿字自动寻路（复用 xuanshu.follow_task）
 3. 对话开打：寻路到达后出现对话面板 → 点击绿色选项「看打！」进入战斗
@@ -659,7 +661,7 @@ def _click_entry_ensuring_dialog(win, log_tag="[修罗]", hover_before_click=Fal
     return True, f"已点击{src2}", src2, pt2, seen_frame
 
 
-def _claim_task(win):
+def _claim_task(win, allow_fill=False):
     """在领取点附近领取修罗任务（前提：已走到领取点附近）。
 
     识图 liuluo_lingqu.png 点击 → 对话框点绿色选项「闲来无事，要我帮忙吗」
@@ -713,6 +715,10 @@ def _claim_task(win):
                 continue
             items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
             if _handle_team_warning(win, items, img_np):
+                if allow_fill:
+                    log("[修罗] 领取被拒：队伍人数不足，进入监控补人循环", "WARN")
+                    _monitor_team_and_fill(win)  # 人满才返回；非队长不返回（保持模式）
+                    return False, "队伍已补齐（监控循环判定），下轮重试领取", None
                 return False, "队伍数量小于 3，无法领取（已关闭提示对话框）", None
             claimed = _click_claim_option(win, items, img_np)
             polls += 1
@@ -748,6 +754,10 @@ def _claim_task(win):
                 count = int(m.group(1))
                 log(f"[修罗] {CLAIM_COUNT_TEXT}：{count}", "SYS")
         if _handle_team_warning(win, items, img_np):
+            if allow_fill:
+                log("[修罗] 领取被拒：队伍人数不足，进入监控补人循环", "WARN")
+                _monitor_team_and_fill(win)  # 人满才返回；非队长不返回（保持模式）
+                return False, "队伍已补齐（监控循环判定），下轮重试领取", None
             return False, "队伍数量小于 3，无法领取（已关闭提示对话框）", None
         # 高性能缓存点击兜底：任务未进追踪且选项仍可见 → 同帧识别补点
         # （识别点击成功后缓存坐标自动刷新，位置漂移自愈）；只补一次
@@ -1224,6 +1234,47 @@ def verify_claim_flow(win):
     return False, "对话框选项未识别（未领取，已尝试关闭对话框）"
 
 
+def _monitor_team_and_fill(win):
+    """队长缺人监控循环（领取前与「战斗力异常强大」被拒后共用）。
+
+    每轮先看申请人证据（申请面板已开，或组队按钮为 zudui_item2
+    申请待处理态——有人申请时按钮变样且该态即确定性队长）：有则先
+    补人（允许一名申请人后立即重查），无则查人数（最少人数按修罗
+    设置）——缺人按间隔重查、人满返回（调用方随即领取）；非队长
+    转保持模式（不返回）。
+
+    先补后查的原因：按钮处于申请态时菜单打不开（点击弹的是申请面板），
+    查人数走菜单路径必失败；补完申请人后按钮恢复普通态，查人数才可用。
+
+    间隔：识别失败（OCR 噪声）3s 短重查，缺人无申请人 10s 重查。
+    """
+    while True:
+        img = win.capture(force_activate=False)
+        if img is not None and team.has_pending_apply(img):
+            ok_fill, fill_info = team.fill_team(
+                win, target=load_xiuluo_settings()["min_members"], max_allow=1)
+            log(f"[修罗] 补人: {fill_info}", "SYS" if ok_fill else "INFO")
+            if ok_fill:
+                continue  # 已补一人，立即重查
+        status, info = _check_team_with_retry(win)
+        if status == "not_leader":
+            if team.is_definitive_not_leader(info):
+                _keep_alive(info)  # 无限循环，用户手动停止
+            # 瞬态失败（遮挡/加载/按钮未命中等）：不退出监控，按间隔
+            # 持续重查——瞬时问题不应把队长永久降级
+            interval = (TEAM_RECOG_RETRY_INTERVAL if "识别失败" in info
+                        else TEAM_CHECK_RETRY_INTERVAL)
+            log(f"[修罗] {info}（瞬态失败，{interval}s 后重查）", "WARN")
+            time.sleep(interval)
+            continue
+        if status == "ready":
+            return
+        interval = (TEAM_RECOG_RETRY_INTERVAL if "识别失败" in info
+                    else TEAM_CHECK_RETRY_INTERVAL)
+        log(f"[修罗] {info}，暂无申请人可补，{interval}s 后重查", "WARN")
+        time.sleep(interval)
+
+
 def _keep_alive(info):
     """非队长：核心流程不执行，保持任务运行（战斗线程自动操作）。
 
@@ -1321,47 +1372,16 @@ def run_loop(win, cycle_interval=1.0):
                 # 队长（抢盒子的队长规则依赖此记录，见 battle._handle_hezi）
                 team.record_leader_status(True)
             if check_team and not _team_checked:
-                # 1.2 首次领取：到达后持续监控队伍人数（人留在领取点）：
-                #     满足最少人数才领取；队长被转移则转非队长保持模式；
-                #     识别失败是 OCR 噪声，短间隔重查（不等满 10 秒）
-                while True:
-                    status, info = _check_team_with_retry(win)
-                    if status == "not_leader":
-                        if team.is_definitive_not_leader(info):
-                            _keep_alive(info)
-                        # 瞬态失败（遮挡/加载等）：不退出监控，按间隔重查
-                        interval = (TEAM_RECOG_RETRY_INTERVAL
-                                    if "识别失败" in info
-                                    else TEAM_CHECK_RETRY_INTERVAL)
-                        log(f"[修罗] {info}（瞬态失败，{interval}s 后重查）", "WARN")
-                        time.sleep(interval)
-                        continue
-                    if status == "ready":
-                        log(f"[修罗] {info}", "SYS")
-                        break
-                    interval = (TEAM_RECOG_RETRY_INTERVAL if "识别失败" in info
-                                else TEAM_CHECK_RETRY_INTERVAL)
-                    log(f"[修罗] {info}，暂不领取（持续监控队伍人数）", "WARN")
-                    time.sleep(interval)
-            # 1.3 领取任务（校验帧随返回值带出，跟踪首轮复用免重复 OCR）
-            ok, info, claim_items = _claim_task(win)
+                # 1.2 首次领取：监控循环（查人数 → 缺人补一名申请人 →
+                #     立即重查；人满才继续领取；非队长转保持模式不返回）
+                log("[修罗] 首次领取前进入队伍监控循环（缺人自动补）", "SYS")
+                _monitor_team_and_fill(win)
+                log("[修罗] 队伍人数满足要求，开始领取", "SYS")
+            # 1.3 领取任务（校验帧随返回值带出，跟踪首轮复用免重复 OCR）；
+            #     队伍不足被拒（战斗力异常强大提示）在 _claim_task 内已
+            #     按开关重入监控补人循环，其余失败直接下轮重试
+            ok, info, claim_items = _claim_task(win, allow_fill=check_team)
             if not ok:
-                if check_team and _team_checked:
-                    # 领取失败统一处理（用户 2026-10-12 确认，与五倍一致）：
-                    # 首次领取前检查队伍，后续轮次跳过；领取失败时补查
-                    # 一次——非队长转保持模式；人数不足复位 _team_checked，
-                    # 恢复领取前监控（等待人数满足后再领取，不再每轮
-                    # 盲点领取）；检查通过（如「对方很强大」非人数问题）
-                    # 则保持跳过检查，下轮直接重试领取
-                    status, info2 = _check_team_with_retry(win)
-                    if status == "not_leader" \
-                            and team.is_definitive_not_leader(info2):
-                        _keep_alive(info2)
-                    elif status == "wait":
-                        _team_checked = False
-                        log("[修罗] 领取失败且队伍人数不足，恢复领取前队伍监控", "WARN")
-                    elif status == "not_leader":
-                        log(f"[修罗] {info2}（瞬态失败，不判定身份）", "WARN")
                 log(f"[修罗] {info}", "WARN")
                 time.sleep(cycle_interval)
                 continue
