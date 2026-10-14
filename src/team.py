@@ -812,6 +812,11 @@ def check_team_min(win, min_members=None):
     if not _is_panel_open(win):
         ok, info = open_team_panel(win)
         if not ok:
+            # 未组队是确定性非队长状态，直接用原因作描述（套「队长无法
+            # 判定」外壳语义矛盾：没组队就没有队长，无从「判定」）；
+            # 面板打不开等瞬态类保留「队长无法判定」表述
+            if "未组队" in info:
+                return "not_leader", info, []
             return "not_leader", f"队长无法判定（{info}）", []
     img = win.capture(force_activate=False)
     if img is None:
