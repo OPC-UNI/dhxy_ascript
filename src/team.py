@@ -40,11 +40,11 @@ from ascript.windows.hardware.keyboard import Keyboard
 from ascript.windows.system import R
 from ascript.windows.screen.find_images import FindImages
 
-from .app_utils import log, human_click, human_move, norm_text
+from .app_utils import log, human_click, human_move
 from . import map as game_map  # 找图与 OCR 能力复用
 from . import debug_overlay  # 调试信息悬浮层（队伍信息行更新）
 from . import task_tracker  # 对话框区域 OCR（允许失败提示检测）
-from .dialog_common import _dialog_text_present, _click_screen_center
+from .dialog_common import _dialog_text_present
 
 # ---- 模板（res/img，用户截图提供） ----
 ZUDUI_ITEM_ICON = "zudui_item.png"        # 组队按钮（点击弹出组队菜单）
@@ -181,21 +181,42 @@ def has_pending_apply(img):
 
 
 def _apply_rows(img, fx, fy):
-    """申请人列表行（面板标志下方固定偏移区域 OCR；排除表头）。
+    """申请人列表行（面板标志下方固定偏移区域 OCR）。
 
-    返回 [(txt, rect)] 按 y 排序；fx/fy 为面板标志匹配中心。
+    每名申请人占一行，行内名字/等级/族群性别为同一 y 的多个 OCR 框
+    （实测名字与等级同 y，旧实现按行序取首框会取到等级框——日志
+    显示「允许飞升160级」而非人名）。按 y 聚簇（≤12px 同一行），
+    簇内优先取非等级行作名字（等级文案可被 _parse_level 识别）。
+    返回 [{"yc": 行中心 y, "name": 名字文案, "rect": 名字框}]，
+    按 y 排序；排除表头行（名字/等级/族群/性别）。
+    fx/fy 为面板标志匹配中心。
     """
     l, t, r, b = (int(fx + APPLY_ROW_OFFSET[0]), int(fy + APPLY_ROW_OFFSET[1]),
                   int(fx + APPLY_ROW_OFFSET[2]), int(fy + APPLY_ROW_OFFSET[3]))
     items, _ = game_map.ocr_region(img, (l, t, r, b))
-    rows = []
+    lines = []
     for txt, rect, score in items:
         if score < 0.55:
             continue
-        if "名字" in txt or "等级" in txt:
-            continue  # 表头行（名字/等级/族群性别）
-        rows.append((txt, rect))
-    rows.sort(key=lambda it: it[1][1])
+        if any(h in txt for h in ("名字", "等级", "族群", "性别")):
+            continue  # 表头行
+        lines.append((txt, rect))
+    lines.sort(key=lambda it: it[1][1])
+    clusters = []
+    for txt, rect in lines:
+        yc = (rect[1] + rect[3]) // 2
+        if clusters and abs(yc - clusters[-1]["yc"]) <= 12:
+            clusters[-1]["lines"].append((txt, rect))
+        else:
+            clusters.append({"lines": [(txt, rect)], "yc": yc})
+    rows = []
+    for c in clusters:
+        c["lines"].sort(key=lambda it: it[1][0])
+        name_line = next((it for it in c["lines"] if _parse_level(it[0]) is None),
+                         None)
+        if name_line is None:
+            name_line = c["lines"][0]
+        rows.append({"yc": c["yc"], "name": name_line[0], "rect": name_line[1]})
     return rows
 
 
@@ -254,7 +275,8 @@ def _fill_team_loop(win, target, max_allow):
                 # 按钮弹的是普通菜单）——返回后由监控循环等待并重查
                 return False, "暂无申请人（申请加入面板未出现）"
             return False, "申请加入面板未出现"
-    failed = set()  # 失败过的申请人（规范化文案）
+    failed = set()  # 失败过的申请人行（按行 y 中心标记——OCR 对同一
+                    # 申请人每次可能读到名字或等级，文案不稳定不能作键）
     allowed = 0
     while allowed < max_allow:
         if img is None:
@@ -263,12 +285,12 @@ def _fill_team_loop(win, target, max_allow):
                 break
         rows = _apply_rows(img, flag[0], flag[1])
         tgt = next((r for r in rows
-                    if norm_text(r[0]) not in failed), None)
+                    if not any(abs(r["yc"] - fy_) <= 6 for fy_ in failed)), None)
         if tgt is None:
             return (allowed > 0,
                     f"已允许 {allowed} 名申请人后无可选申请人"
                     if allowed else "申请列表为空或全部失败")
-        txt0, rect0 = tgt
+        rect0 = tgt["rect"]
         human_click(win, (rect0[0] + rect0[2]) // 2, (rect0[1] + rect0[3]) // 2)
         time.sleep(0.3)  # 等待行选中态刷新
         pt = game_map.find_template(win, ZUDUI_YUNXU_ICON,
@@ -290,19 +312,19 @@ def _fill_team_loop(win, target, max_allow):
                 break
             time.sleep(0.5)
         if fail:
-            log(f"[组队] 允许「{txt0}」失败（对方已加入其他队伍），换下一个", "WARN")
-            _click_screen_center(win, times=1, prefix="组队")  # 点掉提示
-            failed.add(norm_text(txt0))
+            log(f"[组队] 允许「{tgt['name']}」失败（对方已加入其他队伍），换下一个", "WARN")
+            failed.add(tgt["yc"])
+            time.sleep(0.5)  # 失败提示自动消失（不点屏幕中间——用户确认无需点击）
             continue
         # 成功校验：该行从列表消失（行仍在说明允许未生效）
         img2 = win.capture(force_activate=False)
         rows2 = _apply_rows(img2, flag[0], flag[1]) if img2 is not None else []
-        if any(abs(r[1][1] - rect0[1]) <= 10 for r in rows2):
-            log(f"[组队] 允许「{txt0}」后该行仍在，视为未生效换下一个", "WARN")
-            failed.add(norm_text(txt0))
+        if any(abs(r["yc"] - tgt["yc"]) <= 10 for r in rows2):
+            log(f"[组队] 允许「{tgt['name']}」后该行仍在，视为未生效换下一个", "WARN")
+            failed.add(tgt["yc"])
             continue
         allowed += 1
-        log(f"[组队] 已允许「{txt0}」加入队伍（本轮第 {allowed} 人）", "SYS")
+        log(f"[组队] 已允许「{tgt['name']}」加入队伍（本轮第 {allowed} 人）", "SYS")
         img = img2 if img2 is not None else win.capture(force_activate=False)
     return True, f"已允许 {allowed} 名申请人"
 
