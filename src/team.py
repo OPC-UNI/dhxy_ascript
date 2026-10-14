@@ -40,9 +40,11 @@ from ascript.windows.hardware.keyboard import Keyboard
 from ascript.windows.system import R
 from ascript.windows.screen.find_images import FindImages
 
-from .app_utils import log, human_click, human_move
+from .app_utils import log, human_click, human_move, norm_text
 from . import map as game_map  # 找图与 OCR 能力复用
 from . import debug_overlay  # 调试信息悬浮层（队伍信息行更新）
+from . import task_tracker  # 对话框区域 OCR（允许失败提示检测）
+from .dialog_common import _dialog_text_present, _click_screen_center
 
 # ---- 模板（res/img，用户截图提供） ----
 ZUDUI_ITEM_ICON = "zudui_item.png"        # 组队按钮（点击弹出组队菜单）
@@ -51,6 +53,7 @@ JIESAN_DUIWU_ICON = "jiesanduiwu.png"     # 队伍面板「解散队伍」按钮
 DUIWU_MIANBAN_ICON = "duiwumianban.png"   # 队伍面板标志（面板已打开判定）
 ZUDUI_CLOSE_ICON = "zudui_close.png"      # 队伍面板关闭按钮（鼠标移上去左键点击）
 ZUDUI_SHENQINGJIARU_ICON = "zudui_shenqingjiaru.png"  # 申请加入面板标志（队伍人数不足时
+ZUDUI_YUNXU_ICON = "zudui_yunxu.png"      # 申请加入面板「允许」按钮（用户提供模板，实测 1.00 匹配）
                                           # 点组队按钮可能打开该面板；检测到直接点关闭，不处理）
 LIKAI_DUIWU_ICON = "likaiduiwu.png"       # 队伍面板「离开队伍」按钮（队员可见）
 
@@ -136,6 +139,131 @@ def _close_apply_panel(win):
         if game_map.find_template(win, ZUDUI_SHENQINGJIARU_ICON, _TEMPLATE_THRESHOLD) is None:
             return True, "申请加入面板已关闭"
     return False, "申请加入面板关闭失败"
+
+
+# ---- 补人流程（领取被拒后从申请加入面板允许申请人；五倍/修罗复用） ----
+APPLY_FAIL_TEXT = "对方已经加入其他队伍"    # 允许失败提示（屏幕中间，出现即换人）
+APPLY_PANEL_WAIT_TRIES = 6                 # 点击组队按钮后等待申请加入面板出现（0.5s 一次）
+APPLY_FAIL_WAIT = 2.5                      # 点击允许后等待失败提示的窗口（秒）
+APPLY_ROW_OFFSET = (-100, 55, 280, 350)    # 申请人列表区域（相对面板标志左上角；实测
+                                            # 固定布局：表头 y+51、列表行 y+67 起、
+                                            # 允许/拒绝按钮行 y+356）
+APPLY_YUNXU_THRESHOLD = 0.8                # 允许按钮模板匹配阈值（实测 1.00）
+
+
+def _apply_panel_flag(img):
+    """申请加入面板标志模板位置（打开时返回中心坐标，未打开返回 None）。"""
+    return game_map.find_template_in(img, ZUDUI_SHENQINGJIARU_ICON,
+                                     _TEMPLATE_THRESHOLD)
+
+
+def _apply_rows(img, fx, fy):
+    """申请人列表行（面板标志下方固定偏移区域 OCR；排除表头）。
+
+    返回 [(txt, rect)] 按 y 排序；fx/fy 为面板标志匹配中心。
+    """
+    l, t, r, b = (int(fx + APPLY_ROW_OFFSET[0]), int(fy + APPLY_ROW_OFFSET[1]),
+                  int(fx + APPLY_ROW_OFFSET[2]), int(fy + APPLY_ROW_OFFSET[3]))
+    items, _ = game_map.ocr_region(img, (l, t, r, b))
+    rows = []
+    for txt, rect, score in items:
+        if score < 0.55:
+            continue
+        if "名字" in txt or "等级" in txt:
+            continue  # 表头行（名字/等级/族群性别）
+        rows.append((txt, rect))
+    rows.sort(key=lambda it: it[1][1])
+    return rows
+
+
+def fill_team(win, target=5, max_allow=1):
+    """从申请加入面板允许申请人补齐队伍（通用，五倍/修罗复用）。
+
+    前置：领取被拒（人数不足）、角色为队长。流程：
+    1. 确保申请加入面板打开（点击组队按钮；人数不足时点开的是申请
+       加入面板而非组队菜单——_ensure_menu_open 已有该判定经验）
+    2. 循环（最多允许 max_allow 人）：OCR 申请人列表 → 点选第一个
+       未失败过的申请人 → 点击「允许」按钮（zudui_yunxu 模板）→
+       等待检测「对方已经加入其他队伍」提示（屏幕中间；出现则点掉、
+       该申请人记失败换下一个）→ 成功判定 = 无失败提示且该行从
+       列表消失（行仍在说明允许未生效，同样换下一个）
+    3. 返回 (是否允许了至少一人, 描述)；调用方随后重试领取，以游戏
+       的「前途凶险」对话框作最终裁判（每允许一人重试一次）
+    """
+    img = win.capture(force_activate=False)
+    if img is None:
+        return False, "窗口截图失败"
+    flag = _apply_panel_flag(img)
+    if flag is None:
+        # 面板未开：点击组队按钮（人数不足时弹出申请加入面板而非菜单）
+        pt = game_map.find_template(win, ZUDUI_ITEM_ICON, _TEMPLATE_THRESHOLD)
+        if pt is None:
+            return False, "未找到组队按钮（zudui_item）"
+        human_click(win, pt[0], pt[1])
+        flag = None
+        for _ in range(APPLY_PANEL_WAIT_TRIES):
+            time.sleep(0.5)
+            img = win.capture(force_activate=False)
+            if img is None:
+                continue
+            flag = _apply_panel_flag(img)
+            if flag is not None:
+                break
+        if flag is None:
+            if img is not None and _is_menu_open(img):
+                return False, "组队菜单已打开（队伍可能已满员，无需补人）"
+            return False, "申请加入面板未出现"
+    failed = set()  # 失败过的申请人（规范化文案）
+    allowed = 0
+    while allowed < max_allow:
+        if img is None:
+            img = win.capture(force_activate=False)
+            if img is None:
+                break
+        rows = _apply_rows(img, flag[0], flag[1])
+        tgt = next((r for r in rows
+                    if norm_text(r[0]) not in failed), None)
+        if tgt is None:
+            return (allowed > 0,
+                    f"已允许 {allowed} 名申请人后无可选申请人"
+                    if allowed else "申请列表为空或全部失败")
+        txt0, rect0 = tgt
+        human_click(win, (rect0[0] + rect0[2]) // 2, (rect0[1] + rect0[3]) // 2)
+        time.sleep(0.3)  # 等待行选中态刷新
+        pt = game_map.find_template(win, ZUDUI_YUNXU_ICON,
+                                    threshold=APPLY_YUNXU_THRESHOLD)
+        if pt is None:
+            return (allowed > 0, f"未找到允许按钮（zudui_yunxu），已允许 {allowed} 人")
+        human_click(win, pt[0], pt[1])
+        # 失败提示检测（屏幕中间对话框区域）
+        fail = False
+        deadline = time.time() + APPLY_FAIL_WAIT
+        while time.time() < deadline:
+            img = win.capture(force_activate=False)
+            if img is None:
+                time.sleep(0.5)
+                continue
+            items, _ = game_map.ocr_region(img, (task_tracker.DIALOG_REGION,))
+            if _dialog_text_present(items, APPLY_FAIL_TEXT):
+                fail = True
+                break
+            time.sleep(0.5)
+        if fail:
+            log(f"[组队] 允许「{txt0}」失败（对方已加入其他队伍），换下一个", "WARN")
+            _click_screen_center(win, times=1, prefix="组队")  # 点掉提示
+            failed.add(norm_text(txt0))
+            continue
+        # 成功校验：该行从列表消失（行仍在说明允许未生效）
+        img2 = win.capture(force_activate=False)
+        rows2 = _apply_rows(img2, flag[0], flag[1]) if img2 is not None else []
+        if any(abs(r[1][1] - rect0[1]) <= 10 for r in rows2):
+            log(f"[组队] 允许「{txt0}」后该行仍在，视为未生效换下一个", "WARN")
+            failed.add(norm_text(txt0))
+            continue
+        allowed += 1
+        log(f"[组队] 已允许「{txt0}」加入队伍（本轮第 {allowed} 人）", "SYS")
+        img = img2 if img2 is not None else win.capture(force_activate=False)
+    return True, f"已允许 {allowed} 名申请人"
 
 
 def _wait_menu(win):

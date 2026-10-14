@@ -191,44 +191,8 @@ def save_xiuluo_races(races):
     return {"status": "success", "races": races}
 
 
-# 五倍设置：最少人数（默认 5，范围 1~5）
-WUBEI_MIN_DEFAULT = 5
-WUBEI_MIN_RANGE = (1, 5)
-_WUBEI_MIN_KEY = "wubei_min_members"
-
-
-def load_wubei_min():
-    """读取五倍最少人数（1~5，默认 5）。"""
-    value = int(KeyValue.get(_WUBEI_MIN_KEY, WUBEI_MIN_DEFAULT))
-    return min(WUBEI_MIN_RANGE[1], max(WUBEI_MIN_RANGE[0], value))
-
-
-def save_wubei_min(value):
-    """保存五倍最少人数（夹取 1~5），返回操作结果。"""
-    value = min(WUBEI_MIN_RANGE[1], max(WUBEI_MIN_RANGE[0], int(value)))
-    KeyValue.save(_WUBEI_MIN_KEY, value)
-    return {"status": "success", "min_members": value}
-
-
 # 五倍设置：是否自动抢盒子（默认关闭；仅非队长时生效，队长一定抢）
 _WUBEI_HEZI_KEY = "wubei_auto_hezi"
-
-
-# ---- 五倍检查队伍（UI 开关，KeyValue 持久化；对齐修罗：默认关闭，
-#      关闭时领取前跳过全部队伍检查直接领取，寻路/领取成功即记录
-#      队长身份供抢盒子的队长规则使用） ----
-_WUBEI_CHECK_TEAM_KEY = "wubei_check_team"
-
-
-def load_wubei_check_team():
-    """读取五倍检查队伍开关（首次默认关闭，对齐修罗）。"""
-    return bool(KeyValue.get(_WUBEI_CHECK_TEAM_KEY, False))
-
-
-def save_wubei_check_team(on):
-    """保存五倍检查队伍开关，返回操作结果。"""
-    KeyValue.save(_WUBEI_CHECK_TEAM_KEY, bool(on))
-    return {"status": "success"}
 
 
 def load_wubei_hezi():
@@ -436,9 +400,7 @@ def reset_settings():
         save_battle_action(target, _DEFAULT_BATTLE[target])
     save_xiuluo_min(XIULUO_MIN_DEFAULT)
     save_xiuluo_races(XIULUO_RACES_DEFAULT)
-    save_wubei_min(WUBEI_MIN_DEFAULT)
     save_wubei_hezi(False)
-    save_wubei_check_team(False)
     save_xiuluo_hezi(False)
     save_high_perf(True)
     save_auto_refill(True)
@@ -502,9 +464,7 @@ class ControlWindow(WebWindow):
         self.expose(self.save_high_perf)
         self.expose(self.save_auto_refill)
         self.expose(self.save_clear_screen)
-        self.expose(self.save_wubei_min)
         self.expose(self.save_wubei_hezi)
-        self.expose(self.save_wubei_check_team)
         self.expose(self.save_debug_overlay)
         self.expose(self.save_auto_famen)
         self.expose(self.save_ui_theme)
@@ -568,9 +528,7 @@ class ControlWindow(WebWindow):
                 "high_perf": load_high_perf(),
                 "auto_refill": load_auto_refill(),
                 "clear_screen": load_clear_screen(),
-                "wubei": {"min_members": load_wubei_min(),
-                          "hezi": load_wubei_hezi(),
-                          "check_team": load_wubei_check_team()},
+                "wubei": {"hezi": load_wubei_hezi()},
                 "auto_famen": load_auto_famen(),
                 "debug_overlay": load_debug_overlay(),
                 "license": self._license_info,
@@ -636,17 +594,9 @@ class ControlWindow(WebWindow):
         """通用设置变更：保存启动清屏开关状态。"""
         return save_clear_screen(on)
 
-    def save_wubei_min(self, value):
-        """五倍设置变更：保存最少人数。"""
-        return save_wubei_min(value)
-
     def save_wubei_hezi(self, on):
         """五倍设置变更：保存自动抢盒子开关状态。"""
         return save_wubei_hezi(on)
-
-    def save_wubei_check_team(self, on):
-        """五倍设置变更：保存检查队伍开关状态。"""
-        return save_wubei_check_team(on)
 
     def save_debug_overlay(self, on):
         """调试信息开关变更：保存开关状态，并同步日志窗口显隐。"""
