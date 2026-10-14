@@ -309,6 +309,21 @@ def _ensure_menu_open(win):
         return True, img
     pt = game_map.find_template(win, ZUDUI_ITEM_ICON, _TEMPLATE_THRESHOLD)
     if pt is None:
+        # 诊断：组队按钮未命中——记录当前帧最佳匹配分（区分「按钮被
+        # 遮挡/换屏」分数极低 与「渲染差异」分数略低于阈值），并存
+        # 现场截图（tmp_err_img.png，gitignore 已忽略）供人工排查
+        try:
+            diag = win.capture(force_activate=False)
+            if diag is not None:
+                score, _pos = game_map.best_match_in(diag, ZUDUI_ITEM_ICON)
+                log(f"[组队] 组队按钮（zudui_item）未命中：最佳匹配 {score:.2f} "
+                    f"（阈值 {_TEMPLATE_THRESHOLD}），现场已存 tmp_err_img.png", "WARN")
+                try:
+                    diag.save("tmp_err_img.png")
+                except Exception:
+                    pass
+        except Exception as e:
+            log(f"[组队] 组队按钮诊断失败: {e}", "WARN")
         return False, None
     human_click(win, pt[0], pt[1])
     opened, img2 = _wait_menu(win)
