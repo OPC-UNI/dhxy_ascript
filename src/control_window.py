@@ -945,8 +945,7 @@ class ControlWindow(WebWindow):
             self.add_logs([f"[喊话测试] 发送中: {text}"])
             win.activate()  # 键盘事件须游戏前台（不点击，避免误触世界）
             time.sleep(0.5)
-            Keyboard.key("enter")
-            time.sleep(0.6)  # 等待聊天输入框打开
+            # 游戏聊天输入常驻（无需 Enter 打开）：直接输入 + Enter 发送
             Keyboard.input(text)
             time.sleep(0.8)  # 等待剪贴板粘贴完成（与任务内喊话同时序）
             Keyboard.key("enter")

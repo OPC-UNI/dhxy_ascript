@@ -1633,8 +1633,8 @@ def _shout_recruit(win):
     # 路径从不失败而任务路径偶现，差异即此激活）
     win.activate()
     time.sleep(0.5)
-    Keyboard.key("enter")
-    time.sleep(0.6)  # 等待聊天输入框打开
+    # 游戏聊天输入常驻（无需 Enter 打开）：直接输入 + Enter 发送
+    # （用户确认——先 Enter 会把上一次的状态开关式切换，多一次 Enter）
     Keyboard.input(_shout_text)
     time.sleep(0.8)  # 等待剪贴板粘贴完成（中文走 Ctrl+V 粘贴，需落地时间）
     Keyboard.key("enter")  # 发送
