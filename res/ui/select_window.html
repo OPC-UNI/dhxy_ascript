@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <title>选择游戏窗口</title>
+    <style>
+        :root {
+            --bg: #17191d;
+            --panel: #1f2227;
+            --border: #2e333b;
+            --accent: #4f9cf9;
+            --text: #d8dbe0;
+            --text-dim: #8a919c;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: "微软雅黑", sans-serif;
+            font-size: 13px;
+            padding: 14px;
+            user-select: none;
+        }
+        .hint {
+            color: var(--text-dim);
+            font-size: 12px;
+            margin-bottom: 12px;
+            line-height: 1.5;
+        }
+        .win-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 10px 12px;
+            margin-bottom: 8px;
+        }
+        .win-info { flex: 1; min-width: 0; }
+        .win-title {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .win-size { color: var(--text-dim); font-size: 11px; margin-top: 2px; }
+        .btn {
+            background: var(--accent);
+            color: #fff;
+            border: none;
+            border-radius: 4px;
+            padding: 6px 14px;
+            cursor: pointer;
+            font-size: 13px;
+            font-family: inherit;
+        }
+        .btn:hover { filter: brightness(1.1); }
+        .btn-ghost {
+            background: transparent;
+            border: 1px solid var(--border);
+            color: var(--text-dim);
+        }
+        .footer { display: flex; justify-content: flex-end; margin-top: 4px; }
+        .msg { color: #e06c75; font-size: 12px; margin-top: 8px; min-height: 16px; }
+    </style>
+</head>
+<body>
+    <div class="hint">检测到多个游戏窗口，请选择本次要自动操作的窗口（选择后记住，下次启动无需重选）：</div>
+    <div id="win-list"></div>
+    <div class="footer">
+        <button class="btn btn-ghost" onclick="cancel()">取消（自动选择）</button>
+    </div>
+    <div class="msg" id="msg"></div>
+
+    <script>
+        const listEl = document.getElementById('win-list');
+        const msgEl = document.getElementById('msg');
+
+        async function choose(index) {
+            const r = await callPython('choose', index);
+            if (r && r.status === 'error') {
+                msgEl.innerText = '选择失败，请重试';
+            }
+        }
+        async function cancel() {
+            await callPython('cancel');
+        }
+
+        async function init() {
+            const wins = await callPython('get_windows');
+            if (!wins) return;
+            wins.forEach((w, i) => {
+                const row = document.createElement('div');
+                row.className = 'win-row';
+                const info = document.createElement('div');
+                info.className = 'win-info';
+                const t = document.createElement('div');
+                t.className = 'win-title';
+                t.textContent = w.title;
+                const s = document.createElement('div');
+                s.className = 'win-size';
+                s.textContent = '窗口尺寸 ' + w.size;
+                info.appendChild(t);
+                info.appendChild(s);
+                const btn = document.createElement('button');
+                btn.className = 'btn';
+                btn.textContent = '选 择';
+                btn.onclick = () => choose(i);
+                row.appendChild(info);
+                row.appendChild(btn);
+                listEl.appendChild(row);
+            });
+        }
+
+        window.addEventListener('onPythonReady', init);
+        if (window.callPython) init();
+    </script>
+</body>
+</html>

@@ -15,6 +15,7 @@ Runtime.wait 驻留线程防止程序自行退出（托盘「彻底退出」→ 
 - src/wubei.py           五倍任务自动化（宝象国领取、队伍检查，战斗由战斗监控线程操作）
 - src/task_manager.py    任务子进程管理（启停、升级强杀、日志回流）
 - src/control_window.py  网页控制窗口（启动/停止/重置、任务模式选择、内嵌日志）
+- src/select_window.py   多开窗口绑定选择弹窗（启动时多开且无有效绑定时弹出）
 """
 import multiprocessing  # freeze_support：冻结打包下 spawn 子进程（任务/悬浮层）用
 import os
@@ -84,6 +85,32 @@ def _setup_tray(icon_path, control_win):
         tray.run()
     except Exception:
         pass
+
+
+def _ensure_window_binding():
+    """多开时弹框选择要绑定的游戏窗口（单窗口/已有有效绑定时跳过）。
+
+    授权通过后、控制窗口创建前调用（webview 消息循环须独占一次，
+    与控制窗口分属两次 start——同授权窗口路径）。绑定保存到
+    KeyValue（bound_window_id = 标题中的「（ID：xxx）」稳定标识），
+    find_main_window 优先返回绑定窗口（面板/任务子进程/悬浮层共用
+    同一查找接缝）；绑定窗口不存在时下次启动自动重新弹出。
+    """
+    from src.select_window import SelectWindow  # 弹框按需导入
+    wins = game.list_main_windows()
+    if len(wins) <= 1:
+        return  # 单窗口无需选择
+    if game.find_bound_window() is not None:
+        return  # 已有绑定且窗口存在
+    log("[绑定] 检测到多个游戏窗口，弹出选择窗口", "SYS")
+    sel = SelectWindow(wins)
+    title = sel.show(title="选择游戏窗口", block=True,
+                     width=560, height=max(220, 120 + 56 * len(wins)))
+    if title:
+        game.save_bound_window(title)
+        log(f"[绑定] 已绑定游戏窗口: {title}", "SYS")
+    else:
+        log("[绑定] 未选择窗口，本次按自动选择运行", "WARN")
 
 
 def task_start():
@@ -369,6 +396,9 @@ if __name__ == '__main__':
         sys.exit(0)
     license_info = _license_info(auth_win)
     print(f"授权通过（{license_info['status']}），启动主程序...")
+
+    # ---- 多开窗口绑定选择（弹框；须在控制窗口创建前独占一次消息循环） ----
+    _ensure_window_binding()
 
     # ---- 授权通过后装配主程序 ----
     # 必须放在 __main__ 内：Windows spawn 子进程会重新导入本模块但不执行此段

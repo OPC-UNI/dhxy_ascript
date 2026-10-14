@@ -381,6 +381,15 @@
                     <span class="group-sub" id="env-cur-res">-</span>
                 </div>
                 <div class="group-row">
+                    <span class="group-label">绑定窗口</span>
+                    <span class="group-sub" id="env-bound">-</span>
+                </div>
+                <div class="group-row">
+                    <span class="group-label">更换绑定</span>
+                    <button class="btn" id="btn-unbind-win" onclick="unbindWindow()">解除绑定</button>
+                </div>
+                <div class="group-hint" id="unbind-win-msg"></div>
+                <div class="group-row">
                     <span class="group-label">设备 ID</span>
                     <span class="group-sub" id="env-device-id">-</span>
                 </div>
@@ -488,7 +497,9 @@
         const envThemeEl = document.getElementById('env-theme');
         const envAdaptResEl = document.getElementById('env-adapt-res');
         const envCurResEl = document.getElementById('env-cur-res');
+        const envBoundEl = document.getElementById('env-bound');
         const envDeviceIdEl = document.getElementById('env-device-id');
+        const unbindWinMsgEl = document.getElementById('unbind-win-msg');
         let verifying = false;  // 验证请求在途标记（防连点，回程/领取/巫医共用）
 
         // 战斗设置：类型单选（法术/攻击/防御/捕捉/逃跑/无）+ 选「法术」时
@@ -642,15 +653,24 @@
             });
         });
 
-        // 使用环境（高级设置）：主题/适配分辨率为常量，当前窗口分辨率
-        // 与设备 ID 每次打开页签时从主进程刷新
+        // 使用环境（高级设置）：主题/适配分辨率为常量，当前窗口分辨率、
+        // 绑定窗口与设备 ID 每次打开页签时从主进程刷新
         async function refreshEnv() {
             const env = await callPython('get_env_info');
             if (!env) return;
             if (env.theme) envThemeEl.innerText = env.theme;
             if (env.adapt_res) envAdaptResEl.innerText = env.adapt_res;
             envCurResEl.innerText = env.cur_res || '-';
+            envBoundEl.innerText = env.bound || '-';
             envDeviceIdEl.innerText = env.device_id || '-';
+        }
+
+        // 解除窗口绑定：下次启动多开时重新弹框选择
+        async function unbindWindow() {
+            const r = await callPython('unbind_window');
+            if (!r) return;
+            unbindWinMsgEl.innerText = r.msg || (r.status === 'error' ? '操作失败' : '');
+            await refreshEnv();
         }
 
         // 全量同步设置到页面（初始化与重置后共用）：主题、任务模式、
@@ -681,6 +701,7 @@
             if (env.theme) envThemeEl.innerText = env.theme;
             if (env.adapt_res) envAdaptResEl.innerText = env.adapt_res;
             envCurResEl.innerText = env.cur_res || '-';
+            envBoundEl.innerText = env.bound || '-';
             envDeviceIdEl.innerText = env.device_id || '-';
             if (info.xiuluo_wuyi_interval) {
                 xiuluoWuyiIntervalEl.innerText = info.xiuluo_wuyi_interval;

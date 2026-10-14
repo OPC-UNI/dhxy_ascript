@@ -519,16 +519,24 @@ class ControlWindow(WebWindow):
         self.expose(self.verify_clear_screen)
         self.expose(self.unbind_license)
         self.expose(self.get_env_info)
+        self.expose(self.unbind_window)
         # 任务状态/日志回流接线：TaskManager → 主窗口状态 + 日志窗口
         self._tm.set_callbacks(on_status=self.sync_status, on_log=self.add_logs)
 
     def get_env_info(self):
         """使用环境信息（高级设置-使用环境展示）：适配主题/分辨率、
-        当前游戏窗口分辨率与设备 ID。"""
+        当前游戏窗口分辨率、绑定窗口与设备 ID。"""
         cur = "未检测到游戏窗口"
         win = game.find_main_window()
         if win is not None:
             cur = f"{win.rect.width} × {win.rect.height}"
+        bound = game.find_bound_window()
+        if bound is not None:
+            bound_info = bound.title
+        elif game.bound_window_id():
+            bound_info = "绑定丢失（重启后重选）"
+        else:
+            bound_info = "未绑定（自动选择）"
         try:
             device_id = Device.id()
         except Exception:
@@ -536,7 +544,12 @@ class ControlWindow(WebWindow):
         return {"theme": ENV_THEME,
                 "adapt_res": f"{ENV_ADAPT_RES[0]} × {ENV_ADAPT_RES[1]}",
                 "cur_res": cur,
+                "bound": bound_info,
                 "device_id": device_id}
+
+    def unbind_window(self):
+        """解除窗口绑定（下次启动多开时重新弹框选择）。"""
+        return game.clear_bound_window()
 
     def get_init_data(self):
         """页面初始化数据：主题、任务模式、任务次数、摄妖香开关、各条
