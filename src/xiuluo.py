@@ -1253,47 +1253,18 @@ def _shout_recruit(win):
     """缺人自动喊话：Enter 打开聊天输入 → 输入内容（中文自动走剪贴板
     粘贴，Keyboard.input 内置）→ Enter 发送到当前默认频道。
 
-    发送后自检：OCR 聊天区确认消息出现在公屏（五倍实测可发出、
-    修罗实测日志有但游戏无消息——2026-10-14），未确认则告警并
-    重试一次。返回是否已发出。
+    与五倍 _shout_recruit 逐字节一致（验证阶段 2026-10-14：修罗
+    日志有喊话但游戏无消息，代码 diff 无区别，差异在游戏侧状态）。
     """
     global _shout_last_at
-    for attempt in range(2):
-        Keyboard.key("enter")
-        time.sleep(0.8)  # 等待聊天输入框打开（0.4s 在修罗实测被吞）
-        Keyboard.input(_shout_text)
-        time.sleep(0.5)
-        Keyboard.key("enter")  # 发送
-        time.sleep(0.8)
-        _shout_last_at = time.time()
-        if _shout_seen(win):
-            log(f"[修罗] 已自动喊话（公屏已确认）: {_shout_text}", "SYS")
-            return True
-        if attempt == 0:
-            # 诊断：转储聊天区 OCR 内容（确认消息位置/区域标定用）
-            try:
-                img2 = win.capture(force_activate=False)
-                if img2 is not None:
-                    items2, _ = game_map.ocr_region(img2, (20, 590, 720, 800))
-                    txts = " | ".join(t for t, _, s in items2 if s >= 0.55)[:200]
-                    log(f"[修罗] 聊天区 OCR: {txts or '(无)'}", "INFO")
-            except Exception:
-                pass
-            log(f"[修罗] 喊话未在公屏确认（第 {attempt + 1} 次），重试", "WARN")
-    log(f"[修罗] 喊话疑似未发送（已重试）: {_shout_text}", "WARN")
-    return False
-
-
-def _shout_seen(win):
-    """喊话是否出现在公屏：OCR 聊天区（左下）查找喊话内容。"""
-    try:
-        img = win.capture(force_activate=False)
-        if img is None:
-            return False
-        items, _ = game_map.ocr_region(img, (20, 590, 720, 800))
-        return any("百次修罗来人" in t for t, _, s in items if s >= 0.55)
-    except Exception:
-        return False
+    Keyboard.key("enter")
+    time.sleep(0.4)  # 等待聊天输入框打开
+    Keyboard.input(_shout_text)
+    time.sleep(0.4)
+    Keyboard.key("enter")  # 发送
+    time.sleep(0.4)
+    _shout_last_at = time.time()
+    log(f"[修罗] 已自动喊话: {_shout_text}", "SYS")
 
 
 def _monitor_team_and_fill(win):
