@@ -890,14 +890,22 @@ class ControlWindow(WebWindow):
             except Exception:
                 pass
 
-    def verify_shout(self):
-        """高级设置-喊话测试：向游戏聊天发送一次五倍喊话内容（验证
-        发送链路；与验证按钮同款约束——任务运行中拒绝、游戏须前台）。"""
+    def verify_shout(self, target="wubei"):
+        """高级设置-喊话测试：向游戏聊天发送一次喊话内容（验证发送
+        链路；与验证按钮同款约束——任务运行中拒绝、游戏须前台）。
+
+        target：wubei 发五倍喊话内容（任务设置可配）；xiuluo 发修罗
+        按必须种族拼装的文案（_build_shout_text）。
+        """
         if self._tm.is_running():
             return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
-        text = load_wubei_shout_text().strip()
-        if not text:
-            return {"status": "error", "msg": "喊话内容为空，请先在任务设置-五倍设置中填写"}
+        if target == "xiuluo":
+            from . import xiuluo  # 延迟导入：xiuluo 反向导入本模块（避免循环）
+            text = xiuluo._build_shout_text()
+        else:
+            text = load_wubei_shout_text().strip()
+            if not text:
+                return {"status": "error", "msg": "喊话内容为空，请先在任务设置-五倍设置中填写"}
         win = game.find_main_window()
         if win is None:
             return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}

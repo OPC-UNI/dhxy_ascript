@@ -460,10 +460,14 @@
             <div class="group-box">
                 <div class="group-title">喊话测试</div>
                 <div class="verify-row">
-                    <button id="btn-verify-shout" class="btn" onclick="verifyShout()">测试喊话</button>
+                    <button id="btn-verify-shout" class="btn" onclick="verifyShout('wubei')">测试五倍喊话</button>
                     <span id="shout-verify-result"></span>
                 </div>
-                <div class="group-hint">向游戏聊天发送一次五倍喊话内容（任务设置-五倍设置中填写），验证 Enter→输入→Enter 发送链路是否正常（修罗喊话走同一链路）。发送后请查看游戏公屏是否出现消息。任务运行中不可验证。</div>
+                <div class="verify-row">
+                    <button id="btn-verify-shout-xl" class="btn" onclick="verifyShout('xiuluo')">测试修罗喊话</button>
+                    <span id="shout-xl-verify-result"></span>
+                </div>
+                <div class="group-hint">向游戏聊天发送一次喊话验证 Enter→输入→Enter 链路：五倍发任务设置里填的内容；修罗发按必须种族拼装的文案（如「百次修罗来人，效率队，来男人+++++」）。发送后请查看游戏公屏是否出现消息。任务运行中不可验证。</div>
             </div>
         </div>
     </div>
@@ -504,6 +508,8 @@
         const clearScreenVerifyResultEl = document.getElementById('clear-screen-verify-result');
         const btnVerifyShout = document.getElementById('btn-verify-shout');
         const shoutVerifyResultEl = document.getElementById('shout-verify-result');
+        const btnVerifyShoutXl = document.getElementById('btn-verify-shout-xl');
+        const shoutXlVerifyResultEl = document.getElementById('shout-xl-verify-result');
         const licenseStatusEl = document.getElementById('license-status');
         const licenseExpireEl = document.getElementById('license-expire');
         const btnUnbind = document.getElementById('btn-unbind');
@@ -1030,23 +1036,26 @@
         };
 
         // 清屏验证：与回程/领取验证同模式，结果经 onClearScreenVerifyResult 异步回推
-        // 喊话测试：向游戏聊天发送一次五倍喊话内容（验证发送链路）
-        async function verifyShout() {
+        // 喊话测试：向游戏聊天发送一次喊话内容（验证发送链路）；
+        // target: wubei=五倍可配内容 / xiuluo=修罗按种族拼装文案
+        async function verifyShout(target) {
             if (verifying) return;
             verifying = true;
-            btnVerifyShout.disabled = true;
-            shoutVerifyResultEl.style.color = 'var(--text)';
-            shoutVerifyResultEl.innerText = '发送中...';
+            const btn = target === 'xiuluo' ? btnVerifyShoutXl : btnVerifyShout;
+            const resEl = target === 'xiuluo' ? shoutXlVerifyResultEl : shoutVerifyResultEl;
+            btn.disabled = true;
+            resEl.style.color = 'var(--text)';
+            resEl.innerText = '发送中...';
             try {
-                const r = await callPython('verify_shout');
-                shoutVerifyResultEl.style.color = r && r.status === 'success' ? 'var(--text)' : '#ff5f5f';
-                shoutVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
+                const r = await callPython('verify_shout', target);
+                resEl.style.color = r && r.status === 'success' ? 'var(--text)' : '#ff5f5f';
+                resEl.innerText = (r && r.msg) || '验证请求失败';
             } catch (e) {
-                shoutVerifyResultEl.style.color = '#ff5f5f';
-                shoutVerifyResultEl.innerText = '验证请求失败';
+                resEl.style.color = '#ff5f5f';
+                resEl.innerText = '验证请求失败';
             } finally {
                 verifying = false;
-                btnVerifyShout.disabled = false;
+                btn.disabled = false;
             }
         }
 
