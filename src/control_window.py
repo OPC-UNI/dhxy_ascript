@@ -168,13 +168,21 @@ _XIULUO_RACES_KEY = "xiuluo_required_races"
 
 
 def load_xiuluo_settings():
-    """读取修罗设置：最少人数（3~5，默认 5）与必须有的种族（默认 男人+男鬼）。"""
+    """读取修罗设置：最少人数（3~5，默认 5）与必须有的种族。
+
+    种族语义（2026-10-14 确认）：首次无配置用默认（男人+男鬼）；
+    用户显式清空 = 无种族要求（空列表，领取前种族检查与缺人喊话
+    均按无要求处理）——不再强制回退默认。
+    """
     min_members = int(KeyValue.get(_XIULUO_MIN_KEY, XIULUO_MIN_DEFAULT))
     min_members = min(XIULUO_MIN_RANGE[1], max(XIULUO_MIN_RANGE[0], min_members))
-    raw = str(KeyValue.get(_XIULUO_RACES_KEY, ",".join(XIULUO_RACES_DEFAULT)))
-    races = [r for r in raw.replace("，", ",").split(",") if r in XIULUO_RACES]
+    raw = KeyValue.get(_XIULUO_RACES_KEY, None)
+    if raw is None:
+        races = list(XIULUO_RACES_DEFAULT)
+    else:
+        races = [r for r in str(raw).replace("，", ",").split(",") if r in XIULUO_RACES]
     return {"min_members": min_members,
-            "races": races or list(XIULUO_RACES_DEFAULT)}
+            "races": races}
 
 
 def save_xiuluo_min(value):

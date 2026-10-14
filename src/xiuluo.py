@@ -127,9 +127,12 @@ CLAIM_VERIFY_WAIT = 5                         # 领取后任务进入追踪的�
                                               # 仍无即判定失败（用户确认：多次重试无效）
 
 # ---- 领取前队伍检查 ----
-TEAM_CHECK_RETRY_INTERVAL = 10  # 队伍人数不足时的重试间隔（秒）
+TEAM_CHECK_RETRY_INTERVAL = 10  # 缺人且无申请人可补时的重查间隔（秒）
 TEAM_RECOG_RETRY_INTERVAL = 3   # 成员识别失败（OCR 噪声）时的重试间隔（秒）：
                                 # 识别失败≠人数不足，等满 10s 纯属空转
+SHOUT_MIN_INTERVAL = 30         # 缺人自动喊话最短间隔（秒，防刷屏）
+_shout_text = ""                # 本轮喊话内容（按必须种族拼装；空=不喊话）
+_shout_last_at = 0.0            # 上次喊话时间（跨监控调用保持间隔）
 
 # ---- 对话开打（寻路到达后出现对话面板） ----
 FIGHT_DIALOG_OPTION = "看打！"  # 对话面板绿色选项（点击进入战斗，游戏内原文）
@@ -1234,6 +1237,32 @@ def verify_claim_flow(win):
     return False, "对话框选项未识别（未领取，已尝试关闭对话框）"
 
 
+def _build_shout_text():
+    """缺人喊话内容（用户 2026-10-14 指定格式）：
+
+    有必须种族 → 「百次修罗来人，效率队，来男人+++++」（多种族顿号连接）；
+    无必须种族 → 「百次修罗来人，效率队，随意来人++++」。
+    """
+    races = load_xiuluo_settings()["races"]
+    if races:
+        return f"百次修罗来人，效率队，来{'、'.join(races)}+++++"
+    return "百次修罗来人，效率队，随意来人++++"
+
+
+def _shout_recruit(win):
+    """缺人自动喊话：Enter 打开聊天输入 → 输入内容（中文自动走剪贴板
+    粘贴，Keyboard.input 内置）→ Enter 发送到当前默认频道。"""
+    global _shout_last_at
+    Keyboard.key("enter")
+    time.sleep(0.4)  # 等待聊天输入框打开
+    Keyboard.input(_shout_text)
+    time.sleep(0.4)
+    Keyboard.key("enter")  # 发送
+    time.sleep(0.4)
+    _shout_last_at = time.time()
+    log(f"[修罗] 已自动喊话: {_shout_text}", "SYS")
+
+
 def _monitor_team_and_fill(win):
     """队长缺人监控循环（领取前与「战斗力异常强大」被拒后共用）。
 
@@ -1271,6 +1300,13 @@ def _monitor_team_and_fill(win):
             return
         interval = (TEAM_RECOG_RETRY_INTERVAL if "识别失败" in info
                     else TEAM_CHECK_RETRY_INTERVAL)
+        # 缺人自动喊话（间隔限频；有申请人正在补时走上面的补人分支，
+        # 不喊话）
+        if _shout_text and time.time() - _shout_last_at >= SHOUT_MIN_INTERVAL:
+            try:
+                _shout_recruit(win)
+            except Exception as e:
+                log(f"[修罗] 喊话失败: {e}", "WARN")
         log(f"[修罗] {info}，暂无申请人可补，{interval}s 后重查", "WARN")
         time.sleep(interval)
 
@@ -1303,7 +1339,8 @@ def run_loop(win, cycle_interval=1.0):
     2. 领取时出现每日次数已满（TODO: 具体文案待确认）
     返回结束原因描述。
     """
-    global _fight_via_kanda, _team_checked, _task_gone_last_round, _returned_last_round
+    global _fight_via_kanda, _team_checked, _task_gone_last_round, _returned_last_round, \
+        _shout_text
     max_rounds = load_task_counts().get(TASK_MODE, 0)
     log(f"[修罗] 任务次数上限: {max_rounds if max_rounds > 0 else '不限'}", "SYS")
     # 高性能模式开关由 main.task_start 按通用设置置位（共享设施）
@@ -1317,6 +1354,8 @@ def run_loop(win, cycle_interval=1.0):
     log(f"[修罗] 自动巫医: {'开' if auto_wuyi else '关'}"
         + (f"（每 {wuyi_interval} 轮）" if auto_wuyi else ""), "SYS")
     log(f"[修罗] 检查队伍: {'开（领取前检查队伍）' if check_team else '关（跳过队伍检查，直接领取）'}", "SYS")
+    _shout_text = _build_shout_text()
+    log(f"[修罗] 缺人自动喊话: {_shout_text}（最短间隔 {SHOUT_MIN_INTERVAL}s）", "SYS")
 
     done = app_utils.task_progress_done(win, TASK_MODE)  # 当天已完成（跨重启持久）
     if done:
