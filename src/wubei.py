@@ -39,6 +39,7 @@
 """
 import re
 import time
+import traceback
 from pathlib import Path
 
 import cv2
@@ -1897,4 +1898,5 @@ def run_loop(win, cycle_interval=1.0):
             # 失败重试路径，防快速失败模式紧循环空转）
         except Exception as e:
             log(f"[五倍] 主循环异常: {e}", "WARN")
+            log(traceback.format_exc(), "WARN")  # 完整堆栈定位异常行
             time.sleep(cycle_interval)
