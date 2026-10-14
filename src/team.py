@@ -219,7 +219,10 @@ def _fill_team_loop(win, target, max_allow):
                 break
         if flag is None:
             if img is not None and _is_menu_open(img):
-                return False, "组队菜单已打开（队伍可能已满员，无需补人）"
+                # 菜单打开 = 已组队但暂无申请人：申请加入面板只在有人
+                # 申请时出现，与队伍是否满员无关（实测 1/5 队伍点组队
+                # 按钮弹的是普通菜单）——返回后由监控循环等待并重查
+                return False, "暂无申请人（申请加入面板未出现）"
             return False, "申请加入面板未出现"
     failed = set()  # 失败过的申请人（规范化文案）
     allowed = 0
