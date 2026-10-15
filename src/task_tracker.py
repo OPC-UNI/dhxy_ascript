@@ -517,15 +517,6 @@ def track_task(win, title, text=None, green_index=0, retries=4, retry_interval=1
                 coord_pool = [it for it in pool if MAP_COORD_RE.search(it[0])]
                 if coord_pool:
                     pool = coord_pool
-                elif not underline_pool and attempt < retries:
-                    # 无坐标链接（修罗「前往蟠桃园消灭修罗」等）的下划线
-                    # 未渲染（链接刚出现时）：此时点绿字碎片无效（实测
-                    # 点「前往」无反应，下划线出现后才点中）。等待渲染
-                    # 后重试，预算耗尽才退回绿字兜底
-                    log("[任务追踪] 无坐标链接下划线未渲染，等待渲染后重试"
-                        f"（第 {attempt + 1} 次）", "INFO")
-                    time.sleep(3.0)
-                    continue
             tgt = pool[min(green_index, len(pool) - 1)]
             wrap_note = ""
             if green_order:
