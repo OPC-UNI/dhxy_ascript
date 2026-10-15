@@ -19,7 +19,11 @@ _LOG_LOCK = threading.Lock()  # 战斗监控线程与任务主线程都会打日
 
 
 def _open_log_file():
-    """惰性打开本地日志文件（logs/YYYY-MM-DD.log），跨天自动滚动。"""
+    """惰性打开本地日志文件（logs/YYYY-MM-DD.log），跨天自动滚动。
+
+    打开新一天的日志文件时顺带清理超过 7 天的旧日志（保留近 7 天，
+    用户 2026-10-15 要求；进程内每天至多清理一次）。
+    """
     global _LOG_FILE, _LOG_FH, _LOG_DATE
     today = time.strftime("%Y-%m-%d")
     if _LOG_FH is not None and _LOG_DATE == today:
@@ -36,8 +40,23 @@ def _open_log_file():
         _LOG_FH = open(path, "a", encoding="utf-8")
         _LOG_FILE = str(path)
         _LOG_DATE = today
+        _cleanup_old_logs()
     except Exception:
         _LOG_FH = None
+
+
+def _cleanup_old_logs():
+    """删除 logs/ 下修改时间超过 7 天的日志文件（清理失败静默）。"""
+    try:
+        cutoff = time.time() - 7 * 86400
+        for p in _LOG_DIR.glob("*.log"):
+            try:
+                if p.stat().st_mtime < cutoff:
+                    p.unlink()
+            except OSError:
+                pass
+    except Exception:
+        pass
 
 
 def log_file_path():
