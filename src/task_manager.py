@@ -13,6 +13,10 @@ import sys
 import threading
 import time
 
+import win32gui
+
+from src import game  # 任务目标窗口解析（find_main_window，与任务子进程同接缝）
+
 
 class _QueueWriter:
     """子进程内替换 sys.stdout/stderr，逐条写入 multiprocessing.Queue。"""
@@ -109,6 +113,8 @@ class TaskManager:
                 self.active_worker = worker
             threading.Thread(target=self._monitor_worker, args=(worker,),
                              daemon=True, name="task-monitor").start()
+            threading.Thread(target=self._window_watchdog, args=(worker,),
+                             daemon=True, name="window-watchdog").start()
             self._notify_status(True)
             self._emit(["[系统] 任务已启动"])
             return {"status": "success", "running": True}
@@ -140,6 +146,52 @@ class TaskManager:
         with self._lock:
             worker = self.active_worker
         return worker is not None and worker.is_alive()
+
+    # ---- 任务目标窗口存活看护 ----
+    # 任务子进程锁定启动时的主窗口后不再换窗；窗口被关闭（句柄失效）
+    # 后其所有截图失败（GetClientRect 1400 无限刷屏）且不可恢复，
+    # 由本线程在任务期间校验句柄并自动终止任务（最小化不影响：
+    # 句柄仍有效，恢复前台后任务可继续轮询）。
+    WINDOW_CHECK_INTERVAL = 1.0  # 句柄校验间隔（秒）
+    WINDOW_FATAL_MISSES = 3      # 连续失效次数（≈3 秒）判定窗口已关闭
+
+    def _resolve_task_window(self):
+        """解析任务目标窗口句柄（与任务子进程同接缝：find_main_window 绑定优先）。"""
+        win = game.find_main_window()
+        hwnd = getattr(win, "hwnd", 0) if win is not None else 0
+        return int(hwnd or 0) or None
+
+    def _window_watchdog(self, worker):
+        """看护任务目标窗口：句柄连续失效即判定窗口已关闭，终止任务。
+
+        启动时窗口尚未出现（target None）则跟随任务子进程的 30s 等待期
+        每秒重解析，不提前判死；句柄失效后若又被系统复用（IsWindow 转真）
+        计数自动归零自愈。终止前确认 worker 仍是当前轮任务，防止旧看护
+        误杀快速重启后的新一轮任务。
+        """
+        target = None
+        misses = 0
+        while worker.is_alive():
+            time.sleep(self.WINDOW_CHECK_INTERVAL)
+            if target is None:
+                target = self._resolve_task_window()
+                misses = 0
+                continue
+            if win32gui.IsWindow(target):
+                misses = 0
+                continue
+            misses += 1
+            if misses < self.WINDOW_FATAL_MISSES:
+                continue
+            if not worker.is_alive():
+                return  # 任务已自然结束，无需终止
+            with self._lock:
+                current = self.active_worker is worker
+            if not current:
+                return  # 新一轮任务已接管，旧看护静默退出
+            self._emit(["[系统] 检测到游戏窗口已关闭，任务自动终止"])
+            self.stop()
+            return
 
     # ---- 内部机制 ----
 
