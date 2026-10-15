@@ -846,6 +846,19 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
         if task is None:
             if _confirm_task_gone(win, title, fallback_keywords):
                 if not task_seen:
+                    # 诊断：转储追踪面板 OCR 行——宽松匹配（领取校验
+                    # has_task）命中而分组匹配（find_task）漏任务时，
+                    # 标题行形态即根因（五环实测死循环 2026-10-15）
+                    try:
+                        img2 = win.capture(force_activate=False)
+                        if img2 is not None:
+                            items2, _ = game_map.ocr_regions(
+                                img2, (task_tracker.TRACK_REGION,))
+                            dump = " | ".join(f"「{t[0]}」" for t in items2
+                                              if t[2] >= 0.55)
+                            log(f"[{prefix}] 追踪面板 OCR: {dump or '(无)'}", "WARN")
+                    except Exception:
+                        pass
                     return False, f"任务从未出现在追踪面板（跟踪 {rounds} 次点击，领取可能失败）"
                 return True, f"任务已从任务追踪中消失（本轮跟踪 {rounds} 次点击）"
             continue  # 瞬时漏读：任务仍在，继续跟踪
