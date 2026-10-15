@@ -583,7 +583,7 @@ class ControlWindow(WebWindow):
         else:
             bound_info = "未绑定（自动选择）"
         try:
-            device_id = Device.id()
+            device_id = Device.id  # classproperty：属性访问即为字符串，不可加括号调用
         except Exception:
             device_id = "获取失败"
         return {"theme": ENV_THEME,
