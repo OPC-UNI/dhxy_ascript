@@ -1455,6 +1455,9 @@ def _use_return_talisman(win):
     pt, info = _find_return_talisman(win)
     if pt is None:
         return False, info
+    # 保险：右键前确认背包仍打开（持背包锁下不可达，防未来新流程遗漏锁）
+    if not bag.is_bag_open(win):
+        return False, "右键回城符前背包已被关闭，未使用（下轮重试）"
     human_click(win, pt[0], pt[1], button="secondary")
     log(f"[五倍] 已右键使用五倍回城符 ({pt[0]}, {pt[1]})，返回宝象国", "SYS")
     time.sleep(1.0)  # 等待传送生效
@@ -1503,30 +1506,33 @@ def _return_to_npc(win):
         ok, info = _wait_battle_end(win, timeout=60)
         if not ok:
             return False, info
-    # 1. 打开背包并确保任务储物格已打开。战斗结束后的结算过渡期游戏
-    #    忽略输入（实测战斗结束 1s 后点背包两次尝试均失败，而验证流程
-    #    静止场景正常）——重试带间隔直到打开或超时，骑过结算动画
-    ok = False
-    info = ""
-    for attempt in range(3):
-        ok, info = _open_task_box(win)
-        if ok:
-            break
-        if attempt < 2:
-            log(f"[五倍] 背包打开失败（第 {attempt + 1} 次）：{info}，"
-                f"等待结算过渡后重试", "WARN")
-            time.sleep(2.0)
-    if not ok:
-        return False, info
-    # 2. 识别五倍回城符并右键使用（返回宝象国）
-    ok, info = _use_return_talisman(win)
-    if not ok:
-        # 回城符未使用：也关闭背包与地图保持界面干净；下一轮领取
-        # 会走世界地图寻路回宝象国兜底
+    # 1~3. 背包整段流程持背包锁：与其他背包流程（摄妖香等）互斥，
+    # 防止交错破坏状态（同修罗返程的事故教训）
+    with app_utils._BAG_LOCK:
+        # 1. 打开背包并确保任务储物格已打开。战斗结束后的结算过渡期游戏
+        #    忽略输入（实测战斗结束 1s 后点背包两次尝试均失败，而验证流程
+        #    静止场景正常）——重试带间隔直到打开或超时，骑过结算动画
+        ok = False
+        info = ""
+        for attempt in range(3):
+            ok, info = _open_task_box(win)
+            if ok:
+                break
+            if attempt < 2:
+                log(f"[五倍] 背包打开失败（第 {attempt + 1} 次）：{info}，"
+                    f"等待结算过渡后重试", "WARN")
+                time.sleep(2.0)
+        if not ok:
+            return False, info
+        # 2. 识别五倍回城符并右键使用（返回宝象国）
+        ok, info = _use_return_talisman(win)
+        if not ok:
+            # 回城符未使用：也关闭背包与地图保持界面干净；下一轮领取
+            # 会走世界地图寻路回宝象国兜底
+            _close_return_panels(win)
+            return False, info
+        # 3. 关闭世界地图、小地图、背包（清理界面）
         _close_return_panels(win)
-        return False, info
-    # 3. 关闭世界地图、小地图、背包（清理界面）
-    _close_return_panels(win)
     # 传送后位置识别（短时等待加载完成，仅供日志与下一轮领取判断；
     # 5s 上限为实测校准值——实测加载超 3s 时 3s 时限识别失败，
     # 且失败后下一轮领取会误走世界地图寻路兜底）

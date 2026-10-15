@@ -127,11 +127,13 @@ def _sheyaoxiang_watchdog(win):
         try:
             if not app_utils.sheyaoxiang_due(win):
                 continue
-            with app_utils._INPUT_LOCK:
-                ok, info = bag.use_sheyaoxiang(win)
-                if ok:
-                    app_utils.sheyaoxiang_mark_used(win)
-                log(f"[摄妖香] 定时续用: {info}", "SYS" if ok else "WARN")
+            # use_sheyaoxiang 内部整段持 _BAG_LOCK（与其他背包流程互斥），
+            # 单次点击仍走 _INPUT_LOCK——不能在外层再包输入锁，否则与
+            # 返程流程（先 _BAG_LOCK 后点击取 _INPUT_LOCK）锁序相反死锁
+            ok, info = bag.use_sheyaoxiang(win)
+            if ok:
+                app_utils.sheyaoxiang_mark_used(win)
+            log(f"[摄妖香] 定时续用: {info}", "SYS" if ok else "WARN")
         except Exception as e:
             log(f"[摄妖香] 定时续用异常: {e}", "WARN")
 

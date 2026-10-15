@@ -241,8 +241,15 @@ def use_sheyaoxiang(win):
 
     打开背包 → 查找摄妖香（未找到时切换储物格）→ 右键使用 → 关闭背包。
     注意：已右键使用但关闭背包失败时仍视为成功——重试会造成重复使用。
+    整段持背包流程锁（_BAG_LOCK）：与其他背包流程互斥，防止交错
+    破坏对方状态（见 app_utils._BAG_LOCK 注释的实测事故）。
     返回 (是否成功, 描述)。
     """
+    with app_utils._BAG_LOCK:
+        return _use_sheyaoxiang_inner(win)
+
+
+def _use_sheyaoxiang_inner(win):
     # 1. 打开背包
     ok, info = open_bag(win)
     if not ok:

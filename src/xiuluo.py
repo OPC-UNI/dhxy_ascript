@@ -1107,6 +1107,9 @@ def _use_return_talisman(win):
     pt, info = _find_return_talisman(win)
     if pt is None:
         return False, info
+    # 保险：右键前确认背包仍打开（持背包锁下不可达，防未来新流程遗漏锁）
+    if not bag.is_bag_open(win):
+        return False, "右键回城符前背包已被关闭，未使用（下轮重试）"
     human_click(win, pt[0], pt[1], button="secondary")
     log(f"[修罗] 已右键使用修罗回城符 ({pt[0]}, {pt[1]})，返回灵兽村", "SYS")
     time.sleep(1.0)  # 等待传送生效
@@ -1169,19 +1172,22 @@ def _return_to_npc(win):
         ok, info = _wait_battle_end(win, timeout=60)
         if not ok:
             return False, info
-    # 1. 打开背包并确保任务储物格已打开
-    ok, info = _open_task_box(win)
-    if not ok:
-        return False, info
-    # 2. 识别修罗回城符并右键使用（返回灵兽村）
-    ok, info = _use_return_talisman(win)
-    if not ok:
-        # 回城符未使用：也关闭背包与地图保持界面干净；下一轮领取
-        # 会走世界地图寻路回灵兽村兜底
+    # 1~3. 背包整段流程持背包锁：与其他背包流程（摄妖香等）互斥，
+    # 防止交错破坏状态（实测：摄妖香关包后右键回城符点在游戏世界）
+    with app_utils._BAG_LOCK:
+        # 1. 打开背包并确保任务储物格已打开
+        ok, info = _open_task_box(win)
+        if not ok:
+            return False, info
+        # 2. 识别修罗回城符并右键使用（返回灵兽村）
+        ok, info = _use_return_talisman(win)
+        if not ok:
+            # 回城符未使用：也关闭背包与地图保持界面干净；下一轮领取
+            # 会走世界地图寻路回灵兽村兜底
+            _close_return_panels(win)
+            return False, info
+        # 3. 关闭世界地图、小地图、背包（清理界面）
         _close_return_panels(win)
-        return False, info
-    # 3. 关闭世界地图、小地图、背包（清理界面）
-    _close_return_panels(win)
     # 传送后位置识别（短时等待加载完成，仅供日志与下一轮领取判断；
     # 5s 上限为实测校准值——实测加载超 3s 时 3s 时限识别失败，
     # 且失败后下一轮领取会误走世界地图寻路兜底）。0.5s 轮询：

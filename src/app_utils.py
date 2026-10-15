@@ -72,6 +72,12 @@ def log(msg, level="INFO"):
 # 内调 human_move 的二次获取不阻塞；锁内仅 40~90ms 移动+一次点击，
 # 不会饿死 0.5s 轮询的战斗线程。
 _INPUT_LOCK = threading.RLock()
+# 背包流程级互斥锁：整段背包流程（摄妖香/修罗返程/五倍返程）持锁，
+# 防止两个流程并行操作同一背包交错破坏对方状态（实测：摄妖香
+# watchdog 关包后返程流程的右键回城符点在游戏世界，没传送——
+# 2026-10-15）。_INPUT_LOCK 只保证单次移动+点击原子，不保证整段
+# 流程互斥；新增背包用户必须整段持本锁。
+_BAG_LOCK = threading.RLock()
 
 
 def human_move(target_x: int, target_y: int, duration: float = None):
