@@ -61,6 +61,7 @@ from .control_window import (load_task_counts, load_xiuluo_settings,
                              load_xiuluo_wuyi_interval)  # 任务次数上限/修罗设置/自动巫医
 from .xuanshu import follow_task  # 任务跟踪（绿字点击寻路/战斗跳过/附加对话处理）
 from .dialog_common import (_dialog_text_present, _norm_dialog_present,
+                            _click_green_option_once,
                             SCREEN_CENTER_POS,
                             green_option_center)  # 对话框共享组件
 
@@ -96,6 +97,9 @@ CLAIM_OPTION_TAIL = "要我帮忙吗"               # 选项换行渲染时的�
                                               # 永不单行命中，两次全靠尾部/兜底）
 CLAIM_COUNT_TEXT = "今日已完成次数"            # 领取后对话框中的完成次数文案（辅助记录完成次数）
 TEAM_WARNING_TEXT = "修罗的战斗力异常强大，千万要找齐伙伴再一同消灭。"  # 队伍数量小于 3 的提示（实测文案）
+TEAM_CONFIRM_TEXT = "修罗的战斗力异常强大，你当前队伍的人数不足5人，确定要领取任务吗？"  # 领取确认弹窗（实测文案）
+TEAM_CONFIRM_ACCEPT = "确定"           # 确认弹窗选项：接受领取
+TEAM_CONFIRM_DECLINE = "我再想想"       # 确认弹窗选项：拒绝（等待补人）
 CLAIM_ARRIVE_TIMEOUT = 90                     # 寻路到领取点的超时
 CLAIM_BUTTON_TIMEOUT = 20                     # 到达后等待领取任务按钮出现的超时
 ENTRY_FIRST_WAIT = 4.5                         # 入口首轮等待：位置近判定可能误判（超出
@@ -440,6 +444,28 @@ def _handle_team_warning(win, items, img_np):
     return True
 
 
+def _handle_team_confirm(win, items, img_np):
+    """领取确认弹窗（队伍不足 5 人时游戏询问是否仍要领取）。
+
+    按修罗设置的最少人数决定（用户 2026-10-15 指定）：
+    <5 人配置（3/4）→ 点「确定」接受领取；
+    =5 → 点「我再想想」拒绝（等待补满 5 人再领）。
+    返回 "accepted" / "declined" / None（非此弹窗）。
+    """
+    if not _norm_dialog_present(items, TEAM_CONFIRM_TEXT):
+        return None
+    min_members = load_xiuluo_settings()["min_members"]
+    if min_members >= 5:
+        _click_green_option_once(win, items, img_np, TEAM_CONFIRM_DECLINE,
+                                 prefix="修罗")
+        log("[修罗] 队伍不足 5 人，按设置（最少 5 人）点「我再想想」，等待补人", "WARN")
+        return "declined"
+    _click_green_option_once(win, items, img_np, TEAM_CONFIRM_ACCEPT,
+                             prefix="修罗")
+    log(f"[修罗] 队伍不足 5 人，按设置（最少 {min_members} 人）点「确定」接受领取", "SYS")
+    return "accepted"
+
+
 def _walk_to_claim_spot(win, just_returned=False):
     """寻路到灵兽村领取点附近（与队伍人数无关，队长身份下执行）。
 
@@ -718,6 +744,15 @@ def _claim_task(win, allow_fill=False):
                 time.sleep(0.3)
                 continue
             items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
+            # 领取确认弹窗（不足 5 人询问是否仍要领取）：按设置决定
+            confirm = _handle_team_confirm(win, items, img_np)
+            if confirm == "declined":
+                if allow_fill:
+                    log("[修罗] 领取被拒：队伍人数不足，进入监控补人循环", "WARN")
+                    _monitor_team_and_fill(win)  # 人满才返回；非队长不返回（保持模式）
+                    return False, "队伍已补齐（监控循环判定），下轮重试领取", None
+                return False, "队伍人数不足，已点「我再想想」（检查队伍开关关闭，不补人）", None
+            # accepted：已点「确定」接受领取，任务将进追踪（has_task 兜底置 claimed）
             if _handle_team_warning(win, items, img_np):
                 if allow_fill:
                     log("[修罗] 领取被拒：队伍人数不足，进入监控补人循环", "WARN")
@@ -757,6 +792,15 @@ def _claim_task(win, allow_fill=False):
             if m:
                 count = int(m.group(1))
                 log(f"[修罗] {CLAIM_COUNT_TEXT}：{count}", "SYS")
+        # 领取确认弹窗（不足 5 人询问是否仍要领取）：按设置决定
+        confirm = _handle_team_confirm(win, items, img_np)
+        if confirm == "declined":
+            if allow_fill:
+                log("[修罗] 领取被拒：队伍人数不足，进入监控补人循环", "WARN")
+                _monitor_team_and_fill(win)  # 人满才返回；非队长不返回（保持模式）
+                return False, "队伍已补齐（监控循环判定），下轮重试领取", None
+            return False, "队伍人数不足，已点「我再想想」（检查队伍开关关闭，不补人）", None
+        # accepted：已点「确定」接受领取，校验循环继续等任务进追踪
         if _handle_team_warning(win, items, img_np):
             if allow_fill:
                 log("[修罗] 领取被拒：队伍人数不足，进入监控补人循环", "WARN")
