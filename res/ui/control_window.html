@@ -145,9 +145,14 @@
         /* ---- 修罗回程验证行 ---- */
         .verify-row { display: flex; align-items: center; gap: 8px; }
         #verify-result { color: var(--text); font-size: 12px; font-family: "微软雅黑"; flex: 1; word-break: break-all; }
-        .group-label { color: var(--text); font-size: 13px; font-family: "微软雅黑"; flex: 1; min-width: 0; }
+        .group-label { color: var(--text); font-size: 13px; font-family: "微软雅黑"; flex: 1; min-width: 0; white-space: nowrap; }
         .group-hint { color: var(--text-dim); font-size: 11px; font-family: "微软雅黑"; }
         .group-sub { color: var(--text-dim); font-size: 12px; font-family: "微软雅黑"; }
+        /* 设备 ID / 绑定窗口等长文本值：超宽省略号截断，不挤压标签换行 */
+        #env-device-id, #env-bound { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        /* 设备 ID 点击复制 */
+        #env-device-id { cursor: pointer; }
+        #env-device-id:hover { color: var(--accent); }
         /* 种族选择：独立成行，4 列全宽（12 项 3 行） */
         .race-grid { grid-template-columns: repeat(4, 1fr); width: 100%; }
     </style>
@@ -393,7 +398,7 @@
                 <div class="group-hint" id="unbind-win-msg"></div>
                 <div class="group-row">
                     <span class="group-label">设备 ID</span>
-                    <span class="group-sub" id="env-device-id">-</span>
+                    <span class="group-sub" id="env-device-id" title="点击复制" onclick="copyDeviceId()">-</span>
                 </div>
             </div>
             <div class="group-box">
@@ -519,6 +524,7 @@
         const envCurResEl = document.getElementById('env-cur-res');
         const envBoundEl = document.getElementById('env-bound');
         const envDeviceIdEl = document.getElementById('env-device-id');
+        let envDeviceIdValue = '-';  // 设备 ID 原文（复制源；「已复制」反馈后恢复用）
         const unbindWinMsgEl = document.getElementById('unbind-win-msg');
         let verifying = false;  // 验证请求在途标记（防连点，回程/领取/巫医共用）
 
@@ -672,7 +678,36 @@
             if (env.adapt_res) envAdaptResEl.innerText = env.adapt_res;
             envCurResEl.innerText = env.cur_res || '-';
             envBoundEl.innerText = env.bound || '-';
-            envDeviceIdEl.innerText = env.device_id || '-';
+            envDeviceIdValue = env.device_id || '-';
+            envDeviceIdEl.innerText = envDeviceIdValue;
+            envDeviceIdEl.title = envDeviceIdValue;  // 悬停看完整值，点击复制
+        }
+
+        // 设备 ID 点击复制：优先 navigator.clipboard，失败回退 execCommand
+        function copyDeviceId() {
+            const text = envDeviceIdValue;
+            if (!text || text === '-' || text === '获取失败') return;
+            const showDone = () => {
+                envDeviceIdEl.innerText = '已复制';
+                setTimeout(() => { envDeviceIdEl.innerText = envDeviceIdValue; }, 1500);
+            };
+            const legacyCopy = () => {
+                const ta = document.createElement('textarea');
+                ta.value = text;
+                ta.style.position = 'fixed';
+                ta.style.opacity = '0';
+                document.body.appendChild(ta);
+                ta.select();
+                let ok = false;
+                try { ok = document.execCommand('copy'); } catch (e) {}
+                document.body.removeChild(ta);
+                if (ok) showDone();
+            };
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text).then(showDone).catch(legacyCopy);
+            } else {
+                legacyCopy();
+            }
         }
 
         // 解除窗口绑定：下次启动多开时重新弹框选择
@@ -712,7 +747,9 @@
             if (env.adapt_res) envAdaptResEl.innerText = env.adapt_res;
             envCurResEl.innerText = env.cur_res || '-';
             envBoundEl.innerText = env.bound || '-';
-            envDeviceIdEl.innerText = env.device_id || '-';
+            envDeviceIdValue = env.device_id || '-';
+            envDeviceIdEl.innerText = envDeviceIdValue;
+            envDeviceIdEl.title = envDeviceIdValue;  // 悬停看完整值，点击复制
             if (info.xiuluo_wuyi_interval) {
                 xiuluoWuyiIntervalEl.innerText = info.xiuluo_wuyi_interval;
             }
