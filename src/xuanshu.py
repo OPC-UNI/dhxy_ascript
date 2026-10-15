@@ -24,6 +24,7 @@ import time
 import cv2
 import numpy as np
 from ascript.windows.hardware.mouse import Mouse
+from ascript.windows.hardware.keyboard import Keyboard  # Alt+C 降落（封印机关破解）
 from ascript.windows.window.Window import WindowCaptureFormat
 
 from .app_utils import log, human_click, move_away, norm_text
@@ -92,6 +93,8 @@ DIALOG_SKIP_TEXTS = {
     "看少侠的表情，旺小乔不满意？": 4,
     "少侠的脸色有点难看": 4,
     "留香阁的凤姑娘探听到了一些有关玄石的消息": 4,  # 领取后 NPC 追问（无选项，须屏幕中间推进）
+    "看来要破解的便是此地的封印了。":1,
+    "怎么没有反应":5,
 }
 # 特定对话框出现时点击的绿色选项（对话框文案 → 绿字选项）
 DIALOG_OPTION_MAP = {
@@ -124,6 +127,15 @@ DIALOG_OPTION_INDEX_MAP = {
 }
 # 序号点击的坐标参数（相对问题行 rect）：首项纵偏移、行间距、横向偏移
 # （实测三选项文字中心：咖啡 +12、果汁 +30、茶 +48，间距 18px）
+# ---- 封印机关破解（对话框「看来要破解的便是此地的封印了。」出现后） ----
+JIGUAN_DIALOG_TEXT = "看来要破解的便是此地的封印了。"
+JIGUAN_CLICK_ORDER = ("xuanshu_jiguanhuang.png",   # 点击顺序：黄→蓝→红（用户 2026-10-15 指定）
+                      "xuanshu_jiguanlan.png",
+                      "xuanshu_jiguanhong.png")
+JIGUAN_CLICK_WAIT = 5        # 每次点击机关后等待（秒），随后检查任务追踪
+JIGUAN_FIND_TIMEOUT = 10     # 单个机关模板查找超时（秒，找不到跳过继续下一个）
+JIGUAN_THRESHOLD = 0.8       # 机关模板匹配阈值
+
 # 锄遗聚宝小游戏（点击「注入玄蕴试试看」后出现）
 CHUYIJUEBAO_ICON = "chuyijuebao.png"              # 主图（消失即结束；实测匹配 0.91）"
 CHUYIJUEBAO_START_ICON = "chuyijuebao_start.png"  # 开始按钮（实测匹配 0.92）
@@ -549,6 +561,67 @@ def _capture_qi_region(win):
     if full is None:
         return None
     return full[t:b, l:r]
+
+
+def _current_task_sig(win, title):
+    """当前任务签名（仅 OCR 追踪面板区域）；任务不存在返回 ""。"""
+    img = win.capture(force_activate=False)
+    if img is None:
+        return None
+    items, _ = game_map.ocr_region(img, task_tracker.TRACK_REGION)
+    task = task_tracker.find_task(task_tracker.group_tasks(items), title)
+    if task is None:
+        return ""
+    return task_tracker.task_signature(task)
+
+
+def _task_done_or_changed(win, title, sig0):
+    """任务追踪是否消失或签名变化（相对 sig0；sig0 None 表示读不到，
+    此时不判变化）。"""
+    sig = _current_task_sig(win, title)
+    if sig is None:
+        return False
+    if sig == "":
+        return True  # 任务从追踪中消失
+    return sig0 is not None and sig0 != "" and not _signatures_similar(sig, sig0)
+
+
+def _play_jiguan_puzzle(win, title):
+    """封印机关破解（用户 2026-10-15 流程）：
+
+    提示对话框点击一次关闭 → Alt+C 降落 → 按 黄→蓝→红 顺序识别并
+    点击机关模板；每次点击后等待 5s，任务追踪消失或签名变化即停止
+    （不再点剩余机关）。返回 (是否执行了流程, 描述)。
+    """
+    # 1. 点击一次关闭提示对话框（屏幕中间；该对话框无选项）
+    human_click(win, SCREEN_CENTER_POS[0], SCREEN_CENTER_POS[1])
+    log("[玄枢轶闻] 已点击关闭封印提示对话框", "SYS")
+    time.sleep(0.5)
+    # 2. Alt+C 降落（飞行状态下落地，机关才可见可点）
+    Keyboard.key_hot("alt", "c")
+    log("[玄枢轶闻] 已按 Alt+C 降落", "SYS")
+    time.sleep(1.0)
+    # 3. 按序点击机关（每次点击后 5s 检查任务追踪）
+    sig0 = _current_task_sig(win, title)
+    clicked = 0
+    for icon in JIGUAN_CLICK_ORDER:
+        deadline = time.time() + JIGUAN_FIND_TIMEOUT
+        pt = None
+        while time.time() < deadline:
+            pt = game_map.find_template(win, icon, threshold=JIGUAN_THRESHOLD)
+            if pt is not None:
+                break
+            time.sleep(0.5)
+        if pt is None:
+            log(f"[玄枢轶闻] 未找到机关 {icon}，跳过", "WARN")
+            continue
+        human_click(win, pt[0], pt[1])
+        clicked += 1
+        log(f"[玄枢轶闻] 已点击机关 {icon} @({pt[0]},{pt[1]})，等待 {JIGUAN_CLICK_WAIT}s", "SYS")
+        time.sleep(JIGUAN_CLICK_WAIT)
+        if _task_done_or_changed(win, title, sig0):
+            return True, f"封印破解完成（点击 {clicked} 个机关后任务追踪变化）"
+    return clicked > 0, f"封印破解流程结束（点击 {clicked} 个机关，任务追踪未变化）"
 
 
 def _play_chuyijuebao(win, timeout=CHUYIJUEBAO_TIMEOUT):
@@ -985,6 +1058,12 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 continue
             # 战斗中：跳过本轮识别（任务追踪与坐标不可用）；复用本帧
             if is_in_battle_frame(img):
+                continue
+            # 封印机关破解：提示对话框出现则完整处理（点击关闭 → 降落 →
+            # 按序点机关，任务追踪变化即停）
+            if _dialog_text_present(items, JIGUAN_DIALOG_TEXT):
+                ok2, info2 = _play_jiguan_puzzle(win, title)
+                log(f"[{prefix}] {info2}", "SYS" if ok2 else "WARN")
                 continue
             # 锄遗聚宝优先：出现则完整处理（复用本帧模板匹配，不重复截窗）
             if game_map.find_template_in(img, CHUYIJUEBAO_ICON) is not None:
