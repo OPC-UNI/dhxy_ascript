@@ -88,10 +88,11 @@ DESELECT_SETTLE = 0.5  # 点击后等待选中状态更新
 # 不同种族 ≤0.31，取 0.80 留余量且不会误判）
 _RACE_GLYPH_MATCH = 0.80
 
-# 模板匹配与等待参数（0.73：组队按钮实测 item 0.66 / item2 0.78 低于
-# 0.8 漏检，用户 2026-10-15 指定降到 0.73；按钮为单一样式模板，
-# 低阈值误匹配风险低）
-_TEMPLATE_THRESHOLD = 0.73
+# 模板匹配与等待参数
+_TEMPLATE_THRESHOLD = 0.8
+# 组队按钮-申请待处理态单独阈值：item2 实测最佳 0.78，低于 0.8 漏检
+# （用户 2026-10-15 指定 0.77；其他模板仍用 _TEMPLATE_THRESHOLD）
+ZUDUI_ITEM2_THRESHOLD = 0.77
 # 面板标志模板匹配度随队伍成员数变化（单人队实测 ~0.99，两人队降至 0.65，
 # 5 人队实测 0.436~0.683 抖动）；判定不依赖关闭按钮——多个面板共用同款
 # 关闭按钮（申请加入面板即同款），不具区分性。低于阈值时 OCR 文案兜底
@@ -180,7 +181,7 @@ def has_pending_apply(img):
     if _apply_panel_flag(img) is not None:
         return True
     return game_map.find_template_in(img, ZUDUI_ITEM2_ICON,
-                                     _TEMPLATE_THRESHOLD) is not None
+                                     ZUDUI_ITEM2_THRESHOLD) is not None
 
 
 def _apply_rows(img, fx, fy):
@@ -267,7 +268,7 @@ def _fill_team_loop(win, target, max_allow):
         # 面板未开：点击组队按钮。按钮为申请待处理态（zudui_item2，
         # 有人申请加入）时点击直接弹出申请加入面板——该状态即确定性
         # 队长（用户实测）；普通态点击弹出组队菜单
-        pt = game_map.find_template(win, ZUDUI_ITEM2_ICON, _TEMPLATE_THRESHOLD)
+        pt = game_map.find_template(win, ZUDUI_ITEM2_ICON, ZUDUI_ITEM2_THRESHOLD)
         if pt is not None:
             record_leader_status(True)
             log("[组队] 组队按钮为申请待处理态（zudui_item2），队长确认，点击打开申请面板", "INFO")
@@ -386,7 +387,7 @@ def _ensure_menu_open(win):
         # 返回，由监控循环先走补人（用户 2026-10-14 实测根因）
         diag = win.capture(force_activate=False)
         if diag is not None and game_map.find_template_in(
-                diag, ZUDUI_ITEM2_ICON, _TEMPLATE_THRESHOLD) is not None:
+                diag, ZUDUI_ITEM2_ICON, ZUDUI_ITEM2_THRESHOLD) is not None:
             log("[组队] 组队按钮为申请待处理态（zudui_item2），菜单无法打开，应先补人", "INFO")
             return False, None
         # 诊断：组队按钮两个形态都未命中——记录最佳匹配分（区分「按钮
