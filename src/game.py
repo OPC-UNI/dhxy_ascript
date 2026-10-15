@@ -39,12 +39,18 @@ def save_bound_window(title):
     """保存窗口绑定：优先提取标题中的账号 ID（稳定标识），无 ID 时存
     完整标题（未登录窗口的兜底，更新版本后可能失效需重选）。"""
     m = _ID_IN_TITLE_RE.search(title)
+    # 保存前重读合并：任务子进程会写入运行时状态（摄妖香时间戳/
+    # 任务进度等），KeyValue 整文件覆写会抹掉（同 control_window._kv_save）
+    KeyValue._initialize()
+    KeyValue._load_data()
     KeyValue.save(_BOUND_WINDOW_KEY, f"（ID：{m.group(1)}）" if m else title)
     return {"status": "success"}
 
 
 def clear_bound_window():
     """解除窗口绑定（下次启动多开时重新弹框选择）。"""
+    KeyValue._initialize()
+    KeyValue._load_data()  # 同 save_bound_window：防覆写子进程运行时状态
     KeyValue.remove(_BOUND_WINDOW_KEY)
     return {"status": "success", "msg": "已解除窗口绑定，下次启动重新选择"}
 

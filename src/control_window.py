@@ -63,7 +63,7 @@ def save_ui_theme(theme):
     """保存 UI 主题（浅色/深色），返回操作结果。"""
     if theme not in UI_THEMES:
         return {"status": "error", "msg": "INVALID_THEME"}
-    KeyValue.save(_UI_THEME_KEY, theme)
+    _kv_save(_UI_THEME_KEY, theme)
     return {"status": "success"}
 
 
@@ -73,11 +73,30 @@ def load_task_mode():
     return mode if mode in TASK_MODES else _DEFAULT_MODE
 
 
+def _kv_save(key, value):
+    """KeyValue.save 包装：保存前重读合并。
+
+    任务子进程会向 config.json 写入运行时状态（摄妖香使用时间戳、
+    任务当天进度、清屏标记、高性能缓存），KeyValue 是整文件覆写——
+    面板进程直接保存会用启动时的旧快照覆盖掉这些写入（实测 1 小时
+    内吃两次摄妖香：五环用后时间戳被面板保存抹掉，修罗再吃）。
+    """
+    KeyValue._initialize()  # _load_data 依赖 _file_path（首次访问前写时未初始化）
+    KeyValue._load_data()
+    KeyValue.save(key, value)
+
+
+def _kv_remove(key):
+    """KeyValue.remove 包装：移除前重读合并（同 _kv_save 理由）。"""
+    KeyValue._initialize()
+    KeyValue._load_data()
+    KeyValue.remove(key)
+
 def save_task_mode(mode):
     """保存任务模式选择，返回操作结果。"""
     if mode not in TASK_MODES:
         return {"status": "error", "msg": "INVALID_MODE"}
-    KeyValue.save(_MODE_KEY, mode)
+    _kv_save(_MODE_KEY, mode)
     return {"status": "success"}
 
 
@@ -88,7 +107,7 @@ def load_use_sheyaoxiang():
 
 def save_use_sheyaoxiang(on):
     """保存是否使用摄妖香开关，返回操作结果。"""
-    KeyValue.save(_USE_SHEYAOXIANG_KEY, bool(on))
+    _kv_save(_USE_SHEYAOXIANG_KEY, bool(on))
     return {"status": "success"}
 
 
@@ -99,7 +118,7 @@ def load_debug_overlay():
 
 def save_debug_overlay(on):
     """保存调试信息悬浮开关，返回操作结果。"""
-    KeyValue.save(_DEBUG_OVERLAY_KEY, bool(on))
+    _kv_save(_DEBUG_OVERLAY_KEY, bool(on))
     return {"status": "success"}
 
 
@@ -128,7 +147,7 @@ def save_task_count(mode, value):
     if mode not in _COUNT_KEYS:
         return {"status": "error", "msg": "INVALID_MODE"}
     value = _clamp_count(mode, value)
-    KeyValue.save(_COUNT_KEYS[mode], value)
+    _kv_save(_COUNT_KEYS[mode], value)
     return {"status": "success", "count": value}
 
 
@@ -155,7 +174,7 @@ def save_threshold(name, value):
     value = int(value)
     if value < 5 or value > 95:
         return {"status": "error", "msg": "OUT_OF_RANGE"}
-    KeyValue.save(_THRESHOLD_KEYS[name], value)
+    _kv_save(_THRESHOLD_KEYS[name], value)
     return {"status": "success", "threshold": value}
 
 
@@ -190,14 +209,14 @@ def load_xiuluo_settings():
 def save_xiuluo_min(value):
     """保存修罗最少人数（夹取 3~5），返回操作结果。"""
     value = min(XIULUO_MIN_RANGE[1], max(XIULUO_MIN_RANGE[0], int(value)))
-    KeyValue.save(_XIULUO_MIN_KEY, value)
+    _kv_save(_XIULUO_MIN_KEY, value)
     return {"status": "success", "min_members": value}
 
 
 def save_xiuluo_races(races):
     """保存修罗必须有的种族（过滤非法项，按逗号串存储），返回操作结果。"""
     races = [r for r in (races or []) if r in XIULUO_RACES]
-    KeyValue.save(_XIULUO_RACES_KEY, ",".join(races))
+    _kv_save(_XIULUO_RACES_KEY, ",".join(races))
     return {"status": "success", "races": races}
 
 
@@ -217,7 +236,7 @@ def load_wubei_check_team():
 
 def save_wubei_check_team(on):
     """保存五倍检查队伍开关，返回操作结果。"""
-    KeyValue.save(_WUBEI_CHECK_TEAM_KEY, bool(on))
+    _kv_save(_WUBEI_CHECK_TEAM_KEY, bool(on))
     return {"status": "success"}
 
 
@@ -234,7 +253,7 @@ def load_wubei_shout_switch():
 
 def save_wubei_shout_switch(on):
     """保存五倍缺人自动喊话开关，返回操作结果。"""
-    KeyValue.save(_WUBEI_SHOUT_SWITCH_KEY, bool(on))
+    _kv_save(_WUBEI_SHOUT_SWITCH_KEY, bool(on))
     return {"status": "success"}
 
 
@@ -245,7 +264,7 @@ def load_wubei_hezi():
 
 def save_wubei_hezi(on):
     """保存五倍自动抢盒子开关，返回操作结果。"""
-    KeyValue.save(_WUBEI_HEZI_KEY, bool(on))
+    _kv_save(_WUBEI_HEZI_KEY, bool(on))
     return {"status": "success"}
 
 
@@ -260,7 +279,7 @@ def load_xiuluo_hezi():
 
 def save_xiuluo_hezi(on):
     """保存修罗自动抢盒子开关，返回操作结果。"""
-    KeyValue.save(_XIULUO_HEZI_KEY, bool(on))
+    _kv_save(_XIULUO_HEZI_KEY, bool(on))
     return {"status": "success"}
 
 
@@ -276,13 +295,13 @@ def load_high_perf():
     """读取高性能开关（首次默认开启；旧修罗高性能键自动迁移到通用键）。"""
     if KeyValue.get(_HIGH_PERF_KEY) is None \
             and KeyValue.get(_XIULUO_HIGH_PERF_KEY_OLD) is not None:
-        KeyValue.save(_HIGH_PERF_KEY, bool(KeyValue.get(_XIULUO_HIGH_PERF_KEY_OLD)))
+        _kv_save(_HIGH_PERF_KEY, bool(KeyValue.get(_XIULUO_HIGH_PERF_KEY_OLD)))
     return bool(KeyValue.get(_HIGH_PERF_KEY, True))
 
 
 def save_high_perf(on):
     """保存高性能开关，返回操作结果。"""
-    KeyValue.save(_HIGH_PERF_KEY, bool(on))
+    _kv_save(_HIGH_PERF_KEY, bool(on))
     return {"status": "success"}
 
 
@@ -299,7 +318,7 @@ def load_auto_refill():
 
 def save_auto_refill(on):
     """保存战斗结束自动补血量蓝量开关，返回操作结果。"""
-    KeyValue.save(_AUTO_REFILL_KEY, bool(on))
+    _kv_save(_AUTO_REFILL_KEY, bool(on))
     return {"status": "success"}
 
 
@@ -316,7 +335,7 @@ def load_clear_screen():
 
 def save_clear_screen(on):
     """保存启动清屏开关，返回操作结果。"""
-    KeyValue.save(_CLEAR_SCREEN_KEY, bool(on))
+    _kv_save(_CLEAR_SCREEN_KEY, bool(on))
     return {"status": "success"}
 
 
@@ -332,7 +351,7 @@ def load_xiuluo_check_team():
 
 def save_xiuluo_check_team(on):
     """保存修罗检查队伍开关，返回操作结果。"""
-    KeyValue.save(_XIULUO_CHECK_TEAM_KEY, bool(on))
+    _kv_save(_XIULUO_CHECK_TEAM_KEY, bool(on))
     return {"status": "success"}
 
 
@@ -350,7 +369,7 @@ def load_xiuluo_shout_switch():
 
 def save_xiuluo_shout_switch(on):
     """保存修罗缺人自动喊话开关，返回操作结果。"""
-    KeyValue.save(_XIULUO_SHOUT_SWITCH_KEY, bool(on))
+    _kv_save(_XIULUO_SHOUT_SWITCH_KEY, bool(on))
     return {"status": "success"}
 
 
@@ -367,7 +386,7 @@ def load_xiuluo_auto_wuyi():
 
 def save_xiuluo_auto_wuyi(on):
     """保存修罗自动巫医开关，返回操作结果。"""
-    KeyValue.save(_XIULUO_AUTO_WUYI_KEY, bool(on))
+    _kv_save(_XIULUO_AUTO_WUYI_KEY, bool(on))
     return {"status": "success"}
 
 
@@ -388,7 +407,7 @@ def save_xiuluo_wuyi_interval(value):
         return {"status": "error", "msg": "INVALID_INTERVAL"}
     if not (_WUYI_INTERVAL_MIN <= value <= _WUYI_INTERVAL_MAX):
         return {"status": "error", "msg": "OUT_OF_RANGE"}
-    KeyValue.save(_XIULUO_WUYI_INTERVAL_KEY, value)
+    _kv_save(_XIULUO_WUYI_INTERVAL_KEY, value)
     return {"status": "success", "interval": value}
 
 
@@ -419,7 +438,7 @@ def save_battle_action(target, value):
     options = CHAR_BATTLE_ACTIONS if target == "char" else BEAST_BATTLE_ACTIONS
     if value not in options:
         return {"status": "error", "msg": "INVALID_VALUE"}
-    KeyValue.save(_BATTLE_KEYS[target], value)
+    _kv_save(_BATTLE_KEYS[target], value)
     return {"status": "success"}
 
 
@@ -436,7 +455,7 @@ def load_auto_famen():
 
 def save_auto_famen(on):
     """保存自动使用法门开关，返回操作结果。"""
-    KeyValue.save(_AUTO_FAMEN_KEY, bool(on))
+    _kv_save(_AUTO_FAMEN_KEY, bool(on))
     return {"status": "success"}
 
 
@@ -703,7 +722,7 @@ class ControlWindow(WebWindow):
         当前会话授权状态不受影响（每次启动均在线验证，不依赖本机缓存
         之外的会话态）。
         """
-        KeyValue.remove("license_cache_no")
+        _kv_remove("license_cache_no")
         return {"status": "success",
                 "msg": "已解绑本地激活码，重启软件后输入新卡密激活"}
 
