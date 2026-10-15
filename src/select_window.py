@@ -25,12 +25,13 @@ class SelectWindow(WebWindow):
                  "size": f"{w.rect.width}×{w.rect.height}"} for w in self._wins]
 
     def choose(self, index):
-        """用户选择：记录所选标题并关闭窗口（show 阻塞返回该标题）。"""
+        """用户选择：记录所选下标并关闭窗口（show 阻塞返回该下标，
+        由调用方取窗口对象保存绑定——保存需要句柄+标题）。"""
         try:
-            title = self._wins[int(index)].title
+            self._wins[int(index)]
         except (IndexError, ValueError, TypeError):
             return {"status": "error", "msg": "INVALID_INDEX"}
-        self._return_value = title
+        self._return_value = int(index)
         self.close()
         return {"status": "success"}
 

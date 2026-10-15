@@ -92,9 +92,10 @@ def _ensure_window_binding():
 
     授权通过后、控制窗口创建前调用（webview 消息循环须独占一次，
     与控制窗口分属两次 start——同授权窗口路径）。绑定保存到
-    KeyValue（bound_window_id = 标题中的「（ID：xxx）」稳定标识），
-    find_main_window 优先返回绑定窗口（面板/任务子进程/悬浮层共用
-    同一查找接缝）；绑定窗口不存在时下次启动自动重新弹出。
+    KeyValue（bound_window_id = 句柄+账号 ID：句柄区分同账号多
+    窗口，ID 跨重启延续匹配），find_main_window 优先返回绑定窗口
+    （面板/任务子进程/悬浮层共用同一查找接缝）；绑定窗口不存在时
+    下次启动自动重新弹出。
     """
     from src.select_window import SelectWindow  # 弹框按需导入
     wins = game.list_main_windows()
@@ -104,11 +105,11 @@ def _ensure_window_binding():
         return  # 已有绑定且窗口存在
     log("[绑定] 检测到多个游戏窗口，弹出选择窗口", "SYS")
     sel = SelectWindow(wins)
-    title = sel.show(title="选择游戏窗口", block=True,
-                     width=560, height=max(220, 120 + 56 * len(wins)))
-    if title:
-        game.save_bound_window(title)
-        log(f"[绑定] 已绑定游戏窗口: {title}", "SYS")
+    idx = sel.show(title="选择游戏窗口", block=True,
+                   width=560, height=max(220, 120 + 56 * len(wins)))
+    if idx is not None:
+        game.save_bound_window(wins[idx])
+        log(f"[绑定] 已绑定游戏窗口: {wins[idx].title}", "SYS")
     else:
         log("[绑定] 未选择窗口，本次按自动选择运行", "WARN")
 

@@ -31,19 +31,30 @@ def list_main_windows():
 
 
 def bound_window_id():
-    """当前绑定的窗口标识（未绑定返回 None）。"""
+    """当前绑定的窗口标识（未绑定返回 None）。
+
+    格式（2026-10-15 起）：{"id": 标题中的「（ID：xxx）」片段,
+    "hwnd": 窗口句柄, "title": 绑定时的完整标题}——绑定语义为
+    「这个窗口的这个角色」：句柄区分同账号多窗口，ID 跨重启延续
+    匹配。旧版纯 ID 字符串兼容读取（按 ID 匹配）。
+    """
     return KeyValue.get(_BOUND_WINDOW_KEY, None)
 
 
-def save_bound_window(title):
-    """保存窗口绑定：优先提取标题中的账号 ID（稳定标识），无 ID 时存
-    完整标题（未登录窗口的兜底，更新版本后可能失效需重选）。"""
+def save_bound_window(win):
+    """保存窗口绑定：句柄 + 账号 ID（用户 2026-10-15 确认的绑定
+    语义）。无 ID 时（未登录窗口）ID 字段退完整标题。"""
+    title = win.title
     m = _ID_IN_TITLE_RE.search(title)
+    bid = f"（ID：{m.group(1)}）" if m else title
+    data = {"id": bid,
+            "hwnd": int(getattr(win, "hwnd", 0) or 0),
+            "title": title}
     # 保存前重读合并：任务子进程会写入运行时状态（摄妖香时间戳/
     # 任务进度等），KeyValue 整文件覆写会抹掉（同 control_window._kv_save）
     KeyValue._initialize()
     KeyValue._load_data()
-    KeyValue.save(_BOUND_WINDOW_KEY, f"（ID：{m.group(1)}）" if m else title)
+    KeyValue.save(_BOUND_WINDOW_KEY, data)
     return {"status": "success"}
 
 
@@ -56,13 +67,26 @@ def clear_bound_window():
 
 
 def find_bound_window():
-    """返回绑定的窗口（未绑定或已不存在时返回 None）。"""
-    bound = bound_window_id()
-    if not bound:
+    """返回绑定的窗口（未绑定或已不存在时返回 None）。
+
+    匹配顺序：句柄精确命中（会话内句柄稳定、同账号多窗口时唯一
+    区分）→ 账号 ID 命中标题（重启后句柄失效的延续匹配）。旧版
+    纯 ID 字符串绑定按 ID 匹配。
+    """
+    raw = bound_window_id()
+    if not raw:
         return None
-    for w in list_main_windows():
-        if bound in w.title:
-            return w
+    wins = list_main_windows()
+    bid = raw.get("id") if isinstance(raw, dict) else raw
+    bh = raw.get("hwnd") if isinstance(raw, dict) else None
+    if bh:
+        for w in wins:
+            if int(getattr(w, "hwnd", 0) or 0) == bh:
+                return w
+    if bid:
+        for w in wins:
+            if bid in w.title:
+                return w
     return None
 
 
