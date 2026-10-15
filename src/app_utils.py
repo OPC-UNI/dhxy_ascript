@@ -132,6 +132,32 @@ def human_click(win, x: int, y: int, button: str = "primary"):
         Mouse.click(button=button)
 
 
+def precise_click(win, x: int, y: int, times: int = 1, interval: float = 0.4,
+                  move_duration: float = None):
+    """精确点击：跳过拟人化落点抖动（±2px），支持原地连点（购买多件）。
+
+    全程持 _INPUT_LOCK（含点击间隔），与战斗/任务线程互斥；
+    move_duration=None 时按拟人化时长随机移动（human_move 同款）。
+
+    Args:
+        win: Window 对象（窗口相对坐标转屏幕坐标）
+        x: 窗口相对 X 坐标
+        y: 窗口相对 Y 坐标
+        times: 原地连点次数（每次间隔 interval 秒，落点不变）
+        interval: 连点间隔（秒）
+        move_duration: 移动耗时（秒），None 时随机 40~90 毫秒
+    """
+    with _INPUT_LOCK:
+        sx = win.rect.left + int(x)
+        sy = win.rect.top + int(y)
+        Mouse.mouse_move(sx, sy, move_duration=(
+            random.uniform(0.04, 0.09) if move_duration is None else move_duration))
+        for _ in range(int(times)):
+            Mouse.click(button="primary")
+            if interval:
+                time.sleep(interval)
+
+
 def move_away(win):
     """点击对话框选项后把鼠标移走（窗口左下角中性区域）。
 

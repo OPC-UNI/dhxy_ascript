@@ -111,11 +111,19 @@ def find_main_window():
 
 
 def read_login_tab(win):
-    """读取游戏主窗口的 TabItemControl 文本。
+    """读取当前登录角色名（未登录时返回"大话西游2经典版"，失败返回 None）。
 
-    该 Tab 对应登录用户：未登录时显示"大话西游2经典版"，登录后显示角色名。
-    读取失败返回 None。
+    优先解析窗口标题中的角色段（标题格式：... - 服务器 - 角色名（ID：账号），
+    切 Tab 换角色后角色段同步变化，多 Tab 下标题角色 == 选中 Tab）——直接读
+    TabItemControl 会返回 UIA 树序第一个 Tab，多 Tab 时可能不是当前角色。
+    标题无角色段（未登录/加载中）时回退读 TabItemControl 首个文本。
     """
+    try:
+        parts = (getattr(win, "title", "") or "").split(" - ")
+        if len(parts) >= 3 and "（ID：" in parts[-1]:
+            return parts[-1].split("（ID：")[0].strip()
+    except Exception:
+        pass
     try:
         item = Selector(win).type("TabItemControl").find()
         return item.name if item else None

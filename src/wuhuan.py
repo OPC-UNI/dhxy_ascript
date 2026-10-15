@@ -22,9 +22,7 @@
 import re
 import time
 
-from ascript.windows.hardware.mouse import Mouse
-
-from .app_utils import log, human_click, human_move, move_away, norm_text
+from .app_utils import log, human_click, precise_click, move_away, norm_text
 from . import app_utils  # 高性能模式共享设施（固定位置缓存点击）
 from . import bag  # 背包操作（储物格切换搜索）
 from . import map as game_map  # 地图操作（世界地图/小地图/位置识别）
@@ -208,10 +206,7 @@ def _buy_equipments(win):
     pt = game_map.find_template(win, FUZHUANGDIAN_XIANGLIAN_ICON)
     if pt is None:
         return False, "商店中未找到服装店项链"
-    human_move(win.rect.left + pt[0], win.rect.top + pt[1])
-    for _ in range(EQUIPMENT_COUNT):
-        Mouse.click(button="primary")
-        time.sleep(0.4)  # 两次点击间隔，避免被识别为双击
+    precise_click(win, pt[0], pt[1], times=EQUIPMENT_COUNT, interval=0.4)  # 0.4s 间隔避免被识别为双击
     log(f"[五环] 已点击项链 {EQUIPMENT_COUNT} 次", "SYS")
     # 点购买完成
     pt = game_map.find_template(win, GOUMAI_ICON)

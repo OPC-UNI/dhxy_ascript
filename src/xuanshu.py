@@ -23,11 +23,10 @@ import time
 
 import cv2
 import numpy as np
-from ascript.windows.hardware.mouse import Mouse
 from ascript.windows.hardware.keyboard import Keyboard  # Alt+C 降落（封印机关破解）
 from ascript.windows.window.Window import WindowCaptureFormat
 
-from .app_utils import log, human_click, move_away, norm_text
+from .app_utils import log, human_click, precise_click, move_away, norm_text
 from . import app_utils  # 高性能模式共享设施（固定位置缓存点击）
 from . import map as game_map  # 地图操作（世界地图/小地图/位置识别）
 from . import task_tracker  # 任务追踪面板操作
@@ -712,10 +711,8 @@ def _play_chuyijuebao(win, timeout=CHUYIJUEBAO_TIMEOUT):
         if tgt is None:
             time.sleep(CHUYIJUEBAO_CHECK_INTERVAL)
             continue
-        # 快速点击：杂气团块小且移动快，跳过拟人化弧线移动
-        Mouse.mouse_move(win.rect.left + tgt[0], win.rect.top + tgt[1],
-                         move_duration=0.02)
-        Mouse.click(button="primary")
+        # 快速点击：杂气团块小且移动快，跳过拟人化弧线移动与落点抖动
+        precise_click(win, tgt[0], tgt[1], move_duration=0.02)
         last_click_at[(tgt[0], tgt[1])] = now
         if len(last_click_at) > 60:
             last_click_at = {k: t for k, t in last_click_at.items()
