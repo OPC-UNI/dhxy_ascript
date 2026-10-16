@@ -170,7 +170,12 @@ def _spawn_helper():
     直接进入绘制循环）。
     """
     root = str(pathlib.Path.cwd())
-    if getattr(sys, "frozen", False):
+    # 冻结态判据：Nuitka 不设置 sys.frozen，__compiled__ 全局是唯一可靠
+    # 标志（同 main.py 打包路径引导；src 整包编译，本模块必有该全局）。
+    # 用 sys.frozen 判断在 exe 里恒为 False，会误走 -c 分支——编译后
+    # 二进制不支持 -c，绘制进程秒退，监督线程每 2 秒重启一次
+    # （CI 包实测累计 115 次）。
+    if "__compiled__" in globals():
         args = [sys.executable, "--overlay-helper"]
     else:
         code = ("import sys; sys.path.insert(0, {root!r}); "

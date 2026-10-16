@@ -35,6 +35,7 @@ from ascript.windows.system.key_value import KeyValue
 from ascript.windows.ui import WebWindow
 from src.log_window import LogWindow
 from . import game  # 游戏窗口查找（修罗回程验证用；game 不反向依赖本模块，可顶层导入）
+from . import app_utils  # KeyValue 合并读写（kv_save_merged/kv_remove_merged）
 
 # ---- 任务模式（UI 单选项，KeyValue 持久化，记住上次选择） ----
 TASK_MODES = ["五环", "客栈", "修罗", "五倍", "玄枢轶闻", "名望"]
@@ -80,17 +81,14 @@ def _kv_save(key, value):
     任务当天进度、清屏标记、高性能缓存），KeyValue 是整文件覆写——
     面板进程直接保存会用启动时的旧快照覆盖掉这些写入（实测 1 小时
     内吃两次摄妖香：五环用后时间戳被面板保存抹掉，修罗再吃）。
+    走 app_utils.kv_save_merged：锁内重读→改→写，旧快照不再参与。
     """
-    KeyValue._initialize()  # _load_data 依赖 _file_path（首次访问前写时未初始化）
-    KeyValue._load_data()
-    KeyValue.save(key, value)
+    app_utils.kv_save_merged(key, value)
 
 
 def _kv_remove(key):
     """KeyValue.remove 包装：移除前重读合并（同 _kv_save 理由）。"""
-    KeyValue._initialize()
-    KeyValue._load_data()
-    KeyValue.remove(key)
+    app_utils.kv_remove_merged(key)
 
 def save_task_mode(mode):
     """保存任务模式选择，返回操作结果。"""

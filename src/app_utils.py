@@ -1,4 +1,5 @@
 """通用工具：日志输出、拟人化鼠标操作。"""
+import json
 import os
 import pathlib
 import random
@@ -176,6 +177,49 @@ def norm_text(s):
     return re.sub(r"[^\w]", "", s)
 
 
+# ---- KeyValue 跨进程合并读写 ----
+# KeyValue 是整文件覆写的 JSON 存储，_data 每进程只在首次访问时从磁盘
+# 加载一次；库的 _load_data() 只返回文件内容、不更新 _data——保存前
+# 调用它是空操作。面板进程与任务子进程各自持有启动时的旧快照，任意
+# 一方直接 save 都会用旧快照抹掉对方的运行时写入（实测：五环用后
+# 摄妖香时间戳被面板保存抹掉，23 分钟后修罗再吃一次）。
+# 以下包装在锁内完成「重读→改→写」，把跨进程覆盖窗口缩到最小。
+def kv_save_merged(key, value):
+    """重读 config.json 后覆盖写入单键（防旧快照整文件覆写）。"""
+    KeyValue._initialize()
+    with KeyValue._lock:
+        KeyValue._data = KeyValue._load_data()
+        KeyValue._data[key] = value
+        _kv_commit_locked()
+
+
+def kv_update_merged(key, update):
+    """重读 config.json 后按回调改写单键（回调收到该键当前值，返回新值）。"""
+    KeyValue._initialize()
+    with KeyValue._lock:
+        KeyValue._data = KeyValue._load_data()
+        KeyValue._data[key] = update(KeyValue._data.get(key))
+        _kv_commit_locked()
+
+
+def kv_remove_merged(key):
+    """重读 config.json 后删除单键（不存在则不动文件）。"""
+    KeyValue._initialize()
+    with KeyValue._lock:
+        KeyValue._data = KeyValue._load_data()
+        if key in KeyValue._data:
+            del KeyValue._data[key]
+            _kv_commit_locked()
+
+
+def _kv_commit_locked():
+    """锁内写盘（格式同库的 _commit；外层已持 _lock，不能再调 _commit——
+    其内部会再次获取同一把非可重入锁导致死锁）。"""
+    KeyValue._file_path.write_text(
+        json.dumps(KeyValue._data, indent=4, ensure_ascii=False),
+        encoding="utf-8")
+
+
 # ---- 高性能模式共享设施（固定位置 UI 坐标缓存） ----
 # 各任务模块共用：任务进程启动时由 main.task_start 按通用设置置位；
 # 主进程（验证流程等）恒为 False，始终走识别路径。
@@ -190,15 +234,11 @@ _HIGH_PERF_CACHE_KEY = "high_perf_cache"
 
 
 def _persist_high_perf_cache():
-    """把固定位置缓存写入配置。
-
-    KeyValue 是整文件覆写：任务子进程保存前必须重读合并，否则会拿
-    启动时的旧快照覆盖面板进程运行中新保存的设置（实测风险点）。
-    """
+    """把固定位置缓存写入配置（kv_save_merged：重读合并，防任务子进程
+    用启动时的旧快照覆盖面板进程运行中新保存的设置）。"""
     try:
-        KeyValue._load_data()  # 合并面板进程的最新保存，防跨进程覆盖
-        KeyValue.save(_HIGH_PERF_CACHE_KEY,
-                      {k: list(v) for k, v in _fixed_pos_cache.items()})
+        kv_save_merged(_HIGH_PERF_CACHE_KEY,
+                       {k: list(v) for k, v in _fixed_pos_cache.items()})
     except Exception as e:
         log(f"[高性能] 缓存持久化失败: {e}", "WARN")
 
@@ -264,13 +304,10 @@ def _char_state_get(key, ckey, default=None):
 
 
 def _char_state_set(key, ckey, value):
-    """写入角色维度状态（保存前重读合并，防任务子进程整文件覆写
-    面板进程运行中保存的设置——同高性能缓存持久化的坑）。"""
+    """写入角色维度状态（kv_update_merged：保存前重读合并，防任务子进程
+    整文件覆写面板进程运行中保存的设置——同高性能缓存持久化的坑）。"""
     try:
-        KeyValue._load_data()  # 合并面板进程的最新保存
-        data = KeyValue.get(key, {}) or {}
-        data[ckey] = value
-        KeyValue.save(key, data)
+        kv_update_merged(key, lambda data: {**(data or {}), ckey: value})
     except Exception as e:
         log(f"[状态] {key} 持久化失败: {e}", "WARN")
 
@@ -315,15 +352,18 @@ def task_progress_add(win, mode, done):
     """记录该角色当天任务完成次数（done 为含本轮总数）。"""
     ckey = char_key(win)
     today = time.strftime("%Y-%m-%d")
-    try:
-        KeyValue._load_data()  # 合并面板进程的最新保存
-        data = KeyValue.get(_TASK_PROGRESS_KEY, {}) or {}
+
+    def _merge(data):
+        data = data or {}
         entry = data.get(ckey, {})
         if not isinstance(entry, dict) or entry.get("date") != today:
             entry = {"date": today, "modes": {}}
         entry.setdefault("modes", {})[mode] = int(done)
         data[ckey] = entry
-        KeyValue.save(_TASK_PROGRESS_KEY, data)
+        return data
+
+    try:
+        kv_update_merged(_TASK_PROGRESS_KEY, _merge)
     except Exception as e:
         log(f"[进度] {mode} 进度持久化失败: {e}", "WARN")
 

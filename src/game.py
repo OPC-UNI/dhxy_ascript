@@ -4,6 +4,7 @@ import re
 from ascript.windows.window import Window
 from ascript.windows.window.Selector import Selector
 from ascript.windows.system.key_value import KeyValue
+from . import app_utils  # KeyValue 合并读写（防覆写子进程运行时状态）
 
 # 目标游戏窗口标题
 GAME_TITLE = "大话西游2经典版"
@@ -52,17 +53,13 @@ def save_bound_window(win):
             "title": title}
     # 保存前重读合并：任务子进程会写入运行时状态（摄妖香时间戳/
     # 任务进度等），KeyValue 整文件覆写会抹掉（同 control_window._kv_save）
-    KeyValue._initialize()
-    KeyValue._load_data()
-    KeyValue.save(_BOUND_WINDOW_KEY, data)
+    app_utils.kv_save_merged(_BOUND_WINDOW_KEY, data)
     return {"status": "success"}
 
 
 def clear_bound_window():
     """解除窗口绑定（下次启动多开时重新弹框选择）。"""
-    KeyValue._initialize()
-    KeyValue._load_data()  # 同 save_bound_window：防覆写子进程运行时状态
-    KeyValue.remove(_BOUND_WINDOW_KEY)
+    app_utils.kv_remove_merged(_BOUND_WINDOW_KEY)  # 同 save_bound_window：防覆写子进程运行时状态
     return {"status": "success", "msg": "已解除窗口绑定，下次启动重新选择"}
 
 
