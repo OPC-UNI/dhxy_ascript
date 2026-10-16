@@ -34,24 +34,46 @@ OPTION_ROW_STEP = 18
 OPTION_X_OFFSET = 1
 
 
-def green_option_center(img_np, rect, opt_len, line_len):
+def green_option_center(img_np, rect, opt_len, line_len, target_center=None):
     """选项点击中心：全行绿字中心；OCR 行合并了相邻文字时（line_len
-    明显长于选项长度）按字符比例取行左部选项自身中心。
+    明显长于选项长度）按字符比例取选项自身中心。
 
     实测「玄枢轶闻我想领取通用玄宝」合并成一行，全行绿字中心 520
     偏离选项自身中心 470 点不中，且毒化高性能缓存（客栈/五环/修罗/
     玄枢轶闻共用的统一修正）。opt_len/line_len 建议传规范化后长度。
-    纵向合并（两个选项行堆叠成高框，如「接取客栈任务了解任务详情」，
-    实测偶现点错第二项）：高框时纵向同样按比例取上部选项自身中心，
-    全行绿字纵向中心会落到第二项上。
+
+    target_center：目标选项在合并行文本中的中心偏移（字符数）；None
+    按目标为首个选项处理（与旧行为一致）。目标不是首个选项时（如
+    「了解任务详情接取客栈任务」中取后者），旧实现仍取行左段会点到
+    相邻选项——按 target_center 在行内的比例取段才是目标本身。
+    纵向合并（两选项堆叠成高框）：<20 字选项绝不换行（用户 2026-10-16
+    确认），高框必为多选项堆叠，目标行 = 其在合并文本中的序位；
+    ≥20 字长选项可能折行，维持取上部选项中心的旧行为。
     """
     cx, cy = task_tracker.green_text_center(img_np, rect, prefer_underline=False)
     if line_len > opt_len + 2:
-        frac = min(opt_len / line_len, 1.0)
-        cx = rect[0] + int((rect[2] - rect[0]) * frac / 2)
+        center = opt_len / 2 if target_center is None else target_center
+        pos_frac = min(center / line_len, 1.0)
+        cx = rect[0] + int((rect[2] - rect[0]) * pos_frac)
         if rect[3] - rect[1] > 30:
-            cy = rect[1] + int((rect[3] - rect[1]) * frac / 2)
+            if opt_len < 20:
+                cy = rect[1] + int((rect[3] - rect[1]) * pos_frac)
+            else:
+                cy = rect[1] + int((rect[3] - rect[1])
+                                   * min(opt_len / line_len, 1.0) / 2)
     return cx, cy
+
+
+def _option_target_center(txt, text):
+    """目标选项在 OCR 行文本中的中心偏移（字符数），供 green_option_center
+    按比例取段：精确命中用子串位置；模糊命中（漏字/误读）用最长公共
+    块定位。"""
+    idx = txt.find(text)
+    if idx >= 0:
+        return idx + len(text) / 2
+    m = difflib.SequenceMatcher(None, txt, text).find_longest_match(
+        0, len(txt), 0, len(text))
+    return m.a + m.size / 2
 
 
 def _click_green_option_once(win, items, img_np, text, prefix=""):
@@ -63,18 +85,32 @@ def _click_green_option_once(win, items, img_np, text, prefix=""):
     prefix：日志前缀（如「客栈」「玄枢轶闻」）。
     """
     tag = f"[{prefix}] " if prefix else ""
+    exact = []
+    fuzzy = []
     for txt, rect, score in items:
-        if text in txt and score >= 0.55 and rect[0] >= task_tracker.PANEL_MAX_X \
-                and task_tracker.is_green_text(img_np, rect):
-            cx, cy = green_option_center(img_np, rect, len(text), len(txt))
-            human_click(win, cx, cy)
-            # 高性能：记录选项固定位置（按文案做键，各任务模块共用；
-            # 位置漂移时由本路径自然刷新）
-            app_utils.fixed_pos_set(f"option_{text}", win, cx, cy)
-            log(f"{tag}已点击对话框绿色选项「{txt}」@({cx},{cy})", "SYS")
-            move_away(win)  # 鼠标停留选项上会使其悬停变色，干扰后续绿字判定
-            return True
-    return False
+        if score < 0.55 or rect[0] < task_tracker.PANEL_MAX_X \
+                or not task_tracker.is_green_text(img_np, rect):
+            continue
+        if text in txt:
+            exact.append((txt, rect, _option_target_center(txt, text)))
+        elif _fuzzy_contains(txt, text, threshold=0.8):
+            # 行模糊匹配兜底：选项 OCR 常漏字/误读（实测「指明伤口一事」
+            # 读成「指明伤口一」、「指明绳结之事」读成「指明沉船」，精确
+            # 匹配全漏；同屏选项行序随机，只能按文本定位）。阈值 0.8
+            # 容忍 6 字选项漏 1~2 字，与相邻选项互串比 ≤0.5 不会误配
+            fuzzy.append((txt, rect, _option_target_center(txt, text)))
+    tgt = (exact or fuzzy)
+    if not tgt:
+        return False
+    txt, rect, center = tgt[0]
+    cx, cy = green_option_center(img_np, rect, len(text), len(txt), center)
+    human_click(win, cx, cy)
+    # 高性能：记录选项固定位置（按文案做键，各任务模块共用；
+    # 位置漂移时由本路径自然刷新）
+    app_utils.fixed_pos_set(f"option_{text}", win, cx, cy)
+    log(f"{tag}已点击对话框绿色选项「{txt}」@({cx},{cy})", "SYS")
+    move_away(win)  # 鼠标停留选项上会使其悬停变色，干扰后续绿字判定
+    return True
 
 
 def _click_dialog_option_by_index(win, items, dtxt, idx, prefix=""):

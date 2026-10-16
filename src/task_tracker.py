@@ -572,9 +572,17 @@ def track_task(win, title, text=None, green_index=0, retries=4, retry_interval=1
                 log(f"[任务追踪] 已点击「{title}」绿色文案（关键词兜底）: {txt} @ ({cx},{cy})", "SYS")
                 return True, f"已跟踪「{title}」（关键词兜底: {txt}）"
 
-        # 无绿字且内容为空：刚领取尚未渲染 → 重试
+        # 无绿字重试：内容为空（刚领取尚未渲染）或过渡帧（实测任务变化
+        # 瞬间面板重渲染，内容行置信度骤降且绿字判定失败——玄枢轶闻
+        # 变化确认跳出复用确认帧，0.8%/0.0% 置信度致整轮白失败）。
+        # 过渡帧重试限 2 次：真无绿字状态快速失败，由外层轮次重试兜底
         if attempt < retries and not content:
             log(f"[任务追踪] 「{title}」内容尚未渲染（第 {attempt + 1} 次），等待后重试", "INFO")
+            time.sleep(retry_interval)
+            continue
+        if content and attempt < 2:
+            log(f"[任务追踪] 「{title}」内容可见但无绿字（第 {attempt + 1} 次），"
+                f"可能为过渡帧，等待后重试", "INFO")
             time.sleep(retry_interval)
             continue
         break

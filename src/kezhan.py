@@ -43,7 +43,8 @@ from .dialog_common import (_click_green_option_once, _dialog_text_present,
                             _norm_dialog_present, close_scene_panels,
                             _click_screen_center, _fuzzy_contains,
                             DAILY_LIMIT_TEXT, DAILY_LIMIT_INFO,
-                            DIALOG_LOSE_TEXTS, green_option_center)
+                            DIALOG_LOSE_TEXTS, green_option_center,
+                            _option_target_center)
 
 # 任务追踪面板中的任务标题
 TASK_MODE = "客栈"       # 控制面板任务模式名（任务次数配置键）
@@ -1144,8 +1145,10 @@ def _click_green_option_fuzzy(win, items, img_np, text):
         ntxt = norm_text(txt)
         if nopt in ntxt or _fuzzy_contains(ntxt, nopt, threshold=0.8):
             if task_tracker.is_green_text(img_np, rect):
-                # 合并行按比例取选项自身中心（见 dialog_common.green_option_center）
-                cx, cy = green_option_center(img_np, rect, len(nopt), len(ntxt))
+                # 合并行按比例取选项自身中心（见 dialog_common.green_option_center；
+                # 目标在合并文本中的偏移定位，防止点到相邻选项）
+                cx, cy = green_option_center(img_np, rect, len(nopt), len(ntxt),
+                                             _option_target_center(ntxt, nopt))
                 human_click(win, cx, cy)
                 # 高性能：记录选项固定位置（按标准文案做键，漂移自愈）
                 app_utils.fixed_pos_set(f"option_{text}", win, cx, cy)
@@ -1418,6 +1421,27 @@ def _handle_dialog_options(win, items, img_np):
     return False
 
 
+def _click_option_text(win, text, timeout=3.0, interval=0.3):
+    """高性能快速链选项点击：对话框区域 OCR 轮询按文本定位点击。
+
+    不点缓存坐标——对话框选项行序会随机互换（实测「接取客栈任务/
+    了解任务详情」互调后缓存坐标点到相邻选项）；文本定位不受行序
+    影响。单区域 OCR 约 150ms，仍比全帧 OCR + has_task 轮询的识别
+    链快数秒。返回 (是否点击, 描述)。
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        img = win.capture(force_activate=False)
+        if img is None:
+            time.sleep(interval)
+            continue
+        items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
+        if _click_green_option_once(win, items, img_np, text, prefix="客栈"):
+            return True, f"已点击「{text}」"
+        time.sleep(interval)
+    return False, f"未找到选项「{text}」"
+
+
 def _claim_task(win, pt):
     """点击掌柜并领取客栈任务。返回 (是否成功, 描述)。
 
@@ -1432,25 +1456,24 @@ def _claim_task(win, pt):
     human_click(win, pt[0], pt[1])
     log(f"[客栈] 已点击掌柜 @({pt[0]},{pt[1]})", "SYS")
     # 高性能快速链：对话链固定（掌柜 → 「接取客栈任务」→ 瑶池对话
-    # 「广寒宫我熟悉的很，包在我身上！」），选项坐标齐备时按固定延时
-    # 连点（免 OCR 轮询，实测点击掌柜→点接取选项 6s+），任务进追踪即
-    # 成功；未成功回退识别对话链（瑶池对话不出现时第二击无害）
+    # 「广寒宫我熟悉的很，包在我身上！」），按固定延时 + 单区域 OCR
+    # 文本定位连点（免全帧 OCR 与 has_task 轮询，实测点击掌柜→点接取
+    # 选项 6s+），任务进追踪即成功；未成功回退识别对话链。
+    # 不点缓存坐标：选项行序会随机互换（实测「接取客栈任务/了解任务
+    # 详情」互调，缓存坐标点到相邻选项），文本定位不受行序影响
     if app_utils.high_perf_on():
-        pos_lingqu = app_utils.fixed_pos_get(f"option_{DIALOG_OPTION_LINGQU}", win)
-        pos_yaochi = app_utils.fixed_pos_get(f"option_{YAOCHI_DIALOG_OPTION}", win)
-        if pos_lingqu is not None and pos_yaochi is not None:
+        time.sleep(app_utils.HIGH_PERF_DIALOG_WAIT)
+        ok1, _ = _click_option_text(win, DIALOG_OPTION_LINGQU)
+        if ok1:
             time.sleep(app_utils.HIGH_PERF_DIALOG_WAIT)
-            human_click(win, pos_lingqu[0], pos_lingqu[1])
-            log(f"[客栈][高性能] 已按缓存坐标点击「{DIALOG_OPTION_LINGQU}」", "SYS")
-            time.sleep(app_utils.HIGH_PERF_DIALOG_WAIT)
-            human_click(win, pos_yaochi[0], pos_yaochi[1])
-            log(f"[客栈][高性能] 已按缓存坐标点击「{YAOCHI_DIALOG_OPTION}」", "SYS")
-            deadline = time.time() + 4
-            while time.time() < deadline:
-                if _has_task(win):
-                    return True, "已领取客栈任务（高性能）"
-                time.sleep(0.5)
-            log("[客栈][高性能] 缓存连点后任务未进追踪，回退识别对话链", "WARN")
+            ok2, _ = _click_option_text(win, YAOCHI_DIALOG_OPTION)
+            if ok2:
+                deadline = time.time() + 4
+                while time.time() < deadline:
+                    if _has_task(win):
+                        return True, "已领取客栈任务（高性能）"
+                    time.sleep(0.5)
+        log("[客栈][高性能] 快速链未完成，回退识别对话链", "WARN")
     # 每轮询：截图 1 次 + 限对话框区域 OCR（全帧 ~930ms → 区域 ~100-170ms，
     # 实测点击掌柜→点击「接取客栈任务」间隔 6s+，其中每轮 ~2.9s 全耗在
     # has_task 前置检查与全帧 OCR）；has_task（追踪区 OCR ~0.9s）限频到
