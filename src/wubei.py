@@ -172,25 +172,17 @@ _xj_need_move = False   # 点寻路链接后须位置先变化才允许再次用
 _xj_walk_from = None    # 寻路链接点击时的位置（验证移动起点）
 _xj_dialog_clicked_at = 0.0  # 白龙马对话框屏幕中间连点时间（冷却防连点）
 _xj_dismissed_at = 0.0       # 对话框关闭时间（此后窗口内找模板点击）
-# ---- 白龙马任务按钮点击失败恢复（用户 2026-10-11 实测）：
+# ---- 白龙马任务按钮点击失败 → 替换任务（用户 2026-10-17 决策）：
 # 关闭遮挡文字的点地点击会让人物走动，走远后点任务按钮无效（模板
-# 可见但点击不生效）；或模板始终被遮挡不出现。恢复：点寻路链接
-# 走回本处 → 到达后重点模板；多次恢复仍失败 → 重新领取替换任务
-# （ReplaceTaskError → run_loop 走领取分支） ----
+# 可见但点击不生效）；或模板始终被遮挡不出现。原「点寻路链接走回
+# 本处重点模板」恢复链已删除——使用显形镜后命中文案（白龙马对话框
+# 出现）但模板未命中/点击未生效，一律按失败处理：置替换标记并抛
+# ReplaceTaskError（run_loop 走领取分支重新领取替换任务） ----
 XIANXINGJING_BTN_WAIT = 5.0        # 点模板后等对话出现的判定窗（秒）
-XIANXINGJING_BTN_MISS_MAX = 6      # 对话框关闭后连续无模板轮询数（约 6s）→ 走回重试
-XIANXINGJING_RECOVER_MAX = 2       # 走回重点次数上限 → 重新领取替换任务
-XIANXINGJING_RECOVER_TIMEOUT = 30  # 单次恢复（走回+到达）总超时（秒）
+XIANXINGJING_BTN_MISS_MAX = 6      # 对话框关闭后连续无模板轮询数（约 6s）→ 失败替换
 _xj_btn_clicked_at = 0.0    # 模板点击时间（判定窗起点）
 _xj_btn_missing = 0         # 对话框关闭后连续无模板轮询数
-_xj_recover_tries = 0       # 走回重点次数
-_xj_recover_walk = False    # 恢复中：已点寻路链接等到达
-_xj_recover_from = None     # 走回点击时的位置（验证移动起点）
-_xj_recover_moved = False   # 走回移动已开始（位置变化 >5）
-_xj_recover_stable = 0      # 到达位置稳定计数
-_xj_recover_last = None     # 恢复期上次位置
-_xj_recover_start = 0.0     # 本次恢复起点时间
-_xj_need_replace = False    # 恢复失败：请求重新领取替换任务（run_loop 轮次开始消费）
+_xj_need_replace = False    # 按钮失败：请求重新领取替换任务（run_loop 轮次开始消费）
 # ---- extras 链帧复用（性能审计 A：违反规则 1「每轮询只截一帧」）----
 # follow 每轮询调 extras 链一次，链内各处理器原各自截窗（显形镜模板窗
 # ~170ms、phase0 位置 OCR ~150-200ms，均 2Hz）——同轮询共享一帧。
@@ -243,9 +235,7 @@ def _reset_xianxingjing_state():
     global _xj_phase, _xj_stable, _xj_last_pos, _xj_use_count, \
         _xj_grace_start, _xj_warned, _xj_missing, _xj_need_move, _xj_walk_from, \
         _xj_dialog_clicked_at, _xj_dismissed_at, _xj_quota_exhausted_at
-    global _xj_btn_clicked_at, _xj_btn_missing, _xj_recover_tries, _xj_recover_walk
-    global _xj_recover_from, _xj_recover_moved, _xj_recover_stable, _xj_recover_last
-    global _xj_recover_start, _xj_need_replace
+    global _xj_btn_clicked_at, _xj_btn_missing, _xj_need_replace
     _xj_phase = 0
     _xj_stable = 0
     _xj_last_pos = None
@@ -260,13 +250,6 @@ def _reset_xianxingjing_state():
     _xj_quota_exhausted_at = 0.0
     _xj_btn_clicked_at = 0.0
     _xj_btn_missing = 0
-    _xj_recover_tries = 0
-    _xj_recover_walk = False
-    _xj_recover_from = None
-    _xj_recover_moved = False
-    _xj_recover_stable = 0
-    _xj_recover_last = None
-    _xj_recover_start = 0.0
     _xj_need_replace = False
 
 # ---- 领取前队伍检查（检查队伍开关开启时；队伍固定 5 人） ----
@@ -1007,21 +990,6 @@ def _handle_huangpaoguai(win, items, img_np):
     return False
 
 
-def _clear_xj_recover():
-    """显形镜按钮恢复状态清理：战斗开始/开打选项点击 = 点模板已生效，
-    走回恢复失去意义（不清会继续累计 tries，误替换正常推进的任务——
-    审计 B2）。"""
-    global _xj_recover_walk, _xj_recover_tries, _xj_recover_from, _xj_recover_moved
-    global _xj_recover_stable, _xj_recover_last, _xj_recover_start
-    _xj_recover_walk = False
-    _xj_recover_tries = 0
-    _xj_recover_from = None
-    _xj_recover_moved = False
-    _xj_recover_stable = 0
-    _xj_recover_last = None
-    _xj_recover_start = 0.0
-
-
 def _xj_fight_dialog_open(items):
     """点模板后对话是否已打开：对话框区域出现开打选项文案
     （FIGHT_DIALOG_OPTIONS）即视为点击生效。NPC 名字标签等短行
@@ -1035,67 +1003,12 @@ def _xj_fight_dialog_open(items):
     return False
 
 
-def _start_xj_recover(win, items, img_np, now, reason):
-    """显形镜按钮失败恢复：点寻路链接走回本处，到达后重点模板。
-
-    本处对应的寻路链接簇：A（第 1 次用镜）点最左簇，B 点最右簇。
-    超过次数上限 → 置 _xj_need_replace 并抛 ReplaceTaskError
-    （重新领取替换任务）。返回是否已启动恢复。
-    """
-    global _xj_recover_tries, _xj_recover_walk, _xj_recover_from, \
-        _xj_recover_moved, _xj_recover_stable, _xj_recover_start, _xj_need_replace
-    if _xj_recover_tries >= XIANXINGJING_RECOVER_MAX:
-        _xj_need_replace = True
-        raise ReplaceTaskError(f"显形镜任务异常（{reason}，多次走回重试仍失败）")
-    pos = _xj_pos(win, items)  # 点击前读位置（移动验证起点，共享帧免截窗）
-    if not _click_xianxingjing_walk(win, items, img_np, first=_xj_use_count < 2):
-        log("[五倍] 显形镜：追踪面板未找到寻路链接，下轮询重试", "WARN")
-        return False
-    _xj_recover_tries += 1
-    _xj_recover_walk = True
-    _xj_recover_moved = False
-    _xj_recover_stable = 0
-    _xj_recover_from = pos
-    _xj_recover_start = now
-    log(f"[五倍] 显形镜：{reason}，已点寻路链接走回本处重试"
-        f"（第 {_xj_recover_tries}/{XIANXINGJING_RECOVER_MAX} 次）", "WARN")
-    return True
-
-
-def _xj_recover_poll(win, items, now):
-    """恢复中轮询：验证走回移动 → 到达（位置连续稳定）→ 重新打开
-    模板搜索窗口重点。超时放弃本轮恢复（计数保留）。"""
-    global _xj_recover_walk, _xj_recover_moved, _xj_recover_stable, _xj_recover_last
-    global _xj_dismissed_at, _xj_btn_missing
-    if now - _xj_recover_start > XIANXINGJING_RECOVER_TIMEOUT:
-        log("[五倍] 显形镜：走回恢复超时，放弃本轮重试", "WARN")
-        _xj_recover_walk = False
-        return
-    pos = _xj_pos(win, items)  # 共享帧免截窗（性能审计 A）
-    if pos is None:
-        return
-    if not _xj_recover_moved:
-        if _xj_recover_from is not None and (
-                abs(pos[1] - _xj_recover_from[1]) > 5
-                or abs(pos[2] - _xj_recover_from[2]) > 5):
-            _xj_recover_moved = True
-            _xj_recover_stable = 0
-        return
-    if _xj_recover_last is not None and abs(pos[1] - _xj_recover_last[1]) <= 3 \
-            and abs(pos[2] - _xj_recover_last[2]) <= 3:
-        _xj_recover_stable += 1
-    else:
-        _xj_recover_stable = 1
-    _xj_recover_last = pos
-    if _xj_recover_stable < XIANXINGJING_ARRIVE_POLLS:
-        return
-    # 已到达：重新打开模板搜索窗口重点（对话框文字若仍在，由主流程
-    # 关闭分支处理）
-    _xj_recover_walk = False
-    _xj_recover_stable = 0
-    _xj_btn_missing = 0
-    _xj_dismissed_at = now
-    log("[五倍] 显形镜：已走回本处（位置稳定），重新识别白龙马任务按钮", "SYS")
+def _fail_xj_replace(reason):
+    """显形镜按钮流程失败：置替换标记并抛 ReplaceTaskError
+    （run_loop 捕获后走领取分支重新领取替换任务）。"""
+    global _xj_need_replace
+    _xj_need_replace = True
+    raise ReplaceTaskError(f"显形镜任务异常（{reason}）")
 
 
 def _handle_xianxingjing(win, items, img_np):
@@ -1104,22 +1017,20 @@ def _handle_xianxingjing(win, items, img_np):
     开打选项（证明实力/消灭它）由 _handle_fight_dialog 处理。
     对话框持续存在时按 3 秒冷却重试。
 
-    点击失败恢复（用户 2026-10-11 实测）：关闭遮挡文字的点地点击会
-    让人物走动，走远后点任务按钮无效（模板可见但点击不生效）；或
-    模板始终被遮挡不出现。判定窗内对话未打开/模板连续缺失 → 点寻路
-    链接走回本处 → 到达后重点模板；超过 RECOVER_MAX 次 → 抛
-    ReplaceTaskError 重新领取替换任务。返回是否已处理。
+    失败处理（用户 2026-10-17 决策）：使用显形镜后命中文案但模板
+    未命中（模板被遮挡不出现/点地点击走远后点击无效）不再走回重试，
+    一律抛 ReplaceTaskError 重新领取替换任务。返回是否已处理。
     """
     global _xj_dialog_clicked_at, _xj_dismissed_at
-    global _xj_btn_clicked_at, _xj_btn_missing, _xj_recover_walk, _xj_recover_tries
+    global _xj_btn_clicked_at, _xj_btn_missing
     now = time.time()
     if battle_watch_in_battle():
         _xj_btn_clicked_at = 0.0  # 战斗中：判定窗冻结，战斗流程接管
-        _clear_xj_recover()  # 战斗开始 = 任务已推进：走回恢复失去意义
         return False
     if _dialog_text_present(items, XIANXINGJING_DIALOG_TEXT):
         # 白龙马对话框：点屏幕中间关闭遮挡文字（3s 冷却防连点；
-        # 点地点击可能让人物走动——走远由恢复机制兜底）
+        # 点地点击可能让人物走动——走远后模板点击无效，由失败
+        # 替换路径兜底）
         if now - _xj_dialog_clicked_at >= 3.0:
             _xj_dialog_clicked_at = now
             _click_screen_center(win, times=1, prefix="五倍")
@@ -1129,39 +1040,32 @@ def _handle_xianxingjing(win, items, img_np):
     # 判定窗：刚点过模板，等对话打开（开打选项出现即点击生效）
     if _xj_btn_clicked_at:
         if _xj_fight_dialog_open(items):
-            _xj_btn_clicked_at = 0.0  # 对话已打开：恢复状态复位
+            _xj_btn_clicked_at = 0.0  # 对话已打开：按钮流程结束
             _xj_btn_missing = 0
-            _xj_recover_tries = 0
             return False
         if now - _xj_btn_clicked_at < XIANXINGJING_BTN_WAIT:
             return False  # 窗内静默等待
-        # 判定窗超时：点击未生效（人物已走远）→ 走回恢复
-        _xj_btn_clicked_at = 0.0
-        if _start_xj_recover(win, items, img_np, now,
-                             "点击任务按钮未触发对话"):
-            return True
-        return False
+        # 判定窗超时：点击未生效（人物已走远）→ 失败替换任务。
+        # 不消费 btn_clicked_at：确认轮询守卫会吞 extras 异常（既有
+        # 契约），状态保留则下一轮询重抛，最终在正常轮询路径传播
+        _fail_xj_replace("点击任务按钮未触发对话")
     sig_panel = "".join(norm_text(t) for t, r, s in items
                         if s >= 0.55 and r[0] < task_tracker.PANEL_MAX_X)
     if XIANXINGJING_LINK_KEYWORD not in sig_panel:
-        # 非显形镜阶段：不计数不恢复（防其他任务误触发）
+        # 非显形镜阶段：不计数不判失败（防其他任务误触发）
         _xj_btn_missing = 0
-        return False
-    # 恢复中：等到达（阶段已结束时放弃）
-    if _xj_recover_walk:
-        _xj_recover_poll(win, items, now)
         return False
     # 开打对话已打开（如证明实力）：不找模板不计数，交由开打处理
     if _xj_fight_dialog_open(items):
         _xj_btn_missing = 0
         return False
     # 对话框已关闭：窗口内找模板点击；窗口过期后仍继续计数
-    # （连续缺失达上限即走回恢复）。共享帧上模板匹配（性能审计 A：
+    # （连续缺失达上限即失败替换）。共享帧上模板匹配（性能审计 A：
     # 原 find_template 自行截窗 ~170ms/轮询，改同帧 match_frame_np）。
     # 仅当白龙马对话框出现过并已关闭（_xj_dismissed_at 置位）才计数：
     # 用镜后对话框从未出现是 A→B 回退路径（跟踪处理器负责走下一处），
-    # 不存在任务按钮，走回重试无意义且与回退打架（实测 2026-10-12
-    # 15:39:19 用镜未出对话框却误触第 2 次走回）
+    # 不存在任务按钮，判失败会与回退打架（实测 2026-10-12 15:39:19
+    # 用镜未出对话框却误触第 2 次走回）
     if _xj_dismissed_at <= 0:
         return False
     pt = None
@@ -1179,10 +1083,9 @@ def _handle_xianxingjing(win, items, img_np):
         return True
     _xj_btn_missing += 1
     if _xj_btn_missing >= XIANXINGJING_BTN_MISS_MAX:
-        _xj_btn_missing = 0
-        if _start_xj_recover(win, items, img_np, now,
-                             "白龙马任务按钮未出现"):
-            return True
+        # 不消费计数：确认轮询守卫吞 extras 异常时下一轮询重抛，
+        # 最终在正常轮询路径传播（替换成功后状态复位清零）
+        _fail_xj_replace("白龙马任务按钮未出现")
     return False
 
 
@@ -1196,11 +1099,8 @@ def _handle_xianxingjing_track(win, items, img_np):
     global _xj_phase, _xj_stable, _xj_last_pos, _xj_use_count, \
         _xj_grace_start, _xj_warned, _xj_missing, _xj_need_move, _xj_walk_from, \
         _xj_quota_exhausted_at, _xj_need_replace
-    global _xj_recover_walk
     if battle_watch_in_battle():
         return False  # 战斗中：面板隐藏不可点链接（防宽限过期后战斗期空点）
-    if _xj_recover_walk:
-        return False  # 按钮点击恢复进行中：走回流程由 _handle_xianxingjing 独占
     sig = "".join(norm_text(t) for t, r, s in items
                   if s >= 0.55 and r[0] < task_tracker.PANEL_MAX_X)
     if XIANXINGJING_LINK_KEYWORD not in sig:
@@ -1306,7 +1206,6 @@ def _handle_fight_dialog(win, items, img_np):
                 human_click(win, cx, cy)
                 log(f"[五倍] 已点击开打选项「{txt}」进入战斗", "SYS")
                 _fight_via_kanda = True
-                _clear_xj_recover()  # 开打选项被点击 = 点模板已生效（审计 B2）
                 return True
     return False
 
