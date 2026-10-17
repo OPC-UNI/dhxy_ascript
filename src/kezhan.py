@@ -351,8 +351,8 @@ BUG_IDLE_END = 5.0                     # 连续无虫出现达到该时长视为
 CLAIM_CHAIN_TIMEOUT = 30             # 整条领取对话链（含接取与任务对话）的总超时（秒）
 # ---- 特殊任务步骤：前往洛阳城大理寺墙外（追踪文案出现时手动寻路） ----
 DALI_TRACK_TEXT = "前往洛阳城大理寺墙外附近"   # 任务追踪文案（出现即需手动寻路）
-DALI_MAP_CLICK_POS = (620, 317)               # 洛阳小地图上大理寺墙外的点击点（用户实测）
-DALI_TARGET_POS = (220, 195)                  # 到达目标（洛阳城坐标，±5 容差）
+DALI_MAP_CLICK_POS = (623, 317)               # 洛阳小地图上大理寺墙外的点击点（用户实测）
+DALI_TARGET_POS = (223, 195)                  # 到达目标（洛阳城坐标，±5 容差）
 DALI_ARRIVE_TIMEOUT = 120                     # 寻路等待超时（秒）
 DALI_REDO_INTERVAL = 15                       # 寻路完成后最短重做间隔（任务文案未更新时防重复点击）
 AWANG_ICON = "awang.png"                      # 阿旺 NPC 模板（图片后续提供）
@@ -578,13 +578,21 @@ def _find_awang_by_ocr(win):
 
 def _check_awang(win):
     """检查阿旺 NPC：先模板 awang.png，未命中时全屏 OCR 名字「阿旺」兜底；
-    找到则点击推进任务。返回 (是否成功, 描述)。
+    均未命中时按 Alt+C 降落（飞行状态地面 NPC 不可见，用户 2026-10-17
+    实测）后重试一轮；找到则点击推进任务。返回 (是否成功, 描述)。
     """
     pt = _find_awang(win)
     if pt is None:
         pt = _find_awang_by_ocr(win)
     if pt is None:
-        return False, "未找到阿旺（模板与 OCR 名字均未命中）"
+        log("[客栈] 未找到阿旺，按 Alt+C 降落后重试", "WARN")
+        Keyboard.key_hot("alt", "c")
+        time.sleep(1.5)  # 等待降落落地
+        pt = _find_awang(win)
+        if pt is None:
+            pt = _find_awang_by_ocr(win)
+    if pt is None:
+        return False, "未找到阿旺（模板与 OCR 名字均未命中，Alt+C 后重试仍失败）"
     human_click(win, pt[0], pt[1])
     log(f"[客栈] 已点击阿旺 @({pt[0]},{pt[1]})", "SYS")
     return True, "已点击阿旺"

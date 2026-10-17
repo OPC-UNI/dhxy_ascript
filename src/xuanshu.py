@@ -55,10 +55,12 @@ DIALOG_OPTIONS = ["注入玄蕴试试看"]
 JIANTIANPAN_TRACK_TEXT = "使用监天盘寻找石妖踪迹"  # 任务追踪触发文案
 JIANTIANPAN_WORLD_ICON = "shijie_huoyungebi.png"  # 世界地图「火云戈壁」标签模板
 JIANTIANPAN_MAP_CLICK_POS = (759, 435)            # 火云戈壁小地图点击点（寻路到目标附近）
-JIANTIANPAN_TARGET_POS = (183, 81)                # 目标坐标（火云戈壁）
+JIANTIANPAN_TARGET_POS = (180, 86)                # 目标坐标（火云戈壁）
 JIANTIANPAN_ARRIVE_TOLERANCE = 4                  # 到达容差（严格：仙药只在目标附近出现）
 JIANTIANPAN_ARRIVE_TIMEOUT = 90                   # 寻路等待超时（秒）
 JIANTIANPAN_ICON = "xuanshu_jiantianpan.png"      # 监天盘模板
+JIANTIANPAN_THRESHOLD = 0.65                      # 监天盘模板匹配阈值（实测渲染分数偏低，
+                                                  # 0.8 漏检——用户 2026-10-17 指定）
 JIANTIANPAN_CLICK_TIMEOUT = 10                    # 到达后等待监天盘出现的超时（秒）
 TANYAO_ICON = "xuanshu_tanyao.png"                # 探妖按钮模板（使用监天盘后出现，
                                                   # 用户素材 21.png，实测匹配 1.0）
@@ -262,11 +264,11 @@ def _wait_jiantianpan_arrive(win, timeout=JIANTIANPAN_ARRIVE_TIMEOUT):
     return False, "前往火云戈壁目标附近超时（严格容差未达成）"
 
 
-def _click_template_wait(win, icon, label, timeout):
+def _click_template_wait(win, icon, label, timeout, threshold=0.8):
     """轮询等待模板出现并点击。返回 (是否成功, 描述)。"""
     deadline = time.time() + timeout
     while time.time() < deadline:
-        pt = game_map.find_template(win, icon)
+        pt = game_map.find_template(win, icon, threshold=threshold)
         if pt is not None:
             human_click(win, pt[0], pt[1])
             log(f"[玄枢轶闻] 已点击「{label}」@({pt[0]},{pt[1]})", "SYS")
@@ -308,7 +310,9 @@ def _handle_jiantianpan(win, items, img_np):
             log(f"[玄枢轶闻] {info}", "WARN")
             return True
         log(f"[玄枢轶闻] {info}", "SYS")
-    ok, info = _click_template_wait(win, JIANTIANPAN_ICON, "监天盘", JIANTIANPAN_CLICK_TIMEOUT)
+    ok, info = _click_template_wait(win, JIANTIANPAN_ICON, "监天盘",
+                                    JIANTIANPAN_CLICK_TIMEOUT,
+                                    threshold=JIANTIANPAN_THRESHOLD)
     if not ok:
         log(f"[玄枢轶闻] {info}", "WARN")
         return True
