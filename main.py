@@ -117,15 +117,20 @@ def _ensure_window_binding():
 def _sheyaoxiang_watchdog(win):
     """摄妖香定时续用线程（任务子进程内 daemon 线程，随进程强杀终止）。
 
-    每分钟检查一次到期状态；到期时持全局输入锁执行完整使用流程
-    （与任务/战斗线程的点击互斥），成功后记录时间。战斗中同样
-    执行——物品栏战斗中可打开，用户要求不漏用。失败不记录时间，
-    下一分钟自动重试直到成功。
+    每分钟检查一次到期状态；到期时执行完整使用流程（与任务/战斗
+    线程的点击经全局输入锁互斥），成功后记录时间。失败不记录时间，
+    下一分钟自动重试直到成功。战斗中跳过——物品栏战斗中打不开
+    （实测 2026-10-18 第 71 场战斗期间三次点击背包按钮均未打开面板，
+    战斗 UI 覆盖按钮区），战斗结束后下一分钟轮询自然续用；
+    有效期 1 小时，延迟数分钟无害。
     """
     while True:
         time.sleep(60)
         try:
             if not app_utils.sheyaoxiang_due(win):
+                continue
+            if battle.is_in_battle(win):
+                log("[摄妖香] 定时续用: 战斗中跳过，等战斗结束后续用", "INFO")
                 continue
             # use_sheyaoxiang 内部整段持 _BAG_LOCK（与其他背包流程互斥），
             # 单次点击仍走 _INPUT_LOCK——不能在外层再包输入锁，否则与
@@ -244,6 +249,10 @@ def task_start():
         if logged_in and use_sheyaoxiang:
             if not app_utils.sheyaoxiang_due(main_win):
                 log("[摄妖香] 距上次使用不足 1 小时，跳过", "INFO")
+            elif battle.is_in_battle(main_win):
+                # 战斗中跳过：物品栏战斗中打不开（实测 2026-10-18），
+                # 由定时续用线程在战斗结束后补用
+                log("[摄妖香] 启动时处于战斗中，跳过本次使用，由定时续用补用", "INFO")
             else:
                 ok, info = bag.use_sheyaoxiang(main_win)
                 if ok:
@@ -252,7 +261,8 @@ def task_start():
                 else:
                     log(f"[摄妖香] {info}", "WARN")
         # 3.5 摄妖香定时续用：任务持续运行时每小时检查一次，到期自动
-        #     补用（战斗中同样可用——物品栏战斗中可打开，用户要求不漏用；
+        #     补用（战斗中跳过——物品栏战斗中打不开，实测 2026-10-18
+        #     第 71 场战斗期间三次点击均未打开背包；
         #     全局输入锁与任务/战斗线程互斥，不打断当前点击）
         if logged_in and use_sheyaoxiang:
             threading.Thread(
