@@ -473,6 +473,14 @@
                 </div>
                 <div class="group-hint">向游戏聊天发送一次喊话验证 Enter→输入→Enter 链路：五倍发固定内容「百次五倍来人，效率队」；修罗发按必须种族拼装的文案（如「百次修罗来人，效率队，来男人」）。发送后请查看游戏公屏是否出现消息。任务运行中不可验证。</div>
             </div>
+            <div class="group-box">
+                <div class="group-title">机关模板测试</div>
+                <div class="verify-row">
+                    <button id="btn-verify-jiguan" class="btn" onclick="verifyJiguan()">测试机关模板</button>
+                    <span id="jiguan-verify-result"></span>
+                </div>
+                <div class="group-hint">对当前游戏画面逐一测试黄/蓝/红三个机关模板，打印全帧最佳匹配度与位置日志（只读不点击，供阈值与模板校准）。请将游戏画面停在封印机关场景再测试；任务运行中也可测试。</div>
+            </div>
         </div>
     </div>
 
@@ -515,6 +523,8 @@
         const shoutVerifyResultEl = document.getElementById('shout-verify-result');
         const btnVerifyShoutXl = document.getElementById('btn-verify-shout-xl');
         const shoutXlVerifyResultEl = document.getElementById('shout-xl-verify-result');
+        const btnVerifyJiguan = document.getElementById('btn-verify-jiguan');
+        const jiguanVerifyResultEl = document.getElementById('jiguan-verify-result');
         const licenseStatusEl = document.getElementById('license-status');
         const licenseExpireEl = document.getElementById('license-expire');
         const btnUnbind = document.getElementById('btn-unbind');
@@ -1124,6 +1134,37 @@
             btnVerifyClearScreen.disabled = false;
             clearScreenVerifyResultEl.style.color = ok ? 'var(--accent)' : '#ff5f5f';
             clearScreenVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+        };
+
+        async function verifyJiguan() {
+            if (verifying) return;
+            verifying = true;
+            btnVerifyJiguan.disabled = true;
+            jiguanVerifyResultEl.style.color = 'var(--text)';
+            jiguanVerifyResultEl.innerText = '测试中...';
+            try {
+                const r = await callPython('verify_jiguan');
+                if (!r || r.status !== 'success') {
+                    jiguanVerifyResultEl.style.color = '#ff5f5f';
+                    jiguanVerifyResultEl.innerText = (r && r.msg) || '测试请求失败';
+                    verifying = false;
+                    btnVerifyJiguan.disabled = false;
+                }
+                // 成功：等待 Python 侧 onJiguanVerifyResult 回推最终结果
+            } catch (e) {
+                jiguanVerifyResultEl.style.color = '#ff5f5f';
+                jiguanVerifyResultEl.innerText = '测试请求异常';
+                verifying = false;
+                btnVerifyJiguan.disabled = false;
+            }
+        }
+
+        // Python 侧调用：机关模板测试结束回推结果
+        window.onJiguanVerifyResult = function (ok, info) {
+            verifying = false;
+            btnVerifyJiguan.disabled = false;
+            jiguanVerifyResultEl.style.color = ok ? 'var(--accent)' : '#ff5f5f';
+            jiguanVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
         };
 
         // Python 侧（任务状态联动）调用，用于同步页面显示

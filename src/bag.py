@@ -249,12 +249,33 @@ def use_sheyaoxiang(win):
         return _use_sheyaoxiang_inner(win)
 
 
+def _in_battle_any(win):
+    """战斗状态判定（摄妖香使用流程内）：watch 确认状态免费，覆盖
+    战斗 UI 被背包面板遮挡致单帧模板漏检；单帧模板检查覆盖刚开局、
+    watch 确认窗口尚未翻转的间隙（实测 2026-10-19 第 15 场战斗内
+    整段流程执行完——战斗中右键摄妖香不生效，却按成功标记重启
+    1 小时计时，形成空挡遇敌）。"""
+    from . import battle  # 函数内导入：bag→battle→team→dialog_common→bag 环
+    return battle.watch_in_battle() or battle.is_in_battle(win)
+
+
 def _use_sheyaoxiang_inner(win):
+    # 0. 使用前战斗检查：调用方入口检查与本检查之间可能进入战斗
+    #    （战斗开场动画期单帧判定会漏）
+    if _in_battle_any(win):
+        return False, "战斗中跳过（使用前检查），下轮询重试"
     # 1. 打开背包
     ok, info = open_bag(win)
     if not ok:
         return False, f"打开背包失败: {info}"
     log(f"[背包] 已打开（{info}）", "SYS")
+    # 1.5 开包后战斗检查：开包期间可能进入战斗（战斗 UI 的物品按钮
+    #     同样能开背包，实测开包成功于战斗进行中）；关包放弃，下轮询重试
+    if _in_battle_any(win):
+        ok2, info2 = close_bag(win)
+        if not ok2:
+            log(f"[背包] 战斗中跳过，关闭背包失败: {info2}", "WARN")
+        return False, "战斗中跳过（背包打开后检测到战斗），下轮询重试"
 
     # 2. 查找摄妖香（含储物格切换搜索）
     item, desc = find_sheyaoxiang_with_slots(win)
@@ -264,6 +285,13 @@ def _use_sheyaoxiang_inner(win):
         if not ok2:
             log(f"[背包] {info2}", "WARN")
         return False, desc
+    # 2.5 使用前最后检查：查找可能耗时数秒（储物格切换搜索），期间
+    #     可能进入战斗；右键前再确认一次，防战斗中误用
+    if _in_battle_any(win):
+        ok2, info2 = close_bag(win)
+        if not ok2:
+            log(f"[背包] 战斗中跳过，关闭背包失败: {info2}", "WARN")
+        return False, "战斗中跳过（右键使用前检测到战斗），下轮询重试"
 
     # 3. 右键使用
     log(f"[摄妖香] 背包中存在（{desc}，匹配度 {item.confidence:.2f}）", "SYS")

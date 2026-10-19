@@ -560,6 +560,7 @@ class ControlWindow(WebWindow):
         self.expose(self.verify_wubei_return)
         self.expose(self.verify_clear_screen)
         self.expose(self.verify_shout)
+        self.expose(self.verify_jiguan)
         self.expose(self.unbind_license)
         self.expose(self.get_env_info)
         self.expose(self.unbind_window)
@@ -1012,6 +1013,48 @@ class ControlWindow(WebWindow):
                 ok_js = "true" if ok else "false"
                 self.webview_instance.evaluate_js(
                     f"if(window.onClearScreenVerifyResult){{window.onClearScreenVerifyResult({ok_js}, {json.dumps(info)});}}")
+            except Exception:
+                pass
+
+    def verify_jiguan(self):
+        """高级设置-测试机关模板按钮：对当前画面逐一测试黄/蓝/红三个
+        机关模板，只读不点击（截图+全帧匹配），打印最佳匹配度与位置
+        日志供阈值/模板校准。只读操作不影响任务，任务运行中允许测试
+        （封印场景只在任务流程中出现）。
+        """
+        if self._verifying:
+            return {"status": "error", "msg": "验证进行中，请稍候"}
+        win = game.find_main_window()
+        if win is None:
+            return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
+        self._verifying = True
+        threading.Thread(target=self._run_jiguan_verify, args=(win,),
+                         daemon=True, name="jiguan-verify").start()
+        return {"status": "success",
+                "msg": "测试已开始：对当前画面测试三个机关模板，结果见日志"}
+
+    def _run_jiguan_verify(self, win):
+        """机关模板测试线程体：只读测试三个模板，结果回推页面与日志窗。"""
+        from . import xuanshu  # 延迟导入：与其余验证模块保持一致
+        try:
+            self.add_logs(["[验证] 开始测试机关模板（黄/蓝/红，只读不点击）..."])
+            ok, info = xuanshu.verify_jiguan_templates(win)
+        except Exception as e:
+            ok, info = False, f"验证异常: {e}"
+        try:
+            self.add_logs([f"[验证] 结果: {info}"])
+        except Exception:
+            pass
+        self._notify_jiguan_verify_result(ok, info)
+        self._verifying = False
+
+    def _notify_jiguan_verify_result(self, ok, info):
+        """机关模板测试结果回推页面（高级设置-机关模板测试行的结果文案）。"""
+        if self.webview_instance:
+            try:
+                ok_js = "true" if ok else "false"
+                self.webview_instance.evaluate_js(
+                    f"if(window.onJiguanVerifyResult){{window.onJiguanVerifyResult({ok_js}, {json.dumps(info)});}}")
             except Exception:
                 pass
 

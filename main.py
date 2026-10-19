@@ -121,16 +121,21 @@ def _sheyaoxiang_watchdog(win):
     线程的点击经全局输入锁互斥），成功后记录时间。失败不记录时间，
     下一分钟自动重试直到成功。战斗中跳过——物品栏战斗中打不开
     （实测 2026-10-18 第 71 场战斗期间三次点击背包按钮均未打开面板，
-    战斗 UI 覆盖按钮区），战斗结束后下一分钟轮询自然续用；
-    有效期 1 小时，延迟数分钟无害。
+    战斗 UI 覆盖按钮区）；跳过后续用重查间隔缩短为 10 秒，战斗链
+    结束后尽快补用，缩短无摄妖香走路的遇敌窗口。
+    有效期 1 小时，延迟数分钟无害。使用流程内部还有多处战斗检查
+    （bag.use_sheyaoxiang，watch 状态 + 单帧判定）：入口检查落在
+    战斗开场动画期会漏检，流程内检查兜底（实测 2026-10-19 第 15 场
+    战斗内整段流程执行完、摄妖香未生效却标记成功形成空挡遇敌）。
     """
     while True:
         time.sleep(60)
         try:
             if not app_utils.sheyaoxiang_due(win):
                 continue
-            if battle.is_in_battle(win):
-                log("[摄妖香] 定时续用: 战斗中跳过，等战斗结束后续用", "INFO")
+            if battle.watch_in_battle() or battle.is_in_battle(win):
+                log("[摄妖香] 定时续用: 战斗中跳过，10 秒后重查", "INFO")
+                time.sleep(10)
                 continue
             # use_sheyaoxiang 内部整段持 _BAG_LOCK（与其他背包流程互斥），
             # 单次点击仍走 _INPUT_LOCK——不能在外层再包输入锁，否则与
@@ -249,7 +254,7 @@ def task_start():
         if logged_in and use_sheyaoxiang:
             if not app_utils.sheyaoxiang_due(main_win):
                 log("[摄妖香] 距上次使用不足 1 小时，跳过", "INFO")
-            elif battle.is_in_battle(main_win):
+            elif battle.watch_in_battle() or battle.is_in_battle(main_win):
                 # 战斗中跳过：物品栏战斗中打不开（实测 2026-10-18），
                 # 由定时续用线程在战斗结束后补用
                 log("[摄妖香] 启动时处于战斗中，跳过本次使用，由定时续用补用", "INFO")

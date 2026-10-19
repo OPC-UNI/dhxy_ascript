@@ -19,6 +19,7 @@
 """
 import difflib
 import os
+import re
 import time
 
 import cv2
@@ -93,9 +94,9 @@ DIALOG_SKIP_TEXTS = {
     "少侠可是来替小乔试装的？": 4,
     "看少侠的表情，旺小乔不满意？": 4,
     "少侠的脸色有点难看": 4,
-    "留香阁的凤姑娘探听到了一些有关玄石的消息": 4,  # 领取后 NPC 追问（无选项，须屏幕中间推进）
+    # "留香阁的凤姑娘探听到了一些有关玄石的消息": 4,  # 领取后 NPC 追问（无选项，须屏幕中间推进）
     "看来要破解的便是此地的封印了。":1,
-    "怎么没有反应": 5,
+    "换一处再试试": 5,
 }
 # 特定对话框出现时点击的绿色选项（对话框文案 → 绿字选项）
 # 三题（口技/绳结/伤口）选项行序随机（实测同屏乱序），只能按文本
@@ -123,7 +124,8 @@ DIALOG_OPTION_MAP = {
     "略略略略略":"都别吵啦",
     "要么要钱，要么要命，你自己选吧":"看打",
     "少侠救我":"看我的",
-    "嘿，又来一个上当的，今日又能提前完成修行了！":"竟是一只石妖，看打！"
+    "嘿，又来一个上当的，今日又能提前完成修行了！":"竟是一只石妖，看打！",
+    "杜必赢使劲晃动杯中的三颗骰子":"轻轻摇晃"
 }
 # 选项无法被 OCR 识别（如单字选项「茶」）时，按序号点击：
 # 选项为问题文案下方的纵向列表，第 idx 项（对话框文案 → 序号）
@@ -141,8 +143,14 @@ JIGUAN_CLICK_ORDER = ("xuanshu_jiguanhuang.png",   # 点击顺序：黄→蓝→
                       "xuanshu_jiguanlan.png",
                       "xuanshu_jiguanhong.png")
 JIGUAN_CLICK_WAIT = 5        # 每次点击机关后等待（秒），随后检查任务追踪
-JIGUAN_FIND_TIMEOUT = 3     # 单个机关模板查找超时（秒，找不到跳过继续下一个）
-JIGUAN_THRESHOLD = 0.8       # 机关模板匹配阈值
+JIGUAN_FIND_TIMEOUT = 8     # 单个机关模板查找超时（秒，找不到跳过继续下一个；
+                            # 8s 覆盖角色短暂遮挡——遮挡帧低于阈值移，
+                            # 不点击，等遮挡移开后高分局命中；也吸收 Alt+C 降落动画）
+JIGUAN_THRESHOLD = 0.6       # 机关模板匹配阈值（2026-10-19 测试按钮实测：黄 0.94、
+                             # 红 0.88~1.0、蓝 0.62~0.68，角色遮挡时蓝掉到 0.54
+                             # 且最佳位置漂移为误匹配。取 0.6：蓝机关正常分可通过，
+                             # 遮挡帧 0.54 不点击——遮挡是瞬时的，靠加长查找窗口
+                             # 等其移开；失败时打全帧最佳匹配度日志供再校准）
 
 # 锄遗聚宝小游戏（点击「注入玄蕴试试看」后出现）
 CHUYIJUEBAO_ICON = "chuyijuebao.png"              # 主图（消失即结束；实测匹配 0.91）"
@@ -623,7 +631,14 @@ def _play_jiguan_puzzle(win, title):
                 break
             time.sleep(0.5)
         if pt is None:
-            log(f"[玄枢轶闻] 未找到机关 {icon}，跳过", "WARN")
+            # 诊断：记录全帧最佳匹配度与位置，区分「分数差一点」与
+            # 「模板/场景不符」（后者分数会远低于阈值，须换模板）
+            conf, (bx, by) = (0.0, (0, 0))
+            img = win.capture(force_activate=False)
+            if img is not None:
+                conf, (bx, by) = game_map.best_match_in(img, icon)
+            log(f"[玄枢轶闻] 未找到机关 {icon}，跳过"
+                f"（全帧最佳匹配度 {conf:.2f} @({bx},{by})）", "WARN")
             continue
         human_click(win, pt[0], pt[1])
         clicked += 1
@@ -632,6 +647,100 @@ def _play_jiguan_puzzle(win, title):
         if _task_done_or_changed(win, title, sig0):
             return True, f"封印破解完成（点击 {clicked} 个机关后任务追踪变化）"
     return clicked > 0, f"封印破解流程结束（点击 {clicked} 个机关，任务追踪未变化）"
+
+
+def verify_jiguan_templates(win):
+    """高级设置-测试机关模板按钮：对当前画面逐一测试三个机关模板，
+    打印全帧最佳匹配度与位置日志（只读不点击，供阈值/模板校准）。
+    返回 (是否成功, 描述)。
+    """
+    img = win.capture(force_activate=False)
+    if img is None:
+        log("[玄枢轶闻] 测试机关模板: 截图失败", "WARN")
+        return False, "截图失败"
+    for icon in JIGUAN_CLICK_ORDER:
+        conf, (x, y) = game_map.best_match_in(img, icon)
+        hit = conf >= JIGUAN_THRESHOLD
+        log(f"[玄枢轶闻] 测试机关模板 {icon}: 全帧最佳匹配度 {conf:.2f}"
+            f" @({x},{y}){'（≥阈值，任务会点击）' if hit else '（<阈值，任务不会点击）'}",
+            "SYS" if hit else "WARN")
+    return True, "三个模板已测试，结果见日志"
+
+
+# ---- 封印按序开启任务（花果山「先触南，再寻东，后破西」，2026-10-19 实测） ----
+# 三个可跟踪绿字（机关·东/南/西）嵌在描述行内、文案颜色恒不变，须按
+# 南→东→西 点击；每点完一处面板出现「第N处封印已开启」——进度信号。
+# green_order 不适用（关键词恒绿无法序进），用 progress_key（已开启
+# 计数）+ green_picker（按计数选关键词、行内字符比例定位点击）实现；
+# 回调在非本任务阶段自门控不介入（progress_key 返回 None、picker 返回
+# None 回退 track_task 行级选择）。
+JIGUAN_LINK_ORDER = ("南", "东", "西")   # 点击顺序（面板提示原文：先触南，再寻东，后破西）
+JIGUAN_PROGRESS_RE = re.compile(r"第\s*([一二三四五1-5])\s*处\s*封印\s*已\s*开启")
+_JIGUAN_ORD = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5}
+
+
+def _jiguan_link_count(items):
+    """面板「第N处封印已开启」的最大序数（无则 None）。"""
+    best = None
+    for txt, rect, score in items:
+        if score < 0.55 or rect[0] >= task_tracker.PANEL_MAX_X:
+            continue
+        for m in JIGUAN_PROGRESS_RE.finditer(txt):
+            n = _JIGUAN_ORD.get(m.group(1))
+            if n is None and m.group(1).isdigit():
+                n = int(m.group(1))
+            if n is not None and (best is None or n > best):
+                best = n
+    return best
+
+
+def _jiguan_link_stage(items, img_np):
+    """是否处于封印按序开启阶段：面板存在含「机关」的绿字行
+    （描述行绿字占比实测 8~9%，提示行无绿字）。"""
+    for txt, rect, score in items:
+        if score < 0.55 or rect[0] >= task_tracker.PANEL_MAX_X:
+            continue
+        if "机关" in txt and task_tracker.is_green_text(img_np, rect):
+            return True
+    return False
+
+
+def _jiguan_link_progress(items, img_np):
+    """封印按序开启进度键：已开启计数；阶段内未开为 0（与点击前
+    基线一致，点后 1/2/3 变化即推进），阶段外 None（交由默认
+    文本签名驱动）。"""
+    n = _jiguan_link_count(items)
+    if n is not None:
+        return str(n)
+    return "0" if _jiguan_link_stage(items, img_np) else None
+
+
+def _jiguan_link_picker(items, img_np):
+    """按已开启计数选下一个关键词（南→东→西）并在所在绿字行内按
+    字符比例定位点击坐标（行内可含多个关键词，如「·南、机关·西」，
+    用原始文本字符位置区分；提示行无绿字被排除）。计数用尽（≥3）
+    或未命中返回 None，回退 track_task 行级选择。"""
+    n = _jiguan_link_count(items)
+    if n is None:
+        if not _jiguan_link_stage(items, img_np):
+            return None  # 非封印阶段不介入（防其他任务绿字行含南/东/西误选）
+        n = 0
+    if n >= len(JIGUAN_LINK_ORDER):
+        return None
+    kw = JIGUAN_LINK_ORDER[n]
+    for txt, rect, score in items:
+        if score < 0.55 or rect[0] >= task_tracker.PANEL_MAX_X:
+            continue
+        if kw not in txt:
+            continue
+        if not task_tracker.is_green_text(img_np, rect):
+            continue  # 提示行等非链接行的同字忽略
+        idx = txt.find(kw)
+        frac = (idx + len(kw) / 2) / len(txt)
+        cx = rect[0] + int((rect[2] - rect[0]) * frac)
+        cy = (rect[1] + rect[3]) // 2
+        return cx, cy
+    return None
 
 
 def _play_chuyijuebao(win, timeout=CHUYIJUEBAO_TIMEOUT):
@@ -1181,7 +1290,9 @@ def run_cycle(win):
         return "fail", "战斗中，跳过本轮（等待战斗结束）"
 
     if task_tracker.has_task(win, TASK_TITLE):
-        ok, info = follow_task(win, extra_dialog_handler=_handle_jiantianpan)
+        ok, info = follow_task(win, extra_dialog_handler=_handle_jiantianpan,
+                               progress_key=_jiguan_link_progress,
+                               green_picker=_jiguan_link_picker)
         return ("done", info) if ok else ("fail", info)
 
     # 没有任务 → 寻路到任务位置并领取任务
@@ -1191,7 +1302,9 @@ def run_cycle(win):
 
     # 领取成功：紧接着跟踪任务，不等轮次间隔；复用领取校验的 OCR 结果
     ok, info = follow_task(win, first_items=pre_items,
-                           extra_dialog_handler=_handle_jiantianpan)
+                           extra_dialog_handler=_handle_jiantianpan,
+                           progress_key=_jiguan_link_progress,
+                           green_picker=_jiguan_link_picker)
     return ("done", info) if ok else ("fail", info)
 
 

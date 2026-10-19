@@ -1183,6 +1183,28 @@ def _handle_xianxingjing_track(win, items, img_np):
     return False
 
 
+_fight_fb_last_at = 0.0  # 2x 放大重识别冷却（防无选项对话框每轮询白耗 OCR）
+
+
+def _find_fight_option(items, img_np):
+    """在 OCR 行中查找开打选项（FIGHT_DIALOG_OPTIONS 逐一匹配），
+    返回 (点击坐标, 文案) 或 (None, None)。
+
+    去标点后子串匹配；限定对话框区域（x≥PANEL_MAX_X）且为绿字行，
+    避免误点追踪面板的绿字链接；合并行按比例取选项自身中心。
+    """
+    for option in FIGHT_DIALOG_OPTIONS:
+        needle = norm_text(option)
+        for txt, rect, score in items:
+            if score >= 0.55 and needle in norm_text(txt) \
+                    and rect[0] >= task_tracker.PANEL_MAX_X \
+                    and task_tracker.is_green_text(img_np, rect):
+                # 合并行按比例取选项自身中心（见 dialog_common.green_option_center）
+                return green_option_center(img_np, rect, len(needle),
+                                           len(norm_text(txt))), txt
+    return None, None
+
+
 def _handle_fight_dialog(win, items, img_np):
     """对话开打：跟踪期间出现对话 → 点击绿色选项进入战斗。
 
@@ -1191,23 +1213,40 @@ def _handle_fight_dialog(win, items, img_np):
     即标记本轮战斗由对话开打进入（战后据此决定是否返程）。
     OCR 对标点误读常见，去标点后按子串匹配；限定对话框区域
     （x≥PANEL_MAX_X），避免误点追踪面板的绿字链接。
+    选项字小（实测波月洞「消灭它」字高仅 14px，区域 OCR 原尺寸
+    漏检致对话卡住不点，2026-10-19）时兜底：对话框区有故事行
+    （≥120px 宽非绿文本）才尝试，复用本轮询帧 2 倍放大重识别一次
+    （同修罗/巫医处理，实测放大后选项 1.00 命中），5s 冷却防无
+    选项对话框每轮询白耗 OCR。
     返回是否已处理。
     """
-    global _fight_via_kanda
-    for option in FIGHT_DIALOG_OPTIONS:
-        needle = norm_text(option)
-        for txt, rect, score in items:
-            if score >= 0.55 and needle in norm_text(txt) \
-                    and rect[0] >= task_tracker.PANEL_MAX_X \
-                    and task_tracker.is_green_text(img_np, rect):
-                # 合并行按比例取选项自身中心（见 dialog_common.green_option_center）
-                cx, cy = green_option_center(img_np, rect, len(needle),
-                                             len(norm_text(txt)))
-                human_click(win, cx, cy)
-                log(f"[五倍] 已点击开打选项「{txt}」进入战斗", "SYS")
-                _fight_via_kanda = True
-                return True
-    return False
+    global _fight_via_kanda, _fight_fb_last_at
+    pt, txt = _find_fight_option(items, img_np)
+    via_retry = False
+    if pt is None:
+        has_story = any(s >= 0.55 and r[0] >= task_tracker.PANEL_MAX_X
+                        and r[2] - r[0] >= 120
+                        and not task_tracker.is_green_text(img_np, r)
+                        for t, r, s in items)
+        now = time.time()
+        if has_story and now - _fight_fb_last_at >= 5.0:
+            _fight_fb_last_at = now
+            l, t, r, b = task_tracker.DIALOG_REGION
+            crop = cv2.resize(img_np[t:b, l:r], ((r - l) * 2, (b - t) * 2),
+                              interpolation=cv2.INTER_LANCZOS4)
+            items2, _ = game_map.ocr_image(crop)
+            mapped = [(txt2, [l + rect[0] // 2, t + rect[1] // 2,
+                              l + rect[2] // 2, t + rect[3] // 2], score)
+                      for txt2, rect, score in items2]
+            pt, txt = _find_fight_option(mapped, img_np)
+            via_retry = pt is not None
+    if pt is None:
+        return False
+    human_click(win, pt[0], pt[1])
+    log(f"[五倍] 已点击开打选项「{txt}」进入战斗"
+        + ("（2x 放大重识别）" if via_retry else ""), "SYS")
+    _fight_via_kanda = True
+    return True
 
 
 def _handle_follow_extras(win, items, img_np):
