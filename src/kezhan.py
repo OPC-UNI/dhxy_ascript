@@ -205,7 +205,13 @@ DIALOG_OPTION_MAP = {
     "嗯……天机玄奥，非尔所能与闻。少侠且回罢！":"这……好吧。",
     "城南王秀才的夫人上月失足落水，谁知头七过后，魂魄夜夜归来纠缠。如今":"人鬼殊途，强留无益。我这就去劝解。",
     "谁都不能阻止我们二人的团聚！":"怎么一言不合就动手啊？",
-    "阿娟！你何必执着于此……为何不愿去转世投胎……":"唉"
+    "阿娟！你何必执着于此……为何不愿去转世投胎……":"唉",
+    "这个嘛……因果循环，皆有其时。少侠且先去送这锦盒，莫要误了时辰。":"我早晚要弄清楚你的身份，等着瞧吧！",
+    "少侠将锦盒置于西侧玉案即可。":"将锦盒放到西侧玉案上",
+    "有些事，知道的多了反而对自己没有好处，少侠切记。":"你说啥是啥吧，告辞！",
+    "宝象国近日来了个叫阿拉普的乐师，整日鼓吹西域音律冠绝天下，还放话我":"西域乐师也敢在我大唐放肆？这便去会会他。",
+    "不瞒少侠，我三岁便能辨八音，五岁可奏《婆罗门曲》。少侠若是不信，不":"来吧，我还怕了你不成？",
+    "嘿嘿，若少侠不服，我便让你一步，今日算是咱俩打个平手，日后再决胜负":"日后等你把吹牛的功夫分一半到琴艺上再说，告辞。"
 
 }
 # 需要点击屏幕中间跳过的对话框文案 → 点击次数（出现则连点屏幕中间推进
@@ -214,6 +220,9 @@ DIALOG_OPTION_MAP = {
 # 遇到无选项的对话在此追加
 DIALOG_SKIP_TEXTS = {
     "少侠来得正及时！这月华霜蕊灵气充盈，正是宴上所需": 4,
+    "你就是那个放话我大唐无人通晓音律之道的西域乐师？": 5,
+    "音律之道，首重五音十二律，宫商角徵羽各安其位。我游历大唐数月，尚未":2,
+    "少侠技艺确实令人耳目一新！不过若论对曲谱音律的领悟，恐怕还稍逊在下":2,
     "附近的妖邪已被我清理干净了。": 4,
     "少侠可是受客栈所托，前往女儿国送货的？":2,
     "找到了！这宝箱藏得如此隐秘……呃，里面怎么只有一张字条？":2,
@@ -223,6 +232,7 @@ DIALOG_SKIP_TEXTS = {
     "少侠来此有什么事吗？":1,
     "少侠可曾探得什么线索？":4,
     "十年寒窗苦，一朝付火海！我不甘心！便是做鬼我也要考上功名！":2,
+    "少侠来得正好，此乃玉帝特命老夫在人间寻的七宝琉璃盏碎片，如今总算集":2,
     "要不要请在场各位一同验看你的骰盅？":2,
     "莫要过来": 4,
     "你怎么也跟过来": 4,
@@ -244,6 +254,7 @@ DIALOG_SKIP_TEXTS = {
     "你是何人？":4,
     "少侠来的正好":1,
     "恭喜少侠通过考验！来来来一一金指针停何处，福气便落谁家！":2,
+    "少侠眼中似有疑惑，然天机如棋局，未到落子之时，还是不要过多探寻为好":2,
     "哎呦！正是此物！":6,
     "世间皆负我……人人都欺我……": 5,
     "要不要请在场各位一同验看你的骰盅？":1,
@@ -303,7 +314,10 @@ QIYU_DIALOG_TEXTS = ["阴风骤起",   # 第一幕：妖僧现身（三选项 �
                      "那疤脸醉汉怀中",
                      "客人打赏的钱物转增与你",
                      "掌中凝聚真力向那翻涌的血光",
-                     "王秀才从恐惧中恢复"
+                     "王秀才从恐惧中恢复",
+                     "天机难测",
+                     "立即离开凌霄殿",
+                     "多了一个锦囊"
                      ]
 # ---- 答题致富问答题（多星智；选项为纵向排列的单字，OCR 会把整列
 #      合并成一条竖框——实测「稻麦瓜」识别为一个高矩形）----
@@ -322,6 +336,7 @@ TAOZHI_ICON = "kezhan_taozhi.png"  # 桃枝物品（给与面板检索）
 YIHELIPIN_ICON = "kezhan_yihelipin.png"  # 一盒礼品物品（给与面板检索）
 JIGUANCAILIAO_ICON = "kezhan_jiguancailiao.png"
 MIXIN_ICON = "kezhan_mixin.png"
+HUALIDEJINHE_ICON = "kezhan_hualidejinhe.png"
 GIVE_TITLE_ICON = "give_title.png"  # 给与面板标志（横幅「给与」静态标题区）
 # 旧 GIVE_ICON=give.png（32x213 整条横幅）含随物品类别变化的动态区，实测
 # 苏巧儿面板 0.906 → 桃枝面板 0.665 低于 0.8 阈值，面板检查会误判未打开；
@@ -340,6 +355,7 @@ GIVE_NPC_ITEMS = {
     "女儿国": (YIHELIPIN_ICON, "一盒礼品"),
     "木匠": (JIGUANCAILIAO_ICON, "机关材料"),
     "太上老君": (MIXIN_ICON, "密信"),
+    "玉皇大帝": (HUALIDEJINHE_ICON, "华丽的锦盒"),
 }
 GIVE_DEFAULT_ITEM = (GAODENGSHICAI_ICON, "高等食材")  # NPC 行识别失败时的兜底物品
 # ---- 钱老四给与（问答斗智任务：面板无物品检索，输入 1000 银两参加活动） ----
@@ -365,8 +381,18 @@ DALI_TARGET_POS = (223, 195)                  # 到达目标（洛阳城坐标�
 DALI_ARRIVE_TIMEOUT = 120                     # 寻路等待超时（秒）
 DALI_REDO_INTERVAL = 15                       # 寻路完成后最短重做间隔（任务文案未更新时防重复点击）
 AWANG_ICON = "awang.png"                      # 阿旺 NPC 模板（图片后续提供）
+AWANG_FALLBACK_MAP_CLICK_POS = (548, 297)     # 兜底：洛阳小地图点击点（阿旺实际出现点，
+                                              # 用户 2026-10-20 实测）
+AWANG_FALLBACK_TARGET_POS = (180, 207)        # 兜底到达目标（洛阳城坐标，±5 容差）
+AWANG_FALLBACK_ARRIVE_TIMEOUT = 120           # 兜底寻路等待超时（秒）
 AWANG_CLICK_OFFSET = 40                       # OCR 识别到名字标签后，点击目标在其正上方
                                               # 约 40px（用户实测：点文字本身无效）
+AWANG_APPROACH_OFFSET = 60                    # 走近点击：名字标签/模板中心左侧 30px——
+                                              # 距离过远时直接点交互点无效（实测 2026-10-20
+                                              # 点击后任务追踪不变），先点左侧让角色走过去
+                                              # （点在下方角色会站到 NPC 上挡住）
+AWANG_ARRIVE_POLLS = 2                        # 走近寻路结束判定：位置连续不变读数次数（1s 间隔）
+AWANG_ARRIVE_TIMEOUT = 20                     # 走近等待超时（秒；点击远处 NPC 走过去约 10-15s）
 # NPC 名字 OCR 兜底查找的排除区（任务追踪面板；面板内文案如「找阿旺。」不可点）
 TRACK_PANEL_REGION = (0, 200, 260, 600)
 # 任务追踪面板顶部小区域（标题行；客栈任务恒为面板首个任务，拍虫时快速检查用）
@@ -562,11 +588,12 @@ def _find_awang(win):
 
 
 def _find_awang_by_ocr(win):
-    """全屏 OCR 查找 NPC 名字「阿旺」，返回点击坐标或 None。
+    """全屏 OCR 查找 NPC 名字「阿旺」，返回名字标签中心坐标或 None。
 
     只匹配短行（≤4 字）含「阿旺」，排除任务追踪面板区域（0,200-260,600），
-    避免误点追踪文案（如「找阿旺。」）。点击目标在名字标签正上方约
-    40px（用户实测：点文字本身无效）。
+    避免误点追踪文案（如「找阿旺。」）。点击目标由 _check_awang 换算：
+    交互点=名字上方约 40px（用户实测：点文字本身无效）、走近点=名字
+    左侧 30px（点在下方角色会站到 NPC 上挡住）。
     """
     img = win.capture(force_activate=False)
     if img is None:
@@ -579,29 +606,75 @@ def _find_awang_by_ocr(win):
         if rect[0] < pr and pt <= rect[1] <= pb:
             continue  # 任务追踪面板内的文案，跳过
         cx = (rect[0] + rect[2]) // 2
-        cy = (rect[1] + rect[3]) // 2 - AWANG_CLICK_OFFSET
+        cy = (rect[1] + rect[3]) // 2
         log(f"[客栈] OCR 识别到 NPC 名字「{txt}」@({cx},{cy})", "SYS")
         return cx, cy
     return None
 
 
+def _wait_awang_arrival(win):
+    """等待走近阿旺的寻路结束：位置连续 AWANG_ARRIVE_POLLS 次读数不变
+    （1s 间隔）即到达；位置连续识别失败 3 次提前结束（不再空等，
+    直接尝试交互点）；超时兜底。"""
+    deadline = time.time() + AWANG_ARRIVE_TIMEOUT
+    last = None
+    unchanged = 0
+    fails = 0
+    while time.time() < deadline:
+        time.sleep(1.0)
+        pos = game_map.read_map_position(win)
+        if pos is None:
+            fails += 1
+            if fails >= 3:
+                return
+            continue
+        fails = 0
+        if pos == last:
+            unchanged += 1
+            if unchanged >= AWANG_ARRIVE_POLLS:
+                return
+        else:
+            unchanged = 0
+        last = pos
+
+
 def _check_awang(win):
     """检查阿旺 NPC：先模板 awang.png，未命中时全屏 OCR 名字「阿旺」兜底；
     均未命中时按 Alt+C 降落（飞行状态地面 NPC 不可见，用户 2026-10-17
-    实测）后重试一轮；找到则点击推进任务。返回 (是否成功, 描述)。
+    实测）后重试一轮。找到后两段点击：先点名字标签左侧 30px 走近
+    （距离过远时直接点交互点无效——实测 2026-10-20 点击后任务追踪
+    不变；点在下方角色会站到 NPC 上挡住），等寻路结束（位置稳定）后
+    重新定位再点交互点（固定 1s 等待在距离远时点不到，反复点击还会
+    打断寻路走不到位置）。返回 (是否成功, 描述)。
     """
-    pt = _find_awang(win)
-    if pt is None:
-        pt = _find_awang_by_ocr(win)
+
+    def _locate():
+        """定位阿旺，返回 (交互点, 走近点) 或 (None, None)。"""
+        pt = _find_awang(win)
+        if pt is not None:
+            return pt, (pt[0] - AWANG_APPROACH_OFFSET, pt[1])
+        name = _find_awang_by_ocr(win)
+        if name is not None:
+            return (name[0], name[1] - AWANG_CLICK_OFFSET), \
+                   (name[0] - AWANG_APPROACH_OFFSET, name[1])
+        return None, None
+
+    pt, ap = _locate()
     if pt is None:
         log("[客栈] 未找到阿旺，按 Alt+C 降落后重试", "WARN")
         Keyboard.key_hot("alt", "c")
         time.sleep(1.5)  # 等待降落落地
-        pt = _find_awang(win)
-        if pt is None:
-            pt = _find_awang_by_ocr(win)
+        pt, ap = _locate()
     if pt is None:
         return False, "未找到阿旺（模板与 OCR 名字均未命中，Alt+C 后重试仍失败）"
+    # 两段点击：先点名字左侧 30px 走近（点击远处 NPC 会先走过去）；
+    # 等寻路结束——相机随角色移动，阿旺屏幕位置会变，须重新定位
+    human_click(win, ap[0], ap[1])
+    log(f"[客栈] 已点击阿旺左侧 30px 走近 @({ap[0]},{ap[1]})", "SYS")
+    _wait_awang_arrival(win)
+    pt, _ = _locate()
+    if pt is None:
+        return False, "走近后仍未找到阿旺（模板与 OCR 名字均未命中）"
     human_click(win, pt[0], pt[1])
     log(f"[客栈] 已点击阿旺 @({pt[0]},{pt[1]})", "SYS")
     return True, "已点击阿旺"
@@ -663,12 +736,29 @@ def _walk_to_luoyang_pos(win, click_pos, target_pos, timeout, desc):
 
 
 def _walk_to_dali(win):
-    """前往洛阳城大理寺墙外并检查阿旺。返回 (是否成功, 描述)。"""
+    """前往洛阳城大理寺墙外并检查阿旺；未找到时兜底走小地图
+    (548,297) 到洛阳城 (180,207) 附近（阿旺实际出现点，用户
+    2026-10-20 实测）重找一轮。返回 (是否成功, 描述)。"""
     ok, info = _walk_to_luoyang_pos(win, DALI_MAP_CLICK_POS, DALI_TARGET_POS,
                                     DALI_ARRIVE_TIMEOUT, "大理寺墙外")
     if not ok:
         return False, info
-    return _check_awang(win)
+    ok, info = _check_awang(win)
+    if ok:
+        return True, info
+    # 大理寺墙外未找到阿旺：兜底点击小地图 (548,297) 前往洛阳城
+    # (180,207) 附近再找一轮（找到后的点击逻辑同 _check_awang）
+    log(f"[客栈] {info}，兜底前往洛阳城 (180,207) 附近重找阿旺", "WARN")
+    ok2, info2 = _walk_to_luoyang_pos(win, AWANG_FALLBACK_MAP_CLICK_POS,
+                                      AWANG_FALLBACK_TARGET_POS,
+                                      AWANG_FALLBACK_ARRIVE_TIMEOUT,
+                                      "阿旺出现点")
+    if not ok2:
+        return False, info2
+    ok3, info3 = _check_awang(win)
+    if ok3:
+        return True, info3
+    return False, f"{info}；兜底点仍未找到阿旺: {info3}"
 
 
 def _walk_to_biwu(win):
