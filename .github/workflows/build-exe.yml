@@ -14,6 +14,8 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 拉全历史与 tags：变更说明要 diff 上一 tag
 
       - uses: actions/setup-python@v5
         with:
@@ -141,9 +143,31 @@ jobs:
           name: zhuomuniao-windows-${{ github.ref_name }}
           path: zhuomuniao-windows.zip
 
+      - name: 生成变更说明（上一 tag 至今的提交列表）
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          # GitHub 自动生成 notes 只列 PR；本仓库直推无 PR，只会显示
+          # 「Full Changelog」对比链接。改为从 git log 生成提交列表
+          # 作 release 正文，附完整对比链接。
+          $prev = git describe --tags --abbrev=0 HEAD~1 2>$null
+          if (-not $prev) {
+            $range = "HEAD"
+            $link = "https://github.com/$env:GITHUB_REPOSITORY/releases/tag/$env:GITHUB_REF_NAME"
+          } else {
+            $range = "$prev..HEAD"
+            $link = "https://github.com/$env:GITHUB_REPOSITORY/compare/$prev...$env:GITHUB_REF_NAME"
+          }
+          $body = "## 变更（$env:GITHUB_REF_NAME）`n"
+          $body += (git log --pretty=format:"- %s" $range | Out-String)
+          $body += "`n完整对比: $link`n"
+          $body | Out-File -Encoding utf8NoBOM -FilePath release_notes.md
+          Write-Host "--- 生成的变更说明 ---"
+          Write-Host $body
+
       - name: 发布到 GitHub Release（仅打 tag 时）
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: zhuomuniao-windows.zip
-          generate_release_notes: true
+          body_path: release_notes.md
