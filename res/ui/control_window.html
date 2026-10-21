@@ -481,6 +481,14 @@
                 </div>
                 <div class="group-hint">对当前游戏画面逐一测试黄/蓝/红三个机关模板，打印全帧最佳匹配度与位置日志（只读不点击，供阈值与模板校准）。请将游戏画面停在封印机关场景再测试；任务运行中也可测试。</div>
             </div>
+            <div class="group-box">
+                <div class="group-title">获取当前坐标</div>
+                <div class="verify-row">
+                    <button id="btn-verify-position" class="btn" onclick="verifyPosition()">获取当前坐标</button>
+                    <span id="position-verify-result"></span>
+                </div>
+                <div class="group-hint">读取游戏左上角当前地图名与坐标并打印日志（只读，不按键不点击），供标定点位/排查使用。任务运行中也可获取。</div>
+            </div>
         </div>
     </div>
 
@@ -525,6 +533,8 @@
         const shoutXlVerifyResultEl = document.getElementById('shout-xl-verify-result');
         const btnVerifyJiguan = document.getElementById('btn-verify-jiguan');
         const jiguanVerifyResultEl = document.getElementById('jiguan-verify-result');
+        const btnVerifyPosition = document.getElementById('btn-verify-position');
+        const positionVerifyResultEl = document.getElementById('position-verify-result');
         const licenseStatusEl = document.getElementById('license-status');
         const licenseExpireEl = document.getElementById('license-expire');
         const btnUnbind = document.getElementById('btn-unbind');
@@ -1165,6 +1175,37 @@
             btnVerifyJiguan.disabled = false;
             jiguanVerifyResultEl.style.color = ok ? 'var(--accent)' : '#ff5f5f';
             jiguanVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+        };
+
+        async function verifyPosition() {
+            if (verifying) return;
+            verifying = true;
+            btnVerifyPosition.disabled = true;
+            positionVerifyResultEl.style.color = 'var(--text)';
+            positionVerifyResultEl.innerText = '读取中...';
+            try {
+                const r = await callPython('verify_position');
+                if (!r || r.status !== 'success') {
+                    positionVerifyResultEl.style.color = '#ff5f5f';
+                    positionVerifyResultEl.innerText = (r && r.msg) || '获取请求失败';
+                    verifying = false;
+                    btnVerifyPosition.disabled = false;
+                }
+                // 成功：等待 Python 侧 onPositionVerifyResult 回推最终结果
+            } catch (e) {
+                positionVerifyResultEl.style.color = '#ff5f5f';
+                positionVerifyResultEl.innerText = '获取请求异常';
+                verifying = false;
+                btnVerifyPosition.disabled = false;
+            }
+        }
+
+        // Python 侧调用：获取当前坐标结束回推结果
+        window.onPositionVerifyResult = function (ok, info) {
+            verifying = false;
+            btnVerifyPosition.disabled = false;
+            positionVerifyResultEl.style.color = ok ? 'var(--accent)' : '#ff5f5f';
+            positionVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
         };
 
         // Python 侧（任务状态联动）调用，用于同步页面显示

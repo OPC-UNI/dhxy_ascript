@@ -561,6 +561,7 @@ class ControlWindow(WebWindow):
         self.expose(self.verify_clear_screen)
         self.expose(self.verify_shout)
         self.expose(self.verify_jiguan)
+        self.expose(self.verify_position)
         self.expose(self.unbind_license)
         self.expose(self.get_env_info)
         self.expose(self.unbind_window)
@@ -1055,6 +1056,45 @@ class ControlWindow(WebWindow):
                 ok_js = "true" if ok else "false"
                 self.webview_instance.evaluate_js(
                     f"if(window.onJiguanVerifyResult){{window.onJiguanVerifyResult({ok_js}, {json.dumps(info)});}}")
+            except Exception:
+                pass
+
+    def verify_position(self):
+        """高级设置-获取当前坐标按钮：读取当前地图位置（只读，不按键
+        不点击），结果回推页面并打日志。只读操作不影响任务，任务
+        运行中允许使用。
+        """
+        if self._verifying:
+            return {"status": "error", "msg": "验证进行中，请稍候"}
+        win = game.find_main_window()
+        if win is None:
+            return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
+        self._verifying = True
+        threading.Thread(target=self._run_position_verify, args=(win,),
+                         daemon=True, name="position-verify").start()
+        return {"status": "success", "msg": "正在读取当前坐标，结果见下方与日志"}
+
+    def _run_position_verify(self, win):
+        """获取当前坐标线程体：只读位置识别，结果回推页面与日志窗。"""
+        from . import map as game_map  # 延迟导入：与其余验证模块保持一致
+        try:
+            ok, info = game_map.verify_map_position(win)
+        except Exception as e:
+            ok, info = False, f"验证异常: {e}"
+        try:
+            self.add_logs([f"[验证] 结果: {info}"])
+        except Exception:
+            pass
+        self._notify_position_verify_result(ok, info)
+        self._verifying = False
+
+    def _notify_position_verify_result(self, ok, info):
+        """获取当前坐标结果回推页面（高级设置-获取当前坐标行的结果文案）。"""
+        if self.webview_instance:
+            try:
+                ok_js = "true" if ok else "false"
+                self.webview_instance.evaluate_js(
+                    f"if(window.onPositionVerifyResult){{window.onPositionVerifyResult({ok_js}, {json.dumps(info)});}}")
             except Exception:
                 pass
 

@@ -43,7 +43,7 @@ from PIL import Image  # 对话框区域 2x 放大重识别（看打选项 OCR �
 from ascript.windows.system import R  # 资源路由（模板路径）
 from ascript.windows.hardware.keyboard import Keyboard  # Alt+C 飞行/刷新（领取验证兜底）
 
-from .app_utils import human_click, human_move, log, move_away, norm_text
+from .app_utils import human_click, human_move, precise_click, log, move_away, norm_text
 from . import app_utils  # 高性能模式共享设施（固定位置缓存点击）
 from . import task_tracker  # 任务追踪面板操作
 from . import map as game_map  # 地图操作（世界地图/小地图/位置识别）
@@ -84,6 +84,12 @@ WORLD_MAP_LINGSHOUCUN_ICON = "shijie_lingshoucun.png"  # 世界地图灵兽村�
 LINGQU_ICON = "xiuluo_lingqu.png"             # 修罗领取任务按钮（15.png 实测素材）
 LINGSHOUCUN_SHIZHE_ICON = "xiuluo_lingshoucunshizhe.png"  # 灵兽村使者 NPC（识别到也可点击领取）
 CLAIM_SPOT = (111, 90)                        # 领取点地图坐标（用户实测 111,90 附近）
+SHIZHE_SPOT_BOX = (94, 78, 131, 112)         # 灵兽村使者领取点坐标框（用户 2026-10-21）：
+                                             # 使者站位 (101,82)，框 x∈[94,131]、y∈[78,112]。
+                                             # 按钮模板可见必可领取；仅识别到使者时须在
+                                             # 框内才能领取（使者远距离也可见）。严格上下界
+                                             # 判定——超出 +30px 可能落在其他可领取坐标
+                                             # 范围（仍能领取），宽容差会把其他点误判为本点
 CLAIM_NEAR_TOLERANCE = 15                     # 已在领取点附近判定容差（用户步 1.1）
 CLAIM_NEAR_BTN_GRACE = 3.0                    # 位置近但按钮不可见时的渲染短窗口（秒）：
                                               # 窗口内按钮出现即免寻路，仍无走小地图重走
@@ -348,10 +354,21 @@ def _near_claim_spot(pos, tolerance):
                                   CLAIM_SPOT[0], CLAIM_SPOT[1], tolerance)
 
 
+def _near_shizhe_spot(pos):
+    """是否在灵兽村使者领取点坐标框内（严格 x/y 上下界，非容差圆）。"""
+    if pos is None or pos[0] != LINGSHOUCUN:
+        return False
+    xmin, ymin, xmax, ymax = SHIZHE_SPOT_BOX
+    return xmin <= pos[1] <= xmax and ymin <= pos[2] <= ymax
+
+
 def _wait_claim_entry(win, timeout):
     """等待领取入口出现（按钮或使者），返回 (pt, 来源) 或 (None, None)。
 
     战斗中跳过等待；每轮询只截一帧，双模板批量匹配共用一帧。
+    走动中镜头随人物移动，点击须瞬时落点（调用方用 precise_click
+    move_duration=0 取消拟人化移动，实测 2026-10-21 拟人化移动期间
+    点击位置已过期偶现无效）。
     """
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -473,6 +490,9 @@ def _walk_to_claim_spot(win, just_returned=False):
     不在灵兽村 → 世界地图点击灵兽村图标 → 小地图点击 (603,392) 寻路；
     在灵兽村但不在领取点附近 → 直接打开小地图点击 (603,392) 寻路。
     等待到达 110,90（±5 严格容差：走动中识图点击容易点不到）。
+    另有使者领取点坐标框（用户 2026-10-21）：框内且使者模板可见
+    也算到达，直接点使者领取（按钮模板可见必可领取，仅使者可见
+    时须在框内——使者远距离也可见，点远处使者不出对话框）。
 
     到达判定优先用直接信号（领取任务按钮可见 = 已到领取点）——
     位置 OCR 坐标实测不可靠：区域快引擎把 111,90 误读为
@@ -499,19 +519,25 @@ def _walk_to_claim_spot(win, just_returned=False):
     # 误判已在领取点、点击无效（用户 2026-10-11 确认）：到达判定只认
     # 领取按钮（仅在可点击范围内出现）
     pos = game_map.read_map_position(win)
-    if _near_claim_spot(pos, CLAIM_NEAR_TOLERANCE):
-        # 位置近但按钮不可见：可能是位置误读，或超出可点击范围
+    near_old = _near_claim_spot(pos, CLAIM_NEAR_TOLERANCE)
+    near_shizhe = _near_shizhe_spot(pos)
+    if near_old or near_shizhe:
+        # 位置近但入口不可见：可能是位置误读，或超出可点击范围
         # （实测返程落点 101,83 距领取点 12.2 单位处按钮不出现——
         # 旧逻辑直接判「已在附近」跳过寻路，入口等待 20s 空转、
-        # 2026-10-12 第 70 轮手动走位才恢复）。给按钮 3s 渲染短窗口
-        # （返程加载后按钮可能延迟出现），窗口内出现即免寻路，
-        # 仍无则走小地图重走兜底（五倍同款）。
+        # 2026-10-12 第 70 轮手动走位才恢复）。给入口 3s 渲染短窗口
+        # （返程加载后可能延迟出现），窗口内出现即免寻路，仍无则走
+        # 小地图重走兜底（五倍同款）。按钮可见必可领取；仅使者可见
+        # 时须在坐标框内才可领取（用户 2026-10-21）。
         deadline = time.time() + CLAIM_NEAR_BTN_GRACE
         while time.time() < deadline:
             if game_map.find_template(win, LINGQU_ICON) is not None:
                 return True, "已在领取点附近（领取按钮可见）"
+            if near_shizhe \
+                    and game_map.find_template(win, LINGSHOUCUN_SHIZHE_ICON) is not None:
+                return True, "已在领取点附近（使者可见，坐标框内可领取）"
             time.sleep(0.5)
-        log("[修罗] 位置近但领取按钮未出现，改走小地图重走领取点", "WARN")
+        log("[修罗] 位置近但领取入口未出现，改走小地图重走领取点", "WARN")
     if pos is None and just_returned:
         # 刚返程：位置识别失败大概率是传送加载未完成（回城符落点
         # 必在灵兽村，不会在别处）。只识别一次（同帧做按钮匹配 +
@@ -524,7 +550,8 @@ def _walk_to_claim_spot(win, just_returned=False):
             if game_map.find_template_in(img, LINGQU_ICON) is not None:
                 return True, "已在领取点附近（领取按钮可见，等待传送加载完成）"
             pos2 = game_map.read_map_position(win, img=img)
-            if _near_claim_spot(pos2, CLAIM_NEAR_TOLERANCE):
+            if _near_claim_spot(pos2, CLAIM_NEAR_TOLERANCE) \
+                    or _near_shizhe_spot(pos2):
                 return True, "已在领取点附近（等待传送加载完成）"
     if pos is None or pos[0].strip() != LINGSHOUCUN:
         # 不在灵兽村：世界地图点击灵兽村图标，打开灵兽村小地图
@@ -553,6 +580,12 @@ def _walk_to_claim_spot(win, just_returned=False):
             log("[修罗] 已到达领取点附近（领取按钮可见）", "SYS")
             return True, "已到达领取点附近"
         pos = game_map.read_map_position(win)
+        if _near_shizhe_spot(pos) \
+                and game_map.find_template(win, LINGSHOUCUN_SHIZHE_ICON) is not None:
+            # 使者领取点：仅使者可见时须坐标框内才算到达（使者远距离
+            # 也可见，不能单独作到达判据——用户 2026-10-21）
+            log("[修罗] 已到达领取点附近（使者可见，坐标框内可领取）", "SYS")
+            return True, "已到达领取点附近"
         if _near_claim_spot(pos, WALK_ARRIVE_TOLERANCE):
             log("[修罗] 已到达领取点附近", "SYS")
             return True, "已到达领取点附近"
@@ -633,7 +666,9 @@ def _click_entry_ensuring_dialog(win, log_tag="[修罗]", hover_before_click=Fal
             human_move(win.rect.left + pt2[0], win.rect.top + pt2[1])
             log(f"{log_tag} 已移动鼠标到{src2} ({pt2[0]}, {pt2[1]})，"
                 f"已定位到（验证时序与真实流程一致）", "SYS")
-        human_click(win, pt2[0], pt2[1])
+        # 瞬时点击（取消拟人化移动）：走动中镜头随人物移动，拟人化
+        # 移动期间点击位置已过期（实测 2026-10-21 偶现点击无效）
+        precise_click(win, pt2[0], pt2[1], move_duration=0)
         log(f"{log_tag} 已点击{src2}（领取）", "SYS")
         # 高性能：领取选项坐标已缓存 → 跳过对话框 OCR 轮询，固定等待
         # 渲染后由 _claim_task 直接按坐标点选项（点不中由「任务进追踪」

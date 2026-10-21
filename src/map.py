@@ -194,6 +194,20 @@ def read_map_position(win, img=None):
     return None
 
 
+def verify_map_position(win):
+    """高级设置-获取当前坐标按钮：读取当前地图位置并打日志
+    （只读，不按键不点击，失败重读一次）。返回 (是否成功, 描述)。"""
+    pos = read_map_position(win)
+    if pos is None:
+        time.sleep(0.5)
+        pos = read_map_position(win)
+    if pos is None:
+        log("[地图] 获取当前坐标: 位置识别失败", "WARN")
+        return False, "位置识别失败（地图名与坐标未读取到）"
+    log(f"[地图] 获取当前坐标: {pos[0]} {pos[1]},{pos[2]}", "SYS")
+    return True, f"当前位置: {pos[0]} {pos[1]},{pos[2]}"
+
+
 def read_position_with_recovery(win):
     """识别当前位置；失败时按 Alt+C 恢复位置显示后重试一次（常见于人物未落地）。"""
     pos = read_map_position(win)
