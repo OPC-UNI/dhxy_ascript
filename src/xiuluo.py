@@ -118,6 +118,9 @@ CLAIM_DIALOG_TIMEOUT = 15                     # 领取对话框处理超时
 CLAIM_DIALOG_APPEAR_TIMEOUT = 4               # 点击领取入口后等待对话框出现的短窗口
                                               # （正常 ~1.5s 即出）：超时未见选项判定
                                               # 坐标不对，走小地图重定位兜底
+CLAIM_FOLLOW_RECOVER_WINDOW = 30              # 领取后首次跟踪失败的补偿窗口（秒）：
+                                              # 首次点击及其重试实测 9s、慢 OCR 下 ~20s；
+                                              # 窗口外的同类失败视为跟踪中期，不补偿
 
 # ---- 自动巫医（用户流程：领取后每 N 轮一次，无条件医治——血蓝正常
 #      也照常巫医，2026-10-09 用户确认；对话框处理复用战斗线程逻辑） ----
@@ -1022,18 +1025,22 @@ def _follow_to_done(win, first_items=None):
     first_items：领取校验刚确认任务出现的 (items, img_np) 帧，首轮
     跳过截图+OCR 立即点击追踪绿字（省 ~1.2s）。
     跟踪失败为「任务内容中未找到绿色文案」（标题可见内容未渲染，
-    实测 2026-10-21 当前坐标下偶现）时，走到领取点后重试跟踪——
-    领取点面板识别可靠；最多重走 2 次，再失败按原失败返回。
+    实测 2026-10-21 领取完成后偶现）时执行一次补偿：走到领取点后
+    重新跟踪——领取点面板识别可靠。最小影响原则：仅领取后首次跟踪
+    （first_items 存在）且失败发生在跟踪开始 30s 内（首次点击及其
+    重试的窗口）才补偿；跟踪中期的同类失败按原失败返回，交给
+    主循环下轮重试（has_task 续跑，不重新领取）。
     返回 (是否成功, 描述)。
     """
+    t0 = time.time()
     ok, info = follow_task(win, TASK_TITLE, prefix="修罗",
                            extra_dialog_handler=_handle_fight_dialog,
                            fallback_keywords=TASK_FALLBACK_TEXTS,
                            first_items=first_items)
-    recover = 0
-    while not ok and "任务内容中未找到绿色文案" in info and recover < 2:
-        recover += 1
-        log(f"[修罗] {info}，走到领取点后重试跟踪（第 {recover}/2 次）", "WARN")
+    if not ok and first_items is not None \
+            and "任务内容中未找到绿色文案" in info \
+            and time.time() - t0 < CLAIM_FOLLOW_RECOVER_WINDOW:
+        log(f"[修罗] {info}，走到领取点补偿重试跟踪（一次）", "WARN")
         ok2, info2 = _walk_to_claim_spot(win)
         if not ok2:
             return False, f"{info}；走到领取点失败: {info2}"
