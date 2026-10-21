@@ -114,7 +114,7 @@ def _ensure_window_binding():
         log("[绑定] 未选择窗口，本次按自动选择运行", "WARN")
 
 
-def _sheyaoxiang_watchdog(win):
+def _sheyaoxiang_watchdog(win, mode):
     """摄妖香定时续用线程（任务子进程内 daemon 线程，随进程强杀终止）。
 
     每分钟检查一次到期状态；到期时执行完整使用流程（与任务/战斗
@@ -123,17 +123,26 @@ def _sheyaoxiang_watchdog(win):
     （实测 2026-10-18 第 71 场战斗期间三次点击背包按钮均未打开面板，
     战斗 UI 覆盖按钮区）；跳过后续用重查间隔缩短为 10 秒，战斗链
     结束后尽快补用，缩短无摄妖香走路的遇敌窗口。
+    修罗/五倍模式下非队长不续用（跟队无需自用，用户 2026-10-21）。
     有效期 1 小时，按 57 分钟续用提前 3 分钟覆盖，避免到期空挡遇敌
     （日志文案仍按「1 小时」表述）。使用流程内部还有多处战斗检查
     （bag.use_sheyaoxiang，watch 状态 + 单帧判定）：入口检查落在
     战斗开场动画期会漏检，流程内检查兜底（实测 2026-10-19 第 15 场
     战斗内整段流程执行完、摄妖香未生效却标记成功形成空挡遇敌）。
     """
+    skip_logged = False  # 非队长跳过仅提示一次，防每分钟刷屏
     while True:
         time.sleep(60)
         try:
             if not app_utils.sheyaoxiang_due(win):
+                skip_logged = False
                 continue
+            if app_utils.sheyaoxiang_skip_nonleader(mode):
+                if not skip_logged:
+                    log("[摄妖香] 定时续用: 非队长无需使用，跳过", "INFO")
+                    skip_logged = True
+                continue
+            skip_logged = False
             if battle.watch_in_battle() or battle.is_in_battle(win):
                 log("[摄妖香] 定时续用: 战斗中跳过，10 秒后重查", "INFO")
                 time.sleep(10)
@@ -256,6 +265,8 @@ def task_start():
         if logged_in and use_sheyaoxiang:
             if not app_utils.sheyaoxiang_due(main_win):
                 log("[摄妖香] 距上次使用不足 1 小时，跳过", "INFO")
+            elif app_utils.sheyaoxiang_skip_nonleader(mode):
+                log("[摄妖香] 启动检查: 非队长无需使用，跳过", "INFO")
             elif battle.watch_in_battle() or battle.is_in_battle(main_win):
                 # 战斗中跳过：物品栏战斗中打不开（实测 2026-10-18），
                 # 由定时续用线程在战斗结束后补用
@@ -273,7 +284,7 @@ def task_start():
         #     全局输入锁与任务/战斗线程互斥，不打断当前点击）
         if logged_in and use_sheyaoxiang:
             threading.Thread(
-                target=_sheyaoxiang_watchdog, args=(main_win,),
+                target=_sheyaoxiang_watchdog, args=(main_win, mode),
                 daemon=True, name="sheyaoxiang-watchdog").start()
 
         # 4. 战斗监控线程（已登录时启动，任何模式下自动执行人物/召唤兽战斗操作；

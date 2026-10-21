@@ -331,6 +331,15 @@ def sheyaoxiang_mark_used(win):
     _char_state_set(_SHEYAOXIANG_KEY, char_key(win), time.time())
 
 
+def sheyaoxiang_skip_nonleader(mode):
+    """修罗/五倍模式下非队长不续用摄妖香（跟队无需自用，用户
+    2026-10-21）；其他模式与队长/身份未判定一律 False（照常续用）。"""
+    if mode not in ("修罗", "五倍"):
+        return False
+    from . import team  # 函数内导入：team 依赖 app_utils，避免循环导入
+    return team.known_leader() is False
+
+
 # ---- 当天任务完成进度持久化（停止/重启不重置完成度） ----
 _TASK_PROGRESS_KEY = "task_progress"  # {char_key: {"date": "YYYY-MM-DD", "modes": {mode: done}}}
 

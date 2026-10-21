@@ -1021,12 +1021,25 @@ def _follow_to_done(win, first_items=None):
     （点击「看打！」进入战斗）、战斗由战斗监控线程操作且跟踪中自动跳过。
     first_items：领取校验刚确认任务出现的 (items, img_np) 帧，首轮
     跳过截图+OCR 立即点击追踪绿字（省 ~1.2s）。
+    跟踪失败为「任务内容中未找到绿色文案」（标题可见内容未渲染，
+    实测 2026-10-21 当前坐标下偶现）时，走到领取点后重试跟踪——
+    领取点面板识别可靠；最多重走 2 次，再失败按原失败返回。
     返回 (是否成功, 描述)。
     """
     ok, info = follow_task(win, TASK_TITLE, prefix="修罗",
                            extra_dialog_handler=_handle_fight_dialog,
                            fallback_keywords=TASK_FALLBACK_TEXTS,
                            first_items=first_items)
+    recover = 0
+    while not ok and "任务内容中未找到绿色文案" in info and recover < 2:
+        recover += 1
+        log(f"[修罗] {info}，走到领取点后重试跟踪（第 {recover}/2 次）", "WARN")
+        ok2, info2 = _walk_to_claim_spot(win)
+        if not ok2:
+            return False, f"{info}；走到领取点失败: {info2}"
+        ok, info = follow_task(win, TASK_TITLE, prefix="修罗",
+                               extra_dialog_handler=_handle_fight_dialog,
+                               fallback_keywords=TASK_FALLBACK_TEXTS)
     return ok, info
 
 
