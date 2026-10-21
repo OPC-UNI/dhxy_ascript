@@ -312,8 +312,9 @@ def _char_state_set(key, ckey, value):
         log(f"[状态] {key} 持久化失败: {e}", "WARN")
 
 
-# ---- 摄妖香 1 小时有效期管理 ----
-SHEYAOXIANG_VALID_SEC = 3600                    # 一次使用有效 1 小时（用户实测）
+# ---- 摄妖香 1 小时有效期管理（实际有效期 1 小时；按 57 分钟续用，
+#      提前 3 分钟，避免到点空挡遇敌——日志文案仍按「1 小时」表述） ----
+SHEYAOXIANG_VALID_SEC = 57 * 60                  # 续用间隔 57 分钟（有效期 1 小时）
 _SHEYAOXIANG_KEY = "sheyaoxiang_last_use"       # {char_key: 使用时间戳}
 
 

@@ -341,6 +341,40 @@ def best_match_np(img_np, icon, region=None):
     return float(max_val), (ox + max_loc[0] + w // 2, oy + max_loc[1] + h // 2)
 
 
+def match_frame_all(img_np, icon, threshold=0.8, region=None):
+    """在 BGR numpy 帧上取模板全部匹配中心，返回 [(score, x, y), ...]
+    按分数降序。多实例场景用（如白龙马任务按钮同屏多处相似图案，
+    逐一尝试点击）。同一实例邻域（模板尺寸范围）内取最高分点，
+    抑制近重复坐标。无匹配返回空列表。
+    """
+    tpl = _load_template(icon)
+    if tpl is None:
+        return []
+    search = img_np
+    ox = oy = 0
+    if region is not None:
+        l, t, r, b = region
+        search = img_np[max(0, t):min(img_np.shape[0], b),
+                        max(0, l):min(img_np.shape[1], r)]
+        ox, oy = max(0, l), max(0, t)
+    res = cv2.matchTemplate(cv2.cvtColor(search, cv2.COLOR_BGR2GRAY), tpl,
+                            cv2.TM_CCOEFF_NORMED)
+    h, w = tpl.shape[:2]
+    ys, xs = np.where(res >= threshold)
+    if len(xs) == 0:
+        return []
+    pts = sorted(((float(res[y, x]), x, y) for x, y in zip(xs, ys)),
+                 reverse=True)
+    out = []
+    for score, x, y in pts:
+        cx, cy = ox + x + w // 2, oy + y + h // 2
+        if any(abs(cx - px) < w // 2 and abs(cy - py) < h // 2
+               for _, px, py in out):
+            continue  # 同一实例的近重复命中
+        out.append((score, cx, cy))
+    return out
+
+
 def match_frame_multi(img_np, icons, threshold=0.8, regions=None):
     """同一 BGR 帧上批量匹配多模板（帧只做一次灰度转换）。
 

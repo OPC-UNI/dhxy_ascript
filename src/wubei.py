@@ -151,6 +151,11 @@ XIANXINGJING_LINK_KEYWORD = "镜"  # 追踪链接关键词（识别显形镜任�
 XIANXINGJING_GRACE = 6.0              # 用镜后等白龙马对话框的宽限（秒）
 XIANXINGJING_ARRIVE_POLLS = 3         # 位置连续稳定轮询数判定到达（每次 ~1.7s）
 XIANXINGJING_USE_MAX = 2              # 最多用镜次数（A、B 两处）
+XIANXINGJING_MOVE_STUCK_MAX = 4       # 点寻路链接后位置连续不变轮询数 → 换另一侧链接再点
+                                      # （点回当前所在处链接时寻路不启动；偶现只识别到
+                                      # 第二个链接致两侧点击可能同点，翻侧自愈）
+XIANXINGJING_LINK_PITCH = 66          # A/B 两链接横向中心间距（实测 x 60-108 与 126-174）
+XIANXINGJING_LINK_SPLIT_X = 110       # A/B 链接簇分界 x（簇中心 <110 为 A，≥110 为 B）
 XIANXINGJING_QUOTA_STUCK_TIMEOUT = 30  # A、B 两处均失败后的卡死超时（秒）：
                                       # 配额耗尽后原逻辑仅告警一次静默空转，
                                       # 每 5 分钟白走一轮永不完成——超时后
@@ -170,6 +175,8 @@ _xj_quota_exhausted_at = 0.0  # 配额耗尽起点（卡死超时后抛替换，
 _xj_missing = 0         # 关键词连续消失轮询数（≥2 视为阶段结束）
 _xj_need_move = False   # 点寻路链接后须位置先变化才允许再次用镜
 _xj_walk_from = None    # 寻路链接点击时的位置（验证移动起点）
+_xj_move_stuck = 0      # 点寻路链接后位置连续不变轮询数（翻侧重试判据）
+_xj_walk_side = None    # 上次寻路点击的链接侧 "a"/"b"（None=尚未点过；下次点另一侧）
 _xj_dialog_clicked_at = 0.0  # 白龙马对话框屏幕中间连点时间（冷却防连点）
 _xj_dismissed_at = 0.0       # 对话框关闭时间（此后窗口内找模板点击）
 # ---- 白龙马任务按钮点击失败 → 替换任务（用户 2026-10-17 决策）：
@@ -177,11 +184,16 @@ _xj_dismissed_at = 0.0       # 对话框关闭时间（此后窗口内找模板�
 # 可见但点击不生效）；或模板始终被遮挡不出现。原「点寻路链接走回
 # 本处重点模板」恢复链已删除——使用显形镜后命中文案（白龙马对话框
 # 出现）但模板未命中/点击未生效，一律按失败处理：置替换标记并抛
-# ReplaceTaskError（run_loop 走领取分支重新领取替换任务） ----
+# ReplaceTaskError（run_loop 走领取分支重新领取替换任务）。
+# 对话框已出现（命中文案）后同样不再走 A→B 回退：本处找不到任务
+# 按钮即任务无法继续，直接替换（用户 2026-10-21 决策）。 ----
 XIANXINGJING_BTN_WAIT = 5.0        # 点模板后等对话出现的判定窗（秒）
 XIANXINGJING_BTN_MISS_MAX = 6      # 对话框关闭后连续无模板轮询数（约 6s）→ 失败替换
+XIANXINGJING_BTN_THRESHOLD = 0.8   # 白龙马任务按钮模板匹配阈值（与原默认一致）
 _xj_btn_clicked_at = 0.0    # 模板点击时间（判定窗起点）
 _xj_btn_missing = 0         # 对话框关闭后连续无模板轮询数
+_xj_btn_candidates = []     # 当前对话框的模板候选（同屏多处相似图案，逐一尝试）
+_xj_btn_idx = 0             # 当前已点击的候选序号
 _xj_need_replace = False    # 按钮失败：请求重新领取替换任务（run_loop 轮次开始消费）
 # ---- extras 链帧复用（性能审计 A：违反规则 1「每轮询只截一帧」）----
 # follow 每轮询调 extras 链一次，链内各处理器原各自截窗（显形镜模板窗
@@ -234,8 +246,10 @@ def _reset_xianxingjing_state():
     """显形镜状态机复位（任务领取成功后调用，防跨任务残留）。"""
     global _xj_phase, _xj_stable, _xj_last_pos, _xj_use_count, \
         _xj_grace_start, _xj_warned, _xj_missing, _xj_need_move, _xj_walk_from, \
+        _xj_move_stuck, _xj_walk_side, \
         _xj_dialog_clicked_at, _xj_dismissed_at, _xj_quota_exhausted_at
-    global _xj_btn_clicked_at, _xj_btn_missing, _xj_need_replace
+    global _xj_btn_clicked_at, _xj_btn_missing, _xj_btn_candidates, _xj_btn_idx, \
+        _xj_need_replace
     _xj_phase = 0
     _xj_stable = 0
     _xj_last_pos = None
@@ -245,11 +259,15 @@ def _reset_xianxingjing_state():
     _xj_missing = 0
     _xj_need_move = False
     _xj_walk_from = None
+    _xj_move_stuck = 0
+    _xj_walk_side = None
     _xj_dialog_clicked_at = 0.0
     _xj_dismissed_at = 0.0
     _xj_quota_exhausted_at = 0.0
     _xj_btn_clicked_at = 0.0
     _xj_btn_missing = 0
+    _xj_btn_candidates = []
+    _xj_btn_idx = 0
     _xj_need_replace = False
 
 # ---- 领取前队伍检查（检查队伍开关开启时；队伍固定 5 人） ----
@@ -811,52 +829,67 @@ def _click_xianxingjing_use(win, items, img_np):
     return True
 
 
-def _last_green_cluster_center(img_np, rect, first=False):
-    """行内最右侧（first=True 时最左侧）绿色文字簇的中心（寻路行的
-    A/B 位置链接）。
+def _green_cluster_centers(img_np, rect):
+    """行内绿色文字簇中心列表（按 x 左→右排序；无簇为空列表）。
 
-    实测寻路行「前往[A]、[B]处使用」含两个绿色链接（x 60-108 与
-    126-174），整行中心落在两链接间隙——A 失败去 B 点最右簇（B）；
-    走回恢复须回到本处：A 处点最左簇、B 处点最右簇。
-    无绿色簇时回退行矩形中心。
+    寻路行「前往[A]、[B]处使用」含 A/B 两个绿色链接（实测 x 60-108
+    与 126-174），A/B 文案相同、点击后去的坐标不同——按簇位置区分。
     """
     region = img_np[rect[1]:rect[3], rect[0]:rect[2]].astype(int)
     if region.size == 0:
-        return (rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2
+        return []
     mask = task_tracker.green_mask(region, 120)
     n, _, stats, _ = cv2.connectedComponentsWithStats(
         mask.astype(np.uint8), connectivity=8)
-    best = None
+    out = []
     for i in range(1, n):
         x, y, w, h, area = stats[i]
-        if w >= 4 and area >= 10 and (best is None
-                                      or (x < best[0] if first else x > best[0])):
-            best = (x, y, w, h)
-    if best is None:
-        return (rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2
-    x, y, w, h = best
-    return rect[0] + x + w // 2, rect[1] + y + h // 2
+        if w >= 4 and area >= 10:
+            out.append((rect[0] + x + w // 2, rect[1] + y + h // 2))
+    return sorted(out)
 
 
-def _click_xianxingjing_walk(win, items, img_np, first=False):
-    """点击任务追踪面板中的寻路链接（前往…处）。
+def _xj_walk_point(img_np, rect, side):
+    """寻路链接点击点：side="a" 取 A（最左簇）、"b" 取 B（最右簇）。
 
-    优先含「前往」的绿字行；first=True 点击最左绿色簇（A 位置，
-    走回恢复用），默认点击最右侧簇（B 链接，A 失败后去 B 用）。
+    OCR 偶现拆行只识别到第二个链接（B）——半行矩形内只有 B 簇且
+    无「前往」；此时点 A 按链接间距（XIANXINGJING_LINK_PITCH）左移
+    补点、点 B 直接点簇。反之行内只有 A 簇时点 B 右移补点。
+    """
+    centers = _green_cluster_centers(img_np, rect)
+    rcx, rcy = (rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2
+    if not centers:
+        return rcx, rcy
+    if side == "b":
+        cx, cy = centers[-1]
+        return (cx + XIANXINGJING_LINK_PITCH, cy) \
+            if cx < XIANXINGJING_LINK_SPLIT_X else (cx, cy)
+    cx, cy = centers[0]
+    return (cx - XIANXINGJING_LINK_PITCH, cy) \
+        if cx >= XIANXINGJING_LINK_SPLIT_X else (cx, cy)
+
+
+def _click_xianxingjing_walk(win, items, img_np, side="b"):
+    """点击任务追踪面板中的寻路链接（前往…处使用显形镜查探）。
+
+    side="a" 点 A 链接（左）、"b" 点 B 链接（右）。不再要求行内含
+    「前往」：OCR 偶现拆行只识别到第二个链接（B），半行矩形无「前往」
+    旧逻辑无候选点不了 A（实测 2026-10-21 任务卡死）——有绿字行即
+    可点，A/B 由 _xj_walk_point 按簇位置与间距补点区分。
     """
     cands = [(t, r) for t, r, s in items
              if s >= 0.55 and r[0] < task_tracker.PANEL_MAX_X
              and task_tracker.is_green_text(img_np, r)]
     if not cands:
         return False
-    for txt, rect in cands:
-        if "前往" in txt:
-            cx, cy = _last_green_cluster_center(img_np, rect, first=first)
-            human_click(win, cx, cy)
-            log(f"[五倍] 显形镜：已点击寻路链接「{txt}」前往下一处 @({cx},{cy})", "SYS")
-            move_away(win)
-            return True
-    return False
+    # 优先含「前往」的全行（A/B 簇都在矩形内），否则取任意绿字行
+    txt, rect = next((c for c in cands if "前往" in c[0]), cands[0])
+    cx, cy = _xj_walk_point(img_np, rect, side=side)
+    human_click(win, cx, cy)
+    log(f"[五倍] 显形镜：已点击寻路链接「{txt}」"
+        f"{'A' if side == 'a' else 'B'} 侧 @({cx},{cy})", "SYS")
+    move_away(win)
+    return True
 
 
 # ---- 黄袍怪多杀任务（追踪「前往xxx消灭黄袍怪」；用户确认每杀之间
@@ -1017,12 +1050,15 @@ def _handle_xianxingjing(win, items, img_np):
     开打选项（证明实力/消灭它）由 _handle_fight_dialog 处理。
     对话框持续存在时按 3 秒冷却重试。
 
+    模板同屏可能多处相似图案（实测 2026-10-21）：取全部候选逐一
+    点击，以开打对话出现判定生效；候选全部点完仍无对话才失败。
+
     失败处理（用户 2026-10-17 决策）：使用显形镜后命中文案但模板
     未命中（模板被遮挡不出现/点地点击走远后点击无效）不再走回重试，
     一律抛 ReplaceTaskError 重新领取替换任务。返回是否已处理。
     """
     global _xj_dialog_clicked_at, _xj_dismissed_at
-    global _xj_btn_clicked_at, _xj_btn_missing
+    global _xj_btn_clicked_at, _xj_btn_missing, _xj_btn_candidates, _xj_btn_idx
     now = time.time()
     if battle_watch_in_battle():
         _xj_btn_clicked_at = 0.0  # 战斗中：判定窗冻结，战斗流程接管
@@ -1042,12 +1078,25 @@ def _handle_xianxingjing(win, items, img_np):
         if _xj_fight_dialog_open(items):
             _xj_btn_clicked_at = 0.0  # 对话已打开：按钮流程结束
             _xj_btn_missing = 0
+            _xj_btn_candidates = []
+            _xj_btn_idx = 0
             return False
         if now - _xj_btn_clicked_at < XIANXINGJING_BTN_WAIT:
             return False  # 窗内静默等待
-        # 判定窗超时：点击未生效（人物已走远）→ 失败替换任务。
+        # 判定窗超时：还有候选模板则点下一个（同屏多处相似图案，
+        # 点错不出现对话），候选全部点完仍无对话才失败替换。
         # 不消费 btn_clicked_at：确认轮询守卫会吞 extras 异常（既有
         # 契约），状态保留则下一轮询重抛，最终在正常轮询路径传播
+        if _xj_btn_candidates and _xj_btn_idx + 1 < len(_xj_btn_candidates):
+            _xj_btn_idx += 1
+            _, cx, cy = _xj_btn_candidates[_xj_btn_idx]
+            human_click(win, cx, cy)
+            log(f"[五倍] 显形镜：已点击白龙马任务按钮候选 "
+                f"{_xj_btn_idx + 1}/{len(_xj_btn_candidates)} @ ({cx},{cy})"
+                f"（前一候选未触发对话）", "WARN")
+            move_away(win)
+            _xj_btn_clicked_at = now
+            return True
         _fail_xj_replace("点击任务按钮未触发对话")
     sig_panel = "".join(norm_text(t) for t, r, s in items
                         if s >= 0.55 and r[0] < task_tracker.PANEL_MAX_X)
@@ -1068,14 +1117,19 @@ def _handle_xianxingjing(win, items, img_np):
     # 用镜未出对话框却误触第 2 次走回）
     if _xj_dismissed_at <= 0:
         return False
-    pt = None
+    pts = None
     if now - _xj_dismissed_at < XIANXINGJING_TEMPLATE_WINDOW:
         _, bgr = _xj_frame(win, items)
         if bgr is not None:
-            pt = game_map.match_frame_np(bgr, XIANXINGJING_TASK_ICON)
-    if pt is not None:
-        human_click(win, pt[0], pt[1])
-        log(f"[五倍] 显形镜：已点击白龙马任务按钮 @ ({pt[0]},{pt[1]})，开始对话", "SYS")
+            pts = game_map.match_frame_all(bgr, XIANXINGJING_TASK_ICON,
+                                           threshold=XIANXINGJING_BTN_THRESHOLD)
+    if pts:
+        _xj_btn_candidates = pts
+        _xj_btn_idx = 0
+        _, cx, cy = pts[0]
+        human_click(win, cx, cy)
+        log(f"[五倍] 显形镜：已点击白龙马任务按钮 @ ({cx},{cy})，开始对话"
+            + (f"（共 {len(pts)} 处候选）" if len(pts) > 1 else ""), "SYS")
         move_away(win)
         _xj_dismissed_at = 0.0  # 已点击：关闭找模板窗口
         _xj_btn_clicked_at = now  # 开始判定窗
@@ -1115,23 +1169,34 @@ def _handle_xianxingjing_track(win, items, img_np):
     # phase 1：已用镜，等白龙马对话框（出现时上游处理器负责，本机
     # 冻结宽限窗口；模板未匹配时对话框持续存在，不能误点链接）。
     # 开打对话（点模板后出现）同样冻结——点模板已生效时不能按
-    # 宽限过期误走去 B。位置无关，跳过位置读取（区域 OCR ~150ms/轮询）
+    # 宽限过期误走去 B。对话框已出现又关闭（_xj_dismissed_at 置位、
+    # 等待模板/替换路径）与模板判定窗（_xj_btn_clicked_at，候选
+    # 模板逐一尝试）同样冻结：命中文案后找不到任务按钮即任务无法
+    # 继续，不再走 A→B 回退（用户 2026-10-21 决策）。
+    # 位置无关，跳过位置读取（区域 OCR ~150ms/轮询）
     if _xj_phase == 1:
         if _dialog_text_present(items, XIANXINGJING_DIALOG_TEXT) \
-                or _xj_fight_dialog_open(items):
+                or _xj_fight_dialog_open(items) \
+                or _xj_dismissed_at > 0 \
+                or _xj_btn_clicked_at > 0:
             _xj_grace_start = now
             return False
         if now - _xj_grace_start < XIANXINGJING_GRACE:
             return False
-        # 宽限已过未出对话框：本处失败 → 点寻路链接去下一处（位置会变，
-        # 回等到达）；点链接时读一次位置作移动验证起点（仅此一次，
-        # 共享帧免截窗）
+        # 宽限已过未出对话框：本处失败 → 点寻路链接去另一处（A/B 同
+        # 文案不同坐标，点与上次相反的一侧；偶现只识别到第二个链接时
+        # 由 _xj_walk_point 按间距补点）。点链接时读一次位置作移动验证
+        # 起点（仅此一次，共享帧免截窗）
         pos = _xj_pos(win, items)
-        if _click_xianxingjing_walk(win, items, img_np):
-            log("[五倍] 显形镜：本处未触发对话框，已点寻路链接前往下一处", "WARN")
+        side = "b" if _xj_walk_side == "a" else "a"
+        if _click_xianxingjing_walk(win, items, img_np, side=side):
+            _xj_walk_side = side
+            log(f"[五倍] 显形镜：本处未触发对话框，已点寻路链接前往"
+                f"{'A' if side == 'a' else 'B'} 侧", "WARN")
             _xj_phase = 0
             _xj_stable = 0
             _xj_need_move = True    # 须位置变化（寻路启动）后才允许再次用镜
+            _xj_move_stuck = 0
             _xj_walk_from = pos if pos is not None else _xj_last_pos
             return True
         log("[五倍] 显形镜：追踪面板未找到寻路链接，下轮询重试", "WARN")
@@ -1147,14 +1212,27 @@ def _handle_xianxingjing_track(win, items, img_np):
         _xj_stable = 1
     _xj_last_pos = pos
     # 点寻路链接后须位置先变化（寻路启动）才允许再次用镜：链接
-    # 点击未生效时位置不动，直接再次用镜会白耗 A/B 配额
+    # 点击未生效时位置不动，直接再次用镜会白耗 A/B 配额。位置连续
+    # 不变达上限 → 换另一侧链接再点（点回当前所在处/补点偏移失准时
+    # 翻侧自愈，实测 2026-10-21 只识别到第二个链接致两侧同点卡死）
     if _xj_need_move:
         if _xj_walk_from is not None and (
                 abs(pos[1] - _xj_walk_from[1]) > 5
                 or abs(pos[2] - _xj_walk_from[2]) > 5):
             _xj_need_move = False
             _xj_stable = 0  # 移动开始：重新累计到达稳定
+            _xj_move_stuck = 0
         else:
+            _xj_move_stuck += 1
+            if _xj_move_stuck >= XIANXINGJING_MOVE_STUCK_MAX:
+                flip = "b" if _xj_walk_side == "a" else "a"
+                if _click_xianxingjing_walk(win, items, img_np, side=flip):
+                    _xj_walk_side = flip
+                    log(f"[五倍] 显形镜：寻路未启动（位置不变），改点"
+                        f"{'A' if flip == 'a' else 'B'} 侧链接重试", "WARN")
+                    pos = _xj_pos(win, items)  # 共享帧缓存，免截窗
+                    _xj_walk_from = pos if pos is not None else _xj_last_pos
+                _xj_move_stuck = 0  # 已翻侧或无法点击：计数清零避免刷点
             return False
     if _xj_stable < XIANXINGJING_ARRIVE_POLLS:
         return False  # 还在寻路
