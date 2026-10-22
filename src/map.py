@@ -67,11 +67,19 @@ _region_engine = None
 _OCR_MODEL_DIR = R.res("models")
 _OCR_PARAMS = {"Cls.ocr_version": OCRVersion.PPOCRV5,
                "Global.model_root_dir": _OCR_MODEL_DIR,
-               "Global.log_level": "error"}
+               "Global.log_level": "error",
+               # 推理线程数限制（2026-10-22 实测校准）：onnxruntime 默认
+               # intra=-1 用满全部 16 线程，双区域 OCR 一次烧 15.7 CPU 秒
+               # 且 wall 反而更慢（1473ms，线程争抢）；intra=2/inter=1
+               # 实测 wall 436ms（与最优相当）而 CPU 仅 0.92s/次（-17x）
+               "EngineConfig.onnxruntime.intra_op_num_threads": 2,
+               "EngineConfig.onnxruntime.inter_op_num_threads": 1}
 # 区域快配置引擎参数（对应旧版 det_limit_type='max'/det_limit_side_len=736/
 # use_angle_cls=False）：区域按原尺寸检测（默认 'min' 会把小区域放大到
 # 736 最小边再检测，实测双区域 1344ms→944ms）；游戏 UI 全是水平文本，
-# 关闭角度分类。Det/Rec 模型路径保持默认（null = 自动下载的官方模型）
+# 关闭角度分类。Det/Rec 模型路径保持默认（null = 自动下载的官方模型）。
+# 推理线程数限制同全帧引擎（轮询热路径：follow 每 0.5s 一次双区域 OCR，
+# 默认全核并行致任务进程常驻 5~6 核 CPU，见 docs/performance.md）
 _REGION_OCR_PARAMS = {
     "Cls.ocr_version": OCRVersion.PPOCRV5,
     "Det.limit_type": "max",
@@ -79,6 +87,8 @@ _REGION_OCR_PARAMS = {
     "Global.model_root_dir": _OCR_MODEL_DIR,
     "Global.use_cls": False,
     "Global.log_level": "error",
+    "EngineConfig.onnxruntime.intra_op_num_threads": 2,
+    "EngineConfig.onnxruntime.inter_op_num_threads": 1,
 }
 
 

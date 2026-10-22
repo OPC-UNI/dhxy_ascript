@@ -269,6 +269,33 @@ def _daily_complete_open(win):
             and not _dialog_text_present(items, CONGRATS_MARK_TEXT))
 
 
+def _wait_completion_dialog(win, timeout=8.0):
+    """任务消失后补查完成对话框（任务消失与对话框渲染存在竞态）。
+
+    实测 2026-10-22：任务先从追踪面板消失（follow 随即返回），恭喜
+    对话框稍后才渲染——两轮完成均在对话框出现前结束检查导致漏计数。
+    follow 返回后补查一段窗口期，命中即判定本轮完成。
+    返回 "daily"（今日全部完成）/ "single"（单次完成）/ None（未见）。
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        img = win.capture(force_activate=False)
+        if img is None:
+            time.sleep(1.5)
+            continue
+        if is_in_battle_frame(img):
+            time.sleep(1.5)  # 战斗画面遮挡对话框：跳过本帧
+            continue
+        items, _ = game_map.ocr_region(img, task_tracker.DIALOG_REGION)
+        if _dialog_text_present(items, COMPLETE_DIALOG_TEXT) \
+                and not _dialog_text_present(items, CONGRATS_MARK_TEXT):
+            return "daily"
+        if _dialog_text_present(items, CONGRATS_MARK_TEXT):
+            return "single"
+        time.sleep(1.5)
+    return None
+
+
 def _handle_claim_blockers(win, items, img_np):
     """领取对话链中的结束条件对话框：今日两次已满/活力值不足。
 
@@ -454,18 +481,19 @@ def _handle_submit_dialog(win, items, img_np):
     # 完成标记优先：每日五环全部完成出现恭喜对话框 → 抛异常结束任务循环。
     # 「恭喜你完成了一次五环任务（今日还能再完成一次）」是单次完成的
     # 恭喜对话框，与每日完成文案相近，OCR 误读时模糊匹配会混淆，
-    # 含「还能再完成」特征即非每日完成，不得结束任务
-    if _dialog_text_present(items, COMPLETE_DIALOG_TEXT):
-        if not _dialog_text_present(items, CONGRATS_MARK_TEXT):
-            log(f"[五环] 检测到「{COMPLETE_DIALOG_TEXT}」，今日五环任务已完成", "SYS")
-            raise DailyComplete()
-        # 单次完成恭喜对话框（含「还能再完成」区分特征）：本轮真实完成
-        # 的计数信号——置位标记，run_loop 据此计数（完成提示以对话框
-        # 文案为准，用户 2026-10-13 确认）
+    # 含「还能再完成」特征即非每日完成，不得结束任务。
+    # 单次对话框先判（特征词直接命中即可计数，不依赖与每日文案的
+    # 模糊匹配——2026-10-22 实测两轮完成因该匹配未命中漏计数）
+    if _dialog_text_present(items, CONGRATS_MARK_TEXT):
+        # 单次完成恭喜对话框：本轮真实完成的计数信号——置位标记，
+        # run_loop 据此计数（完成提示以对话框文案为准，用户 2026-10-13 确认）
         global _congrats_seen_this_follow
         _congrats_seen_this_follow = True
         log("[五环] 检测到单次完成恭喜对话框，本轮完成", "SYS")
         return True
+    if _dialog_text_present(items, COMPLETE_DIALOG_TEXT):
+        log(f"[五环] 检测到「{COMPLETE_DIALOG_TEXT}」，今日五环任务已完成", "SYS")
+        raise DailyComplete()
     # 任务开场白对话（到达 NPC 自动弹出，无选项）：点屏幕中间推进一次
     # （多页对话由下一轮询自愈）。必须先于跟踪绿字处理——开场白与追踪
     # 面板变化常同窗口期出现，不处理会对着打开中的对话框点任务绿字
@@ -595,10 +623,14 @@ def run_loop(win, cycle_interval=3.0):
             continue
         log(f"[五环] ==== 第 {round_no} 轮 ====", "SYS")
         # 每日完成对话框检查（每轮开头）：见 _daily_complete_open——
-        # 命中即今日两次五环均已完成，直接结束任务
+        # 命中即今日两次五环均已完成，直接结束任务。对话框开着说明
+        # 上一轮真实完成（对话框与任务消失的竞态漏计场景），含本轮
+        # 计入并持久化（2026-10-22 实测漏计数修复）
         if _daily_complete_open(win):
-            log(f"[五环] {COMPLETE_INFO}（含本轮共 {done + 1} 次），结束任务", "SYS")
-            return f"{COMPLETE_INFO}，结束五环任务（已完成 {done + 1} 次）"
+            done += 1
+            app_utils.task_progress_add(win, WUHUAN_TITLE, done)
+            log(f"[五环] {COMPLETE_INFO}（含本轮共 {done} 次），结束任务", "SYS")
+            return f"{COMPLETE_INFO}，结束五环任务（已完成 {done} 次）"
         # 任务追踪中已有「五环[五环]」任务：直接跟踪，跳过领取
         if task_tracker.has_task(win, WUHUAN_TITLE):
             log("[五环] 任务追踪中已有五环任务，直接跟踪", "SYS")
@@ -632,9 +664,13 @@ def run_loop(win, cycle_interval=3.0):
             log(f"[五环] {MISSING_EQUIPMENT_INFO}（{e}），结束任务", "SYS")
             return f"{MISSING_EQUIPMENT_INFO}，结束五环任务（已完成 {done} 次）"
         except DailyComplete:
-            # 恭喜对话框出现在本轮完成时：计入本轮
-            log(f"[五环] {COMPLETE_INFO}（含本轮共 {done + 1} 次），结束任务", "SYS")
-            return f"{COMPLETE_INFO}，结束五环任务（已完成 {done + 1} 次）"
+            # 恭喜对话框出现在本轮完成时：计入本轮并持久化（对话框
+            # 即完成证据；2026-10-22 前未持久化导致进度漏记）
+            done += 1
+            app_utils.task_progress_add(win, WUHUAN_TITLE, done)
+            log(f"[五环] {COMPLETE_INFO}（含本轮共 {done} 次），结束任务", "SYS")
+            return f"{COMPLETE_INFO}，结束五环任务（已完成 {done} 次）"
+        completion_kind = None  # 补查到的完成对话框类型（daily/single/None）
         if not ok:
             if _congrats_seen_this_follow:
                 # 完成恭喜对话框已出现：本轮真实完成，follow 收尾失败
@@ -645,16 +681,24 @@ def run_loop(win, cycle_interval=3.0):
                 time.sleep(cycle_interval)
                 continue
         elif not _congrats_seen_this_follow:
-            # 任务从追踪中消失但未出现完成恭喜对话框：面板瞬时不可读
-            # 的误判，不计完成（下轮 has_task 重检，任务仍在则直接续跑）
-            log(f"[五环] {info} 但未出现完成恭喜对话框，判为面板瞬时不可读，不计完成", "WARN")
-            time.sleep(cycle_interval)
-            continue
+            # 任务从追踪中消失但跟踪期间未见完成恭喜对话框：任务消失
+            # 与对话框渲染存在竞态（实测 2026-10-22 两轮完成均漏计数），
+            # 补查对话框窗口期再决定——命中即计入；仍未命中才按面板
+            # 瞬时不可读处理（下轮 has_task 重检，任务仍在则直接续跑）
+            completion_kind = _wait_completion_dialog(win)
+            if completion_kind is None:
+                log(f"[五环] {info} 但未出现完成恭喜对话框，判为面板瞬时不可读，不计完成", "WARN")
+                time.sleep(cycle_interval)
+                continue
+            log(f"[五环] 补查检测到完成恭喜对话框（{'今日全部完成' if completion_kind == 'daily' else '单次完成'}），本轮计入", "SYS")
         done += 1
         app_utils.task_progress_add(win, WUHUAN_TITLE, done)
         total = max_rounds if max_rounds > 0 else "∞"
         debug_overlay.set_progress(f"{done}/{total}")
         log(f"[五环] {info}（{done}/{total}）", "SYS")
+        if completion_kind == "daily":
+            # 补查发现今日五环全部完成：直接结束，不再领取下一轮
+            return f"{COMPLETE_INFO}，结束五环任务（已完成 {done} 次）"
         if 0 < max_rounds <= done:
             return f"已完成 {done} 次五环任务，达到次数上限 {max_rounds}"
         time.sleep(cycle_interval)  # 轮次间隔，避免空转

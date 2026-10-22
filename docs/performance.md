@@ -18,6 +18,8 @@ CLAUDE.md「Performance Rules」的详细参考：实测数据、规则由来、
 | OCR 区域（region 引擎，cls OFF） | 92-171ms | det_limit_type='max'/736 |
 | 区域 OCR 关闭 use_angle_cls | 再省 50%（277→138ms） | 识别框数不变 |
 | 巫医检查（区域无变化，差分跳过） | 7ms | 全量 OCR 148-311ms |
+| OCR 双区域 CPU 成本（onnxruntime 默认全核） | 2.4 CPU 秒/次（wall 318ms） | 16 线程并行推理，wall 不降反烧 CPU（线程争抢 15.7s 极端帧） |
+| OCR 双区域（intra=2/inter=1，2026-10-22 起） | 0.9 CPU 秒/次（wall 443ms） | CPU -63%，wall 仍在 0.5s 轮询预算内；任务进程常驻 CPU 从 ~6 核降至 ~2 核 |
 
 ## 规则详解与写法对照
 
