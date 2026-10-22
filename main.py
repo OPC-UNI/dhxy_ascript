@@ -16,6 +16,7 @@ Runtime.wait 驻留线程防止程序自行退出（托盘「彻底退出」→ 
 - src/task_manager.py    任务子进程管理（启停、升级强杀、日志回流）
 - src/control_window.py  网页控制窗口（启动/停止/重置、任务多选与次数、总进度条、内嵌日志）
 - src/schemes.py         配置方案管理（多套设置快照一键切换 + 导入导出）
+- src/hotkey.py          全局老板键（默认 F8 一键启动/停止任务）
 - src/select_window.py   多开窗口绑定选择弹窗（启动时多开且无有效绑定时弹出）
 """
 import multiprocessing  # freeze_support：冻结打包下 spawn 子进程（任务/悬浮层）用
@@ -516,6 +517,35 @@ if __name__ == '__main__':
     threading.Thread(target=_setup_tray,
                      args=(R.img("logo.ico"), control_win),
                      daemon=True, name="tray").start()
+
+    # ---- 老板键：全局热键一键启动/停止任务（默认 F11，专用消息泵线程） ----
+    # 状态/日志反馈复用 TaskManager 回调链（sync_status/add_logs 已跨线程
+    # 工作），面板按钮与启动/停止状态自动同步
+    from src import hotkey
+
+    # 切换冷却（秒）：泵线程内回调执行期间按键会滞留队列（hotkey.py 已
+    # 清队列），冷却再兜一层——3 秒内重复触发直接忽略，防连按/键盘粘连
+    # 造成的「停完又启」（用户实测老板键无法停止的根因之一）
+    _last_toggle_ts = [0.0]
+    _TOGGLE_COOLDOWN = 3.0
+
+    def _toggle_task():
+        """老板键回调（消息泵线程）：运行中→停止，已停止→启动。"""
+        now = time.time()
+        if now - _last_toggle_ts[0] < _TOGGLE_COOLDOWN:
+            app_utils.log("[老板键] 冷却期内忽略本次触发", "SYS")
+            return
+        _last_toggle_ts[0] = now
+        running = tm.is_running()
+        app_utils.log(f"[老板键] F11 触发（当前运行状态={running}）", "SYS")
+        if running:
+            result = tm.stop()
+            app_utils.log(f"[老板键] 停止结果={result}", "SYS")
+        else:
+            result = tm.start()
+            app_utils.log(f"[老板键] 启动结果={result}", "SYS")
+
+    hotkey.register(_toggle_task)
 
     def _runtime_waiter():
         """Runtime 驻留线程：托盘「彻底退出」→ Runtime.stop() 后醒来执行清理。

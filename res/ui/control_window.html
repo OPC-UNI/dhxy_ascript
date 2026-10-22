@@ -615,6 +615,7 @@
     <script>
         let running = false;
         let switching = false;  // 启停请求在途标记（防连点）
+        let bossHotkey = '';    // 老板键名（启动/停止按钮文案提示；none 时为空）
         const statusEl = document.getElementById('status');
         const btnStart = document.getElementById('btn-start');
         const btnTheme = document.getElementById('btn-theme');
@@ -774,7 +775,9 @@
         function update() {
             statusEl.innerText = running ? '运行中' : '已停止';
             statusEl.className = running ? 'running' : '';
-            btnStart.innerText = running ? '停 止' : '启 动';
+            // 启动/停止按钮文案带老板键提示（boss_hotkey 为 none 时不显示）
+            const hotkeySuffix = bossHotkey ? '(' + bossHotkey.toUpperCase() + ')' : '';
+            btnStart.innerText = (running ? '停 止' : '启 动') + hotkeySuffix;
             btnStart.classList.toggle('running', running);
             // 运行期间任务勾选与次数不可更改（用户确认：只能停止后修改）
             taskSelects.forEach(el => { el.disabled = running; });
@@ -1051,6 +1054,7 @@
             if (!info) return;
             applyTheme(info.theme === 'light' ? 'light' : 'dark');
             if (info.schemes) renderSchemes(info.schemes);  // 顶部方案下拉
+            bossHotkey = info.boss_hotkey || '';  // 老板键名（按钮文案提示）
             if (info.modes) {
                 taskSelects.forEach(el => { el.checked = info.modes.includes(el.value); });
             }
@@ -1117,6 +1121,7 @@
                     el.checked = xl.races.includes(el.value);
                 });
             }
+            update();  // 应用老板键文案（启动/停止按钮后缀）
             await refreshProgress();
         }
 

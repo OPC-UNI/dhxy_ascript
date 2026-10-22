@@ -74,6 +74,11 @@ class TaskManager:
         self._on_status = None             # callable(bool)  → control_win.sync_status
         self._on_log = None                # callable(list[str]) → control_win.add_logs
         self.stop_event = multiprocessing.Event()
+        # 在主线程立即触底建 SemLock：Windows 下信号量在非主线程首次
+        # 使用会走命名信号量路径，spawn 子进程重建句柄存在继承风险
+        # （表现为子进程收不到停止信号，停止退化到 3s join 超时强杀）。
+        # 老板键热键线程可能先于主线程调用 start/stop，此处预建规避。
+        self.stop_event.clear()
         self.msg_queue = multiprocessing.Queue()
         self.active_worker = None
         self._lock = threading.Lock()      # 保护 active_worker/_busy/_stop_requested
@@ -136,6 +141,7 @@ class TaskManager:
             if worker is not None:
                 self._kill_worker(worker)
             self.stop_event.clear()
+            self._notify_status(False)  # 立即同步面板状态（不等 monitor 收口）
             return {"status": "success", "running": False}
         finally:
             with self._lock:
@@ -196,16 +202,25 @@ class TaskManager:
     # ---- 内部机制 ----
 
     def _kill_worker(self, worker):
-        """升级强杀（复制 flot_window._force_stop_worker 时序）。"""
+        """升级强杀（复制 flot_window._force_stop_worker 时序）。
+
+        分级日志：每阶升级都落一行——老板键停止异常时可直接看出子进程
+        是否收到停止信号（优雅退出无升级行；收不到会依次出现 3s 超时/
+        terminate/kill 行）。
+        """
+        t0 = time.time()
         if worker.is_alive():
             self.stop_event.set()
+            self._emit(["[系统] 已发送停止信号，等待子进程退出..."])
             worker.join(timeout=3.0)
 
         if worker.is_alive():
+            self._emit([f"[系统] 子进程 {time.time() - t0:.1f}s 未退出，升级 terminate"])
             worker.terminate()
             worker.join(timeout=1.0)
 
         if worker.is_alive():
+            self._emit(["[系统] terminate 后仍存活，升级 kill"])
             worker.kill()
             worker.join()
 

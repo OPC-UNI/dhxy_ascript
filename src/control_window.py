@@ -40,6 +40,7 @@ from src.log_window import LogWindow
 from . import game  # 游戏窗口查找（修罗回程验证用；game 不反向依赖本模块，可顶层导入）
 from . import app_utils  # KeyValue 合并读写（kv_save_merged/kv_remove_merged）
 from . import schemes  # 配置方案（多套设置快照切换 + 导入导出）
+from . import hotkey  # 老板键（启动/停止按钮文案展示热键名）
 
 # ---- 任务模式（UI 多选项，KeyValue 持久化，记住上次选择） ----
 TASK_MODES = ["五环", "客栈", "修罗", "五倍", "玄枢轶闻", "名望"]
@@ -881,7 +882,8 @@ class ControlWindow(WebWindow):
                 "debug_overlay": load_debug_overlay(),
                 "license": self._license_info,
                 "env": self.get_env_info(),
-                "schemes": schemes.list_schemes()}
+                "schemes": schemes.list_schemes(),
+                "boss_hotkey": hotkey.load_hotkey()}
 
     def save_battle_action(self, target, value):
         """战斗设置变更：保存人物/召唤兽默认战斗动作。"""
