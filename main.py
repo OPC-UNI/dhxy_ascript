@@ -15,6 +15,7 @@ Runtime.wait 驻留线程防止程序自行退出（托盘「彻底退出」→ 
 - src/wubei.py           五倍任务自动化（宝象国领取、队伍检查，战斗由战斗监控线程操作）
 - src/task_manager.py    任务子进程管理（启停、升级强杀、日志回流）
 - src/control_window.py  网页控制窗口（启动/停止/重置、任务多选与次数、总进度条、内嵌日志）
+- src/schemes.py         配置方案管理（多套设置快照一键切换 + 导入导出）
 - src/select_window.py   多开窗口绑定选择弹窗（启动时多开且无有效绑定时弹出）
 """
 import multiprocessing  # freeze_support：冻结打包下 spawn 子进程（任务/悬浮层）用
@@ -497,6 +498,11 @@ if __name__ == '__main__':
 
     # ---- 多开窗口绑定选择（弹框；须在控制窗口创建前独占一次消息循环） ----
     _ensure_window_binding()
+
+    # ---- 配置方案首次迁移：现有 config.json 设置落为「默认」方案 ----
+    # schemes.json 已存在时空操作（读取路径同样有重建兜底）
+    from src import schemes
+    schemes.migrate_if_needed()
 
     # ---- 授权通过后装配主程序 ----
     # 必须放在 __main__ 内：Windows spawn 子进程会重新导入本模块但不执行此段

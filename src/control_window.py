@@ -7,15 +7,16 @@ ControlWindow 基于 WebWindow（pywebview），页面为 res/ui/control_window.
 线程防程序自行退出）。
 
 页面结构：
-- 顶部：启动/停止按钮 + 重置按钮 + 任务状态显示 + 浅色/深色主题切换
+- 顶部：启动/停止按钮 + 任务状态显示 + 配置方案下拉（选中即切换）+
+  浅色/深色主题切换（月亮/太阳图标按钮）
 - Tab 栏：任务列表（每任务一组：模式多选 + 次数步进 + 总进度条）/
   任务设置 / 通用设置
   （摄妖香、血蓝阈值、人物与召唤兽默认战斗动作，内含修罗/五倍设置
-  分组，仅队长时生效）/ 高级设置（调试信息悬浮开关）
+  分组，仅队长时生效）/ 高级设置（授权信息、配置方案管理区、调试信息
+  悬浮开关）
 
 功能约定：
 - 启动/停止：桥接调用 TaskManager 启停任务子进程（升级强杀保证线程全清）
-- 重置：停止当前任务，并把所有设置恢复默认（见 reset_settings）
 - 关闭（X）：取消关闭并隐藏到托盘（_on_closing），任务继续运行；
   真正退出须先 close_window() 放行（_real_close），否则窗口永不销毁
 - 调试信息开关：控制游戏窗口悬浮层（任务侧读取），同时控制日志窗口显隐；
@@ -38,6 +39,7 @@ from ascript.windows.ui import WebWindow
 from src.log_window import LogWindow
 from . import game  # 游戏窗口查找（修罗回程验证用；game 不反向依赖本模块，可顶层导入）
 from . import app_utils  # KeyValue 合并读写（kv_save_merged/kv_remove_merged）
+from . import schemes  # 配置方案（多套设置快照切换 + 导入导出）
 
 # ---- 任务模式（UI 多选项，KeyValue 持久化，记住上次选择） ----
 TASK_MODES = ["五环", "客栈", "修罗", "五倍", "玄枢轶闻", "名望"]
@@ -584,41 +586,6 @@ def save_auto_famen(on):
     return {"status": "success"}
 
 
-def reset_settings():
-    """把所有设置恢复为默认值（重置按钮用）。
-
-    默认值与各 load 函数一致：选中五环、次数按 TASK_COUNT_DEFAULTS、
-    摄妖香开、血蓝阈值 50、战斗动作 人物技能3-5/召唤兽攻击、修罗
-    最少人数 5 + 种族 男人男鬼、五倍最少人数 5、抢盒子/检查队伍/
-    调试悬浮关、高性能开、自动补血蓝开、启动清屏开、自动巫医开
-    （间隔 5）、自动使用法门关、主题浅色。
-    """
-    save_selected_modes(_DEFAULT_MODES)
-    for mode, default in TASK_COUNT_DEFAULTS.items():
-        save_task_count(mode, default)
-    save_use_sheyaoxiang(True)
-    for name in _THRESHOLD_KEYS:
-        save_threshold(name, DEFAULT_THRESHOLD)
-    for target in _BATTLE_KEYS:
-        save_battle_action(target, _DEFAULT_BATTLE[target])
-    save_xiuluo_min(XIULUO_MIN_DEFAULT)
-    save_xiuluo_races(XIULUO_RACES_DEFAULT)
-    save_wubei_hezi(False)
-    save_wubei_check_team(False)
-    save_wubei_shout_switch(False)
-    save_xiuluo_hezi(False)
-    save_xiuluo_shout_switch(False)
-    save_high_perf(True)
-    save_auto_refill(True)
-    save_clear_screen(True)
-    save_xiuluo_check_team(False)
-    save_xiuluo_auto_wuyi(True)
-    save_xiuluo_wuyi_interval(5)
-    save_auto_famen(False)
-    save_debug_overlay(False)
-    save_ui_theme("light")
-
-
 class _ApiBridge:
     """JS 与 Python 之间的 API 桥接，与 WebWindow 内部实现保持一致。"""
 
@@ -655,6 +622,8 @@ class ControlWindow(WebWindow):
         self._real_close = threading.Event()  # 置位后 X/销毁真正放行（退出路径）
         self._debug_on = load_debug_overlay()  # 调试信息开关：控制日志窗口显隐
         self._verifying = False  # 修罗回程验证进行中标记（防连点）
+        self._scheme_dialog_busy = False  # 方案导入导出文件对话框在途标记（防连点）
+        self._pending_import = None  # 待确认的导入（{"name", "settings"}；同名冲突时挂起）
         self._license_info = license_info or {}  # 授权信息（高级设置-授权信息展示）
         self.log_win = LogWindow()
         self.log_win.set_debug_off_callback(self._on_log_window_closed)
@@ -684,7 +653,6 @@ class ControlWindow(WebWindow):
         self.expose(self.save_ui_theme)
         self.expose(self.start_task)
         self.expose(self.stop_task)
-        self.expose(self.reset_task)
         self.expose(self.verify_xiuluo_return)
         self.expose(self.verify_xiuluo_claim)
         self.expose(self.verify_xiuluo_wuyi)
@@ -697,6 +665,14 @@ class ControlWindow(WebWindow):
         self.expose(self.unbind_license)
         self.expose(self.get_env_info)
         self.expose(self.unbind_window)
+        self.expose(self.get_schemes)
+        self.expose(self.switch_scheme)
+        self.expose(self.scheme_resave)
+        self.expose(self.scheme_copy)
+        self.expose(self.scheme_delete)
+        self.expose(self.scheme_export)
+        self.expose(self.scheme_import)
+        self.expose(self.scheme_import_confirm)
         # 任务状态/日志回流接线：TaskManager → 主窗口状态 + 日志窗口
         self._tm.set_callbacks(on_status=self.sync_status, on_log=self.add_logs)
 
@@ -728,6 +704,158 @@ class ControlWindow(WebWindow):
         """解除窗口绑定（下次启动多开时重新弹框选择）。"""
         return game.clear_bound_window()
 
+    # ---- 配置方案管理（顶部下拉一键切换 + 通用设置管理区） ----
+    # 方案 = 全部设置的快照（schemes.py）；任务运行中全部禁止（切换会
+    # 改战斗阈值/任务列表等运行中任务正在读的键，删除活动方案会应用
+    # 「默认」——页面同步禁用，此处为双保险）。
+
+    def get_schemes(self):
+        """方案列表与当前活动方案（页面下拉/管理区渲染）。"""
+        return schemes.list_schemes()
+
+    def _scheme_guard(self):
+        """方案操作前置检查：任务运行中拒绝。"""
+        if self._tm.is_running():
+            return {"status": "error", "msg": "任务运行中，请先停止任务再操作"}
+        return None
+
+    def switch_scheme(self, name):
+        """一键切换方案：整体替换当前设置（切换前自动保存当前改动）。"""
+        guard = self._scheme_guard()
+        return guard if guard else schemes.switch_scheme(name)
+
+    def scheme_resave(self, name):
+        """保存：当前设置快照写回活动方案（输入名即方案名，改了名即重命名）。"""
+        guard = self._scheme_guard()
+        return guard if guard else schemes.resave_scheme(name)
+
+    def scheme_copy(self, name):
+        """另存新方案：当前设置另存为新方案（重名自动加序号）。"""
+        guard = self._scheme_guard()
+        return guard if guard else schemes.save_scheme_copy(name)
+
+    def scheme_delete(self):
+        """删除当前活动方案（页面二次点击确认；删除后回落「默认」）。"""
+        guard = self._scheme_guard()
+        if guard:
+            return guard
+        name = schemes.active_name()
+        if not name:
+            return {"status": "error", "msg": "当前无活动方案"}
+        return schemes.delete_scheme(name)
+
+    def scheme_export(self):
+        """导出当前活动方案：后台线程弹另存为对话框，结果经
+        onSchemeExportResult 回推页面（同验证流程模式，不阻塞 webview）。"""
+        guard = self._scheme_guard()
+        if guard:
+            return guard
+        if self._scheme_dialog_busy:
+            return {"status": "error", "msg": "文件对话框已打开，请先完成当前操作"}
+        name = schemes.active_name()
+        if not name:
+            return {"status": "error", "msg": "当前无活动方案"}
+        self._scheme_dialog_busy = True
+        threading.Thread(target=self._run_scheme_export, args=(name,),
+                         daemon=True, name="scheme-export").start()
+        return {"status": "success", "msg": "请在弹出的窗口选择导出位置"}
+
+    def _run_scheme_export(self, name):
+        """导出线程体：文件对话框 → 写文件 → 结果回推页面。"""
+        try:
+            path = schemes.pick_save_path(f"{name}.json")
+            if not path:
+                ok, info = False, "已取消导出"
+            else:
+                schemes.export_scheme_to(path, name)
+                ok, info = True, f"已导出方案「{name}」"
+        except Exception as e:
+            ok, info = False, f"导出失败: {e}"
+        self._push_js("if(window.onSchemeExportResult){window.onSchemeExportResult("
+                      f"{'true' if ok else 'false'}, {json.dumps(info)});}}")
+        self._scheme_dialog_busy = False
+
+    def scheme_import(self):
+        """导入方案：后台线程弹打开对话框；同名冲突经 onSchemeImportPending
+        回推页面确认（覆盖/另存为/取消），无冲突直接入列（不激活）。"""
+        guard = self._scheme_guard()
+        if guard:
+            return guard
+        if self._scheme_dialog_busy:
+            return {"status": "error", "msg": "文件对话框已打开，请先完成当前操作"}
+        self._scheme_dialog_busy = True
+        threading.Thread(target=self._run_scheme_import,
+                         daemon=True, name="scheme-import").start()
+        return {"status": "success", "msg": "请选择要导入的方案文件"}
+
+    def _run_scheme_import(self):
+        """导入线程体：对话框 → 解析校验 → 无冲突直接入列 / 冲突挂起等确认。"""
+        try:
+            path = schemes.pick_open_path()
+            if not path:
+                self._finish_scheme_import(False, "已取消导入")
+                return
+            name, settings = schemes.read_import_file(path)
+            if schemes.name_exists(name):
+                self._pending_import = {"name": name, "settings": settings}
+                self._push_js("if(window.onSchemeImportPending)"
+                              f"{{window.onSchemeImportPending({json.dumps(name)});}}")
+                self._scheme_dialog_busy = False
+                return
+            result = schemes.add_scheme(name, settings)
+            if result.get("status") != "success":
+                self._finish_scheme_import(False, result.get("msg", "导入失败"))
+                return
+            self._finish_scheme_import(True, f"已导入方案「{name}」（未激活，可在顶部下拉切换）")
+        except Exception as e:
+            self._finish_scheme_import(False, f"导入失败: {e}")
+
+    def _finish_scheme_import(self, ok, info):
+        """导入结束回推页面（附最新方案列表供下拉重渲染）。"""
+        self._pending_import = None
+        self._push_js("if(window.onSchemeImportResult){window.onSchemeImportResult("
+                      f"{'true' if ok else 'false'}, {json.dumps(info)}, "
+                      f"{json.dumps(schemes.list_schemes())});}}")
+        self._scheme_dialog_busy = False
+
+    def scheme_import_confirm(self, action):
+        """导入同名冲突确认（页面确认行按钮）：overwrite/rename/cancel。"""
+        pending = self._pending_import
+        self._pending_import = None
+        if not pending:
+            self._scheme_dialog_busy = False
+            return {"status": "error", "msg": "无待确认的导入"}
+        name, settings = pending["name"], pending["settings"]
+        try:
+            if action == "cancel":
+                self._scheme_dialog_busy = False
+                return {"status": "success", "msg": "已取消导入",
+                        "schemes": schemes.list_schemes()}
+            if action == "overwrite":
+                result = schemes.replace_scheme(name, settings)
+                msg = f"已覆盖方案「{name}」"
+            elif action == "rename":
+                new_name = schemes.unique_name(name)
+                result = schemes.add_scheme(new_name, settings)
+                msg = f"已导入为「{new_name}」（未激活，可在顶部下拉切换）"
+            else:
+                return {"status": "error", "msg": "未知操作",
+                        "schemes": schemes.list_schemes()}
+        finally:
+            self._scheme_dialog_busy = False
+        if result.get("status") != "success":
+            return {**result, "schemes": schemes.list_schemes()}
+        return {"status": "success", "msg": msg,
+                "schemes": schemes.list_schemes()}
+
+    def _push_js(self, js):
+        """执行页面 JS（导入导出结果异步回推用；页面未就绪时静默忽略）。"""
+        if self.webview_instance:
+            try:
+                self.webview_instance.evaluate_js(js)
+            except Exception:
+                pass
+
     def get_init_data(self):
         """页面初始化数据：主题、任务模式多选、任务次数、摄妖香开关、
         各条阈值、战斗动作、修罗/五倍设置与调试信息开关。"""
@@ -752,7 +880,8 @@ class ControlWindow(WebWindow):
                 "auto_famen": load_auto_famen(),
                 "debug_overlay": load_debug_overlay(),
                 "license": self._license_info,
-                "env": self.get_env_info()}
+                "env": self.get_env_info(),
+                "schemes": schemes.list_schemes()}
 
     def save_battle_action(self, target, value):
         """战斗设置变更：保存人物/召唤兽默认战斗动作。"""
@@ -873,14 +1002,6 @@ class ControlWindow(WebWindow):
     def stop_task(self):
         """停止按钮：停止任务子进程（升级强杀，保证任务线程全清）。"""
         return self._tm.stop()
-
-    def reset_task(self):
-        """重置按钮：停止当前任务，并把所有设置恢复默认。"""
-        result = self._tm.stop()
-        if result.get("status") != "success":
-            return result
-        reset_settings()
-        return {"status": "success", "modes": load_selected_modes()}
 
     def verify_xiuluo_return(self):
         """高级设置-修罗回程验证按钮：与实际返程流程一致，但不右键使用
@@ -1374,7 +1495,7 @@ class ControlWindow(WebWindow):
             except Exception:
                 pass
 
-    def prepare(self, width=360, height=500):
+    def prepare(self, width=440, height=500):
         """创建主窗口与日志窗口（不启动事件循环，webview.start 统一执行）。
 
         日志窗口初始隐藏，主窗口 shown 后按调试信息开关决定是否吸附显示；

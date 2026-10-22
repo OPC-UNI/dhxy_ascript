@@ -193,6 +193,19 @@ def kv_save_merged(key, value):
         _kv_commit_locked()
 
 
+def kv_save_many_merged(mapping):
+    """重读 config.json 后一次批量写入多键（防旧快照整文件覆写）。
+
+    配置方案切换用：一次「重读→改→写」替换全部设置键，避免逐键调用
+    kv_save_merged 造成的 N 次整文件读写。
+    """
+    KeyValue._initialize()
+    with KeyValue._lock:
+        KeyValue._data = KeyValue._load_data()
+        KeyValue._data.update(mapping)
+        _kv_commit_locked()
+
+
 def kv_update_merged(key, update):
     """重读 config.json 后按回调改写单键（回调收到该键当前值，返回新值）。"""
     KeyValue._initialize()

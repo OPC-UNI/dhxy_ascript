@@ -15,7 +15,6 @@
             --text-dim: #888;
             --accent: #00ff88;
             --accent-dim: #00b36b;
-            --warn: #ffb300;
             --progress-tint: rgba(0, 255, 136, 0.10);  /* 任务行背景进度淡色 */
         }
         body.light {
@@ -28,7 +27,6 @@
             --text-dim: #7f8c8d;
             --accent: #00a86b;
             --accent-dim: #00b36b;
-            --warn: #c77700;
             --progress-tint: rgba(0, 168, 107, 0.12);
         }
         html, body {
@@ -36,7 +34,7 @@
             overflow: hidden; background-color: var(--bg);
             display: flex; flex-direction: column;
         }
-        /* ---- 顶部：重置按钮 + 任务状态 + 主题切换 ---- */
+        /* ---- 顶部：任务状态 + 配置方案下拉 + 主题图标切换 ---- */
         .top-bar {
             height: 48px; min-height: 48px; flex-shrink: 0;
             display: flex; align-items: center; gap: 8px; padding: 0 12px;
@@ -58,9 +56,12 @@
         .task-radio input:checked + span { opacity: 1; color: var(--accent); }
         .task-group:has(input:checked) { border-color: var(--accent); }
         .task-group:has(input:disabled) { cursor: not-allowed; }
-        #btn-reset { border-color: var(--warn); color: var(--warn); }
-        #btn-reset.armed { background: var(--warn); color: #fff; }
-        #btn-theme { border-color: var(--accent); color: var(--accent); margin-left: auto; }
+        #btn-theme {
+            border-color: var(--accent); color: var(--accent);
+            min-width: 32px; width: 32px; padding: 0;
+            display: flex; align-items: center; justify-content: center;
+        }
+        #btn-theme svg { width: 17px; height: 17px; display: block; }
         #btn-start { border-color: var(--accent); color: var(--accent); }
         #btn-start.running { border-color: #ff5f5f; color: #ff5f5f; }
         #status { color: var(--text-dim); font-size: 12px; font-family: 'Consolas', '微软雅黑', monospace; }
@@ -97,6 +98,39 @@
         .battle-action-row label { display: flex; align-items: center; gap: 4px; cursor: pointer; user-select: none; }
         .battle-action-row input[type="radio"] { accent-color: var(--accent); cursor: pointer; }
         .skill-select { background: var(--panel2); color: var(--text); border: 1px solid var(--border2); border-radius: 4px; padding: 2px 6px; min-width: 110px; font-size: 13px; font-family: "微软雅黑"; cursor: pointer; }
+        /* ---- 配置方案：顶部一键切换下拉 + 高级设置管理区 ---- */
+        #scheme-select {
+            background: var(--panel2); color: var(--text); border: 1px solid var(--border2);
+            border-radius: 6px; padding: 4px 8px; max-width: 150px; height: 30px;
+            font-size: 12px; font-family: "微软雅黑"; cursor: pointer;
+            margin-left: auto;  /* 推至右侧（主题图标在其右侧） */
+        }
+        #scheme-select:disabled { opacity: 0.35; cursor: not-allowed; }
+        #scheme-name-input {
+            background: var(--panel2); color: var(--text); border: 1px solid var(--border2);
+            border-radius: 4px; padding: 3px 8px; width: 150px; height: 26px;
+            font-size: 12px; font-family: "微软雅黑";
+        }
+        #scheme-name-input:disabled { opacity: 0.35; cursor: not-allowed; }
+        .scheme-current { color: var(--accent); }
+        .scheme-ctrl { flex-wrap: wrap; justify-content: flex-end; }  /* 长方案名按钮自动换行 */
+        .btn-sm {
+            min-width: 0; height: 26px; padding: 0 10px; border-radius: 5px;
+            border: 1px solid var(--border2); font-size: 12px;
+            font-family: "微软雅黑"; cursor: pointer;
+            background: var(--panel2); color: var(--text); transition: all 0.15s;
+        }
+        .btn-sm:hover:not(:disabled) { filter: brightness(1.2); }
+        .btn-sm:disabled { opacity: 0.35; cursor: not-allowed; }
+        /* 方案管理图标按钮（保存/另存/删除）：内联 SVG，随文字色 */
+        .icon-btn-sm {
+            min-width: 30px; width: 30px; height: 26px; padding: 0;
+            display: inline-flex; align-items: center; justify-content: center;
+        }
+        .icon-btn-sm svg { width: 14px; height: 14px; display: block; }
+        #btn-scheme-delete { border-color: #ff5f5f; color: #ff5f5f; }
+        #btn-scheme-delete.armed { background: #ff5f5f; color: #fff; }
+        #btn-scheme-import-confirm-cancel { border-color: var(--text-dim); color: var(--text-dim); }
         /* 设置条目式布局：文本居左、开关居右（DOM 为 track+文本，行反转
            后文本先行；input:checked 相邻兄弟选择器不受 DOM 顺序影响） */
         .switch-row { display: flex; flex-direction: row-reverse; align-items: center; justify-content: space-between; gap: 8px; color: var(--text); font-size: 13px; font-family: "微软雅黑"; cursor: pointer; user-select: none; }
@@ -170,9 +204,20 @@
 <body class="light">
     <div class="top-bar">
         <button id="btn-start" class="btn" onclick="toggleTask()">启 动</button>
-        <button id="btn-reset" class="btn" onclick="reset()">重 置</button>
         <span id="status">已停止</span>
-        <button id="btn-theme" class="btn" onclick="toggleTheme()">深 色</button>
+        <!-- 配置方案下拉：margin-left:auto 推至右侧，主题图标在最右 -->
+        <select id="scheme-select" title="配置方案：选中即切换"></select>
+        <!-- 主题图标按钮：浅色显示月亮（目标深色）、深色显示太阳（目标浅色） -->
+        <button id="btn-theme" class="btn" onclick="toggleTheme()" title="切换到深色">
+            <svg id="theme-icon-moon" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+            </svg>
+            <svg id="theme-icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none">
+                <circle cx="12" cy="12" r="5"/>
+                <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
+            </svg>
+        </button>
     </div>
     <div class="tab-bar">
         <div class="tab active" data-tab="task">任务列表</div>
@@ -434,6 +479,64 @@
                 </div>
                 <div class="group-hint" id="license-msg"></div>
             </div>
+            <!-- 配置方案：多套设置快照管理（一键切换在顶部下拉）。
+                 当前方案行实时显示操作对象；重命名/删除按钮文案带方案名 -->
+            <div class="group-box">
+                <div class="group-title">配置方案</div>
+                <div class="group-row">
+                    <span class="group-label">当前方案</span>
+                    <span class="group-sub scheme-current" id="scheme-current">-</span>
+                </div>
+                <div class="group-row">
+                    <span class="group-label">方案名</span>
+                    <div class="group-ctrl scheme-ctrl">
+                        <!-- 输入框回填当前方案名：改名后点保存=重命名+保存；
+                             另存新方案=当前设置存为新方案（重名自动加序号） -->
+                        <input type="text" id="scheme-name-input" maxlength="20">
+                        <button class="btn-sm icon-btn-sm" id="btn-scheme-save"
+                                title="保存：当前设置写回本方案（改了名字则重命名）">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                                <polyline points="17 21 17 13 7 13 7 21"/>
+                                <polyline points="7 3 7 8 15 8"/>
+                            </svg>
+                        </button>
+                        <button class="btn-sm icon-btn-sm" id="btn-scheme-copy"
+                                title="另存新方案：当前设置另存为新方案，新方案成为当前方案">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                            </svg>
+                        </button>
+                        <button class="btn-sm icon-btn-sm" id="btn-scheme-delete"
+                                title="删除当前方案">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <polyline points="3 6 5 6 21 6"/>
+                                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                                <line x1="10" y1="11" x2="10" y2="17"/>
+                                <line x1="14" y1="11" x2="14" y2="17"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+                <div class="group-row">
+                    <span class="group-label">管理</span>
+                    <div class="group-ctrl">
+                        <button class="btn-sm" id="btn-scheme-import">导入</button>
+                        <button class="btn-sm" id="btn-scheme-export">导出</button>
+                    </div>
+                </div>
+                <div class="group-row" id="scheme-import-confirm" style="display:none">
+                    <span class="group-sub" id="scheme-import-confirm-text"></span>
+                    <div class="group-ctrl">
+                        <button class="btn-sm" id="btn-scheme-import-overwrite" onclick="schemeImportConfirm('overwrite')">覆盖</button>
+                        <button class="btn-sm" id="btn-scheme-import-rename" onclick="schemeImportConfirm('rename')">另存为</button>
+                        <button class="btn-sm" id="btn-scheme-import-confirm-cancel" onclick="schemeImportConfirm('cancel')">取消</button>
+                    </div>
+                </div>
+                <div class="group-hint" id="scheme-msg"></div>
+                <div class="group-hint">方案 = 全部设置的快照，顶部下拉选中即切换（切换前自动保存当前改动）；方案名输入框回填当前方案名，改名后点保存 = 重命名并保存；「默认」方案不可删除/重命名（导入覆盖也被拒绝）；导入的新方案需手动切换生效。任务运行中不可切换或管理。</div>
+            </div>
             <div class="group-box">
                 <div class="group-title">调试信息</div>
                 <label class="switch-row">
@@ -515,7 +618,8 @@
         const statusEl = document.getElementById('status');
         const btnStart = document.getElementById('btn-start');
         const btnTheme = document.getElementById('btn-theme');
-        const btnReset = document.getElementById('btn-reset');
+        const iconMoon = document.getElementById('theme-icon-moon');
+        const iconSun = document.getElementById('theme-icon-sun');
         const taskSelects = document.querySelectorAll('input[name="task-mode"]');
         const countBtns = document.querySelectorAll('.task-count .th-btn');
         const useSyx = document.getElementById('use-syx');
@@ -563,6 +667,17 @@
         const envDeviceIdEl = document.getElementById('env-device-id');
         let envDeviceIdValue = '-';  // 设备 ID 原文（复制源；「已复制」反馈后恢复用）
         const unbindWinMsgEl = document.getElementById('unbind-win-msg');
+        const schemeSelect = document.getElementById('scheme-select');
+        const schemeInput = document.getElementById('scheme-name-input');
+        const btnSchemeSave = document.getElementById('btn-scheme-save');
+        const btnSchemeCopy = document.getElementById('btn-scheme-copy');
+        const btnSchemeDelete = document.getElementById('btn-scheme-delete');
+        const btnSchemeImport = document.getElementById('btn-scheme-import');
+        const btnSchemeExport = document.getElementById('btn-scheme-export');
+        const schemeMsgEl = document.getElementById('scheme-msg');
+        const schemeCurrentEl = document.getElementById('scheme-current');
+        const schemeImportConfirmRow = document.getElementById('scheme-import-confirm');
+        const schemeImportConfirmText = document.getElementById('scheme-import-confirm-text');
         let verifying = false;  // 验证请求在途标记（防连点，回程/领取/巫医共用）
 
         // 战斗设置：类型单选（法术/攻击/防御/捕捉/逃跑/无）+ 选「法术」时
@@ -664,6 +779,177 @@
             // 运行期间任务勾选与次数不可更改（用户确认：只能停止后修改）
             taskSelects.forEach(el => { el.disabled = running; });
             countBtns.forEach(btn => { btn.disabled = running; });
+            // 运行期间配置方案不可切换/管理（Python 侧同样有守卫，双保险）；
+            // 删除还受「默认」不可删除约束（与 renderSchemeControls 一致）
+            schemeSelect.disabled = running;
+            schemeInput.disabled = running;
+            btnSchemeSave.disabled = running;
+            btnSchemeCopy.disabled = running;
+            btnSchemeDelete.disabled = running || schemeActive === '默认';
+            btnSchemeImport.disabled = running;
+            btnSchemeExport.disabled = running;
+        }
+
+        // ---- 配置方案：顶部下拉一键切换 + 高级设置管理区 ----
+        // 方案列表与活动方案由 get_init_data 提供；切换后全量同步页面
+        // （方案含全部设置键，切换即整体替换）。
+        let schemeNames = [];
+        let schemeActive = '';
+        function renderSchemes(info) {
+            if (!info) return;
+            schemeNames = info.names || [];
+            schemeActive = info.active || '';
+            schemeSelect.innerHTML = '';
+            schemeNames.forEach(n => {
+                const opt = document.createElement('option');
+                opt.value = n;
+                opt.textContent = n;
+                schemeSelect.appendChild(opt);
+            });
+            schemeSelect.value = schemeActive || (schemeNames[0] || '');
+            schemeSelect.title = '当前方案：' + (schemeActive || '—') + '（选中即切换）';
+            renderSchemeControls();
+        }
+
+        // 管理区控件：当前方案行、方案名输入回填、按钮禁用态与确认态还原
+        function renderSchemeControls() {
+            schemeDeleteArm = false;  // 任何重渲染都还原删除确认态
+            schemeCurrentEl.innerText = schemeActive || '—';
+            // 输入框回填当前方案名：改名后点保存 = 重命名并保存（用户约定）
+            schemeInput.value = schemeActive || '';
+            btnSchemeDelete.classList.remove('armed');
+            // 「默认」方案不可删除：直接置灰（Python 侧同样拒绝，双保险）
+            const isDefault = schemeActive === '默认';
+            btnSchemeDelete.disabled = isDefault || running;
+            btnSchemeSave.disabled = running;
+            btnSchemeCopy.disabled = running;
+            btnSchemeDelete.title = isDefault ? '「默认」方案不可删除'
+                : '删除当前方案「' + (schemeActive || '') + '」';
+        }
+
+        // 方案操作反馈文案（6s 自动消失，成功/失败着色）
+        let schemeMsgTimer = null;
+        function schemeMsg(text, ok) {
+            schemeMsgEl.style.color = ok ? 'var(--accent)' : '#ff5f5f';
+            schemeMsgEl.innerText = text;
+            if (schemeMsgTimer) clearTimeout(schemeMsgTimer);
+            schemeMsgTimer = setTimeout(() => { schemeMsgEl.innerText = ''; }, 6000);
+        }
+
+        // 顶部下拉：选中即切换（无确认；运行中禁用）
+        schemeSelect.addEventListener('change', async () => {
+            if (running) return;
+            const name = schemeSelect.value;
+            const r = await callPython('switch_scheme', name);
+            if (r && r.status === 'success') {
+                schemeMsg('已切换到「' + name + '」', true);
+                await syncInitData();  // 设置已整体替换：全量刷新（含下拉与方案名回填）
+            } else {
+                schemeMsg((r && r.msg) || '切换失败', false);
+                renderSchemes({ names: schemeNames, active: schemeActive });  // 还原选中
+            }
+        });
+
+        // 保存：当前设置写回活动方案；输入框改了名字则同时重命名。
+        // 输入框回车 = 保存、Esc = 还原为当前方案名。
+        btnSchemeSave.addEventListener('click', submitSchemeSave);
+        schemeInput.addEventListener('keydown', e => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                submitSchemeSave();
+            } else if (e.key === 'Escape') {
+                e.preventDefault();
+                schemeInput.value = schemeActive || '';
+            }
+        });
+        async function submitSchemeSave() {
+            const name = schemeInput.value.trim();
+            if (!name) { schemeMsg('请输入方案名', false); return; }
+            const r = await callPython('scheme_resave', name);
+            if (r && r.status === 'success') {
+                const what = r.renamed ? '已重命名并保存为「' + r.active + '」'
+                    : '已保存到「' + r.active + '」';
+                schemeMsg(what, true);
+                await syncInitData();
+            } else {
+                schemeMsg((r && r.msg) || '保存失败', false);
+            }
+        }
+
+        // 另存新方案：当前设置存为新方案（重名自动加序号），新方案成为当前方案
+        btnSchemeCopy.addEventListener('click', async () => {
+            const name = schemeInput.value.trim();
+            if (!name) { schemeMsg('请输入方案名', false); return; }
+            const r = await callPython('scheme_copy', name);
+            if (r && r.status === 'success') {
+                schemeMsg('已另存为新方案「' + r.name + '」', true);
+                await syncInitData();
+            } else {
+                schemeMsg((r && r.msg) || '另存失败', false);
+            }
+        });
+
+        // 删除当前方案：图标二次点击确认（首点按钮变红，title 提示确认
+        // 对象，3s 未确认自动还原——纯确认操作，无输入时长问题）
+        let schemeDeleteArm = false;
+        btnSchemeDelete.addEventListener('click', async () => {
+            if (!schemeDeleteArm) {
+                schemeDeleteArm = true;
+                btnSchemeDelete.classList.add('armed');
+                btnSchemeDelete.title = '再点一次确认删除「' + (schemeActive || '') + '」';
+                setTimeout(() => {
+                    schemeDeleteArm = false;
+                    renderSchemeControls();
+                }, 3000);
+                return;
+            }
+            schemeDeleteArm = false;
+            renderSchemeControls();
+            const r = await callPython('scheme_delete');
+            if (r && r.status === 'success') {
+                schemeMsg('已删除，活动方案切回「默认」', true);
+                await syncInitData();  // 设置已应用「默认」，全量刷新
+            } else {
+                schemeMsg((r && r.msg) || '删除失败', false);
+            }
+        });
+
+        // 导出当前方案：Python 侧后台线程弹系统对话框，结果异步回推
+        btnSchemeExport.addEventListener('click', async () => {
+            const r = await callPython('scheme_export');
+            schemeMsg((r && r.msg) || '导出失败', r && r.status === 'success');
+        });
+        window.onSchemeExportResult = function (ok, info) {
+            schemeMsg(info, ok);
+        };
+
+        // 导入方案：Python 侧后台线程弹对话框；同名冲突时显示确认行
+        btnSchemeImport.addEventListener('click', async () => {
+            const r = await callPython('scheme_import');
+            schemeMsg((r && r.msg) || '导入失败', r && r.status === 'success');
+        });
+        window.onSchemeImportPending = function (name) {
+            schemeImportConfirmText.innerText = '已存在同名方案「' + name + '」：';
+            schemeImportConfirmRow.style.display = '';
+            btnSchemeImport.style.display = 'none';
+        };
+        window.onSchemeImportResult = function (ok, info, sc) {
+            schemeImportConfirmRow.style.display = 'none';
+            btnSchemeImport.style.display = '';
+            schemeMsg(info, ok);
+            if (sc) renderSchemes(sc);
+        };
+        async function schemeImportConfirm(action) {
+            const r = await callPython('scheme_import_confirm', action);
+            schemeImportConfirmRow.style.display = 'none';
+            btnSchemeImport.style.display = '';
+            if (!r || r.status !== 'success') {
+                schemeMsg((r && r.msg) || '操作失败', false);
+                if (r && r.schemes) renderSchemes(r.schemes);
+                return;
+            }
+            if (action !== 'cancel') schemeMsg(r.msg, true);
+            if (r.schemes) renderSchemes(r.schemes);
         }
 
         // 启动/停止切换：调用 Python 侧 TaskManager（防连点；Python 侧另有 BUSY 守卫）
@@ -685,10 +971,13 @@
 
         // 日志已移至独立吸附窗口（右侧），本页面仅保留调试开关的被动同步接口
 
-        // 主题切换：按钮文案显示切换后的目标模式
+        // 主题切换：图标显示目标主题（浅色界面显示月亮=点按进深色，
+        // 与旧按钮文案「深 色」语义一致）
         function applyTheme(theme) {
             document.body.classList.toggle('light', theme === 'light');
-            btnTheme.innerText = theme === 'light' ? '深 色' : '浅 色';
+            iconMoon.style.display = theme === 'light' ? '' : 'none';
+            iconSun.style.display = theme === 'dark' ? '' : 'none';
+            btnTheme.title = theme === 'light' ? '切换到深色' : '切换到浅色';
         }
         async function toggleTheme() {
             const next = document.body.classList.contains('light') ? 'dark' : 'light';
@@ -755,12 +1044,13 @@
             await refreshEnv();
         }
 
-        // 全量同步设置到页面（初始化与重置后共用）：主题、任务模式、
+        // 全量同步设置到页面（初始化与方案切换后共用）：主题、任务模式、
         // 各开关、巫医间隔、血蓝阈值、任务次数、战斗动作、修罗/五倍设置
         async function syncInitData() {
             const info = await callPython('get_init_data');
             if (!info) return;
             applyTheme(info.theme === 'light' ? 'light' : 'dark');
+            if (info.schemes) renderSchemes(info.schemes);  // 顶部方案下拉
             if (info.modes) {
                 taskSelects.forEach(el => { el.checked = info.modes.includes(el.value); });
             }
@@ -1264,7 +1554,7 @@
             debugOverlay.checked = !!on;
         };
 
-        // 解绑激活码：二次确认（同重置按钮模式），清除本地缓存后重启生效
+        // 解绑激活码：二次确认（同删除方案模式），清除本地缓存后重启生效
         let unbindArm = false;
         async function unbindLicense() {
             if (!unbindArm) {
@@ -1282,30 +1572,6 @@
             licenseMsgEl.innerText = (r && r.msg) || '操作失败';
         }
 
-        // 重置：二次确认（首次点击进入「确认重置？」待确认态，3s 未确认自动还原）
-        let resetArm = false;
-        async function reset() {
-            if (!resetArm) {
-                resetArm = true;
-                btnReset.innerText = '确认重置？';
-                btnReset.classList.add('armed');
-                setTimeout(() => {
-                    resetArm = false;
-                    btnReset.innerText = '重 置';
-                    btnReset.classList.remove('armed');
-                }, 3000);
-                return;
-            }
-            resetArm = false;
-            btnReset.innerText = '重 置';
-            btnReset.classList.remove('armed');
-            const r = await callPython('reset_task');
-            if (r && r.status === 'success') {
-                running = false;
-                await syncInitData();  // 所有设置已重置为默认，全量刷新页面
-                update();
-            }
-        }
     </script>
 </body>
 </html>
