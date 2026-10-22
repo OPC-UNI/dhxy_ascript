@@ -1,10 +1,11 @@
 """背包相关操作：打开背包、物品检测与点击。"""
 import time
 
+from ascript.windows.hardware.keyboard import Keyboard
 from ascript.windows.system import R
 from ascript.windows.screen.find_images import FindImages
 from .app_utils import log, human_click
-from . import app_utils  # 高性能模式共享设施（背包按钮缓存）
+from . import app_utils  # 高性能模式共享设施（high_perf 开关等）
 
 # 背包按钮模板（res/img/bag.png，34x34，实测匹配度 0.999）
 BAG_ICON = "bag.png"
@@ -164,28 +165,50 @@ def find_sheyaoxiang_with_slots(win):
                                 threshold=SHEYAOXIANG_THRESHOLD)
 
 
-def open_bag(win):
-    """点击背包并验证打开。
+def _press_bag_hotkey(win):
+    """高性能开包：按 Alt+E 快捷键（替代缓存坐标点击，位置漂移免疫）。
 
-    点击后轮询 bag_box 模板出现：出现=打开成功；未出现=重试（最多
+    热键经前台窗口送达（Keyboard.key_hot 即 pyautogui）：按键前校验
+    游戏窗口在前台，非前台先激活再校验（同 clear_screen 路径）——
+    任务执行期间游戏保持前台，正常零额外开销。返回 (是否已发送, 描述)。
+    """
+    try:
+        import win32gui
+        if win32gui.GetForegroundWindow() != win.hwnd:
+            win.activate()
+            time.sleep(0.3)
+            if win32gui.GetForegroundWindow() != win.hwnd:
+                return False, "游戏窗口未在前台，Alt+E 未发送"
+        Keyboard.key_hot("alt", "e")
+        return True, "已按 Alt+E 快捷键"
+    except Exception as e:
+        return False, f"Alt+E 发送异常: {e}"
+
+
+def open_bag(win):
+    """打开背包并验证打开。
+
+    操作后轮询 bag_box 模板出现：出现=打开成功；未出现=重试（最多
     3 次、单次等待 4s——覆盖战斗结束后结算/掉落类弹窗的瞬态遮挡，
     实测 2026-10-12 弹窗 ~6s 内吞掉两次点击、地图 1s 后正常打开）。
-    注意背包按钮是开关切换：若此前已是打开状态，第一次点击会关闭，
-    检测失败后重试点击即可恢复打开，流程自愈；等待窗口加宽也消除
+    注意背包是开关切换：若此前已是打开状态，第一次操作会关闭，
+    检测失败后重试即可恢复打开，流程自愈；等待窗口加宽也消除
     「慢开超时后重点把刚打开的背包关掉」的自伤。
-    高性能：按钮坐标缓存后首轮直点（识别打开成功后记录位置），
-    未打开回退识别流程。返回 (是否成功, 描述)。
+    高性能：首轮按 Alt+E 快捷键开包（热键与按钮坐标漂移无关，2026-10-22
+    缓存坐标点击失效后按用户要求调整），未打开回退识别点击流程。
+    返回 (是否成功, 描述)。
     """
     for attempt in (1, 2, 3):
         r = None
-        cached = False
+        via_hotkey = False
         if attempt == 1 and app_utils.high_perf_on():
-            pos = app_utils.fixed_pos_get("bag_btn", win)
-            if pos is not None:
-                human_click(win, pos[0], pos[1])
-                log(f"[背包][高性能] 已按缓存坐标点击背包按钮 ({pos[0]}, {pos[1]})", "SYS")
-                cached = True
-        if not cached:
+            sent, desc = _press_bag_hotkey(win)
+            if sent:
+                via_hotkey = True
+                log(f"[背包][高性能] {desc}，等待背包打开...", "SYS")
+            else:
+                log(f"[背包][高性能] {desc}，回退识别点击", "WARN")
+        if not via_hotkey:
             r = _match_template(win, BAG_ICON)
             if r is None:
                 return False, "未找到背包按钮"
@@ -193,12 +216,10 @@ def open_bag(win):
         deadline = time.time() + _BAG_TOGGLE_TIMEOUT
         while time.time() < deadline:
             if is_bag_open(win):
-                if r is not None:
-                    app_utils.fixed_pos_set("bag_btn", win, r.x, r.y)
-                desc = "高性能缓存" if cached else f"匹配度 {r.confidence:.2f}"
-                return True, f"第{attempt}次点击成功（{desc}）"
+                desc = "Alt+E 快捷键" if via_hotkey else f"匹配度 {r.confidence:.2f}"
+                return True, f"第{attempt}次操作成功（{desc}）"
             time.sleep(_BAG_TOGGLE_POLL)
-        log(f"[背包] 第{attempt}次点击后未检测到背包面板，重试一次...", "WARN")
+        log(f"[背包] 第{attempt}次{'按键' if via_hotkey else '点击'}后未检测到背包面板，重试一次...", "WARN")
     # 诊断：OCR 屏幕中央区域，记录遮挡物文案（弹窗类型排查用）
     try:
         from . import map as _gm
