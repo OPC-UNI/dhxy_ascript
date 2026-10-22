@@ -16,6 +16,7 @@
             --accent: #00ff88;
             --accent-dim: #00b36b;
             --warn: #ffb300;
+            --progress-tint: rgba(0, 255, 136, 0.10);  /* 任务行背景进度淡色 */
         }
         body.light {
             --bg: #f0f2f5;
@@ -28,6 +29,7 @@
             --accent: #00a86b;
             --accent-dim: #00b36b;
             --warn: #c77700;
+            --progress-tint: rgba(0, 168, 107, 0.12);
         }
         html, body {
             margin: 0; padding: 0; width: 100%; height: 100%;
@@ -49,9 +51,9 @@
         .btn:hover:not(:disabled) { filter: brightness(1.2); }
         .btn:disabled { opacity: 0.35; cursor: not-allowed; }
         .th-btn:disabled { opacity: 0.35; cursor: not-allowed; }
-        /* 任务选择：单选框隐藏、整卡点击选择；选中态（边框+文字主题色）
+        /* 任务选择：复选框隐藏、整卡点击勾选/取消；选中态（边框+文字主题色）
            与运行中高亮一致，未选择的任务在运行中置灰 */
-        .task-radio input[type="radio"] { display: none; }
+        .task-radio input[type="checkbox"] { display: none; }
         .task-radio input:disabled + span { opacity: 0.35; }
         .task-radio input:checked + span { opacity: 1; color: var(--accent); }
         .task-group:has(input:checked) { border-color: var(--accent); }
@@ -118,13 +120,14 @@
         }
         .th-btn:hover { background: var(--border); color: var(--accent); }
         .th-val { width: 32px; text-align: center; color: var(--accent); font-family: 'Consolas', monospace; }
-        /* ---- 任务设置：每任务一组（模式单选 + 次数步进） ---- */
+        /* ---- 任务列表：每任务一组（模式多选 + 次数步进） ---- */
         /* 任务条目：卡片加高便于整卡点击；条目间隔收紧（覆盖 tab-panel 默认 12px） */
         #panel-task { gap: 6px; }
         .task-group {
             width: 100%; display: flex; flex-direction: row; align-items: center;
             gap: 10px; background: var(--panel); border: 1px solid var(--border);
             border-radius: 8px; padding: 14px 12px; cursor: pointer;
+            position: relative; z-index: 0; overflow: hidden;  /* 背景进度填充的裁剪与层叠 */
         }
         .task-radio {
             flex: 1; display: flex; align-items: center; gap: 6px;
@@ -132,6 +135,13 @@
             cursor: pointer; user-select: none;
         }
         .task-count { display: flex; align-items: center; gap: 6px; }
+        /* 每行任务背景进度：淡色整行填充（不抢眼球），按完成百分比撑开；
+           负 z-index 叠在卡片背景上、内容之下 */
+        .task-fill {
+            position: absolute; z-index: -1; left: 0; top: 0; bottom: 0; width: 0%;
+            background: var(--progress-tint); pointer-events: none;
+            transition: width 0.4s;
+        }
         /* ---- 分组框（通用/高级设置） ---- */
         .group-box {
             width: 100%; display: flex; flex-direction: column; gap: 10px;
@@ -171,10 +181,12 @@
         <div class="tab" data-tab="advanced">高级设置</div>
     </div>
     <div class="body">
-        <!-- 任务列表：每任务一组（模式单选 + 任务次数步进） -->
+        <!-- 任务列表：每任务一组（模式多选 + 任务次数步进），
+             每行背景淡色填充按完成百分比撑开展示进度 -->
         <div class="tab-panel active" id="panel-task">
             <div class="task-group">
-                <label class="task-radio"><input type="radio" name="task-mode" value="五环"><span>五环</span></label>
+                <div class="task-fill" id="fill-五环"></div>
+                <label class="task-radio"><input type="checkbox" name="task-mode" value="五环"><span>五环</span></label>
                 <div class="task-count">
                     <button class="th-btn" onclick="count('五环', -1)">−</button>
                     <span class="th-val" id="cnt-五环">2</span>
@@ -182,7 +194,8 @@
                 </div>
             </div>
             <div class="task-group">
-                <label class="task-radio"><input type="radio" name="task-mode" value="客栈"><span>客栈</span></label>
+                <div class="task-fill" id="fill-客栈"></div>
+                <label class="task-radio"><input type="checkbox" name="task-mode" value="客栈"><span>客栈</span></label>
                 <div class="task-count">
                     <button class="th-btn" onclick="count('客栈', -1)">−</button>
                     <span class="th-val" id="cnt-客栈">20</span>
@@ -190,7 +203,8 @@
                 </div>
             </div>
             <div class="task-group">
-                <label class="task-radio"><input type="radio" name="task-mode" value="修罗"><span>修罗</span></label>
+                <div class="task-fill" id="fill-修罗"></div>
+                <label class="task-radio"><input type="checkbox" name="task-mode" value="修罗"><span>修罗</span></label>
                 <div class="task-count">
                     <button class="th-btn" onclick="count('修罗', -1)">−</button>
                     <span class="th-val" id="cnt-修罗">90</span>
@@ -198,7 +212,8 @@
                 </div>
             </div>
             <div class="task-group">
-                <label class="task-radio"><input type="radio" name="task-mode" value="五倍"><span>五倍</span></label>
+                <div class="task-fill" id="fill-五倍"></div>
+                <label class="task-radio"><input type="checkbox" name="task-mode" value="五倍"><span>五倍</span></label>
                 <div class="task-count">
                     <button class="th-btn" onclick="count('五倍', -1)">−</button>
                     <span class="th-val" id="cnt-五倍">100</span>
@@ -206,7 +221,8 @@
                 </div>
             </div>
             <div class="task-group">
-                <label class="task-radio"><input type="radio" name="task-mode" value="玄枢轶闻"><span>玄枢轶闻</span></label>
+                <div class="task-fill" id="fill-玄枢轶闻"></div>
+                <label class="task-radio"><input type="checkbox" name="task-mode" value="玄枢轶闻"><span>玄枢轶闻</span></label>
                 <div class="task-count">
                     <button class="th-btn" onclick="count('玄枢轶闻', -1)">−</button>
                     <span class="th-val" id="cnt-玄枢轶闻">5</span>
@@ -214,7 +230,8 @@
                 </div>
             </div>
             <div class="task-group">
-                <label class="task-radio"><input type="radio" name="task-mode" value="名望"><span>名望</span></label>
+                <div class="task-fill" id="fill-名望"></div>
+                <label class="task-radio"><input type="checkbox" name="task-mode" value="名望"><span>名望</span></label>
                 <div class="task-count">
                     <button class="th-btn" onclick="count('名望', -1)">−</button>
                     <span class="th-val" id="cnt-名望">5</span>
@@ -499,7 +516,7 @@
         const btnStart = document.getElementById('btn-start');
         const btnTheme = document.getElementById('btn-theme');
         const btnReset = document.getElementById('btn-reset');
-        const modeRadios = document.querySelectorAll('input[name="task-mode"]');
+        const taskSelects = document.querySelectorAll('input[name="task-mode"]');
         const countBtns = document.querySelectorAll('.task-count .th-btn');
         const useSyx = document.getElementById('use-syx');
         const debugOverlay = document.getElementById('debug-overlay');
@@ -644,8 +661,8 @@
             statusEl.className = running ? 'running' : '';
             btnStart.innerText = running ? '停 止' : '启 动';
             btnStart.classList.toggle('running', running);
-            // 运行期间任务模式与次数不可更改（用户确认：只能停止后修改）
-            modeRadios.forEach(radio => { radio.disabled = running; });
+            // 运行期间任务勾选与次数不可更改（用户确认：只能停止后修改）
+            taskSelects.forEach(el => { el.disabled = running; });
             countBtns.forEach(btn => { btn.disabled = running; });
         }
 
@@ -744,9 +761,8 @@
             const info = await callPython('get_init_data');
             if (!info) return;
             applyTheme(info.theme === 'light' ? 'light' : 'dark');
-            if (info.mode) {
-                const radio = [...modeRadios].find(el => el.value === info.mode);
-                if (radio) radio.checked = true;
+            if (info.modes) {
+                taskSelects.forEach(el => { el.checked = info.modes.includes(el.value); });
             }
             useSyx.checked = !!info.use_sheyaoxiang;
             debugOverlay.checked = !!info.debug_overlay;
@@ -811,6 +827,7 @@
                     el.checked = xl.races.includes(el.value);
                 });
             }
+            await refreshProgress();
         }
 
         // 页面初始化：恢复上次的所有设置
@@ -836,29 +853,56 @@
             const val = Math.min(COUNT_MAX[mode] || Infinity, Math.max(0, cur + delta));
             if (val === cur) return;  // 已到上下限，不发请求
             const r = await callPython('save_task_count', mode, val);
-            if (r && r.status === 'success') el.innerText = r.count;
+            if (r && r.status === 'success') {
+                el.innerText = r.count;
+                refreshProgress();  // 次数变化影响进度分母
+            }
         }
 
-        // 单选变更：立即保存选择（运行期间禁用，双保险）
-        modeRadios.forEach(radio => {
-            radio.addEventListener('change', () => {
+        // 单任务进度刷新：Python 侧直读 config.json 汇总（任务子进程
+        // 写入的当天完成次数），更新每行背景淡色填充；
+        // 次数上限为 0（不限）的任务不计入进度分母
+        async function refreshProgress() {
+            const p = await callPython('get_task_progress');
+            if (!p) return;
+            const per = p.per_task || {};
+            for (const mode of ['五环', '客栈', '修罗', '五倍', '玄枢轶闻', '名望']) {
+                const el = document.getElementById('fill-' + mode);
+                if (!el) continue;
+                const t = per[mode];
+                el.style.width = (t && t.percent) ? t.percent + '%' : '0%';
+            }
+        }
+        setInterval(refreshProgress, 2500);  // 运行中每 2.5s 轮询进度
+
+        // 选中任务列表保存：按面板顺序收集勾选项（Python 侧过滤非法项），
+        // 保存后刷新总进度（勾选变化影响进度分母）
+        function saveSelectedModes() {
+            const modes = [...taskSelects].filter(el => el.checked).map(el => el.value);
+            callPython('save_task_modes', modes).then(refreshProgress);
+        }
+
+        // 勾选变更：立即保存（运行期间禁用，双保险）；
+        // 点击 label 文字时由浏览器原生切换复选框触发 change
+        taskSelects.forEach(input => {
+            input.addEventListener('change', () => {
                 if (running) return;
-                if (radio.checked) callPython('save_task_mode', radio.value);
+                saveSelectedModes();
             });
         });
 
-        // 任务条目整卡点击选择（单选框已隐藏）；次数步进按钮不触发选择。
-        // 注意：脚本设置 radio.checked 不触发 change 事件（Edge/WebView2
-        // 实测，change 只在用户交互时派发）——保存必须直接调用，
-        // 不能依赖 change 监听（change 监听仅作可见控件路径的兜底）
+        // 任务条目整卡点击切换勾选（复选框已隐藏）；次数步进按钮不触发。
+        // 注意：脚本设置 checked 不触发 change 事件（Edge/WebView2 实测，
+        // change 只在用户交互时派发）——卡片空白处点击需直接保存；
+        // 点击落在 label 上时浏览器已原生切换，此处跳过防双重切换
         document.querySelectorAll('.task-group').forEach(group => {
             group.addEventListener('click', e => {
                 if (running) return;
                 if (e.target.closest('.th-btn')) return;
-                const radio = group.querySelector('input[name="task-mode"]');
-                if (radio && !radio.checked) {
-                    radio.checked = true;
-                    callPython('save_task_mode', radio.value);
+                const input = group.querySelector('input[name="task-mode"]');
+                if (input && !e.target.closest('.task-radio')) {
+                    input.checked = !input.checked;
+                    saveSelectedModes();
                 }
             });
         });
@@ -1212,6 +1256,7 @@
         window.syncStatus = function (isActive) {
             running = isActive;
             update();
+            refreshProgress();  // 启停后进度立即刷新
         };
 
         // Python 侧调用：日志窗口被关闭时同步调试信息开关勾选（不触发保存回调）

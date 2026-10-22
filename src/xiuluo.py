@@ -175,7 +175,7 @@ BATTLE_END_POLL = 2.0            # 等待战斗结束的轮询间隔
 # ---- 返程（用户流程：背包任务储物格 → 修罗回城符右键 → 回灵兽村） ----
 BOX_TASK_ICON = "box_task.png"                    # 背包任务储物格按钮（未选中态，点击打开）
 BOX_TASK_SELECTED_ICON = "box_task_selected.png"  # 任务储物格已打开（选中态，无需再点击）
-XIULUO_RETURN_ICON = "xiuluo_huichengfu.png"      # 修罗回城符模板（TODO: 待用户提供）
+XIULUO_RETURN_ICON = "xiuluo_huichengfu.png"      # 修罗回城符模板（用户实测素材）
 TASK_BOX_THRESHOLD = 0.8         # 储物格按钮双模板判定阈值（与其他模板一致）
 TASK_BOX_TIMEOUT = 10            # 等待任务储物格打开的超时（点击后渲染/切换）
 RETURN_TALISMAN_TIMEOUT = 15     # 等待回城符在任务储物格中出现的超时
@@ -1449,9 +1449,8 @@ def run_loop(win, cycle_interval=1.0):
     补查一次队伍状态——非队长转保持模式，人数不足恢复领取前
     监控（等人数满足再领取），检查通过则下轮直接重试领取
 
-    结束条件（满足其一即返回结束原因，任务随之停止）：
-    1. 完成任务次数达到设置的次数上限（通用设置-任务次数）
-    2. 领取时出现每日次数已满（TODO: 具体文案待确认）
+    结束条件：完成任务次数达到设置的次数上限（通用设置-任务次数）
+    即返回结束原因、任务随之停止（无其他结束条件）。
     返回结束原因描述。
     """
     global _fight_via_kanda, _team_checked, _task_gone_last_round, _returned_last_round, \

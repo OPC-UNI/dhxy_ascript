@@ -391,7 +391,7 @@ DALI_MAP_CLICK_POS = (623, 317)               # 洛阳小地图上大理寺墙�
 DALI_TARGET_POS = (223, 195)                  # 到达目标（洛阳城坐标，±5 容差）
 DALI_ARRIVE_TIMEOUT = 120                     # 寻路等待超时（秒）
 DALI_REDO_INTERVAL = 15                       # 寻路完成后最短重做间隔（任务文案未更新时防重复点击）
-AWANG_ICON = "awang.png"                      # 阿旺 NPC 模板（图片后续提供）
+AWANG_ICON = "awang.png"                      # 阿旺 NPC 模板（用户实测素材）
 AWANG_FALLBACK_MAP_CLICK_POS = (548, 297)     # 兜底：洛阳小地图点击点（阿旺实际出现点，
                                               # 用户 2026-10-20 实测）
 AWANG_FALLBACK_TARGET_POS = (180, 207)        # 兜底到达目标（洛阳城坐标，±5 容差）

@@ -8,7 +8,8 @@ ControlWindow 基于 WebWindow（pywebview），页面为 res/ui/control_window.
 
 页面结构：
 - 顶部：启动/停止按钮 + 重置按钮 + 任务状态显示 + 浅色/深色主题切换
-- Tab 栏：任务设置（每任务一组：模式单选 + 次数步进）/ 通用设置
+- Tab 栏：任务列表（每任务一组：模式多选 + 次数步进 + 总进度条）/
+  任务设置 / 通用设置
   （摄妖香、血蓝阈值、人物与召唤兽默认战斗动作，内含修罗/五倍设置
   分组，仅队长时生效）/ 高级设置（调试信息悬浮开关）
 
@@ -24,6 +25,7 @@ ControlWindow 基于 WebWindow（pywebview），页面为 res/ui/control_window.
 （window.callPython → call_internal 通道），否则注入会被跳过。
 """
 import json
+import re
 import threading
 import time
 import webview
@@ -37,10 +39,11 @@ from src.log_window import LogWindow
 from . import game  # 游戏窗口查找（修罗回程验证用；game 不反向依赖本模块，可顶层导入）
 from . import app_utils  # KeyValue 合并读写（kv_save_merged/kv_remove_merged）
 
-# ---- 任务模式（UI 单选项，KeyValue 持久化，记住上次选择） ----
+# ---- 任务模式（UI 多选项，KeyValue 持久化，记住上次选择） ----
 TASK_MODES = ["五环", "客栈", "修罗", "五倍", "玄枢轶闻", "名望"]
-_DEFAULT_MODE = TASK_MODES[0]  # 五环
-_MODE_KEY = "task_mode"
+_DEFAULT_MODES = ["五环"]  # 首次默认选中五环（与原单选默认一致）
+_MODES_KEY = "task_modes"           # 多选列表（新键）
+_MODE_KEY_OLD = "task_mode"         # 旧单选键（自动迁移）
 
 # ---- 使用环境（高级设置-使用环境展示；只读信息） ----
 ENV_THEME = "水墨"               # 已适配的游戏 UI 主题
@@ -68,10 +71,19 @@ def save_ui_theme(theme):
     return {"status": "success"}
 
 
-def load_task_mode():
-    """读取上次选择的任务模式（首次默认五环）。"""
-    mode = KeyValue.get(_MODE_KEY, _DEFAULT_MODE)
-    return mode if mode in TASK_MODES else _DEFAULT_MODE
+def load_selected_modes():
+    """读取选中的任务模式列表（首次默认五环；旧单选键自动迁移）。
+
+    按 TASK_MODES 固定顺序返回（执行顺序与列表一致）；旧版本保存的
+    单选值 task_mode 首次读取时迁移到多选列表。
+    """
+    raw = KeyValue.get(_MODES_KEY, None)
+    if raw is None:
+        old = KeyValue.get(_MODE_KEY_OLD)
+        raw = [old] if old in TASK_MODES else list(_DEFAULT_MODES)
+    if not isinstance(raw, list):
+        raw = []
+    return [m for m in TASK_MODES if m in raw]
 
 
 def _kv_save(key, value):
@@ -90,12 +102,11 @@ def _kv_remove(key):
     """KeyValue.remove 包装：移除前重读合并（同 _kv_save 理由）。"""
     app_utils.kv_remove_merged(key)
 
-def save_task_mode(mode):
-    """保存任务模式选择，返回操作结果。"""
-    if mode not in TASK_MODES:
-        return {"status": "error", "msg": "INVALID_MODE"}
-    _kv_save(_MODE_KEY, mode)
-    return {"status": "success"}
+def save_selected_modes(modes):
+    """保存任务模式多选列表（过滤非法项，允许空列表），返回操作结果。"""
+    modes = [m for m in TASK_MODES if m in modes]
+    _kv_save(_MODES_KEY, modes)
+    return {"status": "success", "modes": modes}
 
 
 def load_use_sheyaoxiang():
@@ -147,6 +158,122 @@ def save_task_count(mode, value):
     value = _clamp_count(mode, value)
     _kv_save(_COUNT_KEYS[mode], value)
     return {"status": "success", "count": value}
+
+
+# ---- 任务总进度（页面进度条数据源；任务子进程写入进度后主进程
+#      经 get_task_progress 实时读取） ----
+_TASK_PROGRESS_KEY = "task_progress"  # 与 app_utils._TASK_PROGRESS_KEY 同键
+
+
+def _fresh_progress_modes():
+    """绕开 KeyValue 进程内缓存，直接重读 config.json 中的当天进度。
+
+    进度由任务子进程的 app_utils.task_progress_add 写入（保存前重读
+    合并），主进程 KeyValue 快照读不到这些更新；进度条轮询必须走
+    文件直读（同 debug_overlay._read_switch 的原因）。
+    返回 {mode: 当天已完成次数}，数据缺失/损坏按空处理。
+    """
+    try:
+        KeyValue._initialize()
+        data = KeyValue._load_data().get(_TASK_PROGRESS_KEY, {}) or {}
+        entry = data.get(_char_key_for_progress(), {})
+        if isinstance(entry, dict) and entry.get("date") == time.strftime("%Y-%m-%d"):
+            modes = entry.get("modes", {}) or {}
+            return {m: int(v) for m, v in modes.items() if isinstance(v, (int, float))}
+    except Exception:
+        pass
+    return {}
+
+
+_char_key_cache = {"key": None, "ts": 0.0}  # 角色键缓存（进度轮询每 2.5s 一次，窗口枚举 30s 刷一次）
+
+
+def _bound_char_key():
+    """从窗口绑定记录提取角色键（进度展示兜底用）。
+
+    游戏在登录界面/未启动时窗口标题无 ID，无法从标题解析角色；
+    绑定记录（bound_window_id）跨重启记住角色 ID，用它兜底对上
+    当天进度。无绑定/无法解析时返回 None。
+    """
+    raw = game.bound_window_id()
+    if isinstance(raw, dict):
+        raw = raw.get("id")
+    m = re.search(r"ID：(\d+)", str(raw or ""))
+    return f"（ID：{m.group(1)}）" if m else None
+
+
+def bound_short_label():
+    """窗口绑定角色短文案（控制窗口标题/托盘菜单共用）：服务器+角色名，
+    如「一生所爱「长相思」」。
+
+    优先取当前窗口标题（实时）；窗口在登录界面（标题无 ID）或未启动
+    时，回退绑定记录里的标题解析（角色信息不因登录状态丢失）。无绑定/
+    无角色信息返回 None。文案刻意保持简短，不拼完整标题。
+    """
+    win = game.find_main_window()
+    title = (getattr(win, "title", "") or "") if win is not None else ""
+    if "ID：" not in title:
+        raw = game.bound_window_id()
+        if isinstance(raw, dict):
+            title = raw.get("title") or ""
+        else:
+            title = raw or ""
+    if "ID：" not in title:
+        return None
+    parts = [p.strip() for p in title.split(" - ")]
+    if len(parts) >= 3:
+        char = re.sub(r"（ID：\d+）\s*$", "", parts[-1]).strip()
+        label = f"{parts[-2]}{char}"
+        if label:
+            return label
+    # 标题格式意外时退回完整标题，超长截断（窗口标题栏空间有限）
+    return title if len(title) <= 20 else title[:19] + "…"
+
+
+def _char_key_for_progress():
+    """当前游戏窗口的角色键（进度按角色持久化）。
+
+    进度条轮询每 2.5 秒调用一次，窗口枚举（find_main_window 内部
+    两次 EnumWindows）不必每次都做：角色键 30 秒内不变，缓存复用；
+    换角色登录后标题变化，下一轮自动刷新。窗口在登录界面（标题
+    无 ID）或未启动时，回退绑定记录的角色 ID——进度展示不因登录
+    状态丢失（2026-10-22：游戏停在登录界面导致进度条全 0 的修复）。
+    """
+    now = time.time()
+    if now - _char_key_cache["ts"] > 30:
+        win = game.find_main_window()
+        key = app_utils.char_key(win) if win is not None else None
+        if not key or "ID：" not in key:
+            key = _bound_char_key()
+        _char_key_cache["key"] = key
+        _char_key_cache["ts"] = now
+    return _char_key_cache["key"]
+
+
+def task_progress_summary():
+    """总进度汇总：选中任务当天完成次数合计 / 次数上限合计（次数 0 =
+    不限，不计入分母——无法度量；已完成超出上限按上限计，防修改上限
+    后百分比破百）。
+    返回 {"percent", "done", "total", "per_task": {mode: {"done", "count", "percent"}}}。
+    """
+    counts = load_task_counts()
+    done_map = _fresh_progress_modes()
+    total = 0
+    done_total = 0
+    per_task = {}
+    for mode in load_selected_modes():
+        count = counts.get(mode, 0) or 0
+        done = done_map.get(mode, 0) or 0
+        if count > 0:
+            total += count
+            done_total += min(done, count)
+            per_task[mode] = {"done": min(done, count), "count": count,
+                              "percent": min(100, round(done * 100.0 / count))}
+        else:
+            per_task[mode] = {"done": done, "count": 0, "percent": 0}
+    percent = round(done_total * 100.0 / total) if total else 0
+    return {"percent": min(100, percent), "done": done_total, "total": total,
+            "per_task": per_task}
 
 
 # ---- 血蓝条阈值设置（各条独立，步进 5%，默认 50%） ----
@@ -460,13 +587,13 @@ def save_auto_famen(on):
 def reset_settings():
     """把所有设置恢复为默认值（重置按钮用）。
 
-    默认值与各 load 函数一致：模式五环、次数按 TASK_COUNT_DEFAULTS、
+    默认值与各 load 函数一致：选中五环、次数按 TASK_COUNT_DEFAULTS、
     摄妖香开、血蓝阈值 50、战斗动作 人物技能3-5/召唤兽攻击、修罗
     最少人数 5 + 种族 男人男鬼、五倍最少人数 5、抢盒子/检查队伍/
     调试悬浮关、高性能开、自动补血蓝开、启动清屏开、自动巫医开
     （间隔 5）、自动使用法门关、主题浅色。
     """
-    save_task_mode(_DEFAULT_MODE)
+    save_selected_modes(_DEFAULT_MODES)
     for mode, default in TASK_COUNT_DEFAULTS.items():
         save_task_count(mode, default)
     save_use_sheyaoxiang(True)
@@ -520,6 +647,10 @@ class ControlWindow(WebWindow):
         super().__init__(R.ui("control_window.html"))
         self._tm = tm
         self._title = title
+        # 窗口标题附加绑定角色短文案（启动时解析一次；仅角色信息，
+        # 保持简短——服务器+角色名，如「啄木鸟 - 一生所爱「长相思」」）
+        label = bound_short_label()
+        self._window_title = f"{title} - {label}" if label else title
         self._visible = True  # 启动时直接可见
         self._real_close = threading.Event()  # 置位后 X/销毁真正放行（退出路径）
         self._debug_on = load_debug_overlay()  # 调试信息开关：控制日志窗口显隐
@@ -529,8 +660,9 @@ class ControlWindow(WebWindow):
         self.log_win.set_debug_off_callback(self._on_log_window_closed)
         self.log_win.apply_theme(load_ui_theme())  # 初始主题与主面板一致
         self.expose(self.get_init_data)
-        self.expose(self.save_task_mode)
+        self.expose(self.save_task_modes)
         self.expose(self.save_task_count)
+        self.expose(self.get_task_progress)
         self.expose(self.save_use_sheyaoxiang)
         self.expose(self.save_threshold)
         self.expose(self.save_battle_action)
@@ -597,10 +729,10 @@ class ControlWindow(WebWindow):
         return game.clear_bound_window()
 
     def get_init_data(self):
-        """页面初始化数据：主题、任务模式、任务次数、摄妖香开关、各条
-        阈值、战斗动作、修罗/五倍设置与调试信息开关。"""
+        """页面初始化数据：主题、任务模式多选、任务次数、摄妖香开关、
+        各条阈值、战斗动作、修罗/五倍设置与调试信息开关。"""
         return {"theme": load_ui_theme(),
-                "mode": load_task_mode(),
+                "modes": load_selected_modes(),
                 "task_counts": load_task_counts(),
                 "use_sheyaoxiang": load_use_sheyaoxiang(),
                 "thresholds": load_thresholds(),
@@ -630,13 +762,25 @@ class ControlWindow(WebWindow):
         """阈值设置变更：保存某条血蓝阈值。"""
         return save_threshold(name, value)
 
-    def save_task_mode(self, mode):
-        """单选项变更：保存任务模式。"""
-        return save_task_mode(mode)
+    def save_task_modes(self, modes):
+        """任务多选变更：保存选中列表。任务运行中拒绝修改（只能停止后
+        修改，用户要求；页面侧同样禁用控件，此为双保险）。"""
+        if self._tm.is_running():
+            return {"status": "error", "msg": "任务运行中，请先停止任务再修改"}
+        return save_selected_modes(modes)
 
     def save_task_count(self, mode, value):
-        """任务次数变更：保存某模式的执行次数。"""
+        """任务次数变更：保存某模式的执行次数。任务运行中拒绝修改
+        （只能停止后修改，用户要求；页面侧同样禁用控件，此为双保险）。"""
+        if self._tm.is_running():
+            return {"status": "error", "msg": "任务运行中，请先停止任务再修改"}
         return save_task_count(mode, value)
+
+    def get_task_progress(self):
+        """任务总进度（页面进度条轮询）：选中任务当天完成次数合计 /
+        次数上限合计；进度由任务子进程写入 config.json，本函数直读
+        文件实时反映（见 task_progress_summary）。"""
+        return task_progress_summary()
 
     def save_use_sheyaoxiang(self, on):
         """摄妖香开关变更：保存开关状态。"""
@@ -736,7 +880,7 @@ class ControlWindow(WebWindow):
         if result.get("status") != "success":
             return result
         reset_settings()
-        return {"status": "success", "mode": load_task_mode()}
+        return {"status": "success", "modes": load_selected_modes()}
 
     def verify_xiuluo_return(self):
         """高级设置-修罗回程验证按钮：与实际返程流程一致，但不右键使用
@@ -1238,7 +1382,7 @@ class ControlWindow(WebWindow):
         """
         file_url = Path(self.abs_path).as_uri()
         win = webview.create_window(
-            title=self._title,
+            title=self._window_title,
             url=file_url,
             js_api=_ApiBridge(self._exposed_functions),
             width=width,

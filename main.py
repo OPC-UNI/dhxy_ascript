@@ -14,7 +14,7 @@ Runtime.wait 驻留线程防止程序自行退出（托盘「彻底退出」→ 
 - src/xiuluo.py          修罗任务自动化（灵兽村领取、跟踪、返程循环）
 - src/wubei.py           五倍任务自动化（宝象国领取、队伍检查，战斗由战斗监控线程操作）
 - src/task_manager.py    任务子进程管理（启停、升级强杀、日志回流）
-- src/control_window.py  网页控制窗口（启动/停止/重置、任务模式选择、内嵌日志）
+- src/control_window.py  网页控制窗口（启动/停止/重置、任务多选与次数、总进度条、内嵌日志）
 - src/select_window.py   多开窗口绑定选择弹窗（启动时多开且无有效绑定时弹出）
 """
 import multiprocessing  # freeze_support：冻结打包下 spawn 子进程（任务/悬浮层）用
@@ -46,7 +46,9 @@ from ascript.windows.system import R  # 程序上下文与资源路由
 from ascript.windows.system import Runtime  # 生命周期驻留（防止程序自行退出）
 from ascript.windows.ui import LicenseWindow  # 安全验证组件
 from src.task_manager import TaskManager  # 任务子进程管理（启停/强杀/日志回流）
-from src.control_window import (ControlWindow, load_task_mode,
+from src.control_window import (ControlWindow, bound_short_label,
+                                load_selected_modes,
+                                load_task_counts,
                                 load_use_sheyaoxiang,
                                 load_debug_overlay,
                                 load_battle_actions,
@@ -72,16 +74,25 @@ from src import map as game_map  # 地图操作（OCR 引擎预热等）
 
 
 def _setup_tray(icon_path, control_win):
-    """托盘菜单：显示/隐藏控制窗口 + 彻底退出（Runtime.stop 触发退出清理）。"""
+    """托盘菜单：显示/隐藏控制窗口 + 彻底退出（Runtime.stop 触发退出清理）。
+
+    首行展示当前绑定角色（服务器+角色名，禁用静态项仅作展示）；
+    悬停提示同步附上角色信息。文案与窗口标题共用 bound_short_label。
+    """
     try:
         img = Image.open(icon_path)
-        menu = pystray.Menu(
+        label = bound_short_label()  # 绑定角色短文案（与窗口标题同源）
+        items = []
+        if label:
+            items.append(pystray.MenuItem(f"角色：{label}", None, enabled=False))
+        items += [
             pystray.MenuItem("显示/隐藏控制窗口",
                              lambda icon, item: control_win.toggle_visible(),
                              default=True),
             pystray.MenuItem("彻底退出", lambda icon, item: Runtime.stop()),
-        )
-        tray = pystray.Icon("AScriptTray", img, "啄木鸟", menu)
+        ]
+        tooltip = f"啄木鸟 - {label}" if label else "啄木鸟"
+        tray = pystray.Icon("AScriptTray", img, tooltip, pystray.Menu(*items))
         tray.run()
     except Exception:
         pass
@@ -114,7 +125,7 @@ def _ensure_window_binding():
         log("[绑定] 未选择窗口，本次按自动选择运行", "WARN")
 
 
-def _sheyaoxiang_watchdog(win, mode):
+def _sheyaoxiang_watchdog(win):
     """摄妖香定时续用线程（任务子进程内 daemon 线程，随进程强杀终止）。
 
     每分钟检查一次到期状态；到期时执行完整使用流程（与任务/战斗
@@ -137,7 +148,7 @@ def _sheyaoxiang_watchdog(win, mode):
             if not app_utils.sheyaoxiang_due(win):
                 skip_logged = False
                 continue
-            if app_utils.sheyaoxiang_skip_nonleader(mode):
+            if app_utils.sheyaoxiang_skip_nonleader():  # 缺省取当前任务模式
                 if not skip_logged:
                     log("[摄妖香] 定时续用: 非队长无需使用，跳过", "INFO")
                     skip_logged = True
@@ -158,6 +169,47 @@ def _sheyaoxiang_watchdog(win, mode):
             log(f"[摄妖香] 定时续用异常: {e}", "WARN")
 
 
+def _run_task_mode(win, mode):
+    """执行单个任务模式的主循环（原 task_start 内按模式分支的收拢）。
+
+    返回该模式循环的结束原因描述；「名望」为面板占位模式，暂无自动化
+    实现，跳过并记日志（多任务场景下不阻塞后续任务）。
+    """
+    if mode == "玄枢轶闻":
+        # 任务前置：退出队伍（队长解散/队员离开），单人状态执行。
+        # 已有跟踪中的任务时跳过退队直接续跑（退队只服务于领取流程，
+        # 续跑无需检查队伍信息——用户确认）
+        if not task_tracker.has_task(win, xuanshu.TASK_TITLE):
+            ok, info = team.leave_or_disband_team(win)
+            log(f"[组队] 任务前置退队：{info}", "SYS" if ok else "WARN")
+        return xuanshu.run_loop(win)
+    if mode == "五环":
+        return wuhuan.run_loop(win)
+    if mode == "客栈":
+        # 任务前置：退出队伍（队长解散/队员离开），单人状态执行
+        ok, info = team.leave_or_disband_team(win)
+        log(f"[组队] 任务前置退队：{info}", "SYS" if ok else "WARN")
+        return kezhan.run_loop(win)
+    if mode == "修罗":
+        return xiuluo.run_loop(win)
+    if mode == "五倍":
+        return wubei.run_loop(win)
+    # 名望等其余模式：暂无自动化实现
+    log(f"[任务] {mode} 暂无自动化实现，跳过", "WARN")
+    return f"{mode} 暂无自动化实现，跳过"
+
+
+def _overall_progress_text(win, modes):
+    """总进度文案（任务切换间隙更新悬浮层；任务运行中由各模块更新
+    自己的进度行）。次数上限为 0（不限）的任务无法度量，不计入分母；
+    已完成超出上限按上限计（上限修改后百分比不破百）。"""
+    counts = load_task_counts()
+    total = sum(counts.get(m, 0) for m in modes if counts.get(m, 0) > 0)
+    done = sum(min(app_utils.task_progress_done(win, m), counts.get(m, 0))
+               for m in modes if counts.get(m, 0) > 0)
+    return f"总进度 {done}/{total}" if total else "总进度 -"
+
+
 def task_start():
     """业务逻辑入口函数（顶层函数，spawn 按引用 pickle）。
 
@@ -166,10 +218,11 @@ def task_start():
     """
     log("业务进程已建立，开始执行自动化任务...", "SYS")
     log(f"[日志] 本地日志文件: {log_file_path()}", "SYS")
-    mode = load_task_mode()
+    modes = load_selected_modes()  # 选中任务列表（按面板勾选，固定顺序执行）
     use_sheyaoxiang = load_use_sheyaoxiang()
     battle_actions = load_battle_actions()
-    log(f"[模式] 当前任务模式: {mode}", "SYS")
+    log(f"[模式] 选中任务: {'、'.join(modes) if modes else '无'}"
+        + (f"（依次执行）" if modes else "（请先在面板勾选任务）"), "SYS")
     log(f"[配置] 使用摄妖香: {'开' if use_sheyaoxiang else '关'}", "SYS")
     log(f"[配置] 人物战斗动作: {battle_actions['char']}，召唤兽战斗动作: {battle_actions['beast']}", "SYS")
     log(f"[配置] 调试信息悬浮: {'开' if load_debug_overlay() else '关'}", "SYS")
@@ -179,8 +232,11 @@ def task_start():
     # 固定位置缓存点击（主进程验证流程不受影响，恒为识别路径）
     app_utils.set_high_perf(load_high_perf())
     log(f"[配置] 高性能模式: {'开（固定位置缓存点击）' if app_utils.high_perf_on() else '关'}", "SYS")
-    # 调试悬浮层初始状态：任务模式与战斗配置（战斗场次/进度由各模块实时更新）
-    debug_overlay.set_task(mode)
+    # 当前任务模式：任务主循环切换任务时更新，战斗线程/摄妖香线程
+    # 按当前模式决策（多任务顺序执行下替代旧的单一模式读取）
+    app_utils.set_current_task_mode(modes[0] if modes else "")
+    # 调试悬浮层初始状态：任务队列与战斗配置（战斗场次/进度由各模块实时更新）
+    debug_overlay.set_task("、".join(modes) if modes else "未选择任务")
     debug_overlay.set_config(battle_actions["char"], battle_actions["beast"])
 
     # OCR 引擎预热：首次调用需加载 det/cls/rec 三个模型（一次性约 1s），
@@ -265,7 +321,7 @@ def task_start():
         if logged_in and use_sheyaoxiang:
             if not app_utils.sheyaoxiang_due(main_win):
                 log("[摄妖香] 距上次使用不足 1 小时，跳过", "INFO")
-            elif app_utils.sheyaoxiang_skip_nonleader(mode):
+            elif app_utils.sheyaoxiang_skip_nonleader():  # 缺省取当前任务模式
                 log("[摄妖香] 启动检查: 非队长无需使用，跳过", "INFO")
             elif battle.watch_in_battle() or battle.is_in_battle(main_win):
                 # 战斗中跳过：物品栏战斗中打不开（实测 2026-10-18），
@@ -284,7 +340,7 @@ def task_start():
         #     全局输入锁与任务/战斗线程互斥，不打断当前点击）
         if logged_in and use_sheyaoxiang:
             threading.Thread(
-                target=_sheyaoxiang_watchdog, args=(main_win, mode),
+                target=_sheyaoxiang_watchdog, args=(main_win,),
                 daemon=True, name="sheyaoxiang-watchdog").start()
 
         # 4. 战斗监控线程（已登录时启动，任何模式下自动执行人物/召唤兽战斗操作；
@@ -295,64 +351,33 @@ def task_start():
                                              daemon=True, name="battle-watch")
             battle_thread.start()
 
-        # 5. 玄枢轶闻主循环（该模式且已登录时执行：跟踪完成 → 继续领取 → 往复）
-        #    循环正常结束（次数上限/每日次数已满）时任务进程退出，面板自动显示已停止
-        #    任务前置：退出队伍（队长解散/队员离开），单人状态执行。
-        #    已有跟踪中的任务时跳过退队直接续跑（退队只服务于领取流程，
-        #    续跑无需检查队伍信息——用户确认）
-        if logged_in and mode == "玄枢轶闻":
-            if not task_tracker.has_task(main_win, xuanshu.TASK_TITLE):
-                ok, info = team.leave_or_disband_team(main_win)
-                log(f"[组队] 任务前置退队：{info}", "SYS" if ok else "WARN")
-            info = xuanshu.run_loop(main_win)
-            log(f"[玄枢轶闻] 任务循环结束：{info}", "SYS")
-            debug_overlay.shutdown()
-            return
+        # 5. 选中任务顺序执行：每个任务的主循环正常结束（次数上限/
+        #    每日次数已满/活力不足等）后进入下一个任务，全部结束后
+        #    任务进程退出，面板自动显示已结束（无需逐个任务重启）。
+        #    任务前置（退队/清屏等）与循环逻辑由 _run_task_mode 按模式分发；
+        #    当前任务模式经 app_utils 共享，战斗线程/摄妖香线程按当前模式决策。
+        if logged_in and modes:
+            for mode in modes:
+                app_utils.set_current_task_mode(mode)
+                debug_overlay.set_task(mode)
+                log(f"[任务] 开始执行: {mode}", "SYS")
+                info = _run_task_mode(main_win, mode)
+                log(f"[任务] {mode} 循环结束：{info}", "SYS")
+                # 任务切换间隙：悬浮层改显总进度（任务运行中由各模块
+                # 更新自己的进度行），并稍候界面状态稳定
+                debug_overlay.set_progress(_overall_progress_text(main_win, modes))
+                time.sleep(2)
+        elif not logged_in:
+            log("[检查] 未登录，无可执行任务，任务结束（登录后可重新启动）", "WARN")
+        else:
+            log("[检查] 未勾选任何任务，任务结束（请在面板勾选任务后启动）", "WARN")
 
-        # 6. 五环主循环（购买装备 → 领取 → 跟踪 → 往复，达到次数上限结束任务进程）
-        if logged_in and mode == "五环":
-            info = wuhuan.run_loop(main_win)
-            log(f"[五环] 任务循环结束：{info}", "SYS")
-            debug_overlay.shutdown()
-            return
-
-        # 7. 客栈主循环（洛阳客栈找掌柜 → 领取 → 跟踪 → 往复，
-        #    达到次数上限或找不到掌柜时结束任务进程）
-        #    任务前置：退出队伍（队长解散/队员离开），单人状态执行
-        if logged_in and mode == "客栈":
-            ok, info = team.leave_or_disband_team(main_win)
-            log(f"[组队] 任务前置退队：{info}", "SYS" if ok else "WARN")
-            info = kezhan.run_loop(main_win)
-            log(f"[客栈] 任务循环结束：{info}", "SYS")
-            debug_overlay.shutdown()
-            return
-
-        # 8. 修罗主循环（灵兽村领取 → 跟踪（寻路/对话开打/战斗）→ 返程 → 往复，
-        #    达到次数上限时结束任务进程）；非队长时核心流程不执行，
-        #    由 run_loop 内部保持任务运行，仅战斗线程自动操作
-        if logged_in and mode == "修罗":
-            info = xiuluo.run_loop(main_win)
-            log(f"[修罗] 任务循环结束：{info}", "SYS")
-            debug_overlay.shutdown()
-            return
-
-        # 9. 五倍主循环（宝象国领取 → 寻路跟踪（绿字自动寻路/对话开打/
-        #    战斗）→ 返程（五倍回城符回宝象国）→ 往复，达到次数上限时结束
-        #    任务进程）；非队长时核心流程不执行，由 run_loop 内部保持
-        #    任务运行，仅战斗线程自动操作
-        if logged_in and mode == "五倍":
-            info = wubei.run_loop(main_win)
-            log(f"[五倍] 任务循环结束：{info}", "SYS")
-            debug_overlay.shutdown()
-            return
-
-        # 10. 血蓝条检测（已登录时执行一次）
+        # 6. 血蓝条检测（已登录时执行一次）
         if logged_in:
             status_bars.check_all_bars(main_win)
 
-    # ---- 保持任务运行，等待停止信号（后续各模式的持续逻辑在此扩展） ----
-    while True:
-        time.sleep(1)
+    # ---- 全部选中任务执行完毕：结束任务进程（面板自动显示已结束） ----
+    debug_overlay.shutdown()
 
 
 def task_stop():

@@ -36,7 +36,7 @@
 「技能C-R」= 第 C 列、第 R 行：
     x = 512 + 150 * (C - 1)   （锚点 512 / 662 / 815）
     y = 300 + 30 * (R - 1)    （锚点 300 / 420）
-召唤兽技能坐标用户尚未提供，先留 BEAST_SKILL_POS 占位。
+召唤兽技能坐标已按首尾锚点标定（见 BEAST_SKILL_POS，用户实测）。
 """
 import re
 import time
@@ -46,13 +46,13 @@ import numpy as np
 from PIL import Image
 from ascript.windows.window.Window import WindowCaptureFormat
 
-from .app_utils import log, human_click, human_move
+from .app_utils import log, human_click, human_move, current_task_mode
 from . import map as game_map
 from . import status_bars  # 血蓝条检测回满（每场战斗结束后调用）
 from . import task_tracker  # 对话框区域与绿色选项定位（巫医对话框）
 from . import debug_overlay  # 调试信息悬浮层（战斗场次更新）
 from . import team  # 队伍身份（抢盒子的队长规则）
-from .control_window import (load_battle_actions, load_task_mode,
+from .control_window import (load_battle_actions,
                              load_xiuluo_hezi, load_wubei_hezi,
                              load_auto_famen, load_auto_refill)
 
@@ -71,7 +71,7 @@ ROUND_BANNER_ICON = "round_banner.png"  # 回合横幅「回合」文字区（�
 ROUND_BANNER_THRESHOLD = 0.8   # 横幅文字匹配阈值（非战斗画面实测最高 0.45，真实横幅 0.99）
 BAR_BUTTON_THRESHOLD = 0.85    # 操作条按钮匹配阈值（非战斗画面实测最高 0.39，真实按钮 1.0）
 
-# 召唤兽技能坐标（精确值用户稍后提供）：技能1~技能6 在技能面板中的
+# 召唤兽技能坐标（用户实测标定）：技能1~技能6 在技能面板中的
 # 窗口相对坐标——首尾实测 技能1 (588,300)、技能6 (588,410)，中间
 # 平均分布（6 点 5 段，步进 22px）
 BEAST_SKILL_POS = {f"技能{i + 1}": (588, 300 + 22 * i) for i in range(6)}
@@ -640,7 +640,7 @@ def _handle_hezi(win):
     单模板 ~27ms/次（5 秒节奏占空比 <1%）；后续拿到窗口内位置后
     可收紧为条带匹配。
     """
-    mode = load_task_mode()
+    mode = current_task_mode()  # 当前任务模式（多任务顺序执行时由主循环切换）
     if mode == "修罗":
         enabled = load_xiuluo_hezi()
     elif mode == "五倍":

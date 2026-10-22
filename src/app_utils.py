@@ -331,9 +331,28 @@ def sheyaoxiang_mark_used(win):
     _char_state_set(_SHEYAOXIANG_KEY, char_key(win), time.time())
 
 
-def sheyaoxiang_skip_nonleader(mode):
+# ---- 当前任务模式（多任务顺序执行：任务主循环切换任务时更新，
+#      战斗线程/摄妖香线程按当前模式决策，替代旧的单一模式读取） ----
+_current_task_mode = ""
+
+
+def set_current_task_mode(mode):
+    """设置当前正在执行的任务模式（任务主循环切换任务时调用）。"""
+    global _current_task_mode
+    _current_task_mode = mode or ""
+
+
+def current_task_mode():
+    """读取当前正在执行的任务模式（任务进程内共享；无任务为空串）。"""
+    return _current_task_mode
+
+
+def sheyaoxiang_skip_nonleader(mode=None):
     """修罗/五倍模式下非队长不续用摄妖香（跟队无需自用，用户
-    2026-10-21）；其他模式与队长/身份未判定一律 False（照常续用）。"""
+    2026-10-21）；其他模式与队长/身份未判定一律 False（照常续用）。
+    mode 缺省时取当前任务模式（多任务顺序执行场景）。"""
+    if mode is None:
+        mode = current_task_mode()
     if mode not in ("修罗", "五倍"):
         return False
     from . import team  # 函数内导入：team 依赖 app_utils，避免循环导入
