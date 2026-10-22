@@ -1152,6 +1152,7 @@ def _handle_xianxingjing_track(win, items, img_np):
     """
     global _xj_phase, _xj_stable, _xj_last_pos, _xj_use_count, \
         _xj_grace_start, _xj_warned, _xj_missing, _xj_need_move, _xj_walk_from, \
+        _xj_move_stuck, _xj_walk_side, \
         _xj_quota_exhausted_at, _xj_need_replace
     if battle_watch_in_battle():
         return False  # 战斗中：面板隐藏不可点链接（防宽限过期后战斗期空点）
