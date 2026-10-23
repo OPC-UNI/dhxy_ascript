@@ -215,7 +215,11 @@ DIALOG_OPTION_MAP = {
     "花果山的小猴精贪玩不小心摔到了筋骨，陶小桃为此特地向孙神医要了几副":"包在我身上。",
     "切记叮嘱陶小桃一—药膏凝前需轻揉伤处，活其气血。":"孙神医仁心，我定会转达。",
     "少侠可把药带来了？":"将续骨膏交给陶小桃",
-    "多谢少侠，等小猴精好了我再继续欺负它……哎不对，继续和它玩耍！":"这小猴精是被你打伤的吧！"
+    "多谢少侠，等小猴精好了我再继续欺负它……哎不对，继续和它玩耍！":"这小猴精是被你打伤的吧！",
+    "长安城正办金鳞会钓鱼大赛，说是谁能两竿内钓起锦鲤，便能赢走神秘宝贝":"嘿，我这就去凑个热闹！",
+    "少侠来得巧！今日赛制简单一一纳千两参赛纹银，两竿之内若请得锦鲤出水":"支付一千两银子",
+    "少侠爽快！我见少侠英姿勃勃，今日定能钓得锦鲤赢取大奖！！！":"借你吉言，我这就去试试！",
+    "少侠莫灰心！明日此时，彩头翻倍一一欢迎再来送’……呃，再来挑战！":"你搞这活动不会是专门坑钱的吧？！"
 
 }
 # 需要点击屏幕中间跳过的对话框文案 → 点击次数（出现则连点屏幕中间推进
@@ -326,7 +330,10 @@ QIYU_DIALOG_TEXTS = ["阴风骤起",   # 第一幕：妖僧现身（三选项 �
                      "多了一个锦囊",
                      "却见那受伤的小猴精忽然从旁边窜了出来",
                      "可还未等出言责备",
-                     "给小猴精道歉"
+                     "给小猴精道歉",
+                     "揭穿骗局讨要说法",
+                     "将银票摔回钓鱼大使脸上",
+                     "钓鱼大使狡辩推脱"
                      ]
 # ---- 答题致富问答题（多星智；选项为纵向排列的单字，OCR 会把整列
 #      合并成一条竖框——实测「稻麦瓜」识别为一个高矩形）----
@@ -354,8 +361,10 @@ GIVE_TITLE_ICON = "give_title.png"  # 给与面板标志（横幅「给与」静
 GIVE_BTN_ICON = "give_btn.png"  # 给与按钮（与五环共用模板，OCR 读作「给子」）
 GIVE_PANEL_TIMEOUT = 10         # 等待给与面板出现的超时
 # 给与面板底部 NPC 行区域（实测「NPC：苏巧儿」位于 (543,579)-(647,598)，
-# 窗口 1378x831 校准，留余量）；识别给与对象决定检索哪件物品
-GIVE_PANEL_NPC_REGION = (520, 565, 680, 615)
+# 窗口 1378x831 校准，留余量）；识别给与对象决定检索哪件物品。
+# 右缘放宽到 740：「NPC：钓鱼大赛主理人」约 11 字形按实测字宽延伸
+# 至 x≈708，旧 680 边界会截断末字致姓名识别失败
+GIVE_PANEL_NPC_REGION = (520, 565, 740, 615)
 # NPC 行关键词 → (物品模板, 物品名)；新增给与任务在此追加即可
 GIVE_NPC_ITEMS = {
     "苏巧儿": (JIUZHUAN_ICON, "九转还魂汤"),
@@ -369,11 +378,12 @@ GIVE_NPC_ITEMS = {
     "桃小淘": (XUGUGAO_ICON, "续骨膏"),
 }
 GIVE_DEFAULT_ITEM = (GAODENGSHICAI_ICON, "高等食材")  # NPC 行识别失败时的兜底物品
-# ---- 钱老四给与（问答斗智任务：面板无物品检索，输入 1000 银两参加活动） ----
-QIANLAOSI_NAME = "钱老四"
-QIANLAOSI_AMOUNT = "1000"
-QIANLAOSI_INPUT_POS = (665, 553)  # 银两输入框中心（15.png 实测 (586-745,540-567)）
-_qianlaosi_given = False          # 已点给与按钮（防面板关闭前重复点击二次给与）
+# ---- 银两给与（问答斗智钱老四 / 钓鱼大赛主理人：面板无物品检索，
+# ---- 输入 1000 银两参加活动；新增同款 NPC 在此追加名称即可） ----
+MONEY_GIVE_NPC_NAMES = ("钱老四", "钓鱼大赛主理人")
+MONEY_GIVE_AMOUNT = "1000"
+MONEY_GIVE_INPUT_POS = (665, 553)  # 银两输入框中心（15.png 实测 (586-745,540-567)）
+_money_give_done = False  # 已点给与按钮（防面板关闭前重复点击二次给与）
 # 任务追踪多绿字点击顺序（四象镇魂：按 青龙→白虎→朱雀→玄武 依次加固封印）；
 # 关键词未命中时自动退回点第一个绿字，不影响其他任务
 GREEN_CLICK_ORDER = ["青龙", "白虎", "朱雀", "玄武"]
@@ -1163,7 +1173,7 @@ def _give_item_for_npc(win):
 
     按 GIVE_NPC_ITEMS 关键词匹配（实测面板底部文案「NPC：苏巧儿」）。
     识别失败时返回默认物品并输出 OCR 原文便于校准。NPC 文案供
-    钱老四等特殊给与分支判断。
+    银两给与（钱老四/钓鱼大赛主理人）等特殊给与分支判断。
     """
     img = win.capture(force_activate=False)
     npc_txt = ""
@@ -1177,29 +1187,29 @@ def _give_item_for_npc(win):
             for key, item in GIVE_NPC_ITEMS.items():
                 if key in ntxt:
                     return item, npc_txt
-        if QIANLAOSI_NAME in npc_txt:
-            return GIVE_DEFAULT_ITEM, npc_txt  # 钱老四：特殊给与由调用方分支处理，不告警
+        if any(n in npc_txt for n in MONEY_GIVE_NPC_NAMES):
+            return GIVE_DEFAULT_ITEM, npc_txt  # 银两给与NPC：特殊给与由调用方分支处理，不告警
         txts = [t for t, _, s in items if s >= 0.55]
         log(f"[客栈] 给与面板 NPC 行未识别出对象（OCR: {txts or '(无)'}），"
             f"按默认物品处理", "WARN")
     return GIVE_DEFAULT_ITEM, npc_txt
 
 
-def _give_money_qianlaosi(win):
-    """钱老四给与（问答斗智任务）：点银两输入框 → 全选清空 → 输入
-    1000 → 点给与按钮。返回是否已处理（面板仍在时同样返回 True，
+def _give_money(win, npc_name):
+    """银两给与（钱老四/钓鱼大赛主理人等）：点银两输入框 → 全选清空 →
+    输入 1000 → 点给与按钮。返回是否已处理（面板仍在时同样返回 True，
     由调用方的已给与标记防重复点击）。"""
-    human_click(win, QIANLAOSI_INPUT_POS[0], QIANLAOSI_INPUT_POS[1])
+    human_click(win, MONEY_GIVE_INPUT_POS[0], MONEY_GIVE_INPUT_POS[1])
     time.sleep(0.3)
     Keyboard.key_hot("ctrl", "a")  # 全选清空默认值
-    Keyboard.input(QIANLAOSI_AMOUNT)
+    Keyboard.input(MONEY_GIVE_AMOUNT)
     time.sleep(0.3)
     pt = game_map.find_template(win, GIVE_BTN_ICON)
     if pt is None:
-        log("[客栈] 钱老四给与：未找到给与按钮，等待下次轮询重试", "WARN")
+        log(f"[客栈] {npc_name}给与：未找到给与按钮，等待下次轮询重试", "WARN")
         return True
     human_click(win, pt[0], pt[1])
-    log(f"[客栈] 钱老四给与：已输入 {QIANLAOSI_AMOUNT} 银两并点击给与按钮", "SYS")
+    log(f"[客栈] {npc_name}给与：已输入 {MONEY_GIVE_AMOUNT} 银两并点击给与按钮", "SYS")
     return True
 
 
@@ -1207,21 +1217,22 @@ def _handle_give_panel(win):
     """给与面板已打开时完成物品给与（参考五环 _do_give）。
 
     按面板 NPC 行识别给与对象（巧儿→九转还魂汤，婉儿→高等食材；
-    钱老四→输入 1000 银两特殊给与）→ 检索物品（含储物格切换）
-    → 点击选中 → 点击给与按钮完成。
+    钱老四/钓鱼大赛主理人→输入 1000 银两特殊给与）→ 检索物品
+    （含储物格切换）→ 点击选中 → 点击给与按钮完成。
     物品未找到/按钮未出现时返回 True（面板仍在，下次轮询续接重试）。
     返回是否已处理。
     """
-    global _qianlaosi_given
+    global _money_give_done
     if game_map.find_template(win, GIVE_TITLE_ICON) is None:
-        _qianlaosi_given = False  # 面板已关闭：复位防重复给与标记
+        _money_give_done = False  # 面板已关闭：复位防重复给与标记
         return False
     (icon, label), npc_txt = _give_item_for_npc(win)
-    if QIANLAOSI_NAME in npc_txt:
-        if _qianlaosi_given:
+    money_npc = next((n for n in MONEY_GIVE_NPC_NAMES if n in npc_txt), None)
+    if money_npc is not None:
+        if _money_give_done:
             return True  # 已点过给与按钮：等面板关闭，不重复点击
-        if _give_money_qianlaosi(win):
-            _qianlaosi_given = True
+        if _give_money(win, money_npc):
+            _money_give_done = True
         return True
     item, desc = bag.find_item_with_slots(win, icon, label)
     if item is None:
