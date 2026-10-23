@@ -486,6 +486,43 @@ def _handle_team_confirm(win, items, img_np):
     return "accepted"
 
 
+def _open_claim_map(win, pos=None):
+    """地图感知导航到灵兽村领取点（世界地图/小地图自动选择）。
+
+    位置读为灵兽村 → 直接打开小地图；其他地图（如五倍返程落点的
+    宝象国）或位置不可读 → 世界地图点击灵兽村图标。随后点击小地图
+    领取点坐标寻路。返回 (是否成功, 描述)。
+
+    领取按钮模板与五倍宝象国领取按钮同图（跨模板匹配 0.947），不在
+    灵兽村时直接开小地图点坐标会在别的图乱走（2026-10-23 五倍反向
+    实测：灵兽村小地图点宝象国坐标，人物跨图乱走）。
+
+    pos：调用方刚读到的位置（同帧复用，免重截+重 OCR——_walk_to_claim_spot
+    决策帧已读过）；None 时自行截帧读取。
+    """
+    img = win.capture(force_activate=False)
+    if img is None:
+        return False, "截图失败"
+    if is_in_battle_frame(img):
+        return False, "战斗中，跳过地图导航"
+    if pos is None:
+        pos = game_map.read_map_position(win, img=img)
+    if pos is not None and pos[0].strip() == LINGSHOUCUN:
+        ok, info = game_map.open_mini_map(win)
+        if not ok:
+            return False, info
+    else:
+        if pos is not None:
+            log(f"[修罗] 不在灵兽村（{pos[0].strip()}[{pos[1]},{pos[2]}]），"
+                f"经世界地图前往灵兽村", "SYS")
+        ok, info = game_map.open_mini_map_city(win, WORLD_MAP_LINGSHOUCUN_ICON,
+                                               LINGSHOUCUN)
+        if not ok:
+            return False, info
+    human_click(win, LINGSHOU_MAP_POS[0], LINGSHOU_MAP_POS[1])
+    return True, "已点击灵兽村小地图领取点位置"
+
+
 def _walk_to_claim_spot(win, just_returned=False):
     """寻路到灵兽村领取点附近（与队伍人数无关，队长身份下执行）。
 
@@ -500,10 +537,14 @@ def _walk_to_claim_spot(win, just_returned=False):
     到达判定优先用直接信号（领取任务按钮可见 = 已到领取点）——
     位置 OCR 坐标实测不可靠：区域快引擎把 111,90 误读为
     11,90/102,79/18,14，玩家站在领取点却被判定未到达、空等 30s+
-    并误走小地图导航。位置读取失败也按不在附近处理，直接走地图
-    寻路（用户 2026-10-09 确认）：加载/渲染等待由 open_mini_map_city
-    的轮询吸收，原 8s 等待 + Alt+C 恢复实测整段空转（且 Alt+C 是
-    位置显示开关，加载期误按会关掉显示——此处不再按）。
+    并误走小地图导航。按钮信号仅 just_returned=True（上一轮返程
+    成功，落点必在灵兽村）时无条件信任；否则须地图名门控——按钮
+    模板与五倍宝象国领取按钮同图（跨模板匹配 0.947），跨图误命中
+    会把五倍领取按钮当成修罗入口（实测 2026-10-23）。位置读取失败
+    也按不在附近处理，直接走地图寻路（用户 2026-10-09 确认）：
+    加载/渲染等待由 open_mini_map_city 的轮询吸收，原 8s 等待 +
+    Alt+C 恢复实测整段空转（且 Alt+C 是位置显示开关，加载期误按
+    会关掉显示——此处不再按）。
     just_returned=True（上一轮返程成功，落点必在灵兽村）时例外：
     位置识别失败极可能是传送加载未完成（实测 12:30 加载超 8s，
     按钮也未渲染），改为轮询等待按钮/位置出现（RETURN_LOAD_TIMEOUT
@@ -512,16 +553,28 @@ def _walk_to_claim_spot(win, just_returned=False):
     """
     if is_in_battle(win):
         return False, "战斗中，跳过本轮寻路"
-    # 直接信号：领取按钮可见 = 已在领取点附近（免位置 OCR，规避坐标
-    # 误读）。注意到达判据只认按钮——使者模板远距离也会命中（实测
-    # 距离过远点击不出现对话框），按钮只在可点击范围内出现
-    if game_map.find_template(win, LINGQU_ICON) is not None:
+    img = win.capture(force_activate=False)
+    if img is None:
+        return False, "截图失败"
+    frame = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
+    btn_visible = game_map.match_frame_np(frame, LINGQU_ICON) is not None
+    if just_returned and btn_visible:
+        # 返程落点必在灵兽村（回城符落点地图固定）：按钮直达信号无条件
+        # 信任，免位置 OCR（每轮领取热路径）。到达判据只认按钮——使者
+        # 模板远距离也会命中（实测距离过远点击不出现对话框），按钮
+        # 只在可点击范围内出现
         return True, "已在领取点附近（领取按钮可见）"
-    # 位置读取：失败按不在附近处理，直接走地图寻路（不等待不 Alt+C）。
+    # 位置读取（同帧复用）。非返程轮次（任务切换/中途失败后位置未知）
+    # 按钮信号须地图名门控：领取按钮模板与五倍宝象国领取按钮同图
+    # （跨模板匹配 0.947），跨图误命中会把五倍领取按钮当成修罗入口
+    # （2026-10-23 五倍反向实测）。坐标误读场景（111,90→11,90/102,79/
+    # 18,14）地图名仍对，按钮信号继续兜底
+    pos = game_map.read_map_position(win, img=img)
+    if btn_visible and (pos is None or pos[0].strip() == LINGSHOUCUN):
+        return True, "已在领取点附近（领取按钮可见）"
     # 坐标未识别时不使用使者模板兜底——使者远距离也可见，远处命中会
     # 误判已在领取点、点击无效（用户 2026-10-11 确认）：到达判定只认
     # 领取按钮（仅在可点击范围内出现）
-    pos = game_map.read_map_position(win)
     near_old = _near_claim_spot(pos, CLAIM_NEAR_TOLERANCE)
     near_shizhe = _near_shizhe_spot(pos)
     if near_old or near_shizhe:
@@ -556,18 +609,9 @@ def _walk_to_claim_spot(win, just_returned=False):
             if _near_claim_spot(pos2, CLAIM_NEAR_TOLERANCE) \
                     or _near_shizhe_spot(pos2):
                 return True, "已在领取点附近（等待传送加载完成）"
-    if pos is None or pos[0].strip() != LINGSHOUCUN:
-        # 不在灵兽村：世界地图点击灵兽村图标，打开灵兽村小地图
-        ok, info = game_map.open_mini_map_city(win, WORLD_MAP_LINGSHOUCUN_ICON,
-                                               LINGSHOUCUN)
-        if not ok:
-            return False, info
-    else:
-        # 在灵兽村但不在领取点附近：直接打开小地图
-        ok, info = game_map.open_mini_map(win)
-        if not ok:
-            return False, info
-    human_click(win, LINGSHOU_MAP_POS[0], LINGSHOU_MAP_POS[1])
+    ok, info = _open_claim_map(win, pos)  # 决策帧已读位置，同帧复用
+    if not ok:
+        return False, info
     log("[修罗] 已点击灵兽村小地图领取点位置，自动寻路中", "SYS")
     time.sleep(1.0)  # 等待自动寻路启动
     game_map.close_maps(win)
@@ -603,15 +647,15 @@ def _relocate_to_claim_spot(win):
     """小地图点击领取点坐标重新寻路（领取校验兜底，用户 2026-10-09）。
 
     领取已点但任务追踪未出现时调用：重走一次领取点坐标可能触发任务
-    渲染。与 _walk_to_claim_spot 的区别：无条件走小地图（不判断位置，
-    通常在领取点原地重走，几秒即回）。返回 (是否成功, 描述)。
+    渲染。与 _walk_to_claim_spot 的区别：不判断是否已在领取点附近
+    （通常在领取点原地重走，几秒即回），但同样走地图感知导航
+    （_open_claim_map：不在灵兽村时先经世界地图）。返回 (是否成功, 描述)。
     """
     if is_in_battle(win):
         return False, "战斗中，跳过重走"
-    ok, info = game_map.open_mini_map(win)
+    ok, info = _open_claim_map(win)
     if not ok:
         return False, info
-    human_click(win, LINGSHOU_MAP_POS[0], LINGSHOU_MAP_POS[1])
     log("[修罗] 已点击灵兽村小地图领取点位置，重新寻路（领取校验兜底）", "SYS")
     time.sleep(1.0)
     game_map.close_maps(win)
@@ -704,12 +748,12 @@ def _click_entry_ensuring_dialog(win, log_tag="[修罗]", hover_before_click=Fal
         if dialog_seen:
             break
         if attempt == 1:
-            # 对话框未出现：坐标不对 → 打开小地图点击领取点坐标重定位
+            # 对话框未出现：坐标不对 → 地图感知重定位（在灵兽村直接小地图；
+            # 不在则先经世界地图——按钮模板跨图误命中时人可能在别的图）
             log(f"{log_tag} 点击后未出现对话框（坐标不对），打开小地图重定位", "WARN")
-            ok, info = game_map.open_mini_map(win)
+            ok, info = _open_claim_map(win)
             if not ok:
                 return False, info, None, None, None
-            human_click(win, LINGSHOU_MAP_POS[0], LINGSHOU_MAP_POS[1])
             log(f"{log_tag} 已点击灵兽村小地图领取点位置，重新寻路中", "SYS")
             time.sleep(1.0)
             game_map.close_maps(win)
@@ -1504,9 +1548,17 @@ def run_loop(win, cycle_interval=1.0):
                 # 1.0 非队长判定：已在领取点附近时跳过（返程落点就在领取点，
                 #    1.2 监控循环马上会检查——先查再走位会让面板连续开合两次，
                 #    一次开合实测 5~7s）；不在领取点则先判定身份，非队长不白走寻路
-                at_spot = (game_map.find_template(win, LINGQU_ICON) is not None
-                           or _near_claim_spot(game_map.read_map_position(win),
-                                               CLAIM_NEAR_TOLERANCE))
+                img0 = win.capture(force_activate=False)
+                pos0 = game_map.read_map_position(win, img=img0) \
+                    if img0 is not None else None
+                frame0 = cv2.cvtColor(np.asarray(img0), cv2.COLOR_RGB2BGR) \
+                    if img0 is not None else None
+                # 按钮直达信号只在地图名读不出或为灵兽村时可信
+                # （按钮模板与五倍领取按钮跨图误命中，见 _walk_to_claim_spot）
+                at_spot = _near_claim_spot(pos0, CLAIM_NEAR_TOLERANCE) \
+                    or (frame0 is not None
+                        and (pos0 is None or pos0[0].strip() == LINGSHOUCUN)
+                        and game_map.match_frame_np(frame0, LINGQU_ICON) is not None)
                 if not at_spot:
                     status, info = _check_team_with_retry(win)
                     if status == "not_leader" \

@@ -306,6 +306,8 @@ _task_gone_last_round = False   # 上一轮任务消失已确认（follow_task �
                                 # 下一轮开始必然无任务，跳过 has_task 检查
                                 # （区域 OCR ~0.9s）；仅进程首轮/上轮跟踪失败
                                 # 未确认时才检查（续跑场景）
+_returned_last_round = False    # 上一轮返程成功（回城符已使用、落点必在宝象国）：
+                                # 下轮走位可信任按钮直达信号免位置 OCR（对齐修罗）
 _replace_fail_streak = 0        # 替换任务连续失败次数：领取失败或领取后任务
                                 # 签名未变化（替换未生效）计数，≥3 终止任务
                                 # （防旧任务在面板致校验假成功 → 无限替换循环）
@@ -467,7 +469,44 @@ def _close_dialog_without_claim(win, items, img_np):
     log("[五倍][验证] 已点击屏幕中间关闭对话框（未领取）", "SYS")
 
 
-def _walk_to_claim_spot(win):
+def _open_claim_map(win, pos=None):
+    """地图感知导航到宝象国领取点（世界地图/小地图自动选择）。
+
+    位置读为宝象国 → 直接打开小地图；其他地图（如修罗返程落点的
+    灵兽村）或位置不可读 → 世界地图点击宝象国图标。随后点击小地图
+    领取点坐标寻路。返回 (是否成功, 描述)。
+
+    领取按钮模板与修罗灵兽村领取按钮同图（跨模板匹配 0.947），不在
+    宝象国时直接开小地图点坐标会在别的图乱走（实测 2026-10-23 修罗
+    →五倍：灵兽村小地图点宝象国坐标，人物经北俱芦洲→长安→瑶池）。
+
+    pos：调用方刚读到的位置（同帧复用，免重截+重 OCR——_walk_to_claim_spot
+    决策帧已读过）；None 时自行截帧读取。
+    """
+    img = win.capture(force_activate=False)
+    if img is None:
+        return False, "截图失败"
+    if is_in_battle_frame(img):
+        return False, "战斗中，跳过地图导航"
+    if pos is None:
+        pos = game_map.read_map_position(win, img=img)
+    if pos is not None and pos[0].strip() == BAOXIANGGUO:
+        ok, info = game_map.open_mini_map(win)
+        if not ok:
+            return False, info
+    else:
+        if pos is not None:
+            log(f"[五倍] 不在宝象国（{pos[0].strip()}[{pos[1]},{pos[2]}]），"
+                f"经世界地图前往宝象国", "SYS")
+        ok, info = game_map.open_mini_map_city(win, WORLD_MAP_BAOXIANGGUO_ICON,
+                                               BAOXIANGGUO)
+        if not ok:
+            return False, info
+    human_click(win, BAOXIANG_MAP_POS[0], BAOXIANG_MAP_POS[1])
+    return True, "已点击宝象国小地图领取点位置"
+
+
+def _walk_to_claim_spot(win, just_returned=False):
     """寻路到宝象国领取点附近（与队伍人数无关，队长身份下执行）。
 
     用户流程：已在领取点 86,86 附近（±15）→ 跳过寻路；
@@ -478,6 +517,9 @@ def _walk_to_claim_spot(win):
     到达判定优先用直接信号（领取任务按钮可见 = 已到领取点）——
     位置 OCR 坐标不可靠时按钮判据兜底（修罗实测教训：区域快引擎
     把 111,90 误读为 11,90，玩家站在领取点却被判定未到达）。
+    按钮信号仅 just_returned=True（上一轮返程成功，落点必在宝象国）
+    时无条件信任；否则须地图名门控——按钮模板与修罗灵兽村领取按钮
+    同图（跨模板匹配 0.947），跨图误命中实测 2026-10-23。
     位置读取失败也按不在附近处理，直接走地图寻路（用户 2026-10-09
     确认）：加载/渲染等待由 open_mini_map_city 的轮询吸收，原 8s
     等待 + Alt+C 恢复实测整段空转（且 Alt+C 是位置显示开关，
@@ -493,13 +535,22 @@ def _walk_to_claim_spot(win):
     if is_in_battle_frame(img):
         return False, "战斗中，跳过本轮寻路"
     frame = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
-    # 直接信号：领取按钮可见 = 已在领取点附近（免位置 OCR，规避坐标
-    # 误读）。注意到达判据只认按钮——NPC 模板受动画影响有相位波动，
-    # 且远距离也可能命中，不能作到达判据（修罗使者教训）
-    if game_map.match_frame_np(frame, LINGQU_ICON) is not None:
+    btn_visible = game_map.match_frame_np(frame, LINGQU_ICON) is not None
+    if just_returned and btn_visible:
+        # 返程落点必在宝象国（回城符落点地图固定）：按钮直达信号无条件
+        # 信任，免位置 OCR（每轮领取热路径）。到达判据只认按钮——NPC
+        # 模板受动画影响有相位波动，且远距离也可能命中，不能作到达判据
+        # （修罗使者教训）
         return True, "已在领取点附近（领取按钮可见）"
-    # 位置读取：失败按不在附近处理，直接走地图寻路（不等待不 Alt+C）
+    # 位置读取（同帧复用）。非返程轮次（任务切换/中途失败后位置未知）
+    # 按钮信号须地图名门控：领取按钮模板与修罗灵兽村领取按钮同图
+    # （跨模板匹配 0.947），跨图误命中实测 2026-10-23：修罗返程落点
+    # 灵兽村，五倍误判「已在领取点」点开修罗对话框、小地图兜底跨图
+    # 乱走。坐标误读场景（修罗实测 111,90→11,90）地图名仍对，按钮
+    # 信号继续兜底
     pos = game_map.read_map_position(win, img=img)
+    if btn_visible and (pos is None or pos[0].strip() == BAOXIANGGUO):
+        return True, "已在领取点附近（领取按钮可见）"
     if _near_claim_spot(pos, CLAIM_NEAR_TOLERANCE):
         # 位置近但按钮不可见：可能是位置误读，或超出可点击范围
         # （实测回城符落点距领取点 12.5 单位处按钮不出现——旧逻辑
@@ -512,18 +563,9 @@ def _walk_to_claim_spot(win):
                 return True, "已在领取点附近（领取按钮可见）"
             time.sleep(0.5)
         log("[五倍] 位置近但领取按钮未出现，改走小地图重走领取点", "WARN")
-    if pos is None or pos[0].strip() != BAOXIANGGUO:
-        # 不在宝象国：世界地图点击宝象国图标，打开宝象国小地图
-        ok, info = game_map.open_mini_map_city(win, WORLD_MAP_BAOXIANGGUO_ICON,
-                                               BAOXIANGGUO)
-        if not ok:
-            return False, info
-    else:
-        # 在宝象国但不在领取点附近：直接打开小地图
-        ok, info = game_map.open_mini_map(win)
-        if not ok:
-            return False, info
-    human_click(win, BAOXIANG_MAP_POS[0], BAOXIANG_MAP_POS[1])
+    ok, info = _open_claim_map(win, pos)  # 决策帧已读位置，同帧复用
+    if not ok:
+        return False, info
     log("[五倍] 已点击宝象国小地图领取点位置，自动寻路中", "SYS")
     time.sleep(1.0)  # 等待自动寻路启动
     game_map.close_maps(win)
@@ -562,15 +604,15 @@ def _relocate_to_claim_spot(win):
     """小地图点击领取点坐标重新寻路（领取校验兜底，修罗同款）。
 
     领取已点但任务追踪未出现时调用：重走一次领取点坐标可能触发任务
-    渲染。与 _walk_to_claim_spot 的区别：无条件走小地图（不判断位置，
-    通常在领取点原地重走，几秒即回）。返回 (是否成功, 描述)。
+    渲染。与 _walk_to_claim_spot 的区别：不判断是否已在领取点附近
+    （通常在领取点原地重走，几秒即回），但同样走地图感知导航
+    （_open_claim_map：不在宝象国时先经世界地图）。返回 (是否成功, 描述)。
     """
     if is_in_battle(win):
         return False, "战斗中，跳过重走"
-    ok, info = game_map.open_mini_map(win)
+    ok, info = _open_claim_map(win)
     if not ok:
         return False, info
-    human_click(win, BAOXIANG_MAP_POS[0], BAOXIANG_MAP_POS[1])
     log("[五倍] 已点击宝象国小地图领取点位置，重新寻路（领取校验兜底）", "SYS")
     time.sleep(1.0)
     game_map.close_maps(win)
@@ -666,12 +708,12 @@ def _click_entry_ensuring_dialog(win, log_tag="[五倍]", hover_before_click=Fal
         if dialog_seen:
             break
         if attempt == 1:
-            # 对话框未出现：坐标不对 → 打开小地图点击领取点坐标重定位
+            # 对话框未出现：坐标不对 → 地图感知重定位（在宝象国直接小地图；
+            # 不在则先经世界地图——按钮模板跨图误命中时人可能在别的图）
             log(f"{log_tag} 点击后未出现对话框（坐标不对），打开小地图重定位", "WARN")
-            ok, info = game_map.open_mini_map(win)
+            ok, info = _open_claim_map(win)
             if not ok:
                 return False, info, None, None, None
-            human_click(win, BAOXIANG_MAP_POS[0], BAOXIANG_MAP_POS[1])
             log(f"{log_tag} 已点击宝象国小地图领取点位置，重新寻路中", "SYS")
             time.sleep(1.0)
             game_map.close_maps(win)
@@ -1780,7 +1822,7 @@ def run_loop(win, cycle_interval=1.0):
     返回结束原因描述。
     """
     global _fight_via_kanda, _team_checked, _task_gone_last_round, _xj_need_replace, \
-        _replace_fail_streak, _hpg_task_seen, _shout_text
+        _replace_fail_streak, _hpg_task_seen, _shout_text, _returned_last_round
     max_rounds = load_task_counts().get(TASK_MODE, 0)
     log(f"[五倍] 任务次数上限: {max_rounds if max_rounds > 0 else '不限'}", "SYS")
     log(f"[五倍] 领取点宝象国 {CLAIM_SPOT[0]},{CLAIM_SPOT[1]}，队伍固定 5 人", "SYS")
@@ -1841,9 +1883,17 @@ def run_loop(win, cycle_interval=1.0):
                 # 先查再走位会让面板连续开合两次，一次开合实测 5~7s）；
                 # 不在领取点则先判定身份，非队长不白走寻路
                 if check_team and not _team_checked:
-                    at_spot = (game_map.find_template(win, LINGQU_ICON) is not None
-                               or _near_claim_spot(game_map.read_map_position(win),
-                                                   CLAIM_NEAR_TOLERANCE))
+                    img0 = win.capture(force_activate=False)
+                    pos0 = game_map.read_map_position(win, img=img0) \
+                        if img0 is not None else None
+                    frame0 = cv2.cvtColor(np.asarray(img0), cv2.COLOR_RGB2BGR) \
+                        if img0 is not None else None
+                    # 按钮直达信号只在地图名读不出或为宝象国时可信
+                    # （按钮模板与修罗领取按钮跨图误命中，见 _walk_to_claim_spot）
+                    at_spot = _near_claim_spot(pos0, CLAIM_NEAR_TOLERANCE) \
+                        or (frame0 is not None
+                            and (pos0 is None or pos0[0].strip() == BAOXIANGGUO)
+                            and game_map.match_frame_np(frame0, LINGQU_ICON) is not None)
                     if not at_spot:
                         status, info = _check_team_with_retry(win)
                         if status == "not_leader" \
@@ -1852,8 +1902,12 @@ def run_loop(win, cycle_interval=1.0):
                         elif status == "not_leader":
                             log(f"[五倍] {info}（瞬态失败，不判定身份，"
                                 f"继续走位由监控循环重查）", "WARN")
-                # 队伍是否满都先走到领取点附近（缺人由监控循环补）
-                ok, info = _walk_to_claim_spot(win)
+                # 队伍是否满都先走到领取点附近（缺人由监控循环补）。
+                # 上一轮返程成功：落点必在宝象国，走位可信任按钮直达
+                # 信号免位置 OCR；消费后复位，失败轮次保持位置门控
+                just_returned = _returned_last_round
+                _returned_last_round = False
+                ok, info = _walk_to_claim_spot(win, just_returned=just_returned)
                 if not ok:
                     log(f"[五倍] {info}", "WARN")
                     time.sleep(cycle_interval)
@@ -1948,6 +2002,7 @@ def run_loop(win, cycle_interval=1.0):
                     log(f"[五倍] {info}", "WARN")
                     time.sleep(cycle_interval)
                     continue
+                _returned_last_round = True  # 落点必在宝象国：下轮走位免位置门控
             done += 1
             app_utils.task_progress_add(win, TASK_MODE, done)
             total = max_rounds if max_rounds > 0 else "∞"
