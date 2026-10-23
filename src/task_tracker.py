@@ -140,11 +140,13 @@ def green_text_center(img_np, rect, prefer_underline=True):
         # 带下划线、其余绿字不可点击，必须点在下划线段上。
         # OCR 框底常贴文字底，下划线落在框底下方 0~6px（五环折行链接
         # 实测续行下划线在框底 4px 外、旧 ±3px 窗口漏检——2026-10-14）。
-        # 规则：框底 -3~+8px 内找含 ≥20px 连续亮绿列段的行（文字行笔画
-        # 连排实测 ≤13px，下划线实测 ≥30px），自上而下取首个命中行
-        # （窗口下探后下方邻行文字顶部会落进来，先命中自己框底的下划线
-        # 可避开），点击列段中心上方 2px。
-        y0 = max(0, rect[3] - 3)
+        # 窗口上探到 -10：OCR 框底可能比文字底低出数 px（下划线落在
+        # 框内框底上方，实测链接行框底 291、下划线 287 被旧 -3 窗口
+        # 漏检——2026-10-23 玄枢轶闻）。实线连排阈值保证上方邻行文字
+        # 顶部不会误判。规则：框底 -10~+8px 内找含 ≥20px 连续亮绿列段
+        # 的行（文字行笔画连排实测 ≤13px，下划线实测 ≥30px），自上而下
+        # 取首个命中行，点击列段中心上方 2px。
+        y0 = max(0, rect[3] - 10)
         y1 = min(img_np.shape[0], rect[3] + 9)
         x0 = max(0, rect[0] - 2)
         x1 = min(img_np.shape[1], rect[2] + 4)
@@ -159,7 +161,11 @@ def green_text_center(img_np, rect, prefer_underline=True):
     # 亮绿/绿色像素回退：链接是行尾部分（描述+链接同行，如「去找大唐
     # 边境(193,144)惯骗」仅「惯骗」可点击）——下划线未检测到时取最右侧
     # 文字块中心（≥8px 段优先），落在行尾链接上而非描述行中间
-    # （五环折行链接 2026-10-14 实测点中描述文字 (101,253)）
+    # （五环折行链接 2026-10-14 实测点中描述文字 (101,253)）。
+    # 纵向取绿色行块底部上方 2px（与下划线点击规则同款）：链接可点区
+    # 在文字行下半部，行块纵向中心/顶部点击会落空——实测玄枢轶闻领取后
+    # 首点击 (121,273) 点在链接顶端无反应，全部成功点击均贴近行底
+    # （2026-10-23）。对话框选项（prefer_underline=False）保持纵向中心。
     for min_g in (GREEN_BRIGHT_MIN, GREEN_MIN_G):
         mask = green_mask(region, min_g)
         cols = np.where(mask.any(axis=0))[0]
@@ -168,13 +174,16 @@ def green_text_center(img_np, rect, prefer_underline=True):
             runs = _col_runs(cols)
             tail = [r for r in runs if r[1] - r[0] + 1 >= 8] or runs
             cx = int(rect[0] + (tail[-1][0] + tail[-1][1]) // 2)
-            cy = int(rect[1] + (rows.min() + rows.max()) // 2)
+            if prefer_underline:
+                cy = max(rect[1], int(rect[1] + rows.max() - 2))
+            else:
+                cy = int(rect[1] + (rows.min() + rows.max()) // 2)
             return cx, cy
     return (rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2
 
 
 def has_underline(img_np, rect):
-    """文字框底边 -3~+8px 内是否存在实线亮绿下划线（≥20px 连续列段）。
+    """文字框底边 -10~+8px 内是否存在实线亮绿下划线（≥20px 连续列段）。
 
     下划线是任务追踪链接的专属标记（可能只覆盖行尾的可点击部分）：
     描述行与链接行同为绿字时用它区分（客栈答题任务描述行「洛阳城正
@@ -183,10 +192,12 @@ def has_underline(img_np, rect):
     green_text_center 的下划线定位一致（窗口一致、均自上而下扫描）：
     文字行笔画连排实测 ≤13px、下划线实测 ≥30px，20px 阈值可区分；
     下划线可落在框底 0~6px 外（折行续行实测 4px 外——2026-10-14），
-    故窗口下探到 +8；邻行文字顶部（行距仅 ~18px）会落进检测窗口但
+    故窗口下探到 +8；窗口上探到 -10（OCR 框底可能比文字底低出数 px，
+    下划线在框内被旧 -3 窗口漏检——2026-10-23 玄枢轶闻实测框底 291、
+    下划线 287）；邻行文字顶部（行距仅 ~18px）会落进检测窗口但
     连排长度不达标，不构成误判。
     """
-    y0 = max(0, rect[3] - 3)
+    y0 = max(0, rect[3] - 10)
     y1 = min(img_np.shape[0], rect[3] + 9)
     x0 = max(0, rect[0] - 2)
     x1 = min(img_np.shape[1], rect[2] + 4)
@@ -536,7 +547,11 @@ def track_task(win, title, text=None, green_index=0, retries=4, retry_interval=1
                 # 选择亮绿像素最多的行点击（链接主体所在行，避开描述行的绿字噪声）
                 cluster = [tgt]
                 for other in green:
-                    if other is not tgt and abs(other[1][1] - tgt[1][3]) <= 6 \
+                    # 相邻判定取 other.top <= tgt.bottom + 6：换行链接的
+                    # OCR 框可能相互重叠（实测描述行框底 276、链接行框顶
+                    # 267，重叠 9px），abs() 会把重叠行误判为不相邻、
+                    # 链接行不参与选择——2026-10-23 玄枢轶闻点击失败根因
+                    if other is not tgt and other[1][1] <= tgt[1][3] + 6 \
                             and abs(other[1][0] - tgt[1][0]) < 80:
                         cluster.append(other)
                 if len(cluster) > 1:
