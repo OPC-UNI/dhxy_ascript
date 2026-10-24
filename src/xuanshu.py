@@ -179,7 +179,11 @@ CONFIRM_POLL_INTERVAL = 0.2         # 变化确认轮询间隔（秒）；OCR �
 # 战斗中不计入确认窗口（战斗画面遮挡追踪面板，OCR 必然读不到任务）。
 TASK_GONE_CONFIRM_TIMEOUT = 6.0    # 确认窗口总时长（秒）
 TASK_GONE_CONFIRM_POLLS = 2        # 连续未见的轮询次数（面板区域 OCR 约 0.9s）
-TASK_GONE_POLL_INTERVAL = 1.0      # 确认轮询间隔（秒）
+TASK_GONE_POLL_INTERVAL = 0.5      # 确认轮询间隔（秒）；两轮证据采样点相距
+                                   # ~1.4s（0.5 间隔 + 0.9 OCR），面板渲染/遮挡
+                                   # 的误判余量仍足（返程交接提速，2026-10-24）
+TASK_GONE_GATE_POLL_INTERVAL = 0.2 # 证据已足时等战斗线程确认门的短轮询间隔（秒）：
+                                   # 不再 OCR，门开即返回（返程交接省 ~1.7s/轮）
 # 跟踪轮询的 OCR 区域见 task_tracker（TRACK_REGION/DIALOG_REGION/OCR_REGIONS）
 FOLLOW_TRACK_REGION = task_tracker.TRACK_REGION
 FOLLOW_OCR_REGIONS = task_tracker.OCR_REGIONS
@@ -919,9 +923,19 @@ def _confirm_task_gone(win, title, fallback_texts=()):
         gone_polls += 1
         if battle_watch_in_battle():
             # 画面已清但战斗线程的 2s 结束确认未完成：证据已收集
-            # （任务还在则上面已 return False），不最终判定，
-            # 等战斗线程确认后的下一次轮询立即出结论
+            # （任务还在则上面已 return False），不最终判定。
+            # 证据已足（≥2 连续轮询未见）时不再 OCR 重复验证，短间隔
+            # 轮询门状态、门开即返回——原逻辑门开后还要再睡 1.0s +
+            # OCR 0.9s 才出结论，实测每轮返程交接白白多等 ~1.7s
+            # （2026-10-24 战斗结束→开背包恒为 2~3s）。门等待 ≤2s，
+            # 最后一次 OCR 时效性与原逻辑（门后一轮 ~1.9s）无实质差异
             deadline = time.time() + TASK_GONE_CONFIRM_TIMEOUT
+            if gone_polls >= TASK_GONE_CONFIRM_POLLS:
+                while time.time() < deadline and battle_watch_in_battle():
+                    time.sleep(TASK_GONE_GATE_POLL_INTERVAL)
+                if not battle_watch_in_battle():
+                    return True  # 门已开且证据已足：直接判定任务消失
+                continue
             time.sleep(TASK_GONE_POLL_INTERVAL)
             continue
         if gone_polls >= TASK_GONE_CONFIRM_POLLS:
@@ -1097,6 +1111,7 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
         first_poll = pre_key is None
         last_poll_img = None
         last_poll_items = None
+        was_battle = False      # 上一轮询为战斗帧（战斗结束转换帧直接做任务消失确认）
         while time.time() < deadline:
             time.sleep(CONFIRM_POLL_INTERVAL if changed_once else FOLLOW_POLL_INTERVAL)
             img = win.capture(force_activate=False)
@@ -1153,6 +1168,21 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                     break
                 changed_once = False  # 变化未持续（OCR 抖动），回退正常轮询
                 continue
+            # 战斗结束转换帧：跳过全区域 OCR 直接做任务消失确认（确认
+            # 循环自带战斗帧防护、只 OCR 面板区域）——证据在战斗线程
+            # 2s 结束确认窗口内即开始收集，返程交接省时（实测 2026-10-24
+            # 战斗结束→开背包恒 2s，根因为全区域 OCR 拖晚确认循环进入，
+            # 门开时证据才 1 轮、还需补 1 轮 ~1.9s）
+            if was_battle and not is_in_battle_frame(img):
+                was_battle = False
+                last_poll_items = None
+                last_poll_img = None
+                if _confirm_task_gone(win, title, fallback_keywords):
+                    if not task_seen:
+                        return False, f"任务从未出现在追踪面板（跟踪 {rounds} 次点击，领取可能失败）"
+                    return True, f"任务已从任务追踪中消失（本轮跟踪 {rounds} 次点击）"
+                changed_once = False  # 任务仍在（遭遇战结束）或未决：回正常轮询
+                continue
             # 帧复用：与上一轮询帧完全相同时复用其 OCR 结果（RapidOCR
             # 同输入输出确定，逐字等价；静止帧省一次双区域 OCR ~1.2s）
             if last_poll_items is not None and _frames_equal(img, last_poll_img):
@@ -1175,6 +1205,7 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 continue
             # 战斗中：跳过本轮识别（任务追踪与坐标不可用）；复用本帧
             if is_in_battle_frame(img):
+                was_battle = True
                 continue
             # 封印机关破解：提示对话框出现则完整处理（点击关闭 → 降落 →
             # 按序点机关，任务追踪变化即停）
