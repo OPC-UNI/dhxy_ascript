@@ -145,6 +145,9 @@ XIANXINGJING_TASK_ICON = "wubei_bailongma_task.png"  # 白龙马任务按钮（�
 # 选项（证明实力/消灭它）由 FIGHT_DIALOG_OPTIONS 处理
 XIANXINGJING_TEMPLATE_WINDOW = 6.0  # 关闭对话框后找模板的窗口（秒）
 XIANXINGJING_LINK_KEYWORD = "镜"  # 追踪链接关键词（识别显形镜任务阶段）。
+XIANXINGJING_USE_TEXT = "显形镜查探"  # 用镜文案精确匹配（「用显形镜查探。」/
+                                  # 「显形镜查探。」变体共用子串；单字「镜」
+                                  # 匹配宽泛可能命中其他含镜行——2026-10-24）
 # 用单字「镜」而非「显形镜」：OCR 对「显」稳定误读（实测读成「豆形镜」），
 # 三字全匹配会漏检导致状态机全程不启动；「镜」在五倍其他任务的追踪
 # 文案中不出现（消灭魔尊/奎木狼/营救三藏等），误报风险可忽略
@@ -851,24 +854,25 @@ def _claim_task(win, allow_fill=False):
 def _click_xianxingjing_use(win, items, img_np):
     """点击任务追踪面板中的显形镜使用文案（用户确认的用镜方式）。
 
-    优先不含「前往」的行（使用链接，如「用显形镜查探。」），再优先
-    绿色、较短的行。点击点为文本矩形中心：实测该行文字非绿色、只有
-    底部绿色下划线，绿字中心会点到下划线上（点文字才生效，用户手动
-    实测）。无显形镜文案返回 False。
+    按文案精确匹配「显形镜查探」（兼容「用显形镜查探。」变体，不用
+    单字「镜」宽泛匹配）；点击点取「显形镜」三字中心——用户实测三字
+    任何位置点击均有效（2026-10-24），整行矩形中心偏右落在「查」字
+    上、离三字区右缘过近，实测点击落空未触发对话框。面板坐标固定，
+    无显形镜文案返回 False。
     """
-    cands = [(t, r, "前往" not in t, task_tracker.is_green_text(img_np, r))
-             for t, r, s in items
-             if s >= 0.55 and r[0] < task_tracker.PANEL_MAX_X
-             and XIANXINGJING_LINK_KEYWORD in t]
-    if not cands:
-        return False
-    cands.sort(key=lambda c: (not c[2], not c[3], len(c[0])))
-    txt, rect, _, _ = cands[0]
-    cx, cy = (rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2
-    human_click(win, cx, cy)
-    log(f"[五倍] 显形镜：已点击追踪文案「{txt}」用镜 @({cx},{cy})", "SYS")
-    move_away(win)
-    return True
+    for txt, rect, score in items:
+        if score < 0.55 or rect[0] >= task_tracker.PANEL_MAX_X:
+            continue
+        if XIANXINGJING_USE_TEXT not in norm_text(txt):
+            continue
+        # 「显形镜」为行内前三个字：三字区中心 ≈ 行首起 1/4 字宽处
+        cx = rect[0] + (rect[2] - rect[0]) // 4
+        cy = (rect[1] + rect[3]) // 2
+        human_click(win, cx, cy)
+        log(f"[五倍] 显形镜：已点击追踪文案「{txt}」用镜 @({cx},{cy})", "SYS")
+        move_away(win)
+        return True
+    return False
 
 
 def _green_cluster_centers(img_np, rect):
