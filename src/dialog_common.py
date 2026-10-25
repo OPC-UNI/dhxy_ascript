@@ -106,7 +106,10 @@ def _click_green_option_once(win, items, img_np, text, prefix=""):
     cx, cy = green_option_center(img_np, rect, len(text), len(txt), center)
     human_click(win, cx, cy)
     # 高性能：记录选项固定位置（按文案做键，各任务模块共用；
-    # 位置漂移时由本路径自然刷新）
+    # 位置漂移时由本路径自然刷新）。键为选项文案，互为子串的
+    # 不同选项会共用一键互相覆写（实测「玄枢轶闻」与「玄闻辨真
+    # （玄枢轶闻）」2026-10-25 领取必现点偏）——新增选项文案须
+    # 避免与其他选项构成子串关系，或用完整文案
     app_utils.fixed_pos_set(f"option_{text}", win, cx, cy)
     log(f"{tag}已点击对话框绿色选项「{txt}」@({cx},{cy})", "SYS")
     move_away(win)  # 鼠标停留选项上会使其悬停变色，干扰后续绿字判定

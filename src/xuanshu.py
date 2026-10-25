@@ -107,7 +107,11 @@ DIALOG_OPTION_MAP = {
     "什么江中劫货？休要血口喷人，你有证据吗？": "指明口技之事",
     "哼，这天底下会口技的人多了去了，你怎么就能断定犯事的是我？": "指明绳结之事",
     "那、那又怎么样，这码头上做活的人那么多，你凭什么说一定是我？": "指明伤口一事",
-    "少侠有什么事吗？": "玄枢轶闻",
+    # 用完整选项文案：短文本「玄枢轶闻」会子串命中本选项并按字符
+    # 比例点偏（实测点击 (537,425) 且写入 option_玄枢轶闻 缓存键——
+    # 与领取对话框的「玄枢轶闻」选项 (490,427) 共用一键、互相覆写，
+    # 领取缓存点击必现点偏 2026-10-25）
+    "少侠有什么事吗？": "玄闻辨真（玄枢轶闻）",
     "太阳的别称是什么":"金乌",
     "浑天仪":"观测星星的位置",
     "大唐的都城":"长安",
@@ -675,11 +679,17 @@ def verify_jiguan_templates(win):
 # 三个可跟踪绿字（机关·东/南/西）嵌在描述行内、文案颜色恒不变，须按
 # 南→东→西 点击；每点完一处面板出现「第N处封印已开启」——进度信号。
 # green_order 不适用（关键词恒绿无法序进），用 progress_key（已开启
-# 计数）+ green_picker（按计数选关键词、行内字符比例定位点击）实现；
+# 计数）+ green_picker（按计数选关键词、链接下划线实线段定位点击——
+# OCR 文本比例映射会因行拆分/误读点错，实测 2026-10-25）实现；
 # 回调在非本任务阶段自门控不介入（progress_key 返回 None、picker 返回
 # None 回退 track_task 行级选择）。
 JIGUAN_LINK_ORDER = ("南", "东", "西")   # 点击顺序（面板提示原文：先触南，再寻东，后破西）
-JIGUAN_PROGRESS_RE = re.compile(r"第\s*([一二三四五1-5])\s*处\s*封印\s*已\s*开启")
+# 链接行绿字簇序（按 x 左→右）→ 关键词：面板固定渲染「机关·东、
+# 机关·南、机关·西」（实测簇 x 24-88 / 106-170 / 188-220，2026-10-25）
+JIGUAN_LINK_CLUSTER = {"东": 0, "南": 1, "西": 2}
+# 进度信号用词兼容「已开启」/「已解除」两种变体（实测 2026-10-25 截图
+# OCR 为「已开启」，用户确认亦有「已解除」文案的轮次变体）
+JIGUAN_PROGRESS_RE = re.compile(r"第\s*([一二三四五1-5])\s*处\s*封印\s*已\s*(?:开启|解除)")
 _JIGUAN_ORD = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5}
 
 
@@ -720,10 +730,18 @@ def _jiguan_link_progress(items, img_np):
 
 
 def _jiguan_link_picker(items, img_np):
-    """按已开启计数选下一个关键词（南→东→西）并在所在绿字行内按
-    字符比例定位点击坐标（行内可含多个关键词，如「·南、机关·西」，
-    用原始文本字符位置区分；提示行无绿字被排除）。计数用尽（≥3）
-    或未命中返回 None，回退 track_task 行级选择。"""
+    """按已开启计数选下一个关键词（南→东→西）并定位点击。
+
+    链接行「机关·东、机关·南、机关·西」三个链接各有独立实线下划线
+    （实测 x 24-89 / 106-171 / 188-221，y 287-288，2026-10-25），
+    按 x 左→右恒为 东/南/西（面板坐标固定）——直接按下划线实线段
+    定位，不用 OCR 文本字符比例映射（OCR 行拆分/误读时映射点错：
+    实测点南落到东、行级兜底点西，顺序破坏任务卡死）。扫描取含
+    「机关」行的纵向邻域（±10px）：碎片行可能不含机关关键词却承载
+    链接（如「·西中的第二处封印封印。」的 西 链接）。点击取下划线
+    上方 2px（行底可点区规则）。计数用尽（≥3）或未命中返回 None，
+    回退 track_task 行级选择。
+    """
     n = _jiguan_link_count(items)
     if n is None:
         if not _jiguan_link_stage(items, img_np):
@@ -731,20 +749,47 @@ def _jiguan_link_picker(items, img_np):
         n = 0
     if n >= len(JIGUAN_LINK_ORDER):
         return None
-    kw = JIGUAN_LINK_ORDER[n]
+    y_top = y_bot = None
     for txt, rect, score in items:
         if score < 0.55 or rect[0] >= task_tracker.PANEL_MAX_X:
             continue
-        if kw not in txt:
+        if "机关" in txt:
+            y_top = rect[1] if y_top is None else min(y_top, rect[1])
+            y_bot = rect[3] if y_bot is None else max(y_bot, rect[3])
+    if y_top is None:
+        return None
+    y_top = max(0, y_top - 10)
+    y_bot = min(img_np.shape[0], y_bot + 10)
+    region = img_np[y_top:y_bot, 0:task_tracker.PANEL_MAX_X].astype(int)
+    mask = task_tracker.green_mask(region, task_tracker.GREEN_MIN_G)
+    # 自底向上找首个含实线段（≥20px 连续亮绿列）的行：下划线可跨
+    # 1~2 行，字形笔画连排实测 ≤13px 不构成实线段；取该行全部
+    # 实线段按 x 排序即 东/南/西 三个链接下划线
+    runs = None
+    y_row = None
+    for rr in range(mask.shape[0] - 1, -1, -1):
+        cols = np.where(mask[rr])[0]
+        if cols.size < 20:
             continue
-        if not task_tracker.is_green_text(img_np, rect):
-            continue  # 提示行等非链接行的同字忽略
-        idx = txt.find(kw)
-        frac = (idx + len(kw) / 2) / len(txt)
-        cx = rect[0] + int((rect[2] - rect[0]) * frac)
-        cy = (rect[1] + rect[3]) // 2
-        return cx, cy
-    return None
+        segs = []
+        start = prev = cols[0]
+        for c in cols[1:]:
+            if c != prev + 1:
+                segs.append((int(start), int(prev)))
+                start = c
+            prev = c
+        segs.append((int(start), int(prev)))
+        solid = [s for s in segs if s[1] - s[0] + 1 >= 20]
+        if solid:
+            runs, y_row = solid, rr
+            break
+    if runs is None or len(runs) != 3:
+        return None  # 下划线不齐（渲染中/遮挡）：回退行级选择
+    runs.sort()
+    ci = JIGUAN_LINK_CLUSTER[JIGUAN_LINK_ORDER[n]]
+    cx = (runs[ci][0] + runs[ci][1]) // 2
+    cy = y_top + y_row - 2  # 下划线上方 2px
+    return cx, cy
 
 
 def _play_chuyijuebao(win, timeout=CHUYIJUEBAO_TIMEOUT):
