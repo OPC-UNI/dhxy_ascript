@@ -1533,6 +1533,12 @@ def run_loop(win, cycle_interval=1.0):
         claim_items = None  # 领取校验帧（续跑路径无，跟踪首轮自行截图+OCR）
         if not _task_gone_last_round and task_tracker.has_task(win, TASK_TITLE, TASK_FALLBACK_TEXTS):
             log("[修罗] 任务追踪中已有修罗任务，直接跟踪", "SYS")
+            # 已有任务必为队长（用户 2026-10-25 确认）：置位队长记录与
+            # 队伍检查标记，下一轮领取免「队长判定 + 监控补人」双检查、
+            # 直接走领取；领取被拒人数不足时仍由 _claim_task 的监控补人
+            # 流程兜底
+            team.record_leader_status(True)
+            _team_checked = True
         else:
             if _task_gone_last_round:
                 _task_gone_last_round = False
