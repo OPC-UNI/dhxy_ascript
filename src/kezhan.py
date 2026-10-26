@@ -534,7 +534,8 @@ def _go_to_inn(win):
     close_scene_panels(win, "客栈")
 
     # 等待：快送对话框 / 到达洛阳客栈 / 寻路结束（位置稳定）。
-    # 每轮询截一帧：战斗跳过与快送对话框判定同帧复用（原每轮询 3 次截图）
+    # 每轮询截一帧：战斗跳过、快送对话框判定与位置识别同帧复用
+    # （原每轮询 3 次截图；性能规则 1 决策点单帧三件套）
     deadline = time.time() + ARRIVE_TIMEOUT
     last = None
     unchanged = 0
@@ -549,8 +550,9 @@ def _go_to_inn(win):
             time.sleep(2.0)  # 等待传送完成
             return True, "已点击快送选项，传送洛阳客栈"
         # 位置识别（寻路等待期间不做 Alt+C 恢复：Alt+C 会打断自动寻路，
-        # 失败跳过本轮即可），同时判定是否已到客栈
-        pos = game_map.read_map_position(win)
+        # 失败跳过本轮即可），同时判定是否已到客栈；复用本轮已截帧
+        # （截帧与使用之间无点击，帧未过期）
+        pos = game_map.read_map_position(win, img=img)
         if pos is not None and pos[0].strip() == KEZHAN_MAP:
             return True, "已到达洛阳客栈"
         if pos is not None and pos == last:
@@ -746,10 +748,12 @@ def _walk_to_luoyang_pos(win, click_pos, target_pos, timeout, desc):
     last = None
     unchanged = 0
     while time.time() < deadline:
-        if is_in_battle(win):
+        # 每轮询截一帧：战斗判定与位置识别同帧复用（原每轮询 2 次截窗）
+        img = win.capture(force_activate=False)
+        if img is not None and is_in_battle_frame(img):
             time.sleep(2.0)
             continue
-        pos = game_map.read_map_position(win)
+        pos = game_map.read_map_position(win, img=img)
         if _near_luoyang(pos, target_pos):
             log(f"[客栈] 已到达{desc}附近", "SYS")
             return True, f"已到达{desc}附近"
@@ -1105,6 +1109,31 @@ def _open_shenmi_baoxiang(win):
     return False, "两个阶段均未匹配到神秘宝箱"
 
 
+# ---- extras 链帧复用（性能规则 1「每轮询只截一帧」；同 wubei _xj_frame）----
+# follow 每轮询调 extras 链一次，链内战斗判定与给与面板检测原各自截窗
+# （截窗 33-129ms + 匹配，2Hz 空烧）——同轮询共享一帧。键为 items 对象
+# id：同轮询链内 items 为同一对象；帧全等复用（_frames_equal）时 items
+# 对象也复用，缓存帧恰为同像素帧，复用正确。extras 收到的 img_np 是
+# 区域外置黑掩码帧（战斗条带/给与标题均在其外），不能直接复用，须重截。
+_kjf_key = None
+_kjf_bgr = None        # BGR np 帧（战斗判定/模板匹配用）
+
+
+def _kj_frame(win, items):
+    """获取当前轮询的共享帧（extras 链内同帧复用），返回 BGR np 帧或 None。
+
+    截图失败返回 None（键仍刷新；调用方按帧不可用跳过需帧的判定）。
+    """
+    global _kjf_key, _kjf_bgr
+    key = id(items)
+    if _kjf_key != key:
+        img = win.capture(force_activate=False)
+        _kjf_key = key
+        _kjf_bgr = None if img is None else cv2.cvtColor(np.asarray(img)[:, :, :3],
+                                                         cv2.COLOR_RGB2BGR)
+    return _kjf_bgr
+
+
 def _handle_follow_extras(win, items, img_np):
     """follow 期间的附加处理。
 
@@ -1116,7 +1145,11 @@ def _handle_follow_extras(win, items, img_np):
     """
     global _dali_last_done, _biwu_last_done, _baoxiang_last_done
     task = task_tracker.find_task(task_tracker.group_tasks(items), TASK_TITLE)
-    if not is_in_battle(win):
+    # 战斗判定复用本轮询共享帧（同轮询免重复截窗；见 _kj_frame）。
+    # 帧不可用视为非战斗——与旧 is_in_battle 截窗失败返回 False 一致，
+    # 特殊步骤分支各自重截；给与面板检测无帧时跳过（见 _handle_give_panel）
+    bgr = _kj_frame(win, items)
+    if bgr is None or not is_in_battle_frame(bgr):
         # 拍毒虫小游戏暂不处理（毒虫模板未匹配成功，先人工操作）：
         # 模板就绪后恢复此段即可自动开始并拍虫
         if False and _norm_dialog_present(items, BUG_START_TEXT):
@@ -1145,7 +1178,7 @@ def _handle_follow_extras(win, items, img_np):
             return True
         # 物品给与：给与面板打开时跨轮询续接（对话选项点击在
         # DIALOG_OPTION_MAP 中处理，点击后弹出给与面板在此完成）
-        if _handle_give_panel(win):
+        if _handle_give_panel(win, bgr):
             return True
         # 战斗失败/平局对话框：先关闭对话框，再重新点击任务追踪绿字
         # 推进（参考 xuanshu 同款处理）。follow 的共享处理在内层等待
@@ -1226,17 +1259,23 @@ def _give_money(win, npc_name):
     return True
 
 
-def _handle_give_panel(win):
+def _handle_give_panel(win, bgr=None):
     """给与面板已打开时完成物品给与（参考五环 _do_give）。
 
     按面板 NPC 行识别给与对象（巧儿→九转还魂汤，婉儿→高等食材；
     钱老四/钓鱼大赛主理人→输入 1000 银两特殊给与）→ 检索物品
     （含储物格切换）→ 点击选中 → 点击给与按钮完成。
     物品未找到/按钮未出现时返回 True（面板仍在，下次轮询续接重试）。
+    bgr：extras 链共享帧（性能规则 1，同轮询免重复截窗；面板检测
+    改在帧上匹配，同算法同 0.8 阈值）。None（帧不可用）时跳过检测
+    返回 False——防重复给与标记不动，帧可读的下一轮询再判；比旧实现
+    「截窗失败即视为面板关闭并复位标记」更安全。
     返回是否已处理。
     """
     global _money_give_done
-    if game_map.find_template(win, GIVE_TITLE_ICON) is None:
+    if bgr is None:
+        return False  # 帧不可用：跳过面板检测（标记不动，下轮询再判）
+    if game_map.match_frame_np(bgr, GIVE_TITLE_ICON) is None:
         _money_give_done = False  # 面板已关闭：复位防重复给与标记
         return False
     (icon, label), npc_txt = _give_item_for_npc(win)
