@@ -34,6 +34,7 @@
 干扰行不含该子串，不会抢锚点。
 """
 import re
+import random
 import time
 from pathlib import Path
 
@@ -118,6 +119,19 @@ CLAIM_DIALOG_TIMEOUT = 15                     # 领取对话框处理超时
 CLAIM_DIALOG_APPEAR_TIMEOUT = 4               # 点击领取入口后等待对话框出现的短窗口
                                               # （正常 ~1.5s 即出）：超时未见选项判定
                                               # 坐标不对，走小地图重定位兜底
+CLAIM_DIALOG_FIXED_WAIT = (0.8, 1.2)          # 高性能缓存点击路径：入口点击后的固定渲染
+                                              # 等待区间（秒，均匀随机取——用户 2026-10-26
+                                              # 指定 0.8~1.2 随机，验证后反馈正确率）。
+                                              # 固定等待较轮询信号更合理——轮询信号偶现
+                                              # 异常致缓存点击点偏
+CLAIM_VERIFY_POLL_INTERVAL = 0.8              # 校验轮询间隔（秒）。用户 2026-10-26 指定
+                                              # 0.8：OCR 占空比降到 ~50%，CPU 占用极低；
+                                              # 检测粒度由任务块 2x 放大重识别补偿（漏检
+                                              # 时补一次高精度识别，不靠高频轮询）
+TASK_BLOCK_REGION = (0, 225, 400, 310)        # 任务块裁剪区域（面板顶部：标题行 y~230-255
+                                              # + 内容链接行 y~260-295，留余量）；2x 放大
+                                              # 重识别用（修罗标题徽标漏检 + 插入滑动动画
+                                              # 期间 det 失败——放大帧检出能力更强）
 CLAIM_FOLLOW_RECOVER_WINDOW = 30              # 领取后首次跟踪失败的补偿窗口（秒）：
                                               # 首次点击及其重试实测 9s、慢 OCR 下 ~20s；
                                               # 窗口外的同类失败视为跟踪中期，不补偿
@@ -416,23 +430,70 @@ def _find_claim_option(items, img_np):
     return None
 
 
-def _wait_claim_option_signal(win, timeout=CLAIM_DIALOG_APPEAR_TIMEOUT):
-    """轮询领取对话框选项出现的直接信号（对话框区域 OCR ~150ms/次）。
+def _task_in_tracker_zoom(img):
+    """任务块裁剪 2x 放大重识别（面板 OCR 漏检兜底，看打选项同款）。
 
-    高性能路径用：替代固定 HIGH_PERF_DIALOG_WAIT 等待——选项渲染
-    完成即返回（渲染快时提前点、慢时最多等 timeout，不再点空）。
-    返回选项是否出现（不影响调用方继续走既有兜底）。
+    修罗标题行带彩色徽标被区域 OCR 确定性漏检、内容链接行在面板
+    插入滑动动画期间 det 偶发失败——裁剪任务块（标题+链接行区域）
+    2x 放大后全帧引擎重识别，检出能力更强。返回是否检出任务。
     """
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        time.sleep(0.3)
-        img = win.capture(force_activate=False)
-        if img is None:
-            continue
-        items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
-        if _find_claim_option(items, img_np) is not None:
-            return True
+    try:
+        l, t, r, b = TASK_BLOCK_REGION
+        crop = img.crop((l, t, r, b)).resize(((r - l) * 2, (b - t) * 2),
+                                             Image.LANCZOS)
+        items2, _ = game_map.ocr_image(crop)
+        for txt, _, score in items2:
+            if score < 0.55:
+                continue
+            if TASK_TITLE in txt or any(ft in txt for ft in TASK_FALLBACK_TEXTS):
+                return True
+    except Exception:
+        pass
     return False
+
+
+def _team_dialog_zoom(win, img):
+    """队伍确认弹窗的对话框区域 2x 放大兜底识别（弹窗文案 OCR 偶发
+    漏检——实测 2026-10-26 人数不足弹窗 3 轮未检出、空转 ~9s）。
+
+    检出后按设置点「确定」/「我再想想」（看打选项同款放大重识别
+    点击路径）。返回 "declined" / "accepted" / None（非本弹窗）。
+    """
+    try:
+        l, t, r, b = task_tracker.DIALOG_REGION
+        crop = img.crop((l, t, r, b)).resize(((r - l) * 2, (b - t) * 2),
+                                             Image.LANCZOS)
+        items2, _ = game_map.ocr_image(crop)
+        joined = "".join(tx for tx, _, s in items2 if s >= 0.55)
+        if not _fuzzy_contains(joined, norm_text(TEAM_CONFIRM_TEXT),
+                               threshold=0.8):
+            return None
+        min_members = load_xiuluo_settings()["min_members"]
+        needle = norm_text(TEAM_CONFIRM_DECLINE if min_members >= 5
+                           else TEAM_CONFIRM_ACCEPT)
+        for txt, rect, score in items2:
+            if score < 0.55 or needle not in norm_text(txt):
+                continue
+            rect2 = [l + rect[0] // 2, t + rect[1] // 2,
+                     l + rect[2] // 2, t + rect[3] // 2]
+            if rect2[0] < task_tracker.PANEL_MAX_X:
+                continue
+            frame = np.asarray(img)[:, :, :3]
+            if not task_tracker.is_green_text(frame, rect2):
+                continue
+            cx, cy = task_tracker.green_text_center(frame, rect2,
+                                                    prefer_underline=False)
+            human_click(win, cx, cy)
+            if min_members >= 5:
+                log("[修罗] 队伍不足 5 人，按设置（最少 5 人）点「我再想想」"
+                    "（2x 补识），等待补人", "WARN")
+                return "declined"
+            log(f"[修罗] 队伍不足 5 人，按设置（最少 {min_members} 人）"
+                f"点「确定」接受领取（2x 补识）", "SYS")
+            return "accepted"
+    except Exception:
+        pass
+    return None
 
 
 def _click_claim_option(win, items, img_np):
@@ -717,16 +778,12 @@ def _click_entry_ensuring_dialog(win, log_tag="[修罗]", hover_before_click=Fal
         # 移动期间点击位置已过期（实测 2026-10-21 偶现点击无效）
         precise_click(win, pt2[0], pt2[1], move_duration=0)
         log(f"{log_tag} 已点击{src2}（领取）", "SYS")
-        # 高性能：领取选项坐标已缓存 → 跳过对话框 OCR 轮询，固定等待
-        # 渲染后由 _claim_task 直接按坐标点选项（点不中由「任务进追踪」
-        # 校验循环内识别补点兜底，无 seen 帧返回）
+        # 高性能：领取选项坐标已缓存 → 固定等待渲染后由 _claim_task
+        # 直接按缓存坐标点选项（点不中由「任务进追踪」校验循环识别
+        # 补点兜底，无 seen 帧返回）
         if app_utils.high_perf_on() \
                 and app_utils.fixed_pos_get("claim_option", win) is not None:
-            # 高性能：跳过全量对话框轮询，改为轮询「选项出现」的直接信号
-            # （对话框渲染实测 ~1.5s）：选项一渲染完成即返回，由
-            # _claim_task 按缓存坐标点选项（点不中由校验循环识别补点
-            # 兜底）。替代固定 1.8s 等待——渲染快时提前点、慢时不点空
-            _wait_claim_option_signal(win)
+            time.sleep(random.uniform(*CLAIM_DIALOG_FIXED_WAIT))
             dialog_seen = True
             break
         # 等待对话框出现：轮询选项（正常 ~1.5s 即出）；首次尝试短窗口，
@@ -856,15 +913,36 @@ def _claim_task(win, allow_fill=False):
     deadline = time.time() + CLAIM_VERIFY_WAIT
     count = None
     found_frame = None
+    polls = 0
+    reclick_poll = 0  # 识别补点发生的轮询序（补点后队伍对话框需再覆盖一轮）
+    option_seen = False  # 校验期是否曾见领取选项（区分未渲染与点击已生效）
     while time.time() < deadline:
         img = win.capture(force_activate=False)
         if img is None:
             time.sleep(1.0)
             continue
-        items, img_np = game_map.ocr_regions(img, task_tracker.OCR_REGIONS)
+        polls += 1
+        # 面板单区域 OCR（0.9s）为主节奏：任务进追踪是确认主信号。
+        # 对话框区域检查（队伍确认/警告、完成次数、缓存点击识别补点）
+        # 仅在必要轮询执行：前 2 轮（队伍对话框出现在选项点击后
+        # ~0.5-1s）+ used_cached 待补点期间 + 补点后一轮（补点点击
+        # 同样可能弹队伍对话框）+ 完成次数未解析（限前 4 轮）——
+        # 其余轮询只 OCR 面板区（1.2s→0.9s），配合 sleep 0.2 节奏
+        # 约 1.1s/轮。found_frame 复用面板单区域帧即可：follow 首轮
+        # 绿字点击只用面板区，对话框区域缺席不产生误动作（extras
+        # 无对话框行即不介入）
+        need_dialog = polls <= 2 or used_cached or (count is None and polls <= 4) \
+            or 0 < reclick_poll < polls <= reclick_poll + 1
+        if need_dialog:
+            items, img_np = game_map.ocr_regions(img, task_tracker.OCR_REGIONS)
+        else:
+            items, img_np = game_map.ocr_regions(img, (task_tracker.TRACK_REGION,))
         if task_tracker.has_task_in(items, img_np, TASK_TITLE, TASK_FALLBACK_TEXTS):
             found_frame = (items, img_np)
             break
+        if not need_dialog:
+            time.sleep(CLAIM_VERIFY_POLL_INTERVAL)
+            continue
         # 完成次数对话框（限对话框区域行）同帧解析，零额外截图
         if count is None:
             raw = re.sub(r"\s", "", "".join(
@@ -874,8 +952,19 @@ def _claim_task(win, allow_fill=False):
             if m:
                 count = int(m.group(1))
                 log(f"[修罗] {CLAIM_COUNT_TEXT}：{count}", "SYS")
-        # 领取确认弹窗（不足 5 人询问是否仍要领取）：按设置决定
+        # 领取确认弹窗（不足 5 人询问是否仍要领取）：按设置决定。
+        # 弹窗文案 OCR 偶发漏检（实测 2026-10-26 3 轮未检出空转
+        # ~9s）：第 2 轮一次性对话框区域 2x 放大补识别——弹窗在
+        # 点击后 ~1s 出现、第 2 轮截帧必然已含弹窗；补识仅此一次，
+        # 不增加常规路径的持续 OCR 负担
         confirm = _handle_team_confirm(win, items, img_np)
+        if confirm is None and polls == 2 \
+                and any(s >= 0.55 and r[0] >= task_tracker.PANEL_MAX_X
+                        for _, r, s in items):
+            # 对话框区域确有文字才放大补识：正常满队领取时对话框已
+            # 关闭、区域为空则跳过（零额外 OCR，不影响常规流程）；
+            # 人数不足弹窗挂在对话框区，此门控必放行
+            confirm = _team_dialog_zoom(win, img)
         if confirm == "declined":
             if allow_fill:
                 log("[修罗] 领取被拒：队伍人数不足，进入监控补人循环", "WARN")
@@ -890,11 +979,31 @@ def _claim_task(win, allow_fill=False):
                 return False, "队伍已补齐（监控循环判定），下轮重试领取", None
             return False, "队伍数量小于 3，无法领取（已关闭提示对话框）", None
         # 高性能缓存点击兜底：任务未进追踪且选项仍可见 → 同帧识别补点
-        # （识别点击成功后缓存坐标自动刷新，位置漂移自愈）；只补一次
-        if used_cached and _find_claim_option(items, img_np) is not None:
-            _click_claim_option(win, items, img_np)
-            used_cached = False
-        time.sleep(0.5)
+        # （识别点击成功后缓存坐标自动刷新，位置漂移自愈）；只补一次。
+        # 「曾见选项后消失」判为缓存点击已生效、释放对话框区检查——
+        # 选项从未出现则保持等待（慢渲染时补点须等到选项渲染出来）
+        if used_cached:
+            if _find_claim_option(items, img_np) is not None:
+                option_seen = True
+                _click_claim_option(win, items, img_np)
+                reclick_poll = polls
+                used_cached = False
+            elif option_seen:
+                used_cached = False
+        # 面板 OCR 漏检：任务块裁剪 2x 放大重识别（首轮截帧必然早于
+        # 渲染完成——任务实测 ~1s 后才出现——跳过免白耗）。置于弹窗
+        # 处理之后：弹窗阻塞期任务不可能进面板，放大 OCR 白耗会拖慢
+        # 弹窗响应
+        if polls >= 2 and _task_in_tracker_zoom(img):
+            log("[修罗] 任务块 2x 重识别检出任务", "SYS")
+            # 重截一帧补全双区域 OCR：found_frame 需完整帧供 follow
+            # 首轮复用（面板绿字点击与对话框处理依赖）
+            img2 = win.capture(force_activate=False)
+            if img2 is not None:
+                items, img_np = game_map.ocr_regions(img2, task_tracker.OCR_REGIONS)
+                found_frame = (items, img_np)
+                break
+        time.sleep(CLAIM_VERIFY_POLL_INTERVAL)
     if found_frame is not None:
         tail = f"（{CLAIM_COUNT_TEXT}：{count}）" if count is not None else ""
         return True, f"修罗任务已领取{tail}", found_frame

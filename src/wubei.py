@@ -1231,11 +1231,20 @@ def _handle_xianxingjing_track(win, items, img_np):
         if now - _xj_grace_start < XIANXINGJING_GRACE:
             return False
         # 宽限已过未出对话框：本处失败 → 点寻路链接去另一处（A/B 同
-        # 文案不同坐标，点与上次相反的一侧；偶现只识别到第二个链接时
-        # 由 _xj_walk_point 按间距补点）。点链接时读一次位置作移动验证
-        # 起点（仅此一次，共享帧免截窗）
+        # 文案不同坐标；偶现只识别到第二个链接时由 _xj_walk_point 按
+        # 间距补点）。点链接时读一次位置作移动验证起点（仅此一次，
+        # 共享帧免截窗）
         pos = _xj_pos(win, items)
-        side = "b" if _xj_walk_side == "a" else "a"
+        if _xj_walk_side is not None:
+            # 已点过寻路链接：点与上次相反的一侧
+            side = "b" if _xj_walk_side == "a" else "a"
+        else:
+            # 尚未点过寻路链接：所处侧按用镜次序推导——首次寻路来自
+            # 任务追踪绿字点击、游戏默认去 A（用户 2026-10-26 确认），
+            # 第 1 处失败应去 B；第 2 处（用镜计数已达 2）在 B，
+            # 失败应回 A。旧逻辑 None 视为 a、翻侧后仍点 A 侧——
+            # 实测本处失败又点回 A 卡死
+            side = "b" if _xj_use_count <= 1 else "a"
         if _click_xianxingjing_walk(win, items, img_np, side=side):
             _xj_walk_side = side
             log(f"[五倍] 显形镜：本处未触发对话框，已点寻路链接前往"

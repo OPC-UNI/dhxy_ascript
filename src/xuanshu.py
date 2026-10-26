@@ -732,15 +732,25 @@ def _jiguan_link_progress(items, img_np):
 def _jiguan_link_picker(items, img_np):
     """按已开启计数选下一个关键词（南→东→西）并定位点击。
 
-    链接行「机关·东、机关·南、机关·西」三个链接各有独立实线下划线
-    （实测 x 24-89 / 106-171 / 188-221，y 287-288，2026-10-25），
-    按 x 左→右恒为 东/南/西（面板坐标固定）——直接按下划线实线段
-    定位，不用 OCR 文本字符比例映射（OCR 行拆分/误读时映射点错：
-    实测点南落到东、行级兜底点西，顺序破坏任务卡死）。扫描取含
-    「机关」行的纵向邻域（±10px）：碎片行可能不含机关关键词却承载
-    链接（如「·西中的第二处封印封印。」的 西 链接）。点击取下划线
-    上方 2px（行底可点区规则）。计数用尽（≥3）或未命中返回 None，
-    回退 track_task 行级选择。
+    布局随进度变化（每点开一处任务描述即改写，2026-10-26 用户确认）：
+    - 0 处已开（描述「根据桃小淘所言，前往花果…」）：链接行折两行——
+      上行「…机关·东、机关」+ 下行「·南、机关·西三处封印。」，南的标签
+      「机关·南」被折行拆成两段（上行行尾「机关」+ 下行行首「·南」），
+      共 4 段实线下划线（实测 y287：东 113-172、南A 188-217；y304：
+      南B 23-55、西 73-137）。此时只能点南：取最底行最左段（南B）。
+    - 1/2 处已开（描述「第一/二处封印已开启，再去开启…」）：链接行仍
+      折两行但主行含 3 段——上行「机关·东、机关·南、机关」+ 下行「·西
+      …」尾段（实测 y288：东 24-88、南 106-170、西A 188-220；y305：
+      西B 24-56 单段尾行）。点法：找 3 段主行按 x 序映射（东/南/西），
+      不能按最底行取（会取到 1 段的西B 尾行）。
+
+    扫描取含「机关」行的纵向邻域（-10/+30px：下行底 307 vs 上行底
+    289，差 18px，OCR 漏读下行时也能扫到其下划线；碎片行可能不含
+    机关关键词却承载链接）。点击取下划线上方 2px（行底可点区规则）。
+    阶段内链接无法解析时返回 PICK_FAIL（track_task 拒绝行级兜底点击
+    并重试——行级兜底按最长实线段点会点错机关：2026-10-26 实测点南
+    落到西、顺序破坏任务卡死）。非封印阶段返回 None（回退行级选择，
+    如领取后的寻路链接）。计数用尽（≥3）返回 None。
     """
     n = _jiguan_link_count(items)
     if n is None:
@@ -759,14 +769,12 @@ def _jiguan_link_picker(items, img_np):
     if y_top is None:
         return None
     y_top = max(0, y_top - 10)
-    y_bot = min(img_np.shape[0], y_bot + 10)
+    y_bot = min(img_np.shape[0], y_bot + 30)
     region = img_np[y_top:y_bot, 0:task_tracker.PANEL_MAX_X].astype(int)
     mask = task_tracker.green_mask(region, task_tracker.GREEN_MIN_G)
-    # 自底向上找首个含实线段（≥20px 连续亮绿列）的行：下划线可跨
-    # 1~2 行，字形笔画连排实测 ≤13px 不构成实线段；取该行全部
-    # 实线段按 x 排序即 东/南/西 三个链接下划线
-    runs = None
-    y_row = None
+    # 收集所有含实线段（≥20px 连续亮绿列）的行（自底向上）：下划线可跨
+    # 1~2 行，字形笔画连排实测 ≤13px 不构成实线段
+    run_rows = []
     for rr in range(mask.shape[0] - 1, -1, -1):
         cols = np.where(mask[rr])[0]
         if cols.size < 20:
@@ -779,17 +787,30 @@ def _jiguan_link_picker(items, img_np):
                 start = c
             prev = c
         segs.append((int(start), int(prev)))
-        solid = [s for s in segs if s[1] - s[0] + 1 >= 20]
+        solid = sorted(s for s in segs if s[1] - s[0] + 1 >= 20)
         if solid:
-            runs, y_row = solid, rr
-            break
-    if runs is None or len(runs) != 3:
-        return None  # 下划线不齐（渲染中/遮挡）：回退行级选择
-    runs.sort()
-    ci = JIGUAN_LINK_CLUSTER[JIGUAN_LINK_ORDER[n]]
-    cx = (runs[ci][0] + runs[ci][1]) // 2
-    cy = y_top + y_row - 2  # 下划线上方 2px
-    return cx, cy
+            run_rows.append((y_top + rr, solid))
+    if not run_rows:
+        return task_tracker.PICK_FAIL  # 阶段内实线段全无：拒绝行级兜底
+    # 主链接行优先：含 3 段实线段的行（1/2 处已开布局：主行「机关·东、
+    # 机关·南、机关」+ 下行「·西…」尾段——实测 y288 东 24-88 / 南
+    # 106-170 / 西A 188-220，y305 西B 24-56 单段尾行）。不能按最底行
+    # 取（会取到 1 段的西B 尾行），须在全部行中找 3 段主行
+    for y0, runs0 in run_rows:
+        if len(runs0) == 3:
+            # 按 x 序映射（东/南/西）
+            ci = JIGUAN_LINK_CLUSTER[JIGUAN_LINK_ORDER[n]]
+            cx = (runs0[ci][0] + runs0[ci][1]) // 2
+            return cx, y0 - 2  # 下划线上方 2px
+    if n == 0 and len(run_rows) == 2 and len(run_rows[0][1]) == 2 \
+            and len(run_rows[1][1]) == 2:
+        # 折行布局（初始态）：上下两行各 2 段，南的可点部分是下行
+        # 最左段（「·南」）。要求两行俱全——上行孤存（下行被遮挡/
+        # 渲染中）时其左段是东，不能点
+        y0, runs0 = run_rows[0]
+        cx = (runs0[0][0] + runs0[0][1]) // 2
+        return cx, y0 - 2
+    return task_tracker.PICK_FAIL  # 下划线形态异常：拒绝行级兜底
 
 
 def _play_chuyijuebao(win, timeout=CHUYIJUEBAO_TIMEOUT):
@@ -1183,8 +1204,12 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 sig2 = _sig_of(items, img_np, task2)
                 text_changed = not _signatures_similar(sig2, sig)
                 key = progress_key(items, img_np) if progress_key is not None else None
-                key_changed = key is not None and not first_poll \
-                    and key != baseline_key
+                # baseline_key 为 None（阶段外基线）时不得参与比较：None 是
+                # 「不归我管」信号而非可比较值，与阶段内值（"0"/"1"）比较
+                # 会把阶段刚出现误判为任务推进（实测「None」→「0」误确认，
+                # 2026-10-26）
+                key_changed = key is not None and baseline_key is not None \
+                    and not first_poll and key != baseline_key
                 if ignore_empty_key and (not key or not baseline_key):
                     key_changed = False  # 空键为过渡帧，不作信号
                 if changed_kind == "text":
@@ -1284,7 +1309,10 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                     baseline_key = key
                     first_poll = False
                 else:
-                    key_changed = key != baseline_key
+                    # 同确认轮询：None（阶段外/识别未决）不作为可比较键值，
+                    # 防「None→0」与「0→None」误判推进（2026-10-26 实测）
+                    key_changed = key is not None and baseline_key is not None \
+                        and key != baseline_key
                     if ignore_empty_key and (not key or not baseline_key):
                         key_changed = False  # 空键为过渡帧，不作信号
             if text_changed or key_changed:

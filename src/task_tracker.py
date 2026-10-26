@@ -33,6 +33,11 @@ PANEL_MAX_X = 400
 # 避免点击目标在描述行/计数碎片行间漂移。兼容实测 OCR 变体：全角括号
 # 「（140,39)」、右括号丢失「(178,111」、句点分隔「(178. 111)」
 MAP_COORD_RE = re.compile(r"[\(（]\s*\d+\s*[.,，]\s*\d+\s*[\)）]?")
+# 精确定位回调的「拒绝行级兜底」信号：调用方阶段内无法解析链接位置时
+# 返回（如玄枢轶闻封印按序开启——行级兜底按最长实线段点击会点错机关、
+# 顺序破坏任务卡死，2026-10-26 实测点南落到西）。track_task 收到后
+# 等待重试并最终失败，不做行级选择点击。坐标为负、非任何真实屏幕坐标。
+PICK_FAIL = (-1, -1)
 # 跟踪轮询与点击的 OCR 区域（窗口相对坐标）：任务追踪面板 + 居中对话框区。
 # 区域外（顶部 HUD、右侧图标列、底部栏）无需识别；全窗 OCR 实测 2.2s，
 # 两个区域合计约 1.2s，轮询与点击提速近一半。
@@ -501,6 +506,16 @@ def track_task(win, title, text=None, green_index=0, retries=4, retry_interval=1
             # 点击坐标（如同一行内多个绿字须按序点击，行级选择无法区分）
             if green_picker is not None:
                 pt = green_picker(items, img_np)
+                if pt == PICK_FAIL:
+                    # 调用方判定当前帧无法安全定位（如玄枢轶闻封印阶段
+                    # 链接下划线不齐）：等待重试而不是行级兜底点击——
+                    # 兜底点错会把任务卡死，比晚几秒点更糟
+                    if attempt < retries:
+                        log(f"[任务追踪] 「{title}」精确定位暂不可用"
+                            f"（第 {attempt + 1} 次），等待后重试", "INFO")
+                        time.sleep(retry_interval)
+                        continue
+                    return False, f"「{title}」精确定位不可用，已拒绝行级兜底点击"
                 if pt is not None:
                     human_click(win, pt[0], pt[1])
                     log(f"[任务追踪] 已点击「{title}」绿色文案（精确定位）@ ({pt[0]},{pt[1]})", "SYS")
