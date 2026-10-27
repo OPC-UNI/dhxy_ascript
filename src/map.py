@@ -90,6 +90,17 @@ _REGION_OCR_PARAMS = {
     "EngineConfig.onnxruntime.intra_op_num_threads": 2,
     "EngineConfig.onnxruntime.inter_op_num_threads": 1,
 }
+# 2x 放大帧 OCR 引擎（开打兜底/巫医选项放大共用，2026-10-27）：
+# 快引擎 limit 'max'/736 会把 1160px 宽的 2x 对话框裁剪缩小到 736
+# （抵消放大、小字重新漏检）；全帧引擎 'min'/736 则把 2x 裁剪再放大
+# 1.1x 白烧 det。max/1600 覆盖 2x 裁剪原始尺寸——det 分辨率与旧全帧
+# 路径（1293x736）同档、CPU 更低。仅限「放大后最长边 ≤1600 且放大
+# 分辨率即检出分辨率」的场景（对话框区 2x 裁剪）；小块 2x 裁剪依赖
+# 'min'/736 的额外放大检出小字（如修罗任务块 2x 重识别），继续走全帧
+# 引擎，不得替换。
+_ZOOM_OCR_PARAMS = dict(_REGION_OCR_PARAMS)
+_ZOOM_OCR_PARAMS["Det.limit_side_len"] = 1600
+_zoom_engine = None
 
 
 def _engine_items(res):
@@ -157,16 +168,35 @@ def ocr_image(img):
     return ocr_regions(img, [])
 
 
+def ocr_zoom(img):
+    """对 2x 放大帧做全图 OCR（快引擎、不缩小放大效果），返回 (items, img_np)。
+
+    开打兜底/巫医选项放大的 2x 对话框裁剪用（max/1600 检出分辨率与
+    旧全帧路径同档、CPU 更低）；调用方自行把 rect 映射回窗口坐标
+    （与旧 ocr_image 用法一致）。
+    """
+    global _zoom_engine
+    if _zoom_engine is None:
+        _zoom_engine = RapidOCR(params=_ZOOM_OCR_PARAMS)
+    full_np = np.asarray(img)
+    items = _engine_items(_zoom_engine(full_np))
+    items.sort(key=lambda x: x[1][1])
+    return items, full_np
+
+
 def warmup_ocr():
     """预热 OCR 引擎（首次调用需加载 det/cls/rec 模型，一次性约 1s；
     新版引擎首次会下载官方模型，网络耗时另计——建议首次运行前联网）。"""
-    global _engine, _region_engine
+    global _engine, _region_engine, _zoom_engine
     if _engine is None:
         _engine = RapidOCR(params=_OCR_PARAMS)
         _engine(np.zeros((32, 32, 3), dtype=np.uint8))
     if _region_engine is None:
         _region_engine = RapidOCR(params=_REGION_OCR_PARAMS)
         _region_engine(np.zeros((32, 32, 3), dtype=np.uint8))
+    if _zoom_engine is None:
+        _zoom_engine = RapidOCR(params=_ZOOM_OCR_PARAMS)
+        _zoom_engine(np.zeros((32, 32, 3), dtype=np.uint8))
 
 
 def _clean_map_pos(text):

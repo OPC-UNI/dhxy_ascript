@@ -366,16 +366,20 @@ def _claim_task(win):
             log(f"[五环][高性能] 已按缓存坐标点击「{CLAIM_DIALOG_OPTION}」 ({pos[0]}, {pos[1]})", "SYS")
     # 对话框：活力值不足则点击「那可不行，我一会再来。」结束任务；
     # 正常则点击「我可以帮助这些人」完成领取。
-    # 每轮询截一帧 + 双区域 OCR 一次（面板+对话框，~1.2s），任务出现与
-    # 对话框判定同帧复用（原每轮询 2 次截图 + 全帧 OCR ~930ms，实测浪费）
+    # 每轮询截一帧 + 面板差分门 + 对话框区域 OCR（任务出现与对话框
+    # 判定同帧复用；面板门复用静态结论，任务进追踪必开）
     deadline = time.time() + CLAIM_DIALOG_TIMEOUT
     claimed = False
+    track_gate = task_tracker.TrackGate()  # 面板差分门（共享组件，四段循环共用）
     while time.time() < deadline:
         img = win.capture(force_activate=False)
         if img is None:
             time.sleep(0.2)
             continue
-        items, img_np = game_map.ocr_regions(img, task_tracker.OCR_REGIONS)
+        track_items = track_gate.ocr(img)
+        dialog_items, img_np = game_map.ocr_region(img, task_tracker.DIALOG_REGION)
+        track_gate.paste_track(img, img_np)
+        items = sorted(track_items + dialog_items, key=lambda x: x[1][1])
         if task_tracker.has_task_in(items, img_np, WUHUAN_TITLE):
             claimed = True
             break
@@ -393,7 +397,11 @@ def _claim_task(win):
                 if img is None:
                     time.sleep(0.5)
                     continue
-                items, img_np = game_map.ocr_regions(img, task_tracker.OCR_REGIONS)
+                track_items = track_gate.ocr(img)
+                dialog_items, img_np = game_map.ocr_region(
+                    img, task_tracker.DIALOG_REGION)
+                track_gate.paste_track(img, img_np)
+                items = sorted(track_items + dialog_items, key=lambda x: x[1][1])
                 if task_tracker.has_task_in(items, img_np, WUHUAN_TITLE):
                     break
                 ended, info = _handle_claim_blockers(win, items, img_np)
@@ -410,7 +418,11 @@ def _claim_task(win):
             if img is None:
                 time.sleep(0.5)
                 continue
-            items, img_np = game_map.ocr_regions(img, task_tracker.OCR_REGIONS)
+            track_items = track_gate.ocr(img)
+            dialog_items, img_np = game_map.ocr_region(
+                img, task_tracker.DIALOG_REGION)
+            track_gate.paste_track(img, img_np)
+            items = sorted(track_items + dialog_items, key=lambda x: x[1][1])
             if task_tracker.has_task_in(items, img_np, WUHUAN_TITLE):
                 claimed = True
                 break
@@ -431,7 +443,10 @@ def _claim_task(win):
         if img is None:
             time.sleep(1.0)
             continue
-        items, img_np = game_map.ocr_regions(img, task_tracker.OCR_REGIONS)
+        track_items = track_gate.ocr(img)
+        dialog_items, img_np = game_map.ocr_region(img, task_tracker.DIALOG_REGION)
+        track_gate.paste_track(img, img_np)
+        items = sorted(track_items + dialog_items, key=lambda x: x[1][1])
         if task_tracker.has_task_in(items, img_np, WUHUAN_TITLE):
             break
         ended, info = _handle_claim_blockers(win, items, img_np)

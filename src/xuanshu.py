@@ -191,6 +191,12 @@ TASK_GONE_GATE_POLL_INTERVAL = 0.2 # 证据已足时等战斗线程确认门的�
 # 跟踪轮询的 OCR 区域见 task_tracker（TRACK_REGION/DIALOG_REGION/OCR_REGIONS）
 FOLLOW_TRACK_REGION = task_tracker.TRACK_REGION
 FOLLOW_OCR_REGIONS = task_tracker.OCR_REGIONS
+# 面板差分门见 task_tracker.TrackGate（共享组件，领取校验循环同用；
+# 门区域/兜底时限为实测校准资产，见 task_tracker.TRACK_GATE_*）
+# 战斗中 extras 对话框 OCR 限频（秒）：战斗动画帧帧不同、差分门失效，
+# 限频替代门控（同 WUYI_CHECK_INTERVAL 模式）。战斗中任务对话
+# （如五环提交装备）仍被处理，仅至多延迟该间隔。
+BATTLE_EXTRAS_INTERVAL = 2.0
 
 
 def _at_target(pos):
@@ -521,11 +527,14 @@ def navigate_to_task(win):
     # （满 5 次提示出现在点击「领取玄枢轶闻」之后）。
     # 命中时把 OCR 结果带回，供 follow_task 复用，省一次截图+OCR
     deadline = time.time() + DIALOG_TIMEOUT
+    track_gate = task_tracker.TrackGate()  # 面板差分门（共享组件）
     while time.time() < deadline:
         img = win.capture(force_activate=False)
         if img is not None:
-            items, img_np = game_map.ocr_regions(img, (task_tracker.TRACK_REGION,))
-            items2, _ = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
+            items = track_gate.ocr(img)
+            items2, _ = game_map.ocr_region(img, task_tracker.DIALOG_REGION)
+            img_np = np.zeros_like(np.asarray(img))
+            track_gate.paste_track(img, img_np)
             if _dialog_text_present(items2, DAILY_LIMIT_TEXT):
                 return False, DAILY_LIMIT_INFO, None
             if task_tracker.has_task_in(items, img_np, TASK_TITLE):
@@ -1177,22 +1186,46 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
         first_poll = pre_key is None
         last_poll_img = None
         last_poll_items = None
+        track_gate = task_tracker.TrackGate()  # 面板差分门（共享组件，见 task_tracker）
+        last_battle_extras_at = 0.0 # 战斗中 extras 上次对话框 OCR 时间（限频）
         was_battle = False      # 上一轮询为战斗帧（战斗结束转换帧直接做任务消失确认）
+
         while time.time() < deadline:
             time.sleep(CONFIRM_POLL_INTERVAL if changed_once else FOLLOW_POLL_INTERVAL)
             img = win.capture(force_activate=False)
             if img is None:
                 continue
+            # 战斗帧判定前置（性能 2026-10-27）：战斗 UI 遮挡追踪面板，
+            # 面板差分门与帧复用均失效（战斗动画帧帧不同），先判战斗、
+            # 命中即跳过面板/对话框全量 OCR——原先 OCR 在战斗判定之前，
+            # 战斗期每轮空烧双区域 OCR（实测 1.4-2.2 CPU 秒/次）
+            if is_in_battle_frame(img):
+                was_battle = True
+                # 确认轮询期战斗帧：保持原 2s 退避（确认轮询间隔仅 0.2s，
+                # 不退避会以 5Hz 截窗+匹配空烧）
+                if changed_once:
+                    time.sleep(2.0)
+                    continue
+                # 战斗中也可能出现任务对话（如五环提交装备）：保留对话框
+                # 区域 OCR 供 extras 处理；限频替代差分门（动画帧门控失效）
+                now = time.time()
+                if extra_dialog_handler is not None \
+                        and now - last_battle_extras_at >= BATTLE_EXTRAS_INTERVAL:
+                    last_battle_extras_at = now
+                    items_d, img_np_d = game_map.ocr_region(
+                        img, task_tracker.DIALOG_REGION)
+                    extra_dialog_handler(win, items_d, img_np_d)
+                continue
             if changed_once:
                 # 确认轮询：只复查追踪面板区域的任务签名/进度键（区域更小
-                # OCR 更快），跳过对话框处理与战斗判定，最快确认变化。
-                # 验证首次变化时的同一信号且新值稳定：文本变化须新签名与
-                # 首次变化时相似；进度键变化须与首次变化时相等。单一信号
-                # 的单次 OCR 抖动被过滤，两个信号各抖一次也无法组合骗过
-                if is_in_battle_frame(img):
-                    time.sleep(2.0)  # 战斗画面遮挡面板：跳过本帧（免空转 OCR）
-                    continue
-                items, img_np = game_map.ocr_regions(img, (FOLLOW_TRACK_REGION,))
+                # OCR 更快），跳过对话框处理，最快确认变化。战斗帧已在
+                # 循环头部拦截。验证首次变化时的同一信号且新值稳定：文本
+                # 变化须新签名与首次变化时相似；进度键变化须与首次变化时
+                # 相等。单一信号的单次 OCR 抖动被过滤，两个信号各抖一次
+                # 也无法组合骗过
+                items = track_gate.ocr(img)
+                img_np = np.zeros_like(np.asarray(img))
+                track_gate.paste_track(img, img_np)
                 task2 = task_tracker.find_task(task_tracker.group_tasks(items), title)
                 if task2 is None:
                     if _confirm_task_gone(win, title, fallback_keywords):
@@ -1238,12 +1271,12 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                     break
                 changed_once = False  # 变化未持续（OCR 抖动），回退正常轮询
                 continue
-            # 战斗结束转换帧：跳过全区域 OCR 直接做任务消失确认（确认
-            # 循环自带战斗帧防护、只 OCR 面板区域）——证据在战斗线程
-            # 2s 结束确认窗口内即开始收集，返程交接省时（实测 2026-10-24
-            # 战斗结束→开背包恒 2s，根因为全区域 OCR 拖晚确认循环进入，
-            # 门开时证据才 1 轮、还需补 1 轮 ~1.9s）
-            if was_battle and not is_in_battle_frame(img):
+            # 战斗结束转换帧：跳过全区域 OCR 直接做任务消失确认——战斗
+            # 帧已由循环头部拦截，走到此处即「战斗后的首个非战斗帧」；
+            # 证据在战斗线程 2s 结束确认窗口内即开始收集，返程交接省时
+            # （实测 2026-10-24 战斗结束→开背包恒 2s，根因为全区域 OCR
+            # 拖晚确认循环进入，门开时证据才 1 轮、还需补 1 轮 ~1.9s）
+            if was_battle:
                 was_battle = False
                 last_poll_items = None
                 last_poll_img = None
@@ -1253,16 +1286,24 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                     return True, f"任务已从任务追踪中消失（本轮跟踪 {rounds} 次点击）"
                 changed_once = False  # 任务仍在（遭遇战结束）或未决：回正常轮询
                 continue
-            # 帧复用：与上一轮询帧完全相同时复用其 OCR 结果（RapidOCR
+            # 帧全等复用：与上一轮询帧完全相同时复用其 OCR 结果（RapidOCR
             # 同输入输出确定，逐字等价；静止帧省一次双区域 OCR ~1.2s）
             if last_poll_items is not None and _frames_equal(img, last_poll_img):
                 items, img_np = last_poll_items
             else:
-                items, img_np = game_map.ocr_regions(img, FOLLOW_OCR_REGIONS)
+                # 面板差分门（见 task_tracker.TrackGate）：移动场景整帧
+                # 比对永不命中，面板核心静止即复用面板 OCR 结论；对话框
+                # 区域逐轮 OCR（对话随时可能出现，移动世界像素持续变化、
+                # 差分门不适用）
+                track_items = track_gate.ocr(img)
+                dialog_items, img_np = game_map.ocr_region(
+                    img, task_tracker.DIALOG_REGION)
+                track_gate.paste_track(img, img_np)
+                items = sorted(track_items + dialog_items, key=lambda x: x[1][1])
                 last_poll_items = (items, img_np)
                 last_poll_img = img
-            # 附加对话框处理优先：战斗中也可能出现任务对话（如五环提交装备），
-            # 此时任务追踪不可用，等战斗结束后再继续识别
+            # 附加对话框处理优先（战斗中的任务对话已由循环头部战斗帧
+            # 分支限频处理，此处处理非战斗帧的对话）
             extras_handled = False
             if extra_dialog_handler is not None:
                 extras_handled = extra_dialog_handler(win, items, img_np)
@@ -1272,10 +1313,6 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 # 轮询（实测 2026-10-13 五环：开场白对话与面板变化同帧，
                 # 若继续用陈旧帧跳出点击任务绿字会误点打开中的对话框）
                 changed_once = False
-                continue
-            # 战斗中：跳过本轮识别（任务追踪与坐标不可用）；复用本帧
-            if is_in_battle_frame(img):
-                was_battle = True
                 continue
             # 封印机关破解：提示对话框出现则完整处理（点击关闭 → 降落 →
             # 按序点机关，任务追踪变化即停）

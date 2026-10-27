@@ -798,12 +798,19 @@ def _claim_task(win, allow_fill=False):
     # （飞行/刷新界面状态）后仅再检索一次——修罗实测多次重试无效
     deadline = time.time() + CLAIM_VERIFY_WAIT
     found_frame = None
+    track_gate = task_tracker.TrackGate()  # 面板差分门（共享组件）
     while time.time() < deadline:
         img = win.capture(force_activate=False)
         if img is None:
             time.sleep(1.0)
             continue
-        items, img_np = game_map.ocr_regions(img, task_tracker.OCR_REGIONS)
+        # 面板差分门 + 对话框逐轮 OCR：任务进追踪必然改变面板核心像素
+        # （门必开），队伍满员提示与缓存补点在对话框区域不受门影响
+        track_items = track_gate.ocr(img)
+        dialog_items, img_np = game_map.ocr_region(
+            img, task_tracker.DIALOG_REGION)
+        track_gate.paste_track(img, img_np)
+        items = sorted(track_items + dialog_items, key=lambda x: x[1][1])
         # 领取被拒：队伍人数不足（游戏要求组满 5 人）。点屏幕中间关闭
         # 提示框。检查队伍开关开启时重入监控补人循环（查人数 → 补人
         # → 重查，人满返回后下轮重试领取）；开关关闭不补人（可能不是
@@ -1368,7 +1375,7 @@ def _handle_fight_dialog(win, items, img_np):
             l, t, r, b = task_tracker.DIALOG_REGION
             crop = cv2.resize(img_np[t:b, l:r], ((r - l) * 2, (b - t) * 2),
                               interpolation=cv2.INTER_LANCZOS4)
-            items2, _ = game_map.ocr_image(crop)
+            items2, _ = game_map.ocr_zoom(crop)  # 快引擎：max/1600 检出分辨率同档、CPU 更低
             mapped = [(txt2, [l + rect[0] // 2, t + rect[1] // 2,
                               l + rect[2] // 2, t + rect[3] // 2], score)
                       for txt2, rect, score in items2]

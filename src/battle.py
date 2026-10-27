@@ -115,10 +115,16 @@ WUYI_DIALOG_TEXTS = (
     "召唤兽和坐骑都是上天赐给我们的好朋友，要好好对待它们，会保佑你的。",
 )
 WUYI_OPTION_TEXT = "全部医治和修复"                    # 对话框绿色选项（游戏内原文，精确子串匹配）
-WUYI_CHECK_INTERVAL = 2.0    # 非战斗时巫医对话框检查间隔（秒）。
+WUYI_CHECK_INTERVAL = 2.0    # 战斗结束后高发窗口内的巫医对话框检查间隔（秒）。
                              # 实测 5s 节奏弹窗最多等 5s 才被点击，人物寻路走远后
-                             # 对话框关闭、点击失效；2s 下最坏延迟 ~2s。差分预过滤
-                             # 后单次检查仅 ~35ms（截图+差分），2s 节奏占空比 ~1.8%
+                             # 对话框关闭、点击失效；2s 下最坏延迟 ~2s——该节奏
+                             # 仅在高发窗口内保持（性能 2026-10-27：行走中差分门
+                             # 因世界移动失效，2s 恒检 OCR 白烧 ~0.3 核）
+WUYI_POST_BATTLE_WINDOW = 15.0   # 战斗结束后巫医弹窗高发窗口（召唤兽受伤弹窗在
+                                 # 战斗结束时弹出；窗口内保持 2s 节奏）
+WUYI_IDLE_CHECK_INTERVAL = 10.0  # 窗口外的安全兜底节奏：窗口外弹窗仅出现在巫医
+                                 # NPC 对话（修罗自动巫医流程）——人物静止、对话框
+                                 # 不随移动关闭，10s 内处理（修罗流程等待上限 15s）
 WUYI_RETRY_COOLDOWN = 15.0   # 点击选项后的冷却期（对话框未关闭时防重复点击）
 WUYI_DIFF_THRESHOLD = 2.0    # 对话框区域平均像素差阈值：低于则跳过 OCR（区域无变化）
 
@@ -595,7 +601,7 @@ def _handle_wuyi_dialog(win):
         l, t, r, b = task_tracker.DIALOG_REGION
         crop = img.crop((l, t, r, b)).resize(((r - l) * 2, (b - t) * 2),
                                              Image.LANCZOS)
-        items2, _ = game_map.ocr_image(crop)
+        items2, _ = game_map.ocr_zoom(crop)  # 快引擎：max/1600 检出分辨率同档、CPU 更低
         mapped = [(txt, [l + rect[0] // 2, t + rect[1] // 2,
                          l + rect[2] // 2, t + rect[3] // 2], score)
                   for txt, rect, score in items2]
@@ -687,6 +693,7 @@ def watch_loop(win):
     pending_auto = False   # 首场结束仍未挂上自动 → 下一场进场补点一次
     last_wuyi_check = 0.0  # 上次巫医对话框检查时间
     wuyi_click_at = 0.0    # 上次点击巫医选项时间（冷却）
+    last_battle_end_at = 0.0  # 上次战斗结束时间（巫医弹窗高发窗口起点）
     last_hezi_check = 0.0  # 上次修罗盒子检查时间
     hezi_click_at = 0.0    # 上次点击「我需要」时间（冷却）
     while True:
@@ -733,9 +740,16 @@ def watch_loop(win):
                             debug_overlay.set_bars(status_bars.last_summary())  # 悬浮层血蓝摘要
                         # 战后立即检查：先补血蓝（上一步），再巫医对话框/修罗盒子
                         last_wuyi_check = 0.0
+                        last_battle_end_at = time.time()  # 巫医弹窗高发窗口起点
                         last_hezi_check = 0.0
                 now = time.time()
-                if now - last_wuyi_check >= WUYI_CHECK_INTERVAL:
+                # 巫医检查节奏：战斗结束后高发窗口内 2s（5s 教训：弹窗等
+                # 久人物走远即关闭），窗口外 10s 兜底（弹窗仅在战斗结束/
+                # 巫医 NPC 对话出现，NPC 场景人物静止无走远关闭问题）
+                wuyi_interval = WUYI_CHECK_INTERVAL \
+                    if now - last_battle_end_at < WUYI_POST_BATTLE_WINDOW \
+                    else WUYI_IDLE_CHECK_INTERVAL
+                if now - last_wuyi_check >= wuyi_interval:
                     last_wuyi_check = now
                     if now - wuyi_click_at >= WUYI_RETRY_COOLDOWN \
                             and _handle_wuyi_dialog(win):

@@ -51,6 +51,46 @@ OCR_REGIONS = (TRACK_REGION, DIALOG_REGION)
 # 与 PANEL_MAX_X 同宽会裁切标题框边缘导致标题误读（实测），
 # group_tasks 仍按 x<PANEL_MAX_X 过滤，区域外行不参与
 TRACK_OCR_REGION = (0, 200, 430, 600)
+# 追踪面板差分门（性能 2026-10-27，实测 11/11 帧行走中严格稳定）：
+# 面板为不透明固定 UI，核心区像素不变则复用上轮面板 OCR 结论（OCR
+# 确定性已实测验证：同输入两次 OCR items 逐字相等）。移动场景整帧
+# 比对永不命中，门区域静止即省去面板 det+rec（实测单区 ~594 CPU ms/
+# 次）。面板下部/门区域外的变化由 TRACK_GATE_MAX_SKIP 兜底强制 OCR
+# 捕获（限频模式同 battle.FULL_CHECK_INTERVAL），保证不漏检任务变化。
+# 只复用 items——像素级判定（绿字/进度键）的 img_np 一律由调用方贴
+# 当前帧裁剪（TrackGate.paste_track），颜色判定不随复用而陈旧。
+TRACK_GATE_REGION = (0, 200, 200, 400)
+TRACK_GATE_MAX_SKIP = 5.0
+
+
+class TrackGate:
+    """追踪面板差分门（follow 轮询与各任务领取校验循环共用）。
+
+    一个任务阶段一个实例（如 follow_task 每轮新建）。战斗帧不要喂给
+    ocr()——战斗 UI 覆盖面板会污染门缓存（调用方须先做战斗判定）。
+    """
+
+    def __init__(self):
+        self.crop = None        # 上轮门区域像素
+        self.items = None       # 上轮面板 OCR 结论
+        self.ocr_at = 0.0       # 上轮面板 OCR 时间（兜底限频）
+
+    def ocr(self, img):
+        """面板 OCR：门区域像素不变且未超兜底时限 → 复用上轮结论。"""
+        gl, gt, gr, gb = TRACK_GATE_REGION
+        crop = np.asarray(img)[gt:gb, gl:gr]
+        now = time.time()
+        if (self.crop is not None and (crop == self.crop).all()
+                and now - self.ocr_at < TRACK_GATE_MAX_SKIP):
+            return self.items
+        items, _ = game_map.ocr_region(img, TRACK_REGION)
+        self.crop, self.items, self.ocr_at = crop, items, now
+        return items
+
+    def paste_track(self, img, img_np):
+        """把当前帧面板区域裁剪贴入掩码帧（像素判定用，不复用陈旧像素）。"""
+        l, t, r, b = TRACK_REGION
+        img_np[t:b, l:r] = np.asarray(img)[t:b, l:r]
 
 
 def green_mask(region, min_g):

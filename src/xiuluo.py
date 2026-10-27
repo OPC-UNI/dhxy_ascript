@@ -916,6 +916,7 @@ def _claim_task(win, allow_fill=False):
     polls = 0
     reclick_poll = 0  # 识别补点发生的轮询序（补点后队伍对话框需再覆盖一轮）
     option_seen = False  # 校验期是否曾见领取选项（区分未渲染与点击已生效）
+    track_gate = task_tracker.TrackGate()  # 面板差分门（共享组件）
     while time.time() < deadline:
         img = win.capture(force_activate=False)
         if img is None:
@@ -933,10 +934,18 @@ def _claim_task(win, allow_fill=False):
         # 无对话框行即不介入）
         need_dialog = polls <= 2 or used_cached or (count is None and polls <= 4) \
             or 0 < reclick_poll < polls <= reclick_poll + 1
+        # 面板差分门：任务进追踪必然改变面板核心像素（门必开）；
+        # 对话框区域（队伍确认/警告、完成次数、缓存补点）逐轮新鲜 OCR
+        track_items = track_gate.ocr(img)
         if need_dialog:
-            items, img_np = game_map.ocr_regions(img, task_tracker.OCR_REGIONS)
+            dialog_items, img_np = game_map.ocr_region(
+                img, task_tracker.DIALOG_REGION)
+            track_gate.paste_track(img, img_np)
+            items = sorted(track_items + dialog_items, key=lambda x: x[1][1])
         else:
-            items, img_np = game_map.ocr_regions(img, (task_tracker.TRACK_REGION,))
+            items = track_items
+            img_np = np.zeros_like(np.asarray(img))
+            track_gate.paste_track(img, img_np)
         if task_tracker.has_task_in(items, img_np, TASK_TITLE, TASK_FALLBACK_TEXTS):
             found_frame = (items, img_np)
             break
@@ -1103,7 +1112,7 @@ def _click_fight_option_fallback(win, items, img_np):
     l, t, r, b = task_tracker.DIALOG_REGION
     crop = img.crop((l, t, r, b)).resize(((r - l) * 2, (b - t) * 2),
                                          Image.LANCZOS)
-    items2, _ = game_map.ocr_image(crop)
+    items2, _ = game_map.ocr_zoom(crop)  # 快引擎：max/1600 检出分辨率同档、CPU 更低
     needle = norm_text(FIGHT_DIALOG_OPTION)
     for txt, rect, score in items2:
         if score < 0.55 or needle not in norm_text(txt):

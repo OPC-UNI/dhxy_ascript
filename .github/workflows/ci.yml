@@ -1,0 +1,38 @@
+name: CI (单元测试)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  unit-test:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+
+      - name: 安装依赖（与 build-exe 同源；pytest 仅测试用）
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+
+      # 用例测试：纯逻辑 + 模板匹配 + 差分门语义 + 性能护栏。
+      # 不触碰游戏窗口/输入（真实场景回归仍走实机 .diag 基准与人工验证）。
+      # 慢测试（OCR 引擎烟测，模型加载 ~2s）：默认排除，本地
+      # `python -m pytest -m slow` 或 CI 手动触发时取消注释下一行
+      - name: 运行用例测试
+        shell: pwsh
+        run: python -m pytest tests/ -m "not slow" -v --durations=10
+      # - name: 运行慢测试（OCR 烟测，按需开启）
+      #   shell: pwsh
+      #   run: python -m pytest tests/ -m slow -v

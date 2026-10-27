@@ -109,6 +109,7 @@ Do not write `FindImages.find("some/path.png")` for a template that does not exi
 9. **实测更差/不值得、明确不做**：替换模板匹配算法（积分图分解实测更慢）、cv2.setNumThreads（无收益）、ocr_regions 掩码缓存（省 1ms）、human_click 拟人化时长压缩（防检测设计）
 10. 引入新轮询时先实测计时（截图/匹配/OCR 分项），以数据决定条带与限频参数，不凭直觉
 11. **OCR 推理线程限制**：onnxruntime 默认 intra=-1 用满全部逻辑核，双区域 OCR 一次烧 2.4 CPU 秒（极端帧 15.7s）而 wall 不降反升；map.py 引擎参数已固定 intra=2/inter=1（实测 wall 持平、CPU -63%，任务进程常驻 CPU 从 ~6 核降至 ~2 核）——新建 OCR 引擎或调整参数时不得移除/放宽该限制
+12. **follow 轮询顺序与门校准（实测资产，2026-10-27）**：follow_task 内层循环每轮固定顺序「截帧 → is_in_battle_frame 前置 → 战斗帧走限频 extras 通道 / 非战斗帧走面板差分门 + 对话框逐轮 OCR」，顺序不得调换（战斗帧会污染门缓存）。面板差分门为共享组件 task_tracker.TrackGate（follow 轮询与玄枢/五环/五倍/修罗领取校验循环同用）：校准值不得随意改——TRACK_GATE_REGION=(0,200,200,400)（11/11 帧行走中严格稳定）、TRACK_GATE_MAX_SKIP=5.0（面板变化兜底强制 OCR）、BATTLE_EXTRAS_INTERVAL=2.0（战斗中任务对话处理限频）。差分门只复用 OCR items，img_np 必须用 TrackGate.paste_track 贴当前帧裁剪（像素判定不陈旧）。实测：战斗期 118%→37%、行走期 186%→133-165%。2x 放大兜底 OCR 用 map.ocr_zoom（max/1600 快引擎）——仅限对话框区 2x 裁剪；小块 2x 裁剪（修罗任务块重识别）依赖全帧引擎 'min'/736 的放大，不得替换。巫医检查节奏窗口化（战斗后 15s 内 2s、窗口外 10s 兜底）——不得恢复全时 2s 或直接放宽到 5s（5s 教训：弹窗等久人物走远即关闭）
 
 ## Anti-Patterns
 
