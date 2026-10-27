@@ -1594,7 +1594,9 @@ def run_loop(win, cycle_interval=1.0):
 
     领取逻辑（用户确认）：
     1. 非队长 → 核心流程不执行，任务保持运行仅战斗线程自动操作
-    2. 队长先走到领取点附近（队伍是否满都先走位）
+    2. 不在领取点时先预检队伍（身份+人数，一次面板开合）：人数满足
+       → 走位后直接领取（不重复开面板）；缺人 → 走位后等 10s 进入
+       监控循环正常轮询；瞬态失败原地重查不走位（非队长不白走寻路）
     3. 首次领取前到达后持续监控队伍人数：满足最少人数才领取，
     不满足 10 秒重查（人留在领取点，只开队伍面板检查）
     4. 队伍检查仅首次领取前执行一次（_team_checked）：首次领取成功后
@@ -1659,6 +1661,8 @@ def run_loop(win, cycle_interval=1.0):
             # 队伍检查受「检查队伍」开关门控（默认关闭=完全跳过），且仅在
             # 首次领取前执行（_team_checked 置位后跳过）：每轮回程后开面板
             # 检查耗时 5~7s，首次领取成功后不再重复
+            pre_status = None  # 1.0 预检结果（ready/wait）：走位后按结果
+                               # 分支，避免监控循环重复开面板检查
             if check_team and not _team_checked:
                 # 1.0 非队长判定：已在领取点附近时跳过（返程落点就在领取点，
                 #    1.2 监控循环马上会检查——先查再走位会让面板连续开合两次，
@@ -1675,13 +1679,23 @@ def run_loop(win, cycle_interval=1.0):
                         and (pos0 is None or pos0[0].strip() == LINGSHOUCUN)
                         and game_map.match_frame_np(frame0, LINGQU_ICON) is not None)
                 if not at_spot:
-                    status, info = _check_team_with_retry(win)
-                    if status == "not_leader" \
-                            and team.is_definitive_not_leader(info):
-                        _keep_alive(info)
-                    elif status == "not_leader":
-                        log(f"[修罗] {info}（瞬态失败，不判定身份，"
-                            f"继续走位由监控循环重查）", "WARN")
+                    # 瞬态失败（遮挡/按钮未命中/截图失败）原地按间隔重查、
+                    # 不走位——瞬态下身份未定，走位会让非队长白走寻路
+                    # （用户 2026-10-27）；真实队长瞬态恢复后原地通过检查
+                    # 再走位，无进度损失。确定性非队长由 _keep_alive 处理。
+                    while True:
+                        status, info = _check_team_with_retry(win)
+                        if status == "not_leader" \
+                                and team.is_definitive_not_leader(info):
+                            _keep_alive(info)
+                        if status != "not_leader":
+                            pre_status = status
+                            break
+                        interval = (TEAM_RECOG_RETRY_INTERVAL
+                                    if "识别失败" in info
+                                    else TEAM_CHECK_RETRY_INTERVAL)
+                        log(f"[修罗] {info}（瞬态失败，{interval}s 后原地重查）", "WARN")
+                        time.sleep(interval)
             # 1.1 队长：队伍是否满都先走到领取点附近
             ok, info = _walk_to_claim_spot(win, just_returned=just_returned)
             if not ok:
@@ -1694,10 +1708,19 @@ def run_loop(win, cycle_interval=1.0):
                 team.record_leader_status(True)
             if check_team and not _team_checked:
                 # 1.2 首次领取：监控循环（查人数 → 缺人补一名申请人 →
-                #     立即重查；人满才继续领取；非队长转保持模式不返回）
-                log("[修罗] 首次领取前进入队伍监控循环（缺人自动补）", "SYS")
-                _monitor_team_and_fill(win)
-                log("[修罗] 队伍人数满足要求，开始领取", "SYS")
+                #     立即重查；人满才继续领取；非队长转保持模式不返回）。
+                #     1.0 已确认人数满足（ready）→ 直接领取不再开面板；
+                #     1.0 已知缺人（wait）→ 走位后等 10s 再进监控正常轮询
+                #     （面板刚开合过，立即重查是冗余的连续开合）；
+                #     1.0 未检查（已在领取点）→ 照常立即监控
+                if pre_status == "ready":
+                    log("[修罗] 走位前队伍检查已通过（人数满足），直接领取", "SYS")
+                else:
+                    if pre_status == "wait":
+                        time.sleep(TEAM_CHECK_RETRY_INTERVAL)
+                    log("[修罗] 首次领取前进入队伍监控循环（缺人自动补）", "SYS")
+                    _monitor_team_and_fill(win)
+                    log("[修罗] 队伍人数满足要求，开始领取", "SYS")
             # 1.3 领取任务（校验帧随返回值带出，跟踪首轮复用免重复 OCR）；
             #     队伍不足被拒（战斗力异常强大提示）在 _claim_task 内已
             #     按开关重入监控补人循环，其余失败直接下轮重试

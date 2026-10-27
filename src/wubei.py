@@ -1823,9 +1823,11 @@ def run_loop(win, cycle_interval=1.0):
     """五倍主循环：领任务 → 寻路 → 对话开打 → 战斗 → 返程 → 循环领取。
 
     领取逻辑（用户确认，队伍固定 5 人）：
-    1. 检查队伍开关开启时：首次领取前判定队长身份（非队长仅保持
-       战斗线程）；队长走到领取点后进入监控循环——查人数，缺人则
-       从申请加入面板允许一名申请人并立即重查，人满才领取
+    1. 检查队伍开关开启时：不在领取点先预检队伍（身份+人数，一次
+       面板开合）——人数满足走位后直接领取（不重复开面板），缺人
+       走位后等 10s 进入监控循环正常轮询，瞬态失败原地重查不走位
+       （非队长不白走寻路）；队长走到领取点后进入监控循环——查
+       人数，缺人则从申请加入面板允许一名申请人并立即重查，人满才领取
     2. 首次领取成功后不再主动检查队伍（_team_checked），直到领取
        被拒弹「前途凶险…」才重入监控补人循环（同上）；开关关闭时
        被拒不补人（可能不是队长），仅重试领取
@@ -1895,6 +1897,8 @@ def run_loop(win, cycle_interval=1.0):
                 # 非队长判定（返程落点就在领取点，监控循环马上会检查——
                 # 先查再走位会让面板连续开合两次，一次开合实测 5~7s）；
                 # 不在领取点则先判定身份，非队长不白走寻路
+                pre_status = None  # 预检结果（ready/wait）：走位后按结果
+                                   # 分支，避免监控循环重复开面板检查
                 if check_team and not _team_checked:
                     img0 = win.capture(force_activate=False)
                     pos0 = game_map.read_map_position(win, img=img0) \
@@ -1908,13 +1912,24 @@ def run_loop(win, cycle_interval=1.0):
                             and (pos0 is None or pos0[0].strip() == BAOXIANGGUO)
                             and game_map.match_frame_np(frame0, LINGQU_ICON) is not None)
                     if not at_spot:
-                        status, info = _check_team_with_retry(win)
-                        if status == "not_leader" \
-                                and team.is_definitive_not_leader(info):
-                            _keep_alive(info)
-                        elif status == "not_leader":
-                            log(f"[五倍] {info}（瞬态失败，不判定身份，"
-                                f"继续走位由监控循环重查）", "WARN")
+                        # 瞬态失败（遮挡/按钮未命中/截图失败）原地按间隔
+                        # 重查、不走位——瞬态下身份未定，走位会让非队长
+                        # 白走寻路（用户 2026-10-27）；真实队长瞬态恢复后
+                        # 原地通过检查再走位，无进度损失。确定性非队长
+                        # 由 _keep_alive 处理。
+                        while True:
+                            status, info = _check_team_with_retry(win)
+                            if status == "not_leader" \
+                                    and team.is_definitive_not_leader(info):
+                                _keep_alive(info)
+                            if status != "not_leader":
+                                pre_status = status
+                                break
+                            interval = (TEAM_RECOG_RETRY_INTERVAL
+                                        if "识别失败" in info
+                                        else TEAM_CHECK_RETRY_INTERVAL)
+                            log(f"[五倍] {info}（瞬态失败，{interval}s 后原地重查）", "WARN")
+                            time.sleep(interval)
                 # 队伍是否满都先走到领取点附近（缺人由监控循环补）。
                 # 上一轮返程成功：落点必在宝象国，走位可信任按钮直达
                 # 信号免位置 OCR；消费后复位，失败轮次保持位置门控
@@ -1931,10 +1946,19 @@ def run_loop(win, cycle_interval=1.0):
                     team.record_leader_status(True)
                 if check_team and not _team_checked:
                     # 首次领取：监控循环（查人数 → 缺人补一名申请人 →
-                    # 立即重查；人满才继续领取；非队长转保持模式不返回）
-                    log("[五倍] 首次领取前进入队伍监控循环（缺人自动补）", "SYS")
-                    _monitor_team_and_fill(win)
-                    log("[五倍] 队伍已满 5 人，开始领取", "SYS")
+                    # 立即重查；人满才继续领取；非队长转保持模式不返回）。
+                    # 预检已确认人数满足（ready）→ 直接领取不再开面板；
+                    # 预检已知缺人（wait）→ 走位后等 10s 再进监控正常
+                    # 轮询（面板刚开合过，立即重查是冗余的连续开合）；
+                    # 预检未执行（已在领取点）→ 照常立即监控
+                    if pre_status == "ready":
+                        log("[五倍] 走位前队伍检查已通过（人数满足），直接领取", "SYS")
+                    else:
+                        if pre_status == "wait":
+                            time.sleep(TEAM_CHECK_RETRY_INTERVAL)
+                        log("[五倍] 首次领取前进入队伍监控循环（缺人自动补）", "SYS")
+                        _monitor_team_and_fill(win)
+                        log("[五倍] 队伍已满 5 人，开始领取", "SYS")
                 # 替换校验（审计问题 3/5）：替换分支领取时旧任务仍在
                 # 追踪面板，领取校验 has_task 恒真——领取后比对任务内容
                 # 签名，签名未变化即替换未生效。连续失败达上限终止任务，
