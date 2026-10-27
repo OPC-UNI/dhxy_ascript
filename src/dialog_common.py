@@ -46,9 +46,9 @@ def green_option_center(img_np, rect, opt_len, line_len, target_center=None):
     按目标为首个选项处理（与旧行为一致）。目标不是首个选项时（如
     「了解任务详情接取客栈任务」中取后者），旧实现仍取行左段会点到
     相邻选项——按 target_center 在行内的比例取段才是目标本身。
-    纵向合并（两选项堆叠成高框）：<20 字选项绝不换行（用户 2026-10-16
-    确认），高框必为多选项堆叠，目标行 = 其在合并文本中的序位；
-    ≥20 字长选项可能折行，维持取上部选项中心的旧行为。
+    纵向合并（两选项堆叠成高框）：<30 字选项绝不换行（用户规则
+    2026-10-27），高框必为多选项堆叠，目标行 = 其在合并文本中的序位；
+    ≥30 字长选项可能折行，维持取上部选项中心的旧行为。
     """
     cx, cy = task_tracker.green_text_center(img_np, rect, prefer_underline=False)
     if line_len > opt_len + 2:
@@ -56,7 +56,7 @@ def green_option_center(img_np, rect, opt_len, line_len, target_center=None):
         pos_frac = min(center / line_len, 1.0)
         cx = rect[0] + int((rect[2] - rect[0]) * pos_frac)
         if rect[3] - rect[1] > 30:
-            if opt_len < 20:
+            if opt_len < 30:
                 cy = rect[1] + int((rect[3] - rect[1]) * pos_frac)
             else:
                 cy = rect[1] + int((rect[3] - rect[1])
@@ -101,6 +101,49 @@ def _click_green_option_once(win, items, img_np, text, prefix=""):
             fuzzy.append((txt, rect, _option_target_center(txt, text)))
     tgt = (exact or fuzzy)
     if not tgt:
+        # 长选项被区域 OCR 拆成同行多框的兜底（实测 2026-10-27「玄闻辨真
+        # （玄枢轶闻）」拆成「玄闻辨真」+「(玄枢轶闻)」两框，单框精确/
+        # 模糊均不命中，对话框永久不推进）：同行绿框（y 中心差 ≤10px、
+        # 相邻水平间隙 ≤30px）按 x 序拼接后匹配；命中按字符比例定位
+        # 选项中心（复用 green_option_center 的合并行定位逻辑）。
+        # <30 字选项不换行（用户规则），同 y 行拼接不会跨选项误拼。
+        rows_by_y = {}
+        for txt, rect, score in items:
+            if score < 0.55 or rect[0] < task_tracker.PANEL_MAX_X \
+                    or not task_tracker.is_green_text(img_np, rect):
+                continue
+            cy = (rect[1] + rect[3]) / 2
+            key = next((k for k in rows_by_y if abs(k - cy) <= 10), None)
+            if key is None:
+                key = cy
+                rows_by_y[key] = []
+            rows_by_y[key].append((txt, rect))
+        for rows in rows_by_y.values():
+            if len(rows) < 2:
+                continue
+            rows.sort(key=lambda r: r[1][0])
+            merged = []
+            for txt, rect in rows:
+                if merged and rect[0] - merged[-1][1][2] > 30:
+                    break  # 间隙过大：后续框属另一选项，不再拼接
+                merged.append((txt, rect))
+            if len(merged) < 2:
+                continue
+            joined = "".join(t for t, _ in merged)
+            if text not in joined and not _fuzzy_contains(joined, text, threshold=0.8):
+                continue
+            l = min(r[0] for _, r in merged)
+            t = min(r[1] for _, r in merged)
+            r = max(r[2] for _, r in merged)
+            b = max(r[3] for _, r in merged)
+            rect = [l, t, r, b]
+            center = _option_target_center(joined, text)
+            cx, cy = green_option_center(img_np, rect, len(text), len(joined), center)
+            human_click(win, cx, cy)
+            app_utils.fixed_pos_set(f"option_{text}", win, cx, cy)
+            log(f"{tag}已点击对话框绿色选项「{joined}」@({cx},{cy})（同行拆框拼接）", "SYS")
+            move_away(win)  # 鼠标停留选项上会使其悬停变色，干扰后续绿字判定
+            return True
         return False
     txt, rect, center = tgt[0]
     cx, cy = green_option_center(img_np, rect, len(text), len(txt), center)

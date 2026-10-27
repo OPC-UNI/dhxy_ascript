@@ -1336,6 +1336,47 @@ def _click_green_option_fuzzy(win, items, img_np, text):
                 log(f"[客栈] 已点击对话框绿色选项「{txt}」@({cx},{cy})", "SYS")
                 move_away(win)  # 鼠标停留选项上会使其悬停变色，干扰后续绿字判定
                 return True
+    # 长选项被区域 OCR 拆成同行多框的兜底（同 dialog_common._click_green_option_once
+    # 的拼接逻辑，2026-10-27 实测「玄闻辨真（玄枢轶闻）」拆两框单框匹配全漏）：
+    # 同行绿框（y 中心差 ≤10px、相邻水平间隙 ≤30px）按 x 序拼接后匹配；
+    # <30 字选项不换行（用户规则），同 y 行拼接不会跨选项误拼。
+    rows_by_y = {}
+    for txt, rect, score in items:
+        if score < 0.55 or rect[0] < task_tracker.PANEL_MAX_X \
+                or not task_tracker.is_green_text(img_np, rect):
+            continue
+        cy = (rect[1] + rect[3]) / 2
+        key = next((k for k in rows_by_y if abs(k - cy) <= 10), None)
+        if key is None:
+            key = cy
+            rows_by_y[key] = []
+        rows_by_y[key].append((txt, rect))
+    for rows in rows_by_y.values():
+        if len(rows) < 2:
+            continue
+        rows.sort(key=lambda r: r[1][0])
+        merged = []
+        for txt, rect in rows:
+            if merged and rect[0] - merged[-1][1][2] > 30:
+                break  # 间隙过大：后续框属另一选项，不再拼接
+            merged.append((txt, rect))
+        if len(merged) < 2:
+            continue
+        joined = "".join(norm_text(t) for t, _ in merged)
+        if nopt not in joined and not _fuzzy_contains(joined, nopt, threshold=0.8):
+            continue
+        l = min(r[0] for _, r in merged)
+        t = min(r[1] for _, r in merged)
+        r = max(r[2] for _, r in merged)
+        b = max(r[3] for _, r in merged)
+        rect = [l, t, r, b]
+        center = _option_target_center(joined, nopt)
+        cx, cy = green_option_center(img_np, rect, len(nopt), len(joined), center)
+        human_click(win, cx, cy)
+        app_utils.fixed_pos_set(f"option_{text}", win, cx, cy)
+        log(f"[客栈] 已点击对话框绿色选项「{joined}」@({cx},{cy})（同行拆框拼接）", "SYS")
+        move_away(win)  # 鼠标停留选项上会使其悬停变色，干扰后续绿字判定
+        return True
     return False
 
 
