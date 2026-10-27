@@ -32,7 +32,18 @@ jobs:
       # `python -m pytest -m slow` 或 CI 手动触发时取消注释下一行
       - name: 运行用例测试
         shell: pwsh
-        run: python -m pytest tests/ -m "not slow" -v --durations=10
+        run: python -m pytest tests/ -m "not slow" -v --durations=10 --junitxml=pytest-report.xml
       # - name: 运行慢测试（OCR 烟测，按需开启）
       #   shell: pwsh
       #   run: python -m pytest tests/ -m slow -v
+
+      # 测试结果汇总展示（Actions 页面按用例分列通过/失败，PR 页有注解；
+      # 只展示不判成败——job 成败由上面 pytest 的退出码决定）
+      - name: 测试结果汇总
+        uses: dorny/test-reporter@v1
+        if: always()
+        with:
+          name: pytest 用例测试
+          path: pytest-report.xml
+          reporter: java-junit
+          fail-on-error: "false"
