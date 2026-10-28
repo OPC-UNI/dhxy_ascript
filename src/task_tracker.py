@@ -51,16 +51,19 @@ OCR_REGIONS = (TRACK_REGION, DIALOG_REGION)
 # 与 PANEL_MAX_X 同宽会裁切标题框边缘导致标题误读（实测），
 # group_tasks 仍按 x<PANEL_MAX_X 过滤，区域外行不参与
 TRACK_OCR_REGION = (0, 200, 430, 600)
-# 追踪面板差分门（性能 2026-10-27，实测 11/11 帧行走中严格稳定）：
-# 面板为不透明固定 UI，核心区像素不变则复用上轮面板 OCR 结论（OCR
-# 确定性已实测验证：同输入两次 OCR items 逐字相等）。移动场景整帧
-# 比对永不命中，门区域静止即省去面板 det+rec（实测单区 ~594 CPU ms/
-# 次）。面板下部/门区域外的变化由 TRACK_GATE_MAX_SKIP 兜底强制 OCR
-# 捕获（限频模式同 battle.FULL_CHECK_INTERVAL），保证不漏检任务变化。
+# 追踪面板差分门（性能 2026-10-27 引入；2026-10-28 增加节奏上限）：
+# 2026-10-27 实测门区域 11/11 帧行走中严格稳定（不透明面板）；2026-10-28
+# 实测面板渲染状态可变——半透明/浮字渲染下门区域背景随世界移动
+# （逐行实测 83% 像素每轮变化、面板内容 bbox 仅 y204-272），严格相等
+# 判定被击穿、面板 OCR 每轮空烧。故增加 TRACK_GATE_MIN_INTERVAL 节奏
+# 上限：距上次 OCR 不足 2s 时一律复用结论（世界像素变化不再击穿门），
+# 任务变化检测时延 ≤2s，精度由确认轮询（0.2s，同复用语义）保证。
 # 只复用 items——像素级判定（绿字/进度键）的 img_np 一律由调用方贴
 # 当前帧裁剪（TrackGate.paste_track），颜色判定不随复用而陈旧。
 TRACK_GATE_REGION = (0, 200, 200, 400)
-TRACK_GATE_MAX_SKIP = 5.0
+TRACK_GATE_MIN_INTERVAL = 2.0   # 面板 OCR 最小间隔（节奏上限，防世界像素击穿门）
+TRACK_GATE_MAX_SKIP = 5.0       # 门持续命中时的强制全量 OCR 兜底（面板下部/门
+                                # 区域外的变化不漏检，限频模式同 battle.FULL_CHECK_INTERVAL）
 
 
 class TrackGate:
@@ -76,10 +79,19 @@ class TrackGate:
         self.ocr_at = 0.0       # 上轮面板 OCR 时间（兜底限频）
 
     def ocr(self, img):
-        """面板 OCR：门区域像素不变且未超兜底时限 → 复用上轮结论。"""
+        """面板 OCR 三态门：节奏上限 → 像素相等 → 全量 OCR。
+
+        1. 距上次 OCR 不足 TRACK_GATE_MIN_INTERVAL：一律复用（世界像素
+           变化/面板动画不击穿门，任务变化检测时延 ≤ 该间隔）
+        2. 门区域像素与上次 OCR 帧相等且未超 MAX_SKIP：复用（OCR 确定性，
+           逐字等价）
+        3. 其余：全量面板 OCR（含 MAX_SKIP 兜底强制刷新）
+        """
         gl, gt, gr, gb = TRACK_GATE_REGION
         crop = np.asarray(img)[gt:gb, gl:gr]
         now = time.time()
+        if self.crop is not None and now - self.ocr_at < TRACK_GATE_MIN_INTERVAL:
+            return self.items
         if (self.crop is not None and (crop == self.crop).all()
                 and now - self.ocr_at < TRACK_GATE_MAX_SKIP):
             return self.items

@@ -146,15 +146,18 @@ OCR 1.4-2.2 CPU 秒。整改后结构（内层循环每轮顺序固定为）：
   `BATTLE_EXTRAS_INTERVAL=2.0s`（战斗动画帧差分门失效，限频替代门控）。
   战斗期任务进程 118% → 37%（-70%）。
 - **面板差分门**：共享组件 `task_tracker.TrackGate`（2026-10-27 由 follow
-  内嵌抽取，玄枢/五环/五倍/修罗领取校验循环同用）。`TRACK_GATE_REGION=
-  (0,200,200,400)` 门区域像素严格相等才复用上轮面板 OCR 结论（OCR 确定性
-  已实测验证：同输入两次 OCR items 逐字相等；拆分合并与 ocr_regions 双区域
-  输出 items/img_np 全等；TrackGate 五项语义单测全过）。门持续命中最多
-  `TRACK_GATE_MAX_SKIP=5.0s` 强制一次全量面板 OCR 兜底（面板下部/门区域外
-  的变化不漏检，限频模式同 battle.FULL_CHECK_INTERVAL）。只复用 items，
-  img_np 一律 `TrackGate.paste_track` 贴当前帧裁剪——绿字/进度键颜色判定
-  不随复用而陈旧。战斗帧不得喂给 ocr()（战斗 UI 污染门缓存，调用方先判
-  战斗）。
+  内嵌抽取，玄枢/五环/五倍/修罗领取校验循环同用）。三态门顺序「节奏上限 →
+  像素相等 → 全量 OCR」：① `TRACK_GATE_MIN_INTERVAL=2.0s` 距上次 OCR 不足
+  2s 一律复用（2026-10-28 实测：面板渲染状态可变，半透明/浮字渲染下门区域
+  背景随世界移动，逐行实测 83% 像素每轮变化、面板内容 bbox 仅 y204-272，
+  严格相等判定被击穿——节奏上限封顶面板 OCR 频率，任务变化检测时延 ≤2s、
+  精度由 0.2s 确认轮询保证）；② 门区域像素与上次 OCR 帧相等且未超
+  `TRACK_GATE_MAX_SKIP=5.0s` 时复用（OCR 确定性已实测验证：同输入两次
+  OCR items 逐字相等；拆分合并与 ocr_regions 双区域输出 items/img_np 全等）；
+  ③ 其余全量 OCR（含 5s 兜底强制刷新，面板下部/门区域外的变化不漏检，
+  限频模式同 battle.FULL_CHECK_INTERVAL）。只复用 items，img_np 一律
+  `TrackGate.paste_track` 贴当前帧裁剪——绿字/进度键颜色判定不随复用而陈旧。
+  战斗帧不得喂给 ocr()（战斗 UI 污染门缓存，调用方先判战斗）。
 - **寻路行走期剩余成本**（py-spy 实测，2026-10-27）：对话框区域 OCR 每轮
   ~32%（设计内，对话随时可能出现）、开打选项兜底全帧 OCR ~41%
   （_click_fight_option_fallback / wubei _handle_fight_dialog：故事行

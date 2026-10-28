@@ -81,43 +81,63 @@ def test_gate_ocr_and_reuse(monkeypatch):
     items = gate.ocr(_make_frame(10))
     assert calls["n"] == 1 and items == FAKE
     items2 = gate.ocr(_make_frame(10))
-    assert calls["n"] == 1 and items2 is items  # 门相同：复用同一对象（extras 帧缓存键 id(items) 契约）
+    assert calls["n"] == 1 and items2 is items  # 复用同一对象（extras 帧缓存键 id(items) 契约）
 
 
-def test_gate_reopens_on_change(monkeypatch):
+def test_gate_reopens_on_change_after_interval(monkeypatch):
     calls = {"n": 0}
+    fake_now = [time.time()]
 
     def fake(img, region=None):
         calls["n"] += 1
         return list(FAKE), np.zeros_like(np.asarray(img))
 
     monkeypatch.setattr(game_map, "ocr_region", fake)
+    monkeypatch.setattr(time, "time", lambda: fake_now[0])
     gate = task_tracker.TrackGate()
     gate.ocr(_make_frame(10))
     gate.ocr(_make_frame(10))
     assert calls["n"] == 1
-    gate.ocr(_make_frame(20))  # 门区域变化 → 必须重新 OCR
+    fake_now[0] += task_tracker.TRACK_GATE_MIN_INTERVAL + 0.5  # 越过节奏上限
+    gate.ocr(_make_frame(20))  # 门区域变化 + 距上次 OCR 超 2s → 重新 OCR
+    assert calls["n"] == 2
+
+
+def test_gate_rate_cap_reuses_despite_change(monkeypatch):
+    """节奏上限：2s 内像素变化也复用（世界像素/面板动画不击穿门）。"""
+    calls = {"n": 0}
+    fake_now = [time.time()]
+
+    def fake(img, region=None):
+        calls["n"] += 1
+        return list(FAKE), np.zeros_like(np.asarray(img))
+
+    monkeypatch.setattr(game_map, "ocr_region", fake)
+    monkeypatch.setattr(time, "time", lambda: fake_now[0])
+    gate = task_tracker.TrackGate()
+    gate.ocr(_make_frame(10))
+    fake_now[0] += 0.5  # 门区域变化（10→20），但距上次 OCR 仅 0.5s
+    items2 = gate.ocr(_make_frame(20))
+    assert calls["n"] == 1 and items2 == FAKE  # 节奏上限复用
+    fake_now[0] += task_tracker.TRACK_GATE_MIN_INTERVAL + 0.5
+    gate.ocr(_make_frame(20))  # 越过节奏上限且像素仍与上次 OCR 不同 → 新 OCR
     assert calls["n"] == 2
 
 
 def test_gate_5s_fallback(monkeypatch):
     calls = {"n": 0}
+    fake_now = [time.time() + 6.0]
 
     def fake(img, region=None):
         calls["n"] += 1
         return list(FAKE), np.zeros_like(np.asarray(img))
 
     monkeypatch.setattr(game_map, "ocr_region", fake)
-    gate = task_tracker.TrackGate()
-    fake_now = [time.time() + 6.0]
-
-    def advance():
-        return fake_now[0]
-
-    monkeypatch.setattr(time, "time", advance)
+    monkeypatch.setattr(time, "time", lambda: fake_now[0])
     try:
+        gate = task_tracker.TrackGate()
         gate.ocr(_make_frame(10))   # 假时钟 t=+6：首调 OCR
-        fake_now[0] += 6.0           # 假时钟前进 6s
+        fake_now[0] += 6.0           # 假时钟前进 6s（越过节奏上限）
         gate.ocr(_make_frame(10))    # 门相同但距上次 OCR 6s > 5s → 强制 OCR
         assert calls["n"] == 2
     finally:
