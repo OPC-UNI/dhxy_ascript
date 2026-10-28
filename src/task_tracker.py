@@ -71,18 +71,26 @@ class TrackGate:
 
     一个任务阶段一个实例（如 follow_task 每轮新建）。战斗帧不要喂给
     ocr()——战斗 UI 覆盖面板会污染门缓存（调用方须先做战斗判定）。
+
+    min_interval：面板 OCR 节奏上限（秒）。follow 轮询用默认值
+    （TRACK_GATE_MIN_INTERVAL=2.0，行走期封顶面板 OCR 频率）；领取
+    校验循环传 0（短窗口关键检测，任务渲染后须下一轮即检出——限频
+    会让 poll 1 的「未出现」结论复用 2s，任务 ~1s 渲染后被 2x 重识别
+    兜底捡走，每次领取多 3-4s，实测 2026-10-28）。
     """
 
-    def __init__(self):
+    def __init__(self, min_interval=TRACK_GATE_MIN_INTERVAL):
         self.crop = None        # 上轮门区域像素
         self.items = None       # 上轮面板 OCR 结论
         self.ocr_at = 0.0       # 上轮面板 OCR 时间（兜底限频）
+        self.min_interval = min_interval
 
     def ocr(self, img):
         """面板 OCR 三态门：节奏上限 → 像素相等 → 全量 OCR。
 
-        1. 距上次 OCR 不足 TRACK_GATE_MIN_INTERVAL：一律复用（世界像素
-           变化/面板动画不击穿门，任务变化检测时延 ≤ 该间隔）
+        1. 距上次 OCR 不足 min_interval：一律复用（世界像素变化/面板
+           动画不击穿门，任务变化检测时延 ≤ 该间隔；min_interval=0
+           时此门禁用）
         2. 门区域像素与上次 OCR 帧相等且未超 MAX_SKIP：复用（OCR 确定性，
            逐字等价）
         3. 其余：全量面板 OCR（含 MAX_SKIP 兜底强制刷新）
@@ -90,7 +98,7 @@ class TrackGate:
         gl, gt, gr, gb = TRACK_GATE_REGION
         crop = np.asarray(img)[gt:gb, gl:gr]
         now = time.time()
-        if self.crop is not None and now - self.ocr_at < TRACK_GATE_MIN_INTERVAL:
+        if self.crop is not None and now - self.ocr_at < self.min_interval:
             return self.items
         if (self.crop is not None and (crop == self.crop).all()
                 and now - self.ocr_at < TRACK_GATE_MAX_SKIP):

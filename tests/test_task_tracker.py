@@ -124,6 +124,24 @@ def test_gate_rate_cap_reuses_despite_change(monkeypatch):
     assert calls["n"] == 2
 
 
+def test_gate_uncapped_claim_mode(monkeypatch):
+    """领取校验用门（min_interval=0）：像素变化立即重开，检测不延迟。"""
+    calls = {"n": 0}
+    fake_now = [time.time()]
+
+    def fake(img, region=None):
+        calls["n"] += 1
+        return list(FAKE), np.zeros_like(np.asarray(img))
+
+    monkeypatch.setattr(game_map, "ocr_region", fake)
+    monkeypatch.setattr(time, "time", lambda: fake_now[0])
+    gate = task_tracker.TrackGate(min_interval=0.0)
+    gate.ocr(_make_frame(10))
+    fake_now[0] += 0.5
+    gate.ocr(_make_frame(20))  # 不限频：像素变化 → 立即新 OCR
+    assert calls["n"] == 2
+
+
 def test_gate_5s_fallback(monkeypatch):
     calls = {"n": 0}
     fake_now = [time.time() + 6.0]

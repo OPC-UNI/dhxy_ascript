@@ -149,7 +149,9 @@ WUYI_ARRIVE_TIMEOUT = 8                       # 走到巫医坐标附近的超�
                                               # 确认：走到附近超时 24s 不合理，压缩上限）
 WUYI_NPC_TIMEOUT = 3                          # 到达后识别巫医 NPC 模板的窗口：3s 内未识别到
                                               # 即本次取消，下次轮到再试（用户 2026-10-09 确认）
-WUYI_HANDLE_TIMEOUT = 15                      # 点击 NPC 后等待战斗线程处理对话框的超时
+WUYI_HANDLE_TIMEOUT = 8                       # 点击 NPC 后等待战斗线程处理对话框的超时
+                                              # （用户 2026-10-28 指定：15s 太长，最长 8s；
+                                              # 超时后自行点击选项兜底，见 _run_wuyi_chain）
 CLAIM_VERIFY_WAIT = 5                         # 领取后任务进入追踪的正常轮询时长（秒）：
                                               # 超时未检索到 → 按一次 Alt+C 飞行后仅再检索一次，
                                               # 仍无即判定失败（用户确认：多次重试无效）
@@ -316,6 +318,8 @@ def _run_wuyi_chain(win, hover_before_click=False, report_condition=False,
     deadline = time.time() + WUYI_HANDLE_TIMEOUT
     appeared = False
     option_clicked = False
+    last_items = None   # 对话框打开期间的最近 OCR（超时自行点击兜底用）
+    last_img_np = None
     while time.time() < deadline:
         img = win.capture(force_activate=False)
         if img is None:
@@ -326,6 +330,7 @@ def _run_wuyi_chain(win, hover_before_click=False, report_condition=False,
         has_dialog = any(_dialog_text_present(items, t) for t in WUYI_DIALOG_TEXTS)
         if has_dialog:
             appeared = True
+            last_items, last_img_np = items, img_np
             if click_option_self and not option_clicked:
                 # 验证模式：主进程无战斗线程，自行点击医治选项
                 # （与真实环境的战斗线程行为等效）
@@ -342,6 +347,17 @@ def _run_wuyi_chain(win, hover_before_click=False, report_condition=False,
             return True, "自动巫医完成"
         time.sleep(0.5)
     if appeared:
+        # 超时仍未关闭：战斗线程未及时点击（弹窗动画吞掉过早点击等）。
+        # 自行点击一次兜底，保证「巫医完 → 再追踪」的顺序
+        # （用户 2026-10-28：超时上限 8s + 兜底自行点击）
+        if not option_clicked and last_items is not None:
+            pt_opt = _find_wuyi_option(last_items, last_img_np)
+            if pt_opt is not None:
+                human_click(win, pt_opt[0], pt_opt[1])
+                log(f"[修罗][巫医] 等待超时，自行点击「全部医治和修复」"
+                    f"@ ({pt_opt[0]}, {pt_opt[1]})", "WARN")
+                time.sleep(1.0)  # 等待点击生效
+                return True, "医治对话框超时未关闭，已自行点击选项"
         return True, "医治对话框已出现（战斗线程将继续处理）"
     # 对话框未出现（距离不够）：本次取消，下次轮到再试
     return False, "点击巫医后未出现医治对话框（本次取消）"
@@ -916,7 +932,10 @@ def _claim_task(win, allow_fill=False):
     polls = 0
     reclick_poll = 0  # 识别补点发生的轮询序（补点后队伍对话框需再覆盖一轮）
     option_seen = False  # 校验期是否曾见领取选项（区分未渲染与点击已生效）
-    track_gate = task_tracker.TrackGate()  # 面板差分门（共享组件）
+    track_gate = task_tracker.TrackGate(min_interval=0.0)  # 面板差分门（领取校验为
+        # 短窗口关键检测，不限频：任务渲染后须下一轮即检出，限频会把
+        # 「未出现」结论复用 2s、被 2x 重识别兜底捡走（实测每次领取
+        # 多 3-4s，2026-10-28）
     while time.time() < deadline:
         img = win.capture(force_activate=False)
         if img is None:

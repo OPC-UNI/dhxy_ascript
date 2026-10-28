@@ -527,7 +527,9 @@ def navigate_to_task(win):
     # （满 5 次提示出现在点击「领取玄枢轶闻」之后）。
     # 命中时把 OCR 结果带回，供 follow_task 复用，省一次截图+OCR
     deadline = time.time() + DIALOG_TIMEOUT
-    track_gate = task_tracker.TrackGate()  # 面板差分门（共享组件）
+    track_gate = task_tracker.TrackGate(min_interval=0.0)  # 面板差分门（领取校验短窗口
+        # 关键检测，不限频——同修罗 _claim_task，防「未出现」结论被
+        # 复用 2s 拖慢领取（2026-10-28）
     while time.time() < deadline:
         img = win.capture(force_activate=False)
         if img is not None:

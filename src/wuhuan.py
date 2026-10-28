@@ -370,7 +370,8 @@ def _claim_task(win):
     # 判定同帧复用；面板门复用静态结论，任务进追踪必开）
     deadline = time.time() + CLAIM_DIALOG_TIMEOUT
     claimed = False
-    track_gate = task_tracker.TrackGate()  # 面板差分门（共享组件，四段循环共用）
+    track_gate = task_tracker.TrackGate(min_interval=0.0)  # 面板差分门（四段循环共用；
+        # 领取校验短窗口关键检测，不限频——同修罗 _claim_task（2026-10-28）
     while time.time() < deadline:
         img = win.capture(force_activate=False)
         if img is None:

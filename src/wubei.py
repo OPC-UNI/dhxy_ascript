@@ -798,7 +798,9 @@ def _claim_task(win, allow_fill=False):
     # （飞行/刷新界面状态）后仅再检索一次——修罗实测多次重试无效
     deadline = time.time() + CLAIM_VERIFY_WAIT
     found_frame = None
-    track_gate = task_tracker.TrackGate()  # 面板差分门（共享组件）
+    track_gate = task_tracker.TrackGate(min_interval=0.0)  # 面板差分门（领取校验短窗口
+        # 关键检测，不限频——同修罗 _claim_task，防「未出现」结论被
+        # 复用 2s 拖慢领取（2026-10-28）
     while time.time() < deadline:
         img = win.capture(force_activate=False)
         if img is None:
