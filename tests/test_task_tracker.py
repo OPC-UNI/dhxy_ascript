@@ -58,6 +58,36 @@ def test_is_green_text():
     assert not task_tracker.is_green_text(img, rect)
 
 
+# ---- 绿字点击定位（green_text_center） ----
+
+def test_green_text_center_tail_bottom_not_leaked_row():
+    """框底漏入邻行绿字时点击不得被推落：行尾块列范围内取底部。
+
+    客栈擂台 2026-10-28 实测失败帧：链接行框底 274、行尾「天」字底
+    267，下方邻行「竺武士」顶笔画（y271-274, x26-35）漏入偏高的
+    OCR 框，旧公式取整框最底绿色行得 (211,272)，落在「天」下方
+    5px 空处点击失败（任务空转 ~2 分钟）。修正后取行尾块（天 +
+    其 15px 下划线）列范围内底部上方 2px 得 (211,268)——与各成功
+    点击（下划线路径 270-2）同高。
+    """
+    img = np.zeros((831, 1378, 3), dtype=np.uint8)
+    img[255:268, 204:219] = (0, 255, 0)    # 行尾「天」字（亮绿）
+    img[270, 204:219] = (0, 255, 0)        # 天 字下划线（15px，短于 20px 检测阈值）
+    img[271:275, 26:36] = (0, 255, 0)      # 邻行顶笔画漏入框内
+    rect = [25, 250, 220, 275]
+    cx, cy = task_tracker.green_text_center(img, rect)
+    assert (cx, cy) == (211, 268)
+
+
+def test_green_text_center_no_leak_stays_on_glyph():
+    """无邻行漏入时（框底贴字底）点击落在行尾字本体上。"""
+    img = np.zeros((831, 1378, 3), dtype=np.uint8)
+    img[255:268, 204:219] = (0, 255, 0)    # 行尾「天」字（亮绿）
+    rect = [25, 250, 220, 268]
+    cx, cy = task_tracker.green_text_center(img, rect)
+    assert (cx, cy) == (211, 265)
+
+
 # ---- 面板差分门（共享组件；语义契约，六处调用点共用） ----
 
 FAKE = [("任务标题", [10, 220, 120, 250], 0.99)]

@@ -240,7 +240,17 @@ def green_text_center(img_np, rect, prefer_underline=True):
             tail = [r for r in runs if r[1] - r[0] + 1 >= 8] or runs
             cx = int(rect[0] + (tail[-1][0] + tail[-1][1]) // 2)
             if prefer_underline:
-                cy = max(rect[1], int(rect[1] + rows.max() - 2))
+                # 底部只取行尾文字块列范围内最底绿色行：整框最底绿色行
+                # 可能属于下方邻行——OCR 框偏高吞入邻行顶部笔画时会把
+                # 点击推落至文字下方空处（客栈擂台链接 2026-10-28 实测：
+                # 链接行框底 274、天 字底 267，「竺武士」顶笔画 271-274
+                # 漏入框内，旧公式点击 (211,272) 落在天 字下方 5px 空处
+                # 失败、任务空转 ~2 分钟）。行尾块列范围内含本行下划线时
+                # （框底 ≥ 下划线行），点击点恰在下划线上方 2px，与
+                # 下划线路径同款
+                t0, t1 = tail[-1]
+                tail_rows = np.where(mask[:, t0:t1 + 1].any(axis=1))[0]
+                cy = max(rect[1], int(rect[1] + tail_rows.max() - 2))
             else:
                 cy = int(rect[1] + (rows.min() + rows.max()) // 2)
             return cx, cy
