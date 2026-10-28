@@ -21,3 +21,6 @@ dist_exe/
 # 外挂重型依赖（CI 构建生成：numpy/onnxruntime 不编译进 exe，随包分发）
 pylibs/
 tmp_err_img.png
+
+# 启动自检黑帧现场（截屏全黑时保存，供人工排查）
+first_frame.png

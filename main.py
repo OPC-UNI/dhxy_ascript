@@ -73,6 +73,7 @@ from src import status_bars  # 人物/召唤兽血蓝条检测
 from src import debug_overlay  # 调试信息悬浮层（游戏窗口上绘制任务/配置/进度）
 from src import clear_screen  # 启动清屏（Alt+6 屏蔽玩家 + Alt+5 屏蔽摊位）
 from src import map as game_map  # 地图操作（OCR 引擎预热等）
+from src import env_check  # 启动环境自检（DPI/屏幕/首帧统计，远程机排障）
 
 
 def _setup_tray(icon_path, control_win):
@@ -263,6 +264,10 @@ def task_start():
         main = game.find_main_window()
         if main:
             log(f"[检查] 主窗口已锁定: {main.title}", "SYS")
+            # 启动环境自检（只读）：DPI 缩放/显示器/系统版本/首帧黑帧
+            # 统计——远程机功能异常时日志开头可直接定位差异（黑帧=截屏层
+            # 失败，后续模板/OCR 全部失效），失败静默不影响启动
+            env_check.log_environment(main)
         else:
             log("[检查] 未找到主窗口（游戏可能已最小化或未登录）", "WARN")
     else:
