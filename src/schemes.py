@@ -119,6 +119,8 @@ def _settings_spec():
         cw._WUBEI_HEZI_KEY: False,
         cw._WUBEI_CHECK_TEAM_KEY: False,
         cw._WUBEI_SHOUT_SWITCH_KEY: False,
+        cw._WUBEI_AUTO_WUYI_KEY: True,
+        cw._WUBEI_WUYI_INTERVAL_KEY: 5,
         cw._HIGH_PERF_KEY: True,
         cw._AUTO_REFILL_KEY: True,
         cw._CLEAR_SCREEN_KEY: True,
@@ -156,6 +158,8 @@ def _snapshot_current():
         cw._WUBEI_HEZI_KEY: cw.load_wubei_hezi(),
         cw._WUBEI_CHECK_TEAM_KEY: cw.load_wubei_check_team(),
         cw._WUBEI_SHOUT_SWITCH_KEY: cw.load_wubei_shout_switch(),
+        cw._WUBEI_AUTO_WUYI_KEY: cw.load_wubei_auto_wuyi(),
+        cw._WUBEI_WUYI_INTERVAL_KEY: cw.load_wubei_wuyi_interval(),
         cw._HIGH_PERF_KEY: cw.load_high_perf(),
         cw._AUTO_REFILL_KEY: cw.load_auto_refill(),
         cw._CLEAR_SCREEN_KEY: cw.load_clear_screen(),
@@ -180,7 +184,7 @@ def _coerce(key, value):
                 v = min(95, max(5, v))
             elif key == cw._XIULUO_MIN_KEY:
                 v = min(cw.XIULUO_MIN_RANGE[1], max(cw.XIULUO_MIN_RANGE[0], v))
-            elif key == cw._XIULUO_WUYI_INTERVAL_KEY:
+            elif key in (cw._XIULUO_WUYI_INTERVAL_KEY, cw._WUBEI_WUYI_INTERVAL_KEY):
                 v = min(cw._WUYI_INTERVAL_MAX, max(cw._WUYI_INTERVAL_MIN, v))
             elif key in cw._COUNT_KEYS.values():
                 v = max(0, v)

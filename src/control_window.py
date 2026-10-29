@@ -539,6 +539,42 @@ def save_xiuluo_wuyi_interval(value):
     return {"status": "success", "interval": value}
 
 
+_WUBEI_AUTO_WUYI_KEY = "wubei_auto_wuyi"
+_WUBEI_WUYI_INTERVAL_KEY = "wubei_wuyi_interval"
+
+
+def load_wubei_auto_wuyi():
+    """读取五倍自动巫医开关（首次默认开启，与修罗一致）。"""
+    return bool(KeyValue.get(_WUBEI_AUTO_WUYI_KEY, True))
+
+
+def save_wubei_auto_wuyi(on):
+    """保存五倍自动巫医开关，返回操作结果。"""
+    _kv_save(_WUBEI_AUTO_WUYI_KEY, bool(on))
+    return {"status": "success"}
+
+
+def load_wubei_wuyi_interval():
+    """读取五倍自动巫医间隔（轮，首次默认 5，与修罗一致）。"""
+    try:
+        value = int(KeyValue.get(_WUBEI_WUYI_INTERVAL_KEY, 5))
+    except (TypeError, ValueError):
+        value = 5
+    return max(_WUYI_INTERVAL_MIN, min(_WUYI_INTERVAL_MAX, value))
+
+
+def save_wubei_wuyi_interval(value):
+    """保存五倍自动巫医间隔（1~90 轮），返回操作结果。"""
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        return {"status": "error", "msg": "INVALID_INTERVAL"}
+    if not (_WUYI_INTERVAL_MIN <= value <= _WUYI_INTERVAL_MAX):
+        return {"status": "error", "msg": "OUT_OF_RANGE"}
+    _kv_save(_WUBEI_WUYI_INTERVAL_KEY, value)
+    return {"status": "success", "interval": value}
+
+
 # ---- 战斗设置（人物/召唤兽默认战斗动作，UI 单选项，KeyValue 持久化） ----
 # 人物：技能面板 3 行 × 5 列共 15 格 + 攻击/防御/捕捉/逃跑/无
 CHAR_BATTLE_ACTIONS = ([f"技能{r}-{c}" for r in range(1, 4) for c in range(1, 6)]
@@ -648,6 +684,8 @@ class ControlWindow(WebWindow):
         self.expose(self.save_wubei_hezi)
         self.expose(self.save_wubei_check_team)
         self.expose(self.save_wubei_shout_switch)
+        self.expose(self.save_wubei_auto_wuyi)
+        self.expose(self.save_wubei_wuyi_interval)
         self.expose(self.save_xiuluo_shout_switch)
         self.expose(self.save_debug_overlay)
         self.expose(self.save_auto_famen)
@@ -659,6 +697,7 @@ class ControlWindow(WebWindow):
         self.expose(self.verify_xiuluo_wuyi)
         self.expose(self.verify_wubei_claim)
         self.expose(self.verify_wubei_return)
+        self.expose(self.verify_wubei_wuyi)
         self.expose(self.verify_clear_screen)
         self.expose(self.verify_shout)
         self.expose(self.verify_jiguan)
@@ -876,7 +915,9 @@ class ControlWindow(WebWindow):
                 "clear_screen": load_clear_screen(),
                 "wubei": {"hezi": load_wubei_hezi(),
                           "check_team": load_wubei_check_team(),
-                          "shout": load_wubei_shout_switch()},
+                          "shout": load_wubei_shout_switch(),
+                          "auto_wuyi": load_wubei_auto_wuyi(),
+                          "wuyi_interval": load_wubei_wuyi_interval()},
                 "xiuluo_shout": load_xiuluo_shout_switch(),
                 "auto_famen": load_auto_famen(),
                 "debug_overlay": load_debug_overlay(),
@@ -968,6 +1009,14 @@ class ControlWindow(WebWindow):
     def save_wubei_shout_switch(self, on):
         """五倍设置变更：保存缺人自动喊话开关状态。"""
         return save_wubei_shout_switch(on)
+
+    def save_wubei_auto_wuyi(self, on):
+        """五倍设置变更：保存自动巫医开关状态。"""
+        return save_wubei_auto_wuyi(on)
+
+    def save_wubei_wuyi_interval(self, value):
+        """五倍设置变更：保存自动巫医间隔（轮）。"""
+        return save_wubei_wuyi_interval(value)
 
     def save_xiuluo_shout_switch(self, on):
         """修罗设置变更：保存缺人自动喊话开关状态。"""
@@ -1152,6 +1201,51 @@ class ControlWindow(WebWindow):
                 ok_js = "true" if ok else "false"
                 self.webview_instance.evaluate_js(
                     f"if(window.onWubeiClaimVerifyResult){{window.onWubeiClaimVerifyResult({ok_js}, {json.dumps(info)});}}")
+            except Exception:
+                pass
+
+    def verify_wubei_wuyi(self):
+        """高级设置-五倍巫医验证按钮：与自动巫医同一链路（条件门槛跳过、
+        血蓝状态仅报告），NPC 点击前先移动鼠标定位（无延时）；对话框处理
+        由验证流程自行点击医治选项（主进程没有战斗线程，与任务进程中
+        战斗线程点击行为等效）。"""
+        if self._tm.is_running():
+            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if self._verifying:
+            return {"status": "error", "msg": "验证进行中，请稍候"}
+        win = game.find_main_window()
+        if win is None:
+            return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
+        if not _game_window_clickable(win):
+            return {"status": "error", "msg": "游戏窗口被其他窗口遮挡，请将游戏窗口置于前台后再验证"}
+        self._verifying = True
+        threading.Thread(target=self._run_wubei_wuyi_verify, args=(win,),
+                         daemon=True, name="wubei-wuyi-verify").start()
+        return {"status": "success",
+                "msg": "验证已开始：血蓝检查 → 走位到巫医 → NPC 定位 → 点击 → 对话框处理"}
+
+    def _run_wubei_wuyi_verify(self, win):
+        """五倍巫医验证线程体：跑自动巫医链路（悬停代替直接点击），结果回推页面与日志窗。"""
+        from . import wubei  # 延迟导入：wubei 反向导入本模块（避免循环）
+        try:
+            self.add_logs(["[验证] 开始验证五倍巫医（走位 → NPC 定位 → 点击 → 对话框处理）..."])
+            ok, info = wubei.verify_wuyi_flow(win)
+        except Exception as e:
+            ok, info = False, f"验证异常: {e}"
+        try:
+            self.add_logs([f"[验证] 结果: {info}"])
+        except Exception:
+            pass
+        self._notify_wubei_wuyi_verify_result(ok, info)
+        self._verifying = False
+
+    def _notify_wubei_wuyi_verify_result(self, ok, info):
+        """五倍巫医验证结果回推页面（高级设置-五倍巫医验证行的结果文案）。"""
+        if self.webview_instance:
+            try:
+                ok_js = "true" if ok else "false"
+                self.webview_instance.evaluate_js(
+                    f"if(window.onWubeiWuyiVerifyResult){{window.onWubeiWuyiVerifyResult({ok_js}, {json.dumps(info)});}}")
             except Exception:
                 pass
 

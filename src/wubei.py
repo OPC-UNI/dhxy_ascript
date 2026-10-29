@@ -14,7 +14,14 @@
        队长被转移则转 1.0 非队长模式
    1.3 识图 wubei_lingqu.png（领取任务按钮）/ wubei_xiangmoshiwei.png
        （降魔侍卫 NPC）点击 → 对话框点绿色选项「除魔卫国，义不容辞」
-       → 校验任务出现在追踪面板
+       → 校验任务出现在追踪面板。入口点击按坐标门控三规则：走位到达
+       只在落点 (94,84)±2 点按钮、站着到达 (86,86)±15 内可见即点、
+       降魔侍卫 (86,78)±6 内可见也可点（仅站着到达生效，走位途中
+       经过侍卫旁不点——见 _wait_claim_entry）
+   1.4 自动巫医（通用设置开关，默认开、每 5 轮一次，与修罗一致）：
+       每 N 轮领取后无条件前往宝象国巫医 NPC (93,122) 医治——小地图
+       点击 (517,418) 寻路 → 点击 wubei_baoxiangguowuyi.png 打开医治
+       对话框（战斗线程处理，8s 超时自行点击选项兜底，见 _run_wuyi_chain）
 2. 寻路：点击任务追踪绿字自动寻路（复用 xuanshu.follow_task）
 3. 对话开打：寻路到达后出现对话面板 → 点击绿色选项进入战斗
    （选项文案随场景变化，FIGHT_DIALOG_OPTIONS 逐一匹配；点击成功
@@ -53,12 +60,18 @@ from . import task_tracker  # 任务追踪面板操作
 from . import map as game_map  # 地图操作（世界地图/小地图/位置识别）
 from . import team  # 组队检查（领取前队伍人数检查，仅队长生效）
 from . import bag  # 背包操作（打开/关闭背包、任务储物格）
+from . import status_bars  # 血蓝检测（巫医验证模式血蓝报告）
 from . import debug_overlay  # 调试信息悬浮层（任务进度更新）
 from .battle import (is_in_battle, is_in_battle_frame,
                      watch_in_battle as battle_watch_in_battle)  # 战斗状态判定（统一在 battle.py 中实现）
+from .battle import WUYI_DIALOG_TEXTS  # 巫医对话框文案（自动巫医等待判定）
+from .battle import _find_wuyi_option  # 「全部医治和修复」选项定位（超时兜底自行点击）
+from . import battle  # 巫医预期时间戳（点 NPC 后通知战斗线程切入 2s 高频检查）
 from .control_window import (load_task_counts,  # 任务次数上限
                              load_wubei_check_team,  # 五倍设置：检查队伍开关
-                             load_wubei_shout_switch)  # 五倍设置：缺人自动喊话开关
+                             load_wubei_shout_switch,  # 五倍设置：缺人自动喊话开关
+                             load_wubei_auto_wuyi,  # 五倍设置：自动巫医开关
+                             load_wubei_wuyi_interval)  # 五倍设置：自动巫医间隔（轮）
 from .dialog_common import (SCREEN_CENTER_POS, green_option_center,
                             _dialog_text_present,
                             _click_screen_center)  # 对话框共享组件（屏幕中间点击/选项中心/文案检测）
@@ -102,9 +115,26 @@ CLAIM_SPOT = (86, 86)                              # 领取点地图坐标（用
 CLAIM_NEAR_TOLERANCE = 15                          # 已在领取点附近判定容差（用户步 1.1）
 CLAIM_NEAR_BTN_GRACE = 3.0                         # 位置近但按钮不可见时的渲染短窗口（秒）：
                                                    # 窗口内按钮出现即免寻路，仍无走小地图重走
-WALK_ARRIVE_TOLERANCE = 5                          # 寻路到达判定容差（用户步 1.2，更严格：
+# 领取入口点击的坐标门控三规则（用户 2026-10-29 定稿，替代静止确认）：
+# 1. 小地图走位到达：lingqu 只在落点 (94,84)±WALK_ARRIVE_TOLERANCE 内点
+#    ——快到目的地，微位移也能点中；±2 收紧后走位途中提前读入盒内的
+#    提前量 <1 单位，点击仍落在按钮上
+# 2. 站着到达：lingqu 在 (86,86)±CLAIM_NEAR_TOLERANCE 内可见即可点
+# 3. 补充坐标（仅站着到达生效）：降魔侍卫在 (86,78)±XIANGMOSHIWEI_TOLERANCE
+#    内可见也可点——走位到达不点 NPC（寻路途中经过侍卫旁会误点，
+#    实测日志 21:21），走到落点点 lingqu
+# 规则独立判定、互不否定（交叉区内任一入口可见都可领取）；拒收模板
+# 远处可见/跨图误命中（按钮模板与修罗领取按钮同图 0.947、NPC 远距离
+# 也会命中）。实现见 _wait_claim_entry。
+XIANGMOSHIWEI_SPOT = (86, 78)
+XIANGMOSHIWEI_TOLERANCE = 6
+WALK_ARRIVE_TOLERANCE = 2                          # 寻路到达判定容差（用户步 1.2，更严格：
                                                    # 走动中识图点击容易点不到）
-BAOXIANG_MAP_POS = (514, 483)                      # 宝象国小地图上领取点位置的点击点（窗口相对坐标，用户实测）
+WALK_TARGET_SPOT = (94, 84)                        # 小地图点击 (521,488) 寻路的实际落点（用户实测）：
+                                                   # 旧判据用领取点 86,86 与真实落点差 8 单位
+                                                   # 永不命中。走位到达的 lingqu 点击只在落点
+                                                   # ±WALK_ARRIVE_TOLERANCE 内接受（规则 1）
+BAOXIANG_MAP_POS = (521, 488)                      # 宝象国小地图上领取点位置的点击点（窗口相对坐标，用户实测）
 CLAIM_DIALOG_OPTION = "除魔卫国，义不容辞"           # 领取对话框绿色选项（游戏内原文，实测用字）
 FULL_TEAM_DIALOG_TEXT = "前途凶险，还是请阁下组满5人队伍再来吧！"  # 领取被拒：队伍人数不足
                                                                    # （游戏要求组满 5 人）
@@ -114,15 +144,18 @@ DECLINE_DIALOG_OPTION = "事态严重，我等退散"          # 领取对话框
                                                    # 点拒绝选项关闭（不领取）
 CLAIM_ARRIVE_TIMEOUT = 90                          # 寻路到领取点的超时
 CLAIM_BUTTON_TIMEOUT = 20                          # 到达后等待领取入口出现的超时
-ENTRY_FIRST_WAIT = 4.5                             # 入口首轮等待：位置近判定可能误判
+ENTRY_FIRST_WAIT = 7.5                             # 入口首轮等待：位置近判定可能误判
                                                    # （回城符落点距领取点约 12.5 单位，
                                                    # 超出可点击范围，入口不会出现）；
-                                                   # 4.5s = 3 次 1.5s 轮询，覆盖 NPC
-                                                   # 待机动画相位波动（在范围内时最多
-                                                   # 2-3 次轮询必命中），未出现即小地图
-                                                   # 重走领取点——重走寻路最多 ~2s，
-                                                   # 宁可早点重走（实测 2026-10-11 16:16
-                                                   # 空等 20s 无入口，手动走位才恢复）
+                                                   # 5 次 1.5s 轮询，覆盖 NPC 待机动画
+                                                   # 相位波动 + 走位到达走到落点 (94,84)
+                                                   # ±2 的余量（按钮 ~12 单位外可见，
+                                                   # 走到落点盒约 3-4s；原 4.5s 会在走到
+                                                   # 前超时触发重定位，每轮多走一次）；
+                                                   # 未出现即小地图重走领取点——重走
+                                                   # 寻路最多 ~2s，宁可早点重走（实测
+                                                   # 2026-10-11 16:16 空等 20s 无入口，
+                                                   # 手动走位才恢复）
 CLAIM_DIALOG_TIMEOUT = 15                          # 领取对话框处理超时
 CLAIM_DIALOG_APPEAR_TIMEOUT = 4                    # 点击领取入口后等待对话框出现的短窗口
                                                    # （正常 ~1.5s 即出）：超时未见选项判定
@@ -301,6 +334,28 @@ RETURN_POLL_INTERVAL = 0.5       # 返程轮询间隔（打开动画约 0.4s，�
 TASK_BOX_OFFSET = (351, 305)
 TASK_BOX_BAND_MARGIN = 55
 
+# ---- 自动巫医（用户流程：领取后每 N 轮一次，无条件医治——血蓝正常
+#      也照常巫医，与修罗一致；对话框处理复用战斗线程逻辑） ----
+WUYI_NPC_ICON = "wubei_baoxiangguowuyi.png"  # 巫医 NPC（点击打开医治对话框，用户提供素材）
+WUYI_SPOT = (93, 122)                        # 巫医 NPC 位置（用户实测）
+WUYI_MAP_POS = (517, 418)                    # 小地图上巫医位置的点击点（窗口相对坐标，用户实测）
+WUYI_NEAR_TOLERANCE = 3                     # 巫医附近的判定容差（对齐修罗：小距离移动，
+                                             # 宽松容差会漏判偏移）
+WUYI_ARRIVE_TIMEOUT = 12                     # 走到巫医坐标附近的超时（领取点 86,86 距巫医
+                                             # 93,122 约 37 单位——修罗 18 单位走位 2~3s
+                                             # 配 8s，五倍路程约翻倍放宽到 12s；单次尝试，
+                                             # 超时即本次取消、下次轮到再试，不阻塞主流程）
+WUYI_NPC_TIMEOUT = 3                         # 到达后识别巫医 NPC 模板的窗口：3s 内未识别到
+                                             # 即本次取消（对齐修罗）
+WUYI_HANDLE_TIMEOUT = 8                      # 点击 NPC 后等待战斗线程处理对话框的超时
+                                             # （对齐修罗 2026-10-28 用户指定：最长 8s；
+                                             # 超时后自行点击选项兜底，见 _run_wuyi_chain）
+
+_arrive_by_walk = False         # 本轮到达领取点是否经小地图走位（_walk_to_claim_spot
+                                # 走位路径返回时置位）：入口点击按坐标门控三规则
+                                # 分流——走位到达只在落点 (94,84)±2 点 lingqu
+                                # （规则 1）；站着到达（决策帧/宽限窗路径）
+                                # (86,86)±15 内可见即可点（规则 2）
 _fight_via_kanda = False        # 本轮战斗是否由「看打！」进入（决定战后是否返程）
 _team_checked = False           # 队伍检查已通过（首次领取成功后置位）：
                                 # 任务中不再主动开面板检查队伍，直到领取
@@ -340,6 +395,200 @@ def _near_claim_spot(pos, tolerance):
                                    CLAIM_SPOT[0], CLAIM_SPOT[1], tolerance)
 
 
+def _near_walk_target_spot(pos):
+    """小地图点击 (521,488) 寻路的实际落点 (94,84) 盒判定（用户实测）。
+
+    仅判「坐标在读落点盒内」——盒内≠已停：走位途中必然穿过盒子
+    （坐标文本提前读入盒内值），点击前须由调用方叠加位置稳定判定
+    （连续两轮询坐标不变），见 _wait_claim_entry 走位完成判定。
+    位置读不到不判到达。
+    """
+    return game_map.is_at_position(pos, BAOXIANGGUO,
+                                   WALK_TARGET_SPOT[0], WALK_TARGET_SPOT[1],
+                                   WALK_ARRIVE_TOLERANCE)
+
+
+def _near_wuyi_spot(pos):
+    """判断位置是否在宝象国巫医 NPC (93,122) 附近（严格容差，对齐修罗）。
+
+    小距离移动场景：附近定义必须严格，宽松容差会漏判偏移。
+    """
+    return game_map.is_at_position(pos, BAOXIANGGUO,
+                                   WUYI_SPOT[0], WUYI_SPOT[1],
+                                   WUYI_NEAR_TOLERANCE)
+
+
+def _run_wuyi_chain(win, hover_before_click=False, report_condition=False,
+                    click_option_self=False):
+    """自动巫医主链路（自动流程与验证共用）：前往宝象国巫医 NPC 医治。
+
+    1. 巫医条件（与修罗一致）：自动巫医按间隔设置无条件执行，血蓝
+       正常也照常巫医——不以血蓝为门槛；
+       report_condition=True（验证模式）时检查召唤兽红条/蓝条并仅
+       报告（不影响执行，只读检查不触发右键回满）
+    2. 位置检查：是否在宝象国 (93,122) 附近（严格容差 ±11）
+    3. 不在 → 打开小地图点击 (517,418) 寻路 → 等待走到坐标附近
+       （位置 ±11 / NPC 模板可见 / 位置由可读变缺失均算到达，超时
+       12s 即取消）→ 到达后 3s 窗口识别 NPC 模板（未识别到即本次
+       取消，下次轮到再试）
+    4. 点击巫医 NPC（wubei_baoxiangguowuyi.png）打开医治对话框。
+       对话框处理复用战斗线程：battle.watch_loop 的巫医判定与任务
+       模式无关（文案/选项通用），五倍任务进程同样生效；点击后设置
+       battle.wuyi_expected_at 通知战斗线程切入 2s 高频检查（10s
+       空闲节奏相位不巧会错过 8s 等待上限，被迫兜底自点——修罗
+       2026-10-29 日志教训）。等待对话框出现→消失即处理完成；8s
+       超时后对话框仍在则自行点击「全部医治和修复」兜底（复用
+       battle._find_wuyi_option，与战斗线程行为等效）；
+       click_option_self=True（验证模式）：主进程没有战斗线程，验证
+       自行点击医治选项（复用 battle._find_wuyi_option，与战斗线程
+       行为等效——不宜把常驻 battle 线程拉进主进程，避免与后续任务
+       的战斗线程抢点击）；
+       hover_before_click=True 时 NPC 点击前先移动鼠标定位（无延时，验证时序与真实流程一致）
+
+    到达/点击的最终真信号是对话框出现：坐标 OCR 不可靠（修罗实测
+    走完站在 NPC 旁位置显示缺失，坐标判定卡死到达循环），NPC 模板
+    远距离也会命中。单次尝试：找不到 NPC/对话框未出现即本次取消，
+    下次轮到再试——失败不阻塞五倍主流程。返回 (是否成功, 描述)。
+    """
+    if is_in_battle(win):
+        return False, "战斗中，跳过自动巫医"
+    # 血蓝报告（仅验证模式）：只读检查，不影响执行
+    if report_condition:
+        low = status_bars.beast_below_threshold(win)
+        log(f"[五倍][巫医] 召唤兽血蓝{'低于阈值' if low else '正常'}（仅报告，不影响执行）", "SYS")
+    # 位置检查（严格容差：小距离移动宽松容差会漏判偏移；坐标
+    # 读不到按不在处理——走去巫医无害）
+    pos = game_map.read_map_position(win)
+    if pos is None:
+        pos = game_map.read_position_with_recovery(win)
+    need_walk = not _near_wuyi_spot(pos)
+    # 走位（需要时）：小地图点击巫医位置，等待走到坐标附近
+    # （位置 ±11 或 NPC 模板可见均算到达——坐标 OCR 不可靠时
+    # 模板兜底，修罗原实现教训）
+    if need_walk:
+        ok, info = game_map.open_mini_map(win)
+        if not ok:
+            return False, info
+        human_click(win, WUYI_MAP_POS[0], WUYI_MAP_POS[1])
+        log("[五倍][巫医] 已点击小地图巫医位置，自动寻路中", "SYS")
+        time.sleep(1.0)
+        game_map.close_maps(win)
+        deadline = time.time() + WUYI_ARRIVE_TIMEOUT
+        arrived = False
+        pos_seen = False
+        while time.time() < deadline:
+            if is_in_battle(win):
+                time.sleep(2.0)
+                continue
+            if game_map.find_template(win, WUYI_NPC_ICON) is not None:
+                arrived = True
+                break
+            pos2 = game_map.read_map_position(win)
+            if _near_wuyi_spot(pos2):
+                arrived = True
+                break
+            if pos2 is not None:
+                pos_seen = True  # 位置可读说明仍在路上
+            elif pos_seen:
+                # 位置由可读变为缺失：走到巫医旁位置显示会消失
+                # （修罗实测站在 NPC 旁坐标判定卡死到达循环的根因），
+                # 视为已到达，转入 3s 识别窗口——识别不到快速失败
+                arrived = True
+                break
+            time.sleep(2.0)
+        if not arrived:
+            return False, "走到巫医坐标附近超时（本次取消）"
+    # 到达后 3s 窗口识别 NPC 模板（0.5s 轮询覆盖待机动画波动相位）；
+    # 未识别到即本次取消（对齐修罗：3s 含识别，最长 3s）
+    pt = None
+    deadline = time.time() + WUYI_NPC_TIMEOUT
+    while time.time() < deadline:
+        if is_in_battle(win):
+            time.sleep(2.0)
+            continue
+        pt = game_map.find_template(win, WUYI_NPC_ICON)
+        if pt is not None:
+            break
+        time.sleep(0.5)
+    if pt is None:
+        return False, f"到达后 {WUYI_NPC_TIMEOUT}s 内未识别到巫医 NPC（本次取消）"
+    if hover_before_click:
+        human_move(win.rect.left + pt[0], win.rect.top + pt[1])
+        log(f"[五倍][验证] 已移动鼠标到巫医 NPC ({pt[0]}, {pt[1]})，"
+            f"已定位到（验证时序与真实流程一致）", "SYS")
+    human_click(win, pt[0], pt[1])
+    # 通知战斗线程：巫医对话框即将出现，切入 2s 高频检查（10s 空闲
+    # 节奏相位不巧时会错过 8s 等待上限，被迫兜底自点——修罗 2026-10-29
+    # 日志教训）
+    battle.wuyi_expected_at = time.time()
+    log(f"[五倍][巫医] 已点击巫医 NPC ({pt[0]}, {pt[1]})，等待医治对话框处理", "SYS")
+    # 等待对话框出现并处理（出现→消失）
+    deadline = time.time() + WUYI_HANDLE_TIMEOUT
+    appeared = False
+    option_clicked = False
+    last_items = None   # 对话框打开期间的最近 OCR（超时自行点击兜底用）
+    last_img_np = None
+    while time.time() < deadline:
+        img = win.capture(force_activate=False)
+        if img is None:
+            time.sleep(0.5)
+            continue
+        items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
+        # 与 battle.py 的巫医判定同款调用（内部模糊匹配，无需预规范化）
+        has_dialog = any(_dialog_text_present(items, t) for t in WUYI_DIALOG_TEXTS)
+        if has_dialog:
+            appeared = True
+            last_items, last_img_np = items, img_np
+            if click_option_self and not option_clicked:
+                # 验证模式：主进程无战斗线程，自行点击医治选项
+                # （与真实环境的战斗线程行为等效）
+                pt_opt = _find_wuyi_option(items, img_np)
+                if pt_opt is not None:
+                    human_click(win, pt_opt[0], pt_opt[1])
+                    log(f"[五倍][验证] 已点击「全部医治和修复」"
+                        f"@ ({pt_opt[0]}, {pt_opt[1]})", "SYS")
+                    option_clicked = True
+            time.sleep(1.0)
+            continue
+        if appeared:
+            log("[五倍][巫医] 医治对话框已处理完毕", "SYS")
+            return True, "自动巫医完成"
+        time.sleep(0.5)
+    if appeared:
+        # 超时仍未关闭：战斗线程未及时点击（弹窗动画吞掉过早点击等）。
+        # 自行点击一次兜底，保证「巫医完 → 再追踪」的顺序
+        # （对齐修罗：超时上限 8s + 兜底自行点击）
+        if not option_clicked and last_items is not None:
+            pt_opt = _find_wuyi_option(last_items, last_img_np)
+            if pt_opt is not None:
+                human_click(win, pt_opt[0], pt_opt[1])
+                log(f"[五倍][巫医] 等待超时，自行点击「全部医治和修复」"
+                    f"@ ({pt_opt[0]}, {pt_opt[1]})", "WARN")
+                time.sleep(1.0)  # 等待点击生效
+                return True, "医治对话框超时未关闭，已自行点击选项"
+        return True, "医治对话框已出现（战斗线程将继续处理）"
+    # 对话框未出现（距离不够）：本次取消，下次轮到再试
+    return False, "点击巫医后未出现医治对话框（本次取消）"
+
+
+def _auto_wuyi(win):
+    """自动巫医（用户流程，通用设置开关+间隔门控）：每 N 轮领取后
+    无条件前往巫医医治（血蓝正常也照常，与修罗一致，见 _run_wuyi_chain）。"""
+    return _run_wuyi_chain(win)
+
+
+def verify_wuyi_flow(win):
+    """验证自动巫医流程（高级设置-验证按钮，主进程调用）。
+
+    与 _auto_wuyi 同一链路，区别：血蓝状态检查并仅报告（不影响执行），
+    NPC 点击前先移动鼠标定位（无延时），并自行点击医治选项
+    （主进程没有战斗线程——真实环境中该点击由任务进程的战斗线程
+    完成，二者行为等效）。返回 (是否成功, 描述)。
+    """
+    return _run_wuyi_chain(win, hover_before_click=True, report_condition=True,
+                           click_option_self=True)
+
+
 def _track_has_suoyaowang(items):
     """任务追踪文案是否要求使用任务栏的锁妖网捕捉。
 
@@ -367,12 +616,37 @@ def _track_state(win):
     return exists, _track_has_suoyaowang(items) if exists else False
 
 
-def _wait_claim_entry(win, timeout):
-    """等待领取入口出现（按钮或降魔侍卫），返回 (pt, 来源) 或 (None, None)。
+def _near_xiangmoshiwei_spot(pos):
+    """降魔侍卫点击门控（规则 3）：宝象国 (86,78) ±容差内可见即可点。
 
-    战斗中跳过等待；每轮询只截一帧，双模板批量匹配共用一帧。
-    降魔侍卫模板受待机动画影响分数波动（实测 0.91~0.95 与低相位交替），
-    1.5s 轮询重复采样覆盖波动相位。
+    与按钮门独立判定、互不否定——交叉区内任一入口可见都可领取。
+    位置读不到按通过处理（站在 NPC 旁位置显示会消失）。
+    """
+    return pos is None or game_map.is_at_position(pos, BAOXIANGGUO,
+                                                  XIANGMOSHIWEI_SPOT[0],
+                                                  XIANGMOSHIWEI_SPOT[1],
+                                                  XIANGMOSHIWEI_TOLERANCE)
+
+
+def _wait_claim_entry(win, timeout, arrive_by_walk=False):
+    """等待领取入口出现（按钮或降魔侍卫），返回 (pt, 来源, 位置) 或 (None, None, None)。
+
+    点击按坐标门控三规则（用户 2026-10-29 定稿，替代静止确认——静止
+    确认带来 ~2.5-4s 等待，坐标盒收紧后直接按盒点击）：
+    1. 小地图走位到达（arrive_by_walk=True）：lingqu 只在走到落点
+       (94,84)±2 内点击——快到目的地，微位移也能点中；走位途中位置
+       会提前读入盒内，但 ±2 收紧后提前量 <1 单位，点击仍落在按钮上
+    2. 站着到达（arrive_by_walk=False）：lingqu 在 (86,86)±15 内
+       可见即可点；位置读不到按在领取点处理（站在 NPC 旁位置显示
+       会消失，拒收会空等超时）
+    3. 补充坐标（仅站着到达生效）：降魔侍卫 NPC 在 (86,78)±6 内
+       可见也可点。走位到达不点 NPC——寻路途中会经过侍卫旁（实测
+       日志 21:21 在 (82,84) 走位中误点侍卫），走到落点点 lingqu
+       （用户 2026-10-29）
+
+    战斗中跳过等待；每轮询只截一帧，双模板批量匹配+位置 OCR 共用
+    一帧（模板命中才读位置）。降魔侍卫模板受待机动画影响分数波动
+    （实测 0.91~0.95 与低相位交替），1.5s 轮询重复采样覆盖波动相位。
     """
     deadline = time.time() + timeout
     polls = 0
@@ -386,15 +660,32 @@ def _wait_claim_entry(win, timeout):
             continue
         frame = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
         found = game_map.match_frame_multi(frame, (LINGQU_ICON, XIANGMOSHIWEI_ICON))
-        for icon, label in ((LINGQU_ICON, "领取任务按钮"),
-                            (XIANGMOSHIWEI_ICON, "降魔侍卫")):
-            if found[icon] is not None:
-                return found[icon], label
+        pos = None
+        if found[LINGQU_ICON] is not None or found[XIANGMOSHIWEI_ICON] is not None:
+            # 模板命中才读位置（同帧复用，规则 1 决策点单帧三件套）
+            pos = game_map.read_map_position(win, img=img)
+            if found[LINGQU_ICON] is not None:
+                # 规则 1/2：走位到达只在落点 (94,84)±2 点；站着到达
+                # (86,86)±15 内可见即可点
+                allowed = _near_walk_target_spot(pos) if arrive_by_walk \
+                    else (pos is None or _near_claim_spot(pos, CLAIM_NEAR_TOLERANCE))
+                if allowed:
+                    return found[LINGQU_ICON], "领取任务按钮", pos
+            if not arrive_by_walk and found[XIANGMOSHIWEI_ICON] is not None \
+                    and (pos is None or _near_xiangmoshiwei_spot(pos)):
+                # 规则 3（仅站着到达生效）：降魔侍卫补充坐标 (86,78)±6。
+                # 走位到达不点 NPC——寻路途中会经过侍卫旁（实测日志
+                # 21:21 在 (82,84) 走位中误点侍卫），走到落点点 lingqu
+                # （用户 2026-10-29）
+                return found[XIANGMOSHIWEI_ICON], "降魔侍卫", pos
+            if polls % 7 == 0:  # 约 10s 输出一次：命中但门控未通过
+                log(f"[五倍] 入口模板命中但坐标门控未通过（位置: {pos or '不可读'}），继续等待", "INFO")
         polls += 1
-        if polls % 7 == 0:  # 约 10s 输出一次，避免等待期日志完全静默
+        if polls % 7 == 0 and found[LINGQU_ICON] is None \
+                and found[XIANGMOSHIWEI_ICON] is None:  # 约 10s 输出一次，避免等待期日志完全静默
             log("[五倍] 等待领取入口出现中...", "INFO")
         time.sleep(1.5)
-    return None, None
+    return None, None, None
 
 
 def _find_claim_option(items, img_np):
@@ -513,13 +804,18 @@ def _walk_to_claim_spot(win, just_returned=False):
     """寻路到宝象国领取点附近（与队伍人数无关，队长身份下执行）。
 
     用户流程：已在领取点 86,86 附近（±15）→ 跳过寻路；
-    不在宝象国 → 世界地图点击宝象国图标 → 小地图点击 (514,483) 寻路；
-    在宝象国但不在领取点附近 → 直接打开小地图点击 (514,483) 寻路。
-    等待到达 86,86（±5 严格容差：走动中识图点击容易点不到）。
+    不在宝象国 → 世界地图点击宝象国图标 → 小地图点击 (521,488) 寻路；
+    在宝象国但不在领取点附近 → 直接打开小地图点击 (521,488) 寻路。
+    等待到达小地图落点 (94,84)（±5 严格容差，用户实测落点）。
+    走位路径返回的到达置位 _arrive_by_walk：入口点击按走位规则
+    （只在落点 (94,84)±2 点 lingqu）；站着到达（决策帧/宽限窗路径）
+    不置位、(86,86)±15 内可见即可点。
 
     到达判定优先用直接信号（领取任务按钮可见 = 已到领取点）——
     位置 OCR 坐标不可靠时按钮判据兜底（修罗实测教训：区域快引擎
     把 111,90 误读为 11,90，玩家站在领取点却被判定未到达）。
+    降魔侍卫在 (86,78)±4 内可见同样算到达（坐标补充，用户 2026-10-29：
+    入口为 NPC 时按钮不出现，只认按钮会走位离开 NPC）。
     按钮信号仅 just_returned=True（上一轮返程成功，落点必在宝象国）
     时无条件信任；否则须地图名门控——按钮模板与修罗灵兽村领取按钮
     同图（跨模板匹配 0.947），跨图误命中实测 2026-10-23。
@@ -532,6 +828,8 @@ def _walk_to_claim_spot(win, just_returned=False):
     # 入口单帧决策（性能审计 C：原 is_in_battle/找模板/位置 OCR 三次
     # 各自截窗）：截一帧 → 战斗判定 + 按钮匹配 + 位置 OCR 共用。
     # is_in_battle_frame 接受 PIL 帧，与 is_in_battle 同判定（battle.py）
+    global _arrive_by_walk
+    _arrive_by_walk = False  # 本轮到达路径默认站着到达；走位路径返回前置位
     img = win.capture(force_activate=False)
     if img is None:
         return False, "截图失败"
@@ -541,9 +839,9 @@ def _walk_to_claim_spot(win, just_returned=False):
     btn_visible = game_map.match_frame_np(frame, LINGQU_ICON) is not None
     if just_returned and btn_visible:
         # 返程落点必在宝象国（回城符落点地图固定）：按钮直达信号无条件
-        # 信任，免位置 OCR（每轮领取热路径）。到达判据只认按钮——NPC
-        # 模板受动画影响有相位波动，且远距离也可能命中，不能作到达判据
-        # （修罗使者教训）
+        # 信任，免位置 OCR（每轮领取热路径）。该快路径只认按钮——NPC
+        # 到达判据须坐标门控（模板受动画影响有相位波动，且远距离也会
+        # 命中，不能无门控信任，修罗使者教训），见下方 NPC 分支
         return True, "已在领取点附近（领取按钮可见）"
     # 位置读取（同帧复用）。非返程轮次（任务切换/中途失败后位置未知）
     # 按钮信号须地图名门控：领取按钮模板与修罗灵兽村领取按钮同图
@@ -554,16 +852,32 @@ def _walk_to_claim_spot(win, just_returned=False):
     pos = game_map.read_map_position(win, img=img)
     if btn_visible and (pos is None or pos[0].strip() == BAOXIANGGUO):
         return True, "已在领取点附近（领取按钮可见）"
+    if _near_xiangmoshiwei_spot(pos) \
+            and game_map.match_frame_np(frame, XIANGMOSHIWEI_ICON) is not None:
+        # 降魔侍卫坐标补充（用户 2026-10-29）：NPC 可见且在 (86,78)±4
+        # 内即算到达——入口为 NPC 时按钮不出现，只认按钮会走位离开
+        # NPC（该坐标在 (86,86)±15 内会触发重走），NPC 入口永远点不到
+        return True, "已在领取点附近（降魔侍卫可见）"
     if _near_claim_spot(pos, CLAIM_NEAR_TOLERANCE):
         # 位置近但按钮不可见：可能是位置误读，或超出可点击范围
         # （实测回城符落点距领取点 12.5 单位处按钮不出现——旧逻辑
         # 直接判「已在附近」跳过寻路，入口永远等不到、每轮空转
         # 1-2 分钟）。给按钮 3s 渲染短窗口（返程加载后按钮可能延迟
-        # 出现，窗口内出现即免寻路），仍无则走小地图重走兜底。
+        # 出现，窗口内出现即免寻路；NPC 在 (86,78)±4 内可见同样
+        # 免寻路），仍无则走小地图重走兜底。
         deadline = time.time() + CLAIM_NEAR_BTN_GRACE
         while time.time() < deadline:
-            if game_map.find_template(win, LINGQU_ICON) is not None:
+            img = win.capture(force_activate=False)
+            if img is None:
+                time.sleep(0.5)
+                continue
+            frame = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
+            if game_map.match_frame_np(frame, LINGQU_ICON) is not None:
                 return True, "已在领取点附近（领取按钮可见）"
+            if game_map.match_frame_np(frame, XIANGMOSHIWEI_ICON) is not None \
+                    and _near_xiangmoshiwei_spot(
+                        game_map.read_map_position(win, img=img)):
+                return True, "已在领取点附近（降魔侍卫可见）"
             time.sleep(0.5)
         log("[五倍] 位置近但领取按钮未出现，改走小地图重走领取点", "WARN")
     ok, info = _open_claim_map(win, pos)  # 决策帧已读位置，同帧复用
@@ -572,13 +886,18 @@ def _walk_to_claim_spot(win, just_returned=False):
     log("[五倍] 已点击宝象国小地图领取点位置，自动寻路中", "SYS")
     time.sleep(1.0)  # 等待自动寻路启动
     game_map.close_maps(win)
-    # 等待到达：按钮可见优先（直接信号），坐标 ±5 作为次级判据
-    # （坐标误读时按钮判据兜底）。每轮询只截一帧：战斗判定与按钮
-    # 匹配共用（is_in_battle_frame + match_frame_np）；位置 OCR 为
-    # 次级判据限频每 3 轮询一次（按钮判据覆盖绝大多数到达）
+    _arrive_by_walk = True  # 此后走位循环的到达均经小地图走位：入口点击按走位规则（落点 ±2）
+    # 等待到达：按钮可见优先（直接信号，落点 12 单位外已可见——
+    # 提前返回后入口等待按走位规则只在落点 (94,84)±2 点），小地图
+    # 落点 (94,84)±2 作为坐标判据（用户实测落点；旧判据用 86,86 与
+    # 真实落点差 8 单位永不命中），降魔侍卫 (86,78)±6 内可见也算
+    # 到达（坐标补充）。每轮询只截一帧：战斗判定与双模板匹配共用
+    # （is_in_battle_frame + match_frame_np）；位置 OCR 为次级判据
+    # 限频每 3 轮询一次（NPC 命中时同帧补读，按钮判据覆盖绝大多数到达）
     deadline = time.time() + CLAIM_ARRIVE_TIMEOUT
     polls = 0
     _walk_pos = None
+    pos_seen = False
     while time.time() < deadline:
         img = win.capture(force_activate=False)
         if img is None:
@@ -591,16 +910,27 @@ def _walk_to_claim_spot(win, just_returned=False):
         if game_map.match_frame_np(frame, LINGQU_ICON, fallback=False) is not None:
             log("[五倍] 已到达领取点附近（领取按钮可见）", "SYS")
             return True, "已到达领取点附近"
+        npc_hit = game_map.match_frame_np(frame, XIANGMOSHIWEI_ICON) is not None
         polls += 1
-        if polls % 3 == 1:
+        if npc_hit or polls % 3 == 1:
             _walk_pos = game_map.read_map_position(win, img=img)  # 同帧复用（规则 1）
-            if _near_claim_spot(_walk_pos, WALK_ARRIVE_TOLERANCE):
-                log("[五倍] 已到达领取点附近", "SYS")
+            if _walk_pos is not None:
+                pos_seen = True
+            if _near_walk_target_spot(_walk_pos):
+                log("[五倍] 已到达领取点附近（小地图落点）", "SYS")
                 return True, "已到达领取点附近"
+        # 降魔侍卫坐标补充（用户 2026-10-29）：NPC 可见且在 (86,78)±4
+        # 内即算到达（入口为 NPC 时按钮不出现）；位置读不到仅当本段
+        # 走位中位置曾可读（走到 NPC 旁位置显示会消失，巫医同款现象）
+        # 才视为到达，防远距离 NPC 假命中停走（修罗使者教训）
+        if npc_hit and _near_xiangmoshiwei_spot(_walk_pos) \
+                and (_walk_pos is not None or pos_seen):
+            log("[五倍] 已到达领取点附近（降魔侍卫可见）", "SYS")
+            return True, "已到达领取点附近"
         if polls % 5 == 0:
             log(f"[五倍] 前往领取点中... 当前位置: {_walk_pos or '识别失败'}", "INFO")
         time.sleep(2.0)
-    return False, f"寻路到领取点超时（未到达宝象国 {CLAIM_SPOT[0]},{CLAIM_SPOT[1]} 附近）"
+    return False, f"寻路到领取点超时（未到达宝象国小地图落点 {WALK_TARGET_SPOT[0]},{WALK_TARGET_SPOT[1]} 附近）"
 
 
 def _relocate_to_claim_spot(win):
@@ -634,9 +964,12 @@ def _relocate_to_claim_spot(win):
         frame = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
         if game_map.match_frame_np(frame, LINGQU_ICON) is not None:
             return True, "已重走到领取点附近（领取按钮可见）"
+        npc_hit = game_map.match_frame_np(frame, XIANGMOSHIWEI_ICON) is not None
         pos = game_map.read_map_position(win, img=img)
-        if _near_claim_spot(pos, WALK_ARRIVE_TOLERANCE):
+        if _near_walk_target_spot(pos):
             return True, "已重走到领取点附近"
+        if npc_hit and _near_xiangmoshiwei_spot(pos):
+            return True, "已重走到领取点附近（降魔侍卫可见）"
         polls += 1
         if polls % 5 == 0:
             log(f"[五倍] 重走领取点中... 当前位置: {pos or '识别失败'}", "INFO")
@@ -668,7 +1001,11 @@ def _click_entry_ensuring_dialog(win, log_tag="[五倍]", hover_before_click=Fal
         # 消失」假失败（修罗实测到达秒级报错未点击）；点不中由对话框
         # 出现判定兜底（小地图重定位重试）
         wait_timeout = ENTRY_FIRST_WAIT if attempt == 1 else CLAIM_BUTTON_TIMEOUT
-        pt2, src2 = _wait_claim_entry(win, wait_timeout)
+        # 坐标门控三规则按到达路径分流：首轮按 _walk_to_claim_spot 的
+        # 到达路径（走位→落点 ±2 规则；站着→±15 规则）；次轮必经
+        # _relocate_to_claim_spot 小地图重走，一律按走位规则
+        arrive_by_walk = _arrive_by_walk if attempt == 1 else True
+        pt2, src2, pos2 = _wait_claim_entry(win, wait_timeout, arrive_by_walk=arrive_by_walk)
         if pt2 is None:
             if attempt == 1:
                 # 入口未出现：小地图重走领取点（原地或短途，几秒即回）
@@ -685,7 +1022,9 @@ def _click_entry_ensuring_dialog(win, log_tag="[五倍]", hover_before_click=Fal
             log(f"{log_tag} 已移动鼠标到{src2} ({pt2[0]}, {pt2[1]})，"
                 f"已定位到（验证时序与真实流程一致）", "SYS")
         human_click(win, pt2[0], pt2[1])
-        log(f"{log_tag} 已点击{src2}（领取）", "SYS")
+        pos_text = f"（位置: {pos2[0]}[{pos2[1]},{pos2[2]}]）" if pos2 is not None \
+            else "（位置: 不可读）"
+        log(f"{log_tag} 已点击{src2}（领取）{pos_text}", "SYS")
         # 高性能：领取选项坐标已缓存 → 跳过对话框 OCR 轮询，固定等待
         # 渲染后由 _claim_task 直接按坐标点选项（点不中由「任务进追踪」
         # 校验循环识别补点兜底，无 seen 帧返回）
@@ -732,9 +1071,12 @@ def _click_entry_ensuring_dialog(win, log_tag="[五倍]", hover_before_click=Fal
                 if is_in_battle_frame(img):
                     time.sleep(2.0)
                     continue
-                if game_map.match_frame_np(
-                        cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR),
-                        LINGQU_ICON) is not None:
+                frame = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
+                if game_map.match_frame_np(frame, LINGQU_ICON) is not None:
+                    break
+                if game_map.match_frame_np(frame, XIANGMOSHIWEI_ICON) is not None \
+                        and _near_xiangmoshiwei_spot(
+                            game_map.read_map_position(win, img=img)):
                     break
                 time.sleep(2.0)
             appear_timeout = CLAIM_DIALOG_TIMEOUT
@@ -746,8 +1088,10 @@ def _click_entry_ensuring_dialog(win, log_tag="[五倍]", hover_before_click=Fal
 def _claim_task(win, allow_fill=False):
     """在领取点附近领取五倍任务（前提：已走到领取点附近）。
 
-    识图 wubei_lingqu.png / wubei_xiangmoshiwei.png 点击 → 对话框点绿色
-    选项「除魔卫国，义不容辞」→ 校验任务出现在追踪面板。
+    识图 wubei_lingqu.png / wubei_xiangmoshiwei.png 点击（入口点击按
+    坐标门控三规则：走位落点 (94,84)±2 / 站着 (86,86)±15 / 降魔侍卫
+    (86,78)±6（仅站着生效），见 _wait_claim_entry）
+    → 对话框点绿色选项「除魔卫国，义不容辞」→ 校验任务出现在追踪面板。
 
     返回 (是否成功, 描述, 校验帧)：校验帧为任务进追踪的确认帧
     （items, img_np），供 follow_task 首轮复用免重复截图+OCR；
@@ -1855,6 +2199,13 @@ def run_loop(win, cycle_interval=1.0):
     # 关闭时跳过全部队伍检查直接领取（可能不是队长，被拒也不补人）
     check_team = load_wubei_check_team()
     log(f"[五倍] 检查队伍: {'开（领取前监控补人）' if check_team else '关（跳过队伍检查）'}", "SYS")
+    # 自动巫医（通用设置开关，默认开、每 5 轮一次，与修罗一致）：每 N 轮
+    # 领取后无条件前往宝象国巫医 NPC 医治，血蓝正常也照常
+    # （对话框处理复用战斗线程逻辑）
+    auto_wuyi = load_wubei_auto_wuyi()
+    wuyi_interval = max(1, load_wubei_wuyi_interval())
+    log(f"[五倍] 自动巫医: {'开' if auto_wuyi else '关'}"
+        + (f"（每 {wuyi_interval} 轮）" if auto_wuyi else ""), "SYS")
     _shout_text = WUBEI_SHOUT_DEFAULT if load_wubei_shout_switch() else ""
     if _shout_text:
         log(f"[五倍] 缺人自动喊话: 开（{_shout_text}，最短间隔 {SHOUT_MIN_INTERVAL}s）", "SYS")
@@ -2003,6 +2354,11 @@ def run_loop(win, cycle_interval=1.0):
                 _reset_xianxingjing_state()  # 新任务：显形镜状态机复位
                 _reset_huangpaoguai_state()  # 新任务：黄袍怪状态机复位
                 _fight_via_kanda = False  # 新一轮开始：重置「看打！」进入战斗标记
+                # 自动巫医：每 N 轮领取后无条件前往宝象国巫医 NPC 医治，
+                # 血蓝正常也照常（失败仅记日志，不阻断后续寻路）
+                if auto_wuyi and round_no % wuyi_interval == 0:
+                    ok2, info2 = _auto_wuyi(win)
+                    log(f"[五倍][巫医] {info2}", "SYS" if ok2 else "WARN")
             # 2~4. 寻路 / 对话开打 / 战斗：由任务跟踪统一驱动
             #     （寻路点击绿字自动进行，对话开打走附加对话处理，
             #      战斗由战斗监控线程自动操作、跟踪中自动跳过）；

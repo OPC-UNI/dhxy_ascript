@@ -346,6 +346,19 @@
                     <span class="switch-track"></span>
                     <span>缺人自动喊话（固定内容「百次五倍来人，效率队」，仅队长生效）</span>
                 </label>
+                <label class="switch-row">
+                    <input type="checkbox" id="wubei-auto-wuyi">
+                    <span class="switch-track"></span>
+                    <span>自动巫医（每 N 轮一次，默认开启）</span>
+                </label>
+                <div class="group-row">
+                    <span class="group-label">巫医间隔</span>
+                    <div class="group-ctrl">
+                        <button class="th-btn" onclick="wubeiWuyiInterval(-1)">−</button>
+                        <span class="th-val" id="wubei-wuyi-interval">5</span>
+                        <button class="th-btn" onclick="wubeiWuyiInterval(1)">＋</button>
+                    </div>
+                </div>
             </div>
         </div>
         <!-- 通用设置：摄妖香开关 + 高性能 + 血量蓝量阈值 + 人物/召唤兽战斗动作 -->
@@ -571,7 +584,11 @@
                     <button id="btn-verify-wubei-return" class="btn" onclick="verifyWubeiReturn()">验证五倍回程</button>
                     <span id="wubei-return-verify-result"></span>
                 </div>
-                <div class="group-hint">与实际流程一致、时序无额外延时，且不改变任务状态：领取=走位到宝象国领取点 → 点击领取入口（领取任务按钮/降魔侍卫）打开对话框 → 选项「除魔卫国，义不容辞」仅定位不点击 → 点拒绝选项「事态严重，我等退散」关闭对话框；回程=定位回城符不点击（回城符模板待提供，缺失时报模板未提供）。任务运行中不可验证。</div>
+                <div class="verify-row">
+                    <button id="btn-verify-wubei-wuyi" class="btn" onclick="verifyWubeiWuyi()">验证五倍巫医</button>
+                    <span id="wubei-wuyi-verify-result"></span>
+                </div>
+                <div class="group-hint">与实际流程一致、时序无额外延时，且不改变任务状态：领取=走位到宝象国领取点 → 点击领取入口（领取任务按钮/降魔侍卫）打开对话框 → 选项「除魔卫国，义不容辞」仅定位不点击 → 点拒绝选项「事态严重，我等退散」关闭对话框；回程=定位回城符不点击（回城符模板待提供，缺失时报模板未提供）；巫医=走位到巫医 NPC、定位后点击打开对话框（医治选项由验证流程自行点击，与任务进程中战斗线程点击行为等效）。任务运行中不可验证。</div>
             </div>
             <div class="group-box">
                 <div class="group-title">清屏验证</div>
@@ -636,6 +653,8 @@
         const wubeiHezi = document.getElementById('wubei-hezi');
         const wubeiCheckTeam = document.getElementById('wubei-check-team');
         const wubeiShout = document.getElementById('wubei-shout');
+        const wubeiAutoWuyi = document.getElementById('wubei-auto-wuyi');
+        const wubeiWuyiIntervalEl = document.getElementById('wubei-wuyi-interval');
         const xiuluoShout = document.getElementById('xiuluo-shout');
         const btnVerifyXiuluo = document.getElementById('btn-verify-xiuluo');
         const verifyResultEl = document.getElementById('verify-result');
@@ -647,6 +666,8 @@
         const wubeiClaimVerifyResultEl = document.getElementById('wubei-claim-verify-result');
         const btnVerifyWubeiReturn = document.getElementById('btn-verify-wubei-return');
         const wubeiReturnVerifyResultEl = document.getElementById('wubei-return-verify-result');
+        const btnVerifyWubeiWuyi = document.getElementById('btn-verify-wubei-wuyi');
+        const wubeiWuyiVerifyResultEl = document.getElementById('wubei-wuyi-verify-result');
         const btnVerifyClearScreen = document.getElementById('btn-verify-clear-screen');
         const clearScreenVerifyResultEl = document.getElementById('clear-screen-verify-result');
         const btnVerifyShout = document.getElementById('btn-verify-shout');
@@ -1086,6 +1107,10 @@
             wubeiHezi.checked = !!(info.wubei && info.wubei.hezi);
             wubeiCheckTeam.checked = !!(info.wubei && info.wubei.check_team);
             wubeiShout.checked = !!(info.wubei && info.wubei.shout);
+            wubeiAutoWuyi.checked = !!(info.wubei && info.wubei.auto_wuyi);
+            if (info.wubei && info.wubei.wuyi_interval) {
+                wubeiWuyiIntervalEl.innerText = info.wubei.wuyi_interval;
+            }
             xiuluoShout.checked = !!info.xiuluo_shout;
             const ths = info.thresholds || {};
             for (const key of ['char_hp', 'char_mp', 'beast_hp', 'beast_mp']) {
@@ -1258,6 +1283,16 @@
             if (r && r.status === 'success') el.innerText = r.interval;
         }
 
+        // 五倍自动巫医间隔步进：±1，范围 1~90，变更立即保存
+        async function wubeiWuyiInterval(delta) {
+            const el = wubeiWuyiIntervalEl;
+            const cur = parseInt(el.innerText);
+            const val = Math.min(90, Math.max(1, cur + delta));
+            if (val === cur) return;
+            const r = await callPython('save_wubei_wuyi_interval', val);
+            if (r && r.status === 'success') el.innerText = r.interval;
+        }
+
         // 五倍自动抢盒子开关变更：立即保存（下次任务启动生效）
         wubeiHezi.addEventListener('change', () => {
             callPython('save_wubei_hezi', wubeiHezi.checked);
@@ -1269,6 +1304,9 @@
         });
         wubeiShout.addEventListener('change', () => {
             callPython('save_wubei_shout_switch', wubeiShout.checked);
+        });
+        wubeiAutoWuyi.addEventListener('change', () => {
+            callPython('save_wubei_auto_wuyi', wubeiAutoWuyi.checked);
         });
         xiuluoShout.addEventListener('change', () => {
             callPython('save_xiuluo_shout_switch', xiuluoShout.checked);
@@ -1428,6 +1466,38 @@
             btnVerifyWubeiReturn.disabled = false;
             wubeiReturnVerifyResultEl.style.color = ok ? 'var(--accent)' : '#ff5f5f';
             wubeiReturnVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+        };
+
+        // 五倍巫医验证：与修罗巫医验证同模式，结果经 onWubeiWuyiVerifyResult 异步回推
+        async function verifyWubeiWuyi() {
+            if (verifying) return;
+            verifying = true;
+            btnVerifyWubeiWuyi.disabled = true;
+            wubeiWuyiVerifyResultEl.style.color = 'var(--text)';
+            wubeiWuyiVerifyResultEl.innerText = '验证中...';
+            try {
+                const r = await callPython('verify_wubei_wuyi');
+                if (!r || r.status !== 'success') {
+                    wubeiWuyiVerifyResultEl.style.color = '#ff5f5f';
+                    wubeiWuyiVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
+                    verifying = false;
+                    btnVerifyWubeiWuyi.disabled = false;
+                }
+                // 成功：等待 Python 侧 onWubeiWuyiVerifyResult 回推最终结果
+            } catch (e) {
+                wubeiWuyiVerifyResultEl.style.color = '#ff5f5f';
+                wubeiWuyiVerifyResultEl.innerText = '验证请求异常';
+                verifying = false;
+                btnVerifyWubeiWuyi.disabled = false;
+            }
+        }
+
+        // Python 侧调用：五倍巫医验证结束回推结果
+        window.onWubeiWuyiVerifyResult = function (ok, info) {
+            verifying = false;
+            btnVerifyWubeiWuyi.disabled = false;
+            wubeiWuyiVerifyResultEl.style.color = ok ? 'var(--accent)' : '#ff5f5f';
+            wubeiWuyiVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
         };
 
         // 清屏验证：与回程/领取验证同模式，结果经 onClearScreenVerifyResult 异步回推
