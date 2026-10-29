@@ -122,10 +122,13 @@ WUYI_CHECK_INTERVAL = 2.0    # 战斗结束后高发窗口内的巫医对话框�
                              # 因世界移动失效，2s 恒检 OCR 白烧 ~0.3 核）
 WUYI_POST_BATTLE_WINDOW = 15.0   # 战斗结束后巫医弹窗高发窗口（召唤兽受伤弹窗在
                                  # 战斗结束时弹出；窗口内保持 2s 节奏）
-WUYI_IDLE_CHECK_INTERVAL = 10.0  # 窗口外的安全兜底节奏：窗口外弹窗仅出现在巫医
-                                 # NPC 对话（修罗自动巫医流程）——人物静止、对话框
-                                 # 不随移动关闭，10s 内处理（修罗流程等待上限 8s，
-                                 # 超时后流程自行点击选项兜底）
+WUYI_EXPECT_WINDOW = 15.0        # 主流程点击巫医 NPC 后的高频检查窗口（秒）：
+                                 # 覆盖流程 8s 等待上限 + 对话框处理余量；窗口内
+                                 # 战斗线程用 2s 节奏（10s 空闲节奏会错过 8s 等待，
+                                 # 2026-10-29 日志 10:58 兜底触发+重复点击教训）
+WUYI_IDLE_CHECK_INTERVAL = 10.0  # 高发窗口/预期窗口之外的安全兜底节奏：仅剩
+                                 # 巫医 NPC 对话未被预期窗口覆盖的兜底（人物静止、
+                                 # 对话框不随移动关闭，10s 内处理）
 WUYI_RETRY_COOLDOWN = 15.0   # 点击选项后的冷却期（对话框未关闭时防重复点击）
 WUYI_DIFF_THRESHOLD = 2.0    # 对话框区域平均像素差阈值：低于则跳过 OCR（区域无变化）
 
@@ -144,6 +147,10 @@ _SKILL_RE = re.compile(r"^技能(\d)-(\d)$")
 # 全程未误判（实测 2.5 分钟战斗 19:45:06-19:47:35 无误报），任务侧
 # 判定「任务消失」等边界时复用此状态，免重复截图判定
 _watch_in_battle = False
+# 主流程点击巫医 NPC 的时刻（xiuluo 任务进程设置、战斗线程读取）：
+# 此后 WUYI_EXPECT_WINDOW 内战斗线程用 2s 高频检查，8s 等待窗口内
+# 必能捡到对话框；只读共享、时间戳自然过期，无需复位
+wuyi_expected_at = 0.0
 
 
 def watch_in_battle():
@@ -634,6 +641,19 @@ def _find_wuyi_option(items, img_np):
     return None
 
 
+def _wuyi_check_interval(now, last_battle_end_at, expected_at):
+    """巫医检查节奏：战后高发窗口或主流程 NPC 预期窗口内 2s，否则 10s 兜底。
+
+    预期窗口（wuyi_expected_at 之后 WUYI_EXPECT_WINDOW 秒）：主流程点击
+    NPC 后对话框即将出现，10s 空闲节奏的相位不巧时会错过流程 8s 等待
+    上限、被迫兜底自点（2026-10-29 日志 10:58 教训）。纯函数便于单测。
+    """
+    if now - last_battle_end_at < WUYI_POST_BATTLE_WINDOW \
+            or now - expected_at < WUYI_EXPECT_WINDOW:
+        return WUYI_CHECK_INTERVAL
+    return WUYI_IDLE_CHECK_INTERVAL
+
+
 def _handle_hezi(win):
     """修罗/五倍盒子：不在战斗时若出现福源广泽盒，点击「我需要」。
 
@@ -745,11 +765,11 @@ def watch_loop(win):
                         last_hezi_check = 0.0
                 now = time.time()
                 # 巫医检查节奏：战斗结束后高发窗口内 2s（5s 教训：弹窗等
-                # 久人物走远即关闭），窗口外 10s 兜底（弹窗仅在战斗结束/
-                # 巫医 NPC 对话出现，NPC 场景人物静止无走远关闭问题）
-                wuyi_interval = WUYI_CHECK_INTERVAL \
-                    if now - last_battle_end_at < WUYI_POST_BATTLE_WINDOW \
-                    else WUYI_IDLE_CHECK_INTERVAL
+                # 久人物走远即关闭），主流程点 NPC 后预期窗口内同样 2s，
+                # 窗口外 10s 兜底（弹窗仅在战斗结束/巫医 NPC 对话出现，
+                # NPC 场景人物静止无走远关闭问题）
+                wuyi_interval = _wuyi_check_interval(now, last_battle_end_at,
+                                                     wuyi_expected_at)
                 if now - last_wuyi_check >= wuyi_interval:
                     last_wuyi_check = now
                     if now - wuyi_click_at >= WUYI_RETRY_COOLDOWN \

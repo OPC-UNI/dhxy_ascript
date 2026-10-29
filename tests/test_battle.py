@@ -73,3 +73,28 @@ def test_find_wuyi_option_rejects_panel_side():
     img_np[400:440, 10:300] = (0, 186, 0)
     items = [("全部医治和修复", [10, 400, 300, 440], 0.96)]
     assert battle._find_wuyi_option(items, img_np) is None
+
+
+# ---- 巫医检查节奏 ----
+
+def test_wuyi_check_interval_post_battle_window():
+    """战后高发窗口内 → 2s 高频。"""
+    now = 100.0
+    assert battle._wuyi_check_interval(now, now - 5.0, 0.0) \
+        == battle.WUYI_CHECK_INTERVAL
+
+
+def test_wuyi_check_interval_expected_window():
+    """主流程点 NPC 后预期窗口内 → 2s 高频（战后窗口已过）。"""
+    now = 100.0
+    assert battle._wuyi_check_interval(now, now - 20.0, now - 5.0) \
+        == battle.WUYI_CHECK_INTERVAL
+
+
+def test_wuyi_check_interval_idle():
+    """两窗口之外（含预期窗口过期）→ 10s 兜底。"""
+    now = 100.0
+    assert battle._wuyi_check_interval(now, now - 20.0, 0.0) \
+        == battle.WUYI_IDLE_CHECK_INTERVAL
+    assert battle._wuyi_check_interval(now, now - 20.0, now - 16.0) \
+        == battle.WUYI_IDLE_CHECK_INTERVAL

@@ -55,6 +55,7 @@ from . import status_bars  # 血蓝检测（自动巫医前置条件）
 from .battle import is_in_battle, is_in_battle_frame  # 战斗状态判定（统一在 battle.py 中实现）
 from .battle import WUYI_DIALOG_TEXTS  # 巫医对话框文案（自动巫医等待判定）
 from .battle import _find_wuyi_option  # 「全部医治和修复」选项定位（验证模式自行点击）
+from . import battle  # 巫医预期时间戳（点 NPC 后通知战斗线程切入 2s 高频检查）
 from .control_window import (load_task_counts, load_xiuluo_settings,
                              load_xiuluo_shout_switch,
                              load_xiuluo_check_team,
@@ -234,6 +235,8 @@ def _run_wuyi_chain(win, hover_before_click=False, report_condition=False,
     4. 点击巫医 NPC（xiuluo_lingshoucunwuyi.png）打开医治对话框。
        真实流程：等待战斗线程点击「全部医治和修复」（battle.py 已有
        完整逻辑，无需重复实现——对话框出现→消失即处理完成）；
+       点击后设置 battle.wuyi_expected_at 通知战斗线程切入 2s 高频
+       检查（10s 空闲节奏会错过 8s 等待上限，被迫兜底自点）；
        click_option_self=True（验证模式）：主进程没有战斗线程，验证
        自行点击医治选项（复用 battle._find_wuyi_option，与战斗线程
        行为等效——不宜把常驻 battle 线程拉进主进程，避免与后续任务
@@ -313,6 +316,9 @@ def _run_wuyi_chain(win, hover_before_click=False, report_condition=False,
         log(f"[修罗][验证] 已移动鼠标到巫医 NPC ({pt[0]}, {pt[1]})，"
             f"已定位到（验证时序与真实流程一致）", "SYS")
     human_click(win, pt[0], pt[1])
+    # 通知战斗线程：巫医对话框即将出现，切入 2s 高频检查（10s 空闲节奏
+    # 相位不巧时会错过 8s 等待上限，被迫兜底自点，2026-10-29 日志教训）
+    battle.wuyi_expected_at = time.time()
     log(f"[修罗][巫医] 已点击巫医 NPC ({pt[0]}, {pt[1]})，等待医治对话框处理", "SYS")
     # 等待对话框出现并处理（出现→消失）
     deadline = time.time() + WUYI_HANDLE_TIMEOUT
