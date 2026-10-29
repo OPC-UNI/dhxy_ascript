@@ -71,7 +71,8 @@ from .control_window import (load_task_counts,  # 任务次数上限
                              load_wubei_check_team,  # 五倍设置：检查队伍开关
                              load_wubei_shout_switch,  # 五倍设置：缺人自动喊话开关
                              load_wubei_auto_wuyi,  # 五倍设置：自动巫医开关
-                             load_wubei_wuyi_interval)  # 五倍设置：自动巫医间隔（轮）
+                             load_wubei_wuyi_interval,  # 五倍设置：自动巫医间隔（轮）
+                             load_wubei_kuimulang_switch)  # 五倍设置：领取奎木狼任务开关
 from .dialog_common import (SCREEN_CENTER_POS, green_option_center,
                             _dialog_text_present,
                             _click_screen_center)  # 对话框共享组件（屏幕中间点击/选项中心/文案检测）
@@ -92,10 +93,18 @@ TASK_TITLE = "魔任务"
 # （仅在任务存在时出现于面板左区，任务消失即随之消失——只会把「假消失」
 # 纠正回「还在」，不会把「真消失」误判成「还在」）。「形镜」取「显形镜」
 # 后两字：OCR 对「显」稳定误读成「豆」。新任务文案出现时在此追加。
-TASK_FALLBACK_TEXTS = ("消灭黄袍怪", "消灭魔尊", "形镜", "锁妖网")
+TASK_FALLBACK_TEXTS = ("消灭黄袍怪", "消灭魔尊", "形镜", "锁妖网", "奎木狼")
 # 锁妖网捕捉任务：追踪文案出现即无法自动推进（须点任务栏物品捕捉），
 # 重新领取任务替换（用户 2026-10-11 确认游戏允许重领替换）
 SUOYAOWANG_TRACK_TEXT = "使用任务栏的锁妖网捕捉"
+# 奎木狼任务：追踪步骤行关键词（「消灭奎木狼」等）。领取奎木狼开关
+# 关闭时检测到即重新领取替换——逻辑同锁妖网（2026-10-29 用户要求）
+KUIMULANG_TRACK_TEXT = "奎木狼"
+# 连续重新领取间隔（秒，用户 2026-10-29）：首次替换立即执行（与当前
+# 逻辑无差异）；替换领取后新任务仍为锁妖网/奎木狼（或显形镜替换）时，
+# 距上次替换领取满 6s 才再次替换——防连续快速重领；普通领取成功
+# 即重置间隔（下一次替换重新视为首次）
+REPLACE_INTERVAL = 6
 
 
 class ReplaceTaskError(Exception):
@@ -356,6 +365,12 @@ _arrive_by_walk = False         # 本轮到达领取点是否经小地图走位�
                                 # 分流——走位到达只在落点 (94,84)±2 点 lingqu
                                 # （规则 1）；站着到达（决策帧/宽限窗路径）
                                 # (86,86)±15 内可见即可点（规则 2）
+_kuimulang_on = True            # 领取奎木狼任务开关（run_loop 启动时读取；跟随期
+                                # 替换检查用，免每轮询读 KeyValue——关闭时追踪
+                                # 文案含奎木狼即重新领取替换）
+_last_replace_at = 0.0          # 上次替换领取成功时刻（0=无连续替换链）：连续多次
+                                # 重领须距上次替换满 REPLACE_INTERVAL 秒（首次替换
+                                # 立即执行；普通领取成功重置）
 _fight_via_kanda = False        # 本轮战斗是否由「看打！」进入（决定战后是否返程）
 _team_checked = False           # 队伍检查已通过（首次领取成功后置位）：
                                 # 任务中不再主动开面板检查队伍，直到领取
@@ -601,8 +616,15 @@ def _track_has_suoyaowang(items):
     return _dialog_text_present(panel, norm_text(SUOYAOWANG_TRACK_TEXT))
 
 
+def _track_has_kuimulang(items):
+    """任务追踪文案是否包含奎木狼关键词（只认追踪面板区域行，同锁妖网）。"""
+    panel = [(norm_text(t), r, s) for t, r, s in items
+             if r[0] < task_tracker.PANEL_MAX_X]
+    return _dialog_text_present(panel, norm_text(KUIMULANG_TRACK_TEXT))
+
+
 def _track_state(win):
-    """一次追踪面板 OCR 同时判定：任务是否存在 + 是否为锁妖网任务。
+    """一次追踪面板 OCR 同时判定：任务是否存在 + 是否为锁妖网/奎木狼任务。
 
     续跑路径原为两次 TRACK OCR（has_task ~0.9s + 锁妖网检查 ~0.9s），
     合并省一半（性能审计 B）。TRACK_OCR_REGION 比 TRACK_REGION 宽 30px，
@@ -610,10 +632,12 @@ def _track_state(win):
     """
     img = win.capture(force_activate=False)
     if img is None:
-        return False, False
+        return False, False, False
     items, img_np = game_map.ocr_regions(img, (task_tracker.TRACK_OCR_REGION,))
     exists = task_tracker.has_task_in(items, img_np, TASK_TITLE, TASK_FALLBACK_TEXTS)
-    return exists, _track_has_suoyaowang(items) if exists else False
+    return (exists,
+            _track_has_suoyaowang(items) if exists else False,
+            _track_has_kuimulang(items) if exists else False)
 
 
 def _near_xiangmoshiwei_spot(pos):
@@ -1743,10 +1767,13 @@ def _handle_follow_extras(win, items, img_np):
 
     追踪文案出现「使用任务栏的锁妖网捕捉」时抛 ReplaceTaskError
     （follow_task 约定：回调抛异常向上传播，供调用方做任务级终止）——
-    该任务须点任务栏物品捕捉，无法自动推进，由主循环重新领取替换。
+    该任务须点任务栏物品捕捉，无法自动推进，由主循环重新领取替换；
+    领取奎木狼开关关闭且追踪文案含奎木狼时同样抛替换（逻辑同锁妖网）。
     """
     if _track_has_suoyaowang(items):
         raise ReplaceTaskError(SUOYAOWANG_TRACK_TEXT)
+    if not _kuimulang_on and _track_has_kuimulang(items):
+        raise ReplaceTaskError(f"奎木狼任务（{KUIMULANG_TRACK_TEXT}）")
     if _handle_xianxingjing(win, items, img_np):
         return True
     if _handle_xianxingjing_track(win, items, img_np):
@@ -1778,9 +1805,12 @@ def _follow_to_done(win, first_items=None):
 def _handle_pre_click(win, items, img_np):
     """点击追踪绿字前的替换检查：锁妖网任务在寻路开始前拦截，人物
     不起步直接进入替换领取（原流程先点链接开始寻路、内层轮询才
-    检测到——实测 2026-10-12 15:50 白走一段再折返）。"""
+    检测到——实测 2026-10-12 15:50 白走一段再折返）；领取奎木狼开关
+    关闭且追踪文案含奎木狼时同样拦截（逻辑同锁妖网）。"""
     if _track_has_suoyaowang(items):
         raise ReplaceTaskError(SUOYAOWANG_TRACK_TEXT)
+    if not _kuimulang_on and _track_has_kuimulang(items):
+        raise ReplaceTaskError(f"奎木狼任务（{KUIMULANG_TRACK_TEXT}）")
 
 
 def _open_task_box(win):
@@ -2190,7 +2220,8 @@ def run_loop(win, cycle_interval=1.0):
     返回结束原因描述。
     """
     global _fight_via_kanda, _team_checked, _task_gone_last_round, _xj_need_replace, \
-        _replace_fail_streak, _hpg_task_seen, _shout_text, _returned_last_round
+        _replace_fail_streak, _hpg_task_seen, _shout_text, _returned_last_round, \
+        _kuimulang_on, _last_replace_at
     max_rounds = load_task_counts().get(TASK_MODE, 0)
     log(f"[五倍] 任务次数上限: {max_rounds if max_rounds > 0 else '不限'}", "SYS")
     log(f"[五倍] 领取点宝象国 {CLAIM_SPOT[0]},{CLAIM_SPOT[1]}，队伍固定 5 人", "SYS")
@@ -2206,6 +2237,11 @@ def run_loop(win, cycle_interval=1.0):
     wuyi_interval = max(1, load_wubei_wuyi_interval())
     log(f"[五倍] 自动巫医: {'开' if auto_wuyi else '关'}"
         + (f"（每 {wuyi_interval} 轮）" if auto_wuyi else ""), "SYS")
+    # 领取奎木狼任务开关（五倍设置，默认开）：关闭时追踪文案含奎木狼
+    # 即重新领取替换（逻辑同锁妖网——跟随期检查共用此全局，免每轮询
+    # 读 KeyValue）
+    _kuimulang_on = load_wubei_kuimulang_switch()
+    log(f"[五倍] 领取奎木狼任务: {'开' if _kuimulang_on else '关（奎木狼任务重新领取替换）'}", "SYS")
     _shout_text = WUBEI_SHOUT_DEFAULT if load_wubei_shout_switch() else ""
     if _shout_text:
         log(f"[五倍] 缺人自动喊话: 开（{_shout_text}，最短间隔 {SHOUT_MIN_INTERVAL}s）", "SYS")
@@ -2229,17 +2265,20 @@ def run_loop(win, cycle_interval=1.0):
             #    本轮开始必然无任务——has_task（区域 OCR ~0.9s）只在可能
             #    续跑时检查（进程首轮或上轮跟踪失败未确认完成）
             claim_items = None  # 领取校验帧（续跑路径无，跟踪首轮自行截图+OCR）
-            # 锁妖网捕捉/显形镜按钮恢复失败：即使追踪中已有任务也走
-            # 领取分支重新领取替换（用户 2026-10-11 确认游戏允许重领替换）
+            # 锁妖网捕捉/奎木狼开关关闭/显形镜按钮恢复失败：即使追踪中
+            # 已有任务也走领取分支重新领取替换（用户 2026-10-11 确认
+            # 游戏允许重领替换）
             if _task_gone_last_round:
                 task_exists = False
                 suoyaowang = False
+                kuimulang = False
             else:
-                # 一次 OCR 同时判定任务存在与锁妖网文案（性能审计 B）
-                task_exists, suoyaowang = _track_state(win)
+                # 一次 OCR 同时判定任务存在与锁妖网/奎木狼文案（性能审计 B）
+                task_exists, suoyaowang, kuimulang = _track_state(win)
             xj_replace = _xj_need_replace
             _xj_need_replace = False  # 消费替换请求（本轮走领取分支）
-            need_replace = task_exists and (suoyaowang or xj_replace)
+            kuimulang_replace = kuimulang and not _kuimulang_on
+            need_replace = task_exists and (suoyaowang or kuimulang_replace or xj_replace)
             if task_exists and not need_replace:
                 # 续跑：非对话开打进入（契约：仅对话开打战斗结束才返程，
                 # 否则黄袍怪多杀第 2/3 杀遭遇战后会误返程——审计问题 4）
@@ -2247,8 +2286,23 @@ def run_loop(win, cycle_interval=1.0):
                 log("[五倍] 任务追踪中已有五倍任务，直接跟踪", "SYS")
             else:
                 if need_replace:
-                    log(f"[五倍] 任务为「{SUOYAOWANG_TRACK_TEXT}」，重新领取替换任务" if suoyaowang
-                        else "[五倍] 显形镜任务按钮点击失败，重新领取替换任务", "WARN")
+                    # 连续重领间隔（用户 2026-10-29）：距上次替换领取不足
+                    # REPLACE_INTERVAL 秒先补足等待——首次替换
+                    # （_last_replace_at=0）直接执行；替换后新任务仍是
+                    # 锁妖网/奎木狼时每轮间隔 6s，防连续快速重领
+                    if _last_replace_at:
+                        wait = _last_replace_at + REPLACE_INTERVAL - time.time()
+                        if wait > 0:
+                            log(f"[五倍] 距上次替换领取不足 {REPLACE_INTERVAL}s，"
+                                f"等待 {wait:.1f}s 后重新领取替换", "INFO")
+                            time.sleep(wait)
+                    if suoyaowang:
+                        log(f"[五倍] 任务为「{SUOYAOWANG_TRACK_TEXT}」，重新领取替换任务", "WARN")
+                    elif kuimulang_replace:
+                        log(f"[五倍] 任务为奎木狼任务（{KUIMULANG_TRACK_TEXT}，"
+                            f"领取奎木狼开关关闭），重新领取替换任务", "WARN")
+                    else:
+                        log("[五倍] 显形镜任务按钮点击失败，重新领取替换任务", "WARN")
                 if _task_gone_last_round:
                     _task_gone_last_round = False
                     log("[五倍] 上一轮已确认任务完成，跳过任务检查，直接领取", "INFO")
@@ -2338,6 +2392,10 @@ def run_loop(win, cycle_interval=1.0):
                     log(f"[五倍] {info}", "WARN")
                     time.sleep(cycle_interval)
                     continue
+                # 连续重领间隔起点（用户 2026-10-29）：替换领取成功记时刻，
+                # 下轮仍须替换时距此满 6s 才再次重领；普通领取重置
+                # （下一次替换重新视为首次、免等待）
+                _last_replace_at = time.time() if need_replace else 0.0
                 if need_replace and prev_sig is not None:
                     t2 = task_tracker.get_task(win, TASK_TITLE)
                     if t2 is not None and task_tracker.task_signature(t2) == prev_sig:

@@ -575,6 +575,22 @@ def save_wubei_wuyi_interval(value):
     return {"status": "success", "interval": value}
 
 
+# ---- 五倍是否领取奎木狼任务（UI 开关，KeyValue 持久化，默认开启；
+#      关闭时领取到奎木狼任务自动重新领取替换，逻辑同锁妖网） ----
+_WUBEI_KUIMULANG_KEY = "wubei_kuimulang"
+
+
+def load_wubei_kuimulang_switch():
+    """读取五倍领取奎木狼任务开关（首次默认开启）。"""
+    return bool(KeyValue.get(_WUBEI_KUIMULANG_KEY, True))
+
+
+def save_wubei_kuimulang_switch(on):
+    """保存五倍领取奎木狼任务开关，返回操作结果。"""
+    _kv_save(_WUBEI_KUIMULANG_KEY, bool(on))
+    return {"status": "success"}
+
+
 # ---- 战斗设置（人物/召唤兽默认战斗动作，UI 单选项，KeyValue 持久化） ----
 # 人物：技能面板 3 行 × 5 列共 15 格 + 攻击/防御/捕捉/逃跑/无
 CHAR_BATTLE_ACTIONS = ([f"技能{r}-{c}" for r in range(1, 4) for c in range(1, 6)]
@@ -686,6 +702,7 @@ class ControlWindow(WebWindow):
         self.expose(self.save_wubei_shout_switch)
         self.expose(self.save_wubei_auto_wuyi)
         self.expose(self.save_wubei_wuyi_interval)
+        self.expose(self.save_wubei_kuimulang_switch)
         self.expose(self.save_xiuluo_shout_switch)
         self.expose(self.save_debug_overlay)
         self.expose(self.save_auto_famen)
@@ -917,7 +934,8 @@ class ControlWindow(WebWindow):
                           "check_team": load_wubei_check_team(),
                           "shout": load_wubei_shout_switch(),
                           "auto_wuyi": load_wubei_auto_wuyi(),
-                          "wuyi_interval": load_wubei_wuyi_interval()},
+                          "wuyi_interval": load_wubei_wuyi_interval(),
+                          "kuimulang": load_wubei_kuimulang_switch()},
                 "xiuluo_shout": load_xiuluo_shout_switch(),
                 "auto_famen": load_auto_famen(),
                 "debug_overlay": load_debug_overlay(),
@@ -1017,6 +1035,10 @@ class ControlWindow(WebWindow):
     def save_wubei_wuyi_interval(self, value):
         """五倍设置变更：保存自动巫医间隔（轮）。"""
         return save_wubei_wuyi_interval(value)
+
+    def save_wubei_kuimulang_switch(self, on):
+        """五倍设置变更：保存领取奎木狼任务开关状态。"""
+        return save_wubei_kuimulang_switch(on)
 
     def save_xiuluo_shout_switch(self, on):
         """修罗设置变更：保存缺人自动喊话开关状态。"""

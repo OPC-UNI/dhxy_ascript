@@ -147,6 +147,9 @@
         }
         .switch-row input:checked + .switch-track { background: var(--accent-dim); }
         .switch-row input:checked + .switch-track::after { left: 22px; background: #fff; }
+        /* 禁用开关（如领取锁妖网任务）：整体变灰提示不可操作 */
+        .switch-row input:disabled + .switch-track { opacity: 0.5; }
+        .switch-row input:disabled + .switch-track + span { opacity: 0.6; }
         .th-btn {
             width: 22px; height: 22px; border-radius: 4px; border: 1px solid var(--border2);
             background: var(--panel2); color: var(--text); font-size: 14px; line-height: 1;
@@ -359,6 +362,16 @@
                         <button class="th-btn" onclick="wubeiWuyiInterval(1)">＋</button>
                     </div>
                 </div>
+                <label class="switch-row">
+                    <input type="checkbox" id="wubei-suoyaowang" disabled>
+                    <span class="switch-track"></span>
+                    <span>领取锁妖网任务（暂不可用，默认关闭）</span>
+                </label>
+                <label class="switch-row">
+                    <input type="checkbox" id="wubei-kuimulang">
+                    <span class="switch-track"></span>
+                    <span>领取奎木狼任务（默认开启；关闭时领取到奎木狼任务自动重新领取替换）</span>
+                </label>
             </div>
         </div>
         <!-- 通用设置：摄妖香开关 + 高性能 + 血量蓝量阈值 + 人物/召唤兽战斗动作 -->
@@ -555,9 +568,10 @@
                 <label class="switch-row">
                     <input type="checkbox" id="debug-overlay">
                     <span class="switch-track"></span>
-                    <span>游戏窗口悬浮显示任务信息（同时显示右侧吸附日志窗口）</span>
+                    <span>游戏窗口悬浮显示任务信息（同时显示右侧吸附日志窗口、展示下方验证/测试入口）</span>
                 </label>
             </div>
+            <div id="dev-tools" style="display:none">
             <div class="group-box">
                 <div class="group-title">修罗验证</div>
                 <div class="verify-row">
@@ -626,6 +640,7 @@
                 </div>
                 <div class="group-hint">读取游戏左上角当前地图名与坐标并打印日志（只读，不按键不点击），供标定点位/排查使用。任务运行中也可获取。</div>
             </div>
+            </div>
         </div>
     </div>
 
@@ -642,6 +657,7 @@
         const countBtns = document.querySelectorAll('.task-count .th-btn');
         const useSyx = document.getElementById('use-syx');
         const debugOverlay = document.getElementById('debug-overlay');
+        const devTools = document.getElementById('dev-tools');
         const xiuluoHezi = document.getElementById('xiuluo-hezi');
         const xiuluoCheckTeam = document.getElementById('xiuluo-check-team');
         const xiuluoAutoWuyi = document.getElementById('xiuluo-auto-wuyi');
@@ -655,6 +671,7 @@
         const wubeiShout = document.getElementById('wubei-shout');
         const wubeiAutoWuyi = document.getElementById('wubei-auto-wuyi');
         const wubeiWuyiIntervalEl = document.getElementById('wubei-wuyi-interval');
+        const wubeiKuimulang = document.getElementById('wubei-kuimulang');
         const xiuluoShout = document.getElementById('xiuluo-shout');
         const btnVerifyXiuluo = document.getElementById('btn-verify-xiuluo');
         const verifyResultEl = document.getElementById('verify-result');
@@ -1081,6 +1098,7 @@
             }
             useSyx.checked = !!info.use_sheyaoxiang;
             debugOverlay.checked = !!info.debug_overlay;
+            applyDevTools();  // 调试信息开关：控制下方验证/测试入口显隐
             xiuluoHezi.checked = !!info.xiuluo_hezi;
             xiuluoCheckTeam.checked = !!info.xiuluo_check_team;
             xiuluoAutoWuyi.checked = !!info.xiuluo_auto_wuyi;
@@ -1111,6 +1129,7 @@
             if (info.wubei && info.wubei.wuyi_interval) {
                 wubeiWuyiIntervalEl.innerText = info.wubei.wuyi_interval;
             }
+            wubeiKuimulang.checked = !!(info.wubei && info.wubei.kuimulang);
             xiuluoShout.checked = !!info.xiuluo_shout;
             const ths = info.thresholds || {};
             for (const key of ['char_hp', 'char_mp', 'beast_hp', 'beast_mp']) {
@@ -1232,8 +1251,13 @@
             callPython('save_use_sheyaoxiang', useSyx.checked);
         });
 
-        // 调试信息开关变更：立即保存（任务运行中切换后数秒生效）
+        // 调试信息开关变更：立即保存（任务运行中切换后数秒生效），
+        // 同时控制下方验证/测试入口显隐（默认关闭不展示）
+        function applyDevTools() {
+            devTools.style.display = debugOverlay.checked ? 'contents' : 'none';
+        }
         debugOverlay.addEventListener('change', () => {
+            applyDevTools();
             callPython('save_debug_overlay', debugOverlay.checked);
         });
 
@@ -1307,6 +1331,9 @@
         });
         wubeiAutoWuyi.addEventListener('change', () => {
             callPython('save_wubei_auto_wuyi', wubeiAutoWuyi.checked);
+        });
+        wubeiKuimulang.addEventListener('change', () => {
+            callPython('save_wubei_kuimulang_switch', wubeiKuimulang.checked);
         });
         xiuluoShout.addEventListener('change', () => {
             callPython('save_xiuluo_shout_switch', xiuluoShout.checked);
@@ -1627,6 +1654,7 @@
         // Python 侧调用：日志窗口被关闭时同步调试信息开关勾选（不触发保存回调）
         window.setDebugSwitch = function (on) {
             debugOverlay.checked = !!on;
+            applyDevTools();  // 验证/测试入口显隐随开关同步
         };
 
         // 解绑激活码：二次确认（同删除方案模式），清除本地缓存后重启生效
