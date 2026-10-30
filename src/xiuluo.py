@@ -1590,7 +1590,7 @@ def _monitor_team_and_fill(win):
         status, info = _check_team_with_retry(win)
         if status == "not_leader":
             if team.is_definitive_not_leader(info):
-                _keep_alive(info)  # 无限循环，用户手动停止
+                _keep_alive(win, info)  # 无限循环，用户手动停止
             # 瞬态失败（遮挡/加载/按钮未命中等）：不退出监控，按间隔
             # 持续重查——瞬时问题不应把队长永久降级
             interval = (TEAM_RECOG_RETRY_INTERVAL if "识别失败" in info
@@ -1613,12 +1613,17 @@ def _monitor_team_and_fill(win):
         time.sleep(interval)
 
 
-def _keep_alive(info):
+def _keep_alive(win, info):
     """非队长：核心流程不执行，保持任务运行（战斗线程自动操作）。
 
     用户手动停止时任务进程被回收，无需自行退出。
+    置位 battle.wuyi_fast_idle：队伍共享的巫医对话框由队长点 NPC 触发，
+    本进程不设 wuyi_expected_at——10s 空闲节奏会在队长走远关闭对话框
+    后才赶到、点击失效（2026-10-30 实测），空闲节奏提升到 2s（人物
+    静止，对话框区域差分门有效，OCR 成本可控）。
     """
     log(f"[修罗] {info}，跳过核心流程，仅保持战斗线程运行", "SYS")
+    battle.wuyi_fast_idle = True
     while True:
         time.sleep(1)
 
@@ -1721,7 +1726,7 @@ def run_loop(win, cycle_interval=1.0):
                         status, info = _check_team_with_retry(win)
                         if status == "not_leader" \
                                 and team.is_definitive_not_leader(info):
-                            _keep_alive(info)
+                            _keep_alive(win, info)
                         if status != "not_leader":
                             pre_status = status
                             break

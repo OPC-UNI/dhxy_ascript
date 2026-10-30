@@ -137,13 +137,13 @@ CLAIM_NEAR_BTN_GRACE = 3.0                         # 位置近但按钮不可见
 # 也会命中）。实现见 _wait_claim_entry。
 XIANGMOSHIWEI_SPOT = (86, 78)
 XIANGMOSHIWEI_TOLERANCE = 6
-WALK_ARRIVE_TOLERANCE = 2                          # 寻路到达判定容差（用户步 1.2，更严格：
+WALK_ARRIVE_TOLERANCE = 5                          # 寻路到达判定容差（用户步 1.2，更严格：
                                                    # 走动中识图点击容易点不到）
 WALK_TARGET_SPOT = (94, 84)                        # 小地图点击 (521,488) 寻路的实际落点（用户实测）：
                                                    # 旧判据用领取点 86,86 与真实落点差 8 单位
                                                    # 永不命中。走位到达的 lingqu 点击只在落点
                                                    # ±WALK_ARRIVE_TOLERANCE 内接受（规则 1）
-BAOXIANG_MAP_POS = (521, 488)                      # 宝象国小地图上领取点位置的点击点（窗口相对坐标，用户实测）
+BAOXIANG_MAP_POS = (517, 488)                      # 宝象国小地图上领取点位置的点击点（窗口相对坐标，用户实测）
 CLAIM_DIALOG_OPTION = "除魔卫国，义不容辞"           # 领取对话框绿色选项（游戏内原文，实测用字）
 FULL_TEAM_DIALOG_TEXT = "前途凶险，还是请阁下组满5人队伍再来吧！"  # 领取被拒：队伍人数不足
                                                                    # （游戏要求组满 5 人）
@@ -2072,12 +2072,17 @@ def _check_team_with_retry(win, tries=3):
     return last
 
 
-def _keep_alive(info):
+def _keep_alive(win, info):
     """非队长：核心流程不执行，保持任务运行（战斗线程自动操作）。
 
     用户手动停止时任务进程被回收，无需自行退出。
+    置位 battle.wuyi_fast_idle：队伍共享的巫医对话框由队长点 NPC 触发，
+    本进程不设 wuyi_expected_at——10s 空闲节奏会在队长走远关闭对话框
+    后才赶到、点击失效（2026-10-30 实测），空闲节奏提升到 2s（人物
+    静止，对话框区域差分门有效，OCR 成本可控）。
     """
     log(f"[五倍] {info}，跳过核心流程，仅保持战斗线程运行", "SYS")
+    battle.wuyi_fast_idle = True
     while True:
         time.sleep(1)
 
@@ -2127,7 +2132,7 @@ def _monitor_team_and_fill(win):
         status, info = _check_team_with_retry(win)
         if status == "not_leader":
             if team.is_definitive_not_leader(info):
-                _keep_alive(info)  # 无限循环，用户手动停止
+                _keep_alive(win, info)  # 无限循环，用户手动停止
             # 瞬态失败（遮挡/加载/按钮未命中等）：不退出监控，按间隔
             # 持续重查——瞬时问题不应把队长永久降级
             interval = (TEAM_RECOG_RETRY_INTERVAL if "识别失败" in info
@@ -2335,7 +2340,7 @@ def run_loop(win, cycle_interval=1.0):
                             status, info = _check_team_with_retry(win)
                             if status == "not_leader" \
                                     and team.is_definitive_not_leader(info):
-                                _keep_alive(info)
+                                _keep_alive(win, info)
                             if status != "not_leader":
                                 pre_status = status
                                 break

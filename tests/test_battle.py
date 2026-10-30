@@ -98,3 +98,15 @@ def test_wuyi_check_interval_idle():
         == battle.WUYI_IDLE_CHECK_INTERVAL
     assert battle._wuyi_check_interval(now, now - 20.0, now - 16.0) \
         == battle.WUYI_IDLE_CHECK_INTERVAL
+
+
+def test_wuyi_check_interval_fast_idle():
+    """非队长保持模式（wuyi_fast_idle）→ 空闲节奏提升到 2s。"""
+    old = battle.wuyi_fast_idle
+    battle.wuyi_fast_idle = True
+    try:
+        now = 100.0
+        assert battle._wuyi_check_interval(now, now - 20.0, 0.0) \
+            == battle.WUYI_CHECK_INTERVAL
+    finally:
+        battle.wuyi_fast_idle = old
