@@ -602,7 +602,11 @@
                     <button id="btn-verify-wubei-wuyi" class="btn" onclick="verifyWubeiWuyi()">验证五倍巫医</button>
                     <span id="wubei-wuyi-verify-result"></span>
                 </div>
-                <div class="group-hint">与实际流程一致、时序无额外延时，且不改变任务状态：领取=走位到宝象国领取点 → 点击领取入口（领取任务按钮/降魔侍卫）打开对话框 → 选项「除魔卫国，义不容辞」仅定位不点击 → 点拒绝选项「事态严重，我等退散」关闭对话框；回程=定位回城符不点击（回城符模板待提供，缺失时报模板未提供）；巫医=走位到巫医 NPC、定位后点击打开对话框（医治选项由验证流程自行点击，与任务进程中战斗线程点击行为等效）。任务运行中不可验证。</div>
+                <div class="verify-row">
+                    <button id="btn-verify-wubei-xj" class="btn" onclick="verifyWubeiXj()">测试白龙马模板</button>
+                    <span id="wubei-xj-verify-result"></span>
+                </div>
+                <div class="group-hint">与实际流程一致、时序无额外延时，且不改变任务状态：领取=走位到宝象国领取点 → 点击领取入口（领取任务按钮/降魔侍卫）打开对话框 → 选项「除魔卫国，义不容辞」仅定位不点击 → 点拒绝选项「事态严重，我等退散」关闭对话框；回程=定位回城符不点击（回城符模板待提供，缺失时报模板未提供）；巫医=走位到巫医 NPC、定位后点击打开对话框（医治选项由验证流程自行点击，与任务进程中战斗线程点击行为等效）；白龙马模板=按任务流程实际点击候选（找全部候选→逐一真实点击→误点对话框自动关闭→开打对话出现即停止并停留，请手动关闭对话框）。任务运行中不可验证。</div>
             </div>
             <div class="group-box">
                 <div class="group-title">清屏验证</div>
@@ -685,6 +689,8 @@
         const wubeiReturnVerifyResultEl = document.getElementById('wubei-return-verify-result');
         const btnVerifyWubeiWuyi = document.getElementById('btn-verify-wubei-wuyi');
         const wubeiWuyiVerifyResultEl = document.getElementById('wubei-wuyi-verify-result');
+        const btnVerifyWubeiXj = document.getElementById('btn-verify-wubei-xj');
+        const wubeiXjVerifyResultEl = document.getElementById('wubei-xj-verify-result');
         const btnVerifyClearScreen = document.getElementById('btn-verify-clear-screen');
         const clearScreenVerifyResultEl = document.getElementById('clear-screen-verify-result');
         const btnVerifyShout = document.getElementById('btn-verify-shout');
@@ -1611,6 +1617,38 @@
             btnVerifyJiguan.disabled = false;
             jiguanVerifyResultEl.style.color = ok ? 'var(--accent)' : '#ff5f5f';
             jiguanVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+        };
+
+        // 白龙马模板测试：与机关模板测试同模式，结果经 onWubeiXjVerifyResult 异步回推
+        async function verifyWubeiXj() {
+            if (verifying) return;
+            verifying = true;
+            btnVerifyWubeiXj.disabled = true;
+            wubeiXjVerifyResultEl.style.color = 'var(--text)';
+            wubeiXjVerifyResultEl.innerText = '测试中...';
+            try {
+                const r = await callPython('verify_wubei_xj');
+                if (!r || r.status !== 'success') {
+                    wubeiXjVerifyResultEl.style.color = '#ff5f5f';
+                    wubeiXjVerifyResultEl.innerText = (r && r.msg) || '测试请求失败';
+                    verifying = false;
+                    btnVerifyWubeiXj.disabled = false;
+                }
+                // 成功：等待 Python 侧 onWubeiXjVerifyResult 回推最终结果
+            } catch (e) {
+                wubeiXjVerifyResultEl.style.color = '#ff5f5f';
+                wubeiXjVerifyResultEl.innerText = '测试请求异常';
+                verifying = false;
+                btnVerifyWubeiXj.disabled = false;
+            }
+        }
+
+        // Python 侧调用：白龙马模板测试结束回推结果
+        window.onWubeiXjVerifyResult = function (ok, info) {
+            verifying = false;
+            btnVerifyWubeiXj.disabled = false;
+            wubeiXjVerifyResultEl.style.color = ok ? 'var(--accent)' : '#ff5f5f';
+            wubeiXjVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
         };
 
         async function verifyPosition() {

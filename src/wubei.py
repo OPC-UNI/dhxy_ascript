@@ -201,10 +201,12 @@ XIANXINGJING_MOVE_STUCK_MAX = 4       # 点寻路链接后位置连续不变轮�
                                       # 第二个链接致两侧点击可能同点，翻侧自愈）
 XIANXINGJING_LINK_PITCH = 66          # A/B 两链接横向中心间距（实测 x 60-108 与 126-174）
 XIANXINGJING_LINK_SPLIT_X = 110       # A/B 链接簇分界 x（簇中心 <110 为 A，≥110 为 B）
-XIANXINGJING_QUOTA_STUCK_TIMEOUT = 30  # A、B 两处均失败后的卡死超时（秒）：
-                                      # 配额耗尽后原逻辑仅告警一次静默空转，
-                                      # 每 5 分钟白走一轮永不完成——超时后
-                                      # 抛 ReplaceTaskError 重新领取替换任务
+XIANXINGJING_QUOTA_STUCK_TIMEOUT = 6   # A、B 两处均失败后的卡死超时（秒）：
+                                      # 等待无法完成任务（用户 2026-10-30：
+                                      # 30s 没必要），6s 后抛 ReplaceTaskError
+                                      # 重新领取替换任务——与「命中对话框后
+                                      # 找不到模板 6s 替换」同档语义；对话框
+                                      # 出现会取消计时（见 _handle_xianxingjing）
 # A→B 回退状态机（A 失败后追踪签名不变，follow 不会重点链接——
 # 本状态机按到达/用镜/宽限推进；关键词连续消失或新领取时重置。
 # 注意：不能按签名文本变化复位——OCR 噪声（「前」读成「剪」、「显」
@@ -235,11 +237,33 @@ _xj_dismissed_at = 0.0       # 对话框关闭时间（此后窗口内找模板�
 XIANXINGJING_BTN_WAIT = 5.0        # 点模板后等对话出现的判定窗（秒）
 XIANXINGJING_BTN_MISS_MAX = 6      # 对话框关闭后连续无模板轮询数（约 6s）→ 失败替换
 XIANXINGJING_BTN_THRESHOLD = 0.8   # 白龙马任务按钮模板匹配阈值（与原默认一致）
+# 白龙马任务按钮误点对话框（用户 2026-10-30）：候选点错会弹出阻塞
+# 对话框，须关闭后才能点下一候选——否则点击落在对话框上、模板点击
+# 永不生效（全部候选"失败"误替换）。文案均为游戏内原文。
+XJ_GZC_DIALOG_TEXT = "少侠耳聪目慧，何不去孤竹城听听佛法"
+XJ_GZC_OPTION = "我是路过"
+XJ_YIXIANG_DIALOG_TEXT = "不知何时矗立于此，其内异象迭生，诡谲难测"
+XJ_YIXIANG_OPTION = "离开"
+# 误点对话框表：(对话框文案, 关闭选项, 日志标签)——选项为 None 时
+# 对话框无选项、点屏幕中间关闭；有选项的须点选项关闭（用户 2026-10-30
+# 追加：冰刃/喜忧/红孩儿无选项点屏幕中间，无本买卖点「偶然路过」）
+XJ_BLOCK_DIALOGS = (
+    (XJ_GZC_DIALOG_TEXT, XJ_GZC_OPTION, "孤竹城佛法"),
+    (XJ_YIXIANG_DIALOG_TEXT, XJ_YIXIANG_OPTION, "异象迭生"),
+    ("妄想拆散我与我浑家之人，且问过我手中冰刃再说", None, "冰刃"),
+    ("这是喜还是忧，我也说不准了", None, "喜忧"),
+    ("我是红孩儿，不是哪吒", None, "红孩儿"),
+    ("我爹是平天大圣牛魔王，我不坑爹", None, "红孩儿"),
+    ("无本的买卖最好做", "偶然路过", "无本买卖"),
+)
+XJ_BLOCK_CLOSE_WAIT = 1.5   # 误点对话框选项点击后的关闭等待（秒）：关闭动画期
+                            # 不点下一候选（点击会被对话框吞掉）
 _xj_btn_clicked_at = 0.0    # 模板点击时间（判定窗起点）
 _xj_btn_missing = 0         # 对话框关闭后连续无模板轮询数
 _xj_btn_candidates = []     # 当前对话框的模板候选（同屏多处相似图案，逐一尝试）
 _xj_btn_idx = 0             # 当前已点击的候选序号
 _xj_need_replace = False    # 按钮失败：请求重新领取替换任务（run_loop 轮次开始消费）
+_xj_block_clicked_at = 0.0  # 误点对话框选项点击时间（关闭等待/防连点）
 # ---- extras 链帧复用（性能审计 A：违反规则 1「每轮询只截一帧」）----
 # follow 每轮询调 extras 链一次，链内各处理器原各自截窗（显形镜模板窗
 # ~170ms、phase0 位置 OCR ~150-200ms，均 2Hz）——同轮询共享一帧。
@@ -294,7 +318,7 @@ def _reset_xianxingjing_state():
         _xj_move_stuck, _xj_walk_side, \
         _xj_dialog_clicked_at, _xj_dismissed_at, _xj_quota_exhausted_at
     global _xj_btn_clicked_at, _xj_btn_missing, _xj_btn_candidates, _xj_btn_idx, \
-        _xj_need_replace
+        _xj_need_replace, _xj_block_clicked_at
     _xj_phase = 0
     _xj_stable = 0
     _xj_last_pos = None
@@ -314,6 +338,7 @@ def _reset_xianxingjing_state():
     _xj_btn_candidates = []
     _xj_btn_idx = 0
     _xj_need_replace = False
+    _xj_block_clicked_at = 0.0
 
 # ---- 领取前队伍检查（检查队伍开关开启时；队伍固定 5 人） ----
 TEAM_CHECK_RETRY_INTERVAL = 10  # 缺人且无申请人可补时的重查间隔（秒）
@@ -602,6 +627,83 @@ def verify_wuyi_flow(win):
     """
     return _run_wuyi_chain(win, hover_before_click=True, report_condition=True,
                            click_option_self=True)
+
+
+def verify_xj_flow(win):
+    """高级设置-测试白龙马模板按钮：按任务流程实际点击候选模板。
+
+    与任务流程同算法同阈值找全部候选 → 逐一真实点击（判定窗检测
+    开打对话=正确候选即停止；误点阻塞对话框按 XJ_BLOCK_DIALOGS
+    点选项/屏幕中间关闭后继续下一候选）。真实点击、会打开/关闭
+    游戏对话框；开打对话出现后停留不点击开打选项（点击即进入
+    战斗），由用户确认后手动关闭。返回 (是否成功, 描述)。
+    """
+    if is_in_battle(win):
+        return False, "战斗中，请退出战斗后再测试"
+    img = win.capture(force_activate=False)
+    if img is None:
+        log("[五倍][验证] 测试白龙马模板: 截图失败", "WARN")
+        return False, "截图失败"
+    frame = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
+    pts = game_map.match_frame_all(frame, XIANXINGJING_TASK_ICON,
+                                   threshold=XIANXINGJING_BTN_THRESHOLD)
+    if not pts:
+        log(f"[五倍][验证] 测试白龙马模板: 无命中（阈值 "
+            f"{XIANXINGJING_BTN_THRESHOLD} 以上 0 处候选）", "WARN")
+        return True, f"0 处候选命中（阈值 {XIANXINGJING_BTN_THRESHOLD}）"
+    log(f"[五倍][验证] 测试白龙马模板: 共 {len(pts)} 处候选，按任务顺序实际点击验证", "SYS")
+    for i, (score, x, y) in enumerate(pts, 1):
+        log(f"[五倍][验证] 候选{i}: 匹配度 {score:.2f} @({x},{y})", "SYS")
+    for i, (score, x, y) in enumerate(pts, 1):
+        human_click(win, x, y)
+        move_away(win)
+        log(f"[五倍][验证] 已点击候选 {i}/{len(pts)} @({x},{y})，等待对话判定", "SYS")
+        # 判定窗（与任务流程同款常量）：开打对话=正确候选即停止；
+        # 误点阻塞对话框=关闭后直接下一候选
+        deadline = time.time() + XIANXINGJING_BTN_WAIT
+        block_clicked_at = 0.0
+        while time.time() < deadline:
+            img2 = win.capture(force_activate=False)
+            if img2 is None:
+                time.sleep(0.5)
+                continue
+            items, img_np = game_map.ocr_regions(
+                img2, (task_tracker.DIALOG_REGION,))
+            if _xj_fight_dialog_open(items):
+                log(f"[五倍][验证] 候选 {i} 正确：开打对话已打开"
+                    f"（停留不点击开打选项，请手动关闭对话框）", "SYS")
+                return True, f"候选 {i}/{len(pts)} 正确，开打对话已打开（请手动关闭对话框）"
+            block = None
+            for text, opt, label in XJ_BLOCK_DIALOGS:
+                if _dialog_text_present(items, text):
+                    block = (opt, label)
+                    break
+            if block is not None:
+                opt, label = block
+                if time.time() - block_clicked_at >= 1.0:  # 防连点冷却
+                    if opt is None:
+                        _click_screen_center(win, times=1, prefix="五倍")
+                        log(f"[五倍][验证] 候选点中「{label}」对话框（无选项），"
+                            f"已点屏幕中间关闭", "WARN")
+                        block_clicked_at = time.time()
+                    else:
+                        pt2, _ = _find_xj_block_option(items, img_np, opt)
+                        if pt2 is not None:
+                            human_click(win, pt2[0], pt2[1])
+                            log(f"[五倍][验证] 候选点中「{label}」对话框，"
+                                f"已点击选项「{opt}」关闭", "WARN")
+                            block_clicked_at = time.time()
+                deadline = time.time() + XIANXINGJING_BTN_WAIT  # 顺延：处理阻塞对话框不超时
+                time.sleep(0.5)
+                continue
+            if block_clicked_at:
+                if time.time() - block_clicked_at < XJ_BLOCK_CLOSE_WAIT:
+                    time.sleep(0.5)
+                    continue  # 关闭动画期：等对话框消失
+                break  # 已关闭：该候选已证伪，直接下一候选
+            time.sleep(0.5)
+        log(f"[五倍][验证] 候选 {i} 未触发开打对话，继续下一候选", "WARN")
+    return False, f"{len(pts)} 处候选全部点击后未出现开打对话"
 
 
 def _track_has_suoyaowang(items):
@@ -1467,6 +1569,19 @@ def _fail_xj_replace(reason):
     raise ReplaceTaskError(f"显形镜任务异常（{reason}）")
 
 
+def _find_xj_block_option(items, img_np, option):
+    """误点对话框选项定位：去标点精确子串 + 绿字行 + 对话框区域
+    （与 _find_fight_option 同款判定），返回 (点击坐标, 文案) 或 (None, None)。"""
+    needle = norm_text(option)
+    for txt, rect, score in items:
+        if score >= 0.55 and needle in norm_text(txt) \
+                and rect[0] >= task_tracker.PANEL_MAX_X \
+                and task_tracker.is_green_text(img_np, rect):
+            return green_option_center(img_np, rect, len(needle),
+                                       len(norm_text(txt))), txt
+    return None, None
+
+
 def _handle_xianxingjing(win, items, img_np):
     """显形镜查探：白龙马对话框出现时先点屏幕中间关闭遮挡文字
     （对话框文字挡住任务按钮模板），随后窗口内识别点击模板开始对话；
@@ -1475,13 +1590,19 @@ def _handle_xianxingjing(win, items, img_np):
 
     模板同屏可能多处相似图案（实测 2026-10-21）：取全部候选逐一
     点击，以开打对话出现判定生效；候选全部点完仍无对话才失败。
+    候选误点阻塞对话框（用户 2026-10-30，表见 XJ_BLOCK_DIALOGS）：
+    有选项的点对应选项（我是路过/离开/偶然路过）、无选项的点屏幕
+    中间（冰刃/喜忧/红孩儿）关闭后继续点下一候选——关闭前不点候选
+    （点击会被对话框吞掉）。
 
     失败处理（用户 2026-10-17 决策）：使用显形镜后命中文案但模板
     未命中（模板被遮挡不出现/点地点击走远后点击无效）不再走回重试，
     一律抛 ReplaceTaskError 重新领取替换任务。返回是否已处理。
     """
     global _xj_dialog_clicked_at, _xj_dismissed_at
-    global _xj_btn_clicked_at, _xj_btn_missing, _xj_btn_candidates, _xj_btn_idx
+    global _xj_btn_clicked_at, _xj_btn_missing, _xj_btn_candidates, _xj_btn_idx, \
+        _xj_block_clicked_at
+    global _xj_warned, _xj_quota_exhausted_at
     now = time.time()
     if battle_watch_in_battle():
         _xj_btn_clicked_at = 0.0  # 战斗中：判定窗冻结，战斗流程接管
@@ -1489,7 +1610,11 @@ def _handle_xianxingjing(win, items, img_np):
     if _dialog_text_present(items, XIANXINGJING_DIALOG_TEXT):
         # 白龙马对话框：点屏幕中间关闭遮挡文字（3s 冷却防连点；
         # 点地点击可能让人物走动——走远后模板点击无效，由失败
-        # 替换路径兜底）
+        # 替换路径兜底）。对话框出现即任务在推进：取消卡死超时
+        # 计时（实测 2026-10-30 12:42 对话框晚于配额告警 29s 出现、
+        # 30s 卡死超时在按钮点击后 1s 误替换任务）
+        _xj_quota_exhausted_at = 0.0
+        _xj_warned = False
         if now - _xj_dialog_clicked_at >= 3.0:
             _xj_dialog_clicked_at = now
             _click_screen_center(win, times=1, prefix="五倍")
@@ -1499,17 +1624,55 @@ def _handle_xianxingjing(win, items, img_np):
     # 判定窗：刚点过模板，等对话打开（开打选项出现即点击生效）
     if _xj_btn_clicked_at:
         if _xj_fight_dialog_open(items):
+            # 规则 1：开打对话已打开（证明实力等）——正确点击，按钮流程结束
             _xj_btn_clicked_at = 0.0  # 对话已打开：按钮流程结束
             _xj_btn_missing = 0
             _xj_btn_candidates = []
             _xj_btn_idx = 0
+            _xj_block_clicked_at = 0.0  # 误点对话框状态一并复位
             return False
-        if now - _xj_btn_clicked_at < XIANXINGJING_BTN_WAIT:
+        # 误点阻塞对话框（规则 2/3，用户 2026-10-30）：候选点错弹出
+        # 阻塞对话框——有选项的点选项关闭、无选项的点屏幕中间关闭，
+        # 关闭后才能点下一候选，否则点击落在对话框上、模板点击永不
+        # 生效（全部候选"失败"误替换）。判定窗顺延：处理阻塞对话框
+        # 期间不超时。
+        block = None
+        for text, opt, label in XJ_BLOCK_DIALOGS:
+            if _dialog_text_present(items, text):
+                block = (opt, label)
+                break
+        if block is not None:
+            opt, label = block
+            if now - _xj_block_clicked_at >= 1.0:  # 防连点冷却
+                if opt is None:
+                    # 无选项对话框：点屏幕中间关闭（用户 2026-10-30）
+                    _click_screen_center(win, times=1, prefix="五倍")
+                    _xj_block_clicked_at = now
+                    log(f"[五倍] 显形镜：候选点中「{label}」对话框（无选项），"
+                        f"已点屏幕中间关闭", "WARN")
+                else:
+                    pt, _ = _find_xj_block_option(items, img_np, opt)
+                    if pt is not None:
+                        human_click(win, pt[0], pt[1])
+                        _xj_block_clicked_at = now
+                        log(f"[五倍] 显形镜：候选点中「{label}」对话框，"
+                            f"已点击选项「{opt}」关闭", "WARN")
+            _xj_btn_clicked_at = now  # 判定窗顺延：对话框处理期间不超时
+            return True
+        if _xj_block_clicked_at:
+            # 选项已点：等对话框关闭动画结束再点下一候选
+            # （关闭前点击会被对话框吞掉）
+            if now - _xj_block_clicked_at < XJ_BLOCK_CLOSE_WAIT:
+                _xj_btn_clicked_at = now  # 判定窗顺延
+                return False
+            _xj_block_clicked_at = 0.0  # 关闭确认：该候选已证伪，直接进下一候选
+        elif now - _xj_btn_clicked_at < XIANXINGJING_BTN_WAIT:
             return False  # 窗内静默等待
-        # 判定窗超时：还有候选模板则点下一个（同屏多处相似图案，
-        # 点错不出现对话），候选全部点完仍无对话才失败替换。
-        # 不消费 btn_clicked_at：确认轮询守卫会吞 extras 异常（既有
-        # 契约），状态保留则下一轮询重抛，最终在正常轮询路径传播
+        # 判定窗超时或误点对话框已关闭：还有候选模板则点下一个
+        # （同屏多处相似图案，点错不出现对话），候选全部点完仍无
+        # 对话才失败替换。不消费 btn_clicked_at：确认轮询守卫会吞
+        # extras 异常（既有契约），状态保留则下一轮询重抛，最终在
+        # 正常轮询路径传播
         if _xj_btn_candidates and _xj_btn_idx + 1 < len(_xj_btn_candidates):
             _xj_btn_idx += 1
             _, cx, cy = _xj_btn_candidates[_xj_btn_idx]

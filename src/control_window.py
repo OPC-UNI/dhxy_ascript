@@ -715,6 +715,7 @@ class ControlWindow(WebWindow):
         self.expose(self.verify_wubei_claim)
         self.expose(self.verify_wubei_return)
         self.expose(self.verify_wubei_wuyi)
+        self.expose(self.verify_wubei_xj)
         self.expose(self.verify_clear_screen)
         self.expose(self.verify_shout)
         self.expose(self.verify_jiguan)
@@ -1268,6 +1269,52 @@ class ControlWindow(WebWindow):
                 ok_js = "true" if ok else "false"
                 self.webview_instance.evaluate_js(
                     f"if(window.onWubeiWuyiVerifyResult){{window.onWubeiWuyiVerifyResult({ok_js}, {json.dumps(info)});}}")
+            except Exception:
+                pass
+
+    def verify_wubei_xj(self):
+        """高级设置-测试白龙马模板按钮：按任务流程实际点击候选模板
+        （与任务流程同算法同阈值找候选 → 逐一真实点击 → 误点对话框
+        关闭后继续 → 开打对话出现即停止）。真实点击会打开/关闭游戏
+        对话框；开打对话出现后停留不点开打选项（点击即进入战斗）。
+        任务运行中不可验证（点击与任务流程冲突）。"""
+        if self._tm.is_running():
+            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if self._verifying:
+            return {"status": "error", "msg": "验证进行中，请稍候"}
+        win = game.find_main_window()
+        if win is None:
+            return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
+        if not _game_window_clickable(win):
+            return {"status": "error", "msg": "游戏窗口被其他窗口遮挡，请将游戏窗口置于前台后再验证"}
+        self._verifying = True
+        threading.Thread(target=self._run_wubei_xj_verify, args=(win,),
+                         daemon=True, name="wubei-xj-verify").start()
+        return {"status": "success",
+                "msg": "验证已开始：按任务流程实际点击白龙马模板候选，结果见日志"}
+
+    def _run_wubei_xj_verify(self, win):
+        """白龙马模板测试线程体：实际点击候选模板（与任务流程一致），结果回推页面与日志窗。"""
+        from . import wubei  # 延迟导入：与其余验证模块保持一致
+        try:
+            self.add_logs(["[验证] 开始测试白龙马模板（按任务流程实际点击候选）..."])
+            ok, info = wubei.verify_xj_flow(win)
+        except Exception as e:
+            ok, info = False, f"验证异常: {e}"
+        try:
+            self.add_logs([f"[验证] 结果: {info}"])
+        except Exception:
+            pass
+        self._notify_wubei_xj_verify_result(ok, info)
+        self._verifying = False
+
+    def _notify_wubei_xj_verify_result(self, ok, info):
+        """白龙马模板测试结果回推页面（高级设置-五倍验证行的结果文案）。"""
+        if self.webview_instance:
+            try:
+                ok_js = "true" if ok else "false"
+                self.webview_instance.evaluate_js(
+                    f"if(window.onWubeiXjVerifyResult){{window.onWubeiXjVerifyResult({ok_js}, {json.dumps(info)});}}")
             except Exception:
                 pass
 

@@ -518,6 +518,13 @@ if __name__ == '__main__':
     control_win = ControlWindow(tm, license_info=license_info)  # 构造内已接线 tm 的状态/日志回调
     control_win.prepare()            # 创建唯一窗口（uid='master'）
 
+    # OCR 引擎预热（主进程，后台线程）：高级设置的验证/测试按钮在主进程
+    # 跑 OCR，首次调用冷启动加载 det/cls/rec 模型实测阻塞约 30s
+    # （2026-10-30 白龙马模板验证：点候选后第一次 OCR 卡 30s 才检测到
+    # 对话框）。任务子进程另有 task_start 内预热；此处覆盖主进程。
+    threading.Thread(target=game_map.warmup_ocr,
+                     daemon=True, name="ocr-warmup").start()
+
     # 托盘：显示/隐藏控制窗口 + 彻底退出（Runtime.stop 触发退出清理）
     threading.Thread(target=_setup_tray,
                      args=(R.img("logo.ico"), control_win),
