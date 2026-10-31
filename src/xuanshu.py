@@ -1048,7 +1048,7 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 extra_dialog_handler=None, green_order=None, progress_key=None,
                 green_picker=None, fallback_keywords=None, first_items=None,
                 signature_key=None, ignore_empty_key=False, skip_texts=None,
-                pre_click_handler=None):
+                pre_click_handler=None, require_coord=False):
     """循环跟踪任务直到完成（prefix 供其他任务复用，如五环）。
 
     每轮：点击任务当前第一个绿色文案 → 等待任务信息变化（内容更新）
@@ -1082,10 +1082,15 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
     signature_key：任务文本签名回调 (items, img_np) → str，替代默认的
     标题+首行签名参与相似度比较（五环链接行被 OCR 拆成链接/计数两个
     碎片行且输出顺序抖动，默认签名反复翻转导致重复点击；五环改用
-    行序无关的排序拼接签名）。
+    行序无关的排序拼接签名）。回调返回空串表示「标题在但链接行内容
+    不可读」：本轮不点击、不作变化信号，等待下一轮复读（五环过渡帧，
+    2026-10-31）。
     ignore_empty_key：进度键为空时不作为变化信号（五环到达 NPC 时
     链接变暗、亮绿关键词集合为空再回弹，属过渡帧抖动；客栈的「」
     是合法终态，默认不启用）。
+    require_coord：透传 track_task——点击目标行须含地图坐标，坐标行
+    未检出时重试而非行级兜底点击（五环子目标行/剩余时间行不可点，
+    2026-10-31）。
     返回 (是否完成, 描述)。
     """
     deadline = time.time() + timeout
@@ -1097,6 +1102,7 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
     last_clicked_sig = None
     progressed = False
     last_items = None
+    empty_sig_streak = 0  # 连续空签名次数（外循环退避节奏用）
 
     def _sig_of(items, img_np, task):
         """当前帧的任务文本签名（signature_key 优先，默认标题+首行）。"""
@@ -1145,6 +1151,18 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
             continue  # 瞬时漏读：任务仍在，继续跟踪
         task_seen = True
         sig = _sig_of(items, img_np, task)
+        if not sig:
+            # 标题在但链接行未检出（signature_key 返回空串，如五环链接行
+            # 被区域 OCR 漏读/拆碎的过渡帧）：不点击也不作变化信号；对话
+            # 处理照常（等待期间可能弹出任务对话，不处理会卡到超时）。
+            # 连续空签名逐步退避至 1.5s：外循环每轮全区域 OCR（约 1.2s），
+            # 不退避会以 2Hz 空烧 CPU
+            empty_sig_streak += 1
+            if extra_dialog_handler is not None:
+                extra_dialog_handler(win, items, img_np)
+            time.sleep(min(1.5, FOLLOW_POLL_INTERVAL * empty_sig_streak))
+            continue
+        empty_sig_streak = 0
         if last_clicked_sig is not None and _signatures_similar(sig, last_clicked_sig) \
                 and not progressed:
             # 任务信息未真实变化（OCR 噪声抖动）→ 不重复点击，继续等待
@@ -1167,7 +1185,8 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
         ok, info = task_tracker.track_task(win, title, green_order=green_order,
                                            green_picker=green_picker,
                                            fallback_keywords=fallback_keywords,
-                                           pre_items=(items, img_np))
+                                           pre_items=(items, img_np),
+                                           require_coord=require_coord)
         if not ok:
             return False, info
         last_clicked_sig = sig
@@ -1237,6 +1256,9 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                     changed_once = False  # 面板瞬时不可读：回退正常轮询
                     continue
                 sig2 = _sig_of(items, img_np, task2)
+                if not sig2:
+                    changed_once = False  # 链接行未检出：不作变化信号，回正常轮询
+                    continue
                 text_changed = not _signatures_similar(sig2, sig)
                 key = progress_key(items, img_np) if progress_key is not None else None
                 # baseline_key 为 None（阶段外基线）时不得参与比较：None 是
@@ -1337,6 +1359,9 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 continue
             task_seen = True
             sig2 = _sig_of(items, img_np, task2)
+            if not sig2:
+                changed_once = False  # 链接行未检出：不作变化信号（过渡帧）
+                continue
             text_changed = not _signatures_similar(sig2, sig)
             key = None
             key_changed = False
@@ -1392,7 +1417,8 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 ok3, info3 = task_tracker.track_task(win, title, green_order=green_order,
                                                      green_picker=green_picker,
                                                      fallback_keywords=fallback_keywords,
-                                                     pre_items=(items, img_np))
+                                                     pre_items=(items, img_np),
+                                                     require_coord=require_coord)
                 if ok3:
                     log(f"[{prefix}] 检测到「你输了/平局」对话，继续点击任务绿字推进", "SYS")
                     handled = True

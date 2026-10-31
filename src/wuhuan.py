@@ -45,6 +45,18 @@ WUHUAN_SUB_KEYWORDS = ["替身", "武痴", "惯骗","盗号贼", "食婴鬼"]
 # 签名污染行判定（_wuhuan_text_key 用）：去标点后纯数字的行
 # （计数碎片「1/51」→151、无标签倒计时「00:59:16」→005916）
 _DIGITS_ONLY_RE = re.compile(r"^\d+$")
+# 链接行标记：五环追踪链接行恒为「去找{地图}(x, y){子目标}」格式；
+# 「去我」为「去找」的常见 OCR 误读
+_LINK_MARK_RE = re.compile(r"去找|去我|前往")
+# 链接行剥离项（签名归一用）：回合计数 [3/5]（碎片行拆分抖动，剥离后
+# 签名稳定，真实计数变化由进度键/坐标变化检出）、坐标括号段（含右括号
+# 丢失变体）、残留括号、括号丢失时的坐标数字（「1347情缘」，2026-10-31
+# 实测区域 OCR 把 (13，47) 读成 1347 混入文案）
+_LINK_STRIP_RE = re.compile(
+    r"[\[［【]\s*\d+\s*/\s*\d+\s*[\]］】]?"
+    r"|[\(（][^\)）]*[\)）]?"
+    r"|[\(（\)）\[\]［］【】]"
+    r"|\d{2,}")
 
 # ---- 长安与服装店（用户实测坐标/模板） ----
 # 长安城世界地图图标见 map.py 的 WORLD_MAP_CHANGAN_ICON（城市图标统一在 map.py 维护）
@@ -574,32 +586,114 @@ def _wuhuan_progress_key(items, img_np):
     return "|".join(sorted(found))
 
 
-def _wuhuan_text_key(items, img_np):
-    """五环文本签名键：标题 + 内容行排序拼接（行序无关、污染行过滤）。
+def _merge_same_line(rows):
+    """同行碎片合并：同一视觉行的碎片纵向高度重叠 ≥60%（行距约 18px 的
+    相邻行达不到），返回 [(merged_rect, [(rect, txt), ...]), ...]。
 
-    链接行「去找…惯骗[4/5]」被 OCR 拆成链接/计数两个碎片行，碎片行的
-    输出顺序与纵向坐标都会抖动（实测交替翻转导致默认签名反复翻转、
-    重复点击）；排序拼接后行序无关。倒计时行（「剩余时间 00:59:16」，
-    逐秒变化）与计数碎片/纯数字行（「1/51」「151」「005916」，随机
-    出现消失）不参与签名——日志 19:10:10 签名混入「剩余时间005916」
-    与「151」导致误判变化、重复点击。计数变化（3/5→4/5）与坐标、单字
-    误读经相似度比较（0.8）过滤，子目标切换（关键词变化）由进度键
-    检测，两者互不干扰。
+    碎片再拆分也不改变合并结果——链接行「去找大雁塔二层(13，47)情缘」
+    被区域 OCR 拆成「去找大雁塔二」+「情缘」或整段漏检都不影响定位。
+    """
+    rows.sort(key=lambda r: r[0][1])
+    merged = []  # [(merged_rect, [(rect, txt), ...])]
+    for rect, txt in rows:
+        for mrect, mparts in merged:
+            if min(rect[3], mrect[3]) - max(rect[1], mrect[1]) \
+                    >= 0.6 * min(rect[3] - rect[1], mrect[3] - mrect[1]):
+                mrect[0] = min(mrect[0], rect[0])
+                mrect[2] = max(mrect[2], rect[2])
+                mrect[1] = min(mrect[1], rect[1])
+                mrect[3] = max(mrect[3], rect[3])
+                mparts.append((rect, txt))
+                break
+        else:
+            merged.append([list(rect), [(rect, txt)]])
+    return merged
+
+
+def _wuhuan_link_picker(items, img_np):
+    """五环绿字精确定位回调（track_task 的 green_picker）。
+
+    链接行「去找大雁塔二层(13，47)情缘」较长，区域 OCR 每次读取的拆分
+    方式不同（实测拆成「去找大雁塔二」+「情缘」、坐标读成 1347 混入文案
+    或整段漏检），行级选择在碎片间漂移——点中描述文字 (108,264) 或
+    子目标行/剩余时间行 (63~69,285)（2026-10-31）。本回调把锚点下方
+    面板行按同行合并，选最靠上且含链接标记（去找/去我/前往或地图坐标）
+    的合并行点击：下划线检测在合并框内命中行尾链接下划线。
+    无链接标记行时返回 PICK_FAIL：track_task 等待重试，绝不做行级兜底
+    点击——子目标行同为亮绿带下划线、剩余时间行因 OCR 框重叠沾绿
+    （实测 3.2%），颜色与下划线都无法区分。
+    """
+    anchor = None
+    for txt, rect, score in items:
+        if task_tracker._is_title_line(txt) and WUHUAN_TITLE in txt \
+                and score >= 0.55 and rect[0] < task_tracker.PANEL_MAX_X:
+            anchor = rect
+            break
+    if anchor is None:
+        return task_tracker.PICK_FAIL
+    rows = []
+    for txt, rect, score in items:
+        if score < 0.55 or rect[0] >= task_tracker.PANEL_MAX_X:
+            continue
+        if rect[1] - anchor[3] > 150:
+            continue  # 锚点下方内容范围外（同 track_task 内容采集纵向限制）
+        if rect[0] >= anchor[2] + 40 and rect[2] <= anchor[0] - 40:
+            continue  # 与锚点无横向交叠（同内容采集几何过滤）
+        rows.append((list(rect), txt))
+    if not rows:
+        return task_tracker.PICK_FAIL
+    for mrect, members in _merge_same_line(rows):
+        if any(_LINK_MARK_RE.search(txt)
+               or task_tracker.MAP_COORD_RE.search(txt)
+               for _rect, txt in members):
+            return task_tracker.green_text_center(img_np, mrect)
+    return task_tracker.PICK_FAIL
+
+
+def _wuhuan_text_key(items, img_np):
+    """五环文本签名键：标题 + 链接行归一化拼接（行序无关、噪声行过滤）。
+
+    链接行「去找大雁塔二层(13，47)情缘」较长，区域 OCR 每次读取的拆分
+    方式与坐标格式都不同（2026-10-31 实测交替出现「去找大雁塔二|47情缘」、
+    「去找大雁塔二层1347情缘」、「层(13,47)情缘」等变体，签名随之翻转、
+    每 2s 重复点击 22 轮）；同行碎片先按 x 合并再剥离坐标/计数后拼接，
+    各变体归一后相似度 ≥0.8，不再触发误变化。
+    非链接行不参与签名：替身子目标行（「24载的替身[1/5]」，OCR 误读
+    多变、同为亮绿不可靠）、倒计时行（逐秒变化）、计数/纯数字碎片行，
+    以及随人物走动出现/消失的场景玩家名（实测混入日行千里/老谭酸菜面
+    等 11 行导致签名污染）——子目标推进由进度键（_wuhuan_progress_key）
+    检测。链接行未检出时返回空串：follow_task 视作内容不可读，不点击
+    也不作变化信号，等待下一轮复读。
     """
     task = task_tracker.find_task(task_tracker.group_tasks(items), WUHUAN_TITLE)
     if task is None:
         return ""
-    parts = [task["title"]]
-    for ln in task["lines"]:
-        stripped = norm_text(ln[0])
+    rows = []
+    for txt, rect, _score in task["lines"]:
+        stripped = norm_text(txt)
         if not stripped:
             continue
         if _DIGITS_ONLY_RE.match(stripped):
             continue  # 计数碎片行/纯数字行（1/51→151、005916）
         if "剩余" in stripped:
             continue  # 倒计时行（含 OCR 变体「剩余时问」等），逐秒变化
-        parts.append(stripped)
-    return "|".join([parts[0]] + sorted(parts[1:]))
+        # 链接行标记用原文判定（norm_text 会吃掉坐标括号）；「去找」
+        # 前缀与坐标括号互为兜底——前缀被误读时坐标行仍可入签名
+        if not (_LINK_MARK_RE.search(txt)
+                or task_tracker.MAP_COORD_RE.search(txt)):
+            continue  # 替身行/场景玩家名等非链接行不参与签名
+        rows.append((list(rect), stripped))
+    if not rows:
+        return ""
+    parts = []
+    for _mrect, mparts in _merge_same_line(rows):
+        mparts.sort(key=lambda p: p[0][0])
+        line = _LINK_STRIP_RE.sub("", "".join(t for _rect, t in mparts))
+        if line:
+            parts.append(line)
+    if not parts:
+        return ""
+    return "|".join([norm_text(task["title"])] + sorted(set(parts)))
 
 
 def run_loop(win, cycle_interval=3.0):
@@ -664,8 +758,10 @@ def run_loop(win, cycle_interval=3.0):
                 continue
             log(f"[五环] {info}", "SYS")
         # 提交装备步骤：由 follow_task 的附加对话处理回调接管
-        # signature_key：行序无关签名（碎片行翻转不再引起重复点击）
+        # signature_key：链接行归一签名（碎片行翻转不再引起重复点击）
         # ignore_empty_key：到达 NPC 链接变暗的过渡帧不作变化信号
+        # green_picker：碎片合并后按链接标记精确定位（替身行/剩余时间行
+        # 不可点）；require_coord：标题/内容漏检时的关键词兜底也须含坐标
         _congrats_seen_this_follow = False  # 每轮跟踪前复位完成信号
         try:
             ok, info = follow_task(win, WUHUAN_TITLE, prefix="五环",
@@ -674,8 +770,10 @@ def run_loop(win, cycle_interval=3.0):
                                    fallback_keywords=WUHUAN_SUB_KEYWORDS,
                                    progress_key=_wuhuan_progress_key,
                                    signature_key=_wuhuan_text_key,
+                                   green_picker=_wuhuan_link_picker,
                                    ignore_empty_key=True,
-                                   skip_texts={})
+                                   skip_texts={},
+                                   require_coord=True)
         except MissingEquipment as e:
             log(f"[五环] {MISSING_EQUIPMENT_INFO}（{e}），结束任务", "SYS")
             return f"{MISSING_EQUIPMENT_INFO}，结束五环任务（已完成 {done} 次）"

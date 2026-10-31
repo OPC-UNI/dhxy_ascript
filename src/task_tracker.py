@@ -213,8 +213,13 @@ def green_text_center(img_np, rect, prefer_underline=True):
         # 取首个命中行，点击列段中心上方 2px。
         y0 = max(0, rect[3] - 10)
         y1 = min(img_np.shape[0], rect[3] + 9)
+        # 窗口右探 +60：链接行被 OCR 拆碎时坐标碎片框（如「(13，47)」）
+        # 不含行尾下划线（下划线在「情缘」文字下，框右 0~30px 外，实测
+        # 2026-10-31 五环链接），框内检不到即退化为点碎片文字中点、
+        # 点不中链接；纵向仍限框底 -10~+8px 带（邻行下划线不在此带），
+        # 右探不会误抓邻行下划线
         x0 = max(0, rect[0] - 2)
-        x1 = min(img_np.shape[1], rect[2] + 4)
+        x1 = min(img_np.shape[1], rect[2] + 60)
         mask = green_mask(img_np[y0:y1, x0:x1], GREEN_BRIGHT_MIN)
         for y_row in range(mask.shape[0]):
             cols = np.where(mask[y_row])[0]
@@ -275,7 +280,9 @@ def has_underline(img_np, rect):
     y0 = max(0, rect[3] - 10)
     y1 = min(img_np.shape[0], rect[3] + 9)
     x0 = max(0, rect[0] - 2)
-    x1 = min(img_np.shape[1], rect[2] + 4)
+    # 右探与 green_text_center 同款 +60（坐标碎片框不含行尾下划线，
+    # 2026-10-31 五环实测）
+    x1 = min(img_np.shape[1], rect[2] + 60)
     mask = green_mask(img_np[y0:y1, x0:x1], GREEN_BRIGHT_MIN)
     for y_row in range(mask.shape[0]):
         cols = np.where(mask[y_row])[0]
@@ -431,13 +438,16 @@ def task_signature(task):
     return norm_text(f"{task['title']}|{first}")
 
 
-def _keyword_fallback(items, img_np, keywords, arect):
+def _keyword_fallback(items, img_np, keywords, arect, require_coord=False):
     """在追踪面板区域内按关键词兜底查找绿字行（锚点内容采集失败时）。
 
     搜索范围：面板左区（x<PANEL_MAX_X，排除居中对话框）、锚点行下方
     （容 OCR 纵向抖动；arect 为 None 时不限纵向——标题行被区域 OCR
     整行漏检、锚点定位失败时用）；不过滤标题行判定（子目标行可能被
     误判为标题行）。返回 (txt, rect) 或 None。
+    require_coord：候选行须含地图坐标——五环子目标行「24载的替身
+    [1/5]」与链接行同含子目标关键词、同为亮绿带下划线（实测
+    2026-10-31），兜底点击必须靠坐标区分，否则点中子目标行。
     """
     cands = []
     for txt, rect, score in items:
@@ -446,6 +456,8 @@ def _keyword_fallback(items, img_np, keywords, arect):
         if arect is not None and rect[1] < arect[3] - 30:  # 锚点行下方（容抖动）
             continue
         if not any(kw in txt for kw in keywords):
+            continue
+        if require_coord and not MAP_COORD_RE.search(txt):
             continue
         if not is_green_text(img_np, rect):
             continue
@@ -459,7 +471,7 @@ def _keyword_fallback(items, img_np, keywords, arect):
 
 def track_task(win, title, text=None, green_index=0, retries=4, retry_interval=1.5,
                green_order=None, green_picker=None, fallback_keywords=None,
-               pre_items=None):
+               pre_items=None, require_coord=False):
     """跟踪任务：点击任务内容的绿色带下划线文案。
 
     默认点击第一个绿色文案（green_index=0）；指定 text 时先在内容
@@ -479,6 +491,11 @@ def track_task(win, title, text=None, green_index=0, retries=4, retry_interval=1
     内层轮询的最近一帧），首次尝试跳过截图+OCR，省约 1.2s。
     任务刚领取时内容行可能尚未渲染（标题已出现、内容为空），
     内容为空时自动重试等待渲染。
+    require_coord：点击目标行须含地图坐标（链接行专属标记）。五环
+    链接行被区域 OCR 漏读/拆碎时，行级兜底会点中子目标行（替身行
+    同为亮绿带下划线）或沾绿的剩余时间行（OCR 框重叠，实测
+    2026-10-31）；启用后坐标行未检出即等待重试、最终失败，绝不
+    做行级兜底点击。关键词兜底同样按坐标过滤。
     返回 (是否成功, 描述)。
     """
     last_img_np = None
@@ -527,7 +544,8 @@ def track_task(win, title, text=None, green_index=0, retries=4, retry_interval=1
             # 时，用关键词兜底直接点面板左区的绿字链接行（内容行即
             # 跟踪目标，无锚点纵向约束）——否则跟踪失败整轮重试
             if fallback_keywords:
-                fb = _keyword_fallback(items, img_np, fallback_keywords, None)
+                fb = _keyword_fallback(items, img_np, fallback_keywords, None,
+                                       require_coord=require_coord)
                 if fb is not None:
                     txt, rect = fb
                     cx, cy = green_text_center(img_np, rect)
@@ -613,6 +631,16 @@ def track_task(win, title, text=None, green_index=0, retries=4, retry_interval=1
                 coord_pool = [it for it in pool if MAP_COORD_RE.search(it[0])]
                 if coord_pool:
                     pool = coord_pool
+                elif require_coord:
+                    # 坐标行未检出：链接行被区域 OCR 漏读/拆碎，行级兜底
+                    # 会点错——五环实测点中子目标行（同为亮绿带下划线）
+                    # 与沾绿的剩余时间行（2026-10-31）。等待重试而非兜底
+                    if attempt < retries:
+                        log(f"[任务追踪] 「{title}」链接行坐标未检出"
+                            f"（第 {attempt + 1} 次），等待后重试", "INFO")
+                        time.sleep(retry_interval)
+                        continue
+                    return False, f"「{title}」链接行坐标未检出，已拒绝行级兜底点击"
             tgt = pool[min(green_index, len(pool) - 1)]
             wrap_note = ""
             if green_order:
@@ -664,7 +692,8 @@ def track_task(win, title, text=None, green_index=0, retries=4, retry_interval=1
         # 按关键词匹配绿字行点击（子目标行可能被判定为标题行、与锚点
         # 几何关系不符或超出纵向范围，导致内容采集失败）
         if not green and fallback_keywords:
-            fb = _keyword_fallback(items, img_np, fallback_keywords, arect)
+            fb = _keyword_fallback(items, img_np, fallback_keywords, arect,
+                                   require_coord=require_coord)
             if fb is not None:
                 txt, rect = fb
                 cx, cy = green_text_center(img_np, rect)

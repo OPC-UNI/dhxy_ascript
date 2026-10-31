@@ -88,6 +88,101 @@ def test_green_text_center_no_leak_stays_on_glyph():
     assert (cx, cy) == (211, 265)
 
 
+def test_green_text_center_underline_beyond_fragment_rect():
+    """坐标碎片框不含行尾下划线时，右探 +60 仍点在下划线上。
+
+    2026-10-31 五环实测：链接行被 OCR 拆碎，「(13，47)」碎片框
+    x150-184，下划线在「情缘」文字下 x189-219、框右 5px 外——旧窗口
+    （+4px）检不到即退化点碎片文字中点，点不中链接。
+    """
+    img = np.zeros((831, 1378, 3), dtype=np.uint8)
+    img[255:268, 155:180:4] = (0, 255, 0)  # 「(13，47)」文字（散碎笔画）
+    img[270, 189:220] = (0, 255, 0)        # 行尾下划线（31px 实线）
+    rect = [150, 249, 184, 276]
+    cx, cy = task_tracker.green_text_center(img, rect)
+    assert (cx, cy) == (204, 268)
+    assert task_tracker.has_underline(img, rect)
+
+
+def test_track_task_require_coord_refuses_subgoal_and_time_rows(monkeypatch):
+    """require_coord：坐标行未检出时拒绝行级兜底点击（替身行/剩余时间
+    行同为绿字也不点），直接失败等外层复读（2026-10-31 点错教训）。
+
+    像素形态按 2026-10-31 实测截图：替身行亮绿+下划线、剩余时间行因
+    OCR 框重叠沾到替身下划线绿色（3.2%）。
+    """
+    img = np.zeros((831, 1378, 3), dtype=np.uint8)
+    img[255:268, 25:145] = (0, 255, 0)     # 替身行文字（亮绿）
+    img[287, 24:115] = (0, 255, 0)         # 替身行下划线
+    items = [("五环[五环]", [14, 233, 100, 253], 0.99),
+             ("24载的替身[1/5]", [19, 262, 139, 293], 0.90),
+             ("剩余时间：00:58:03", [22, 286, 164, 306], 0.90)]
+    clicks = []
+
+    class FakeWin:
+        def capture(self, force_activate=False):
+            from PIL import Image
+            return Image.fromarray(img)
+
+    monkeypatch.setattr(task_tracker, "human_click",
+                        lambda win, x, y: clicks.append((x, y)))
+    monkeypatch.setattr(task_tracker.game_map, "ocr_regions",
+                        lambda im, regions: (items, img))
+    ok, info = task_tracker.track_task(FakeWin(), "五环", retries=0,
+                                       fallback_keywords=["替身", "武痴"],
+                                       pre_items=(items, img),
+                                       require_coord=True)
+    assert not ok and clicks == []  # 未点任何行
+    # 对比：不要求坐标时旧路径会点子目标行（回归对照，锁定行为差异）
+    clicks.clear()
+    ok, info = task_tracker.track_task(FakeWin(), "五环", retries=0,
+                                       fallback_keywords=["替身", "武痴"],
+                                       pre_items=(items, img))
+    assert ok and clicks  # 旧路径仍可兜底点击（其他任务不受影响）
+
+
+def test_track_task_require_coord_clicks_coord_line_underline(monkeypatch):
+    """require_coord：坐标行检出时正常点击其下划线。"""
+    img = np.zeros((831, 1378, 3), dtype=np.uint8)
+    # 文字用散碎笔画像（实线整块会被下划线检测误抓——真实文字笔画
+    # 连排 ≤13px，下划线检测按 ≥20px 实线区分）
+    img[255:268, 25:145:8] = (0, 255, 0)   # 替身行文字（亮绿笔画）
+    img[287, 24:115] = (0, 255, 0)         # 替身行下划线
+    img[255:268, 60:215:8] = (0, 255, 0)   # 链接行文字（亮绿笔画）
+    img[270, 189:220] = (0, 255, 0)        # 链接行下划线
+    items = [("五环[五环]", [14, 233, 100, 253], 0.99),
+             ("去找大雁塔二层(13，47)情缘", [20, 249, 224, 276], 0.96),
+             ("24载的替身[1/5]", [19, 262, 139, 293], 0.90)]
+    clicks = []
+
+    class FakeWin:
+        def capture(self, force_activate=False):
+            from PIL import Image
+            return Image.fromarray(img)
+
+    monkeypatch.setattr(task_tracker, "human_click",
+                        lambda win, x, y: clicks.append((x, y)))
+    ok, info = task_tracker.track_task(FakeWin(), "五环", retries=0,
+                                       fallback_keywords=["替身", "武痴"],
+                                       pre_items=(items, img),
+                                       require_coord=True)
+    assert ok and clicks == [(204, 268)]  # 链接下划线上方 2px
+
+
+def test_keyword_fallback_require_coord_filters_subgoal_line():
+    """关键词兜底 + require_coord：子目标行（含关键词但无坐标）不候选。"""
+    img = np.zeros((831, 1378, 3), dtype=np.uint8)
+    img[255:268, 25:145:4] = (0, 255, 0)   # 替身行文字（亮绿，框内）
+    img[305:318, 60:215:4] = (0, 255, 0)   # 武痴链接行文字（亮绿，框内）
+    items = [("24载的替身[1/5]", [19, 262, 139, 293], 0.90),
+             ("去找大唐境内(223,21)武痴[1/5]", [20, 300, 260, 327], 0.95)]
+    fb = task_tracker._keyword_fallback(items, img, ["替身", "武痴"], None,
+                                        require_coord=True)
+    assert fb is not None and "武痴" in fb[0]  # 只中链接行
+    fb = task_tracker._keyword_fallback(items, img, ["替身", "武痴"], None)
+    assert fb is not None and "替身" in fb[0]  # 不要求坐标时仍按首行命中
+
+
 # ---- 面板差分门（共享组件；语义契约，六处调用点共用） ----
 
 FAKE = [("任务标题", [10, 220, 120, 250], 0.99)]
