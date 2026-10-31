@@ -153,6 +153,13 @@ WUYI_NPC_TIMEOUT = 3                          # 到达后识别巫医 NPC 模板
 WUYI_HANDLE_TIMEOUT = 8                       # 点击 NPC 后等待战斗线程处理对话框的超时
                                               # （用户 2026-10-28 指定：15s 太长，最长 8s；
                                               # 超时后自行点击选项兜底，见 _run_wuyi_chain）
+WUYI_BLOCK_DIALOG_TEXT = "阻止它为非作歹"     # 领取任务后弹出的遮挡对话框文案：面板遮挡巫医
+                                              # NPC 模板（2026-10-31 用户反馈），点击屏幕中间
+                                              # 取消后模板即恢复可见——仅巫医回合处理（领取后
+                                              # 检查见 run_loop，到达窗口兜底见 _find_wuyi_npc）
+WUYI_BLOCK_TIMEOUT = 3                       # 领取完成后等待该对话框出现的窗口：窗口内出现即
+                                              # 取消；未出现直接去巫医（对话框可能走近巫医时
+                                              # 才弹出，由 _find_wuyi_npc 到达窗口兜底）
 CLAIM_VERIFY_WAIT = 5                         # 领取后任务进入追踪的正常轮询时长（秒）：
                                               # 超时未检索到 → 按一次 Alt+C 飞行后仅再检索一次，
                                               # 仍无即判定失败（用户确认：多次重试无效）
@@ -217,6 +224,77 @@ def _near_wuyi_spot(pos):
     return game_map.is_at_position(pos, LINGSHOUCUN,
                                   WUYI_SPOT[0], WUYI_SPOT[1],
                                   WUYI_NEAR_TOLERANCE)
+
+
+def _dismiss_block_dialog_on_frame(win, img):
+    """单帧检测「阻止它为非作歹」对话框并点击屏幕中间取消（仅巫医回合）。
+
+    命中即点击一次并返回 True；未命中/战斗帧返回 False。重复点击防重
+    由调用方控制（连续点屏幕中间会误点游戏世界引起走位）。
+    """
+    if is_in_battle_frame(img):
+        return False
+    items, _ = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
+    if not _dialog_text_present(items, WUYI_BLOCK_DIALOG_TEXT):
+        return False
+    human_click(win, SCREEN_CENTER_POS[0], SCREEN_CENTER_POS[1])
+    move_away(win)
+    log("[修罗][巫医] 检测到「阻止它为非作歹」对话框遮挡 NPC，"
+        "已点击屏幕中间取消", "SYS")
+    return True
+
+
+def _dismiss_wuyi_block_dialog(win):
+    """领取任务完成后取消「阻止它为非作歹」对话框（期望流程 2026-10-31）。
+
+    领取完成 → 取消对话框 → 去巫医 → 识别模板 → 点击 → 全部医治。
+    窗口内出现即取消一次；未出现直接去巫医（对话框可能走近巫医时
+    才弹出，由 _find_wuyi_npc 到达窗口兜底）。返回是否已取消。
+    """
+    deadline = time.time() + WUYI_BLOCK_TIMEOUT
+    while time.time() < deadline:
+        img = win.capture(force_activate=False)
+        if img is None:
+            time.sleep(0.5)
+            continue
+        if _dismiss_block_dialog_on_frame(win, img):
+            return True
+        time.sleep(0.5)
+    return False
+
+
+def _find_wuyi_npc(win):
+    """到达后识别巫医 NPC 模板（3s 窗口，0.5s 轮询，每轮询只截一帧）。
+
+    未识别到即本次取消（用户 2026-10-09 确认：3s 含识别，最长 3s）。
+    遮挡对话框兜底（仅巫医回合，正常回合不涉及）：「阻止它为非作歹」
+    对话框可能在走近巫医时才弹出（2026-10-31 用户反馈，领取后检查
+    可能扑空），遮挡 NPC 模板时点击屏幕中间取消、窗口顺延 2s——
+    识别到点一次（防重复点击误点世界走位）。
+    返回 (pt 或 None, 失败描述)。
+    """
+    pt = None
+    deadline = time.time() + WUYI_NPC_TIMEOUT
+    dismissed = False
+    while time.time() < deadline:
+        img = win.capture(force_activate=False)
+        if img is None:
+            time.sleep(0.5)
+            continue
+        if is_in_battle_frame(img):
+            time.sleep(2.0)
+            continue
+        frame = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
+        pt = game_map.match_frame_np(frame, WUYI_NPC_ICON)
+        if pt is not None:
+            break
+        if not dismissed and _dismiss_block_dialog_on_frame(win, img):
+            dismissed = True
+            deadline += 2.0
+        time.sleep(0.5)
+    if pt is None:
+        return None, f"到达后 {WUYI_NPC_TIMEOUT}s 内未识别到巫医 NPC（本次取消）"
+    return pt, ""
 
 
 def _run_wuyi_chain(win, hover_before_click=False, report_condition=False,
@@ -298,19 +376,11 @@ def _run_wuyi_chain(win, hover_before_click=False, report_condition=False,
         if not arrived:
             return False, "走到巫医坐标附近超时（本次取消）"
     # 4. 到达后 3s 窗口识别 NPC 模板（0.5s 轮询覆盖待机动画波动相位）；
-    #    未识别到即本次取消（用户 2026-10-09 确认：3s 含识别，最长 3s）
-    pt = None
-    deadline = time.time() + WUYI_NPC_TIMEOUT
-    while time.time() < deadline:
-        if is_in_battle(win):
-            time.sleep(2.0)
-            continue
-        pt = game_map.find_template(win, WUYI_NPC_ICON)
-        if pt is not None:
-            break
-        time.sleep(0.5)
+    #    未识别到即本次取消（用户 2026-10-09 确认：3s 含识别，最长 3s）。
+    #    遮挡对话框处理见 _find_wuyi_npc（仅巫医回合）
+    pt, npc_info = _find_wuyi_npc(win)
     if pt is None:
-        return False, f"到达后 {WUYI_NPC_TIMEOUT}s 内未识别到巫医 NPC（本次取消）"
+        return False, npc_info
     if hover_before_click:
         human_move(win.rect.left + pt[0], win.rect.top + pt[1])
         log(f"[修罗][验证] 已移动鼠标到巫医 NPC ({pt[0]}, {pt[1]})，"
@@ -1773,8 +1843,12 @@ def run_loop(win, cycle_interval=1.0):
             _team_checked = True  # 首次领取成功：后续轮次跳过队伍检查
             _fight_via_kanda = False  # 新一轮开始：重置「看打！」进入战斗标记
             # 自动巫医：每 N 轮领取后无条件前往巫医 NPC 医治，
-            # 血蓝正常也照常（失败仅记日志，不阻断后续寻路）
+            # 血蓝正常也照常（失败仅记日志，不阻断后续寻路）。
+            # 期望流程（2026-10-31）：领取完成 → 取消「阻止它为非作歹」
+            # 对话框（若有）→ 去巫医 → 识别模板 → 点击 → 全部医治；
+            # 对话框可能在走近巫医时才弹出，到达窗口另有兜底
             if auto_wuyi and round_no % wuyi_interval == 0:
+                _dismiss_wuyi_block_dialog(win)
                 ok2, info2 = _auto_wuyi(win)
                 log(f"[修罗][巫医] {info2}", "SYS" if ok2 else "WARN")
         # 2~4. 寻路 / 对话开打 / 战斗：由任务跟踪统一驱动
