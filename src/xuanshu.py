@@ -1044,6 +1044,29 @@ def _confirm_guard_dialog(win, img, extra_dialog_handler):
         return False
 
 
+def _task_gone_dialog_guard(win, extra_dialog_handler):
+    """任务消失确认后的对话框复核（任务消失时奇遇弹窗可能仍在）。
+
+    任务从追踪面板消失后，奇遇弹窗可能还开着（如客栈开箱奇遇的结局
+    幕，任务完成与弹窗出现同帧附近，2026-10-31 实测弹窗未处理遗留
+    到下一轮、遮挡掌柜模板致任务终止）——确认结论前重新截一帧 OCR
+    对话框区域交给 extras：命中（弹窗仍在且被处理）返回 True，调用方
+    推迟任务消失结论、回正常轮询下一轮再确认；无 extras/战斗帧/
+    未命中返回 False 放行。extras 业务异常吞掉放行（与
+    _confirm_guard_dialog 同约定）。
+    """
+    if extra_dialog_handler is None:
+        return False
+    try:
+        img = win.capture(force_activate=False)
+        if img is None or is_in_battle_frame(img):
+            return False
+        items_d, _ = game_map.ocr_region(img, task_tracker.DIALOG_REGION)
+        return bool(extra_dialog_handler(win, items_d, np.asarray(img)))
+    except Exception:
+        return False
+
+
 def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶闻",
                 extra_dialog_handler=None, green_order=None, progress_key=None,
                 green_picker=None, fallback_keywords=None, first_items=None,
@@ -1132,6 +1155,8 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
         task = task_tracker.find_task(task_tracker.group_tasks(items), title)
         if task is None:
             if _confirm_task_gone(win, title, fallback_keywords):
+                if _task_gone_dialog_guard(win, extra_dialog_handler):
+                    continue  # 弹窗仍在：先处理，下一轮再确认任务消失
                 if not task_seen:
                     # 诊断：转储追踪面板 OCR 行——宽松匹配（领取校验
                     # has_task）命中而分组匹配（find_task）漏任务时，
@@ -1250,6 +1275,9 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 task2 = task_tracker.find_task(task_tracker.group_tasks(items), title)
                 if task2 is None:
                     if _confirm_task_gone(win, title, fallback_keywords):
+                        if _task_gone_dialog_guard(win, extra_dialog_handler):
+                            changed_once = False
+                            continue
                         if not task_seen:
                             return False, f"任务从未出现在追踪面板（跟踪 {rounds} 次点击，领取可能失败）"
                         return True, f"任务已从任务追踪中消失（本轮跟踪 {rounds} 次点击）"
@@ -1305,6 +1333,9 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 last_poll_items = None
                 last_poll_img = None
                 if _confirm_task_gone(win, title, fallback_keywords):
+                    if _task_gone_dialog_guard(win, extra_dialog_handler):
+                        changed_once = False
+                        continue
                     if not task_seen:
                         return False, f"任务从未出现在追踪面板（跟踪 {rounds} 次点击，领取可能失败）"
                     return True, f"任务已从任务追踪中消失（本轮跟踪 {rounds} 次点击）"
@@ -1352,6 +1383,9 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
             task2 = task_tracker.find_task(task_tracker.group_tasks(items), title)
             if task2 is None:
                 if _confirm_task_gone(win, title, fallback_keywords):
+                    if _task_gone_dialog_guard(win, extra_dialog_handler):
+                        changed_once = False
+                        continue
                     if not task_seen:
                         return False, f"任务从未出现在追踪面板（跟踪 {rounds} 次点击，领取可能失败）"
                     return True, f"任务已从任务追踪中消失（本轮跟踪 {rounds} 次点击）"
