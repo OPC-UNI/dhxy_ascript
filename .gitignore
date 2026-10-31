@@ -24,3 +24,6 @@ tmp_err_img.png
 
 # 启动自检黑帧现场（截屏全黑时保存，供人工排查）
 first_frame.png
+# 截屏通道诊断产物（capture_diag.py 运行生成：日志 + 通道 BMP）
+capture_diag_*.log
+capture_diag_*.bmp

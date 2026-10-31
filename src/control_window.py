@@ -720,6 +720,7 @@ class ControlWindow(WebWindow):
         self.expose(self.verify_shout)
         self.expose(self.verify_jiguan)
         self.expose(self.verify_position)
+        self.expose(self.verify_capture_diag)
         self.expose(self.unbind_license)
         self.expose(self.get_env_info)
         self.expose(self.unbind_window)
@@ -1525,6 +1526,59 @@ class ControlWindow(WebWindow):
                 ok_js = "true" if ok else "false"
                 self.webview_instance.evaluate_js(
                     f"if(window.onPositionVerifyResult){{window.onPositionVerifyResult({ok_js}, {json.dumps(info)});}}")
+            except Exception:
+                pass
+
+    def verify_capture_diag(self):
+        """高级设置-截屏通道诊断按钮：对比 PrintWindow(3)/PrintWindow(0)/
+        窗口 BitBlt/全屏 BitBlt 四条截屏通道并记录环境事实（显卡/DWM/
+        进程提权/兼容模式），结果全部写入日志（本地日志文件 + 日志窗）。
+        只读不点击；任务未运行时额外尝试把游戏窗口置前复测 A/C（任务
+        运行中跳过激活，避免抢前台干扰）。
+        """
+        if self._verifying:
+            return {"status": "error", "msg": "验证进行中，请稍候"}
+        win = game.find_main_window()
+        if win is None:
+            return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
+        self._verifying = True
+        allow_activate = not self._tm.is_running()
+        threading.Thread(target=self._run_capture_diag, args=(win, allow_activate),
+                         daemon=True, name="capture-diag").start()
+        return {"status": "success",
+                "msg": "诊断已开始：四通道截图对比与环境事实将写入日志（约 10 秒）"}
+
+    def _run_capture_diag(self, win, allow_activate):
+        """截屏通道诊断线程体：逐行写入本地日志文件与日志窗，结束回推页面。"""
+        from . import capture_diag  # 延迟导入：与其余验证模块保持一致
+
+        def emit(msg):
+            app_utils.log(f"[诊断] {msg}")
+            try:
+                self.add_logs([f"[诊断] {msg}"])
+            except Exception:
+                pass
+
+        try:
+            ok, info = capture_diag.run_diag(win.hwnd, emit,
+                                             allow_activate=allow_activate)
+        except Exception as e:
+            ok, info = False, f"诊断异常: {e}"
+        try:
+            app_utils.log(f"[诊断] 结果: {info}")
+            self.add_logs([f"[诊断] 结果: {info}"])
+        except Exception:
+            pass
+        self._notify_capture_diag_result(ok, info)
+        self._verifying = False
+
+    def _notify_capture_diag_result(self, ok, info):
+        """截屏通道诊断结果回推页面（高级设置-截屏通道诊断行的结果文案）。"""
+        if self.webview_instance:
+            try:
+                ok_js = "true" if ok else "false"
+                self.webview_instance.evaluate_js(
+                    f"if(window.onCaptureDiagVerifyResult){{window.onCaptureDiagVerifyResult({ok_js}, {json.dumps(info)});}}")
             except Exception:
                 pass
 

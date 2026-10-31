@@ -604,8 +604,9 @@ def main():
         log("- 本机无法把游戏窗口置前（SetForegroundWindow 失败/未生效），"
             "与 App 日志「未在前台」一致：提权差异或前台锁")
     else:
-        log(f"- 激活正常；激活后复测 A 黑帧比例={p2a if p2a is not None else 'N/A'}% "
-            f"C={p2c if p2c is not None else 'N/A'}%")
+        a2pct = f"{p2a:.1f}%" if p2a is not None else "N/A"
+        c2pct = f"{p2c:.1f}%" if p2c is not None else "N/A"
+        log(f"- 激活正常；激活后复测 A 黑帧比例={a2pct} C={c2pct}")
     log("==== 诊断结束：请把本 .log 文件（及同目录 BMP）发回分析 ====")
 
 

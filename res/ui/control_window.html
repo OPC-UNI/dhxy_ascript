@@ -644,6 +644,14 @@
                 </div>
                 <div class="group-hint">读取游戏左上角当前地图名与坐标并打印日志（只读，不按键不点击），供标定点位/排查使用。任务运行中也可获取。</div>
             </div>
+            <div class="group-box">
+                <div class="group-title">截屏通道诊断</div>
+                <div class="verify-row">
+                    <button id="btn-verify-capture-diag" class="btn" onclick="verifyCaptureDiag()">开始诊断</button>
+                    <span id="capture-diag-verify-result"></span>
+                </div>
+                <div class="group-hint">对比 PrintWindow(3)/PrintWindow(0)/窗口 BitBlt/全屏 BitBlt 四条截屏通道并记录环境事实（显卡/DWM/进程提权/兼容模式），逐行写入本地日志文件与日志窗，用于定位黑屏/识别全失效问题。只读不点击（任务未运行时额外尝试置前游戏窗口复测），约 10 秒。任务运行中也可诊断（跳过置前复测）。</div>
+            </div>
             </div>
         </div>
     </div>
@@ -701,6 +709,8 @@
         const jiguanVerifyResultEl = document.getElementById('jiguan-verify-result');
         const btnVerifyPosition = document.getElementById('btn-verify-position');
         const positionVerifyResultEl = document.getElementById('position-verify-result');
+        const btnVerifyCaptureDiag = document.getElementById('btn-verify-capture-diag');
+        const captureDiagVerifyResultEl = document.getElementById('capture-diag-verify-result');
         const licenseStatusEl = document.getElementById('license-status');
         const licenseExpireEl = document.getElementById('license-expire');
         const btnUnbind = document.getElementById('btn-unbind');
@@ -1680,6 +1690,37 @@
             btnVerifyPosition.disabled = false;
             positionVerifyResultEl.style.color = ok ? 'var(--accent)' : '#ff5f5f';
             positionVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+        };
+
+        async function verifyCaptureDiag() {
+            if (verifying) return;
+            verifying = true;
+            btnVerifyCaptureDiag.disabled = true;
+            captureDiagVerifyResultEl.style.color = 'var(--text)';
+            captureDiagVerifyResultEl.innerText = '诊断中...';
+            try {
+                const r = await callPython('verify_capture_diag');
+                if (!r || r.status !== 'success') {
+                    captureDiagVerifyResultEl.style.color = '#ff5f5f';
+                    captureDiagVerifyResultEl.innerText = (r && r.msg) || '诊断请求失败';
+                    verifying = false;
+                    btnVerifyCaptureDiag.disabled = false;
+                }
+                // 成功：等待 Python 侧 onCaptureDiagVerifyResult 回推最终结果
+            } catch (e) {
+                captureDiagVerifyResultEl.style.color = '#ff5f5f';
+                captureDiagVerifyResultEl.innerText = '诊断请求异常';
+                verifying = false;
+                btnVerifyCaptureDiag.disabled = false;
+            }
+        }
+
+        // Python 侧调用：截屏通道诊断结束回推结果
+        window.onCaptureDiagVerifyResult = function (ok, info) {
+            verifying = false;
+            btnVerifyCaptureDiag.disabled = false;
+            captureDiagVerifyResultEl.style.color = ok ? 'var(--accent)' : '#ff5f5f';
+            captureDiagVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
         };
 
         // Python 侧（任务状态联动）调用，用于同步页面显示
