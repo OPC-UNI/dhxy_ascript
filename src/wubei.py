@@ -72,11 +72,13 @@ from .control_window import (load_task_counts,  # 任务次数上限
                              load_wubei_shout_switch,  # 五倍设置：缺人自动喊话开关
                              load_wubei_auto_wuyi,  # 五倍设置：自动巫医开关
                              load_wubei_wuyi_interval,  # 五倍设置：自动巫医间隔（轮）
-                             load_wubei_kuimulang_switch)  # 五倍设置：领取奎木狼任务开关
+                             load_wubei_kuimulang_switch,  # 五倍设置：领取奎木狼任务开关
+                             load_wubei_tab_group)  # 五倍设置：组号专用开关
 from .dialog_common import (SCREEN_CENTER_POS, green_option_center,
                             _dialog_text_present,
                             _click_screen_center)  # 对话框共享组件（屏幕中间点击/选项中心/文案检测）
 from .xuanshu import follow_task  # 任务跟踪（绿字点击寻路/战斗跳过/附加对话处理）
+from . import tab_group  # 组号模式（一窗口多 Tab）：初始化/队员 pass/抑制标志
 
 # 任务模式与追踪面板标题（用户 2026-10-08 提供：追踪面板标题为
 # 「xxxx[除魔任务]」——前缀是彩色徽标（如「降魔」），OCR 时有时无
@@ -420,13 +422,19 @@ def _wait_battle_end(win, timeout=60):
 
     轮询 is_in_battle 直到战斗画面消失；超时返回失败防止卡死（验证流程用）。
     返回 (是否成功, 描述)。
+    组号 pass 期间（战斗线程在切队员 Tab）跳过轮询——队员屏幕的
+    战斗判定不可代表队长，防误判结束提前返程。
     """
     deadline = time.time() + timeout
-    while is_in_battle(win):
+    while True:
+        if tab_group.pass_active:
+            time.sleep(0.3)
+            continue
+        if not is_in_battle(win):
+            return True, "战斗已结束"
         if time.time() > deadline:
             return False, f"等待战斗结束超时（{timeout}s）"
         time.sleep(BATTLE_END_POLL)
-    return True, "战斗已结束"
 
 
 def _near_claim_spot(pos, tolerance):
@@ -613,8 +621,15 @@ def _run_wuyi_chain(win, hover_before_click=False, report_condition=False,
 
 def _auto_wuyi(win):
     """自动巫医（用户流程，通用设置开关+间隔门控）：每 N 轮领取后
-    无条件前往巫医医治（血蓝正常也照常，与修罗一致，见 _run_wuyi_chain）。"""
-    return _run_wuyi_chain(win)
+    无条件前往巫医医治（血蓝正常也照常，与修罗一致，见 _run_wuyi_chain）。
+
+    组号模式：队长医治成功后遍历队员 Tab 点击其自动弹出的巫医
+    对话框（队员不点 NPC、不检查血蓝、不重点任务追踪）。
+    """
+    ok, info = _run_wuyi_chain(win)
+    if ok and tab_group.active():
+        tab_group.member_wuyi_pass(win)
+    return ok, info
 
 
 def verify_wuyi_flow(win):
@@ -1961,8 +1976,18 @@ def _follow_to_done(win, first_items=None):
                            first_items=first_items,
                            skip_texts={},  # 禁用 xuanshu 默认跳过表（玄枢轶闻
                                            # 专属文案，五倍自有对话处理——审计问题 2）
-                           pre_click_handler=_handle_pre_click)
+                           pre_click_handler=_handle_pre_click,
+                           post_track_handler=_maybe_tab_bars_pass)
     return ok, info
+
+
+def _maybe_tab_bars_pass(win):
+    """组号模式：点完任务追踪（寻路中）检查队员血蓝（tab_group 内 60s 节流）。"""
+    try:
+        if tab_group.active():
+            tab_group.member_bars_pass(win)
+    except Exception as e:
+        log(f"[五倍] 组号队员血蓝 pass 异常: {e}", "WARN")
 
 
 def _handle_pre_click(win, items, img_np):
@@ -2420,11 +2445,25 @@ def run_loop(win, cycle_interval=1.0):
     if 0 < max_rounds <= done:
         log(f"[五倍] 当天进度已达上限 {done}/{max_rounds}，无需再执行", "SYS")
         return f"已完成 {done} 次五倍任务，达到次数上限 {max_rounds}"
+    # 组号专用（高级设置开关，默认关闭）：一窗口多 Tab 多账号时激活，
+    # 队长带队、队员自动挂战斗/巫医/补血蓝。激活时强制队长判定
+    # （即使「检查队伍」关闭）：非队长停止任务，提醒在队长 Tab 启动。
+    # 已登录 Tab <2（单号）不激活，行为与旧版完全一致。
+    tab_group.init_task(win, TASK_MODE, load_wubei_tab_group())
+    if tab_group.active():
+        ok_leader, leader_info = tab_group.startup_leader_check(win)
+        if not ok_leader:
+            log(f"[五倍] {leader_info}，停止任务（组号模式要求队长带队，请在队长 Tab 下启动）", "ERROR")
+            return f"组号模式：{leader_info}，请在队长 Tab 下启动任务"
     round_no = 0
     while True:
         try:
             round_no += 1
             log(f"[五倍] ==== 第 {round_no} 轮 ====", "SYS")
+            # 组号护栏：pass 切回失败残留时先回队长 Tab 再走本轮流程
+            if tab_group.active() and not tab_group.ensure_leader_tab(win):
+                time.sleep(cycle_interval)
+                continue
             if is_in_battle(win):
                 time.sleep(cycle_interval)
                 continue

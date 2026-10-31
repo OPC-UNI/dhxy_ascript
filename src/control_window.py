@@ -591,6 +591,37 @@ def save_wubei_kuimulang_switch(on):
     return {"status": "success"}
 
 
+# ---- 组号专用（UI 开关，修罗/五倍各一，KeyValue 持久化，默认关闭；
+#      一个窗口内多个登录 Tab 视为一组号：队长带队，队员 Tab 自动挂
+#      战斗/巫医/补血蓝，实现见 src/tab_group.py） ----
+_XIULUO_TAB_GROUP_KEY = "xiuluo_tab_group"
+
+
+def load_xiuluo_tab_group():
+    """读取修罗组号专用开关（首次默认关闭）。"""
+    return bool(KeyValue.get(_XIULUO_TAB_GROUP_KEY, False))
+
+
+def save_xiuluo_tab_group(on):
+    """保存修罗组号专用开关，返回操作结果。"""
+    _kv_save(_XIULUO_TAB_GROUP_KEY, bool(on))
+    return {"status": "success"}
+
+
+_WUBEI_TAB_GROUP_KEY = "wubei_tab_group"
+
+
+def load_wubei_tab_group():
+    """读取五倍组号专用开关（首次默认关闭）。"""
+    return bool(KeyValue.get(_WUBEI_TAB_GROUP_KEY, False))
+
+
+def save_wubei_tab_group(on):
+    """保存五倍组号专用开关，返回操作结果。"""
+    _kv_save(_WUBEI_TAB_GROUP_KEY, bool(on))
+    return {"status": "success"}
+
+
 # ---- 战斗设置（人物/召唤兽默认战斗动作，UI 单选项，KeyValue 持久化） ----
 # 人物：技能面板 3 行 × 5 列共 15 格 + 攻击/防御/捕捉/逃跑/无
 CHAR_BATTLE_ACTIONS = ([f"技能{r}-{c}" for r in range(1, 4) for c in range(1, 6)]
@@ -929,6 +960,7 @@ class ControlWindow(WebWindow):
                 "xiuluo_check_team": load_xiuluo_check_team(),
                 "xiuluo_auto_wuyi": load_xiuluo_auto_wuyi(),
                 "xiuluo_wuyi_interval": load_xiuluo_wuyi_interval(),
+                "xiuluo_tab_group": load_xiuluo_tab_group(),
                 "high_perf": load_high_perf(),
                 "auto_refill": load_auto_refill(),
                 "clear_screen": load_clear_screen(),
@@ -937,7 +969,8 @@ class ControlWindow(WebWindow):
                           "shout": load_wubei_shout_switch(),
                           "auto_wuyi": load_wubei_auto_wuyi(),
                           "wuyi_interval": load_wubei_wuyi_interval(),
-                          "kuimulang": load_wubei_kuimulang_switch()},
+                          "kuimulang": load_wubei_kuimulang_switch(),
+                          "tab_group": load_wubei_tab_group()},
                 "xiuluo_shout": load_xiuluo_shout_switch(),
                 "auto_famen": load_auto_famen(),
                 "debug_overlay": load_debug_overlay(),
@@ -1006,6 +1039,10 @@ class ControlWindow(WebWindow):
         """修罗设置变更：保存自动巫医间隔（轮）。"""
         return save_xiuluo_wuyi_interval(value)
 
+    def save_xiuluo_tab_group(self, on):
+        """修罗设置变更：保存组号专用开关状态。"""
+        return save_xiuluo_tab_group(on)
+
     def save_high_perf(self, on):
         """通用设置变更：保存高性能模式开关状态。"""
         return save_high_perf(on)
@@ -1041,6 +1078,10 @@ class ControlWindow(WebWindow):
     def save_wubei_kuimulang_switch(self, on):
         """五倍设置变更：保存领取奎木狼任务开关状态。"""
         return save_wubei_kuimulang_switch(on)
+
+    def save_wubei_tab_group(self, on):
+        """五倍设置变更：保存组号专用开关状态。"""
+        return save_wubei_tab_group(on)
 
     def save_xiuluo_shout_switch(self, on):
         """修罗设置变更：保存缺人自动喊话开关状态。"""

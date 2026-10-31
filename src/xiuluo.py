@@ -60,8 +60,10 @@ from .control_window import (load_task_counts, load_xiuluo_settings,
                              load_xiuluo_shout_switch,
                              load_xiuluo_check_team,
                              load_xiuluo_auto_wuyi,
-                             load_xiuluo_wuyi_interval)  # 任务次数上限/修罗设置/自动巫医
+                             load_xiuluo_wuyi_interval,
+                             load_xiuluo_tab_group)  # 任务次数上限/修罗设置/自动巫医/组号开关
 from .xuanshu import follow_task  # 任务跟踪（绿字点击寻路/战斗跳过/附加对话处理）
+from . import tab_group  # 组号模式（一窗口多 Tab）：初始化/队员 pass/抑制标志
 from .dialog_common import (_dialog_text_present, _norm_dialog_present,
                             _click_green_option_once,
                             SCREEN_CENTER_POS,
@@ -441,8 +443,15 @@ def _run_wuyi_chain(win, hover_before_click=False, report_condition=False,
 
 def _auto_wuyi(win):
     """自动巫医（用户流程，通用设置开关+间隔门控）：每 N 轮领取后
-    无条件前往巫医医治（血蓝正常也照常，见 _run_wuyi_chain）。"""
-    return _run_wuyi_chain(win)
+    无条件前往巫医医治（血蓝正常也照常，见 _run_wuyi_chain）。
+
+    组号模式：队长医治成功后遍历队员 Tab 点击其自动弹出的巫医
+    对话框（队员不点 NPC、不检查血蓝、不重点任务追踪）。
+    """
+    ok, info = _run_wuyi_chain(win)
+    if ok and tab_group.active():
+        tab_group.member_wuyi_pass(win)
+    return ok, info
 
 
 def verify_wuyi_flow(win):
@@ -1293,7 +1302,8 @@ def _follow_to_done(win, first_items=None):
     ok, info = follow_task(win, TASK_TITLE, prefix="修罗",
                            extra_dialog_handler=_handle_fight_dialog,
                            fallback_keywords=TASK_FALLBACK_TEXTS,
-                           first_items=first_items)
+                           first_items=first_items,
+                           post_track_handler=_maybe_tab_bars_pass)
     if not ok and first_items is not None \
             and "任务内容中未找到绿色文案" in info \
             and time.time() - t0 < CLAIM_FOLLOW_RECOVER_WINDOW:
@@ -1303,8 +1313,18 @@ def _follow_to_done(win, first_items=None):
             return False, f"{info}；走到领取点失败: {info2}"
         ok, info = follow_task(win, TASK_TITLE, prefix="修罗",
                                extra_dialog_handler=_handle_fight_dialog,
-                               fallback_keywords=TASK_FALLBACK_TEXTS)
+                               fallback_keywords=TASK_FALLBACK_TEXTS,
+                               post_track_handler=_maybe_tab_bars_pass)
     return ok, info
+
+
+def _maybe_tab_bars_pass(win):
+    """组号模式：点完任务追踪（寻路中）检查队员血蓝（tab_group 内 60s 节流）。"""
+    try:
+        if tab_group.active():
+            tab_group.member_bars_pass(win)
+    except Exception as e:
+        log(f"[修罗] 组号队员血蓝 pass 异常: {e}", "WARN")
 
 
 def _wait_battle_end(win, timeout=60):  # 等待战斗结束的超时（调用点均显式传 60）
@@ -1312,13 +1332,19 @@ def _wait_battle_end(win, timeout=60):  # 等待战斗结束的超时（调用�
 
     轮询 is_in_battle 直到战斗画面消失；超时返回失败防止卡死。
     返回 (是否成功, 描述)。
+    组号 pass 期间（战斗线程在切队员 Tab）跳过轮询——队员屏幕的
+    战斗判定不可代表队长，防误判结束提前返程。
     """
     deadline = time.time() + timeout
-    while is_in_battle(win):
+    while True:
+        if tab_group.pass_active:
+            time.sleep(0.3)
+            continue
+        if not is_in_battle(win):
+            return True, "战斗已结束"
         if time.time() > deadline:
             return False, f"等待战斗结束超时（{timeout}s）"
         time.sleep(BATTLE_END_POLL)
-    return True, "战斗已结束"
 
 
 def _open_task_box(win):
@@ -1742,10 +1768,24 @@ def run_loop(win, cycle_interval=1.0):
     if 0 < max_rounds <= done:
         log(f"[修罗] 当天进度已达上限 {done}/{max_rounds}，无需再执行", "SYS")
         return f"已完成 {done} 次修罗任务，达到次数上限 {max_rounds}"
+    # 组号专用（高级设置开关，默认关闭）：一窗口多 Tab 多账号时激活，
+    # 队长带队、队员自动挂战斗/巫医/补血蓝。激活时强制队长判定
+    # （即使「检查队伍」关闭）：非队长停止任务，提醒在队长 Tab 启动。
+    # 已登录 Tab <2（单号）不激活，行为与旧版完全一致。
+    tab_group.init_task(win, TASK_MODE, load_xiuluo_tab_group())
+    if tab_group.active():
+        ok_leader, leader_info = tab_group.startup_leader_check(win)
+        if not ok_leader:
+            log(f"[修罗] {leader_info}，停止任务（组号模式要求队长带队，请在队长 Tab 下启动）", "ERROR")
+            return f"组号模式：{leader_info}，请在队长 Tab 下启动任务"
     round_no = 0
     while True:
         round_no += 1
         log(f"[修罗] ==== 第 {round_no} 轮 ====", "SYS")
+        # 组号护栏：pass 切回失败残留时先回队长 Tab 再走本轮流程
+        if tab_group.active() and not tab_group.ensure_leader_tab(win):
+            time.sleep(cycle_interval)
+            continue
         # 1. 领任务：任务追踪中已有修罗任务（续跑）→ 跳过领取，直接跟踪。
         #    上一轮已确认任务完成（follow_task 以任务消失为完成判据）时，
         #    本轮开始必然无任务——has_task（区域 OCR ~0.9s）只在可能

@@ -1,4 +1,5 @@
 """游戏窗口相关操作：窗口查找、登录 Tab 读取、多开窗口绑定。"""
+import ctypes
 import re
 
 from ascript.windows.window import Window
@@ -126,3 +127,61 @@ def read_login_tab(win):
         return item.name if item else None
     except Exception:
         return None
+
+
+# ---- 一窗口多 Tab（组号模式）子窗口枚举 ----
+# 多标签客户端（xy2_tab_x64 系列）每个登录 Tab 对应主窗口的一个
+# Win32Window 子窗口，标题「[大话西游2_经典版] 大话西游2经典版
+# $Revision: xxx - 服务器 - 角色名（ID：账号）」；当前选中 Tab 的
+# 子窗口可见、其余隐藏（客户端维护）——计数、登录判定、当前身份
+# 全部走句柄枚举（2026-10-31 实机探测验证），零 OCR。
+_WM_GETTEXT = 0x000D
+
+
+def _child_window_text(hwnd):
+    """跨进程读取子窗口标题（GetWindowTextW 优先，WM_GETTEXT 兜底）。
+
+    本程序与游戏同完整性级别（均为管理员），WM_GETTEXT 不受 UIPI 拦截。
+    """
+    buf = ctypes.create_unicode_buffer(512)
+    ctypes.windll.user32.GetWindowTextW(hwnd, buf, 512)
+    if buf.value:
+        return buf.value
+    ctypes.windll.user32.SendMessageW(hwnd, _WM_GETTEXT, 512, buf)
+    return buf.value
+
+
+def list_tab_windows(win):
+    """枚举主窗口的登录 Tab 子窗口（每个 Tab 一个 Win32Window）。
+
+    返回 [{"hwnd", "visible", "title", "id"}]，按子窗口枚举顺序；
+    id 为标题中的「ID：账号」（未登录 Tab 无）。异常返回 []。
+    """
+    hwnd = getattr(win, "hwnd", 0)
+    if not hwnd:
+        return []
+    results = []
+    _EnumProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p,
+                                   ctypes.c_void_p)
+
+    def _cb(h, _l):
+        try:
+            cls = ctypes.create_unicode_buffer(256)
+            ctypes.windll.user32.GetClassNameW(h, cls, 256)
+            if cls.value != "Win32Window":
+                return True
+            title = _child_window_text(h)
+            m = _ID_IN_TITLE_RE.search(title)
+            results.append({"hwnd": int(h), "title": title,
+                            "visible": bool(ctypes.windll.user32.IsWindowVisible(h)),
+                            "id": m.group(1) if m else None})
+        except Exception:
+            pass
+        return True
+
+    try:
+        ctypes.windll.user32.EnumChildWindows(
+            ctypes.c_void_p(int(hwnd)), _EnumProc(_cb), 0)
+    except Exception:
+        return []
+    return results

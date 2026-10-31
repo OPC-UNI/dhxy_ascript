@@ -55,6 +55,7 @@ from . import team  # 队伍身份（抢盒子的队长规则）
 from .control_window import (load_battle_actions,
                              load_xiuluo_hezi, load_wubei_hezi,
                              load_auto_famen, load_auto_refill)
+from . import tab_group  # 组号模式（一窗口多 Tab）：pass 抑制标志与队员自动 pass
 
 # ---- 战斗 UI 坐标与模板（窗口相对坐标，用户实测） ----
 ATTACK_POS = (366, 415)        # 攻击按钮位置；技能选择后也在此位置再点一次
@@ -179,7 +180,14 @@ def is_in_battle(win):
     操作条按钮（法术/防御/自动）是战斗专属 UI，出现即战斗操作阶段，
     误报率最低；回合横幅「回合」文字覆盖操作条隐藏的回合间隙。
     用 BGR 帧 + 条带限定匹配（单帧判定，模板/阈值/短路顺序不变）。
+    组号 pass 期间返回 True：屏幕上可能是队员 Tab，队员画面的战斗
+    判定不可代表队长——统一按「战斗中等待」处理，让全库所有
+    「战斗中跳过」护栏在 pass 期间同样生效（走位/等待循环不会在
+    队员屏幕点小地图）；pass 内部判定用 is_in_battle_frame（帧级），
+    不受此影响。pass 只会在组号激活时发生，单号恒 False 直通。
     """
+    if tab_group.pass_active:
+        return True
     img = win.capture(force_activate=False, format=WindowCaptureFormat.OPENCV)
     if img is None:
         return False
@@ -543,6 +551,7 @@ def _click_auto_once(win):
     不会出现，轮询超时即跳过、不打扰；自动被关掉（如次数耗尽）时
     点一次重新开启。操作条可能正处回合间隙，最多等待一整回合的
     操作条周期；战斗结束（连续两轮确认）提前返回。单帧判定。
+    返回是否点击了自动按钮（组号模式据此触发队员自动 pass）。
     """
     deadline = time.time() + AUTO_ASSERT_TIMEOUT
     out_polls = 0
@@ -556,16 +565,17 @@ def _click_auto_once(win):
         else:
             out_polls += 1
             if out_polls >= BATTLE_CONFIRM_POLLS:
-                return
+                return False
         pt = game_map.match_frame_np(img, AUTO_ICON, region=_bar_band(img),
                                      fallback=True)
         if pt is not None:
             human_click(win, pt[0], pt[1])
             _park_mouse(win)  # 鼠标移开，避免遮挡操作条
             log("[战斗] 已点击自动按钮（每 5 场例行确认）", "SYS")
-            return
+            return True
         time.sleep(BAR_POLL_INTERVAL)
     log("[战斗] 未识别到自动按钮（可能已处于自动战斗），本场不点击", "INFO")
+    return False
 
 
 # 巫医对话框选项未识别告警去重标记（对话框消失后复位，防轮询刷屏）
@@ -705,6 +715,20 @@ def _handle_hezi(win):
     return True
 
 
+def _member_auto_pass_hook(win, wait_auto):
+    """组号模式：队长点完自动后遍历队员 Tab 点击自动（仅激活时执行）。
+
+    队员与队长同场战斗，队长的自动触发时机即队员的触发时机
+    （首场 wait_auto=5s 等操作条、每 5 场例行 wait_auto=1s 多半已挂
+    自动跳过）。任何异常只记日志，不影响战斗监控主循环。
+    """
+    try:
+        if tab_group.active():
+            tab_group.member_auto_pass(win, wait_auto)
+    except Exception as e:
+        log(f"[战斗] 组号队员自动 pass 异常: {e}", "WARN")
+
+
 def watch_loop(win):
     """战斗监控线程入口：轮询战斗状态，按场次调度战斗操作。
 
@@ -715,6 +739,9 @@ def watch_loop(win):
     - 其余场次：不操作，交由游戏自动战斗（自动战斗跨场持续生效）
     每场战斗结束后检查血蓝条回满，并立即检查巫医对话框；
     非战斗时周期性检查巫医对话框（召唤兽受伤弹出的医治对话框）。
+    组号模式：队长点完自动后遍历队员 Tab 点自动（_member_auto_pass_hook）；
+    任务线程发起 pass 期间（tab_group.pass_active）跳过本轮全部处理——
+    屏幕上可能是队员 Tab，误处理会点错账号。
     """
     global _watch_in_battle
     log("[战斗] 战斗监控已启动", "SYS")
@@ -730,6 +757,10 @@ def watch_loop(win):
     hezi_click_at = 0.0    # 上次点击「我需要」时间（冷却）
     while True:
         try:
+            if tab_group.pass_active:
+                # 任务线程的 pass 进行中：跳过本轮处理（屏幕是队员 Tab）
+                time.sleep(WATCH_POLL_INTERVAL)
+                continue
             if is_in_battle(win):
                 out_polls = 0
                 if not in_battle:
@@ -745,14 +776,18 @@ def watch_loop(win):
                             pending_auto = (result != "auto_ok")
                             if pending_auto:
                                 log("[战斗] 首场结束未挂上自动，下一场进场补点一次", "WARN")
+                            else:
+                                _member_auto_pass_hook(win, wait_auto=True)
                         else:
                             # 自动使用法门：每场战斗第 1 回合点一次
                             # （首场由 handle_battle 内处理）
                             _click_famen(win)
                             if battle_no % AUTO_REASSERT_EVERY == 1:
-                                _click_auto_once(win)  # 每 5 场：点一次自动
+                                if _click_auto_once(win):  # 每 5 场：点一次自动
+                                    _member_auto_pass_hook(win, wait_auto=False)
                             elif pending_auto:
-                                _click_auto_once(win)  # 首场未挂上自动：本场进场补点
+                                if _click_auto_once(win):  # 首场未挂上自动：本场进场补点
+                                    _member_auto_pass_hook(win, wait_auto=True)
                                 pending_auto = False
                         # 其余场次：不操作，等待游戏自动战斗结束
             else:

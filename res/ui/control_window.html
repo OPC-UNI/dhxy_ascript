@@ -330,6 +330,11 @@
                     <span class="switch-track"></span>
                     <span>自动抢盒子（仅非队长生效）</span>
                 </label>
+                <label class="switch-row">
+                    <input type="checkbox" id="xiuluo-tab-group">
+                    <span class="switch-track"></span>
+                    <span>组号专用（一窗口多账号：队员自动挂战斗/巫医/补血蓝，非队长停止任务）</span>
+                </label>
             </div>
             <!-- 五倍设置分组：自动抢盒子 + 检查队伍（队伍固定 5 人） -->
             <div class="group-box">
@@ -371,6 +376,11 @@
                     <input type="checkbox" id="wubei-kuimulang">
                     <span class="switch-track"></span>
                     <span>领取奎木狼任务（默认开启；关闭时领取到奎木狼任务自动重新领取替换）</span>
+                </label>
+                <label class="switch-row">
+                    <input type="checkbox" id="wubei-tab-group">
+                    <span class="switch-track"></span>
+                    <span>组号专用（一窗口多账号：队员自动挂战斗/巫医/补血蓝，非队长停止任务）</span>
                 </label>
             </div>
         </div>
@@ -673,6 +683,7 @@
         const xiuluoHezi = document.getElementById('xiuluo-hezi');
         const xiuluoCheckTeam = document.getElementById('xiuluo-check-team');
         const xiuluoAutoWuyi = document.getElementById('xiuluo-auto-wuyi');
+        const xiuluoTabGroup = document.getElementById('xiuluo-tab-group');
         const highPerf = document.getElementById('high-perf');
         const autoRefill = document.getElementById('auto-refill');
         const clearScreen = document.getElementById('clear-screen');
@@ -684,6 +695,7 @@
         const wubeiAutoWuyi = document.getElementById('wubei-auto-wuyi');
         const wubeiWuyiIntervalEl = document.getElementById('wubei-wuyi-interval');
         const wubeiKuimulang = document.getElementById('wubei-kuimulang');
+        const wubeiTabGroup = document.getElementById('wubei-tab-group');
         const xiuluoShout = document.getElementById('xiuluo-shout');
         const btnVerifyXiuluo = document.getElementById('btn-verify-xiuluo');
         const verifyResultEl = document.getElementById('verify-result');
@@ -1118,6 +1130,7 @@
             xiuluoHezi.checked = !!info.xiuluo_hezi;
             xiuluoCheckTeam.checked = !!info.xiuluo_check_team;
             xiuluoAutoWuyi.checked = !!info.xiuluo_auto_wuyi;
+            xiuluoTabGroup.checked = !!info.xiuluo_tab_group;
             highPerf.checked = !!info.high_perf;
             autoRefill.checked = !!info.auto_refill;
             clearScreen.checked = !!info.clear_screen;
@@ -1146,6 +1159,7 @@
                 wubeiWuyiIntervalEl.innerText = info.wubei.wuyi_interval;
             }
             wubeiKuimulang.checked = !!(info.wubei && info.wubei.kuimulang);
+            wubeiTabGroup.checked = !!(info.wubei && info.wubei.tab_group);
             xiuluoShout.checked = !!info.xiuluo_shout;
             const ths = info.thresholds || {};
             for (const key of ['char_hp', 'char_mp', 'beast_hp', 'beast_mp']) {
@@ -1291,6 +1305,9 @@
         xiuluoAutoWuyi.addEventListener('change', () => {
             callPython('save_xiuluo_auto_wuyi', xiuluoAutoWuyi.checked);
         });
+        xiuluoTabGroup.addEventListener('change', () => {
+            callPython('save_xiuluo_tab_group', xiuluoTabGroup.checked);
+        });
 
         // 高性能模式开关变更：立即保存（下次任务启动生效）
         highPerf.addEventListener('change', () => {
@@ -1350,6 +1367,9 @@
         });
         wubeiKuimulang.addEventListener('change', () => {
             callPython('save_wubei_kuimulang_switch', wubeiKuimulang.checked);
+        });
+        wubeiTabGroup.addEventListener('change', () => {
+            callPython('save_wubei_tab_group', wubeiTabGroup.checked);
         });
         xiuluoShout.addEventListener('change', () => {
             callPython('save_xiuluo_shout_switch', xiuluoShout.checked);

@@ -34,6 +34,7 @@ from . import task_tracker  # 任务追踪面板操作
 from .battle import (is_in_battle, is_in_battle_frame,
                      watch_in_battle as battle_watch_in_battle)  # 战斗状态判定（统一在 battle.py 中实现）
 from . import debug_overlay  # 调试信息悬浮层（任务进度更新）
+from . import tab_group  # 组号模式：pass 抑制标志（follow 轮询护栏）
 from .control_window import load_task_counts  # 任务次数上限（通用设置）
 
 # 任务追踪面板中的任务标题
@@ -1071,7 +1072,8 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 extra_dialog_handler=None, green_order=None, progress_key=None,
                 green_picker=None, fallback_keywords=None, first_items=None,
                 signature_key=None, ignore_empty_key=False, skip_texts=None,
-                pre_click_handler=None, require_coord=False):
+                pre_click_handler=None, require_coord=False,
+                post_track_handler=None):
     """循环跟踪任务直到完成（prefix 供其他任务复用，如五环）。
 
     每轮：点击任务当前第一个绿色文案 → 等待任务信息变化（内容更新）
@@ -1088,6 +1090,8 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
     供调用方做任务级终止。
     pre_click_handler：点击任务绿字前的检查回调 (win, items, img_np)，可抛异常
     终止跟踪（如五倍锁妖网任务在寻路开始前拦截，人物不起步直接替换领取）。
+    post_track_handler：点击任务绿字成功后的回调 (win)——点完即进入寻路期，
+    供组号模式检查队员血蓝（回调自行节流与消化异常，不阻塞跟踪推进）。
     green_order：多个可点击绿字须按序点击时的顺序关键词列表
     （如 青龙→白虎→朱雀→玄武），传给 track_task；None 时点第一个绿字。
     progress_key：进度判定回调 (items, img_np) → str。任务推进可能只改变
@@ -1133,6 +1137,16 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
             return signature_key(items, img_np)
         return task_tracker.task_signature(task)
     while time.time() < deadline:
+        # 组号 pass 进行中（战斗线程在切队员 Tab）：屏幕不是队长，
+        # 跳过本轮识别防误点队员账号
+        if tab_group.pass_active:
+            time.sleep(FOLLOW_POLL_INTERVAL)
+            continue
+        # 组号护栏：pass 切回失败残留时确保回到队长 Tab 再点寻路
+        # （点任务追踪/对话框绝不能落在队员 Tab 上）
+        if tab_group.active() and not tab_group.ensure_leader_tab(win):
+            time.sleep(FOLLOW_POLL_INTERVAL)
+            continue
         # 战斗中：任务追踪不可用（可能误判任务消失），等待战斗结束
         if is_in_battle(win):
             time.sleep(FOLLOW_POLL_INTERVAL)
@@ -1218,6 +1232,11 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
         rounds += 1
         progressed = False
         log(f"[{prefix}] 第 {rounds} 轮跟踪完成，等待任务信息变化", "SYS")
+        if post_track_handler is not None:
+            try:
+                post_track_handler(win)
+            except Exception as e:
+                log(f"[{prefix}] post_track_handler 异常: {e}", "WARN")
 
         # 等待任务信息变化或任务消失；期间处理对话框选项与锄遗聚宝小游戏
         changed_once = False
@@ -1238,6 +1257,9 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
 
         while time.time() < deadline:
             time.sleep(CONFIRM_POLL_INTERVAL if changed_once else FOLLOW_POLL_INTERVAL)
+            # 组号 pass 进行中：屏幕是队员 Tab，跳过本轮识别（同外层护栏）
+            if tab_group.pass_active:
+                continue
             img = win.capture(force_activate=False)
             if img is None:
                 continue
