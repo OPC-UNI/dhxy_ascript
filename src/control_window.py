@@ -745,6 +745,7 @@ class ControlWindow(WebWindow):
         self.expose(self.verify_xiuluo_return)
         self.expose(self.verify_xiuluo_claim)
         self.expose(self.verify_xiuluo_wuyi)
+        self.expose(self.verify_xiuluo_tab_wuyi)
         self.expose(self.verify_wubei_claim)
         self.expose(self.verify_wubei_return)
         self.expose(self.verify_wubei_wuyi)
@@ -1208,6 +1209,52 @@ class ControlWindow(WebWindow):
                 ok_js = "true" if ok else "false"
                 self.webview_instance.evaluate_js(
                     f"if(window.onWuyiVerifyResult){{window.onWuyiVerifyResult({ok_js}, {json.dumps(info)});}}")
+            except Exception:
+                pass
+
+    def verify_xiuluo_tab_wuyi(self):
+        """高级设置-修罗组号巫医验证按钮：队长巫医链路 + 队员 Tab 巫医 pass。
+
+        主进程无战斗线程，队长医治选项由验证自行点击（与 verify_wuyi_flow
+        一致）；前置：窗口内 ≥2 个已登录 Tab（开关状态不校验）。
+        """
+        if self._tm.is_running():
+            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if self._verifying:
+            return {"status": "error", "msg": "验证进行中，请稍候"}
+        win = game.find_main_window()
+        if win is None:
+            return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
+        if not _game_window_clickable(win):
+            return {"status": "error", "msg": "游戏窗口被其他窗口遮挡，请将游戏窗口置于前台后再验证"}
+        self._verifying = True
+        threading.Thread(target=self._run_tab_wuyi_verify, args=(win,),
+                         daemon=True, name="xiuluo-tab-wuyi-verify").start()
+        return {"status": "success",
+                "msg": "验证已开始：队长巫医链路 → 逐个队员 Tab 点击医治对话框 → 切回队长（需 ≥2 个已登录 Tab）"}
+
+    def _run_tab_wuyi_verify(self, win):
+        """组号巫医验证线程体：队长巫医链路 + 队员 Tab pass，结果回推页面与日志窗。"""
+        from . import xiuluo  # 延迟导入：xiuluo 反向导入本模块（避免循环）
+        try:
+            self.add_logs(["[验证] 开始验证修罗组号巫医（队长巫医 → 逐个队员 Tab 医治对话框 → 切回队长）..."])
+            ok, info = xiuluo.verify_tab_wuyi_flow(win)
+        except Exception as e:
+            ok, info = False, f"验证异常: {e}"
+        try:
+            self.add_logs([f"[验证] 结果: {info}"])
+        except Exception:
+            pass
+        self._notify_tab_wuyi_verify_result(ok, info)
+        self._verifying = False
+
+    def _notify_tab_wuyi_verify_result(self, ok, info):
+        """组号巫医验证结果回推页面（高级设置-组号巫医验证行的结果文案）。"""
+        if self.webview_instance:
+            try:
+                ok_js = "true" if ok else "false"
+                self.webview_instance.evaluate_js(
+                    f"if(window.onTabWuyiVerifyResult){{window.onTabWuyiVerifyResult({ok_js}, {json.dumps(info)});}}")
             except Exception:
                 pass
 

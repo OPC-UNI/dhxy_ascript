@@ -122,6 +122,15 @@ def active():
     return _active and current_task_mode() == _mode
 
 
+def ready():
+    """组号基础条件是否具备（已登录 Tab ≥2 且队长 ID 可解析）。
+
+    验证模式用：主进程没有任务模式（active() 需 current_task_mode
+    匹配），验证时用 ready() + pass(force=True) 绕过模式校验。
+    """
+    return _leader_id is not None and _logged_count >= 2
+
+
 def startup_leader_check(win):
     """组号模式启动检查：强制队长判定（即使「检查队伍」开关关闭）。
 
@@ -200,8 +209,12 @@ def _switch_next(win):
 
 
 def return_to_leader(win):
-    """切回队长 Tab（Ctrl+Tab 循环直至当前 ID == 队长 ID）。"""
-    if not _active or _leader_id is None:
+    """切回队长 Tab（Ctrl+Tab 循环直至当前 ID == 队长 ID）。
+
+    只认 _leader_id（不查 active()——验证模式 force 走 pass 时
+    _active 为 False，仍须切回队长）。
+    """
+    if _leader_id is None:
         return
     for _ in range(TAB_CYCLE_GUARD):
         if _current_id(win) == _leader_id:
@@ -243,14 +256,16 @@ def _guarded_click(win, x, y, button="primary"):
     return True
 
 
-def _for_each_member(win, handler, label):
+def _for_each_member(win, handler, label, force=False):
     """遍历队员 Tab：Ctrl+Tab 切一整圈（_tab_count 次），逐个执行 handler。
 
-    未登录 Tab（切换成功但无 ID，cur == ""）跳过；绕回队长提前结束；
-    handler 异常内部消化；整体受 PASS_TOTAL_DEADLINE 上限保护。
-    结束切回队长。pass_active 由调用方置位/复位。
+    handler 签名 (win, tab_id)；未登录 Tab（切换成功但无 ID，
+    cur == ""）跳过；绕回队长提前结束；handler 异常内部消化；
+    整体受 PASS_TOTAL_DEADLINE 上限保护。结束切回队长。
+    pass_active 由调用方置位/复位。
+    force=True 供验证模式绕过 active() 检查（主进程无任务模式）。
     """
-    if not _active:
+    if not _active and not force:
         return
     deadline = time.time() + PASS_TOTAL_DEADLINE
     for _ in range(_tab_count):
@@ -267,7 +282,7 @@ def _for_each_member(win, handler, label):
             log(f"[组号] {label}：当前 Tab 未登录，跳过", "INFO")
             continue
         try:
-            handler(cur)
+            handler(win, cur)
         except Exception as e:
             log(f"[组号] {label}：队员 Tab（ID {cur}）处理异常: {e}", "WARN")
     return_to_leader(win)
@@ -291,7 +306,7 @@ def member_auto_pass(win, wait_auto=AUTO_WAIT_FIRST):
         if not _ensure_foreground(win):
             log("[组号] 游戏窗口未在前台，跳过战斗自动 pass", "WARN")
             return
-        _for_each_member(win, lambda cur: _auto_one(win, cur, wait_auto),
+        _for_each_member(win, lambda w, cur: _auto_one(w, cur, wait_auto),
                          "战斗自动 pass")
     finally:
         _exit_pass()
@@ -321,15 +336,16 @@ def _auto_one(win, tab_id, wait_auto):
 
 # ---- 巫医 pass ----
 
-def member_wuyi_pass(win):
+def member_wuyi_pass(win, force=False):
     """巫医 pass：队长点完全部医治后，逐个队员点击其自动弹出的巫医对话框。
 
     前置（用户确认）：队长点击巫医 NPC 后所有队员自动弹出对话框、
     不点不消失——队员不点 NPC、不检查血蓝（医治的是召唤兽忠诚度）、
     不重点任务追踪；对话框未弹出/选项未识别 → 超时跳过记日志。
+    force=True 供验证模式绕过 active() 检查（主进程无任务模式）。
     """
     global pass_active
-    if not _active:
+    if not _active and not force:
         return
     if not _try_enter_pass():
         return  # 另一 pass 进行中：放弃本轮，等下一轮时机
@@ -337,7 +353,7 @@ def member_wuyi_pass(win):
         if not _ensure_foreground(win):
             log("[组号] 游戏窗口未在前台，跳过巫医 pass", "WARN")
             return
-        _for_each_member(win, _wuyi_one, "巫医 pass")
+        _for_each_member(win, _wuyi_one, "巫医 pass", force=force)
     finally:
         _exit_pass()
 

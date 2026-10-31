@@ -596,7 +596,11 @@
                     <button id="btn-verify-xiuluo-wuyi" class="btn" onclick="verifyXiuluoWuyi()">验证修罗巫医</button>
                     <span id="wuyi-verify-result"></span>
                 </div>
-                <div class="group-hint">与实际流程一致、时序无额外延时，且都不改变任务状态：回程=定位回城符不点击；领取=点击领取按钮开对话框、选项仅定位不点击、点屏幕中间关闭；巫医=走位到 NPC、定位后点击打开对话框（医治选项由战斗线程处理）。任务运行中不可验证。</div>
+                <div class="verify-row">
+                    <button id="btn-verify-xiuluo-tab-wuyi" class="btn" onclick="verifyXiuluoTabWuyi()">验证组号巫医</button>
+                    <span id="tab-wuyi-verify-result"></span>
+                </div>
+                <div class="group-hint">与实际流程一致、时序无额外延时，且都不改变任务状态：回程=定位回城符不点击；领取=点击领取按钮开对话框、选项仅定位不点击、点屏幕中间关闭；巫医=走位到 NPC、定位后点击打开对话框（医治选项由战斗线程处理）；组号巫医=巫医完整链路后逐个切换队员 Tab 点击其医治对话框并切回队长（需窗口内 ≥2 个已登录 Tab，开关状态不校验）。任务运行中不可验证。</div>
             </div>
             <div class="group-box">
                 <div class="group-title">五倍验证</div>
@@ -703,6 +707,8 @@
         const claimVerifyResultEl = document.getElementById('claim-verify-result');
         const btnVerifyXiuluoWuyi = document.getElementById('btn-verify-xiuluo-wuyi');
         const wuyiVerifyResultEl = document.getElementById('wuyi-verify-result');
+        const btnVerifyXiuluoTabWuyi = document.getElementById('btn-verify-xiuluo-tab-wuyi');
+        const tabWuyiVerifyResultEl = document.getElementById('tab-wuyi-verify-result');
         const btnVerifyWubeiClaim = document.getElementById('btn-verify-wubei-claim');
         const wubeiClaimVerifyResultEl = document.getElementById('wubei-claim-verify-result');
         const btnVerifyWubeiReturn = document.getElementById('btn-verify-wubei-return');
@@ -1467,6 +1473,37 @@
             btnVerifyXiuluoWuyi.disabled = false;
             wuyiVerifyResultEl.style.color = ok ? 'var(--accent)' : '#ff5f5f';
             wuyiVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+        };
+
+        // 修罗组号巫医验证：队长巫医链路 + 队员 Tab pass，结果经 onTabWuyiVerifyResult 异步回推
+        async function verifyXiuluoTabWuyi() {
+            if (verifying) return;
+            verifying = true;
+            btnVerifyXiuluoTabWuyi.disabled = true;
+            tabWuyiVerifyResultEl.style.color = 'var(--text)';
+            tabWuyiVerifyResultEl.innerText = '验证中...';
+            try {
+                const r = await callPython('verify_xiuluo_tab_wuyi');
+                if (!r || r.status !== 'success') {
+                    tabWuyiVerifyResultEl.style.color = '#ff5f5f';
+                    tabWuyiVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
+                    verifying = false;
+                    btnVerifyXiuluoTabWuyi.disabled = false;
+                }
+            } catch (e) {
+                tabWuyiVerifyResultEl.style.color = '#ff5f5f';
+                tabWuyiVerifyResultEl.innerText = '验证请求异常';
+                verifying = false;
+                btnVerifyXiuluoTabWuyi.disabled = false;
+            }
+        }
+
+        // Python 侧调用：组号巫医验证结束回推结果
+        window.onTabWuyiVerifyResult = function (ok, info) {
+            verifying = false;
+            btnVerifyXiuluoTabWuyi.disabled = false;
+            tabWuyiVerifyResultEl.style.color = ok ? 'var(--accent)' : '#ff5f5f';
+            tabWuyiVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
         };
 
         // 五倍领取验证：与修罗领取验证同模式，结果经 onWubeiClaimVerifyResult 异步回推

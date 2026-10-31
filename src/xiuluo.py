@@ -466,6 +466,28 @@ def verify_wuyi_flow(win):
                            click_option_self=True)
 
 
+def verify_tab_wuyi_flow(win):
+    """验证组号巫医（高级设置-验证按钮，主进程调用，不改变任务状态）。
+
+    与 verify_wuyi_flow 同一队长链路（自行点击医治选项，主进程无
+    战斗线程），队长医治完成后追加组号队员 pass：逐个切换队员 Tab
+    点击其自动弹出的医治对话框，最后切回队长。前置：窗口内 ≥2 个
+    已登录 Tab（开关状态不校验——验证不受开关影响，仅统计 Tab 数）。
+    返回 (是否成功, 描述)。
+    """
+    ok, info = _run_wuyi_chain(win, hover_before_click=True, report_condition=True,
+                               click_option_self=True)
+    if not ok:
+        return False, info
+    # 强制枚举 Tab（主进程无任务模式，active() 不可用；验证用
+    # ready() + member_wuyi_pass(force=True) 绕过模式校验）
+    tab_group.init_task(win, TASK_MODE, True)
+    if not tab_group.ready():
+        return False, f"{info}；组号模式未激活（需窗口内 ≥2 个已登录 Tab），队员 pass 未执行"
+    tab_group.member_wuyi_pass(win, force=True)
+    return True, f"{info}；队员巫医 pass 已执行"
+
+
 def _near_claim_spot(pos, tolerance):
     """判断位置是否在灵兽村领取点附近（地名精确匹配，容差抗 OCR 噪声）。"""
     return game_map.is_at_position(pos, LINGSHOUCUN,
