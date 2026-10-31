@@ -46,7 +46,7 @@ import numpy as np
 from PIL import Image
 from ascript.windows.window.Window import WindowCaptureFormat
 
-from .app_utils import log, human_click, human_move, current_task_mode
+from .app_utils import log, human_click, human_move, current_task_mode, UserAbort
 from . import map as game_map
 from . import status_bars  # 血蓝条检测回满（每场战斗结束后调用）
 from . import task_tracker  # 对话框区域与绿色选项定位（巫医对话框）
@@ -791,6 +791,9 @@ def watch_loop(win):
                     if now - hezi_click_at >= XIULUO_HEZI_RETRY_COOLDOWN \
                             and _handle_hezi(win):
                         hezi_click_at = now
+        except UserAbort as e:
+            log(f"[战斗] {e}，战斗监控退出", "WARN")
+            break
         except Exception as e:
             log(f"[战斗] 监控异常: {e}", "WARN")
         time.sleep(WATCH_POLL_INTERVAL)

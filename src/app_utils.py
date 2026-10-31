@@ -10,6 +10,11 @@ import time
 from ascript.windows.hardware.mouse import Mouse
 from ascript.windows.system.key_value import KeyValue
 
+try:
+    from pydirectinput import FailSafeException as _PDIFailSafe
+except ImportError:  # 理论不可达（ascript Mouse 依赖 pydirectinput），防御性兜底
+    _PDIFailSafe = ()
+
 # ---- 本地日志文件（开发调试用：日志落盘到工程目录 logs/，运行中/结束后
 # 可直接读取文件排查问题，无需翻浮动窗口日志面板）----
 _LOG_DIR = pathlib.Path(os.getcwd()) / "logs"
@@ -100,6 +105,42 @@ _INPUT_LOCK = threading.RLock()
 _BAG_LOCK = threading.RLock()
 
 
+class UserAbort(BaseException):
+    """用户人工接管鼠标（fail-safe 触发）——任务应干净中止。
+
+    触发条件：物理鼠标位于屏幕角落时，PyDirectInput/PyAutoGUI 的
+    fail-safe 会拒绝一切输入操作（脚本自身所有移动目标都在游戏窗口
+    内，不可能把鼠标移到角落，只有人能触发）。
+
+    继承 BaseException 而非 Exception：任务循环内遍布的
+    ``except Exception`` 兜底不应吞掉用户中断——与 KeyboardInterrupt
+    同理，直接穿透到 task_start 顶层收口（日志落盘 + 线程干净退出，
+    2026-10-31 fail-safe 致线程裸崩、堆栈丢失在控制台的教训）。
+    """
+
+
+def _convert_failsafe(e):
+    """鼠标输入异常识别：fail-safe 命中转 UserAbort，其余原样返回。
+
+    ascript Mouse 走 pydirectinput（FAILSAFE=True），类型信号为
+    pydirectinput.FailSafeException；消息兜底（"fail-safe"）覆盖后端
+    替换/异常被包装后类型丢失的情况。返回后调用方以裸 ``raise``
+    重抛原异常（本函数不抛即非 fail-safe）。
+    """
+    if isinstance(e, _PDIFailSafe) or "fail-safe" in str(e).lower():
+        raise UserAbort(
+            "检测到鼠标位于屏幕角落（fail-safe 触发），判定用户人工接管") from e
+
+
+def _mouse_call(fn, *args, **kwargs):
+    """执行 Mouse 调用并把 fail-safe 异常转成 UserAbort（其余原样抛出）。"""
+    try:
+        return fn(*args, **kwargs)
+    except Exception as e:
+        _convert_failsafe(e)
+        raise
+
+
 def human_move(target_x: int, target_y: int, duration: float = None):
     """直接移动到屏幕坐标（无轨迹），保持极短耗时。
 
@@ -111,7 +152,7 @@ def human_move(target_x: int, target_y: int, duration: float = None):
     with _INPUT_LOCK:
         if duration is None:
             duration = random.uniform(0.04, 0.09)
-        Mouse.mouse_move(target_x, target_y, move_duration=duration)
+        _mouse_call(Mouse.mouse_move, target_x, target_y, move_duration=duration)
 
 
 def human_click(win, x: int, y: int, button: str = "primary"):
@@ -130,7 +171,7 @@ def human_click(win, x: int, y: int, button: str = "primary"):
         sx = win.rect.left + x + random.randint(-2, 2)
         sy = win.rect.top + y + random.randint(-2, 2)
         human_move(sx, sy)
-        Mouse.click(button=button)
+        _mouse_call(Mouse.click, button=button)
 
 
 def precise_click(win, x: int, y: int, times: int = 1, interval: float = 0.4,
@@ -151,10 +192,10 @@ def precise_click(win, x: int, y: int, times: int = 1, interval: float = 0.4,
     with _INPUT_LOCK:
         sx = win.rect.left + int(x)
         sy = win.rect.top + int(y)
-        Mouse.mouse_move(sx, sy, move_duration=(
+        _mouse_call(Mouse.mouse_move, sx, sy, move_duration=(
             random.uniform(0.04, 0.09) if move_duration is None else move_duration))
         for _ in range(int(times)):
-            Mouse.click(button="primary")
+            _mouse_call(Mouse.click, button="primary")
             if interval:
                 time.sleep(interval)
 

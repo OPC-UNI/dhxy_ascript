@@ -24,6 +24,7 @@ import os
 import sys
 import threading
 import time
+import traceback
 
 # ---- 打包环境路径引导 ----
 # 打包后本文件位于 site-packages/dhxy2/main.py，src 子包随包安装为
@@ -168,6 +169,9 @@ def _sheyaoxiang_watchdog(win):
             if ok:
                 app_utils.sheyaoxiang_mark_used(win)
             log(f"[摄妖香] 定时续用: {info}", "SYS" if ok else "WARN")
+        except app_utils.UserAbort as e:
+            log(f"[摄妖香] {e}，定时续用线程退出", "WARN")
+            break
         except Exception as e:
             log(f"[摄妖香] 定时续用异常: {e}", "WARN")
 
@@ -218,7 +222,26 @@ def task_start():
 
     由 TaskManager 在独立子进程的 daemon 线程中调用；
     停止/超限时进程被强杀，本函数内所有循环与线程随进程一并终止。
+
+    顶层兜底（2026-10-31 物理鼠标位于屏幕角落触发 fail-safe、任务
+    线程裸崩且堆栈只留在控制台的教训）：
+    - app_utils.UserAbort（用户人工接管鼠标）：记 WARN 后正常返回，
+      wrapper 检测线程结束执行 task_stop 善后——干净中止而非异常退出；
+    - 其余未捕获异常：完整堆栈先落盘（log 双写日志文件）再重抛，
+      控制台与日志文件均保留现场。
     """
+    try:
+        _task_start_body()
+    except app_utils.UserAbort as e:
+        log(f"[系统] {e}，任务中止（鼠标移出屏幕角落后可重新启动）", "WARN")
+    except Exception:
+        log("[系统] 任务线程未捕获异常，完整堆栈如下:\n"
+            + traceback.format_exc(), "ERROR")
+        raise
+
+
+def _task_start_body():
+    """task_start 逻辑体（收拢为函数以便顶层统一兜底，见 task_start）。"""
     log("业务进程已建立，开始执行自动化任务...", "SYS")
     log(f"[日志] 本地日志文件: {log_file_path()}", "SYS")
     modes = load_selected_modes()  # 选中任务列表（按面板勾选，固定顺序执行）
