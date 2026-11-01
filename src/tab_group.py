@@ -21,7 +21,8 @@ from PIL import Image
 from ascript.windows.hardware.keyboard import Keyboard
 from ascript.windows.window.Window import WindowCaptureFormat
 
-from .app_utils import log, human_click, current_task_mode
+from .app_utils import log, human_click, move_away, current_task_mode
+from .control_window import load_high_perf  # 高性能开关：巫医 pass 直点门控
 from . import game  # 子窗口枚举（每个 Tab 一个 Win32Window）
 from . import map as game_map  # 模板匹配快速接口
 from . import status_bars  # 血蓝条检测回满（队员 pass 复用）
@@ -37,6 +38,8 @@ AUTO_WAIT_ROUTINE = 1.0    # 每 5 场例行队员自动按钮等待上限（多
 BARS_PASS_INTERVAL = 60.0  # 队员血蓝检查最小间隔（寻路中触发，节流）
 WUYI_DIALOG_WAIT = 3.0     # 队员巫医对话框出现等待上限
 WUYI_GONE_WAIT = 3.0       # 队员巫医对话框关闭确认上限
+WUYI_POS_FRESH = 30.0      # 队长选项坐标新鲜期：期内队员 pass 可直点复用
+                           # （队长点击后 pass 数秒内开始，30s 足够覆盖）
 PASS_TOTAL_DEADLINE = 30.0  # 单次 pass 总时长上限（防异常拖垮主流程）
 
 # ---- 状态（任务进程内共享） ----
@@ -342,6 +345,8 @@ def member_wuyi_pass(win, force=False):
     前置（用户确认）：队长点击巫医 NPC 后所有队员自动弹出对话框、
     不点不消失——队员不点 NPC、不检查血蓝（医治的是召唤兽忠诚度）、
     不重点任务追踪；对话框未弹出/选项未识别 → 超时跳过记日志。
+    高性能模式 + 队长选项坐标新鲜（battle.record_wuyi_option_pos 刚记录，
+    同一对话框布局队员位置相同）时直点同一坐标，省每队员截图+OCR。
     force=True 供验证模式绕过 active() 检查（主进程无任务模式）。
     """
     global pass_active
@@ -353,9 +358,31 @@ def member_wuyi_pass(win, force=False):
         if not _ensure_foreground(win):
             log("[组号] 游戏窗口未在前台，跳过巫医 pass", "WARN")
             return
-        _for_each_member(win, _wuyi_one, "巫医 pass", force=force)
+        from . import battle  # 函数内导入，避免循环依赖
+        pos = battle.last_wuyi_option_pos
+        fresh = pos is not None \
+            and time.time() - battle.last_wuyi_option_at <= WUYI_POS_FRESH
+        if fresh and load_high_perf():
+            log(f"[组号] 巫医 pass 高性能直点：复用队长选项坐标 ({pos[0]},{pos[1]})", "INFO")
+            _for_each_member(win, lambda w, cur: _wuyi_click_direct(w, cur, pos),
+                             "巫医 pass（高性能直点）", force=force)
+        else:
+            _for_each_member(win, _wuyi_one, "巫医 pass", force=force)
     finally:
         _exit_pass()
+
+
+def _wuyi_click_direct(win, tab_id, pos):
+    """高性能直点：队员对话框与队长同位置，直接点队长选项坐标。
+
+    跳过截图/OCR（同一客户端同一对话框布局）；点完移走鼠标防悬停
+    变色残留。队员无对话框的罕见情况下点击落到场景地面（队员走
+    几步，队长再移动时跟随恢复）——直点是高性能模式的明确取舍。
+    """
+    if _guarded_click(win, pos[0], pos[1]):
+        log(f"[组号] 队员 Tab（ID {tab_id}）已点击「全部医治和修复」"
+            f" @ ({pos[0]},{pos[1]})（高性能直点）", "SYS")
+    move_away(win)
 
 
 def _wuyi_one(win, tab_id):
@@ -387,6 +414,7 @@ def _wuyi_one(win, tab_id):
             if _guarded_click(win, pt[0], pt[1]):
                 log(f"[组号] 队员 Tab（ID {tab_id}）已点击「全部医治和修复」"
                     f" @ ({pt[0]},{pt[1]})", "SYS")
+            move_away(win)  # 悬停会让选项变色，干扰对话框关闭判定
             _wait_dialog_gone(win, tab_id)
             return
         time.sleep(0.5)  # 对话框在但选项未识别：继续轮询

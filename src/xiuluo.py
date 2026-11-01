@@ -417,6 +417,8 @@ def _run_wuyi_chain(win, hover_before_click=False, report_condition=False,
                     human_click(win, pt_opt[0], pt_opt[1])
                     log(f"[修罗][验证] 已点击「全部医治和修复」"
                         f"@ ({pt_opt[0]}, {pt_opt[1]})", "SYS")
+                    battle.record_wuyi_option_pos(pt_opt)  # 组号队员 pass 直点复用
+                    move_away(win)  # 悬停会让选项变色，干扰绿字判定
                     option_clicked = True
             time.sleep(1.0)
             continue
@@ -434,6 +436,8 @@ def _run_wuyi_chain(win, hover_before_click=False, report_condition=False,
                 human_click(win, pt_opt[0], pt_opt[1])
                 log(f"[修罗][巫医] 等待超时，自行点击「全部医治和修复」"
                     f"@ ({pt_opt[0]}, {pt_opt[1]})", "WARN")
+                battle.record_wuyi_option_pos(pt_opt)  # 组号队员 pass 直点复用
+                move_away(win)  # 悬停会让选项变色，干扰绿字判定
                 time.sleep(1.0)  # 等待点击生效
                 return True, "医治对话框超时未关闭，已自行点击选项"
         return True, "医治对话框已出现（战斗线程将继续处理）"

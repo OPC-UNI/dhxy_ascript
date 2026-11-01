@@ -46,7 +46,7 @@ import numpy as np
 from PIL import Image
 from ascript.windows.window.Window import WindowCaptureFormat
 
-from .app_utils import log, human_click, human_move, current_task_mode, UserAbort
+from .app_utils import log, human_click, human_move, move_away, current_task_mode, UserAbort
 from . import map as game_map
 from . import status_bars  # 血蓝条检测回满（每场战斗结束后调用）
 from . import task_tracker  # 对话框区域与绿色选项定位（巫医对话框）
@@ -116,6 +116,11 @@ WUYI_DIALOG_TEXTS = (
     "召唤兽和坐骑都是上天赐给我们的好朋友，要好好对待它们，会保佑你的。",
 )
 WUYI_OPTION_TEXT = "全部医治和修复"                    # 对话框绿色选项（游戏内原文，精确子串匹配）
+# 最近一次巫医选项点击位置与时间（组号模式队员 pass 高性能直点复用：
+# 同一客户端同一对话框布局，队员选项位置与队长一致——新鲜期内
+# 切到队员直接点同一坐标，省截图+OCR；见 tab_group._wuyi_click_direct）
+last_wuyi_option_pos = None
+last_wuyi_option_at = 0.0
 WUYI_CHECK_INTERVAL = 2.0    # 战斗结束后高发窗口内的巫医对话框检查间隔（秒）。
                              # 实测 5s 节奏弹窗最多等 5s 才被点击，人物寻路走远后
                              # 对话框关闭、点击失效；2s 下最坏延迟 ~2s——该节奏
@@ -637,6 +642,8 @@ def _handle_wuyi_dialog(win):
         return False
     human_click(win, pt[0], pt[1])
     log(f"[战斗] 巫医对话框：已点击「全部医治和修复」 @ ({pt[0]},{pt[1]})", "SYS")
+    record_wuyi_option_pos(pt)  # 组号模式队员 pass 高性能直点复用坐标
+    move_away(win)  # 移走鼠标：悬停会让选项变色（切队员 Tab 后干扰绿字判定）
     _wuyi_option_missing_warned = False
     return True
 
@@ -655,6 +662,18 @@ def _find_wuyi_option(items, img_np):
             return task_tracker.green_text_center(img_np, rect,
                                                   prefer_underline=False)
     return None
+
+
+def record_wuyi_option_pos(pt):
+    """记录巫医选项点击位置与时间（组号模式队员 pass 高性能直点复用）。
+
+    队长侧每次点击「全部医治和修复」（战斗线程/验证/超时兜底）后
+    调用：同一客户端同一对话框布局，队员 Tab 的选项位置与队长一致，
+    新鲜期内（tab_group.WUYI_POS_FRESH）队员 pass 直接点同一坐标。
+    """
+    global last_wuyi_option_pos, last_wuyi_option_at
+    last_wuyi_option_pos = (int(pt[0]), int(pt[1]))
+    last_wuyi_option_at = time.time()
 
 
 def _wuyi_check_interval(now, last_battle_end_at, expected_at):
