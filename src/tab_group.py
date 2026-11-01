@@ -21,7 +21,8 @@ from PIL import Image
 from ascript.windows.hardware.keyboard import Keyboard
 from ascript.windows.window.Window import WindowCaptureFormat
 
-from .app_utils import log, human_click, move_away, current_task_mode
+from .app_utils import (log, human_click, move_away, current_task_mode,
+                        fixed_pos_get, fixed_pos_set)
 from .control_window import load_high_perf  # 高性能开关：巫医 pass 直点门控
 from . import game  # 子窗口枚举（每个 Tab 一个 Win32Window）
 from . import map as game_map  # 模板匹配快速接口
@@ -316,7 +317,12 @@ def member_auto_pass(win, wait_auto=AUTO_WAIT_FIRST):
 
 
 def _auto_one(win, tab_id, wait_auto):
-    """单个队员 Tab 的战斗自动：截一帧判战斗 → 等自动按钮出现即点。"""
+    """单个队员 Tab 的战斗自动：截一帧判战斗 → 等自动按钮出现即点。
+
+    高性能缓存：自动按钮位置固定（同队长同一客户端），队长例行确认
+    刚记下的缓存坐标直接复用——小 ROI 双模板比分数判态，「取消自动」
+    即已挂自动跳过，「自动」点缓存坐标；无缓存走操作条带识别并记缓存。
+    """
     from . import battle  # 函数内导入：battle 顶层导入 tab_group，避免循环依赖
     deadline = time.time() + max(0.5, wait_auto)
     while time.time() < deadline:
@@ -327,12 +333,25 @@ def _auto_one(win, tab_id, wait_auto):
         if not battle.is_in_battle_frame(img):
             log(f"[组号] 队员 Tab（ID {tab_id}）不在战斗中，跳过自动", "INFO")
             return
-        pt = game_map.match_frame_np(img, battle.AUTO_ICON,
-                                     region=battle._bar_band(img), fallback=True)
-        if pt is not None:
-            if _guarded_click(win, pt[0], pt[1]):
-                log(f"[组号] 队员 Tab（ID {tab_id}）已点击自动 @ ({pt[0]},{pt[1]})", "SYS")
-            return
+        pos = fixed_pos_get(battle.AUTO_POS_CACHE_KEY, win)
+        if pos is not None:
+            state = battle._auto_state_at(img, pos)
+            if state == "cancel":
+                log(f"[组号] 队员 Tab（ID {tab_id}）已挂自动（取消自动按钮可见），跳过", "INFO")
+                return
+            if state == "auto":
+                if _guarded_click(win, pos[0], pos[1]):
+                    log(f"[组号] 队员 Tab（ID {tab_id}）已点击自动"
+                        f" @ ({pos[0]},{pos[1]})（高性能缓存）", "SYS")
+                return
+        else:
+            pt = game_map.match_frame_np(img, battle.AUTO_ICON,
+                                         region=battle._bar_band(img), fallback=True)
+            if pt is not None:
+                if _guarded_click(win, pt[0], pt[1]):
+                    log(f"[组号] 队员 Tab（ID {tab_id}）已点击自动 @ ({pt[0]},{pt[1]})", "SYS")
+                fixed_pos_set(battle.AUTO_POS_CACHE_KEY, win, pt[0], pt[1])  # 识别成功记缓存
+                return
         time.sleep(0.5)
     log(f"[组号] 队员 Tab（ID {tab_id}）未识别到自动按钮（可能已挂自动），跳过", "INFO")
 

@@ -46,7 +46,9 @@ import numpy as np
 from PIL import Image
 from ascript.windows.window.Window import WindowCaptureFormat
 
-from .app_utils import log, human_click, human_move, move_away, current_task_mode, UserAbort
+from .app_utils import (log, human_click, human_move, move_away,
+                        current_task_mode, UserAbort,
+                        fixed_pos_get, fixed_pos_set, fixed_pos_clear)
 from . import map as game_map
 from . import status_bars  # 血蓝条检测回满（每场战斗结束后调用）
 from . import task_tracker  # 对话框区域与绿色选项定位（巫医对话框）
@@ -100,6 +102,12 @@ AUTO_ASSERT_TIMEOUT = 35     # 例行确认自动时等待自动按钮出现的�
 BATTLE_CONFIRM_POLLS = 2     # 战斗进入的连续轮询确认次数（防开场抖动）
 BATTLE_END_CONFIRM_POLLS = 4  # 战斗结束的连续轮询确认次数（0.5s×4=2s 窗口，
                               # 与原先 1s×2 相同，防回合间隙误判结束）
+
+# ---- 自动按钮高性能缓存（位置固定：操作条在窗口底部，按钮布局不变） ----
+AUTO_POS_CACHE_KEY = "battle_auto"  # 固定位置缓存键（识别成功后 fixed_pos_set）
+AUTO_CACHE_ROI_MARGIN = (80, 50)    # 缓存位置附近小 ROI（按钮 + ≥50px 余量）
+AUTO_CACHE_MISS_CLEAR = 6           # 缓存路径连续未命中 N 次（×0.5s）做一次全带复查
+AUTO_STATE_THRESHOLD = 0.8          # 按钮态判定阈值（与 match_frame_np 默认一致）
 
 # ---- 战斗 UI 搜索条带（快速匹配用，窗口相对坐标，实测 1378x831 布局） ----
 BANNER_BAND = (0, 40, 400, 240)  # 回合横幅带（第1/第2回合横幅实测 x34-121 y88-116）
@@ -556,10 +564,16 @@ def _click_auto_once(win):
     不会出现，轮询超时即跳过、不打扰；自动被关掉（如次数耗尽）时
     点一次重新开启。操作条可能正处回合间隙，最多等待一整回合的
     操作条周期；战斗结束（连续两轮确认）提前返回。单帧判定。
-    返回是否点击了自动按钮（组号模式据此触发队员自动 pass）。
+    高性能模式：按钮位置固定（识别成功后记缓存），每轮询只在缓存
+    位置小 ROI 双模板比分数判定按钮态——「取消自动」直接视为例行
+    确认完成（原逻辑此情形空等 35s 超时），「自动」点击缓存坐标；
+    连续未命中时每 6 次做一次全带复查（缓存漂移自愈：带区命中则
+    清缓存重学并点击）。返回是否已确认/点击自动（组号模式据此触发
+    队员自动 pass——已挂自动同样返回 True，队员 pass 顺势复确认）。
     """
     deadline = time.time() + AUTO_ASSERT_TIMEOUT
     out_polls = 0
+    cache_misses = 0
     while time.time() < deadline:
         img = win.capture(force_activate=False, format=WindowCaptureFormat.OPENCV)
         if img is None:
@@ -571,13 +585,41 @@ def _click_auto_once(win):
             out_polls += 1
             if out_polls >= BATTLE_CONFIRM_POLLS:
                 return False
-        pt = game_map.match_frame_np(img, AUTO_ICON, region=_bar_band(img),
-                                     fallback=True)
-        if pt is not None:
-            human_click(win, pt[0], pt[1])
-            _park_mouse(win)  # 鼠标移开，避免遮挡操作条
-            log("[战斗] 已点击自动按钮（每 5 场例行确认）", "SYS")
-            return True
+        pos = fixed_pos_get(AUTO_POS_CACHE_KEY, win)
+        if pos is not None:
+            state = _auto_state_at(img, pos)
+            if state == "cancel":
+                log("[战斗] 已处于自动战斗（取消自动按钮可见），例行确认完成（高性能缓存）", "INFO")
+                return True
+            if state == "auto":
+                human_click(win, pos[0], pos[1])
+                _park_mouse(win)  # 鼠标移开，避免遮挡操作条
+                log(f"[战斗] 已点击自动按钮（每 5 场例行确认，高性能缓存 @ ({pos[0]},{pos[1]})）", "SYS")
+                return True
+            cache_misses += 1
+            if cache_misses >= AUTO_CACHE_MISS_CLEAR:
+                # 缓存漂移自愈：全带复查一次——带区命中说明位置漂移
+                # （缓存 ROI 内不可见但按钮在别处），清缓存重学并点击；
+                # 未命中是回合间隙，保留缓存继续等下一轮询
+                cache_misses = 0
+                pt = game_map.match_frame_np(img, AUTO_ICON, region=_bar_band(img),
+                                             fallback=True)
+                if pt is not None:
+                    fixed_pos_clear(AUTO_POS_CACHE_KEY)
+                    human_click(win, pt[0], pt[1])
+                    _park_mouse(win)  # 鼠标移开，避免遮挡操作条
+                    fixed_pos_set(AUTO_POS_CACHE_KEY, win, pt[0], pt[1])
+                    log("[战斗] 已点击自动按钮（每 5 场例行确认，缓存漂移已自愈）", "SYS")
+                    return True
+        else:
+            pt = game_map.match_frame_np(img, AUTO_ICON, region=_bar_band(img),
+                                         fallback=True)
+            if pt is not None:
+                human_click(win, pt[0], pt[1])
+                _park_mouse(win)  # 鼠标移开，避免遮挡操作条
+                fixed_pos_set(AUTO_POS_CACHE_KEY, win, pt[0], pt[1])  # 识别成功记缓存
+                log("[战斗] 已点击自动按钮（每 5 场例行确认）", "SYS")
+                return True
         time.sleep(BAR_POLL_INTERVAL)
     log("[战斗] 未识别到自动按钮（可能已处于自动战斗），本场不点击", "INFO")
     return False
@@ -661,6 +703,26 @@ def _find_wuyi_option(items, img_np):
                 and task_tracker.is_green_text(img_np, rect):
             return task_tracker.green_text_center(img_np, rect,
                                                   prefer_underline=False)
+    return None
+
+
+def _auto_state_at(img, pos):
+    """在缓存位置小 ROI 判定操作条自动按钮态（双模板比分数防互误匹配）。
+
+    自动/取消自动两按钮样式相近会弱互匹配（同队伍解散/离开教训），
+    各自分数达标且更高者胜。返回 "auto"（按钮为「自动」，可点）、
+    "cancel"（已挂自动，例行确认完成）或 None（按钮不可见：回合
+    间隙或缓存漂移）。img 为 BGR numpy 帧。
+    """
+    l, t = pos[0] - AUTO_CACHE_ROI_MARGIN[0], pos[1] - AUTO_CACHE_ROI_MARGIN[1]
+    region = (l, t, pos[0] + AUTO_CACHE_ROI_MARGIN[0],
+              pos[1] + AUTO_CACHE_ROI_MARGIN[1])
+    auto_score, _ = game_map.best_match_np(img, AUTO_ICON, region=region)
+    cancel_score, _ = game_map.best_match_np(img, AUTO_CANCEL_ICON, region=region)
+    if cancel_score >= AUTO_STATE_THRESHOLD and cancel_score > auto_score:
+        return "cancel"
+    if auto_score >= AUTO_STATE_THRESHOLD and auto_score > cancel_score:
+        return "auto"
     return None
 
 
