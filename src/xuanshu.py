@@ -1073,7 +1073,7 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 green_picker=None, fallback_keywords=None, first_items=None,
                 signature_key=None, ignore_empty_key=False, skip_texts=None,
                 pre_click_handler=None, require_coord=False,
-                post_track_handler=None):
+                post_track_handler=None, signature_ratio=0.8):
     """循环跟踪任务直到完成（prefix 供其他任务复用，如五环）。
 
     每轮：点击任务当前第一个绿色文案 → 等待任务信息变化（内容更新）
@@ -1092,6 +1092,13 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
     终止跟踪（如五倍锁妖网任务在寻路开始前拦截，人物不起步直接替换领取）。
     post_track_handler：点击任务绿字成功后的回调 (win)——点完即进入寻路期，
     供组号模式检查队员血蓝（回调自行节流与消化异常，不阻塞跟踪推进）。
+    signature_ratio：签名变化判定的相似阈值（默认 0.8）。同图链接变化
+    （如五环「去找长安城东李冰冰的替身」→「去找长安城东食婴鬼手下的
+    手下」，地图同为长安城东）归一签名相似度实测 0.846，默认阈值将其
+    过滤为 OCR 噪声而不点击、任务卡住须人工点链接恢复（2026-11-01
+    两轮实测各卡 2.5/7.4 分钟）；五环传 0.9 可检出（单字误读相似度
+    ≥0.923 仍被过滤，两字以上误读由确认轮询收敛、误点击只是重复点
+    同一链接无害）。
     green_order：多个可点击绿字须按序点击时的顺序关键词列表
     （如 青龙→白虎→朱雀→玄武），传给 track_task；None 时点第一个绿字。
     progress_key：进度判定回调 (items, img_np) → str。任务推进可能只改变
@@ -1202,7 +1209,8 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
             time.sleep(min(1.5, FOLLOW_POLL_INTERVAL * empty_sig_streak))
             continue
         empty_sig_streak = 0
-        if last_clicked_sig is not None and _signatures_similar(sig, last_clicked_sig) \
+        if last_clicked_sig is not None and _signatures_similar(sig, last_clicked_sig,
+                                                                ratio=signature_ratio) \
                 and not progressed:
             # 任务信息未真实变化（OCR 噪声抖动）→ 不重复点击，继续等待
             # progressed=True 时（进度键已变化）允许继续点击下一个绿字。
@@ -1309,7 +1317,7 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 if not sig2:
                     changed_once = False  # 链接行未检出：不作变化信号，回正常轮询
                     continue
-                text_changed = not _signatures_similar(sig2, sig)
+                text_changed = not _signatures_similar(sig2, sig, ratio=signature_ratio)
                 key = progress_key(items, img_np) if progress_key is not None else None
                 # baseline_key 为 None（阶段外基线）时不得参与比较：None 是
                 # 「不归我管」信号而非可比较值，与阶段内值（"0"/"1"）比较
@@ -1320,7 +1328,8 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 if ignore_empty_key and (not key or not baseline_key):
                     key_changed = False  # 空键为过渡帧，不作信号
                 if changed_kind == "text":
-                    if text_changed and _signatures_similar(sig2, changed_sig):
+                    if text_changed and _signatures_similar(sig2, changed_sig,
+                                                           ratio=signature_ratio):
                         # 跳出前复核对话框：确认轮询只 OCR 追踪面板（快速
                         # 路径），而确认窗口期可能弹出对话（如五环到达 NPC
                         # 的开场白，实测 2026-10-13）——补 OCR 对话框区域
@@ -1418,7 +1427,7 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
             if not sig2:
                 changed_once = False  # 链接行未检出：不作变化信号（过渡帧）
                 continue
-            text_changed = not _signatures_similar(sig2, sig)
+            text_changed = not _signatures_similar(sig2, sig, ratio=signature_ratio)
             key = None
             key_changed = False
             if progress_key is not None:

@@ -110,6 +110,13 @@ DAILY_LIMIT_INFO = "今日两次五环均已完成（请明天再来）"   # 结
 # 跟踪总超时（秒）：一轮五环含 5 个子目标与多场战斗，实测耗时约 9 分半，
 # 默认 300s 会中途超时重启（日志出现「跟踪后任务信息无变化（超时）」）
 WUHUAN_FOLLOW_TIMEOUT = 1800
+# 签名变化判定相似阈值（follow_task 参数）：同图链接变化（「去找长安城东
+# 李冰冰的替身」→「去找长安城东食婴鬼手下的手下」，地图同为长安城东）
+# 归一签名相似度实测 0.846，默认 0.8 阈值将其过滤为 OCR 噪声而不点击、
+# 任务卡住须人工点链接恢复（2026-11-01 两轮实测各卡 2.5/7.4 分钟）；
+# 0.9 可检出（单字误读相似度 ≥0.923 仍被过滤，两字以上误读由确认轮询
+# 收敛、误点击只是重复点同一链接无害）
+WUHUAN_SIG_RATIO = 0.9
 
 # ---- 时序参数（秒） ----
 CLOTH_SHOP_ARRIVE_TIMEOUT = 90  # 寻路到布店门口的超时
@@ -773,7 +780,8 @@ def run_loop(win, cycle_interval=3.0):
                                    green_picker=_wuhuan_link_picker,
                                    ignore_empty_key=True,
                                    skip_texts={},
-                                   require_coord=True)
+                                   require_coord=True,
+                                   signature_ratio=WUHUAN_SIG_RATIO)
         except MissingEquipment as e:
             log(f"[五环] {MISSING_EQUIPMENT_INFO}（{e}），结束任务", "SYS")
             return f"{MISSING_EQUIPMENT_INFO}，结束五环任务（已完成 {done} 次）"
