@@ -1655,6 +1655,22 @@ def _handle_dialog_options(win, items, img_np):
                 log(f"[客栈] 检测到任务对话，已点击绿色选项「{opt}」"
                     f"（重 OCR 补识）", "SYS")
                 return True
+            # 重 OCR 仍漏：对话框区 2x 放大重识别一次（答题选项字小或
+            # 渲染特殊，区域快引擎原尺寸漏检——2026-11-01 子曰第一题
+            # 三选项全漏、绿字块兜底点中第 1 位错误答案、任务卡死须
+            # 人工停止；与巫医/五倍开打选项同款 max/1600 快引擎放大，
+            # rect 映射回窗口坐标）
+            l, t, r, b = task_tracker.DIALOG_REGION
+            crop = cv2.resize(img_np2[t:b, l:r], ((r - l) * 2, (b - t) * 2),
+                              interpolation=cv2.INTER_LANCZOS4)
+            itemsz, _ = game_map.ocr_zoom(crop)
+            mapped = [(txt, [l + rect[0] // 2, t + rect[1] // 2,
+                             l + rect[2] // 2, t + rect[3] // 2], score)
+                      for txt, rect, score in itemsz]
+            if _click_green_option_fuzzy(win, mapped, img_np2, opt):
+                log(f"[客栈] 检测到任务对话，已点击绿色选项「{opt}」"
+                    f"（2x 放大补识）", "SYS")
+                return True
         # 选项 OCR 不可识别（如单字「哎」）：按问题行下方绿字块点击
         if _click_green_option_fallback(win, items, img_np, dtxt):
             log("[客栈] 检测到任务对话（选项 OCR 不可识别，绿字块兜底点击）", "SYS")
