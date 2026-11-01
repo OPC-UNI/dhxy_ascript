@@ -66,6 +66,8 @@ SKILL_GRID_STEP = (150, 30)     # 列/行间隔（3 列 × 5 行）
 FASHU_ICON = "fashu.png"       # 法术按钮模板（用户提供 15.png）
 FANGYU_ICON = "fangyu.png"     # 防御按钮模板（用户提供 16.png）
 AUTO_ICON = "auto.png"         # 自动按钮模板（用户提供 17.png）
+AUTO2_ICON = "auto2.png"       # 自动按钮变体模板（用户 2026-11-01 提供：
+                               # 自动态有另一种渲染形态，任一命中即视为「自动」）
 AUTO_CANCEL_ICON = "auto_cancel.png"    # 取消自动按钮模板（用户提供 18.png）
 AUTO_RESUME_ICON = "auto_resume.png"    # 恢复自动按钮模板（用户提供 19.png）
 BATTLE_FIRST_ICON = "battle_first.png"  # 「第1回合」横幅模板（第 1 回合判定，见 is_round_1）
@@ -341,7 +343,8 @@ def _find_in_frame(win, frame, icon):
         if frame is None:
             return None
     region = _bar_band(frame) if icon in (FASHU_ICON, FANGYU_ICON,
-                                          AUTO_ICON, AUTO_CANCEL_ICON) else None
+                                          AUTO_ICON, AUTO2_ICON,
+                                          AUTO_CANCEL_ICON) else None
     return game_map.match_frame_np(frame, icon, region=region, fallback=True)
 
 
@@ -352,6 +355,35 @@ def _click_template(win, icon):
         return False
     human_click(win, pt[0], pt[1])
     return True
+
+
+def _click_auto_button(win):
+    """点击自动按钮（自动态有两个渲染变体 auto/auto2，任一命中即点）。"""
+    for icon in (AUTO_ICON, AUTO2_ICON):
+        if _click_template(win, icon):
+            return True
+    return False
+
+
+def _match_auto_band(img):
+    """操作条带内匹配自动按钮（两个变体任一命中），返回中心或 None。"""
+    band = _bar_band(img)
+    for icon in (AUTO_ICON, AUTO2_ICON):
+        pt = game_map.match_frame_np(img, icon, region=band, fallback=True)
+        if pt is not None:
+            return pt
+    return None
+
+
+def _wait_auto_button(win, timeout):
+    """等待自动按钮出现（两个变体任一），返回是否出现。"""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        img = win.capture(force_activate=False, format=WindowCaptureFormat.OPENCV)
+        if img is not None and _match_auto_band(img) is not None:
+            return True
+        time.sleep(BAR_POLL_INTERVAL)
+    return False
 
 
 def _cancel_auto(win):
@@ -372,17 +404,19 @@ def _cancel_auto_frame(win, img):
     """帧内取消自动（见 _cancel_auto）。返回是否点击了取消。
 
     取消后轮询自动按钮出现代替固定等待（快恢复时立即继续，1.5s 超时
-    上限与旧固定等待相同）。
+    上限与旧固定等待相同）。自动态分数取两变体（auto/auto2）较高者。
     """
     band = _bar_band(img)
     cancel_score, cancel_pt = game_map.best_match_np(img, AUTO_CANCEL_ICON, region=band)
     auto_score, _ = game_map.best_match_np(img, AUTO_ICON, region=band)
+    auto2_score, _ = game_map.best_match_np(img, AUTO2_ICON, region=band)
+    auto_score = max(auto_score, auto2_score)
     if cancel_score >= BAR_BUTTON_THRESHOLD and cancel_score > auto_score:
         human_click(win, cancel_pt[0], cancel_pt[1])
         _park_mouse(win)  # 鼠标移开，避免遮挡操作条
         log("[战斗] 检测到自动战斗，已点击取消自动恢复手动", "SYS")
-        # 等待操作条恢复手动（自动按钮出现即恢复）
-        _wait_icon(win, AUTO_ICON, AUTO_CANCEL_SETTLE, want_found=True)
+        # 等待操作条恢复手动（自动按钮出现即恢复；两变体任一出现）
+        _wait_auto_button(win, AUTO_CANCEL_SETTLE)
         return True
     # 分数可疑（取消自动弱匹配但未达判定）才输出，便于排查模板是否需更新；
     # 明确的非自动状态（取消自动 <0.5）不打日志
@@ -520,7 +554,7 @@ def handle_battle(win):
             _click_famen(win, bar_ready=True)
         # 非第 1 回合：点击自动按钮，剩余回合交由游戏自动战斗
         if not (rounds == 1 and round_1):
-            if _click_template(win, AUTO_ICON):
+            if _click_auto_button(win):
                 _park_mouse(win)  # 鼠标移开，避免遮挡操作条
                 auto_engaged = True
                 log("[战斗] 已点击自动，剩余回合由游戏自动战斗", "SYS")
@@ -545,7 +579,7 @@ def handle_battle(win):
             # 挂上自动，否则下场战斗进场不在自动状态；点不到时由下一操作条
             # （本场第 2 回合）或 watch_loop 下场进场补点
             time.sleep(SKILL_CONFIRM_DELAY)
-            if _click_template(win, AUTO_ICON):
+            if _click_auto_button(win):
                 _park_mouse(win)  # 鼠标移开，避免遮挡操作条
                 auto_engaged = True
                 log("[战斗] 操作完成，已点击自动", "SYS")
@@ -602,8 +636,7 @@ def _click_auto_once(win):
                 # （缓存 ROI 内不可见但按钮在别处），清缓存重学并点击；
                 # 未命中是回合间隙，保留缓存继续等下一轮询
                 cache_misses = 0
-                pt = game_map.match_frame_np(img, AUTO_ICON, region=_bar_band(img),
-                                             fallback=True)
+                pt = _match_auto_band(img)
                 if pt is not None:
                     fixed_pos_clear(AUTO_POS_CACHE_KEY)
                     human_click(win, pt[0], pt[1])
@@ -612,8 +645,7 @@ def _click_auto_once(win):
                     log("[战斗] 已点击自动按钮（每 5 场例行确认，缓存漂移已自愈）", "SYS")
                     return True
         else:
-            pt = game_map.match_frame_np(img, AUTO_ICON, region=_bar_band(img),
-                                         fallback=True)
+            pt = _match_auto_band(img)
             if pt is not None:
                 human_click(win, pt[0], pt[1])
                 _park_mouse(win)  # 鼠标移开，避免遮挡操作条
@@ -707,17 +739,20 @@ def _find_wuyi_option(items, img_np):
 
 
 def _auto_state_at(img, pos):
-    """在缓存位置小 ROI 判定操作条自动按钮态（双模板比分数防互误匹配）。
+    """在缓存位置小 ROI 判定操作条自动按钮态（比分数防互误匹配）。
 
-    自动/取消自动两按钮样式相近会弱互匹配（同队伍解散/离开教训），
-    各自分数达标且更高者胜。返回 "auto"（按钮为「自动」，可点）、
-    "cancel"（已挂自动，例行确认完成）或 None（按钮不可见：回合
-    间隙或缓存漂移）。img 为 BGR numpy 帧。
+    自动/取消自动按钮样式相近会弱互匹配（同队伍解散/离开教训），
+    各自分数达标且更高者胜；自动态分数取两变体（auto/auto2）较高者。
+    返回 "auto"（按钮为「自动」，可点）、"cancel"（已挂自动，例行
+    确认完成）或 None（按钮不可见：回合间隙或缓存漂移）。
+    img 为 BGR numpy 帧。
     """
     l, t = pos[0] - AUTO_CACHE_ROI_MARGIN[0], pos[1] - AUTO_CACHE_ROI_MARGIN[1]
     region = (l, t, pos[0] + AUTO_CACHE_ROI_MARGIN[0],
               pos[1] + AUTO_CACHE_ROI_MARGIN[1])
     auto_score, _ = game_map.best_match_np(img, AUTO_ICON, region=region)
+    auto2_score, _ = game_map.best_match_np(img, AUTO2_ICON, region=region)
+    auto_score = max(auto_score, auto2_score)
     cancel_score, _ = game_map.best_match_np(img, AUTO_CANCEL_ICON, region=region)
     if cancel_score >= AUTO_STATE_THRESHOLD and cancel_score > auto_score:
         return "cancel"

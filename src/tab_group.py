@@ -345,8 +345,7 @@ def _auto_one(win, tab_id, wait_auto):
                         f" @ ({pos[0]},{pos[1]})（高性能缓存）", "SYS")
                 return
         else:
-            pt = game_map.match_frame_np(img, battle.AUTO_ICON,
-                                         region=battle._bar_band(img), fallback=True)
+            pt = battle._match_auto_band(img)  # 自动态两变体（auto/auto2）任一命中
             if pt is not None:
                 if _guarded_click(win, pt[0], pt[1]):
                     log(f"[组号] 队员 Tab（ID {tab_id}）已点击自动 @ ({pt[0]},{pt[1]})", "SYS")
