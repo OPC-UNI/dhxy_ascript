@@ -200,6 +200,23 @@ def precise_click(win, x: int, y: int, times: int = 1, interval: float = 0.4,
                 time.sleep(interval)
 
 
+def rapid_click(win, x: int, y: int, press: float = 0.02):
+    """极速点击：瞬时移动到窗口相对坐标并按下抬起（默认按压 20ms）。
+
+    供锄遗聚宝批量消除杂气等吞吐优先的热路径使用——每击省掉拟人化
+    移动耗时与 50ms 默认按压，约 25ms/击；按压时长小于 ascript 默认
+    50ms（游戏点击注册通常 10ms 即足够，20ms 为保守折中，如出现漏
+    注册可调回 0.05）。仍持全局输入锁防与战斗/任务线程交错。
+    """
+    with _INPUT_LOCK:
+        sx = win.rect.left + int(x)
+        sy = win.rect.top + int(y)
+        _mouse_call(Mouse.mouse_move, sx, sy, move_duration=0.0)
+        _mouse_call(Mouse.mouse_down, button="primary")
+        time.sleep(press)
+        _mouse_call(Mouse.mouse_up, button="primary")
+
+
 def move_away(win):
     """点击对话框选项后把鼠标移走（窗口左下角中性区域）。
 

@@ -27,3 +27,5 @@ first_frame.png
 # 截屏通道诊断产物（capture_diag.py 运行生成：日志 + 通道 BMP）
 capture_diag_*.log
 capture_diag_*.bmp
+# 锄遗聚宝超时诊断标注帧（打包版远程排查用）
+qi_debug/
