@@ -21,8 +21,12 @@
 已实现手动寻路（世界地图 → 洛阳城 → 小地图 (620,317) → 到达 220,195 附近
 → 检查阿旺 awang.png）；神秘宝箱（追踪文案「前面出现一个神秘宝箱，快去」
 出现时双模板匹配宝箱点击，到达遮挡时点屏幕中间让人物离开后再匹配）；
+四象镇魂按 青龙→白虎→朱雀→玄武 依次点击加固；三才锁阴阵（循法固阵）
+按 引灯阵法→镇煞阵法→定魂阵法 依次点击加固（文案阅读序与点击序不一致，
+按「第N处阵法已加固完成」计数选下一个关键词，同玄枢轶闻封印按序开启）；
 提交物品/无跟踪两类特殊任务后续单独处理。
 """
+import re
 import time
 
 import cv2
@@ -83,6 +87,7 @@ DIALOG_OPTION_MAP = {
     "有空我请你喝瑶池鲜酿": "那我就坐等瑶池鲜酿了",
     "被镇于修罗古城中的妖邪近日隐隐躁动": "修罗出世非同小可，我这便前去加固封印",
     "火云戈壁的浮屠塔近来邪气外泄": "护法镇魔是我的强项，我这便前往。",
+    "钟天师为震慑地府游魂，特在地府周边三处地点设下了三才锁阴阵。近日阵":"好说，包在我身上。",
     "就凭你": "收拾你",
     "此间异象比老夫预想之中复杂万倍，实难在短期内探明全貌": "日后若有需要找我便是",
     "城东王老汉的小孙子阿旺前日出门玩耍，至今未归。有人说曾在大理寺墙外": "孩童走失非同小可，我这就去大理寺附近仔细寻找。",
@@ -226,7 +231,9 @@ DIALOG_OPTION_MAP = {
     "嗯……天机玄奥，非尔所能与闻。少侠且回罢！":"这……好吧。",
     "洛阳城里近来冒出个“玄机真人’，整日给人算命消灾，实则满口胡言，骗":"这等江湖骗子，正该给他个教训。",
     "你...你这是要砸我饭碗啊！真当道爷在城里混这些年是白给的？":"巧了，我专治各种白给。",
-    "不敢不敢！我这就回乡下种田！绝对不会给少侠惹麻烦了！":"快走快走，真是懒得搭理你这怂包……"
+    "不敢不敢！我这就回乡下种田！绝对不会给少侠惹麻烦了！":"快走快走，真是懒得搭理你这怂包……",
+    "少侠需依此次序加固：先点灯指引迷魂，再镇煞封堵鬼门，终定魂稳固轮回":"三才相生，阴阳有序。我记下了",
+    "地府秩序已复，游魂再难作乱":"钟天师有事随时叫我，先告辞了。"
 
 }
 # 需要点击屏幕中间跳过的对话框文案 → 点击次数（出现则连点屏幕中间推进
@@ -241,6 +248,7 @@ DIALOG_SKIP_TEXTS = {
     "少侠是为那小猴来的？它这是胫骨裂隙，幸未伤及经脉。这续骨膏需以晨露":1,
     "老夫手中这封密信关系重大，须即刻面呈太上老君。此事非比寻常，还望少":2,
     "贫道观少侠龙行虎步，眉间隐现祥瑞之气一一莫非是要求问仕途姻缘？不瞒":4,
+    "少侠可是来加固阵法的？":3,
     "还想跑多远？要不要我再陪你跑一会儿？":3,
     "这是什么？":2,
     "孙神医嘱咐，每日敷三次，七日不可攀跳。":1,
@@ -275,6 +283,7 @@ DIALOG_SKIP_TEXTS = {
     "梆梆给你两拳帮收保护费啦！不给钱的就要挨...挨...下一句词儿是啥来着":2,
     "哎……少侠答错了！":5,
     "你是何人？":4,
+    "少侠都处理好了？":2,
     "少侠来的正好":1,
     "恭喜少侠通过考验！来来来一一金指针停何处，福气便落谁家！":2,
     "少侠眼中似有疑惑，然天机如棋局，未到落子之时，还是不要过多探寻为好":2,
@@ -361,7 +370,11 @@ QIYU_DIALOG_TEXTS = ["阴风骤起",   # 第一幕：妖僧现身（三选项 �
                      "我这就回乡下种田",
                      "俯身拾起那柄拂尘",
                      "你闪避的同时拂尘脱手",
-                     "强行开启导致局部不稳"
+                     "强行开启导致局部不稳",
+                     "你急忙催动真气护住自身",
+                     "眉头紧锁望向阵法深处",
+                     "直接朝那异常波动的源头掠去",
+                     "钟馗为救你颇费心力"
                      ]
 # ---- 答题致富问答题（多星智；选项为纵向排列的单字，OCR 会把整列
 #      合并成一条竖框——实测「稻麦瓜」识别为一个高矩形）----
@@ -415,6 +428,20 @@ _money_give_done = False  # 已点给与按钮（防面板关闭前重复点击�
 # 任务追踪多绿字点击顺序（四象镇魂：按 青龙→白虎→朱雀→玄武 依次加固封印）；
 # 关键词未命中时自动退回点第一个绿字，不影响其他任务
 GREEN_CLICK_ORDER = ["青龙", "白虎", "朱雀", "玄武"]
+# ---- 三才锁阴阵任务（循法固阵：按 引灯→镇煞→定魂 依次点击加固，模式
+# 同玄枢轶闻封印按序开启，2026-11-02 用户流程）----
+# 三个追踪点嵌在描述行内（初始文案「根据钟馗所示，依据点灯、镇鬼、固魂
+# 之序加固镇煞阵法、引灯阵法、定魂阵法三处三才锁阴阵阵法。」，用户实测
+# 截图 2026-11-02：镇煞阵法 y271-284/x145-203、引灯阵法 y288-301/x26-82、
+# 定魂阵法 y288-301/x99-158，下划线各自 y287/y304），文案阅读序与点击
+# 顺序不一致（阅读序 镇煞→引灯→定魂，点击序 引灯→镇煞→定魂），不能按
+# 阅读序点击；每点完一处面板出现「第N处阵法已加固完成」——进度信号。
+# green_order 不适用（文案顺序≠点击顺序），用 progress_key（已加固计数）
+# + green_picker（按计数选关键词、下划线实线段定位点击，同 xuanshu
+# _jiguan_link_picker）；回调在非本任务阶段自门控不介入。
+SANCAI_LINK_ORDER = ("引灯阵法", "镇煞阵法", "定魂阵法")  # 点击顺序（领取对话：先点灯，再镇煞，终定魂）
+SANCAI_PROGRESS_RE = re.compile(r"第\s*([一二三四五1-5])\s*处\s*阵法\s*已\s*加固\s*完成")
+_SANCAI_ORD = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5}
 # ---- 拍毒虫小游戏（入口对话框 → 开始 → 拍虫） ----
 BUG_START_TEXT = "请在游戏开始后拍打毒虫，不要误伤蜻蜓和七星虫哦"  # 入口对话框文案
 BUG_START_ICON = "bug_start.png"       # 开始按钮模板（38.png 实测素材）
@@ -920,15 +947,21 @@ def _order_green_state(items, img_np):
 
 
 def _order_progress_key(items, img_np):
-    """四象任务进度键：仍为绿字的顺序关键词列表（如 白虎,朱雀,玄武）。
+    """任务进度键：三才阵法已加固计数 / 四象仍为绿字的顺序关键词列表
+    （如 白虎,朱雀,玄武）。
 
-    封印完成关键词变红（文字不变），绿字集合缩小即任务推进，
+    三才：每点完一处面板出现「第N处阵法已加固完成」，计数即进度
+    （同 xuanshu._jiguan_link_progress）。
+    四象：封印完成关键词变红（文字不变），绿字集合缩小即任务推进，
     follow_task 据此点击下一个绿字。词级判定不受 OCR 抖动影响。
-    非四象任务（如智多星答题：题目文案变化推进）回退取任务首行内容
+    非顺序任务（如智多星答题：题目文案变化推进）回退取任务首行内容
     作键——默认文本签名经相似度阈值（0.8）过滤，两个字的题目变化
     会被吞掉（实测 2026-10-13「经史类→天象类」相似 0.93 未触发
     再点击）；键为精确比较，且经两轮询确认过滤单次 OCR 抖动。
     """
+    key = _sancai_progress_key(items, img_np)
+    if key is not None:
+        return key
     green_kws, _, _ = _order_green_state(items, img_np)
     if green_kws:
         return ",".join(green_kws)
@@ -951,6 +984,130 @@ def _pick_order_green(items, img_np):
         return None
     cx, cy = centers[0]
     return l + cx, t + cy
+
+
+def _sancai_panel_lines(items):
+    """三才任务关注的面板行（任务追踪面板区域内，排除居中对话框；
+    领取/跟踪对话框同含关键词，面板外行命中会把对话框选项当链接）。"""
+    pl, pt_, pr, pb = TRACK_PANEL_REGION
+    return [(txt, rect, score) for txt, rect, score in items
+            if score >= 0.55 and rect[0] < pr and pt_ <= rect[1] <= pb]
+
+
+def _sancai_stage(items):
+    """是否处于三才阵法阶段：面板存在任一顺序关键词。"""
+    return any(any(kw in norm_text(txt) for kw in SANCAI_LINK_ORDER)
+               for txt, _, _ in _sancai_panel_lines(items))
+
+
+def _sancai_count(items):
+    """面板「第N处阵法已加固完成」的最大序数（无则 None）。"""
+    best = None
+    for txt, _, _ in _sancai_panel_lines(items):
+        for m in SANCAI_PROGRESS_RE.finditer(norm_text(txt)):
+            n = _SANCAI_ORD.get(m.group(1))
+            if n is None and m.group(1).isdigit():
+                n = int(m.group(1))
+            if n is not None and (best is None or n > best):
+                best = n
+    return best
+
+
+def _sancai_locate_link(items, img_np, kw):
+    """定位三才任务关键词链接的点击点：下划线实线段中心上方 2px。
+
+    关键词嵌在描述行内，一行可能含两个链接（如「引灯阵法、定魂阵法」），
+    行级选择无法区分——按关键词在行文本中的位置比例估计 x 中心，配对
+    最近的 ≥20px 连续亮绿下划线实线段（下划线是链接专属标记，检测窗口
+    同 task_tracker.green_text_center：框底 -10~+8px、右探 +60px）。
+    下划线缺失（渲染变体）时回退行内绿色字形簇（同 _order_green_state
+    的字符合并），纵向点击行底上方 2px（行底可点区规则）。关键词被
+    OCR 拆行/漏读时返回 None（调用方拒绝行级兜底，等待重试）。
+    """
+    for txt, rect, _ in _sancai_panel_lines(items):
+        ntxt = norm_text(txt)
+        i = ntxt.find(kw)
+        if i < 0:
+            continue
+        est_cx = rect[0] + int((i + len(kw) / 2) / len(ntxt) * (rect[2] - rect[0]))
+        y0 = max(0, rect[3] - 10)
+        y1 = min(img_np.shape[0], rect[3] + 9)
+        x0 = max(0, rect[0] - 2)
+        x1 = min(img_np.shape[1], rect[2] + 60)
+        mask = task_tracker.green_mask(img_np[y0:y1, x0:x1].astype(int),
+                                       task_tracker.GREEN_BRIGHT_MIN)
+        runs = []
+        for rr in range(mask.shape[0]):
+            cols = np.where(mask[rr])[0]
+            if cols.size < 20 or task_tracker._longest_run_len(cols) < 20:
+                continue
+            for a, b in (seg for seg in task_tracker._col_runs(cols)
+                         if seg[1] - seg[0] + 1 >= 20):
+                runs.append((y0 + rr, x0 + (a + b) // 2))
+        if runs:
+            yr, cx = min(runs, key=lambda r: abs(r[1] - est_cx))
+            return cx, yr - 2
+        # 下划线未检出：回退绿色字形簇（无下划线渲染变体兜底）
+        region = img_np[rect[1]:rect[3], rect[0]:rect[2]].astype(int)
+        cmask = task_tracker.green_mask(region, 90).astype(np.uint8)
+        ncomp, _, stats, _ = cv2.connectedComponentsWithStats(cmask, connectivity=8)
+        words = []
+        for j in range(1, ncomp):
+            x, y, w, h, area = stats[j]
+            if w >= 8 and h >= 6 and area >= 20:
+                words.append([x, y, x + w, y + h])
+        if words:
+            merged = []
+            for c in sorted(words, key=lambda c: (c[1], c[0])):
+                if merged and abs(c[1] - merged[-1][1]) <= 6 \
+                        and c[0] - merged[-1][2] <= 6:
+                    merged[-1][2] = max(merged[-1][2], c[2])
+                    merged[-1][3] = max(merged[-1][3], c[3])
+                else:
+                    merged.append(c[:])
+            rel_cx = est_cx - rect[0]
+            best = min(merged, key=lambda c: abs((c[0] + c[2]) / 2 - rel_cx))
+            return rect[0] + (best[0] + best[2]) // 2, rect[1] + best[3] - 2
+    return None
+
+
+def _sancai_picker(items, img_np):
+    """三才任务精确点击：按已加固计数选下一个关键词（引灯→镇煞→定魂）。
+
+    非三才阶段返回 None（回退四象/行级选择）。阶段内目标无法定位返回
+    PICK_FAIL（拒绝行级兜底点击——兜底按阅读序点第一个绿字会点到
+    镇煞阵法，破坏 引灯→镇煞→定魂 顺序使任务卡死，同 xuanshu
+    封印按序开启）。计数用尽（≥3）返回 None：最后阶段（如回钟馗处
+    复命的链接）交回行级选择。
+    """
+    n = _sancai_count(items)
+    if n is None:
+        if not _sancai_stage(items):
+            return None
+        n = 0
+    if n >= len(SANCAI_LINK_ORDER):
+        return None
+    pt = _sancai_locate_link(items, img_np, SANCAI_LINK_ORDER[n])
+    return pt if pt is not None else task_tracker.PICK_FAIL
+
+
+def _sancai_progress_key(items, img_np):
+    """三才任务进度键：已加固计数；阶段内未加固为 0（与点击前基线
+    一致，点后 1/2/3 变化即推进），阶段外 None（交由四象/默认文本
+    签名驱动）。"""
+    n = _sancai_count(items)
+    if n is not None:
+        return str(n)
+    return "0" if _sancai_stage(items) else None
+
+
+def _pick_task_green(items, img_np):
+    """任务绿字精确点击调度：三才阵法优先（PICK_FAIL 直接透传，
+    拒绝行级兜底），其余任务回退四象顺序逻辑。"""
+    pt = _sancai_picker(items, img_np)
+    if pt is not None:
+        return pt
+    return _pick_order_green(items, img_np)
 
 
 def _find_duchong(win, threshold=0.75):
@@ -1082,7 +1239,7 @@ def _open_shenmi_baoxiang(win):
     # 寻路目标，人物已在途/已到达时无副作用）
     ok0, info0 = task_tracker.track_task(win, TASK_TITLE,
                                          green_order=GREEN_CLICK_ORDER,
-                                         green_picker=_pick_order_green)
+                                         green_picker=_pick_task_green)
     if not ok0:
         log(f"[客栈] 宝箱流程：绿字点击未成功（{info0}），继续轮询匹配", "WARN")
     # 阶段一：接近途中直接匹配（宝箱在人物前方，步行通常短暂）
@@ -1221,7 +1378,7 @@ def _handle_follow_extras(win, items, img_np):
                 pass
             ok3, info3 = task_tracker.track_task(win, TASK_TITLE,
                                                  green_order=GREEN_CLICK_ORDER,
-                                                 green_picker=_pick_order_green)
+                                                 green_picker=_pick_task_green)
             if ok3:
                 log("[客栈] 已重新点击任务绿字推进", "SYS")
                 return True
@@ -1772,12 +1929,12 @@ def _claim_task(win, pt):
 
 
 def _follow_kezhan(win):
-    """客栈 follow_task 统一参数调用（四象顺序绿字点击 + 附加对话处理）。"""
+    """客栈 follow_task 统一参数调用（四象/三才顺序绿字点击 + 附加对话处理）。"""
     ok, info = follow_task(win, TASK_TITLE, prefix="客栈",
                            extra_dialog_handler=_handle_follow_extras,
                            green_order=GREEN_CLICK_ORDER,
                            progress_key=_order_progress_key,
-                           green_picker=_pick_order_green)
+                           green_picker=_pick_task_green)
     return ("done", info) if ok else ("fail", info)
 
 
