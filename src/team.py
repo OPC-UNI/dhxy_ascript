@@ -384,7 +384,9 @@ def _ensure_menu_open(win):
     if pt is None:
         # 按钮可能处于申请待处理态（zudui_item2，有人申请加入）：
         # 该状态点击打开的是申请加入面板而非菜单，菜单打不开——直接
-        # 返回，由监控循环先走补人（用户 2026-10-14 实测根因）
+        # 返回，由监控循环先走补人（用户 2026-10-14 实测根因；监控
+        # 循环入口 check_team_min 开面板前已先查该证据，此处兜底
+        # 其余调用方）
         diag = win.capture(force_activate=False)
         if diag is not None and game_map.find_template_in(
                 diag, ZUDUI_ITEM2_ICON, ZUDUI_ITEM2_THRESHOLD) is not None:
@@ -902,7 +904,11 @@ def check_team_min(win, min_members=None):
     """领取前队伍检查（通用，修罗/五倍等复用）：一次打开队伍面板完成
     队长判定、人数检查与成员信息采集。
 
-    面板打不开（未组队/申请加入面板等）与非队长均返回 not_leader。
+    开面板前先查申请人证据（申请加入面板已开，或组队按钮为 zudui_item2
+    申请待处理态）——该状态即确定性队长（只有队长会收到入队申请），
+    直接按人数待补（wait）返回交监控循环补人，不算「队长无法判定」
+    （2026-11-02 日志教训：zudui_item2 可点击打开申请面板查看队伍信息）。
+    面板打不开（未组队等）与非队长均返回 not_leader。
     队长判定为双模板比分数（防解散/离开按钮互误匹配）；人数按等级行
     计数（种族行第 1 列读不到时也不漏）。
     min_members: 人数下限（含自己），None 不检查
@@ -910,6 +916,12 @@ def check_team_min(win, min_members=None):
     不足 / not_leader 非队长或队长无法判定。
     """
     if not _is_panel_open(win):
+        img0 = win.capture(force_activate=False)
+        if img0 is not None and has_pending_apply(img0):
+            # 申请人证据即确定性队长：菜单打不开不能算「队长无法判定」，
+            # 按人数待补返回，由监控循环补人后重查（见 docstring）
+            record_leader_status(True)
+            return "wait", "队伍人数待补（有申请人待处理，确定性队长）", []
         ok, info = open_team_panel(win)
         if not ok:
             # 未组队是确定性非队长状态，直接用原因作描述（套「队长无法

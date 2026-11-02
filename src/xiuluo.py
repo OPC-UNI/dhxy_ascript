@@ -17,6 +17,7 @@
        → 校验任务出现在追踪面板；若出现「修罗的战斗力异常强大…」提示
        （队伍数量小于 3）→ 点击屏幕中间一次关闭对话框；检查队伍开启
        时重入 1.2 监控补人循环（人满下轮重试领取），关闭时本轮领取失败
+       （被拒→补人→重领全链路时序详见 docs/xiuluo-team-fill-flow.md）
    1.4 领取后对话框「今日已完成次数：N」解析已完成次数（辅助完成次数记录）
 2. 寻路：点击任务追踪绿字自动寻路（复用 xuanshu.follow_task）
 3. 对话开打：寻路到达后出现对话面板 → 点击绿色选项「看打！」进入战斗
@@ -1698,8 +1699,12 @@ def _monitor_team_and_fill(win):
 
     先补后查的原因：按钮处于申请态时菜单打不开（点击弹的是申请面板），
     查人数走菜单路径必失败；补完申请人后按钮恢复普通态，查人数才可用。
+    查人数发现申请待处理态（check_team_min 开面板前查，返回 wait 而非
+    「队长无法判定」）时同样先补人再重查，不空等重查间隔。
 
     间隔：识别失败（OCR 噪声）3s 短重查，缺人无申请人 10s 重查。
+    全链路时序（被拒→补人→重领，含各步间隔）详见
+    docs/xiuluo-team-fill-flow.md。
     """
     while True:
         img = win.capture(force_activate=False)
@@ -1722,6 +1727,16 @@ def _monitor_team_and_fill(win):
             continue
         if status == "ready":
             return
+        # 等待状态下复查申请人证据：check_team_min 的帧可能比本循环
+        # 首帧更晚拍到申请待处理态（申请人恰在两次截帧间出现），有则
+        # 立即补人不空等重查间隔（2026-11-02 日志教训）
+        img = win.capture(force_activate=False)
+        if img is not None and team.has_pending_apply(img):
+            ok_fill, fill_info = team.fill_team(
+                win, target=load_xiuluo_settings()["min_members"], max_allow=1)
+            log(f"[修罗] 补人: {fill_info}", "SYS" if ok_fill else "INFO")
+            if ok_fill:
+                continue  # 已补一人，立即重查
         interval = (TEAM_RECOG_RETRY_INTERVAL if "识别失败" in info
                     else TEAM_CHECK_RETRY_INTERVAL)
         # 缺人自动喊话（间隔限频；有申请人正在补时走上面的补人分支，

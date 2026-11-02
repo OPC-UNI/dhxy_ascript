@@ -106,7 +106,7 @@ KUIMULANG_TRACK_TEXT = "奎木狼"
 # 逻辑无差异）；替换领取后新任务仍为锁妖网/奎木狼（或显形镜替换）时，
 # 距上次替换领取满 6s 才再次替换——防连续快速重领；普通领取成功
 # 即重置间隔（下一次替换重新视为首次）
-REPLACE_INTERVAL = 6
+REPLACE_INTERVAL = 8
 
 
 class ReplaceTaskError(Exception):
@@ -2311,8 +2311,12 @@ def _monitor_team_and_fill(win):
 
     先补后查的原因：按钮处于申请态时菜单打不开（点击弹的是申请面板），
     查人数走菜单路径必失败；补完申请人后按钮恢复普通态，查人数才可用。
+    查人数发现申请待处理态（check_team_min 开面板前查，返回 wait 而非
+    「队长无法判定」）时同样先补人再重查，不空等重查间隔。
 
     间隔：识别失败（OCR 噪声）3s 短重查，缺人无申请人 10s 重查。
+    全链路时序（被拒→补人→重领，含各步间隔）详见
+    docs/xiuluo-team-fill-flow.md（修罗/五倍同款镜像）。
     """
     while True:
         img = win.capture(force_activate=False)
@@ -2334,6 +2338,15 @@ def _monitor_team_and_fill(win):
             continue
         if status == "ready":
             return
+        # 等待状态下复查申请人证据：check_team_min 的帧可能比本循环
+        # 首帧更晚拍到申请待处理态（申请人恰在两次截帧间出现），有则
+        # 立即补人不空等重查间隔（2026-11-02 日志教训）
+        img = win.capture(force_activate=False)
+        if img is not None and team.has_pending_apply(img):
+            ok_fill, fill_info = team.fill_team(win, target=5, max_allow=1)
+            log(f"[五倍] 补人: {fill_info}", "SYS" if ok_fill else "INFO")
+            if ok_fill:
+                continue  # 已补一人，立即重查
         interval = (TEAM_RECOG_RETRY_INTERVAL if "识别失败" in info
                     else TEAM_CHECK_RETRY_INTERVAL)
         # 缺人自动喊话（间隔限频；有申请人正在补时走上面的补人分支，
