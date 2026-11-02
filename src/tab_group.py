@@ -39,6 +39,11 @@ AUTO_WAIT_ROUTINE = 1.0    # 每 5 场例行队员自动按钮等待上限（多
 BARS_PASS_INTERVAL = 60.0  # 队员血蓝检查最小间隔（寻路中触发，节流）
 WUYI_DIALOG_WAIT = 3.0     # 队员巫医对话框出现等待上限
 WUYI_GONE_WAIT = 3.0       # 队员巫医对话框关闭确认上限
+WUYI_DIRECT_SETTLE = 1.0   # 直点前等待：切 Tab 后客户端有短暂输入忽略窗口
+                           # （无可见动画，但切换后立即点击不生效——
+                           # 2026-11-02 实测：坐标与队长一致、对话框却不
+                           # 关闭），等切换处理稳定再点
+WUYI_CLOSE_CHECK_WAIT = 1.5  # 点击后等待关闭生效再验证（防连点落到场景）
 WUYI_POS_FRESH = 30.0      # 队长选项坐标新鲜期：期内队员 pass 可直点复用
                            # （队长点击后 pass 数秒内开始，30s 足够覆盖）
 PASS_TOTAL_DEADLINE = 30.0  # 单次 pass 总时长上限（防异常拖垮主流程）
@@ -390,23 +395,62 @@ def member_wuyi_pass(win, force=False):
         _exit_pass()
 
 
+def _wuyi_state(win):
+    """一帧判定巫医对话框是否在屏（True 在 / False 不在 / None 截图失败）。"""
+    from . import battle  # 函数内导入，避免循环依赖
+    img = win.capture(force_activate=False)
+    if img is None:
+        return None
+    items, _ = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
+    return any(_dialog_text_present(items, t) for t in battle.WUYI_DIALOG_TEXTS)
+
+
 def _wuyi_click_direct(win, tab_id, pos):
     """高性能直点：队员对话框与队长同位置，直接点队长选项坐标。
 
-    跳过截图/OCR（同一客户端同一对话框布局）；点完移走鼠标防悬停
-    变色残留。队员无对话框的罕见情况下点击落到场景地面（队员走
-    几步，队长再移动时跟随恢复）——直点是高性能模式的明确取舍。
+    切 Tab 后客户端有短暂输入忽略窗口（2026-11-02 实测：无弹出
+    动画，坐标与队长一致、点击却落在选项上方一点且对话框不关闭）
+    ——点击前等待切换稳定并确认对话框在屏（无对话框的队员直接
+    跳过，不点场景），点击后验证关闭：未关闭原位补点一次，仍没关
+    回退识别路径（OCR 找实际位置并持续补点，输入忽略窗口超长/
+    布局微偏移都能兜住）。
     """
-    if _guarded_click(win, pos[0], pos[1]):
-        log(f"[组号] 队员 Tab（ID {tab_id}）已点击「全部医治和修复」"
-            f" @ ({pos[0]},{pos[1]})（高性能直点）", "SYS")
+    time.sleep(WUYI_DIRECT_SETTLE)  # 等切换输入稳定（忽略窗口内点击被吞）
+    if not _wuyi_state(win):
+        # 无对话框（或截图失败按无处理）：跳过，不点场景
+        log(f"[组号] 队员 Tab（ID {tab_id}）无巫医对话框，跳过", "WARN")
+        return
+    if not _guarded_click(win, pos[0], pos[1]):
+        return  # 禁入区跳过
+    log(f"[组号] 队员 Tab（ID {tab_id}）已点击「全部医治和修复」"
+        f" @ ({pos[0]},{pos[1]})（高性能直点）", "SYS")
     move_away(win)
+    time.sleep(WUYI_CLOSE_CHECK_WAIT)  # 等关闭动画
+    if _wuyi_state(win) is False:
+        return  # 对话框已关闭
+    # 第一次点击可能被重渲染动画吞掉：等稳定后原位补点一次
+    log(f"[组号] 队员 Tab（ID {tab_id}）直点后对话框未关闭，原位补点", "WARN")
+    if _guarded_click(win, pos[0], pos[1]):
+        move_away(win)
+        time.sleep(WUYI_CLOSE_CHECK_WAIT)
+        if _wuyi_state(win) is False:
+            log(f"[组号] 队员 Tab（ID {tab_id}）补点后对话框已关闭", "INFO")
+            return
+    log(f"[组号] 队员 Tab（ID {tab_id}）直点两次未关闭，回退识别路径", "WARN")
+    _wuyi_one(win, tab_id)
 
 
 def _wuyi_one(win, tab_id):
-    """单个队员 Tab 的巫医对话框处理（出现→点全部医治和修复→消失）。"""
+    """单个队员 Tab 的巫医对话框处理（出现→点全部医治和修复→消失）。
+
+    点击后未确认关闭时继续轮询补点（首次点击可能被切 Tab 重渲染
+    动画吞掉；识别路径找的是实际位置，布局微偏移同样兜住）。
+    预算 = 出现等待 + 关闭确认（点击后等关闭动画再复查，防连点
+    落到场景）。
+    """
     from . import battle  # 函数内导入，避免循环依赖
-    deadline = time.time() + WUYI_DIALOG_WAIT
+    deadline = time.time() + WUYI_DIALOG_WAIT + WUYI_GONE_WAIT
+    clicked = False
     while time.time() < deadline:
         img = win.capture(force_activate=False)
         if img is None:
@@ -414,6 +458,8 @@ def _wuyi_one(win, tab_id):
             continue
         items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
         if not any(_dialog_text_present(items, t) for t in battle.WUYI_DIALOG_TEXTS):
+            if clicked:
+                return  # 已点击且对话框已关闭：完成
             time.sleep(0.5)
             continue
         pt = battle._find_wuyi_option(items, img_np)
@@ -433,25 +479,11 @@ def _wuyi_one(win, tab_id):
                 log(f"[组号] 队员 Tab（ID {tab_id}）已点击「全部医治和修复」"
                     f" @ ({pt[0]},{pt[1]})", "SYS")
             move_away(win)  # 悬停会让选项变色，干扰对话框关闭判定
-            _wait_dialog_gone(win, tab_id)
-            return
-        time.sleep(0.5)  # 对话框在但选项未识别：继续轮询
-    log(f"[组号] 队员 Tab（ID {tab_id}）巫医对话框未出现/选项未识别，跳过", "WARN")
-
-
-def _wait_dialog_gone(win, tab_id):
-    """等待队员巫医对话框关闭（选项点击生效确认）。"""
-    from . import battle  # 函数内导入，避免循环依赖
-    deadline = time.time() + WUYI_GONE_WAIT
-    while time.time() < deadline:
-        time.sleep(0.5)
-        img = win.capture(force_activate=False)
-        if img is None:
+            clicked = True
+            time.sleep(WUYI_CLOSE_CHECK_WAIT)  # 等关闭动画再复查，防连点落到场景
             continue
-        items, _ = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
-        if not any(_dialog_text_present(items, t) for t in battle.WUYI_DIALOG_TEXTS):
-            return
-    log(f"[组号] 队员 Tab（ID {tab_id}）巫医对话框未确认关闭", "WARN")
+        time.sleep(0.5)  # 对话框在但选项未识别：继续轮询
+    log(f"[组号] 队员 Tab（ID {tab_id}）巫医对话框未出现/未关闭，跳过", "WARN")
 
 
 # ---- 回血回蓝 pass ----
