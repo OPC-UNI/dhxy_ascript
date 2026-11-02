@@ -1436,6 +1436,7 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
         last_clicked_sig = sig
         rounds += 1
         progressed = False
+        debug_overlay.set_phase("寻路中")  # 看板阶段（点击任务绿字后自动寻路）
         log(f"[{prefix}] 第 {rounds} 轮跟踪完成，等待任务信息变化", "SYS")
         if post_track_handler is not None:
             try:
@@ -1701,6 +1702,7 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
             if not handled:
                 for opt in DIALOG_OPTIONS:
                     if _click_green_option_once(win, items, img_np, opt, prefix=prefix):
+                        debug_overlay.set_phase("任务对话")  # 看板阶段
                         break
         else:
             return False, f"第 {rounds} 轮跟踪后任务信息无变化（超时）"
@@ -1727,6 +1729,7 @@ def run_cycle(win):
         return ("done", info) if ok else ("fail", info)
 
     # 没有任务 → 寻路到任务位置并领取任务
+    debug_overlay.set_phase("前往领取点")  # 看板阶段
     ok, info, pre_items = navigate_to_task(win)
     if not ok:
         return ("daily_limit", info) if info == DAILY_LIMIT_INFO else ("fail", info)

@@ -3,43 +3,101 @@
 <head>
     <meta charset="utf-8">
     <style>
+        /* ============ 2026-11 重设计（docs/ui-redesign.md）：侧边导航 + 运行看板 + 水墨皮肤 ============ */
         * { box-sizing: border-box; }
-        /* ---- 主题变量：深色（默认）/ 浅色（body.light） ---- */
+        /* ---- 主题变量：深色墨色系（默认）/ 浅色宣纸（body.light） ---- */
         :root {
-            --bg: #1a1a1a;
-            --panel: #222;
-            --panel2: #2a2a2a;
-            --border: #333;
-            --border2: #444;
-            --text: #ccc;
-            --text-dim: #888;
-            --accent: #00ff88;
-            --accent-dim: #00b36b;
-            --progress-tint: rgba(0, 255, 136, 0.10);  /* 任务行背景进度淡色 */
+            --bg: #0E1411;
+            --panel: #161D18;
+            --panel2: #1D261F;
+            --border: #2B352E;
+            --border2: #3A463E;
+            --text: #D8DED8;
+            --text-dim: #8B948C;
+            --accent: #2FBF71;
+            --accent-dim: #1F8A53;
+            --gold: #C9A15C;
+            --danger: #E5484D;
+            --seal: #C0392B;
+            --progress-tint: rgba(47, 191, 113, 0.12);
         }
         body.light {
-            --bg: #f0f2f5;
-            --panel: #ffffff;
-            --panel2: #f7f8fa;
-            --border: #d9dce1;
-            --border2: #c2c7ce;
-            --text: #2c3e50;
-            --text-dim: #7f8c8d;
-            --accent: #00a86b;
-            --accent-dim: #00b36b;
-            --progress-tint: rgba(0, 168, 107, 0.12);
+            --bg: #F4F1E8;
+            --panel: #FBF9F2;
+            --panel2: #F0EDE0;
+            --border: #E2DCC9;
+            --border2: #CFC8B0;
+            --text: #2E2B23;
+            --text-dim: #6E6A5C;
+            --accent: #177A46;
+            --accent-dim: #1E8F57;
+            --gold: #8A6A2E;
+            --danger: #C23B33;
+            --seal: #B3352F;
+            --progress-tint: rgba(23, 122, 70, 0.10);
         }
         html, body {
             margin: 0; padding: 0; width: 100%; height: 100%;
             overflow: hidden; background-color: var(--bg);
+            font-family: "微软雅黑"; font-size: 13px; color: var(--text);
+        }
+        button:focus-visible, select:focus-visible, input:focus-visible {
+            outline: 2px solid var(--accent); outline-offset: 2px;
+        }
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after { transition: none !important; animation: none !important; }
+        }
+        /* ---- 整体布局：侧边导航 + 主列 ---- */
+        .app { display: flex; width: 100%; height: 100%; }
+        .sidebar {
+            width: 148px; min-width: 148px; flex-shrink: 0;
+            background: var(--panel); border-right: 1px solid var(--border);
             display: flex; flex-direction: column;
         }
-        /* ---- 顶部：任务状态 + 配置方案下拉 + 主题图标切换 ---- */
+        .brand { display: flex; align-items: center; gap: 8px; padding: 14px 12px 12px; }
+        .brand-seal {
+            width: 30px; height: 30px; flex-shrink: 0; border-radius: 5px;
+            background: var(--seal); color: #fff; border: 1px solid var(--seal);
+            display: flex; align-items: center; justify-content: center;
+            font-family: KaiTi, STKaiti, '楷体', serif; font-size: 19px;
+            transform: rotate(-3deg); user-select: none;
+        }
+        .brand-text { display: flex; flex-direction: column; line-height: 1.25; }
+        .brand-name { font-family: KaiTi, STKaiti, '楷体', serif; font-size: 16px; }
+        .brand-sub { font-size: 10px; color: var(--text-dim); }
+        .nav-items { flex: 1; display: flex; flex-direction: column; gap: 2px; padding: 4px 8px; }
+        .nav-item {
+            display: flex; align-items: center; gap: 9px; padding: 9px 10px;
+            border-radius: 6px; color: var(--text-dim); cursor: pointer; user-select: none;
+            transition: background 0.15s, color 0.15s;
+        }
+        .nav-item svg { width: 17px; height: 17px; display: block; flex-shrink: 0; }
+        .nav-item:hover { color: var(--text); background: var(--panel2); }
+        .nav-item.active { color: var(--accent); background: var(--progress-tint); }
+        .side-footer {
+            padding: 10px 12px; border-top: 1px solid var(--border);
+            display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-dim);
+            flex-wrap: wrap;
+        }
+        .lic-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
+        .lic-dot.warn { background: var(--gold); }
+        .lic-dot.bad { background: var(--danger); }
+        .side-ver { width: 100%; font-size: 10px; margin-top: 2px; }
+        .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+        /* ---- 顶栏 ---- */
         .top-bar {
-            height: 48px; min-height: 48px; flex-shrink: 0;
+            height: 52px; min-height: 52px; flex-shrink: 0;
             display: flex; align-items: center; gap: 8px; padding: 0 12px;
             background-color: var(--panel); border-bottom: 1px solid var(--border);
         }
+        .char-chip {
+            max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+            font-size: 12px; color: var(--gold); border: 1px solid var(--border2);
+            border-radius: 11px; padding: 2px 10px; cursor: pointer; user-select: none;
+            transition: border-color 0.15s;
+        }
+        .char-chip:hover { border-color: var(--gold); }
+        .top-spacer { flex: 1; }
         .btn {
             min-width: 64px; height: 30px; padding: 0 12px; border-radius: 6px;
             border: 1px solid var(--border2); font-size: 13px;
@@ -49,61 +107,26 @@
         .btn:hover:not(:disabled) { filter: brightness(1.2); }
         .btn:disabled { opacity: 0.35; cursor: not-allowed; }
         .th-btn:disabled { opacity: 0.35; cursor: not-allowed; }
-        /* 任务选择：复选框隐藏、整卡点击勾选/取消；选中态（边框+文字主题色）
-           与运行中高亮一致，未选择的任务在运行中置灰 */
-        .task-radio input[type="checkbox"] { display: none; }
-        .task-radio input:disabled + span { opacity: 0.35; }
-        .task-radio input:checked + span { opacity: 1; color: var(--accent); }
-        .task-group:has(input:checked) { border-color: var(--accent); }
-        .task-group:has(input:disabled) { cursor: not-allowed; }
-        #btn-theme {
-            border-color: var(--accent); color: var(--accent);
-            min-width: 32px; width: 32px; padding: 0;
+        /* 启动/停止主按钮：全场视觉权重第一（顶栏常驻 + 看板大按钮共用） */
+        .btn-primary {
+            min-width: 108px; height: 34px; padding: 0 16px; border-radius: 7px;
+            border: 1px solid var(--accent); background: var(--accent);
+            color: #06200F; font-size: 14px; font-weight: bold; letter-spacing: 2px;
+            font-family: "微软雅黑"; cursor: pointer; transition: all 0.15s;
+        }
+        .btn-primary:hover:not(:disabled) { filter: brightness(1.12); }
+        .btn-primary.running { border-color: var(--danger); background: var(--danger); color: #fff; }
+        .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+        .icon-btn {
+            min-width: 32px; width: 32px; height: 32px; padding: 0;
             display: flex; align-items: center; justify-content: center;
+            border: 1px solid var(--accent); color: var(--accent);
         }
-        #btn-theme svg { width: 17px; height: 17px; display: block; }
-        #btn-start { border-color: var(--accent); color: var(--accent); }
-        #btn-start.running { border-color: #ff5f5f; color: #ff5f5f; }
-        #status { color: var(--text-dim); font-size: 12px; font-family: 'Consolas', '微软雅黑', monospace; }
-        #status.running { color: var(--accent); }
-        /* ---- Tab 栏 ---- */
-        .tab-bar {
-            height: 40px; min-height: 40px; flex-shrink: 0;
-            display: flex; background-color: var(--panel); border-bottom: 1px solid var(--border);
-        }
-        .tab {
-            flex: 1; display: flex; align-items: center; justify-content: center;
-            color: var(--text-dim); font-size: 13px; font-family: "微软雅黑";
-            cursor: pointer; user-select: none; border-bottom: 2px solid transparent;
-            transition: color 0.15s;
-        }
-        .tab:hover { color: var(--text); }
-        .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
-        /* ---- 内容区 ---- */
-        .body { flex: 1; overflow-y: auto; }
-        .tab-panel {
-            display: none; flex-direction: column; align-items: center;
-            gap: 12px; padding: 14px 12px; min-height: 100%;
-        }
-        .tab-panel.active { display: flex; }
-        .radio-grid {
-            display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px 16px;
-            font-size: 13px; font-family: "微软雅黑"; color: var(--text);
-        }
-        .radio-grid label { display: flex; align-items: center; gap: 5px; cursor: pointer; user-select: none; }
-        .radio-grid input[type="radio"] { accent-color: var(--accent); cursor: pointer; }
-        .radio-grid input[type="checkbox"] { accent-color: var(--accent); cursor: pointer; }
-        /* 战斗动作：类型单选横排（法术/攻击/防御/捕捉/逃跑/无）+ 法术技能下拉 */
-        .battle-action-row { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; font-family: "微软雅黑"; color: var(--text); }
-        .battle-action-row label { display: flex; align-items: center; gap: 4px; cursor: pointer; user-select: none; }
-        .battle-action-row input[type="radio"] { accent-color: var(--accent); cursor: pointer; }
-        .skill-select { background: var(--panel2); color: var(--text); border: 1px solid var(--border2); border-radius: 4px; padding: 2px 6px; min-width: 110px; font-size: 13px; font-family: "微软雅黑"; cursor: pointer; }
-        /* ---- 配置方案：顶部一键切换下拉 + 高级设置管理区 ---- */
+        .icon-btn svg { width: 17px; height: 17px; display: block; }
         #scheme-select {
             background: var(--panel2); color: var(--text); border: 1px solid var(--border2);
-            border-radius: 6px; padding: 4px 8px; max-width: 150px; height: 30px;
+            border-radius: 6px; padding: 4px 8px; max-width: 140px; height: 30px;
             font-size: 12px; font-family: "微软雅黑"; cursor: pointer;
-            margin-left: auto;  /* 推至右侧（主题图标在其右侧） */
         }
         #scheme-select:disabled { opacity: 0.35; cursor: not-allowed; }
         #scheme-name-input {
@@ -128,11 +151,36 @@
             display: inline-flex; align-items: center; justify-content: center;
         }
         .icon-btn-sm svg { width: 14px; height: 14px; display: block; }
-        #btn-scheme-delete { border-color: #ff5f5f; color: #ff5f5f; }
-        #btn-scheme-delete.armed { background: #ff5f5f; color: #fff; }
+        #btn-scheme-delete { border-color: var(--danger); color: var(--danger); }
+        #btn-scheme-delete.armed { background: var(--danger); color: #fff; }
         #btn-scheme-import-confirm-cancel { border-color: var(--text-dim); color: var(--text-dim); }
-        /* 设置条目式布局：文本居左、开关居右（DOM 为 track+文本，行反转
-           后文本先行；input:checked 相邻兄弟选择器不受 DOM 顺序影响） */
+        /* ---- 页面容器 ---- */
+        .page {
+            flex: 1; min-height: 0; overflow-y: auto; display: none;
+            flex-direction: column; gap: 10px; padding: 14px;
+        }
+        .page.active { display: flex; }
+        /* ---- 卡片与分组 ---- */
+        .card, .group-box {
+            width: 100%; display: flex; flex-direction: column; gap: 10px;
+            background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+            padding: 12px; flex-shrink: 0;
+        }
+        .card-title, .group-title { color: var(--accent); font-size: 13px; font-family: "微软雅黑"; }
+        .group-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+        .group-ctrl { display: flex; align-items: center; gap: 6px; }
+        .group-label { color: var(--text); font-size: 13px; font-family: "微软雅黑"; flex: 1; min-width: 0; white-space: nowrap; }
+        .group-hint { color: var(--text-dim); font-size: 11px; font-family: "微软雅黑"; line-height: 1.5; }
+        .group-sub { color: var(--text-dim); font-size: 12px; font-family: "微软雅黑"; }
+        /* 提示横幅（任务锁定/授权临期/异常） */
+        .banner {
+            width: 100%; flex-shrink: 0; border-radius: 8px; padding: 8px 12px;
+            font-size: 12px; font-family: "微软雅黑"; border: 1px solid;
+            display: none;
+        }
+        .banner.warn { display: block; color: var(--gold); border-color: var(--gold); background: var(--panel); }
+        .banner.danger { display: block; color: var(--danger); border-color: var(--danger); background: var(--panel); }
+        /* ---- 设置开关行（文本居左、开关居右；DOM 为 track+文本，行反转） ---- */
         .switch-row { display: flex; flex-direction: row-reverse; align-items: center; justify-content: space-between; gap: 8px; color: var(--text); font-size: 13px; font-family: "微软雅黑"; cursor: pointer; user-select: none; }
         .switch-row span:not(.switch-track) { flex: 1; min-width: 0; }
         .switch-row input { display: none; }
@@ -157,236 +205,418 @@
         }
         .th-btn:hover { background: var(--border); color: var(--accent); }
         .th-val { width: 32px; text-align: center; color: var(--accent); font-family: 'Consolas', monospace; }
-        /* ---- 任务列表：每任务一组（模式多选 + 次数步进） ---- */
-        /* 任务条目：卡片加高便于整卡点击；条目间隔收紧（覆盖 tab-panel 默认 12px） */
-        #panel-task { gap: 6px; }
-        .task-group {
-            width: 100%; display: flex; flex-direction: row; align-items: center;
-            gap: 10px; background: var(--panel); border: 1px solid var(--border);
-            border-radius: 8px; padding: 14px 12px; cursor: pointer;
-            position: relative; z-index: 0; overflow: hidden;  /* 背景进度填充的裁剪与层叠 */
+        .radio-grid {
+            display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px 16px;
+            font-size: 13px; font-family: "微软雅黑"; color: var(--text);
         }
+        .radio-grid label { display: flex; align-items: center; gap: 5px; cursor: pointer; user-select: none; }
+        .radio-grid input[type="radio"] { accent-color: var(--accent); cursor: pointer; }
+        .radio-grid input[type="checkbox"] { accent-color: var(--accent); cursor: pointer; }
+        /* 战斗动作：类型单选横排（法术/攻击/防御/捕捉/逃跑/无）+ 法术技能下拉 */
+        .battle-action-row { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; font-family: "微软雅黑"; color: var(--text); }
+        .battle-action-row label { display: flex; align-items: center; gap: 4px; cursor: pointer; user-select: none; }
+        .battle-action-row input[type="radio"] { accent-color: var(--accent); cursor: pointer; }
+        .skill-select { background: var(--panel2); color: var(--text); border: 1px solid var(--border2); border-radius: 4px; padding: 2px 6px; min-width: 110px; font-size: 13px; font-family: "微软雅黑"; cursor: pointer; }
+        /* 种族选择：独立成行，4 列全宽（12 项 3 行） */
+        .race-grid { grid-template-columns: repeat(4, 1fr); width: 100%; }
+        /* ---- 任务卡（选择 + 次数 + 专属设置手风琴；进度展示在运行看板） ---- */
+        #page-task { gap: 8px; }
+        .task-card {
+            width: 100%; flex-shrink: 0; background: var(--panel);
+            border: 1px solid var(--border); border-radius: 8px;
+            position: relative; z-index: 0; overflow: hidden;
+        }
+        .task-card-main {
+            display: flex; flex-direction: row; align-items: center; gap: 8px;
+            padding: 12px; cursor: pointer; position: relative; z-index: 0;
+        }
+        /* 运行中锁定态：仅任务卡自身的复选框禁用才置灰（不得匹配
+           手风琴内禁用的设置开关，如锁妖网） */
+        .task-card:has(.task-radio input:disabled) { cursor: not-allowed; }
+        .task-order { width: 18px; text-align: center; color: var(--text-dim); font-family: 'Consolas', monospace; font-size: 12px; flex-shrink: 0; }
         .task-radio {
             flex: 1; display: flex; align-items: center; gap: 6px;
             color: var(--text); font-size: 13px; font-family: "微软雅黑";
-            cursor: pointer; user-select: none;
+            cursor: pointer; user-select: none; min-width: 0;
         }
-        .task-count { display: flex; align-items: center; gap: 6px; }
-        /* 每行任务背景进度：淡色整行填充（不抢眼球），按完成百分比撑开；
-           负 z-index 叠在卡片背景上、内容之下 */
-        .task-fill {
-            position: absolute; z-index: -1; left: 0; top: 0; bottom: 0; width: 0%;
-            background: var(--progress-tint); pointer-events: none;
-            transition: width 0.4s;
+        /* 选中指示 = 可见原生复选框；卡片边框/文案颜色不随选中变化 */
+        .task-radio input[type="checkbox"] {
+            display: inline-block; width: 14px; height: 14px; margin: 0;
+            accent-color: var(--accent); cursor: pointer; flex-shrink: 0;
         }
-        /* ---- 分组框（通用/高级设置） ---- */
-        .group-box {
-            width: 100%; display: flex; flex-direction: column; gap: 10px;
-            background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
-            padding: 10px 12px;
+        .task-radio input:disabled + span { opacity: 0.35; }
+        .badge {
+            font-size: 11px; padding: 1px 8px; border-radius: 8px;
+            border: 1px solid var(--gold); color: var(--gold); flex-shrink: 0;
         }
-        .group-title { color: var(--accent); font-size: 13px; font-family: "微软雅黑"; }
-        /* 设置条目行：文本居左、控件居右（与开关行统一） */
-        .group-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-        .group-ctrl { display: flex; align-items: center; gap: 6px; }
-        /* ---- 修罗回程验证行 ---- */
+        .task-count { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+        .task-expand {
+            width: 24px; height: 24px; flex-shrink: 0; border-radius: 4px;
+            border: 1px solid var(--border2); background: var(--panel2); color: var(--text-dim);
+            font-size: 12px; line-height: 1; cursor: pointer; user-select: none;
+        }
+        .task-expand:hover { color: var(--accent); border-color: var(--accent); }
+        /* 展开按钮内嵌任务名（label 内）：更小，紧贴名字，次数步进右对齐 */
+        .task-radio .task-expand { width: 19px; height: 19px; font-size: 10px; border-radius: 3px; }
+        /* 任务专属设置手风琴（展开态记忆到 localStorage） */
+        .task-accordion {
+            display: none; flex-direction: column; gap: 10px;
+            padding: 10px 12px 12px; border-top: 1px solid var(--border);
+        }
+        .task-card.open .task-accordion { display: flex; }
+        /* ---- 运行看板 ---- */
+        #page-dash { gap: 10px; }
+        /* 覆盖 .card 的 column 方向：印章/信息/操作横排 */
+        .dash-hero { display: flex; flex-direction: row; align-items: center; gap: 18px; padding: 16px; }
+        .seal {
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            width: 66px; height: 66px; border-radius: 6px; border: 2px solid;
+            font-family: KaiTi, STKaiti, '楷体', serif; font-size: 19px; line-height: 1.2;
+            transform: rotate(-3deg); user-select: none; flex-shrink: 0;
+            transition: background 0.3s, color 0.3s, border-color 0.3s;
+        }
+        /* ---- 印章动效：与阶段状态联动（JS 按阶段挂 phase-* 类；
+                prefers-reduced-motion 全局禁用全部动画） ---- */
+        /* 待命：灰章呼吸（轻微明暗，不抢眼） */
+        .seal.idle { background: transparent; color: var(--text-dim); border-color: var(--border2); animation: sealBreath 3.5s ease-in-out infinite; }
+        @keyframes sealBreath {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(139, 148, 140, 0); border-color: var(--border2); }
+            50% { box-shadow: 0 0 9px 1px rgba(139, 148, 140, 0.30); border-color: var(--text-dim); }
+        }
+        /* 运行中默认：红章标准脉冲 */
+        .seal.running { background: var(--seal); color: #fff; border-color: var(--seal); animation: sealPulse 2s ease-in-out infinite; }
+        @keyframes sealPulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(192, 57, 43, 0); transform: rotate(-3deg); }
+            50% { box-shadow: 0 0 12px 2px rgba(192, 57, 43, 0.45); transform: rotate(-3deg); }
+        }
+        /* 战斗中：快速强脉冲（0.9s 高频 + 大光晕微放大） */
+        .seal.running.phase-battle { animation: sealBattle 0.9s ease-in-out infinite; }
+        @keyframes sealBattle {
+            0%, 100% { box-shadow: 0 0 6px 1px rgba(192, 57, 43, 0.35); transform: rotate(-3deg) scale(1); }
+            50% { box-shadow: 0 0 18px 5px rgba(192, 57, 43, 0.65); transform: rotate(-3deg) scale(1.05); }
+        }
+        /* 移动类阶段（寻路/前往/返程）：左右轻摆走路节奏 */
+        .seal.running.phase-walk { animation: sealWalk 1.6s ease-in-out infinite; }
+        @keyframes sealWalk {
+            0%, 100% { box-shadow: 0 0 10px 1px rgba(192, 57, 43, 0.35); transform: rotate(-3deg) translateX(0); }
+            25% { transform: rotate(-4deg) translateX(-2px); }
+            75% { transform: rotate(-2deg) translateX(2px); }
+        }
+        /* 任务对话：慢节奏柔光（对话期场景静止，动效收敛） */
+        .seal.running.phase-talk { animation: sealTalk 2.4s ease-in-out infinite; }
+        @keyframes sealTalk {
+            0%, 100% { box-shadow: 0 0 8px 1px rgba(192, 57, 43, 0.35); transform: rotate(-3deg); }
+            50% { box-shadow: 0 0 14px 4px rgba(192, 57, 43, 0.7); transform: rotate(-3deg); }
+        }
+        .dash-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+        .info-row { font-size: 13px; color: var(--text); display: flex; gap: 8px; line-height: 1.4; }
+        .info-k { color: var(--text-dim); width: 58px; flex-shrink: 0; }
+        .info-v { flex: 1; min-width: 0; word-break: break-all; }
+        /* 今日计划等长文案：单行省略不换行（明细在下方任务队列） */
+        .info-v.nowrap { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .info-hint { font-size: 11px; color: var(--text-dim); }
+        /* 任务队列 */
+        .queue-card { flex: 1; min-height: 0; overflow-y: auto; }
+        .queue-head { display: flex; align-items: center; gap: 8px; }
+        .queue-summary { font-size: 12px; color: var(--text-dim); font-family: 'Consolas', monospace; }
+        .queue-row {
+            display: flex; align-items: center; gap: 8px; padding: 7px 4px;
+            border-bottom: 1px solid var(--border); border-radius: 4px;
+        }
+        .queue-row:last-child { border-bottom: none; }
+        .queue-row.active { background: var(--progress-tint); }
+        .queue-state { width: 18px; text-align: center; flex-shrink: 0; font-size: 13px; color: var(--text-dim); }
+        .queue-row.done .queue-state, .queue-row.active .queue-state { color: var(--accent); }
+        .queue-name { width: 68px; flex-shrink: 0; font-size: 13px; }
+        .queue-row.active .queue-name { color: var(--accent); }
+        .queue-prog {
+            flex: 1; min-width: 0; position: relative; height: 8px;
+            background: var(--panel2); border-radius: 4px; overflow: hidden;
+        }
+        .queue-prog-fill { position: absolute; left: 0; top: 0; bottom: 0; width: 0%; background: var(--accent-dim); transition: width 0.4s; }
+        .queue-text { width: 76px; flex-shrink: 0; text-align: right; font-family: 'Consolas', monospace; font-size: 12px; color: var(--text-dim); }
+        .queue-empty { padding: 18px 0; text-align: center; color: var(--text-dim); font-size: 12px; }
+        /* 日志抽屉 */
+        .log-drawer { flex-shrink: 0; padding: 0; overflow: hidden; }
+        .log-head {
+            height: 30px; display: flex; align-items: center; gap: 10px; padding: 0 12px;
+            font-size: 12px; font-family: "微软雅黑"; flex-shrink: 0;
+        }
+        .log-title { color: var(--accent); }
+        .log-meta { color: var(--text-dim); font-size: 11px; flex: 1; }
+        .link-btn { color: var(--text-dim); cursor: pointer; user-select: none; font-size: 12px; }
+        .link-btn:hover { color: var(--accent); }
+        #dash-log-box {
+            height: 156px; overflow-y: auto; margin: 0; padding: 2px 12px 8px;
+            border-top: 1px solid var(--border);
+            font-family: 'Consolas', '微软雅黑', monospace; font-size: 11px; line-height: 1.5;
+            color: var(--text); white-space: pre-wrap; word-break: break-all;
+        }
+        .log-drawer.collapsed #dash-log-box { display: none; }
+        /* ---- 诊断页：双列工具卡 ---- */
+        .tools-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: start; }
         .verify-row { display: flex; align-items: center; gap: 8px; }
-        #verify-result { color: var(--text); font-size: 12px; font-family: "微软雅黑"; flex: 1; word-break: break-all; }
-        .group-label { color: var(--text); font-size: 13px; font-family: "微软雅黑"; flex: 1; min-width: 0; white-space: nowrap; }
-        .group-hint { color: var(--text-dim); font-size: 11px; font-family: "微软雅黑"; }
-        .group-sub { color: var(--text-dim); font-size: 12px; font-family: "微软雅黑"; }
+        .verify-row .btn { min-width: 0; flex-shrink: 0; }
+        .verify-result { color: var(--text); font-size: 12px; font-family: "微软雅黑"; flex: 1; min-width: 0; word-break: break-all; }
         /* 设备 ID / 绑定窗口等长文本值：超宽省略号截断，不挤压标签换行 */
         #env-device-id, #env-bound { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         /* 设备 ID 点击复制 */
         #env-device-id { cursor: pointer; }
         #env-device-id:hover { color: var(--accent); }
-        /* 种族选择：独立成行，4 列全宽（12 项 3 行） */
-        .race-grid { grid-template-columns: repeat(4, 1fr); width: 100%; }
     </style>
 </head>
 <body class="light">
-    <div class="top-bar">
-        <button id="btn-start" class="btn" onclick="toggleTask()">启 动</button>
-        <span id="status">已停止</span>
-        <!-- 配置方案下拉：margin-left:auto 推至右侧，主题图标在最右 -->
-        <select id="scheme-select" title="配置方案：选中即切换"></select>
-        <!-- 主题图标按钮：浅色显示月亮（目标深色）、深色显示太阳（目标浅色） -->
-        <button id="btn-theme" class="btn" onclick="toggleTheme()" title="切换到深色">
-            <svg id="theme-icon-moon" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
-            </svg>
-            <svg id="theme-icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none">
-                <circle cx="12" cy="12" r="5"/>
-                <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
-            </svg>
-        </button>
-    </div>
-    <div class="tab-bar">
-        <div class="tab active" data-tab="task">任务列表</div>
-        <div class="tab" data-tab="taskcfg">任务设置</div>
-        <div class="tab" data-tab="general">通用设置</div>
-        <div class="tab" data-tab="advanced">高级设置</div>
-    </div>
-    <div class="body">
-        <!-- 任务列表：每任务一组（模式多选 + 任务次数步进），
-             每行背景淡色填充按完成百分比撑开展示进度 -->
-        <div class="tab-panel active" id="panel-task">
-            <div class="task-group">
-                <div class="task-fill" id="fill-五环"></div>
-                <label class="task-radio"><input type="checkbox" name="task-mode" value="五环"><span>五环</span></label>
-                <div class="task-count">
-                    <button class="th-btn" onclick="count('五环', -1)">−</button>
-                    <span class="th-val" id="cnt-五环">2</span>
-                    <button class="th-btn" onclick="count('五环', 1)">＋</button>
-                </div>
-            </div>
-            <div class="task-group">
-                <div class="task-fill" id="fill-客栈"></div>
-                <label class="task-radio"><input type="checkbox" name="task-mode" value="客栈"><span>客栈</span></label>
-                <div class="task-count">
-                    <button class="th-btn" onclick="count('客栈', -1)">−</button>
-                    <span class="th-val" id="cnt-客栈">20</span>
-                    <button class="th-btn" onclick="count('客栈', 1)">＋</button>
-                </div>
-            </div>
-            <div class="task-group">
-                <div class="task-fill" id="fill-修罗"></div>
-                <label class="task-radio"><input type="checkbox" name="task-mode" value="修罗"><span>修罗</span></label>
-                <div class="task-count">
-                    <button class="th-btn" onclick="count('修罗', -1)">−</button>
-                    <span class="th-val" id="cnt-修罗">90</span>
-                    <button class="th-btn" onclick="count('修罗', 1)">＋</button>
-                </div>
-            </div>
-            <div class="task-group">
-                <div class="task-fill" id="fill-五倍"></div>
-                <label class="task-radio"><input type="checkbox" name="task-mode" value="五倍"><span>五倍</span></label>
-                <div class="task-count">
-                    <button class="th-btn" onclick="count('五倍', -1)">−</button>
-                    <span class="th-val" id="cnt-五倍">100</span>
-                    <button class="th-btn" onclick="count('五倍', 1)">＋</button>
-                </div>
-            </div>
-            <div class="task-group">
-                <div class="task-fill" id="fill-玄枢轶闻"></div>
-                <label class="task-radio"><input type="checkbox" name="task-mode" value="玄枢轶闻"><span>玄枢轶闻</span></label>
-                <div class="task-count">
-                    <button class="th-btn" onclick="count('玄枢轶闻', -1)">−</button>
-                    <span class="th-val" id="cnt-玄枢轶闻">5</span>
-                    <button class="th-btn" onclick="count('玄枢轶闻', 1)">＋</button>
-                </div>
-            </div>
-            <div class="task-group">
-                <div class="task-fill" id="fill-名望"></div>
-                <label class="task-radio"><input type="checkbox" name="task-mode" value="名望"><span>名望</span></label>
-                <div class="task-count">
-                    <button class="th-btn" onclick="count('名望', -1)">−</button>
-                    <span class="th-val" id="cnt-名望">5</span>
-                    <button class="th-btn" onclick="count('名望', 1)">＋</button>
-                </div>
+<div class="app">
+    <!-- ================= 侧边导航 ================= -->
+    <nav class="sidebar">
+        <div class="brand">
+            <div class="brand-seal">啄</div>
+            <div class="brand-text">
+                <span class="brand-name">啄木鸟</span>
+                <span class="brand-sub">大话2自动化助手</span>
             </div>
         </div>
-        <!-- 任务设置：各任务专属配置（修罗/五倍，后续其他任务设置同样收纳于此） -->
-        <div class="tab-panel" id="panel-taskcfg">
-            <!-- 修罗设置分组：检查队伍开关 + 最少人数 + 必须有的种族 -->
-            <div class="group-box">
-                <div class="group-title">修罗设置</div>
-                <label class="switch-row">
-                    <input type="checkbox" id="xiuluo-check-team">
-                    <span class="switch-track"></span>
-                    <span>检查队伍（默认关闭）</span>
-                </label>
-                <label class="switch-row">
-                    <input type="checkbox" id="xiuluo-shout">
-                    <span class="switch-track"></span>
-                    <span>缺人自动喊话（按必须种族拼装内容，仅队长生效）</span>
-                </label>
-                <label class="switch-row">
-                    <input type="checkbox" id="xiuluo-auto-wuyi">
-                    <span class="switch-track"></span>
-                    <span>自动巫医（每 N 轮一次，默认开启）</span>
-                </label>
-                <div class="group-row">
-                    <span class="group-label">巫医间隔</span>
-                    <div class="group-ctrl">
-                        <button class="th-btn" onclick="xiuluoWuyiInterval(-1)">−</button>
-                        <span class="th-val" id="xiuluo-wuyi-interval">5</span>
-                        <button class="th-btn" onclick="xiuluoWuyiInterval(1)">＋</button>
-                    </div>
-                </div>
-                <div class="group-row">
-                    <span class="group-label">最少人数</span>
-                    <div class="group-ctrl">
-                        <button class="th-btn" onclick="xiuluoMin(-1)">−</button>
-                        <span class="th-val" id="xiuluo-min">5</span>
-                        <button class="th-btn" onclick="xiuluoMin(1)">＋</button>
-                    </div>
-                </div>
-                <div class="group-sub">必须有的种族</div>
-                <div class="radio-grid race-grid" id="xiuluo-race-grid"></div>
-                <label class="switch-row">
-                    <input type="checkbox" id="xiuluo-hezi">
-                    <span class="switch-track"></span>
-                    <span>自动抢盒子（仅非队长生效）</span>
-                </label>
-                <label class="switch-row">
-                    <input type="checkbox" id="xiuluo-tab-group">
-                    <span class="switch-track"></span>
-                    <span>组号专用（一窗口多账号：队员自动挂战斗/巫医/补血蓝，非队长停止任务）</span>
-                </label>
+        <div class="nav-items">
+            <div class="nav-item active" data-page="dash">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+                <span>运 行</span>
             </div>
-            <!-- 五倍设置分组：自动抢盒子 + 检查队伍（队伍固定 5 人） -->
-            <div class="group-box">
-                <div class="group-title">五倍设置</div>
-                <label class="switch-row">
-                    <input type="checkbox" id="wubei-hezi">
-                    <span class="switch-track"></span>
-                    <span>自动抢盒子（仅非队长生效）</span>
-                </label>
-                <label class="switch-row">
-                    <input type="checkbox" id="wubei-check-team">
-                    <span class="switch-track"></span>
-                    <span>检查队伍（队伍固定 5 人，缺人自动补）</span>
-                </label>
-                <label class="switch-row">
-                    <input type="checkbox" id="wubei-shout">
-                    <span class="switch-track"></span>
-                    <span>缺人自动喊话（固定内容「百次五倍来人，效率队」，仅队长生效）</span>
-                </label>
-                <label class="switch-row">
-                    <input type="checkbox" id="wubei-auto-wuyi">
-                    <span class="switch-track"></span>
-                    <span>自动巫医（每 N 轮一次，默认开启）</span>
-                </label>
-                <div class="group-row">
-                    <span class="group-label">巫医间隔</span>
-                    <div class="group-ctrl">
-                        <button class="th-btn" onclick="wubeiWuyiInterval(-1)">−</button>
-                        <span class="th-val" id="wubei-wuyi-interval">5</span>
-                        <button class="th-btn" onclick="wubeiWuyiInterval(1)">＋</button>
-                    </div>
-                </div>
-                <label class="switch-row">
-                    <input type="checkbox" id="wubei-suoyaowang" disabled>
-                    <span class="switch-track"></span>
-                    <span>领取锁妖网任务（暂不可用，默认关闭）</span>
-                </label>
-                <label class="switch-row">
-                    <input type="checkbox" id="wubei-kuimulang">
-                    <span class="switch-track"></span>
-                    <span>领取奎木狼任务（默认开启；关闭时领取到奎木狼任务自动重新领取替换）</span>
-                </label>
-                <label class="switch-row">
-                    <input type="checkbox" id="wubei-tab-group">
-                    <span class="switch-track"></span>
-                    <span>组号专用（一窗口多账号：队员自动挂战斗/巫医/补血蓝，非队长停止任务）</span>
-                </label>
+            <div class="nav-item" data-page="task">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+                <span>任 务</span>
+            </div>
+            <div class="nav-item" data-page="general">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+                <span>设 置</span>
+            </div>
+            <div class="nav-item" data-page="system">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+                <span>系 统</span>
+            </div>
+            <div class="nav-item" data-page="diag" id="nav-diag" style="display:none">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+                <span>诊 断</span>
             </div>
         </div>
-        <!-- 通用设置：摄妖香开关 + 高性能 + 血量蓝量阈值 + 人物/召唤兽战斗动作 -->
-        <div class="tab-panel" id="panel-general">
-            <!-- 通用分组：摄妖香 + 高性能模式 -->
+        <div class="side-footer">
+            <span class="lic-dot" id="lic-dot"></span>
+            <span id="lic-text">授权：-</span>
+            <span class="side-ver" id="app-version">-</span>
+        </div>
+    </nav>
+    <!-- ================= 主列 ================= -->
+    <div class="main">
+        <header class="top-bar">
+            <span class="char-chip" id="char-chip" title="绑定角色（点击前往系统页）" onclick="switchPage('system')">-</span>
+            <div class="top-spacer"></div>
+            <!-- 配置方案下拉：选中即切换（任务运行中禁用） -->
+            <select id="scheme-select" title="配置方案：选中即切换"></select>
+            <!-- 主题图标按钮：浅色显示月亮（目标深色）、深色显示太阳（目标浅色） -->
+            <button id="btn-theme" class="icon-btn" onclick="toggleTheme()" title="切换到深色">
+                <svg id="theme-icon-moon" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+                </svg>
+                <svg id="theme-icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none">
+                    <circle cx="12" cy="12" r="5"/>
+                    <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
+                </svg>
+            </button>
+            <button id="btn-start" class="btn-primary" onclick="toggleTask()">启 动</button>
+        </header>
+        <!-- ============ 运行看板 ============ -->
+        <div class="page active" id="page-dash">
+            <div class="card dash-hero">
+                <div class="seal idle" id="dash-seal"><span>待</span><span>命</span></div>
+                <div class="dash-info" id="dash-info"></div>
+            </div>
+            <div class="card queue-card">
+                <div class="queue-head">
+                    <span class="card-title">任务队列</span>
+                    <span class="queue-summary" id="queue-summary"></span>
+                </div>
+                <div id="dash-queue"></div>
+            </div>
+            <div class="card log-drawer collapsed" id="log-drawer">
+                <div class="log-head">
+                    <span class="log-title">运 行 日 志</span>
+                    <span class="log-meta" id="log-meta">0 行</span>
+                    <span class="link-btn" onclick="clearPanelLogs()">清 空</span>
+                    <span class="link-btn" id="log-toggle" onclick="toggleLogDrawer()">展 开</span>
+                </div>
+                <div id="dash-log-box"></div>
+            </div>
+        </div>
+        <!-- ============ 任务页（选择 + 次数 + 专属设置手风琴） ============ -->
+        <div class="page" id="page-task">
+            <div class="banner warn" id="task-lock-banner" style="display:none">任务运行中：勾选与次数不可修改，停止后可编辑；专属设置修改下次启动生效</div>
+            <div class="task-card" data-mode="五环">
+                <div class="task-card-main">
+                    <span class="task-order">①</span>
+                    <label class="task-radio"><input type="checkbox" name="task-mode" value="五环"><span>五环</span></label>
+                    <div class="task-count">
+                        <button class="th-btn" onclick="count('五环', -1)">−</button>
+                        <span class="th-val" id="cnt-五环">2</span>
+                        <button class="th-btn" onclick="count('五环', 1)">＋</button>
+                    </div>
+                </div>
+            </div>
+            <div class="task-card" data-mode="客栈">
+                <div class="task-card-main">
+                    <span class="task-order">②</span>
+                    <label class="task-radio"><input type="checkbox" name="task-mode" value="客栈"><span>客栈</span></label>
+                    <div class="task-count">
+                        <button class="th-btn" onclick="count('客栈', -1)">−</button>
+                        <span class="th-val" id="cnt-客栈">20</span>
+                        <button class="th-btn" onclick="count('客栈', 1)">＋</button>
+                    </div>
+                </div>
+            </div>
+            <div class="task-card" data-mode="修罗">
+                <div class="task-card-main">
+                    <span class="task-order">③</span>
+                    <label class="task-radio"><input type="checkbox" name="task-mode" value="修罗"><span>修罗</span>
+                        <button class="task-expand" data-mode="修罗" title="修罗专属设置">▾</button></label>
+                    <div class="task-count">
+                        <button class="th-btn" onclick="count('修罗', -1)">−</button>
+                        <span class="th-val" id="cnt-修罗">90</span>
+                        <button class="th-btn" onclick="count('修罗', 1)">＋</button>
+                    </div>
+                </div>
+                <!-- 修罗设置手风琴：检查队伍 + 最少人数 + 必须种族 + 巫医 + 组号 -->
+                <div class="task-accordion">
+                    <div class="group-title">修罗设置</div>
+                    <label class="switch-row">
+                        <input type="checkbox" id="xiuluo-check-team">
+                        <span class="switch-track"></span>
+                        <span>检查队伍（默认关闭）</span>
+                    </label>
+                    <label class="switch-row">
+                        <input type="checkbox" id="xiuluo-shout">
+                        <span class="switch-track"></span>
+                        <span>缺人自动喊话（按必须种族拼装内容，仅队长生效）</span>
+                    </label>
+                    <label class="switch-row">
+                        <input type="checkbox" id="xiuluo-auto-wuyi">
+                        <span class="switch-track"></span>
+                        <span>自动巫医（每 N 轮一次，默认开启）</span>
+                    </label>
+                    <div class="group-row">
+                        <span class="group-label">巫医间隔</span>
+                        <div class="group-ctrl">
+                            <button class="th-btn" onclick="xiuluoWuyiInterval(-1)">−</button>
+                            <span class="th-val" id="xiuluo-wuyi-interval">5</span>
+                            <button class="th-btn" onclick="xiuluoWuyiInterval(1)">＋</button>
+                        </div>
+                    </div>
+                    <div class="group-row">
+                        <span class="group-label">最少人数</span>
+                        <div class="group-ctrl">
+                            <button class="th-btn" onclick="xiuluoMin(-1)">−</button>
+                            <span class="th-val" id="xiuluo-min">5</span>
+                            <button class="th-btn" onclick="xiuluoMin(1)">＋</button>
+                        </div>
+                    </div>
+                    <div class="group-sub">必须有的种族</div>
+                    <div class="radio-grid race-grid" id="xiuluo-race-grid"></div>
+                    <label class="switch-row">
+                        <input type="checkbox" id="xiuluo-hezi">
+                        <span class="switch-track"></span>
+                        <span>自动抢盒子（仅非队长生效）</span>
+                    </label>
+                    <label class="switch-row">
+                        <input type="checkbox" id="xiuluo-tab-group">
+                        <span class="switch-track"></span>
+                        <span>组号专用（一窗口多账号：队员自动挂战斗/巫医/补血蓝，非队长停止任务）</span>
+                    </label>
+                </div>
+            </div>
+            <div class="task-card" data-mode="五倍">
+                <div class="task-card-main">
+                    <span class="task-order">④</span>
+                    <label class="task-radio"><input type="checkbox" name="task-mode" value="五倍"><span>五倍</span>
+                        <button class="task-expand" data-mode="五倍" title="五倍专属设置">▾</button></label>
+                    <div class="task-count">
+                        <button class="th-btn" onclick="count('五倍', -1)">−</button>
+                        <span class="th-val" id="cnt-五倍">100</span>
+                        <button class="th-btn" onclick="count('五倍', 1)">＋</button>
+                    </div>
+                </div>
+                <!-- 五倍设置手风琴：抢盒子 + 检查队伍（固定 5 人）+ 巫医 + 组号 -->
+                <div class="task-accordion">
+                    <div class="group-title">五倍设置</div>
+                    <label class="switch-row">
+                        <input type="checkbox" id="wubei-hezi">
+                        <span class="switch-track"></span>
+                        <span>自动抢盒子（仅非队长生效）</span>
+                    </label>
+                    <label class="switch-row">
+                        <input type="checkbox" id="wubei-check-team">
+                        <span class="switch-track"></span>
+                        <span>检查队伍（队伍固定 5 人，缺人自动补）</span>
+                    </label>
+                    <label class="switch-row">
+                        <input type="checkbox" id="wubei-shout">
+                        <span class="switch-track"></span>
+                        <span>缺人自动喊话（固定内容「百次五倍来人，效率队」，仅队长生效）</span>
+                    </label>
+                    <label class="switch-row">
+                        <input type="checkbox" id="wubei-auto-wuyi">
+                        <span class="switch-track"></span>
+                        <span>自动巫医（每 N 轮一次，默认开启）</span>
+                    </label>
+                    <div class="group-row">
+                        <span class="group-label">巫医间隔</span>
+                        <div class="group-ctrl">
+                            <button class="th-btn" onclick="wubeiWuyiInterval(-1)">−</button>
+                            <span class="th-val" id="wubei-wuyi-interval">5</span>
+                            <button class="th-btn" onclick="wubeiWuyiInterval(1)">＋</button>
+                        </div>
+                    </div>
+                    <label class="switch-row">
+                        <input type="checkbox" id="wubei-suoyaowang" disabled>
+                        <span class="switch-track"></span>
+                        <span>领取锁妖网任务（暂不可用，默认关闭）</span>
+                    </label>
+                    <label class="switch-row">
+                        <input type="checkbox" id="wubei-kuimulang">
+                        <span class="switch-track"></span>
+                        <span>领取奎木狼任务（默认开启；关闭时领取到奎木狼任务自动重新领取替换）</span>
+                    </label>
+                    <label class="switch-row">
+                        <input type="checkbox" id="wubei-tab-group">
+                        <span class="switch-track"></span>
+                        <span>组号专用（一窗口多账号：队员自动挂战斗/巫医/补血蓝，非队长停止任务）</span>
+                    </label>
+                </div>
+            </div>
+            <div class="task-card" data-mode="玄枢轶闻">
+                <div class="task-card-main">
+                    <span class="task-order">⑤</span>
+                    <label class="task-radio"><input type="checkbox" name="task-mode" value="玄枢轶闻"><span>玄枢轶闻</span></label>
+                    <div class="task-count">
+                        <button class="th-btn" onclick="count('玄枢轶闻', -1)">−</button>
+                        <span class="th-val" id="cnt-玄枢轶闻">5</span>
+                        <button class="th-btn" onclick="count('玄枢轶闻', 1)">＋</button>
+                    </div>
+                </div>
+            </div>
+            <div class="task-card" data-mode="名望">
+                <div class="task-card-main">
+                    <span class="task-order">⑥</span>
+                    <label class="task-radio"><input type="checkbox" name="task-mode" value="名望"><span>名望</span></label>
+                    <span class="badge">规划中</span>
+                    <div class="task-count">
+                        <button class="th-btn" onclick="count('名望', -1)">−</button>
+                        <span class="th-val" id="cnt-名望">5</span>
+                        <button class="th-btn" onclick="count('名望', 1)">＋</button>
+                    </div>
+                </div>
+            </div>
+            <div class="group-hint">按顺序号 ①→⑥ 依次执行，全部完成后自动结束；每卡点空白处可勾选/取消（运行中锁定）。「名望」暂无自动化实现，选中后自动跳过。</div>
+        </div>
+        <!-- ============ 设置页（通用 + 显示与调试 + 血蓝阈值 + 战斗动作） ============ -->
+        <div class="page" id="page-general">
             <div class="group-box">
                 <div class="group-title">通用</div>
                 <label class="switch-row">
@@ -410,8 +640,6 @@
                     <span>启动时自动清屏（屏蔽其他玩家和摊位，默认开启）</span>
                 </label>
             </div>
-            <!-- 修罗/五倍配置已移至「任务设置」页签 -->
-            <!-- 血量蓝量分组 -->
             <div class="group-box">
                 <div class="group-title">血量蓝量阈值（步进 5%）</div>
                 <div class="group-row">
@@ -469,8 +697,9 @@
                 </label>
             </div>
         </div>
-        <!-- 高级设置：调试信息（悬浮显示 + 右侧吸附日志窗口，切换后数秒生效） -->
-        <div class="tab-panel" id="panel-advanced">
+        <!-- ============ 系统页（环境 / 授权 / 配置方案 / 关于） ============ -->
+        <div class="page" id="page-system">
+            <div class="banner warn" id="license-banner" style="display:none">授权即将到期</div>
             <div class="group-box">
                 <div class="group-title">使用环境</div>
                 <div class="group-row">
@@ -515,7 +744,16 @@
                 </div>
                 <div class="group-hint" id="license-msg"></div>
             </div>
-            <!-- 配置方案：多套设置快照管理（一键切换在顶部下拉）。
+            <div class="group-box">
+                <div class="group-title">显示与调试</div>
+                <label class="switch-row">
+                    <input type="checkbox" id="debug-overlay">
+                    <span class="switch-track"></span>
+                    <span>调试信息（游戏窗口悬浮任务信息 + 显示「诊断」页）</span>
+                </label>
+                <div class="group-hint">开启后左侧导航出现「诊断」页，供验证各链路识别是否正常；任务运行中切换数秒生效。</div>
+            </div>
+            <!-- 配置方案：多套设置快照管理（一键切换在顶栏下拉）。
                  当前方案行实时显示操作对象；重命名/删除按钮文案带方案名 -->
             <div class="group-box">
                 <div class="group-title">配置方案</div>
@@ -574,1243 +812,1425 @@
                 <div class="group-hint">方案 = 全部设置的快照，顶部下拉选中即切换（切换前自动保存当前改动）；方案名输入框回填当前方案名，改名后点保存 = 重命名并保存；「默认」方案不可删除/重命名（导入覆盖也被拒绝）；导入的新方案需手动切换生效。任务运行中不可切换或管理。</div>
             </div>
             <div class="group-box">
-                <div class="group-title">调试信息</div>
-                <label class="switch-row">
-                    <input type="checkbox" id="debug-overlay">
-                    <span class="switch-track"></span>
-                    <span>游戏窗口悬浮显示任务信息（同时显示右侧吸附日志窗口、展示下方验证/测试入口）</span>
-                </label>
+                <div class="group-title">关于</div>
+                <div class="group-row">
+                    <span class="group-label">版本</span>
+                    <span class="group-sub" id="about-version">-</span>
+                </div>
+                <div class="group-row">
+                    <span class="group-label">运行日志</span>
+                    <span class="group-sub">工程目录 logs\（按日期双写，排查问题直接读文件）</span>
+                </div>
+                <div class="group-hint">窗口关闭（X）后程序驻留托盘继续运行任务；托盘菜单可再次打开面板或彻底退出。老板键 F11 任意前台窗口一键启动/停止任务。</div>
             </div>
-            <div id="dev-tools" style="display:none">
-            <div class="group-box">
-                <div class="group-title">修罗验证</div>
-                <div class="verify-row">
-                    <button id="btn-verify-xiuluo" class="btn" onclick="verifyXiuluoReturn()">验证修罗回程</button>
-                    <span id="verify-result"></span>
+        </div>
+        <!-- ============ 诊断页（调试信息开启时导航可见；工具卡网格） ============ -->
+        <div class="page" id="page-diag">
+            <div class="tools-grid">
+                <div class="group-box">
+                    <div class="group-title">修罗链路</div>
+                    <div class="verify-row">
+                        <button id="btn-verify-xiuluo" class="btn" onclick="verifyXiuluoReturn()">验证回程</button>
+                        <span class="verify-result" id="verify-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="btn-verify-xiuluo-claim" class="btn" onclick="verifyXiuluoClaim()">验证领取</button>
+                        <span class="verify-result" id="claim-verify-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="btn-verify-xiuluo-wuyi" class="btn" onclick="verifyXiuluoWuyi()">验证巫医</button>
+                        <span class="verify-result" id="wuyi-verify-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="btn-verify-xiuluo-tab-wuyi" class="btn" onclick="verifyXiuluoTabWuyi()">验证组号巫医</button>
+                        <span class="verify-result" id="tab-wuyi-verify-result"></span>
+                    </div>
+                    <div class="group-hint">与实际流程一致、时序无额外延时，且都不改变任务状态：回程=定位回城符不点击；领取=点击领取按钮开对话框、选项仅定位不点击、点屏幕中间关闭；巫医=走位到 NPC、定位后点击打开对话框（医治选项由战斗线程处理）；组号巫医=巫医完整链路后逐个切换队员 Tab 点击其医治对话框并切回队长（需窗口内 ≥2 个已登录 Tab，开关状态不校验）。任务运行中不可验证。</div>
                 </div>
-                <div class="verify-row">
-                    <button id="btn-verify-xiuluo-claim" class="btn" onclick="verifyXiuluoClaim()">验证修罗领取</button>
-                    <span id="claim-verify-result"></span>
+                <div class="group-box">
+                    <div class="group-title">五倍链路</div>
+                    <div class="verify-row">
+                        <button id="btn-verify-wubei-claim" class="btn" onclick="verifyWubeiClaim()">验证领取任务</button>
+                        <span class="verify-result" id="wubei-claim-verify-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="btn-verify-wubei-return" class="btn" onclick="verifyWubeiReturn()">验证回程</button>
+                        <span class="verify-result" id="wubei-return-verify-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="btn-verify-wubei-wuyi" class="btn" onclick="verifyWubeiWuyi()">验证巫医</button>
+                        <span class="verify-result" id="wubei-wuyi-verify-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="btn-verify-wubei-xj" class="btn" onclick="verifyWubeiXj()">测试白龙马模板</button>
+                        <span class="verify-result" id="wubei-xj-verify-result"></span>
+                    </div>
+                    <div class="group-hint">与实际流程一致、时序无额外延时，且不改变任务状态：领取=走位到宝象国领取点 → 点击领取入口（领取任务按钮/降魔侍卫）打开对话框 → 选项「除魔卫国，义不容辞」仅定位不点击 → 点拒绝选项「事态严重，我等退散」关闭对话框；回程=定位回城符不点击（回城符模板待提供，缺失时报模板未提供）；巫医=走位到巫医 NPC、定位后点击打开对话框（医治选项由验证流程自行点击，与任务进程中战斗线程点击行为等效）；白龙马模板=按任务流程实际点击候选（找全部候选→逐一真实点击→误点对话框自动关闭→开打对话出现即停止并停留，请手动关闭对话框）。任务运行中不可验证。</div>
                 </div>
-                <div class="verify-row">
-                    <button id="btn-verify-xiuluo-wuyi" class="btn" onclick="verifyXiuluoWuyi()">验证修罗巫医</button>
-                    <span id="wuyi-verify-result"></span>
+                <div class="group-box">
+                    <div class="group-title">清屏</div>
+                    <div class="verify-row">
+                        <button id="btn-verify-clear-screen" class="btn" onclick="verifyClearScreen()">验证清屏</button>
+                        <span class="verify-result" id="clear-screen-verify-result"></span>
+                    </div>
+                    <div class="group-hint">执行真实清屏流程：激活游戏窗口 → 按 Alt+6 屏蔽非队伍玩家 → 按 Alt+5 屏蔽摊位（真实按键，可能短暂取消再开启），结束时两个屏蔽均处于开启态，与任务启动清屏结果一致。游戏窗口未在前台时跳过并提示。任务运行中不可验证。</div>
                 </div>
-                <div class="verify-row">
-                    <button id="btn-verify-xiuluo-tab-wuyi" class="btn" onclick="verifyXiuluoTabWuyi()">验证组号巫医</button>
-                    <span id="tab-wuyi-verify-result"></span>
+                <div class="group-box">
+                    <div class="group-title">喊话</div>
+                    <div class="verify-row">
+                        <button id="btn-verify-shout" class="btn" onclick="verifyShout('wubei')">测试五倍喊话</button>
+                        <span class="verify-result" id="shout-verify-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="btn-verify-shout-xl" class="btn" onclick="verifyShout('xiuluo')">测试修罗喊话</button>
+                        <span class="verify-result" id="shout-xl-verify-result"></span>
+                    </div>
+                    <div class="group-hint">向游戏聊天发送一次喊话验证 Enter→输入→Enter 链路：五倍发固定内容「百次五倍来人，效率队」；修罗发按必须种族拼装的文案（如「百次修罗来人，效率队，来男人」）。发送后请查看游戏公屏是否出现消息。任务运行中不可验证。</div>
                 </div>
-                <div class="group-hint">与实际流程一致、时序无额外延时，且都不改变任务状态：回程=定位回城符不点击；领取=点击领取按钮开对话框、选项仅定位不点击、点屏幕中间关闭；巫医=走位到 NPC、定位后点击打开对话框（医治选项由战斗线程处理）；组号巫医=巫医完整链路后逐个切换队员 Tab 点击其医治对话框并切回队长（需窗口内 ≥2 个已登录 Tab，开关状态不校验）。任务运行中不可验证。</div>
-            </div>
-            <div class="group-box">
-                <div class="group-title">五倍验证</div>
-                <div class="verify-row">
-                    <button id="btn-verify-wubei-claim" class="btn" onclick="verifyWubeiClaim()">验证五倍领取任务</button>
-                    <span id="wubei-claim-verify-result"></span>
+                <div class="group-box">
+                    <div class="group-title">模板与坐标</div>
+                    <div class="verify-row">
+                        <button id="btn-verify-jiguan" class="btn" onclick="verifyJiguan()">测试机关模板</button>
+                        <span class="verify-result" id="jiguan-verify-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="btn-verify-position" class="btn" onclick="verifyPosition()">获取当前坐标</button>
+                        <span class="verify-result" id="position-verify-result"></span>
+                    </div>
+                    <div class="group-hint">机关模板：对当前游戏画面逐一测试黄/蓝/红三个机关模板，打印全帧最佳匹配度与位置日志（只读不点击），请将游戏画面停在封印机关场景再测试。坐标：读取游戏左上角当前地图名与坐标并打印日志（只读）。两项任务运行中也可使用。</div>
                 </div>
-                <div class="verify-row">
-                    <button id="btn-verify-wubei-return" class="btn" onclick="verifyWubeiReturn()">验证五倍回程</button>
-                    <span id="wubei-return-verify-result"></span>
+                <div class="group-box">
+                    <div class="group-title">截屏通道</div>
+                    <div class="verify-row">
+                        <button id="btn-verify-capture-diag" class="btn" onclick="verifyCaptureDiag()">开始诊断</button>
+                        <span class="verify-result" id="capture-diag-verify-result"></span>
+                    </div>
+                    <div class="group-hint">对比 PrintWindow(3)/PrintWindow(0)/窗口 BitBlt/全屏 BitBlt 四条截屏通道并记录环境事实（显卡/DWM/进程提权/兼容模式），逐行写入本地日志文件与面板日志抽屉，用于定位黑屏/识别全失效问题。只读不点击（任务未运行时额外尝试置前游戏窗口复测），约 10 秒。任务运行中也可诊断（跳过置前复测）。</div>
                 </div>
-                <div class="verify-row">
-                    <button id="btn-verify-wubei-wuyi" class="btn" onclick="verifyWubeiWuyi()">验证五倍巫医</button>
-                    <span id="wubei-wuyi-verify-result"></span>
-                </div>
-                <div class="verify-row">
-                    <button id="btn-verify-wubei-xj" class="btn" onclick="verifyWubeiXj()">测试白龙马模板</button>
-                    <span id="wubei-xj-verify-result"></span>
-                </div>
-                <div class="group-hint">与实际流程一致、时序无额外延时，且不改变任务状态：领取=走位到宝象国领取点 → 点击领取入口（领取任务按钮/降魔侍卫）打开对话框 → 选项「除魔卫国，义不容辞」仅定位不点击 → 点拒绝选项「事态严重，我等退散」关闭对话框；回程=定位回城符不点击（回城符模板待提供，缺失时报模板未提供）；巫医=走位到巫医 NPC、定位后点击打开对话框（医治选项由验证流程自行点击，与任务进程中战斗线程点击行为等效）；白龙马模板=按任务流程实际点击候选（找全部候选→逐一真实点击→误点对话框自动关闭→开打对话出现即停止并停留，请手动关闭对话框）。任务运行中不可验证。</div>
-            </div>
-            <div class="group-box">
-                <div class="group-title">清屏验证</div>
-                <div class="verify-row">
-                    <button id="btn-verify-clear-screen" class="btn" onclick="verifyClearScreen()">验证清屏</button>
-                    <span id="clear-screen-verify-result"></span>
-                </div>
-                <div class="group-hint">执行真实清屏流程：激活游戏窗口 → 按 Alt+6 屏蔽非队伍玩家 → 按 Alt+5 屏蔽摊位（真实按键，可能短暂取消再开启），结束时两个屏蔽均处于开启态，与任务启动清屏结果一致。游戏窗口未在前台时跳过并提示。任务运行中不可验证。</div>
-            </div>
-            <div class="group-box">
-                <div class="group-title">喊话测试</div>
-                <div class="verify-row">
-                    <button id="btn-verify-shout" class="btn" onclick="verifyShout('wubei')">测试五倍喊话</button>
-                    <span id="shout-verify-result"></span>
-                </div>
-                <div class="verify-row">
-                    <button id="btn-verify-shout-xl" class="btn" onclick="verifyShout('xiuluo')">测试修罗喊话</button>
-                    <span id="shout-xl-verify-result"></span>
-                </div>
-                <div class="group-hint">向游戏聊天发送一次喊话验证 Enter→输入→Enter 链路：五倍发固定内容「百次五倍来人，效率队」；修罗发按必须种族拼装的文案（如「百次修罗来人，效率队，来男人」）。发送后请查看游戏公屏是否出现消息。任务运行中不可验证。</div>
-            </div>
-            <div class="group-box">
-                <div class="group-title">机关模板测试</div>
-                <div class="verify-row">
-                    <button id="btn-verify-jiguan" class="btn" onclick="verifyJiguan()">测试机关模板</button>
-                    <span id="jiguan-verify-result"></span>
-                </div>
-                <div class="group-hint">对当前游戏画面逐一测试黄/蓝/红三个机关模板，打印全帧最佳匹配度与位置日志（只读不点击，供阈值与模板校准）。请将游戏画面停在封印机关场景再测试；任务运行中也可测试。</div>
-            </div>
-            <div class="group-box">
-                <div class="group-title">获取当前坐标</div>
-                <div class="verify-row">
-                    <button id="btn-verify-position" class="btn" onclick="verifyPosition()">获取当前坐标</button>
-                    <span id="position-verify-result"></span>
-                </div>
-                <div class="group-hint">读取游戏左上角当前地图名与坐标并打印日志（只读，不按键不点击），供标定点位/排查使用。任务运行中也可获取。</div>
-            </div>
-            <div class="group-box">
-                <div class="group-title">截屏通道诊断</div>
-                <div class="verify-row">
-                    <button id="btn-verify-capture-diag" class="btn" onclick="verifyCaptureDiag()">开始诊断</button>
-                    <span id="capture-diag-verify-result"></span>
-                </div>
-                <div class="group-hint">对比 PrintWindow(3)/PrintWindow(0)/窗口 BitBlt/全屏 BitBlt 四条截屏通道并记录环境事实（显卡/DWM/进程提权/兼容模式），逐行写入本地日志文件与日志窗，用于定位黑屏/识别全失效问题。只读不点击（任务未运行时额外尝试置前游戏窗口复测），约 10 秒。任务运行中也可诊断（跳过置前复测）。</div>
-            </div>
             </div>
         </div>
     </div>
+</div>
 
-    <script>
-        let running = false;
-        let switching = false;  // 启停请求在途标记（防连点）
-        let bossHotkey = '';    // 老板键名（启动/停止按钮文案提示；none 时为空）
-        const statusEl = document.getElementById('status');
-        const btnStart = document.getElementById('btn-start');
-        const btnTheme = document.getElementById('btn-theme');
-        const iconMoon = document.getElementById('theme-icon-moon');
-        const iconSun = document.getElementById('theme-icon-sun');
-        const taskSelects = document.querySelectorAll('input[name="task-mode"]');
-        const countBtns = document.querySelectorAll('.task-count .th-btn');
-        const useSyx = document.getElementById('use-syx');
-        const debugOverlay = document.getElementById('debug-overlay');
-        const devTools = document.getElementById('dev-tools');
-        const xiuluoHezi = document.getElementById('xiuluo-hezi');
-        const xiuluoCheckTeam = document.getElementById('xiuluo-check-team');
-        const xiuluoAutoWuyi = document.getElementById('xiuluo-auto-wuyi');
-        const xiuluoTabGroup = document.getElementById('xiuluo-tab-group');
-        const highPerf = document.getElementById('high-perf');
-        const autoRefill = document.getElementById('auto-refill');
-        const clearScreen = document.getElementById('clear-screen');
-        const autoFamen = document.getElementById('auto-famen');
-        const xiuluoWuyiIntervalEl = document.getElementById('xiuluo-wuyi-interval');
-        const wubeiHezi = document.getElementById('wubei-hezi');
-        const wubeiCheckTeam = document.getElementById('wubei-check-team');
-        const wubeiShout = document.getElementById('wubei-shout');
-        const wubeiAutoWuyi = document.getElementById('wubei-auto-wuyi');
-        const wubeiWuyiIntervalEl = document.getElementById('wubei-wuyi-interval');
-        const wubeiKuimulang = document.getElementById('wubei-kuimulang');
-        const wubeiTabGroup = document.getElementById('wubei-tab-group');
-        const xiuluoShout = document.getElementById('xiuluo-shout');
-        const btnVerifyXiuluo = document.getElementById('btn-verify-xiuluo');
-        const verifyResultEl = document.getElementById('verify-result');
-        const btnVerifyXiuluoClaim = document.getElementById('btn-verify-xiuluo-claim');
-        const claimVerifyResultEl = document.getElementById('claim-verify-result');
-        const btnVerifyXiuluoWuyi = document.getElementById('btn-verify-xiuluo-wuyi');
-        const wuyiVerifyResultEl = document.getElementById('wuyi-verify-result');
-        const btnVerifyXiuluoTabWuyi = document.getElementById('btn-verify-xiuluo-tab-wuyi');
-        const tabWuyiVerifyResultEl = document.getElementById('tab-wuyi-verify-result');
-        const btnVerifyWubeiClaim = document.getElementById('btn-verify-wubei-claim');
-        const wubeiClaimVerifyResultEl = document.getElementById('wubei-claim-verify-result');
-        const btnVerifyWubeiReturn = document.getElementById('btn-verify-wubei-return');
-        const wubeiReturnVerifyResultEl = document.getElementById('wubei-return-verify-result');
-        const btnVerifyWubeiWuyi = document.getElementById('btn-verify-wubei-wuyi');
-        const wubeiWuyiVerifyResultEl = document.getElementById('wubei-wuyi-verify-result');
-        const btnVerifyWubeiXj = document.getElementById('btn-verify-wubei-xj');
-        const wubeiXjVerifyResultEl = document.getElementById('wubei-xj-verify-result');
-        const btnVerifyClearScreen = document.getElementById('btn-verify-clear-screen');
-        const clearScreenVerifyResultEl = document.getElementById('clear-screen-verify-result');
-        const btnVerifyShout = document.getElementById('btn-verify-shout');
-        const shoutVerifyResultEl = document.getElementById('shout-verify-result');
-        const btnVerifyShoutXl = document.getElementById('btn-verify-shout-xl');
-        const shoutXlVerifyResultEl = document.getElementById('shout-xl-verify-result');
-        const btnVerifyJiguan = document.getElementById('btn-verify-jiguan');
-        const jiguanVerifyResultEl = document.getElementById('jiguan-verify-result');
-        const btnVerifyPosition = document.getElementById('btn-verify-position');
-        const positionVerifyResultEl = document.getElementById('position-verify-result');
-        const btnVerifyCaptureDiag = document.getElementById('btn-verify-capture-diag');
-        const captureDiagVerifyResultEl = document.getElementById('capture-diag-verify-result');
-        const licenseStatusEl = document.getElementById('license-status');
-        const licenseExpireEl = document.getElementById('license-expire');
-        const btnUnbind = document.getElementById('btn-unbind');
-        const licenseMsgEl = document.getElementById('license-msg');
-        const envThemeEl = document.getElementById('env-theme');
-        const envAdaptResEl = document.getElementById('env-adapt-res');
-        const envCurResEl = document.getElementById('env-cur-res');
-        const envBoundEl = document.getElementById('env-bound');
-        const envDeviceIdEl = document.getElementById('env-device-id');
-        let envDeviceIdValue = '-';  // 设备 ID 原文（复制源；「已复制」反馈后恢复用）
-        const unbindWinMsgEl = document.getElementById('unbind-win-msg');
-        const schemeSelect = document.getElementById('scheme-select');
-        const schemeInput = document.getElementById('scheme-name-input');
-        const btnSchemeSave = document.getElementById('btn-scheme-save');
-        const btnSchemeCopy = document.getElementById('btn-scheme-copy');
-        const btnSchemeDelete = document.getElementById('btn-scheme-delete');
-        const btnSchemeImport = document.getElementById('btn-scheme-import');
-        const btnSchemeExport = document.getElementById('btn-scheme-export');
-        const schemeMsgEl = document.getElementById('scheme-msg');
-        const schemeCurrentEl = document.getElementById('scheme-current');
-        const schemeImportConfirmRow = document.getElementById('scheme-import-confirm');
-        const schemeImportConfirmText = document.getElementById('scheme-import-confirm-text');
-        let verifying = false;  // 验证请求在途标记（防连点，回程/领取/巫医共用）
+<script>
+    /* ================= 全局状态 ================= */
+    let running = false;
+    let switching = false;  // 启停请求在途标记（防连点）
+    let bossHotkey = '';    // 老板键名（启动/停止按钮文案提示；none 时为空）
+    let runtimeStatus = null;   // 任务运行状态（get_runtime_status 轮询，看板展示）
+    let progressData = null;    // 任务进度汇总（get_task_progress 轮询）
+    let verifying = false;      // 验证请求在途标记（防连点，回程/领取/巫医共用）
+    const TASK_MODES = ['五环', '客栈', '修罗', '五倍', '玄枢轶闻', '名望'];
+    const COUNT_MAX = {'五环': 2, '客栈': 20, '玄枢轶闻': 5, '名望': 5};
+    // 印章动效：移动类阶段（左右轻摆走路节奏；其余按战斗/对话/默认分档）
+    const WALK_PHASES = ['寻路中', '前往领取点', '前往客栈', '返程',
+                         '大理寺寻路', '比武场寻路', '准备阶段'];
 
-        // 战斗设置：类型单选（法术/攻击/防御/捕捉/逃跑/无）+ 选「法术」时
-        // 显示技能下拉（人物 3 列 × 5 行；召唤兽 6 技能、不能捕捉）。
-        // 存储值语义不变：法术存「技能C-R」/「技能N」，其余存类型本身。
-        // 初始默认：人物=法术 技能3-5，召唤兽=攻击（配置加载前展示用，
-        // 用 defaultChecked/生成前赋值避免触发 change 保存，防止覆盖已存配置）
-        const CHAR_SKILLS = [];
-        for (let r = 1; r <= 3; r++) for (let c = 1; c <= 5; c++) CHAR_SKILLS.push('技能' + r + '-' + c);
-        const BEAST_SKILLS = [];
-        for (let i = 1; i <= 6; i++) BEAST_SKILLS.push('技能' + i);
-        const BATTLE_TYPES = { char: ['法术', '攻击', '防御', '捕捉', '逃跑', '无'],
-                               beast: ['法术', '攻击', '防御', '逃跑', '无'] };
-        const DEFAULT_BATTLE = { char: '技能3-5', beast: '攻击' };
+    const btnStart = document.getElementById('btn-start');
+    const dashSeal = document.getElementById('dash-seal');
+    const dashInfo = document.getElementById('dash-info');
+    const dashQueue = document.getElementById('dash-queue');
+    const queueSummary = document.getElementById('queue-summary');
+    const btnTheme = document.getElementById('btn-theme');
+    const iconMoon = document.getElementById('theme-icon-moon');
+    const iconSun = document.getElementById('theme-icon-sun');
+    const taskSelects = document.querySelectorAll('input[name="task-mode"]');
+    const countBtns = document.querySelectorAll('.task-count .th-btn');
+    const taskLockBanner = document.getElementById('task-lock-banner');
+    const useSyx = document.getElementById('use-syx');
+    const debugOverlay = document.getElementById('debug-overlay');
+    const devTools = document.getElementById('nav-diag');  // 调试信息开关控制「诊断」导航显隐
+    const xiuluoHezi = document.getElementById('xiuluo-hezi');
+    const xiuluoCheckTeam = document.getElementById('xiuluo-check-team');
+    const xiuluoAutoWuyi = document.getElementById('xiuluo-auto-wuyi');
+    const xiuluoTabGroup = document.getElementById('xiuluo-tab-group');
+    const highPerf = document.getElementById('high-perf');
+    const autoRefill = document.getElementById('auto-refill');
+    const clearScreen = document.getElementById('clear-screen');
+    const autoFamen = document.getElementById('auto-famen');
+    const xiuluoWuyiIntervalEl = document.getElementById('xiuluo-wuyi-interval');
+    const wubeiHezi = document.getElementById('wubei-hezi');
+    const wubeiCheckTeam = document.getElementById('wubei-check-team');
+    const wubeiShout = document.getElementById('wubei-shout');
+    const wubeiAutoWuyi = document.getElementById('wubei-auto-wuyi');
+    const wubeiWuyiIntervalEl = document.getElementById('wubei-wuyi-interval');
+    const wubeiKuimulang = document.getElementById('wubei-kuimulang');
+    const wubeiTabGroup = document.getElementById('wubei-tab-group');
+    const xiuluoShout = document.getElementById('xiuluo-shout');
+    const btnVerifyXiuluo = document.getElementById('btn-verify-xiuluo');
+    const verifyResultEl = document.getElementById('verify-result');
+    const btnVerifyXiuluoClaim = document.getElementById('btn-verify-xiuluo-claim');
+    const claimVerifyResultEl = document.getElementById('claim-verify-result');
+    const btnVerifyXiuluoWuyi = document.getElementById('btn-verify-xiuluo-wuyi');
+    const wuyiVerifyResultEl = document.getElementById('wuyi-verify-result');
+    const btnVerifyXiuluoTabWuyi = document.getElementById('btn-verify-xiuluo-tab-wuyi');
+    const tabWuyiVerifyResultEl = document.getElementById('tab-wuyi-verify-result');
+    const btnVerifyWubeiClaim = document.getElementById('btn-verify-wubei-claim');
+    const wubeiClaimVerifyResultEl = document.getElementById('wubei-claim-verify-result');
+    const btnVerifyWubeiReturn = document.getElementById('btn-verify-wubei-return');
+    const wubeiReturnVerifyResultEl = document.getElementById('wubei-return-verify-result');
+    const btnVerifyWubeiWuyi = document.getElementById('btn-verify-wubei-wuyi');
+    const wubeiWuyiVerifyResultEl = document.getElementById('wubei-wuyi-verify-result');
+    const btnVerifyWubeiXj = document.getElementById('btn-verify-wubei-xj');
+    const wubeiXjVerifyResultEl = document.getElementById('wubei-xj-verify-result');
+    const btnVerifyClearScreen = document.getElementById('btn-verify-clear-screen');
+    const clearScreenVerifyResultEl = document.getElementById('clear-screen-verify-result');
+    const btnVerifyShout = document.getElementById('btn-verify-shout');
+    const shoutVerifyResultEl = document.getElementById('shout-verify-result');
+    const btnVerifyShoutXl = document.getElementById('btn-verify-shout-xl');
+    const shoutXlVerifyResultEl = document.getElementById('shout-xl-verify-result');
+    const btnVerifyJiguan = document.getElementById('btn-verify-jiguan');
+    const jiguanVerifyResultEl = document.getElementById('jiguan-verify-result');
+    const btnVerifyPosition = document.getElementById('btn-verify-position');
+    const positionVerifyResultEl = document.getElementById('position-verify-result');
+    const btnVerifyCaptureDiag = document.getElementById('btn-verify-capture-diag');
+    const captureDiagVerifyResultEl = document.getElementById('capture-diag-verify-result');
+    const licenseStatusEl = document.getElementById('license-status');
+    const licenseExpireEl = document.getElementById('license-expire');
+    const licenseBanner = document.getElementById('license-banner');
+    const btnUnbind = document.getElementById('btn-unbind');
+    const licenseMsgEl = document.getElementById('license-msg');
+    const envThemeEl = document.getElementById('env-theme');
+    const envAdaptResEl = document.getElementById('env-adapt-res');
+    const envCurResEl = document.getElementById('env-cur-res');
+    const envBoundEl = document.getElementById('env-bound');
+    const envDeviceIdEl = document.getElementById('env-device-id');
+    const charChip = document.getElementById('char-chip');
+    let envDeviceIdValue = '-';  // 设备 ID 原文（复制源；「已复制」反馈后恢复用）
+    const unbindWinMsgEl = document.getElementById('unbind-win-msg');
+    const schemeSelect = document.getElementById('scheme-select');
+    const schemeInput = document.getElementById('scheme-name-input');
+    const btnSchemeSave = document.getElementById('btn-scheme-save');
+    const btnSchemeCopy = document.getElementById('btn-scheme-copy');
+    const btnSchemeDelete = document.getElementById('btn-scheme-delete');
+    const btnSchemeImport = document.getElementById('btn-scheme-import');
+    const btnSchemeExport = document.getElementById('btn-scheme-export');
+    const schemeMsgEl = document.getElementById('scheme-msg');
+    const schemeCurrentEl = document.getElementById('scheme-current');
+    const schemeImportConfirmRow = document.getElementById('scheme-import-confirm');
+    const schemeImportConfirmText = document.getElementById('scheme-import-confirm-text');
+    const licDot = document.getElementById('lic-dot');
+    const licText = document.getElementById('lic-text');
+    const appVersionEl = document.getElementById('app-version');
+    const aboutVersionEl = document.getElementById('about-version');
+    const logDrawer = document.getElementById('log-drawer');
+    const logBox = document.getElementById('dash-log-box');
+    const logMeta = document.getElementById('log-meta');
+    const logToggle = document.getElementById('log-toggle');
 
-        // 动态生成战斗动作类型单选 + 法术技能下拉，变更立即保存
-        function buildBattleActions(name, container, skillRow, skillSel, skills, initial) {
-            const store = () => {
-                const type = container.querySelector('input:checked');
-                const v = (type && type.value === '法术') ? skillSel.value
-                    : (type ? type.value : '攻击');
-                callPython('save_battle_action', name, v);
-            };
-            BATTLE_TYPES[name].forEach(t => {
-                const label = document.createElement('label');
-                const input = document.createElement('input');
-                input.type = 'radio';
-                input.name = 'battle-' + name;
-                input.value = t;
-                if (t === (initial.startsWith('技能') ? '法术' : initial)) {
-                    input.defaultChecked = true;  // 生成期默认，不触发 change
-                }
-                input.addEventListener('change', () => {
-                    if (!input.checked) return;
-                    skillRow.hidden = (t !== '法术');
-                    store();
-                });
-                label.appendChild(input);
-                label.appendChild(document.createTextNode(t));
-                container.appendChild(label);
-            });
-            skills.forEach(s => {
-                const opt = document.createElement('option');
-                opt.value = s;
-                opt.textContent = s;
-                skillSel.appendChild(opt);
-            });
-            if (initial.startsWith('技能')) skillSel.value = initial;  // 监听前赋值不触发
-            skillSel.addEventListener('change', store);
-            skillRow.hidden = !initial.startsWith('技能');
-            return { container, skillRow, skillSel };
-        }
-        const charBattle = buildBattleActions('char',
-            document.getElementById('battle-char-actions'),
-            document.getElementById('battle-char-skill-row'),
-            document.getElementById('battle-char-skill'), CHAR_SKILLS,
-            DEFAULT_BATTLE.char);
-        const beastBattle = buildBattleActions('beast',
-            document.getElementById('battle-beast-actions'),
-            document.getElementById('battle-beast-skill-row'),
-            document.getElementById('battle-beast-skill'), BEAST_SKILLS,
-            DEFAULT_BATTLE.beast);
+    /* ================= 战斗设置（人物/召唤兽动作单选 + 技能下拉） ================= */
+    // 存储值语义不变：法术存「技能C-R」/「技能N」，其余存类型本身。
+    const CHAR_SKILLS = [];
+    for (let r = 1; r <= 3; r++) for (let c = 1; c <= 5; c++) CHAR_SKILLS.push('技能' + r + '-' + c);
+    const BEAST_SKILLS = [];
+    for (let i = 1; i <= 6; i++) BEAST_SKILLS.push('技能' + i);
+    const BATTLE_TYPES = { char: ['法术', '攻击', '防御', '捕捉', '逃跑', '无'],
+                           beast: ['法术', '攻击', '防御', '逃跑', '无'] };
+    const DEFAULT_BATTLE = { char: '技能3-5', beast: '攻击' };
 
-        // 修罗设置：必须有的种族多选框（全部种族可选，变更立即保存）
-        const XIULUO_RACES = ['男人', '女人', '男鬼', '女鬼', '男仙', '女仙', '男魔', '女魔', '男巫', '女巫', '男龙', '女龙'];
-        const xiuluoRaceGrid = document.getElementById('xiuluo-race-grid');
-        XIULUO_RACES.forEach(race => {
+    // 动态生成战斗动作类型单选 + 法术技能下拉，变更立即保存
+    function buildBattleActions(name, container, skillRow, skillSel, skills, initial) {
+        const store = () => {
+            const type = container.querySelector('input:checked');
+            const v = (type && type.value === '法术') ? skillSel.value
+                : (type ? type.value : '攻击');
+            callPython('save_battle_action', name, v);
+        };
+        BATTLE_TYPES[name].forEach(t => {
             const label = document.createElement('label');
             const input = document.createElement('input');
-            input.type = 'checkbox';
-            input.value = race;
-            input.addEventListener('change', saveXiuluoRaces);
-            label.appendChild(input);
-            label.appendChild(document.createTextNode(race));
-            xiuluoRaceGrid.appendChild(label);
-        });
-
-        // 修罗最少人数步进：±1，范围 3~5，变更立即保存
-        async function xiuluoMin(delta) {
-            const el = document.getElementById('xiuluo-min');
-            const cur = parseInt(el.innerText);
-            const val = Math.min(5, Math.max(3, cur + delta));
-            if (val === cur) return;  // 已到上下限，不发请求
-            const r = await callPython('save_xiuluo_min', val);
-            if (r && r.status === 'success') el.innerText = r.min_members;
-        }
-
-        // 修罗必须有的种族变更：收集勾选项立即保存
-        async function saveXiuluoRaces() {
-            const checked = [...xiuluoRaceGrid.querySelectorAll('input:checked')].map(el => el.value);
-            callPython('save_xiuluo_races', checked);
-        }
-
-        function update() {
-            statusEl.innerText = running ? '运行中' : '已停止';
-            statusEl.className = running ? 'running' : '';
-            // 启动/停止按钮文案带老板键提示（boss_hotkey 为 none 时不显示）
-            const hotkeySuffix = bossHotkey ? '(' + bossHotkey.toUpperCase() + ')' : '';
-            btnStart.innerText = (running ? '停 止' : '启 动') + hotkeySuffix;
-            btnStart.classList.toggle('running', running);
-            // 运行期间任务勾选与次数不可更改（用户确认：只能停止后修改）
-            taskSelects.forEach(el => { el.disabled = running; });
-            countBtns.forEach(btn => { btn.disabled = running; });
-            // 运行期间配置方案不可切换/管理（Python 侧同样有守卫，双保险）；
-            // 删除还受「默认」不可删除约束（与 renderSchemeControls 一致）
-            schemeSelect.disabled = running;
-            schemeInput.disabled = running;
-            btnSchemeSave.disabled = running;
-            btnSchemeCopy.disabled = running;
-            btnSchemeDelete.disabled = running || schemeActive === '默认';
-            btnSchemeImport.disabled = running;
-            btnSchemeExport.disabled = running;
-        }
-
-        // ---- 配置方案：顶部下拉一键切换 + 高级设置管理区 ----
-        // 方案列表与活动方案由 get_init_data 提供；切换后全量同步页面
-        // （方案含全部设置键，切换即整体替换）。
-        let schemeNames = [];
-        let schemeActive = '';
-        function renderSchemes(info) {
-            if (!info) return;
-            schemeNames = info.names || [];
-            schemeActive = info.active || '';
-            schemeSelect.innerHTML = '';
-            schemeNames.forEach(n => {
-                const opt = document.createElement('option');
-                opt.value = n;
-                opt.textContent = n;
-                schemeSelect.appendChild(opt);
-            });
-            schemeSelect.value = schemeActive || (schemeNames[0] || '');
-            schemeSelect.title = '当前方案：' + (schemeActive || '—') + '（选中即切换）';
-            renderSchemeControls();
-        }
-
-        // 管理区控件：当前方案行、方案名输入回填、按钮禁用态与确认态还原
-        function renderSchemeControls() {
-            schemeDeleteArm = false;  // 任何重渲染都还原删除确认态
-            schemeCurrentEl.innerText = schemeActive || '—';
-            // 输入框回填当前方案名：改名后点保存 = 重命名并保存（用户约定）
-            schemeInput.value = schemeActive || '';
-            btnSchemeDelete.classList.remove('armed');
-            // 「默认」方案不可删除：直接置灰（Python 侧同样拒绝，双保险）
-            const isDefault = schemeActive === '默认';
-            btnSchemeDelete.disabled = isDefault || running;
-            btnSchemeSave.disabled = running;
-            btnSchemeCopy.disabled = running;
-            btnSchemeDelete.title = isDefault ? '「默认」方案不可删除'
-                : '删除当前方案「' + (schemeActive || '') + '」';
-        }
-
-        // 方案操作反馈文案（6s 自动消失，成功/失败着色）
-        let schemeMsgTimer = null;
-        function schemeMsg(text, ok) {
-            schemeMsgEl.style.color = ok ? 'var(--accent)' : '#ff5f5f';
-            schemeMsgEl.innerText = text;
-            if (schemeMsgTimer) clearTimeout(schemeMsgTimer);
-            schemeMsgTimer = setTimeout(() => { schemeMsgEl.innerText = ''; }, 6000);
-        }
-
-        // 顶部下拉：选中即切换（无确认；运行中禁用）
-        schemeSelect.addEventListener('change', async () => {
-            if (running) return;
-            const name = schemeSelect.value;
-            const r = await callPython('switch_scheme', name);
-            if (r && r.status === 'success') {
-                schemeMsg('已切换到「' + name + '」', true);
-                await syncInitData();  // 设置已整体替换：全量刷新（含下拉与方案名回填）
-            } else {
-                schemeMsg((r && r.msg) || '切换失败', false);
-                renderSchemes({ names: schemeNames, active: schemeActive });  // 还原选中
+            input.type = 'radio';
+            input.name = 'battle-' + name;
+            input.value = t;
+            if (t === (initial.startsWith('技能') ? '法术' : initial)) {
+                input.defaultChecked = true;  // 生成期默认，不触发 change
             }
-        });
-
-        // 保存：当前设置写回活动方案；输入框改了名字则同时重命名。
-        // 输入框回车 = 保存、Esc = 还原为当前方案名。
-        btnSchemeSave.addEventListener('click', submitSchemeSave);
-        schemeInput.addEventListener('keydown', e => {
-            if (e.key === 'Enter') {
-                e.preventDefault();
-                submitSchemeSave();
-            } else if (e.key === 'Escape') {
-                e.preventDefault();
-                schemeInput.value = schemeActive || '';
-            }
-        });
-        async function submitSchemeSave() {
-            const name = schemeInput.value.trim();
-            if (!name) { schemeMsg('请输入方案名', false); return; }
-            const r = await callPython('scheme_resave', name);
-            if (r && r.status === 'success') {
-                const what = r.renamed ? '已重命名并保存为「' + r.active + '」'
-                    : '已保存到「' + r.active + '」';
-                schemeMsg(what, true);
-                await syncInitData();
-            } else {
-                schemeMsg((r && r.msg) || '保存失败', false);
-            }
-        }
-
-        // 另存新方案：当前设置存为新方案（重名自动加序号），新方案成为当前方案
-        btnSchemeCopy.addEventListener('click', async () => {
-            const name = schemeInput.value.trim();
-            if (!name) { schemeMsg('请输入方案名', false); return; }
-            const r = await callPython('scheme_copy', name);
-            if (r && r.status === 'success') {
-                schemeMsg('已另存为新方案「' + r.name + '」', true);
-                await syncInitData();
-            } else {
-                schemeMsg((r && r.msg) || '另存失败', false);
-            }
-        });
-
-        // 删除当前方案：图标二次点击确认（首点按钮变红，title 提示确认
-        // 对象，3s 未确认自动还原——纯确认操作，无输入时长问题）
-        let schemeDeleteArm = false;
-        btnSchemeDelete.addEventListener('click', async () => {
-            if (!schemeDeleteArm) {
-                schemeDeleteArm = true;
-                btnSchemeDelete.classList.add('armed');
-                btnSchemeDelete.title = '再点一次确认删除「' + (schemeActive || '') + '」';
-                setTimeout(() => {
-                    schemeDeleteArm = false;
-                    renderSchemeControls();
-                }, 3000);
-                return;
-            }
-            schemeDeleteArm = false;
-            renderSchemeControls();
-            const r = await callPython('scheme_delete');
-            if (r && r.status === 'success') {
-                schemeMsg('已删除，活动方案切回「默认」', true);
-                await syncInitData();  // 设置已应用「默认」，全量刷新
-            } else {
-                schemeMsg((r && r.msg) || '删除失败', false);
-            }
-        });
-
-        // 导出当前方案：Python 侧后台线程弹系统对话框，结果异步回推
-        btnSchemeExport.addEventListener('click', async () => {
-            const r = await callPython('scheme_export');
-            schemeMsg((r && r.msg) || '导出失败', r && r.status === 'success');
-        });
-        window.onSchemeExportResult = function (ok, info) {
-            schemeMsg(info, ok);
-        };
-
-        // 导入方案：Python 侧后台线程弹对话框；同名冲突时显示确认行
-        btnSchemeImport.addEventListener('click', async () => {
-            const r = await callPython('scheme_import');
-            schemeMsg((r && r.msg) || '导入失败', r && r.status === 'success');
-        });
-        window.onSchemeImportPending = function (name) {
-            schemeImportConfirmText.innerText = '已存在同名方案「' + name + '」：';
-            schemeImportConfirmRow.style.display = '';
-            btnSchemeImport.style.display = 'none';
-        };
-        window.onSchemeImportResult = function (ok, info, sc) {
-            schemeImportConfirmRow.style.display = 'none';
-            btnSchemeImport.style.display = '';
-            schemeMsg(info, ok);
-            if (sc) renderSchemes(sc);
-        };
-        async function schemeImportConfirm(action) {
-            const r = await callPython('scheme_import_confirm', action);
-            schemeImportConfirmRow.style.display = 'none';
-            btnSchemeImport.style.display = '';
-            if (!r || r.status !== 'success') {
-                schemeMsg((r && r.msg) || '操作失败', false);
-                if (r && r.schemes) renderSchemes(r.schemes);
-                return;
-            }
-            if (action !== 'cancel') schemeMsg(r.msg, true);
-            if (r.schemes) renderSchemes(r.schemes);
-        }
-
-        // 启动/停止切换：调用 Python 侧 TaskManager（防连点；Python 侧另有 BUSY 守卫）
-        async function toggleTask() {
-            if (switching) return;
-            switching = true;
-            btnStart.disabled = true;
-            try {
-                const r = await callPython(running ? 'stop_task' : 'start_task');
-                if (r && r.status === 'success' && typeof r.running === 'boolean') {
-                    running = r.running;  // 立即反馈；后续 syncStatus 再校正
-                    update();
-                }
-            } finally {
-                switching = false;
-                btnStart.disabled = false;
-            }
-        }
-
-        // 日志已移至独立吸附窗口（右侧），本页面仅保留调试开关的被动同步接口
-
-        // 主题切换：图标显示目标主题（浅色界面显示月亮=点按进深色，
-        // 与旧按钮文案「深 色」语义一致）
-        function applyTheme(theme) {
-            document.body.classList.toggle('light', theme === 'light');
-            iconMoon.style.display = theme === 'light' ? '' : 'none';
-            iconSun.style.display = theme === 'dark' ? '' : 'none';
-            btnTheme.title = theme === 'light' ? '切换到深色' : '切换到浅色';
-        }
-        async function toggleTheme() {
-            const next = document.body.classList.contains('light') ? 'dark' : 'light';
-            const r = await callPython('save_ui_theme', next);
-            if (r && r.status === 'success') applyTheme(next);
-        }
-
-        // Tab 切换（默认选中任务列表；打开高级设置时刷新使用环境）
-        document.querySelectorAll('.tab').forEach(tab => {
-            tab.addEventListener('click', () => {
-                document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t === tab));
-                document.querySelectorAll('.tab-panel').forEach(p =>
-                    p.classList.toggle('active', p.id === 'panel-' + tab.dataset.tab));
-                if (tab.dataset.tab === 'advanced') refreshEnv();
-            });
-        });
-
-        // 使用环境（高级设置）：主题/适配分辨率为常量，当前窗口分辨率、
-        // 绑定窗口与设备 ID 每次打开页签时从主进程刷新
-        async function refreshEnv() {
-            const env = await callPython('get_env_info');
-            if (!env) return;
-            if (env.theme) envThemeEl.innerText = env.theme;
-            if (env.adapt_res) envAdaptResEl.innerText = env.adapt_res;
-            envCurResEl.innerText = env.cur_res || '-';
-            envBoundEl.innerText = env.bound || '-';
-            envDeviceIdValue = env.device_id || '-';
-            envDeviceIdEl.innerText = envDeviceIdValue;
-            envDeviceIdEl.title = envDeviceIdValue;  // 悬停看完整值，点击复制
-        }
-
-        // 设备 ID 点击复制：优先 navigator.clipboard，失败回退 execCommand
-        function copyDeviceId() {
-            const text = envDeviceIdValue;
-            if (!text || text === '-' || text === '获取失败') return;
-            const showDone = () => {
-                envDeviceIdEl.innerText = '已复制';
-                setTimeout(() => { envDeviceIdEl.innerText = envDeviceIdValue; }, 1500);
-            };
-            const legacyCopy = () => {
-                const ta = document.createElement('textarea');
-                ta.value = text;
-                ta.style.position = 'fixed';
-                ta.style.opacity = '0';
-                document.body.appendChild(ta);
-                ta.select();
-                let ok = false;
-                try { ok = document.execCommand('copy'); } catch (e) {}
-                document.body.removeChild(ta);
-                if (ok) showDone();
-            };
-            if (navigator.clipboard && navigator.clipboard.writeText) {
-                navigator.clipboard.writeText(text).then(showDone).catch(legacyCopy);
-            } else {
-                legacyCopy();
-            }
-        }
-
-        // 解除窗口绑定：下次启动多开时重新弹框选择
-        async function unbindWindow() {
-            const r = await callPython('unbind_window');
-            if (!r) return;
-            unbindWinMsgEl.innerText = r.msg || (r.status === 'error' ? '操作失败' : '');
-            await refreshEnv();
-        }
-
-        // 全量同步设置到页面（初始化与方案切换后共用）：主题、任务模式、
-        // 各开关、巫医间隔、血蓝阈值、任务次数、战斗动作、修罗/五倍设置
-        async function syncInitData() {
-            const info = await callPython('get_init_data');
-            if (!info) return;
-            applyTheme(info.theme === 'light' ? 'light' : 'dark');
-            if (info.schemes) renderSchemes(info.schemes);  // 顶部方案下拉
-            bossHotkey = info.boss_hotkey || '';  // 老板键名（按钮文案提示）
-            if (info.modes) {
-                taskSelects.forEach(el => { el.checked = info.modes.includes(el.value); });
-            }
-            useSyx.checked = !!info.use_sheyaoxiang;
-            debugOverlay.checked = !!info.debug_overlay;
-            applyDevTools();  // 调试信息开关：控制下方验证/测试入口显隐
-            xiuluoHezi.checked = !!info.xiuluo_hezi;
-            xiuluoCheckTeam.checked = !!info.xiuluo_check_team;
-            xiuluoAutoWuyi.checked = !!info.xiuluo_auto_wuyi;
-            xiuluoTabGroup.checked = !!info.xiuluo_tab_group;
-            highPerf.checked = !!info.high_perf;
-            autoRefill.checked = !!info.auto_refill;
-            clearScreen.checked = !!info.clear_screen;
-            autoFamen.checked = !!info.auto_famen;
-            const lic = info.license || {};
-            if (lic.status) {
-                licenseStatusEl.innerText = lic.status;
-                licenseExpireEl.innerText = lic.expire || '—';
-            }
-            const env = info.env || {};
-            if (env.theme) envThemeEl.innerText = env.theme;
-            if (env.adapt_res) envAdaptResEl.innerText = env.adapt_res;
-            envCurResEl.innerText = env.cur_res || '-';
-            envBoundEl.innerText = env.bound || '-';
-            envDeviceIdValue = env.device_id || '-';
-            envDeviceIdEl.innerText = envDeviceIdValue;
-            envDeviceIdEl.title = envDeviceIdValue;  // 悬停看完整值，点击复制
-            if (info.xiuluo_wuyi_interval) {
-                xiuluoWuyiIntervalEl.innerText = info.xiuluo_wuyi_interval;
-            }
-            wubeiHezi.checked = !!(info.wubei && info.wubei.hezi);
-            wubeiCheckTeam.checked = !!(info.wubei && info.wubei.check_team);
-            wubeiShout.checked = !!(info.wubei && info.wubei.shout);
-            wubeiAutoWuyi.checked = !!(info.wubei && info.wubei.auto_wuyi);
-            if (info.wubei && info.wubei.wuyi_interval) {
-                wubeiWuyiIntervalEl.innerText = info.wubei.wuyi_interval;
-            }
-            wubeiKuimulang.checked = !!(info.wubei && info.wubei.kuimulang);
-            wubeiTabGroup.checked = !!(info.wubei && info.wubei.tab_group);
-            xiuluoShout.checked = !!info.xiuluo_shout;
-            const ths = info.thresholds || {};
-            for (const key of ['char_hp', 'char_mp', 'beast_hp', 'beast_mp']) {
-                const el = document.getElementById('th-' + key);
-                if (el && ths[key] !== undefined) el.innerText = ths[key] + '%';
-            }
-            const counts = info.task_counts || {};
-            for (const mode of ['五环', '客栈', '修罗', '五倍', '玄枢轶闻', '名望']) {
-                const el = document.getElementById('cnt-' + mode);
-                if (el && counts[mode] !== undefined) el.innerText = counts[mode];
-            }
-            const battle = info.battle || {};
-            for (const [name, b] of [['char', charBattle], ['beast', beastBattle]]) {
-                const v = battle[name];
-                if (!v) continue;
-                const isSkill = /^技能/.test(v);
-                const type = isSkill ? '法术' : v;
-                // 先设技能下拉再勾选类型：勾选会触发 change 立即保存，
-                // 顺序反了会把存储值覆盖成下拉默认第一项
-                if (isSkill) b.skillSel.value = v;
-                const radio = b.container.querySelector('input[value="' + type + '"]');
-                if (radio) {
-                    radio.checked = true;
-                    b.skillRow.hidden = (type !== '法术');
-                }
-            }
-            const xl = info.xiuluo || {};
-            if (xl.min_members) {
-                document.getElementById('xiuluo-min').innerText = xl.min_members;
-            }
-            if (xl.races) {
-                xiuluoRaceGrid.querySelectorAll('input').forEach(el => {
-                    el.checked = xl.races.includes(el.value);
-                });
-            }
-            update();  // 应用老板键文案（启动/停止按钮后缀）
-            await refreshProgress();
-        }
-
-        // 页面初始化：恢复上次的所有设置
-        window.addEventListener('onPythonReady', async () => {
-            try { await syncInitData(); } catch (e) {}
-        });
-
-        // 阈值步进：±5%，范围 5~95，变更立即保存
-        async function th(key, delta) {
-            const el = document.getElementById('th-' + key);
-            const cur = parseInt(el.innerText);
-            const val = Math.min(95, Math.max(5, cur + delta));
-            const r = await callPython('save_threshold', key, val);
-            if (r && r.status === 'success') el.innerText = r.threshold + '%';
-        }
-
-        // 任务次数步进：±1，下限 0，部分模式有上限（五环2/客栈20/玄枢轶闻5/名望5），变更立即保存
-        const COUNT_MAX = {'五环': 2, '客栈': 20, '玄枢轶闻': 5, '名望': 5};
-        async function count(mode, delta) {
-            if (running) return;  // 运行期间不可修改（按钮已禁用，双保险）
-            const el = document.getElementById('cnt-' + mode);
-            const cur = parseInt(el.innerText);
-            const val = Math.min(COUNT_MAX[mode] || Infinity, Math.max(0, cur + delta));
-            if (val === cur) return;  // 已到上下限，不发请求
-            const r = await callPython('save_task_count', mode, val);
-            if (r && r.status === 'success') {
-                el.innerText = r.count;
-                refreshProgress();  // 次数变化影响进度分母
-            }
-        }
-
-        // 单任务进度刷新：Python 侧直读 config.json 汇总（任务子进程
-        // 写入的当天完成次数），更新每行背景淡色填充；
-        // 次数上限为 0（不限）的任务不计入进度分母
-        async function refreshProgress() {
-            const p = await callPython('get_task_progress');
-            if (!p) return;
-            const per = p.per_task || {};
-            for (const mode of ['五环', '客栈', '修罗', '五倍', '玄枢轶闻', '名望']) {
-                const el = document.getElementById('fill-' + mode);
-                if (!el) continue;
-                const t = per[mode];
-                el.style.width = (t && t.percent) ? t.percent + '%' : '0%';
-            }
-        }
-        setInterval(refreshProgress, 2500);  // 运行中每 2.5s 轮询进度
-
-        // 选中任务列表保存：按面板顺序收集勾选项（Python 侧过滤非法项），
-        // 保存后刷新总进度（勾选变化影响进度分母）
-        function saveSelectedModes() {
-            const modes = [...taskSelects].filter(el => el.checked).map(el => el.value);
-            callPython('save_task_modes', modes).then(refreshProgress);
-        }
-
-        // 勾选变更：立即保存（运行期间禁用，双保险）；
-        // 点击 label 文字时由浏览器原生切换复选框触发 change
-        taskSelects.forEach(input => {
             input.addEventListener('change', () => {
-                if (running) return;
+                if (!input.checked) return;
+                skillRow.hidden = (t !== '法术');
+                store();
+            });
+            label.appendChild(input);
+            label.appendChild(document.createTextNode(t));
+            container.appendChild(label);
+        });
+        skills.forEach(s => {
+            const opt = document.createElement('option');
+            opt.value = s;
+            opt.textContent = s;
+            skillSel.appendChild(opt);
+        });
+        if (initial.startsWith('技能')) skillSel.value = initial;  // 监听前赋值不触发
+        skillSel.addEventListener('change', store);
+        skillRow.hidden = !initial.startsWith('技能');
+        return { container, skillRow, skillSel };
+    }
+    const charBattle = buildBattleActions('char',
+        document.getElementById('battle-char-actions'),
+        document.getElementById('battle-char-skill-row'),
+        document.getElementById('battle-char-skill'), CHAR_SKILLS,
+        DEFAULT_BATTLE.char);
+    const beastBattle = buildBattleActions('beast',
+        document.getElementById('battle-beast-actions'),
+        document.getElementById('battle-beast-skill-row'),
+        document.getElementById('battle-beast-skill'), BEAST_SKILLS,
+        DEFAULT_BATTLE.beast);
+
+    /* ================= 修罗必须种族多选（12 项，变更立即保存） ================= */
+    const XIULUO_RACES = ['男人', '女人', '男鬼', '女鬼', '男仙', '女仙', '男魔', '女魔', '男巫', '女巫', '男龙', '女龙'];
+    const xiuluoRaceGrid = document.getElementById('xiuluo-race-grid');
+    XIULUO_RACES.forEach(race => {
+        const label = document.createElement('label');
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.value = race;
+        input.addEventListener('change', saveXiuluoRaces);
+        label.appendChild(input);
+        label.appendChild(document.createTextNode(race));
+        xiuluoRaceGrid.appendChild(label);
+    });
+
+    /* ================= 页面导航（侧边栏） ================= */
+    document.querySelectorAll('.nav-item').forEach(item => {
+        item.addEventListener('click', () => switchPage(item.dataset.page));
+    });
+    function switchPage(name) {
+        document.querySelectorAll('.nav-item').forEach(n =>
+            n.classList.toggle('active', n.dataset.page === name));
+        document.querySelectorAll('.page').forEach(p =>
+            p.classList.toggle('active', p.id === 'page-' + name));
+        if (name === 'system') refreshEnv();
+        if (name === 'dash') { refreshProgress(); refreshRuntimeStatus(); }
+    }
+
+    /* ================= 运行看板渲染 ================= */
+    function currentTaskMode() {
+        // 当前执行中的任务：优先取状态通道（任务进程按模式 set_task），
+        // 缺失时按队列推导（第一个未完成/不限次的任务）
+        const sel = selectedModes();
+        if (runtimeStatus && runtimeStatus.task && sel.includes(runtimeStatus.task)) {
+            return runtimeStatus.task;
+        }
+        const per = (progressData && progressData.per_task) || {};
+        return sel.find(mode => {
+            const t = per[mode];
+            return !t || t.count <= 0 || t.done < t.count;
+        }) || sel[0] || '';
+    }
+
+    function selectedModes() {
+        return [...taskSelects].filter(el => el.checked).map(el => el.value);
+    }
+
+    function renderDash() {
+        const sel = selectedModes();
+        const per = (progressData && progressData.per_task) || {};
+        const hintText = '任务运行时请保持游戏窗口前台 · 老板键 '
+            + (bossHotkey ? bossHotkey.toUpperCase() : 'F11') + ' 一键启停';
+        // ---- 状态印章与信息区（启停操作只在顶栏主按钮，看板不重复） ----
+        if (running) {
+            // 印章动效类随阶段联动：战斗快速强脉冲 / 移动左右轻摆 / 对话柔光 / 默认标准脉冲
+            const ph = (runtimeStatus && runtimeStatus.phase) || '';
+            let phaseCls = '';
+            if (ph.indexOf('战斗') >= 0) phaseCls = 'phase-battle';
+            else if (WALK_PHASES.includes(ph)) phaseCls = 'phase-walk';
+            else if (ph === '任务对话') phaseCls = 'phase-talk';
+            dashSeal.className = 'seal running' + (phaseCls ? ' ' + phaseCls : '');
+            dashSeal.innerHTML = '<span>运</span><span>行</span><span>中</span>';
+            const cur = currentTaskMode();
+            const rows = [];
+            if (cur) {
+                const t = per[cur];
+                const progText = (t && t.count > 0) ? `${t.done}/${t.count}` : (t ? `${t.done} 轮` : '');
+                rows.push(['当前任务', cur + (progText ? '（' + progText + '）' : '')]);
+            }
+            // 阶段：任务进程各模块写入的结构化 phase（战斗中/寻路中/
+            // 领取任务/自动巫医/返程…）；空串（出战斗/无阶段信息）回退「执行中」
+            rows.push(['阶段', (runtimeStatus && runtimeStatus.phase) || '执行中']);
+            if (runtimeStatus && runtimeStatus.bars) rows.push(['血蓝', runtimeStatus.bars]);
+            if (runtimeStatus && runtimeStatus.team) rows.push(['队伍', runtimeStatus.team]);
+            dashInfo.innerHTML = rows.map(([k, v]) =>
+                '<div class="info-row"><span class="info-k">' + k + '</span>' +
+                '<span class="info-v"></span></div>').join('')
+                + '<div class="info-hint"></div>';
+            [...dashInfo.querySelectorAll('.info-v')].forEach((el, i) => {
+                el.textContent = rows[i][1];  // textContent 防注入（状态文本来自任务进程）
+            });
+            dashInfo.querySelector('.info-hint').textContent = hintText;
+        } else {
+            dashSeal.className = 'seal idle';
+            dashSeal.innerHTML = '<span>待</span><span>命</span>';
+            const plan = sel.length
+                ? sel.map(m => m + ' ×' + document.getElementById('cnt-' + m).innerText).join(' · ')
+                : '未选择任务（请到「任务」页勾选）';
+            // 单行省略展示；今日合计在下方队列卡（与队列明细一处，不重复）
+            dashInfo.innerHTML =
+                '<div class="info-row"><span class="info-k">今日计划</span><span class="info-v nowrap"></span></div>'
+                + '<div class="info-hint"></div>';
+            dashInfo.querySelector('.info-v').textContent = plan;
+            dashInfo.querySelector('.info-hint').textContent = hintText;
+        }
+        // ---- 任务队列 ----
+        const cur = running ? currentTaskMode() : '';
+        if (!sel.length) {
+            dashQueue.innerHTML = '<div class="queue-empty">未选择任务——到「任务」页勾选后即可启动</div>';
+        } else {
+            dashQueue.innerHTML = sel.map(mode => {
+                const t = per[mode];
+                const cnt = parseInt(document.getElementById('cnt-' + mode).innerText) || 0;
+                const done = t ? t.done : 0;
+                const pct = (t && t.percent !== undefined) ? t.percent : 0;
+                let state = 'waiting', stateIcon = '·', cls = '';
+                if (running) {
+                    if (t && t.count > 0 && t.done >= t.count) { state = 'done'; stateIcon = '✓'; cls = 'done'; }
+                    else if (mode === cur) { state = 'active'; stateIcon = '▶'; cls = 'active'; }
+                }
+                const text = cnt > 0 ? `${Math.min(done, cnt)}/${cnt}` : `${done} 轮`;
+                const stateTitle = running ? (state === 'done' ? '已完成' : (state === 'active' ? '执行中' : '待执行')) : '';
+                return '<div class="queue-row ' + cls + '" title="' + stateTitle + '">' +
+                    '<span class="queue-state">' + stateIcon + '</span>' +
+                    '<span class="queue-name">' + mode + '</span>' +
+                    '<span class="queue-prog"><span class="queue-prog-fill" style="width:' + (cnt > 0 ? pct : 0) + '%"></span></span>' +
+                    '<span class="queue-text">' + text + '</span></div>';
+            }).join('');
+        }
+        // ---- 队列汇总 ----
+        let total = 0, done = 0;
+        sel.forEach(m => {
+            const t = per[m];
+            if (t && t.count > 0) { total += t.count; done += t.done; }
+        });
+        queueSummary.innerText = total > 0
+            ? `今日合计 ${Math.min(done, total)}/${total}`
+            : (sel.length ? '（不限次任务不汇总）' : '');
+    }
+
+    async function refreshRuntimeStatus() {
+        try {
+            const s = await callPython('get_runtime_status');
+            const sig = JSON.stringify(s);
+            if (sig !== JSON.stringify(runtimeStatus)) {
+                runtimeStatus = s;
+                renderDash();
+            }
+        } catch (e) { /* 桥接未就绪时忽略 */ }
+    }
+
+    /* ================= 看板日志抽屉 ================= */
+    const MAX_PANEL_LOG_LINES = 300;
+    function addPanelLogs(lines) {
+        for (const ln of lines) {
+            const div = document.createElement('div');
+            div.textContent = String(ln);  // textContent 防注入
+            logBox.appendChild(div);
+        }
+        while (logBox.childNodes.length > MAX_PANEL_LOG_LINES) {
+            logBox.removeChild(logBox.firstChild);
+        }
+        logMeta.innerText = logBox.childNodes.length + ' 行';
+        if (!logDrawer.classList.contains('collapsed')) {
+            logBox.scrollTop = logBox.scrollHeight;  // 展开态自动跟随
+        }
+    }
+    window.addPanelLogs = addPanelLogs;  // Python 侧 evaluate_js 推送入口
+    function clearPanelLogs() {
+        logBox.innerHTML = '';
+        logMeta.innerText = '0 行';
+    }
+    function toggleLogDrawer() {
+        const collapsed = logDrawer.classList.toggle('collapsed');
+        logToggle.innerText = collapsed ? '展 开' : '收 起';
+        if (!collapsed) logBox.scrollTop = logBox.scrollHeight;
+    }
+
+    /* ================= 启动/停止 ================= */
+    function update() {
+        // 启动/停止按钮文案带老板键提示（boss_hotkey 为 none 时不显示）
+        const hotkeySuffix = bossHotkey ? '(' + bossHotkey.toUpperCase() + ')' : '';
+        btnStart.innerText = (running ? '停 止' : '启 动') + hotkeySuffix;
+        btnStart.classList.toggle('running', running);
+        // 运行期间任务勾选与次数不可更改（用户确认：只能停止后修改）
+        taskSelects.forEach(el => { el.disabled = running; });
+        countBtns.forEach(btn => { btn.disabled = running; });
+        taskLockBanner.classList.toggle('warn', running);
+        taskLockBanner.style.display = running ? 'block' : 'none';
+        // 运行期间配置方案不可切换/管理（Python 侧同样有守卫，双保险）；
+        // 删除还受「默认」不可删除约束（与 renderSchemeControls 一致）
+        schemeSelect.disabled = running;
+        schemeInput.disabled = running;
+        btnSchemeSave.disabled = running;
+        btnSchemeCopy.disabled = running;
+        btnSchemeDelete.disabled = running || schemeActive === '默认';
+        btnSchemeImport.disabled = running;
+        btnSchemeExport.disabled = running;
+        renderDash();
+    }
+
+    // 启动/停止切换：调用 Python 侧 TaskManager（防连点；Python 侧另有 BUSY 守卫）
+    async function toggleTask() {
+        if (switching) return;
+        switching = true;
+        btnStart.disabled = true;
+        try {
+            const r = await callPython(running ? 'stop_task' : 'start_task');
+            if (r && r.status === 'success' && typeof r.running === 'boolean') {
+                running = r.running;  // 立即反馈；后续 syncStatus 再校正
+                update();
+            }
+        } finally {
+            switching = false;
+            btnStart.disabled = false;
+        }
+    }
+
+    /* ================= 配置方案（顶部下拉一键切换 + 系统页管理区） ================= */
+    let schemeNames = [];
+    let schemeActive = '';
+    function renderSchemes(info) {
+        if (!info) return;
+        schemeNames = info.names || [];
+        schemeActive = info.active || '';
+        schemeSelect.innerHTML = '';
+        schemeNames.forEach(n => {
+            const opt = document.createElement('option');
+            opt.value = n;
+            opt.textContent = n;
+            schemeSelect.appendChild(opt);
+        });
+        schemeSelect.value = schemeActive || (schemeNames[0] || '');
+        schemeSelect.title = '当前方案：' + (schemeActive || '—') + '（选中即切换）';
+        renderSchemeControls();
+    }
+
+    // 管理区控件：当前方案行、方案名输入回填、按钮禁用态与确认态还原
+    function renderSchemeControls() {
+        schemeDeleteArm = false;  // 任何重渲染都还原删除确认态
+        schemeCurrentEl.innerText = schemeActive || '—';
+        // 输入框回填当前方案名：改名后点保存 = 重命名并保存（用户约定）
+        schemeInput.value = schemeActive || '';
+        btnSchemeDelete.classList.remove('armed');
+        // 「默认」方案不可删除：直接置灰（Python 侧同样拒绝，双保险）
+        const isDefault = schemeActive === '默认';
+        btnSchemeDelete.disabled = isDefault || running;
+        btnSchemeSave.disabled = running;
+        btnSchemeCopy.disabled = running;
+        btnSchemeDelete.title = isDefault ? '「默认」方案不可删除'
+            : '删除当前方案「' + (schemeActive || '') + '」';
+    }
+
+    // 方案操作反馈文案（6s 自动消失，成功/失败着色）
+    let schemeMsgTimer = null;
+    function schemeMsg(text, ok) {
+        schemeMsgEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        schemeMsgEl.innerText = text;
+        if (schemeMsgTimer) clearTimeout(schemeMsgTimer);
+        schemeMsgTimer = setTimeout(() => { schemeMsgEl.innerText = ''; }, 6000);
+    }
+
+    // 顶部下拉：选中即切换（无确认；运行中禁用）
+    schemeSelect.addEventListener('change', async () => {
+        if (running) return;
+        const name = schemeSelect.value;
+        const r = await callPython('switch_scheme', name);
+        if (r && r.status === 'success') {
+            schemeMsg('已切换到「' + name + '」', true);
+            await syncInitData();  // 设置已整体替换：全量刷新（含下拉与方案名回填）
+        } else {
+            schemeMsg((r && r.msg) || '切换失败', false);
+            renderSchemes({ names: schemeNames, active: schemeActive });  // 还原选中
+        }
+    });
+
+    // 保存：当前设置写回活动方案；输入框改了名字则同时重命名。
+    // 输入框回车 = 保存、Esc = 还原为当前方案名。
+    btnSchemeSave.addEventListener('click', submitSchemeSave);
+    schemeInput.addEventListener('keydown', e => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            submitSchemeSave();
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            schemeInput.value = schemeActive || '';
+        }
+    });
+    async function submitSchemeSave() {
+        const name = schemeInput.value.trim();
+        if (!name) { schemeMsg('请输入方案名', false); return; }
+        const r = await callPython('scheme_resave', name);
+        if (r && r.status === 'success') {
+            const what = r.renamed ? '已重命名并保存为「' + r.active + '」'
+                : '已保存到「' + r.active + '」';
+            schemeMsg(what, true);
+            await syncInitData();
+        } else {
+            schemeMsg((r && r.msg) || '保存失败', false);
+        }
+    }
+
+    // 另存新方案：当前设置存为新方案（重名自动加序号），新方案成为当前方案
+    btnSchemeCopy.addEventListener('click', async () => {
+        const name = schemeInput.value.trim();
+        if (!name) { schemeMsg('请输入方案名', false); return; }
+        const r = await callPython('scheme_copy', name);
+        if (r && r.status === 'success') {
+            schemeMsg('已另存为新方案「' + r.name + '」', true);
+            await syncInitData();
+        } else {
+            schemeMsg((r && r.msg) || '另存失败', false);
+        }
+    });
+
+    // 删除当前方案：图标二次点击确认（首点按钮变红，title 提示确认
+    // 对象，3s 未确认自动还原——纯确认操作，无输入时长问题）
+    let schemeDeleteArm = false;
+    btnSchemeDelete.addEventListener('click', async () => {
+        if (!schemeDeleteArm) {
+            schemeDeleteArm = true;
+            btnSchemeDelete.classList.add('armed');
+            btnSchemeDelete.title = '再点一次确认删除「' + (schemeActive || '') + '」';
+            setTimeout(() => {
+                schemeDeleteArm = false;
+                renderSchemeControls();
+            }, 3000);
+            return;
+        }
+        schemeDeleteArm = false;
+        renderSchemeControls();
+        const r = await callPython('scheme_delete');
+        if (r && r.status === 'success') {
+            schemeMsg('已删除，活动方案切回「默认」', true);
+            await syncInitData();  // 设置已应用「默认」，全量刷新
+        } else {
+            schemeMsg((r && r.msg) || '删除失败', false);
+        }
+    });
+
+    // 导出当前方案：Python 侧后台线程弹系统对话框，结果异步回推
+    btnSchemeExport.addEventListener('click', async () => {
+        const r = await callPython('scheme_export');
+        schemeMsg((r && r.msg) || '导出失败', r && r.status === 'success');
+    });
+    window.onSchemeExportResult = function (ok, info) {
+        schemeMsg(info, ok);
+    };
+
+    // 导入方案：Python 侧后台线程弹对话框；同名冲突时显示确认行
+    btnSchemeImport.addEventListener('click', async () => {
+        const r = await callPython('scheme_import');
+        schemeMsg((r && r.msg) || '导入失败', r && r.status === 'success');
+    });
+    window.onSchemeImportPending = function (name) {
+        schemeImportConfirmText.innerText = '已存在同名方案「' + name + '」：';
+        schemeImportConfirmRow.style.display = '';
+        btnSchemeImport.style.display = 'none';
+    };
+    window.onSchemeImportResult = function (ok, info, sc) {
+        schemeImportConfirmRow.style.display = 'none';
+        btnSchemeImport.style.display = '';
+        schemeMsg(info, ok);
+        if (sc) renderSchemes(sc);
+    };
+    async function schemeImportConfirm(action) {
+        const r = await callPython('scheme_import_confirm', action);
+        schemeImportConfirmRow.style.display = 'none';
+        btnSchemeImport.style.display = '';
+        if (!r || r.status !== 'success') {
+            schemeMsg((r && r.msg) || '操作失败', false);
+            if (r && r.schemes) renderSchemes(r.schemes);
+            return;
+        }
+        if (action !== 'cancel') schemeMsg(r.msg, true);
+        if (r.schemes) renderSchemes(r.schemes);
+    }
+
+    /* ================= 主题切换 ================= */
+    // 图标显示目标主题（浅色界面显示月亮=点按进深色，与旧按钮文案「深 色」语义一致）
+    function applyTheme(theme) {
+        document.body.classList.toggle('light', theme === 'light');
+        iconMoon.style.display = theme === 'light' ? '' : 'none';
+        iconSun.style.display = theme === 'dark' ? '' : 'none';
+        btnTheme.title = theme === 'light' ? '切换到深色' : '切换到浅色';
+    }
+    async function toggleTheme() {
+        const next = document.body.classList.contains('light') ? 'dark' : 'light';
+        const r = await callPython('save_ui_theme', next);
+        if (r && r.status === 'success') applyTheme(next);
+    }
+
+    /* ================= 任务卡交互（勾选/步进/手风琴） ================= */
+    // 手风琴展开态记忆（localStorage 键按任务模式）；
+    // 按钮内嵌在 label 中：preventDefault 阻断 label 激活勾选（虽为交互
+    // 元素本不触发，双保险），stopPropagation 阻断整卡点击切换
+    document.querySelectorAll('.task-expand').forEach(btn => {
+        btn.addEventListener('click', e => {
+            e.preventDefault();
+            e.stopPropagation();
+            const card = btn.closest('.task-card');
+            const open = !card.classList.contains('open');
+            card.classList.toggle('open', open);
+            btn.innerText = open ? '▴' : '▾';
+            try { localStorage.setItem('task-acc-' + card.dataset.mode, open ? '1' : '0'); } catch (e) {}
+        });
+    });
+
+    // 任务条目整卡点击切换勾选（选中指示为可见复选框，卡片不整体染色）；
+    // 次数步进按钮/展开按钮不触发。
+    // 注意：脚本设置 checked 不触发 change 事件（Edge/WebView2 实测，
+    // change 只在用户交互时派发）——卡片空白处点击需直接保存；
+    // 点击落在 label 上时浏览器已原生切换，此处跳过防双重切换
+    document.querySelectorAll('.task-card-main').forEach(main => {
+        main.addEventListener('click', e => {
+            if (running) return;
+            if (e.target.closest('.th-btn') || e.target.closest('.task-expand')) return;
+            const input = main.querySelector('input[name="task-mode"]');
+            if (input && !e.target.closest('.task-radio')) {
+                input.checked = !input.checked;
                 saveSelectedModes();
+            }
+        });
+    });
+
+    // 勾选变更：立即保存（运行期间禁用，双保险）
+    taskSelects.forEach(input => {
+        input.addEventListener('change', () => {
+            if (running) return;
+            saveSelectedModes();
+        });
+    });
+
+    // 选中任务列表保存：按面板顺序收集勾选项（Python 侧过滤非法项），
+    // 保存后刷新总进度（勾选变化影响进度分母）
+    function saveSelectedModes() {
+        const modes = [...taskSelects].filter(el => el.checked).map(el => el.value);
+        callPython('save_task_modes', modes).then(refreshProgress);
+    }
+
+    // 任务次数步进：±1，下限 0，部分模式有上限（五环2/客栈20/玄枢轶闻5/名望5），变更立即保存
+    async function count(mode, delta) {
+        if (running) return;  // 运行期间不可修改（按钮已禁用，双保险）
+        const el = document.getElementById('cnt-' + mode);
+        const cur = parseInt(el.innerText);
+        const val = Math.min(COUNT_MAX[mode] || Infinity, Math.max(0, cur + delta));
+        if (val === cur) return;  // 已到上下限，不发请求
+        const r = await callPython('save_task_count', mode, val);
+        if (r && r.status === 'success') {
+            el.innerText = r.count;
+            refreshProgress();  // 次数变化影响进度分母
+        }
+    }
+
+    /* ================= 进度轮询（运行看板队列 + 今日合计） ================= */
+    // 任务进度已收拢到运行看板展示（任务页不再显示单任务进度）；
+    // Python 侧直读 config.json 汇总（任务子进程写入的当天完成次数）
+    async function refreshProgress() {
+        const p = await callPython('get_task_progress');
+        if (!p) return;
+        progressData = p;
+        renderDash();
+    }
+    setInterval(refreshProgress, 2500);   // 运行中每 2.5s 轮询进度
+    setInterval(refreshRuntimeStatus, 1500);  // 看板运行状态每 1.5s 轮询
+
+    /* ================= 使用环境（系统页，打开时刷新） ================= */
+    async function refreshEnv() {
+        const env = await callPython('get_env_info');
+        if (!env) return;
+        if (env.theme) envThemeEl.innerText = env.theme;
+        if (env.adapt_res) envAdaptResEl.innerText = env.adapt_res;
+        envCurResEl.innerText = env.cur_res || '-';
+        envBoundEl.innerText = env.bound || '-';
+        charChip.innerText = env.bound_short || '未绑定角色';  // 短角色文案与窗口标题同源
+        charChip.title = '操作窗口：' + (env.bound || '-') + '（点击前往系统页）';
+        envDeviceIdValue = env.device_id || '-';
+        envDeviceIdEl.innerText = envDeviceIdValue;
+        envDeviceIdEl.title = envDeviceIdValue;  // 悬停看完整值，点击复制
+    }
+
+    // 设备 ID 点击复制：优先 navigator.clipboard，失败回退 execCommand
+    function copyDeviceId() {
+        const text = envDeviceIdValue;
+        if (!text || text === '-' || text === '获取失败') return;
+        const showDone = () => {
+            envDeviceIdEl.innerText = '已复制';
+            setTimeout(() => { envDeviceIdEl.innerText = envDeviceIdValue; }, 1500);
+        };
+        const legacyCopy = () => {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.select();
+            let ok = false;
+            try { ok = document.execCommand('copy'); } catch (e) {}
+            document.body.removeChild(ta);
+            if (ok) showDone();
+        };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(showDone).catch(legacyCopy);
+        } else {
+            legacyCopy();
+        }
+    }
+
+    // 解除窗口绑定：下次启动多开时重新弹框选择
+    async function unbindWindow() {
+        const r = await callPython('unbind_window');
+        if (!r) return;
+        unbindWinMsgEl.innerText = r.msg || (r.status === 'error' ? '操作失败' : '');
+        await refreshEnv();
+    }
+
+    /* ================= 授权信息（系统页 + 侧边栏状态点） ================= */
+    function applyLicense(lic) {
+        if (!lic || !lic.status) return;
+        licenseStatusEl.innerText = lic.status;
+        licenseExpireEl.innerText = lic.expire || '—';
+        licText.innerText = '授权：' + lic.status;
+        // 到期解析（仅一次）：状态点与临期横幅共用
+        let expMs = NaN;
+        if (lic.expire) {
+            expMs = new Date(String(lic.expire).replace(' ', 'T')).getTime();
+        }
+        const daysLeft = isNaN(expMs) ? NaN : Math.ceil((expMs - Date.now()) / 86400000);
+        // 状态点：已过期红 / 已激活且 7 天内到期金 / 其余绿（免费版无到期时间恒绿）
+        let cls = '';
+        if (lic.status === '已过期') {
+            cls = 'bad';
+        } else if (!isNaN(daysLeft) && daysLeft >= 0 && daysLeft <= 7) {
+            cls = 'warn';
+        }
+        licDot.className = 'lic-dot' + (cls ? ' ' + cls : '');
+        // 临期横幅（系统页，7 天内到期）；其余状态（含免费版）明确隐藏——
+        // 横幅 CSS warn 类默认可见，必须每次内联覆盖 display
+        if (!isNaN(daysLeft) && daysLeft >= 0 && daysLeft <= 7 && lic.status !== '已过期') {
+            licenseBanner.innerText = '授权即将到期：剩余 ' + daysLeft + ' 天（到期后请更换卡密激活）';
+            licenseBanner.style.display = 'block';
+        } else {
+            licenseBanner.style.display = 'none';
+        }
+    }
+
+    // 解绑激活码：二次确认（同删除方案模式），清除本地缓存后重启生效
+    let unbindArm = false;
+    async function unbindLicense() {
+        if (!unbindArm) {
+            unbindArm = true;
+            btnUnbind.innerText = '确认解绑？';
+            setTimeout(() => {
+                unbindArm = false;
+                btnUnbind.innerText = '解绑激活码';
+            }, 3000);
+            return;
+        }
+        unbindArm = false;
+        btnUnbind.innerText = '解绑激活码';
+        const r = await callPython('unbind_license');
+        licenseMsgEl.innerText = (r && r.msg) || '操作失败';
+    }
+
+    /* ================= 阈值 / 修罗 / 巫医间隔步进（变更立即保存） ================= */
+    async function th(key, delta) {
+        const el = document.getElementById('th-' + key);
+        const cur = parseInt(el.innerText);
+        const val = Math.min(95, Math.max(5, cur + delta));
+        const r = await callPython('save_threshold', key, val);
+        if (r && r.status === 'success') el.innerText = r.threshold + '%';
+    }
+
+    async function xiuluoMin(delta) {
+        const el = document.getElementById('xiuluo-min');
+        const cur = parseInt(el.innerText);
+        const val = Math.min(5, Math.max(3, cur + delta));
+        if (val === cur) return;  // 已到上下限，不发请求
+        const r = await callPython('save_xiuluo_min', val);
+        if (r && r.status === 'success') el.innerText = r.min_members;
+    }
+
+    async function saveXiuluoRaces() {
+        const checked = [...xiuluoRaceGrid.querySelectorAll('input:checked')].map(el => el.value);
+        callPython('save_xiuluo_races', checked);
+    }
+
+    async function xiuluoWuyiInterval(delta) {
+        const el = xiuluoWuyiIntervalEl;
+        const cur = parseInt(el.innerText);
+        const val = Math.min(90, Math.max(1, cur + delta));
+        if (val === cur) return;
+        const r = await callPython('save_xiuluo_wuyi_interval', val);
+        if (r && r.status === 'success') el.innerText = r.interval;
+    }
+
+    async function wubeiWuyiInterval(delta) {
+        const el = wubeiWuyiIntervalEl;
+        const cur = parseInt(el.innerText);
+        const val = Math.min(90, Math.max(1, cur + delta));
+        if (val === cur) return;
+        const r = await callPython('save_wubei_wuyi_interval', val);
+        if (r && r.status === 'success') el.innerText = r.interval;
+    }
+
+    /* ================= 各开关变更：立即保存 ================= */
+    useSyx.addEventListener('change', () => {
+        callPython('save_use_sheyaoxiang', useSyx.checked);
+    });
+
+    // 调试信息开关变更：立即保存（任务运行中切换后数秒生效），
+    // 同时控制「诊断」导航入口显隐（默认关闭不展示）
+    function applyDevTools() {
+        devTools.style.display = debugOverlay.checked ? '' : 'none';
+        // 调试信息关闭且当前停在诊断页时自动回看板（入口已隐藏）
+        if (!debugOverlay.checked && document.getElementById('page-diag').classList.contains('active')) {
+            switchPage('dash');
+        }
+    }
+    debugOverlay.addEventListener('change', () => {
+        applyDevTools();
+        callPython('save_debug_overlay', debugOverlay.checked);
+    });
+
+    xiuluoHezi.addEventListener('change', () => {
+        callPython('save_xiuluo_hezi', xiuluoHezi.checked);
+    });
+    xiuluoCheckTeam.addEventListener('change', () => {
+        callPython('save_xiuluo_check_team', xiuluoCheckTeam.checked);
+    });
+    xiuluoAutoWuyi.addEventListener('change', () => {
+        callPython('save_xiuluo_auto_wuyi', xiuluoAutoWuyi.checked);
+    });
+    xiuluoTabGroup.addEventListener('change', () => {
+        callPython('save_xiuluo_tab_group', xiuluoTabGroup.checked);
+    });
+    highPerf.addEventListener('change', () => {
+        callPython('save_high_perf', highPerf.checked);
+    });
+    autoRefill.addEventListener('change', () => {
+        callPython('save_auto_refill', autoRefill.checked);
+    });
+    clearScreen.addEventListener('change', () => {
+        callPython('save_clear_screen', clearScreen.checked);
+    });
+    autoFamen.addEventListener('change', () => {
+        callPython('save_auto_famen', autoFamen.checked);
+    });
+    wubeiHezi.addEventListener('change', () => {
+        callPython('save_wubei_hezi', wubeiHezi.checked);
+    });
+    wubeiCheckTeam.addEventListener('change', () => {
+        callPython('save_wubei_check_team', wubeiCheckTeam.checked);
+    });
+    wubeiShout.addEventListener('change', () => {
+        callPython('save_wubei_shout_switch', wubeiShout.checked);
+    });
+    wubeiAutoWuyi.addEventListener('change', () => {
+        callPython('save_wubei_auto_wuyi', wubeiAutoWuyi.checked);
+    });
+    wubeiKuimulang.addEventListener('change', () => {
+        callPython('save_wubei_kuimulang_switch', wubeiKuimulang.checked);
+    });
+    wubeiTabGroup.addEventListener('change', () => {
+        callPython('save_wubei_tab_group', wubeiTabGroup.checked);
+    });
+    xiuluoShout.addEventListener('change', () => {
+        callPython('save_xiuluo_shout_switch', xiuluoShout.checked);
+    });
+
+    /* ================= 全量同步设置到页面 ================= */
+    // 初始化与方案切换后共用：主题、任务模式、各开关、巫医间隔、
+    // 血蓝阈值、任务次数、战斗动作、修罗/五倍设置
+    async function syncInitData() {
+        const info = await callPython('get_init_data');
+        if (!info) return;
+        applyTheme(info.theme === 'light' ? 'light' : 'dark');
+        if (info.schemes) renderSchemes(info.schemes);  // 顶部方案下拉
+        bossHotkey = info.boss_hotkey || '';  // 老板键名（按钮文案提示）
+        if (info.modes) {
+            taskSelects.forEach(el => { el.checked = info.modes.includes(el.value); });
+        }
+        useSyx.checked = !!info.use_sheyaoxiang;
+        debugOverlay.checked = !!info.debug_overlay;
+        applyDevTools();  // 调试信息开关：控制「诊断」导航入口显隐
+        xiuluoHezi.checked = !!info.xiuluo_hezi;
+        xiuluoCheckTeam.checked = !!info.xiuluo_check_team;
+        xiuluoAutoWuyi.checked = !!info.xiuluo_auto_wuyi;
+        xiuluoTabGroup.checked = !!info.xiuluo_tab_group;
+        highPerf.checked = !!info.high_perf;
+        autoRefill.checked = !!info.auto_refill;
+        clearScreen.checked = !!info.clear_screen;
+        autoFamen.checked = !!info.auto_famen;
+        applyLicense(info.license || {});
+        const env = info.env || {};
+        if (env.theme) envThemeEl.innerText = env.theme;
+        if (env.adapt_res) envAdaptResEl.innerText = env.adapt_res;
+        envCurResEl.innerText = env.cur_res || '-';
+        envBoundEl.innerText = env.bound || '-';
+        charChip.innerText = env.bound_short || '未绑定角色';  // 短角色文案与窗口标题同源
+        charChip.title = '操作窗口：' + (env.bound || '-') + '（点击前往系统页）';
+        if (info.version) {
+            const v = 'v' + info.version;
+            appVersionEl.innerText = v;
+            aboutVersionEl.innerText = v;
+        }
+        envDeviceIdValue = env.device_id || '-';
+        envDeviceIdEl.innerText = envDeviceIdValue;
+        envDeviceIdEl.title = envDeviceIdValue;  // 悬停看完整值，点击复制
+        if (info.xiuluo_wuyi_interval) {
+            xiuluoWuyiIntervalEl.innerText = info.xiuluo_wuyi_interval;
+        }
+        wubeiHezi.checked = !!(info.wubei && info.wubei.hezi);
+        wubeiCheckTeam.checked = !!(info.wubei && info.wubei.check_team);
+        wubeiShout.checked = !!(info.wubei && info.wubei.shout);
+        wubeiAutoWuyi.checked = !!(info.wubei && info.wubei.auto_wuyi);
+        if (info.wubei && info.wubei.wuyi_interval) {
+            wubeiWuyiIntervalEl.innerText = info.wubei.wuyi_interval;
+        }
+        wubeiKuimulang.checked = !!(info.wubei && info.wubei.kuimulang);
+        wubeiTabGroup.checked = !!(info.wubei && info.wubei.tab_group);
+        xiuluoShout.checked = !!info.xiuluo_shout;
+        const ths = info.thresholds || {};
+        for (const key of ['char_hp', 'char_mp', 'beast_hp', 'beast_mp']) {
+            const el = document.getElementById('th-' + key);
+            if (el && ths[key] !== undefined) el.innerText = ths[key] + '%';
+        }
+        const counts = info.task_counts || {};
+        for (const mode of TASK_MODES) {
+            const el = document.getElementById('cnt-' + mode);
+            if (el && counts[mode] !== undefined) el.innerText = counts[mode];
+        }
+        const battle = info.battle || {};
+        for (const [name, b] of [['char', charBattle], ['beast', beastBattle]]) {
+            const v = battle[name];
+            if (!v) continue;
+            const isSkill = /^技能/.test(v);
+            const type = isSkill ? '法术' : v;
+            // 先设技能下拉再勾选类型：勾选会触发 change 立即保存，
+            // 顺序反了会把存储值覆盖成下拉默认第一项
+            if (isSkill) b.skillSel.value = v;
+            const radio = b.container.querySelector('input[value="' + type + '"]');
+            if (radio) {
+                radio.checked = true;
+                b.skillRow.hidden = (type !== '法术');
+            }
+        }
+        const xl = info.xiuluo || {};
+        if (xl.min_members) {
+            document.getElementById('xiuluo-min').innerText = xl.min_members;
+        }
+        if (xl.races) {
+            xiuluoRaceGrid.querySelectorAll('input').forEach(el => {
+                el.checked = xl.races.includes(el.value);
             });
-        });
-
-        // 任务条目整卡点击切换勾选（复选框已隐藏）；次数步进按钮不触发。
-        // 注意：脚本设置 checked 不触发 change 事件（Edge/WebView2 实测，
-        // change 只在用户交互时派发）——卡片空白处点击需直接保存；
-        // 点击落在 label 上时浏览器已原生切换，此处跳过防双重切换
-        document.querySelectorAll('.task-group').forEach(group => {
-            group.addEventListener('click', e => {
-                if (running) return;
-                if (e.target.closest('.th-btn')) return;
-                const input = group.querySelector('input[name="task-mode"]');
-                if (input && !e.target.closest('.task-radio')) {
-                    input.checked = !input.checked;
-                    saveSelectedModes();
-                }
-            });
-        });
-
-        // 摄妖香开关变更：立即保存
-        useSyx.addEventListener('change', () => {
-            callPython('save_use_sheyaoxiang', useSyx.checked);
-        });
-
-        // 调试信息开关变更：立即保存（任务运行中切换后数秒生效），
-        // 同时控制下方验证/测试入口显隐（默认关闭不展示）
-        function applyDevTools() {
-            devTools.style.display = debugOverlay.checked ? 'contents' : 'none';
         }
-        debugOverlay.addEventListener('change', () => {
-            applyDevTools();
-            callPython('save_debug_overlay', debugOverlay.checked);
+        // 手风琴展开态恢复（localStorage）
+        document.querySelectorAll('.task-expand').forEach(btn => {
+            const card = btn.closest('.task-card');
+            let open = false;
+            try { open = localStorage.getItem('task-acc-' + card.dataset.mode) === '1'; } catch (e) {}
+            card.classList.toggle('open', open);
+            btn.innerText = open ? '▴' : '▾';
         });
+        update();  // 应用老板键文案（启动/停止按钮后缀）
+        await refreshProgress();
+    }
 
-        // 修罗自动抢盒子开关变更：立即保存（下次任务启动生效）
-        xiuluoHezi.addEventListener('change', () => {
-            callPython('save_xiuluo_hezi', xiuluoHezi.checked);
-        });
+    /* ================= Python 侧回调入口（名称与语义必须与后端一致） ================= */
 
-        // 修罗检查队伍开关变更：立即保存（下次任务启动生效）
-        xiuluoCheckTeam.addEventListener('change', () => {
-            callPython('save_xiuluo_check_team', xiuluoCheckTeam.checked);
-        });
+    // 页面初始化：恢复上次的所有设置
+    window.addEventListener('onPythonReady', async () => {
+        try { await syncInitData(); } catch (e) {}
+    });
 
-        // 修罗自动巫医开关变更：立即保存（下次任务启动生效）
-        xiuluoAutoWuyi.addEventListener('change', () => {
-            callPython('save_xiuluo_auto_wuyi', xiuluoAutoWuyi.checked);
-        });
-        xiuluoTabGroup.addEventListener('change', () => {
-            callPython('save_xiuluo_tab_group', xiuluoTabGroup.checked);
-        });
-
-        // 高性能模式开关变更：立即保存（下次任务启动生效）
-        highPerf.addEventListener('change', () => {
-            callPython('save_high_perf', highPerf.checked);
-        });
-
-        // 战斗结束自动补血量蓝量开关变更：立即保存（战斗线程每场战斗
-        // 结束实时读取，下次战斗结束即生效）
-        autoRefill.addEventListener('change', () => {
-            callPython('save_auto_refill', autoRefill.checked);
-        });
-
-        // 启动清屏开关变更：立即保存（下次任务启动生效）
-        clearScreen.addEventListener('change', () => {
-            callPython('save_clear_screen', clearScreen.checked);
-        });
-
-        // 自动使用法门开关变更：立即保存（下次任务启动生效）
-        autoFamen.addEventListener('change', () => {
-            callPython('save_auto_famen', autoFamen.checked);
-        });
-
-        // 修罗自动巫医间隔步进：±1，范围 1~90，变更立即保存
-        async function xiuluoWuyiInterval(delta) {
-            const el = xiuluoWuyiIntervalEl;
-            const cur = parseInt(el.innerText);
-            const val = Math.min(90, Math.max(1, cur + delta));
-            if (val === cur) return;
-            const r = await callPython('save_xiuluo_wuyi_interval', val);
-            if (r && r.status === 'success') el.innerText = r.interval;
+    // 任务状态联动：同步页面显示（Python 侧 sync_status 调用）
+    window.syncStatus = function (isActive) {
+        running = isActive;
+        update();
+        refreshProgress();  // 启停后进度立即刷新
+        refreshRuntimeStatus();
+        if (running) {  // 运行中自动展开日志抽屉（用户可手动收起）
+            logDrawer.classList.remove('collapsed');
+            logToggle.innerText = '收 起';
         }
+    };
 
-        // 五倍自动巫医间隔步进：±1，范围 1~90，变更立即保存
-        async function wubeiWuyiInterval(delta) {
-            const el = wubeiWuyiIntervalEl;
-            const cur = parseInt(el.innerText);
-            const val = Math.min(90, Math.max(1, cur + delta));
-            if (val === cur) return;
-            const r = await callPython('save_wubei_wuyi_interval', val);
-            if (r && r.status === 'success') el.innerText = r.interval;
-        }
+    /* ================= 验证/测试（诊断页；与旧版行为一致） ================= */
 
-        // 五倍自动抢盒子开关变更：立即保存（下次任务启动生效）
-        wubeiHezi.addEventListener('change', () => {
-            callPython('save_wubei_hezi', wubeiHezi.checked);
-        });
-
-        // 五倍检查队伍开关变更：立即保存（下次任务启动生效）
-        wubeiCheckTeam.addEventListener('change', () => {
-            callPython('save_wubei_check_team', wubeiCheckTeam.checked);
-        });
-        wubeiShout.addEventListener('change', () => {
-            callPython('save_wubei_shout_switch', wubeiShout.checked);
-        });
-        wubeiAutoWuyi.addEventListener('change', () => {
-            callPython('save_wubei_auto_wuyi', wubeiAutoWuyi.checked);
-        });
-        wubeiKuimulang.addEventListener('change', () => {
-            callPython('save_wubei_kuimulang_switch', wubeiKuimulang.checked);
-        });
-        wubeiTabGroup.addEventListener('change', () => {
-            callPython('save_wubei_tab_group', wubeiTabGroup.checked);
-        });
-        xiuluoShout.addEventListener('change', () => {
-            callPython('save_xiuluo_shout_switch', xiuluoShout.checked);
-        });
-
-        // 修罗回程验证：Python 侧后台线程执行，结果经 onVerifyResult 异步回推
-        async function verifyXiuluoReturn() {
-            if (verifying) return;
-            verifying = true;
-            btnVerifyXiuluo.disabled = true;
-            verifyResultEl.style.color = 'var(--text)';
-            verifyResultEl.innerText = '验证中...';
-            try {
-                const r = await callPython('verify_xiuluo_return');
-                if (!r || r.status !== 'success') {
-                    verifyResultEl.style.color = '#ff5f5f';
-                    verifyResultEl.innerText = (r && r.msg) || '验证请求失败';
-                    verifying = false;
-                    btnVerifyXiuluo.disabled = false;
-                }
-                // 成功：等待 Python 侧 onVerifyResult 回推最终结果
-            } catch (e) {
-                verifyResultEl.style.color = '#ff5f5f';
-                verifyResultEl.innerText = '验证请求异常';
+    // 修罗回程验证：Python 侧后台线程执行，结果经 onVerifyResult 异步回推
+    async function verifyXiuluoReturn() {
+        if (verifying) return;
+        verifying = true;
+        btnVerifyXiuluo.disabled = true;
+        verifyResultEl.style.color = 'var(--text)';
+        verifyResultEl.innerText = '验证中...';
+        try {
+            const r = await callPython('verify_xiuluo_return');
+            if (!r || r.status !== 'success') {
+                verifyResultEl.style.color = 'var(--danger)';
+                verifyResultEl.innerText = (r && r.msg) || '验证请求失败';
                 verifying = false;
                 btnVerifyXiuluo.disabled = false;
             }
-        }
-
-        // Python 侧调用：验证结束回推结果（ok=是否成功，info=描述文案）
-        window.onVerifyResult = function (ok, info) {
+            // 成功：等待 Python 侧 onVerifyResult 回推最终结果
+        } catch (e) {
+            verifyResultEl.style.color = 'var(--danger)';
+            verifyResultEl.innerText = '验证请求异常';
             verifying = false;
             btnVerifyXiuluo.disabled = false;
-            verifyResultEl.style.color = ok ? 'var(--accent)' : '#ff5f5f';
-            verifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
-        };
+        }
+    }
+    window.onVerifyResult = function (ok, info) {
+        verifying = false;
+        btnVerifyXiuluo.disabled = false;
+        verifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        verifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+    };
 
-        // 修罗领取验证：与回程验证同模式，结果经 onClaimVerifyResult 异步回推
-        async function verifyXiuluoClaim() {
-            if (verifying) return;
-            verifying = true;
-            btnVerifyXiuluoClaim.disabled = true;
-            claimVerifyResultEl.style.color = 'var(--text)';
-            claimVerifyResultEl.innerText = '验证中...';
-            try {
-                const r = await callPython('verify_xiuluo_claim');
-                if (!r || r.status !== 'success') {
-                    claimVerifyResultEl.style.color = '#ff5f5f';
-                    claimVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
-                    verifying = false;
-                    btnVerifyXiuluoClaim.disabled = false;
-                }
-            } catch (e) {
-                claimVerifyResultEl.style.color = '#ff5f5f';
-                claimVerifyResultEl.innerText = '验证请求异常';
+    // 修罗领取验证：与回程验证同模式，结果经 onClaimVerifyResult 异步回推
+    async function verifyXiuluoClaim() {
+        if (verifying) return;
+        verifying = true;
+        btnVerifyXiuluoClaim.disabled = true;
+        claimVerifyResultEl.style.color = 'var(--text)';
+        claimVerifyResultEl.innerText = '验证中...';
+        try {
+            const r = await callPython('verify_xiuluo_claim');
+            if (!r || r.status !== 'success') {
+                claimVerifyResultEl.style.color = 'var(--danger)';
+                claimVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
                 verifying = false;
                 btnVerifyXiuluoClaim.disabled = false;
             }
-        }
-
-        // Python 侧调用：领取验证结束回推结果
-        window.onClaimVerifyResult = function (ok, info) {
+        } catch (e) {
+            claimVerifyResultEl.style.color = 'var(--danger)';
+            claimVerifyResultEl.innerText = '验证请求异常';
             verifying = false;
             btnVerifyXiuluoClaim.disabled = false;
-            claimVerifyResultEl.style.color = ok ? 'var(--accent)' : '#ff5f5f';
-            claimVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
-        };
+        }
+    }
+    window.onClaimVerifyResult = function (ok, info) {
+        verifying = false;
+        btnVerifyXiuluoClaim.disabled = false;
+        claimVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        claimVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+    };
 
-        // 修罗巫医验证：与回程/领取验证同模式，结果经 onWuyiVerifyResult 异步回推
-        async function verifyXiuluoWuyi() {
-            if (verifying) return;
-            verifying = true;
-            btnVerifyXiuluoWuyi.disabled = true;
-            wuyiVerifyResultEl.style.color = 'var(--text)';
-            wuyiVerifyResultEl.innerText = '验证中...';
-            try {
-                const r = await callPython('verify_xiuluo_wuyi');
-                if (!r || r.status !== 'success') {
-                    wuyiVerifyResultEl.style.color = '#ff5f5f';
-                    wuyiVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
-                    verifying = false;
-                    btnVerifyXiuluoWuyi.disabled = false;
-                }
-            } catch (e) {
-                wuyiVerifyResultEl.style.color = '#ff5f5f';
-                wuyiVerifyResultEl.innerText = '验证请求异常';
+    // 修罗巫医验证：与回程/领取验证同模式，结果经 onWuyiVerifyResult 异步回推
+    async function verifyXiuluoWuyi() {
+        if (verifying) return;
+        verifying = true;
+        btnVerifyXiuluoWuyi.disabled = true;
+        wuyiVerifyResultEl.style.color = 'var(--text)';
+        wuyiVerifyResultEl.innerText = '验证中...';
+        try {
+            const r = await callPython('verify_xiuluo_wuyi');
+            if (!r || r.status !== 'success') {
+                wuyiVerifyResultEl.style.color = 'var(--danger)';
+                wuyiVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
                 verifying = false;
                 btnVerifyXiuluoWuyi.disabled = false;
             }
-        }
-
-        // Python 侧调用：巫医验证结束回推结果
-        window.onWuyiVerifyResult = function (ok, info) {
+        } catch (e) {
+            wuyiVerifyResultEl.style.color = 'var(--danger)';
+            wuyiVerifyResultEl.innerText = '验证请求异常';
             verifying = false;
             btnVerifyXiuluoWuyi.disabled = false;
-            wuyiVerifyResultEl.style.color = ok ? 'var(--accent)' : '#ff5f5f';
-            wuyiVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
-        };
+        }
+    }
+    window.onWuyiVerifyResult = function (ok, info) {
+        verifying = false;
+        btnVerifyXiuluoWuyi.disabled = false;
+        wuyiVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        wuyiVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+    };
 
-        // 修罗组号巫医验证：队长巫医链路 + 队员 Tab pass，结果经 onTabWuyiVerifyResult 异步回推
-        async function verifyXiuluoTabWuyi() {
-            if (verifying) return;
-            verifying = true;
-            btnVerifyXiuluoTabWuyi.disabled = true;
-            tabWuyiVerifyResultEl.style.color = 'var(--text)';
-            tabWuyiVerifyResultEl.innerText = '验证中...';
-            try {
-                const r = await callPython('verify_xiuluo_tab_wuyi');
-                if (!r || r.status !== 'success') {
-                    tabWuyiVerifyResultEl.style.color = '#ff5f5f';
-                    tabWuyiVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
-                    verifying = false;
-                    btnVerifyXiuluoTabWuyi.disabled = false;
-                }
-            } catch (e) {
-                tabWuyiVerifyResultEl.style.color = '#ff5f5f';
-                tabWuyiVerifyResultEl.innerText = '验证请求异常';
+    // 修罗组号巫医验证：队长巫医链路 + 队员 Tab pass，结果经 onTabWuyiVerifyResult 异步回推
+    async function verifyXiuluoTabWuyi() {
+        if (verifying) return;
+        verifying = true;
+        btnVerifyXiuluoTabWuyi.disabled = true;
+        tabWuyiVerifyResultEl.style.color = 'var(--text)';
+        tabWuyiVerifyResultEl.innerText = '验证中...';
+        try {
+            const r = await callPython('verify_xiuluo_tab_wuyi');
+            if (!r || r.status !== 'success') {
+                tabWuyiVerifyResultEl.style.color = 'var(--danger)';
+                tabWuyiVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
                 verifying = false;
                 btnVerifyXiuluoTabWuyi.disabled = false;
             }
-        }
-
-        // Python 侧调用：组号巫医验证结束回推结果
-        window.onTabWuyiVerifyResult = function (ok, info) {
+        } catch (e) {
+            tabWuyiVerifyResultEl.style.color = 'var(--danger)';
+            tabWuyiVerifyResultEl.innerText = '验证请求异常';
             verifying = false;
             btnVerifyXiuluoTabWuyi.disabled = false;
-            tabWuyiVerifyResultEl.style.color = ok ? 'var(--accent)' : '#ff5f5f';
-            tabWuyiVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
-        };
+        }
+    }
+    window.onTabWuyiVerifyResult = function (ok, info) {
+        verifying = false;
+        btnVerifyXiuluoTabWuyi.disabled = false;
+        tabWuyiVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        tabWuyiVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+    };
 
-        // 五倍领取验证：与修罗领取验证同模式，结果经 onWubeiClaimVerifyResult 异步回推
-        async function verifyWubeiClaim() {
-            if (verifying) return;
-            verifying = true;
-            btnVerifyWubeiClaim.disabled = true;
-            wubeiClaimVerifyResultEl.style.color = 'var(--text)';
-            wubeiClaimVerifyResultEl.innerText = '验证中...';
-            try {
-                const r = await callPython('verify_wubei_claim');
-                if (!r || r.status !== 'success') {
-                    wubeiClaimVerifyResultEl.style.color = '#ff5f5f';
-                    wubeiClaimVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
-                    verifying = false;
-                    btnVerifyWubeiClaim.disabled = false;
-                }
-            } catch (e) {
-                wubeiClaimVerifyResultEl.style.color = '#ff5f5f';
-                wubeiClaimVerifyResultEl.innerText = '验证请求异常';
+    // 五倍领取验证：与修罗领取验证同模式，结果经 onWubeiClaimVerifyResult 异步回推
+    async function verifyWubeiClaim() {
+        if (verifying) return;
+        verifying = true;
+        btnVerifyWubeiClaim.disabled = true;
+        wubeiClaimVerifyResultEl.style.color = 'var(--text)';
+        wubeiClaimVerifyResultEl.innerText = '验证中...';
+        try {
+            const r = await callPython('verify_wubei_claim');
+            if (!r || r.status !== 'success') {
+                wubeiClaimVerifyResultEl.style.color = 'var(--danger)';
+                wubeiClaimVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
                 verifying = false;
                 btnVerifyWubeiClaim.disabled = false;
             }
-        }
-
-        // Python 侧调用：五倍领取验证结束回推结果
-        window.onWubeiClaimVerifyResult = function (ok, info) {
+        } catch (e) {
+            wubeiClaimVerifyResultEl.style.color = 'var(--danger)';
+            wubeiClaimVerifyResultEl.innerText = '验证请求异常';
             verifying = false;
             btnVerifyWubeiClaim.disabled = false;
-            wubeiClaimVerifyResultEl.style.color = ok ? 'var(--accent)' : '#ff5f5f';
-            wubeiClaimVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
-        };
+        }
+    }
+    window.onWubeiClaimVerifyResult = function (ok, info) {
+        verifying = false;
+        btnVerifyWubeiClaim.disabled = false;
+        wubeiClaimVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        wubeiClaimVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+    };
 
-        // 五倍回程验证：与修罗回程验证同模式，结果经 onWubeiReturnVerifyResult 异步回推
-        async function verifyWubeiReturn() {
-            if (verifying) return;
-            verifying = true;
-            btnVerifyWubeiReturn.disabled = true;
-            wubeiReturnVerifyResultEl.style.color = 'var(--text)';
-            wubeiReturnVerifyResultEl.innerText = '验证中...';
-            try {
-                const r = await callPython('verify_wubei_return');
-                if (!r || r.status !== 'success') {
-                    wubeiReturnVerifyResultEl.style.color = '#ff5f5f';
-                    wubeiReturnVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
-                    verifying = false;
-                    btnVerifyWubeiReturn.disabled = false;
-                }
-            } catch (e) {
-                wubeiReturnVerifyResultEl.style.color = '#ff5f5f';
-                wubeiReturnVerifyResultEl.innerText = '验证请求异常';
+    // 五倍回程验证：与修罗回程验证同模式，结果经 onWubeiReturnVerifyResult 异步回推
+    async function verifyWubeiReturn() {
+        if (verifying) return;
+        verifying = true;
+        btnVerifyWubeiReturn.disabled = true;
+        wubeiReturnVerifyResultEl.style.color = 'var(--text)';
+        wubeiReturnVerifyResultEl.innerText = '验证中...';
+        try {
+            const r = await callPython('verify_wubei_return');
+            if (!r || r.status !== 'success') {
+                wubeiReturnVerifyResultEl.style.color = 'var(--danger)';
+                wubeiReturnVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
                 verifying = false;
                 btnVerifyWubeiReturn.disabled = false;
             }
-        }
-
-        // Python 侧调用：五倍回程验证结束回推结果
-        window.onWubeiReturnVerifyResult = function (ok, info) {
+        } catch (e) {
+            wubeiReturnVerifyResultEl.style.color = 'var(--danger)';
+            wubeiReturnVerifyResultEl.innerText = '验证请求异常';
             verifying = false;
             btnVerifyWubeiReturn.disabled = false;
-            wubeiReturnVerifyResultEl.style.color = ok ? 'var(--accent)' : '#ff5f5f';
-            wubeiReturnVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
-        };
+        }
+    }
+    window.onWubeiReturnVerifyResult = function (ok, info) {
+        verifying = false;
+        btnVerifyWubeiReturn.disabled = false;
+        wubeiReturnVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        wubeiReturnVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+    };
 
-        // 五倍巫医验证：与修罗巫医验证同模式，结果经 onWubeiWuyiVerifyResult 异步回推
-        async function verifyWubeiWuyi() {
-            if (verifying) return;
-            verifying = true;
-            btnVerifyWubeiWuyi.disabled = true;
-            wubeiWuyiVerifyResultEl.style.color = 'var(--text)';
-            wubeiWuyiVerifyResultEl.innerText = '验证中...';
-            try {
-                const r = await callPython('verify_wubei_wuyi');
-                if (!r || r.status !== 'success') {
-                    wubeiWuyiVerifyResultEl.style.color = '#ff5f5f';
-                    wubeiWuyiVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
-                    verifying = false;
-                    btnVerifyWubeiWuyi.disabled = false;
-                }
-                // 成功：等待 Python 侧 onWubeiWuyiVerifyResult 回推最终结果
-            } catch (e) {
-                wubeiWuyiVerifyResultEl.style.color = '#ff5f5f';
-                wubeiWuyiVerifyResultEl.innerText = '验证请求异常';
+    // 五倍巫医验证：与修罗巫医验证同模式，结果经 onWubeiWuyiVerifyResult 异步回推
+    async function verifyWubeiWuyi() {
+        if (verifying) return;
+        verifying = true;
+        btnVerifyWubeiWuyi.disabled = true;
+        wubeiWuyiVerifyResultEl.style.color = 'var(--text)';
+        wubeiWuyiVerifyResultEl.innerText = '验证中...';
+        try {
+            const r = await callPython('verify_wubei_wuyi');
+            if (!r || r.status !== 'success') {
+                wubeiWuyiVerifyResultEl.style.color = 'var(--danger)';
+                wubeiWuyiVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
                 verifying = false;
                 btnVerifyWubeiWuyi.disabled = false;
             }
-        }
-
-        // Python 侧调用：五倍巫医验证结束回推结果
-        window.onWubeiWuyiVerifyResult = function (ok, info) {
+            // 成功：等待 Python 侧 onWubeiWuyiVerifyResult 回推最终结果
+        } catch (e) {
+            wubeiWuyiVerifyResultEl.style.color = 'var(--danger)';
+            wubeiWuyiVerifyResultEl.innerText = '验证请求异常';
             verifying = false;
             btnVerifyWubeiWuyi.disabled = false;
-            wubeiWuyiVerifyResultEl.style.color = ok ? 'var(--accent)' : '#ff5f5f';
-            wubeiWuyiVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
-        };
-
-        // 清屏验证：与回程/领取验证同模式，结果经 onClearScreenVerifyResult 异步回推
-        // 喊话测试：向游戏聊天发送一次喊话内容（验证发送链路）；
-        // target: wubei=五倍可配内容 / xiuluo=修罗按种族拼装文案
-        async function verifyShout(target) {
-            if (verifying) return;
-            verifying = true;
-            const btn = target === 'xiuluo' ? btnVerifyShoutXl : btnVerifyShout;
-            const resEl = target === 'xiuluo' ? shoutXlVerifyResultEl : shoutVerifyResultEl;
-            btn.disabled = true;
-            resEl.style.color = 'var(--text)';
-            resEl.innerText = '发送中...';
-            try {
-                const r = await callPython('verify_shout', target);
-                resEl.style.color = r && r.status === 'success' ? 'var(--text)' : '#ff5f5f';
-                resEl.innerText = (r && r.msg) || '验证请求失败';
-            } catch (e) {
-                resEl.style.color = '#ff5f5f';
-                resEl.innerText = '验证请求失败';
-            } finally {
-                verifying = false;
-                btn.disabled = false;
-            }
         }
+    }
+    window.onWubeiWuyiVerifyResult = function (ok, info) {
+        verifying = false;
+        btnVerifyWubeiWuyi.disabled = false;
+        wubeiWuyiVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        wubeiWuyiVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+    };
 
-        async function verifyClearScreen() {
-            if (verifying) return;
-            verifying = true;
-            btnVerifyClearScreen.disabled = true;
-            clearScreenVerifyResultEl.style.color = 'var(--text)';
-            clearScreenVerifyResultEl.innerText = '验证中...';
-            try {
-                const r = await callPython('verify_clear_screen');
-                if (!r || r.status !== 'success') {
-                    clearScreenVerifyResultEl.style.color = '#ff5f5f';
-                    clearScreenVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
-                    verifying = false;
-                    btnVerifyClearScreen.disabled = false;
-                }
-                // 成功：等待 Python 侧 onClearScreenVerifyResult 回推最终结果
-            } catch (e) {
-                clearScreenVerifyResultEl.style.color = '#ff5f5f';
-                clearScreenVerifyResultEl.innerText = '验证请求异常';
-                verifying = false;
-                btnVerifyClearScreen.disabled = false;
-            }
-        }
-
-        // Python 侧调用：清屏验证结束回推结果
-        window.onClearScreenVerifyResult = function (ok, info) {
-            verifying = false;
-            btnVerifyClearScreen.disabled = false;
-            clearScreenVerifyResultEl.style.color = ok ? 'var(--accent)' : '#ff5f5f';
-            clearScreenVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
-        };
-
-        async function verifyJiguan() {
-            if (verifying) return;
-            verifying = true;
-            btnVerifyJiguan.disabled = true;
-            jiguanVerifyResultEl.style.color = 'var(--text)';
-            jiguanVerifyResultEl.innerText = '测试中...';
-            try {
-                const r = await callPython('verify_jiguan');
-                if (!r || r.status !== 'success') {
-                    jiguanVerifyResultEl.style.color = '#ff5f5f';
-                    jiguanVerifyResultEl.innerText = (r && r.msg) || '测试请求失败';
-                    verifying = false;
-                    btnVerifyJiguan.disabled = false;
-                }
-                // 成功：等待 Python 侧 onJiguanVerifyResult 回推最终结果
-            } catch (e) {
-                jiguanVerifyResultEl.style.color = '#ff5f5f';
-                jiguanVerifyResultEl.innerText = '测试请求异常';
-                verifying = false;
-                btnVerifyJiguan.disabled = false;
-            }
-        }
-
-        // Python 侧调用：机关模板测试结束回推结果
-        window.onJiguanVerifyResult = function (ok, info) {
-            verifying = false;
-            btnVerifyJiguan.disabled = false;
-            jiguanVerifyResultEl.style.color = ok ? 'var(--accent)' : '#ff5f5f';
-            jiguanVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
-        };
-
-        // 白龙马模板测试：与机关模板测试同模式，结果经 onWubeiXjVerifyResult 异步回推
-        async function verifyWubeiXj() {
-            if (verifying) return;
-            verifying = true;
-            btnVerifyWubeiXj.disabled = true;
-            wubeiXjVerifyResultEl.style.color = 'var(--text)';
-            wubeiXjVerifyResultEl.innerText = '测试中...';
-            try {
-                const r = await callPython('verify_wubei_xj');
-                if (!r || r.status !== 'success') {
-                    wubeiXjVerifyResultEl.style.color = '#ff5f5f';
-                    wubeiXjVerifyResultEl.innerText = (r && r.msg) || '测试请求失败';
-                    verifying = false;
-                    btnVerifyWubeiXj.disabled = false;
-                }
-                // 成功：等待 Python 侧 onWubeiXjVerifyResult 回推最终结果
-            } catch (e) {
-                wubeiXjVerifyResultEl.style.color = '#ff5f5f';
-                wubeiXjVerifyResultEl.innerText = '测试请求异常';
+    // 白龙马模板测试：与机关模板测试同模式，结果经 onWubeiXjVerifyResult 异步回推
+    async function verifyWubeiXj() {
+        if (verifying) return;
+        verifying = true;
+        btnVerifyWubeiXj.disabled = true;
+        wubeiXjVerifyResultEl.style.color = 'var(--text)';
+        wubeiXjVerifyResultEl.innerText = '测试中...';
+        try {
+            const r = await callPython('verify_wubei_xj');
+            if (!r || r.status !== 'success') {
+                wubeiXjVerifyResultEl.style.color = 'var(--danger)';
+                wubeiXjVerifyResultEl.innerText = (r && r.msg) || '测试请求失败';
                 verifying = false;
                 btnVerifyWubeiXj.disabled = false;
             }
-        }
-
-        // Python 侧调用：白龙马模板测试结束回推结果
-        window.onWubeiXjVerifyResult = function (ok, info) {
+        } catch (e) {
+            wubeiXjVerifyResultEl.style.color = 'var(--danger)';
+            wubeiXjVerifyResultEl.innerText = '测试请求异常';
             verifying = false;
             btnVerifyWubeiXj.disabled = false;
-            wubeiXjVerifyResultEl.style.color = ok ? 'var(--accent)' : '#ff5f5f';
-            wubeiXjVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
-        };
+        }
+    }
+    window.onWubeiXjVerifyResult = function (ok, info) {
+        verifying = false;
+        btnVerifyWubeiXj.disabled = false;
+        wubeiXjVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        wubeiXjVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+    };
 
-        async function verifyPosition() {
-            if (verifying) return;
-            verifying = true;
-            btnVerifyPosition.disabled = true;
-            positionVerifyResultEl.style.color = 'var(--text)';
-            positionVerifyResultEl.innerText = '读取中...';
-            try {
-                const r = await callPython('verify_position');
-                if (!r || r.status !== 'success') {
-                    positionVerifyResultEl.style.color = '#ff5f5f';
-                    positionVerifyResultEl.innerText = (r && r.msg) || '获取请求失败';
-                    verifying = false;
-                    btnVerifyPosition.disabled = false;
-                }
-                // 成功：等待 Python 侧 onPositionVerifyResult 回推最终结果
-            } catch (e) {
-                positionVerifyResultEl.style.color = '#ff5f5f';
-                positionVerifyResultEl.innerText = '获取请求异常';
+    // 清屏验证：与回程/领取验证同模式，结果经 onClearScreenVerifyResult 异步回推
+    async function verifyClearScreen() {
+        if (verifying) return;
+        verifying = true;
+        btnVerifyClearScreen.disabled = true;
+        clearScreenVerifyResultEl.style.color = 'var(--text)';
+        clearScreenVerifyResultEl.innerText = '验证中...';
+        try {
+            const r = await callPython('verify_clear_screen');
+            if (!r || r.status !== 'success') {
+                clearScreenVerifyResultEl.style.color = 'var(--danger)';
+                clearScreenVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
+                verifying = false;
+                btnVerifyClearScreen.disabled = false;
+            }
+            // 成功：等待 Python 侧 onClearScreenVerifyResult 回推最终结果
+        } catch (e) {
+            clearScreenVerifyResultEl.style.color = 'var(--danger)';
+            clearScreenVerifyResultEl.innerText = '验证请求异常';
+            verifying = false;
+            btnVerifyClearScreen.disabled = false;
+        }
+    }
+    window.onClearScreenVerifyResult = function (ok, info) {
+        verifying = false;
+        btnVerifyClearScreen.disabled = false;
+        clearScreenVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        clearScreenVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+    };
+
+    // 喊话测试：向游戏聊天发送一次喊话内容（验证发送链路）；
+    // target: wubei=五倍可配内容 / xiuluo=修罗按种族拼装文案
+    async function verifyShout(target) {
+        if (verifying) return;
+        verifying = true;
+        const btn = target === 'xiuluo' ? btnVerifyShoutXl : btnVerifyShout;
+        const resEl = target === 'xiuluo' ? shoutXlVerifyResultEl : shoutVerifyResultEl;
+        btn.disabled = true;
+        resEl.style.color = 'var(--text)';
+        resEl.innerText = '发送中...';
+        try {
+            const r = await callPython('verify_shout', target);
+            resEl.style.color = r && r.status === 'success' ? 'var(--text)' : 'var(--danger)';
+            resEl.innerText = (r && r.msg) || '验证请求失败';
+        } catch (e) {
+            resEl.style.color = 'var(--danger)';
+            resEl.innerText = '验证请求失败';
+        } finally {
+            verifying = false;
+            btn.disabled = false;
+        }
+    }
+
+    async function verifyJiguan() {
+        if (verifying) return;
+        verifying = true;
+        btnVerifyJiguan.disabled = true;
+        jiguanVerifyResultEl.style.color = 'var(--text)';
+        jiguanVerifyResultEl.innerText = '测试中...';
+        try {
+            const r = await callPython('verify_jiguan');
+            if (!r || r.status !== 'success') {
+                jiguanVerifyResultEl.style.color = 'var(--danger)';
+                jiguanVerifyResultEl.innerText = (r && r.msg) || '测试请求失败';
+                verifying = false;
+                btnVerifyJiguan.disabled = false;
+            }
+            // 成功：等待 Python 侧 onJiguanVerifyResult 回推最终结果
+        } catch (e) {
+            jiguanVerifyResultEl.style.color = 'var(--danger)';
+            jiguanVerifyResultEl.innerText = '测试请求异常';
+            verifying = false;
+            btnVerifyJiguan.disabled = false;
+        }
+    }
+    window.onJiguanVerifyResult = function (ok, info) {
+        verifying = false;
+        btnVerifyJiguan.disabled = false;
+        jiguanVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        jiguanVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+    };
+
+    async function verifyPosition() {
+        if (verifying) return;
+        verifying = true;
+        btnVerifyPosition.disabled = true;
+        positionVerifyResultEl.style.color = 'var(--text)';
+        positionVerifyResultEl.innerText = '读取中...';
+        try {
+            const r = await callPython('verify_position');
+            if (!r || r.status !== 'success') {
+                positionVerifyResultEl.style.color = 'var(--danger)';
+                positionVerifyResultEl.innerText = (r && r.msg) || '获取请求失败';
                 verifying = false;
                 btnVerifyPosition.disabled = false;
             }
-        }
-
-        // Python 侧调用：获取当前坐标结束回推结果
-        window.onPositionVerifyResult = function (ok, info) {
+            // 成功：等待 Python 侧 onPositionVerifyResult 回推最终结果
+        } catch (e) {
+            positionVerifyResultEl.style.color = 'var(--danger)';
+            positionVerifyResultEl.innerText = '获取请求异常';
             verifying = false;
             btnVerifyPosition.disabled = false;
-            positionVerifyResultEl.style.color = ok ? 'var(--accent)' : '#ff5f5f';
-            positionVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
-        };
+        }
+    }
+    window.onPositionVerifyResult = function (ok, info) {
+        verifying = false;
+        btnVerifyPosition.disabled = false;
+        positionVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        positionVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+    };
 
-        async function verifyCaptureDiag() {
-            if (verifying) return;
-            verifying = true;
-            btnVerifyCaptureDiag.disabled = true;
-            captureDiagVerifyResultEl.style.color = 'var(--text)';
-            captureDiagVerifyResultEl.innerText = '诊断中...';
-            try {
-                const r = await callPython('verify_capture_diag');
-                if (!r || r.status !== 'success') {
-                    captureDiagVerifyResultEl.style.color = '#ff5f5f';
-                    captureDiagVerifyResultEl.innerText = (r && r.msg) || '诊断请求失败';
-                    verifying = false;
-                    btnVerifyCaptureDiag.disabled = false;
-                }
-                // 成功：等待 Python 侧 onCaptureDiagVerifyResult 回推最终结果
-            } catch (e) {
-                captureDiagVerifyResultEl.style.color = '#ff5f5f';
-                captureDiagVerifyResultEl.innerText = '诊断请求异常';
+    async function verifyCaptureDiag() {
+        if (verifying) return;
+        verifying = true;
+        btnVerifyCaptureDiag.disabled = true;
+        captureDiagVerifyResultEl.style.color = 'var(--text)';
+        captureDiagVerifyResultEl.innerText = '诊断中...';
+        try {
+            const r = await callPython('verify_capture_diag');
+            if (!r || r.status !== 'success') {
+                captureDiagVerifyResultEl.style.color = 'var(--danger)';
+                captureDiagVerifyResultEl.innerText = (r && r.msg) || '诊断请求失败';
                 verifying = false;
                 btnVerifyCaptureDiag.disabled = false;
             }
-        }
-
-        // Python 侧调用：截屏通道诊断结束回推结果
-        window.onCaptureDiagVerifyResult = function (ok, info) {
+            // 成功：等待 Python 侧 onCaptureDiagVerifyResult 回推最终结果
+        } catch (e) {
+            captureDiagVerifyResultEl.style.color = 'var(--danger)';
+            captureDiagVerifyResultEl.innerText = '诊断请求异常';
             verifying = false;
             btnVerifyCaptureDiag.disabled = false;
-            captureDiagVerifyResultEl.style.color = ok ? 'var(--accent)' : '#ff5f5f';
-            captureDiagVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
-        };
-
-        // Python 侧（任务状态联动）调用，用于同步页面显示
-        window.syncStatus = function (isActive) {
-            running = isActive;
-            update();
-            refreshProgress();  // 启停后进度立即刷新
-        };
-
-        // Python 侧调用：日志窗口被关闭时同步调试信息开关勾选（不触发保存回调）
-        window.setDebugSwitch = function (on) {
-            debugOverlay.checked = !!on;
-            applyDevTools();  // 验证/测试入口显隐随开关同步
-        };
-
-        // 解绑激活码：二次确认（同删除方案模式），清除本地缓存后重启生效
-        let unbindArm = false;
-        async function unbindLicense() {
-            if (!unbindArm) {
-                unbindArm = true;
-                btnUnbind.innerText = '确认解绑？';
-                setTimeout(() => {
-                    unbindArm = false;
-                    btnUnbind.innerText = '解绑激活码';
-                }, 3000);
-                return;
-            }
-            unbindArm = false;
-            btnUnbind.innerText = '解绑激活码';
-            const r = await callPython('unbind_license');
-            licenseMsgEl.innerText = (r && r.msg) || '操作失败';
         }
+    }
+    window.onCaptureDiagVerifyResult = function (ok, info) {
+        verifying = false;
+        btnVerifyCaptureDiag.disabled = false;
+        captureDiagVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        captureDiagVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+    };
 
-    </script>
+    /* ================= 初始化 ================= */
+    // 顶部栏与看板初始按钮态（syncInitData 完成后由 update() 校正）
+    update();
+</script>
 </body>
 </html>

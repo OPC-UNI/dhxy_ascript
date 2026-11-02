@@ -719,6 +719,7 @@ def run_loop(win, cycle_interval=3.0):
 
     # 续跑场景：任务已在追踪中则跳过购买装备（首次领取时再走完整流程）
     if not task_tracker.has_task(win, WUHUAN_TITLE):
+        debug_overlay.set_phase("准备阶段")  # 看板阶段
         ok, info = _prepare(win)
         if not ok:
             return f"准备阶段失败：{info}"
@@ -752,6 +753,7 @@ def run_loop(win, cycle_interval=3.0):
         if task_tracker.has_task(win, WUHUAN_TITLE):
             log("[五环] 任务追踪中已有五环任务，直接跟踪", "SYS")
         else:
+            debug_overlay.set_phase("领取任务")  # 看板阶段
             ok, info = _claim_task(win)
             if not ok:
                 if info == VITALITY_LIMIT_INFO:

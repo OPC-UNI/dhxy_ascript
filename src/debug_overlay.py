@@ -45,6 +45,7 @@ OVERLAY_HELPER_INTERVAL = 1.0  # 绘制进程读取状态周期（秒）
 OVERLAY_SWITCH_KEY = "debug_overlay"  # 控制窗口开关的 KeyValue 键
 STATE_FILENAME = "debug_overlay_state.json"  # 任务进程 → 绘制进程的状态文件
 _HELPER_STALE_TIMEOUT = 15  # 状态文件超过该秒数未更新视为父进程已死（绘制进程自尽）
+STATUS_STALE_TIMEOUT = 6.0  # 运行看板读状态：文件超过该秒数未更新视为无效（任务进程每 2s 写一次）
 
 # ---- 状态（各模块通过 set_* 写入，任务进程内存） ----
 _lock = threading.Lock()
@@ -55,6 +56,7 @@ _name = ""
 _config = ""
 _battle = ""
 _progress = ""
+_phase = ""  # 当前阶段（运行看板「阶段」行；各模块在阶段节点写入，战斗线程进出战斗覆写/清空）
 
 # ---- 绘制进程管理 ----
 _helper_proc = None
@@ -111,6 +113,18 @@ def set_progress(text):
         _progress = text
 
 
+def set_phase(text):
+    """设置当前阶段（运行看板「阶段」行）。
+
+    各任务模块在阶段节点写入（前往领取点/检查队伍/领取任务/自动巫医/
+    返程/寻路中/任务对话…）；战斗线程进入战斗覆写为「战斗中 · 第 N 场」、
+    战斗结束清空（空串——看板回退「执行中」）。传空串即清除。
+    """
+    global _phase
+    with _lock:
+        _phase = text
+
+
 def _config_dir():
     """配置目录：与 KeyValue._determine_path 一致（当前目录，无写权限回退用户目录）。"""
     root = pathlib.Path(os.getcwd())
@@ -154,6 +168,19 @@ def _read_state():
         if not path.exists() or time.time() - path.stat().st_mtime > _HELPER_STALE_TIMEOUT:
             return None
         return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def read_runtime_status():
+    """运行看板状态读取（主进程控制窗口调用）：返回状态文件的结构化
+    status 字段；文件不存在或陈旧（>STATUS_STALE_TIMEOUT，任务未运行/
+    已停止）返回 None。仅读文件，不触碰绘制进程。"""
+    path = _state_path()
+    try:
+        if not path.exists() or time.time() - path.stat().st_mtime > STATUS_STALE_TIMEOUT:
+            return None
+        return json.loads(path.read_text(encoding="utf-8")).get("status")
     except Exception:
         return None
 
@@ -293,8 +320,15 @@ def _supervise(win):
     while not _stopped:
         try:
             enabled = _read_switch()
+            # status 为结构化运行状态（控制窗口看板读取；与悬浮层开关无关）：
+            # 绘制进程只消费 lines/color/font，多余键忽略
+            with _lock:
+                status = {"task": _task, "progress": _progress,
+                          "battle": _battle, "bars": _bars,
+                          "team": _team, "name": _name, "phase": _phase}
             _write_state({"enabled": enabled,
                           "lines": _build_frame(win) if enabled else [],
+                          "status": status,
                           "color": OVERLAY_COLOR, "font": OVERLAY_FONT})
             with _helper_lock:
                 proc = _helper_proc

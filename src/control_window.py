@@ -1,26 +1,25 @@
 """自定义网页控制窗口：任务启动/停止、页面设置与配置、独立吸附日志窗口。
 
 ControlWindow 基于 WebWindow（pywebview），页面为 res/ui/control_window.html，
-是应用主窗口；日志由独立的 LogWindow 吸附在主窗口右侧，仅在调试信息开关
-开启时显示（主窗口移动/缩放时跟随）。先 prepare() 创建窗口，再 show() 进入
-阻塞式 GUI 事件循环（webview.start 由主线程执行，配合 Runtime.wait 驻留
-线程防程序自行退出）。
+是应用主窗口；日志直接展示在面板内「运行日志」抽屉（2026-11 起不再使用
+独立吸附日志窗）。先 prepare() 创建窗口，再 show() 进入阻塞式 GUI 事件
+循环（webview.start 由主线程执行，配合 Runtime.wait 驻留线程防程序自行退出）。
 
-页面结构：
-- 顶部：启动/停止按钮 + 任务状态显示 + 配置方案下拉（选中即切换）+
-  浅色/深色主题切换（月亮/太阳图标按钮）
-- Tab 栏：任务列表（每任务一组：模式多选 + 次数步进 + 总进度条）/
-  任务设置 / 通用设置
-  （摄妖香、血蓝阈值、人物与召唤兽默认战斗动作，内含修罗/五倍设置
-  分组，仅队长时生效）/ 高级设置（授权信息、配置方案管理区、调试信息
-  悬浮开关）
+页面结构（2026-11 重设计，见 docs/ui-redesign.md）：
+- 顶栏：品牌 + 绑定角色 + 配置方案下拉（选中即切换）+ 主题切换 +
+  启动/停止主按钮（F11 老板键提示）
+- 侧边导航：运行看板（状态印章/任务队列/日志抽屉）/ 任务（选择+次数+
+  各任务专属设置）/ 设置（通用+血蓝阈值+战斗动作）/ 系统（环境/授权/
+  配置方案）/ 诊断（验证工具，调试信息开启时显示）
+- 看板运行状态：任务子进程写悬浮层状态文件（结构化 status 字段），
+  本窗口 get_runtime_status 直读，与调试信息开关无关
 
 功能约定：
 - 启动/停止：桥接调用 TaskManager 启停任务子进程（升级强杀保证线程全清）
 - 关闭（X）：取消关闭并隐藏到托盘（_on_closing），任务继续运行；
   真正退出须先 close_window() 放行（_real_close），否则窗口永不销毁
-- 调试信息开关：控制游戏窗口悬浮层（任务侧读取），同时控制日志窗口显隐；
-  关闭日志窗口 = 自动关闭调试信息开关（页面勾选同步）
+- 调试信息开关：控制游戏窗口悬浮层（任务侧读取）与「诊断」导航显隐；
+  日志统一展示在面板内「运行日志」抽屉（独立吸附日志窗已于 2026-11 移除）
 
 注意：页面不要自行声明 callPython 函数，使用框架注入的桥接
 （window.callPython → call_internal 通道），否则注入会被跳过。
@@ -36,11 +35,11 @@ from ascript.windows.system import R
 from ascript.windows.system.device import Device
 from ascript.windows.system.key_value import KeyValue
 from ascript.windows.ui import WebWindow
-from src.log_window import LogWindow
 from . import game  # 游戏窗口查找（修罗回程验证用；game 不反向依赖本模块，可顶层导入）
 from . import app_utils  # KeyValue 合并读写（kv_save_merged/kv_remove_merged）
 from . import schemes  # 配置方案（多套设置快照切换 + 导入导出）
 from . import hotkey  # 老板键（启动/停止按钮文案展示热键名）
+from . import __version__  # 版本号唯一来源（src/__init__.py，面板关于/侧边栏展示）
 
 # ---- 任务模式（UI 多选项，KeyValue 持久化，记住上次选择） ----
 TASK_MODES = ["五环", "客栈", "修罗", "五倍", "玄枢轶闻", "名望"]
@@ -688,10 +687,10 @@ class _ApiBridge:
 
 
 class ControlWindow(WebWindow):
-    """应用主窗口：任务启动/停止、配置页面；日志由吸附的 LogWindow 显示。
+    """应用主窗口：任务启动/停止、配置页面；日志展示在面板内日志抽屉。
 
     启停通过桥接调用 TaskManager（任务子进程管理），状态与日志由
-    TaskManager 回调推送（sync_status / add_logs → 日志窗口）。
+    TaskManager 回调推送（sync_status / add_logs → 面板看板日志抽屉）。
     """
 
     def __init__(self, tm, title="啄木鸟", license_info=None):
@@ -704,14 +703,10 @@ class ControlWindow(WebWindow):
         self._window_title = f"{title} - {label}" if label else title
         self._visible = True  # 启动时直接可见
         self._real_close = threading.Event()  # 置位后 X/销毁真正放行（退出路径）
-        self._debug_on = load_debug_overlay()  # 调试信息开关：控制日志窗口显隐
         self._verifying = False  # 修罗回程验证进行中标记（防连点）
         self._scheme_dialog_busy = False  # 方案导入导出文件对话框在途标记（防连点）
         self._pending_import = None  # 待确认的导入（{"name", "settings"}；同名冲突时挂起）
         self._license_info = license_info or {}  # 授权信息（高级设置-授权信息展示）
-        self.log_win = LogWindow()
-        self.log_win.set_debug_off_callback(self._on_log_window_closed)
-        self.log_win.apply_theme(load_ui_theme())  # 初始主题与主面板一致
         self.expose(self.get_init_data)
         self.expose(self.save_task_modes)
         self.expose(self.save_task_count)
@@ -766,12 +761,21 @@ class ControlWindow(WebWindow):
         self.expose(self.scheme_export)
         self.expose(self.scheme_import)
         self.expose(self.scheme_import_confirm)
+        self.expose(self.get_runtime_status)
         # 任务状态/日志回流接线：TaskManager → 主窗口状态 + 日志窗口
         self._tm.set_callbacks(on_status=self.sync_status, on_log=self.add_logs)
 
     def get_env_info(self):
-        """使用环境信息（高级设置-使用环境展示）：适配主题/分辨率、
-        当前游戏窗口分辨率、绑定窗口与设备 ID。"""
+        """使用环境信息（系统页-使用环境展示）：适配主题/分辨率、
+        当前游戏窗口分辨率、绑定窗口（含短角色文案 bound_short，
+        顶栏 chip 用，与窗口标题同源）与设备 ID。
+
+        绑定丢失且有自动选择窗口时注明实跑目标（find_main_window
+        兜底：已登录窗口优先），并同步刷新窗口标题角色文案——防
+        标题显示旧绑定角色而任务实际跑在自动选择窗口上。无绑定但
+        存在窗口（自动选择生效）时同样直接展示该窗口标题，与标题
+        栏角色一致（单游戏窗口首次启动即此场景）。
+        """
         cur = "未检测到游戏窗口"
         win = game.find_main_window()
         if win is not None:
@@ -780,9 +784,17 @@ class ControlWindow(WebWindow):
         if bound is not None:
             bound_info = bound.title
         elif game.bound_window_id():
-            bound_info = "绑定丢失（重启后重选）"
+            raw = game.bound_window_id()
+            old = raw.get("title") if isinstance(raw, dict) else str(raw)
+            if win is not None:
+                bound_info = f"已自动选择：{win.title}（原绑定 {old} 未匹配）"
+            else:
+                bound_info = "绑定丢失（重启后重选）"
+        elif win is not None:
+            bound_info = win.title  # 无绑定记录：自动选择窗口即操作目标
         else:
             bound_info = "未绑定（自动选择）"
+        self.refresh_window_title()  # 标题角色文案随解析结果刷新
         try:
             device_id = Device.id  # classproperty：属性访问即为字符串，不可加括号调用
         except Exception:
@@ -791,6 +803,7 @@ class ControlWindow(WebWindow):
                 "adapt_res": f"{ENV_ADAPT_RES[0]} × {ENV_ADAPT_RES[1]}",
                 "cur_res": cur,
                 "bound": bound_info,
+                "bound_short": bound_short_label() or "",
                 "device_id": device_id}
 
     def unbind_window(self):
@@ -979,6 +992,7 @@ class ControlWindow(WebWindow):
                 "debug_overlay": load_debug_overlay(),
                 "license": self._license_info,
                 "env": self.get_env_info(),
+                "version": __version__,
                 "schemes": schemes.list_schemes(),
                 "boss_hotkey": hotkey.load_hotkey()}
 
@@ -1009,6 +1023,13 @@ class ControlWindow(WebWindow):
         次数上限合计；进度由任务子进程写入 config.json，本函数直读
         文件实时反映（见 task_progress_summary）。"""
         return task_progress_summary()
+
+    def get_runtime_status(self):
+        """运行看板状态：直读任务子进程写入的悬浮层状态文件的结构化
+        status 字段（task/progress/battle/bars/team/name）。任务未运行
+        或状态陈旧时返回 None。"""
+        from . import debug_overlay  # 延迟导入：与其余验证模块保持一致
+        return debug_overlay.read_runtime_status()
 
     def save_use_sheyaoxiang(self, on):
         """摄妖香开关变更：保存开关状态。"""
@@ -1091,21 +1112,18 @@ class ControlWindow(WebWindow):
         return save_xiuluo_shout_switch(on)
 
     def save_debug_overlay(self, on):
-        """调试信息开关变更：保存开关状态，并同步日志窗口显隐。"""
-        result = save_debug_overlay(on)
-        if result.get("status") == "success":
-            self._set_debug_on(bool(on))
-        return result
+        """调试信息开关变更：保存开关状态（悬浮层由任务侧读取、
+        诊断导航显隐由页面侧同步）。"""
+        return save_debug_overlay(on)
 
     def save_ui_theme(self, theme):
-        """主题切换：保存浅色/深色选择，并同步日志窗口主题。"""
-        result = save_ui_theme(theme)
-        if result.get("status") == "success":
-            self.log_win.apply_theme(theme)
-        return result
+        """主题切换：保存浅色/深色选择。"""
+        return save_ui_theme(theme)
 
     def start_task(self):
-        """启动按钮：启动任务子进程。"""
+        """启动按钮：启动任务子进程（先刷新标题角色文案——任务目标
+        窗口解析在绑定丢失后可能已自动选择新窗口）。"""
+        self.refresh_window_title()
         return self._tm.start()
 
     def unbind_license(self):
@@ -1708,47 +1726,19 @@ class ControlWindow(WebWindow):
                 pass
 
     def add_log(self, line):
-        """单行日志推送到吸附日志窗口（主进程 [系统] 消息用）。"""
+        """单行日志推送到面板日志抽屉（主进程 [系统] 消息用）。"""
         self.add_logs([line])
 
     def add_logs(self, lines):
-        """批量日志推送到吸附日志窗口（隐藏期间由 LogWindow 内部缓冲）。"""
-        self.log_win.add_logs(lines)
+        """批量日志推送到主面板看板日志抽屉。"""
+        self._push_panel_logs(lines)
 
-    # ---- 日志窗口联动 ----
-
-    def _set_debug_on(self, on):
-        """更新调试信息开关状态并刷新日志窗口显隐。"""
-        self._debug_on = bool(on)
-        self._refresh_log_visibility()
-
-    def _refresh_log_visibility(self):
-        """日志窗口可见 = 调试信息开启 且 主窗口可见；显示前先吸附定位。"""
-        visible = self._debug_on and self._visible
-        if visible:
-            self._dock_log()
-        self.log_win.set_visible(visible)
-
-    def _dock_log(self):
-        """日志窗口吸附到主窗口右侧（等高、右缘对齐、顶部对齐）。"""
-        if not (self.webview_instance and self.log_win.webview_instance):
-            return
-        try:
-            mw = self.webview_instance
-            lw = self.log_win.webview_instance
-            lw.resize(260, mw.height)
-            lw.move(mw.x + mw.width, mw.y)
-        except Exception:
-            pass
-
-    def _on_log_window_closed(self):
-        """日志窗口被 X 关闭：关闭调试信息开关并同步主页面勾选。"""
-        save_debug_overlay(False)
-        self._debug_on = False
+    def _push_panel_logs(self, lines):
+        """主面板看板日志抽屉推送（页面未就绪时静默忽略；行数上限由页面截断）。"""
         if self.webview_instance:
             try:
                 self.webview_instance.evaluate_js(
-                    "if(window.setDebugSwitch){window.setDebugSwitch(false);}")
+                    f"if(window.addPanelLogs){{window.addPanelLogs({json.dumps(lines)});}}")
             except Exception:
                 pass
 
@@ -1765,7 +1755,27 @@ class ControlWindow(WebWindow):
                 self._visible = True
         except Exception:
             pass
-        self._refresh_log_visibility()
+        if self._visible:
+            self.refresh_window_title()  # 重新显示时刷新角色文案（窗口解析可能已变化）
+
+    def refresh_window_title(self):
+        """刷新窗口标题的角色短文案。
+
+        绑定丢失时 find_main_window 自动选择新窗口（已登录优先），
+        实际运行目标变化而标题若停在启动时的旧绑定角色会误导——
+        在环境刷新/任务启动/托盘显示时重解析刷新（set_title 在窗口
+        shown 前为 no-op，此时仅更新内存值，创建窗口时仍用新值）。
+        """
+        label = bound_short_label()
+        new_title = f"{self._title} - {label}" if label else self._title
+        if new_title == self._window_title:
+            return
+        self._window_title = new_title
+        if self.webview_instance:
+            try:
+                self.webview_instance.set_title(new_title)
+            except Exception:
+                pass
 
     def sync_status(self, running):
         """任务状态同步到页面（仅更新状态与按钮，不改窗口显隐）。"""
@@ -1791,13 +1801,11 @@ class ControlWindow(WebWindow):
             self.webview_instance.hide()
         except Exception:
             pass
-        self._refresh_log_visibility()  # 主窗口隐藏时日志窗口一并隐藏
         return False
 
     def close_window(self):
-        """真正退出：放行关闭并销毁全部窗口 → Application.Exit → webview.start 返回。"""
+        """真正退出：放行关闭并销毁主窗口 → Application.Exit → webview.start 返回。"""
         self._real_close.set()
-        self.log_win.close_window()
         if self.webview_instance:
             try:
                 self.webview_instance.destroy()
@@ -1805,11 +1813,7 @@ class ControlWindow(WebWindow):
                 pass
 
     def prepare(self, width=440, height=500):
-        """创建主窗口与日志窗口（不启动事件循环，webview.start 统一执行）。
-
-        日志窗口初始隐藏，主窗口 shown 后按调试信息开关决定是否吸附显示；
-        主窗口移动/缩放/最小化/恢复时同步日志窗口位置与显隐。
-        """
+        """创建主窗口（不启动事件循环，webview.start 统一执行）。"""
         file_url = Path(self.abs_path).as_uri()
         win = webview.create_window(
             title=self._window_title,
@@ -1827,22 +1831,6 @@ class ControlWindow(WebWindow):
 
         win.events.loaded += on_loaded
         win.events.closing += self._on_closing
-        # 主窗口 shown 后首次吸附定位并应用日志窗口初始显隐
-        win.events.shown += lambda: self._refresh_log_visibility()
-        # 移动/缩放时跟随吸附（仅日志窗口可见时重定位）
-        win.events.moved += self._on_main_moved
-        win.events.resized += self._on_main_moved
-        # 最小化隐藏日志窗口，恢复时按开关重新显示
-        win.events.minimized += lambda: self.log_win.set_visible(False)
-        win.events.restored += lambda: self._refresh_log_visibility()
-
-        # 日志窗口：初始隐藏创建（与主窗口同一次 webview.start）
-        self.log_win.prepare()
-
-    def _on_main_moved(self):
-        """主窗口移动/缩放：日志窗口可见时重新吸附。"""
-        if self._debug_on and self._visible:
-            self._dock_log()
 
 
 def _game_window_clickable(win):

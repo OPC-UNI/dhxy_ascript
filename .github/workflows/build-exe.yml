@@ -23,6 +23,24 @@ jobs:
           cache: "pip"
           cache-dependency-path: requirements.txt
 
+      - name: 打 tag 构建：把 tag 版本号自动烙进 src/__init__.py（面板展示的版本）
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          # 发版免手动改版本号：vX.Y.Z 的 tag 触发构建时，CI 把版本号
+          # 写进 src/__init__.py 再打包——exe 里面板显示版本 = tag 版本。
+          # 手动 workflow_dispatch 构建不烙（保持代码内开发态版本）。
+          $v = $env:GITHUB_REF_NAME -replace '^v', ''
+          if (-not ($v -match '^\d+\.\d+\.\d+')) {
+            Write-Error "tag 版本号格式异常: $env:GITHUB_REF_NAME（应为 vX.Y.Z）"
+            exit 1
+          }
+          $p = "src/__init__.py"
+          $content = Get-Content $p -Raw
+          $content = $content -replace '__version__\s*=\s*"[^"]*"', ('__version__ = "' + $v + '"')
+          Set-Content -Path $p -Value $content -Encoding utf8NoBOM
+          Write-Host "版本号已烙为: $v"
+
       - name: 安装依赖（ascript 的依赖声明会传递解析其余运行时库；pip 缓存随 requirements.txt 哈希自动管理）
         shell: pwsh
         run: |

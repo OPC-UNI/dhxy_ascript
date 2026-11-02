@@ -2573,6 +2573,7 @@ def run_loop(win, cycle_interval=1.0):
                 # 信号免位置 OCR；消费后复位，失败轮次保持位置门控
                 just_returned = _returned_last_round
                 _returned_last_round = False
+                debug_overlay.set_phase("前往领取点")  # 看板阶段
                 ok, info = _walk_to_claim_spot(win, just_returned=just_returned)
                 if not ok:
                     log(f"[五倍] {info}", "WARN")
@@ -2594,6 +2595,7 @@ def run_loop(win, cycle_interval=1.0):
                     else:
                         if pre_status == "wait":
                             time.sleep(TEAM_CHECK_RETRY_INTERVAL)
+                        debug_overlay.set_phase("检查队伍")  # 看板阶段
                         log("[五倍] 首次领取前进入队伍监控循环（缺人自动补）", "SYS")
                         _monitor_team_and_fill(win)
                         log("[五倍] 队伍已满 5 人，开始领取", "SYS")
@@ -2607,6 +2609,7 @@ def run_loop(win, cycle_interval=1.0):
                     prev_sig = task_tracker.task_signature(t) if t is not None else None
                 # 领取任务（校验帧随返回值带出，跟踪首轮复用免重复 OCR）；
                 # 队伍不足被拒时按开关决定是否重入监控补人循环
+                debug_overlay.set_phase("领取任务")  # 看板阶段
                 ok, info, claim_items = _claim_task(win, allow_fill=check_team)
                 if not ok:
                     if need_replace:
@@ -2639,6 +2642,7 @@ def run_loop(win, cycle_interval=1.0):
                 # 自动巫医：每 N 轮领取后无条件前往宝象国巫医 NPC 医治，
                 # 血蓝正常也照常（失败仅记日志，不阻断后续寻路）
                 if auto_wuyi and round_no % wuyi_interval == 0:
+                    debug_overlay.set_phase("自动巫医")  # 看板阶段
                     ok2, info2 = _auto_wuyi(win)
                     log(f"[五倍][巫医] {info2}", "SYS" if ok2 else "WARN")
             # 2~4. 寻路 / 对话开打 / 战斗：由任务跟踪统一驱动
@@ -2681,6 +2685,7 @@ def run_loop(win, cycle_interval=1.0):
             # 仅「看打！」/对话开打进入的战斗结束后才返程（背包任务
             # 储物格右键五倍回城符回宝象国），其他方式进入的战斗不返程
             if _fight_via_kanda:
+                debug_overlay.set_phase("返程")  # 看板阶段
                 ok, info = _return_to_npc(win)
                 if not ok:
                     log(f"[五倍] {info}", "WARN")

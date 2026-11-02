@@ -316,6 +316,7 @@ def _task_start_body():
         # 调试信息悬浮层：在游戏窗口上绘制任务/配置/进度（开关在控制窗口
         # 切换后实时生效；开关关闭时不创建绘制窗口，行为与未启用一致）
         debug_overlay.start(main_win)
+        debug_overlay.set_phase("准备中")  # 看板阶段：启动检查/清屏期间显示
 
         # 2. 登录状态检查（Tab 读取一次）
         tab = game.read_login_tab(main_win)
@@ -539,7 +540,8 @@ if __name__ == '__main__':
     # 列表里只有授权窗口自己，其关闭即结束该次消息循环
     tm = TaskManager(task_start, task_stop)
     control_win = ControlWindow(tm, license_info=license_info)  # 构造内已接线 tm 的状态/日志回调
-    control_win.prepare()            # 创建唯一窗口（uid='master'）
+    # 面板重设计后默认尺寸 720×560（侧边导航 + 运行看板，见 docs/ui-redesign.md）
+    control_win.prepare(width=720, height=560)            # 创建唯一窗口（uid='master'）
 
     # OCR 引擎预热（主进程，后台线程）：高级设置的验证/测试按钮在主进程
     # 跑 OCR，首次调用冷启动加载 det/cls/rec 模型实测阻塞约 30s
@@ -577,6 +579,7 @@ if __name__ == '__main__':
             result = tm.stop()
             app_utils.log(f"[老板键] 停止结果={result}", "SYS")
         else:
+            control_win.refresh_window_title()  # 标题角色文案随任务目标窗口刷新（防绑定丢失后显示旧角色）
             result = tm.start()
             app_utils.log(f"[老板键] 启动结果={result}", "SYS")
 

@@ -886,6 +886,7 @@ def watch_loop(win):
                         _watch_in_battle = True  # 任务侧共享状态
                         battle_no += 1
                         debug_overlay.set_battle(battle_no)  # 调试悬浮层场次
+                        debug_overlay.set_phase(f"战斗中 · 第 {battle_no} 场")  # 看板阶段
                         log(f"[战斗] 第 {battle_no} 场战斗开始", "SYS")
                         if battle_no == 1:
                             result = handle_battle(win)  # 首场：按配置操作后点击自动
@@ -915,6 +916,7 @@ def watch_loop(win):
                     if out_polls >= BATTLE_END_CONFIRM_POLLS:
                         in_battle = False
                         _watch_in_battle = False  # 任务侧共享状态
+                        debug_overlay.set_phase("")  # 出战斗清阶段：看板回退「执行中」，待任务模块写下一阶段（防战后陈旧显示「战斗中」）
                         log(f"[战斗] 第 {battle_no} 场战斗结束", "SYS")
                         # 战后补血蓝受通用设置开关门控（默认开）：关闭时
                         # 不检测血蓝条、不自动右键回满

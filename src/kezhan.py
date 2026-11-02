@@ -1967,17 +1967,20 @@ def run_cycle(win):
         task = task_tracker.get_task(win, TASK_TITLE)
         if _task_needs_dali_walk(task) \
                 and time.time() - _dali_last_done >= DALI_REDO_INTERVAL:
+            debug_overlay.set_phase("大理寺寻路")  # 看板阶段
             ok, info = _walk_to_dali(win)
             _dali_last_done = time.time()
             log(f"[客栈] 大理寺寻路: {info}", "SYS" if ok else "WARN")
         if _task_needs_biwu_walk(task) \
                 and time.time() - _biwu_last_done >= BIWU_REDO_INTERVAL:
+            debug_overlay.set_phase("比武场寻路")  # 看板阶段
             ok, info = _walk_to_biwu(win)
             _biwu_last_done = time.time()
             log(f"[客栈] 比武场寻路: {info}", "SYS" if ok else "WARN")
         return _follow_kezhan(win)
 
     # 没有任务 → 前往洛阳客栈找掌柜并领取任务
+    debug_overlay.set_phase("前往客栈")  # 看板阶段
     pt, info = _ensure_zhanggui(win)
     if pt is None:
         return "fail", info
@@ -1985,6 +1988,7 @@ def run_cycle(win):
     if _has_task(win):
         log("[客栈] 领前复核发现任务仍在追踪中，改为直接跟踪", "WARN")
         return _follow_kezhan(win)
+    debug_overlay.set_phase("领取任务")  # 看板阶段
     ok, info = _claim_task(win, pt)
     if not ok:
         return ("daily_limit", info) if info == DAILY_LIMIT_INFO else ("fail", info)
