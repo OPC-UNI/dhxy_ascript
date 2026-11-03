@@ -26,9 +26,9 @@
 按 引灯阵法→镇煞阵法→定魂阵法 依次点击加固（文案阅读序与点击序不一致，
 按「第N处阵法已加固完成」计数选下一个关键词，同玄枢轶闻封印按序开启）；
 音律小游戏（辨八音：对话「来吧，我还怕了你不成？」→ 窗口横幅
-kezhan_yinlv.png 出现 → 记住五编钟位置 → 点开始演奏 → 倒计时 3s 后
-按序点击 5 1 4 5 1 1 5 5 1 5 4 3 2 3 5（15 次、1s 间隔，用户 2026-11-03
-提供）→ 横幅消失结束）；
+kezhan_yinlv.png 出现 → 记住五编钟位置 → 点开始演奏 → 按序点击
+5 1 4 5 1 1 5 5 1 5 4 3 2 3 5（15 次；首个 3.4s、间隔 1.45s，
+用户 2026-11-03 实测节奏）→ 横幅消失结束）；
 提交物品/无跟踪两类特殊任务后续单独处理。
 """
 import re
@@ -133,6 +133,7 @@ DIALOG_OPTION_MAP = {
     "你！你也是它们派来的！（猴精龇牙咧嘴直扑而来）":"只能先制服它再说了。",
     "有位整天云游的逍遥散仙刚向我发了份求助，说他家那只宝贝坐骑被蓬莱的":"小事一桩，包在我身上。",
     "看来这就是那困住灵兔的封印了。":"消耗灵气，破除封印",
+    "小狐妖那里有封密信需即刻送至玉面狐狸手中，事关重大，切记亲自交予她":"没问题，我速去速回。",
     "多谢少侠，嘿嘿，老夫还要赶去赴瑶池仙会，后会有期！":"您老慢走",
     "绣娘苏巧儿的母亲突发急症，城中大夫皆束手无策":"性命攸关，我这就去求见孙神医。",
     "这帖药需分三次煎服：首服吊命，次服通脉，三服固本。切记要用晨露煎煮":"神医妙手仁心，我代苏家谢过！",
@@ -244,7 +245,10 @@ DIALOG_OPTION_MAP = {
     "你...你这是要砸我饭碗啊！真当道爷在城里混这些年是白给的？":"巧了，我专治各种白给。",
     "不敢不敢！我这就回乡下种田！绝对不会给少侠惹麻烦了！":"快走快走，真是懒得搭理你这怂包……",
     "少侠需依此次序加固：先点灯指引迷魂，再镇煞封堵鬼门，终定魂稳固轮回":"三才相生，阴阳有序。我记下了",
-    "地府秩序已复，游魂再难作乱":"钟天师有事随时叫我，先告辞了。"
+    "地府秩序已复，游魂再难作乱":"钟天师有事随时叫我，先告辞了。",
+    "你要是这个态度嘛……那应该就不会是骗子了，诺，信给你，记得不要路上":"放心吧，我没兴趣看。",
+    "少侠是专程来送信的？":"将密信交给玉面狐狸",
+    "哈哈哈，我就喜欢像你这样知礼守心的少侠~往后得了闲，常来我这儿坐坐":"好说，一定常来"
 
 }
 # 需要点击屏幕中间跳过的对话框文案 → 点击次数（出现则连点屏幕中间推进
@@ -254,11 +258,13 @@ DIALOG_OPTION_MAP = {
 DIALOG_SKIP_TEXTS = {
     "少侠来得正及时！这月华霜蕊灵气充盈，正是宴上所需": 4,
     "你就是那个放话我大唐无人通晓音律之道的西域乐师？": 5,
+    "嗯...封印完好，墨迹未改...少侠一路护送周全，倒是费心了。":4,
     "音律之道，首重五音十二律，宫商角徵羽各安其位。我游历大唐数月，尚未":2,
     "少侠技艺确实令人耳目一新！不过若论对曲谱音律的领悟，恐怕还稍逊在下":2,
     "少侠是为那小猴来的？它这是胫骨裂隙，幸未伤及经脉。这续骨膏需以晨露":1,
     "老夫手中这封密信关系重大，须即刻面呈太上老君。此事非比寻常，还望少":2,
     "贫道观少侠龙行虎步，眉间隐现祥瑞之气一一莫非是要求问仕途姻缘？不瞒":4,
+    "少侠可是来取信的？":4,
     "少侠可是来加固阵法的？":3,
     "还想跑多远？要不要我再陪你跑一会儿？":3,
     "这是什么？":2,
@@ -385,7 +391,10 @@ QIYU_DIALOG_TEXTS = ["阴风骤起",   # 第一幕：妖僧现身（三选项 �
                      "你急忙催动真气护住自身",
                      "眉头紧锁望向阵法深处",
                      "直接朝那异常波动的源头掠去",
-                     "钟馗为救你颇费心力"
+                     "钟馗为救你颇费心力",
+                     "忽闻身后香风袭近",
+                     "只见一只狐妖似笑非笑地站在一步之外",
+                     "狐妖眼中掠过一丝赞许"
                      ]
 # ---- 答题致富问答题（多星智；选项为纵向排列的单字，OCR 会把整列
 #      合并成一条竖框——实测「稻麦瓜」识别为一个高矩形）----
@@ -428,6 +437,7 @@ GIVE_NPC_ITEMS = {
     "太上老君": (MIXIN_ICON, "密信"),
     "玉皇大帝": (HUALIDEJINHE_ICON, "华丽的锦盒"),
     "桃小淘": (XUGUGAO_ICON, "续骨膏"),
+    "玉面狐狸": (MIXIN_ICON, "密信"),
 }
 GIVE_DEFAULT_ITEM = (GAODENGSHICAI_ICON, "高等食材")  # NPC 行识别失败时的兜底物品
 # ---- 银两给与（问答斗智钱老四 / 钓鱼大赛主理人：面板无物品检索，
@@ -463,8 +473,9 @@ BUG_IDLE_END = 5.0                     # 连续无虫出现达到该时长视为
 # ---- 音律小游戏（辨八音：与西域乐师阿拉普比试编钟演奏） ----
 # 流程：对话「来吧，我还怕了你不成？」→ 小游戏窗口出现（kezhan_yinlv.png
 # 横幅命中）→ 记住五个编钟位置 → 点「开始演奏」（kezhan_kaishiyanzou.png，
-# 点后倒计时 3s 正式开始）→ 按固定顺序/间隔循环点击编钟 → 窗口横幅消失
-# 即小游戏结束。编钟 1-5 对应宫商角徵羽（模板 OCR：2=商 3=角 4=徵）。
+# 点后倒计时 3s 正式开始）→ 按固定节奏点击编钟（首个 3.4s、间隔 1.45s，
+# 用户实测）→ 窗口横幅消失即小游戏结束。编钟 1-5 对应宫商角徵羽
+# （模板 OCR：2=商 3=角 4=徵）。
 YINLV_WINDOW_ICON = "kezhan_yinlv.png"       # 小游戏窗口横幅（出现=窗口已开，消失=结束）
 YINLV_START_ICON = "kezhan_kaishiyanzou.png"  # 「开始演奏」按钮
 YINLV_BELLS = ("kezhan_bianzhong1_ring.png",   # 五个编钟模板（点开始前记住位置）
@@ -479,9 +490,11 @@ YINLV_CHECK_INTERVAL = 3.0          # extras 链窗口横幅检测限频（秒�
                                     # 性能规则 3——带区待真实截图标定后收紧）
 YINLV_WINDOW_REGION = None          # 窗口横幅搜索条带 (l,t,r,b)；TODO 真实截图标定
 YINLV_LOCATE_TIMEOUT = 15           # 点开始前定位按钮+全部编钟的超时（秒）
-YINLV_COUNTDOWN = 3.0               # 点开始演奏后的倒计时（秒，用户指定）
-# 点击序列（用户提供 2026-11-03）：5 1 4 5 1 1 5 5 1 5 4 3 2 3 5 共 15 次。
-# 节奏：点开始 → 倒计时 3s → 再等 1s → 点 5 → 等 1s → 点 1 → ...
+# 点击节奏（用户实测 2026-11-03）：点开始 → 第一个编钟间隔 3s400ms；
+# 之后每个编钟间隔 1s450ms。调度为时间基准步进（t_next 绝对时刻），
+# 点击自身耗时不计入间隔，落地间隔恒定（见 _play_yinlv 阶段二）
+YINLV_FIRST_INTERVAL = 3.4          # 点开始→第一个编钟的间隔（秒）
+# 点击序列（用户提供 2026-11-03）：5 1 4 5 1 1 5 5 1 5 4 3 2 3 5 共 15 次
 YINLV_CLICK_SEQ = ("kezhan_bianzhong5_ring.png", "kezhan_bianzhong1_ring.png",
                    "kezhan_bianzhong4_ring.png", "kezhan_bianzhong5_ring.png",
                    "kezhan_bianzhong1_ring.png", "kezhan_bianzhong1_ring.png",
@@ -490,8 +503,7 @@ YINLV_CLICK_SEQ = ("kezhan_bianzhong5_ring.png", "kezhan_bianzhong1_ring.png",
                    "kezhan_bianzhong4_ring.png", "kezhan_bianzhong3_ring.png",
                    "kezhan_bianzhong2_ring.png", "kezhan_bianzhong3_ring.png",
                    "kezhan_bianzhong5_ring.png")
-YINLV_CLICK_INTERVAL = 1.0          # 编钟点击间隔（秒，用户指定）
-YINLV_CLICK_ROUNDS = 1              # 序列循环轮数（用户指定：共点击 15 次）
+YINLV_CLICK_INTERVAL = 1.45         # 编钟点击间隔（秒，用户实测 1s450ms）
 YINLV_END_TIMEOUT = 120             # 小游戏总超时（秒）
 YINLV_END_MISSES = 3                # 窗口横幅连续未命中次数即判结束（0.5s×3=1.5s
                                     # 防抖窗口，防单帧误判结束）
@@ -1290,10 +1302,10 @@ def _play_yinlv(win):
 
     1. 同帧定位「开始演奏」按钮与五个编钟（编钟位置在点开始前记住；
        点开始后倒计时期间画面会变化，不能点后再定位）
-    2. 点开始 → 倒计时 YINLV_COUNTDOWN 秒 → 再等 1 个点击间隔 → 按
-       YINLV_CLICK_SEQ 每点一次等 YINLV_CLICK_INTERVAL 秒（用户节奏：
-       倒计时 3s → 等 1s → 点 5 → 等 1s → 点 1 → ...）；多轮时每轮
-       结束确认窗口仍在再继续——横幅没了再点会点到世界里，防误操作
+    2. 点开始 → 按用户实测节奏点击（2026-11-03）：第一个编钟在点开始
+       后 YINLV_FIRST_INTERVAL 秒，其后每个间隔 YINLV_CLICK_INTERVAL 秒。
+       时间基准步进调度（t_next 绝对时刻），点击自身耗时（移动
+       40-90ms+点击）不累积漂移——点击落地间隔恒为 YINLV_CLICK_INTERVAL
     3. 等窗口横幅连续 YINLV_END_MISSES 次未命中即结束
     """
     # 阶段一：定位开始按钮与全部编钟（小游戏窗口内，帧间位置稳定）
@@ -1318,40 +1330,31 @@ def _play_yinlv(win):
     if start_pt is None or bells is None:
         return False, "音律小游戏：定位开始按钮/编钟超时（模板未命中，待校准阈值）"
     log(f"[客栈] 音律小游戏：已定位 5 个编钟，点击开始演奏 "
-        f"@({start_pt[0]},{start_pt[1]})，倒计时 {YINLV_COUNTDOWN}s", "SYS")
+        f"@({start_pt[0]},{start_pt[1]})，首个编钟间隔 {YINLV_FIRST_INTERVAL}s", "SYS")
+    # 时间基准取点开始点击前一刻：点击落地（移动 40-90ms 后）约在
+    # t0+70ms，游戏在此刻注册开始——首个间隔 3.4s 按用户实测值包含
+    # 该落地延迟，从 t0 起算即可
+    t0 = time.time()
     human_click(win, start_pt[0], start_pt[1])
-    # 等倒计时结束（正式开始的直接信号待实测后轮询化，性能规则 7；
-    # 固定延时只作上限），再等 1 个点击间隔才点第一个编钟（用户节奏）
-    time.sleep(YINLV_COUNTDOWN)
-    time.sleep(YINLV_CLICK_INTERVAL)
-    # 阶段二：按固定顺序/间隔循环点击编钟（点击节奏优先，中途不截帧）
+    # 阶段二：按固定节奏点击编钟（点击节奏优先，中途不截帧）。
+    # 序列为单轮 15 次（用户提供），点完交阶段三等结束；窗口在演奏
+    # 期间恒在，不会中途消失，故不在点击间做窗口检查
     deadline = time.time() + YINLV_END_TIMEOUT
     if not YINLV_CLICK_SEQ:
         log("[客栈] 音律点击顺序未配置（YINLV_CLICK_SEQ 为空），跳过点击直接等结束", "WARN")
     else:
+        t_next = t0 + YINLV_FIRST_INTERVAL
         clicked = 0
-        rounds = 0
-        while time.time() < deadline:
-            for icon in YINLV_CLICK_SEQ:
-                pt = bells.get(icon)
-                if pt is not None:
-                    human_click(win, pt[0], pt[1])
-                    clicked += 1
-                time.sleep(YINLV_CLICK_INTERVAL)
-            rounds += 1
-            if YINLV_CLICK_ROUNDS is not None and rounds >= YINLV_CLICK_ROUNDS:
-                break
-            # 窗口消失即停止点击（横幅没了再点会点到世界里）。
-            # 单帧快速检查保点击节奏（帧在时仅 ~40-140ms），疑似消失
-            # 才走 1.5s 防抖确认——防单帧误判打断节奏
-            img = win.capture(force_activate=False)
-            if img is not None:
-                bgr2 = cv2.cvtColor(np.asarray(img)[:, :, :3], cv2.COLOR_RGB2BGR)
-                if game_map.match_frame_np(bgr2, YINLV_WINDOW_ICON,
-                                           threshold=YINLV_THRESHOLD) is None \
-                        and _yinlv_window_gone(win, timeout=3.0):
-                    break
-        log(f"[客栈] 音律小游戏：已点击编钟 {clicked} 次（{rounds} 轮）", "SYS")
+        for icon in YINLV_CLICK_SEQ:
+            delay = t_next - time.time()
+            if delay > 0:
+                time.sleep(delay)
+            pt = bells.get(icon)
+            if pt is not None:
+                human_click(win, pt[0], pt[1])
+                clicked += 1
+            t_next += YINLV_CLICK_INTERVAL
+        log(f"[客栈] 音律小游戏：已点击编钟 {clicked}/{len(YINLV_CLICK_SEQ)} 次", "SYS")
     # 阶段三：等窗口横幅消失（连续 YINLV_END_MISSES 次未命中）
     while time.time() < deadline:
         if _yinlv_window_gone(win, timeout=5.0):
