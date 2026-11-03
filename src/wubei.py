@@ -1475,13 +1475,19 @@ def _reset_huangpaoguai_state():
 
 
 def _click_track_link(win, items, img_np, keyword):
-    """点击任务追踪面板中含关键词的绿字行（文本矩形中心，点文字）。"""
+    """点击任务追踪面板中含关键词的绿字行（下划线/绿字定位，同 track_task）。
+
+    旧实现点 OCR 文本矩形中心：矩形含整行「前往平顶山消灭黄袍怪」，
+    中心落在可点击链接「平顶山」右缘之外（实测同帧对比：矩形中心
+    (99,261) vs green_text_center (76,268)，偏 23px 点到非链接文字，
+    偶现点击无反应）。链接下划线是唯一可点击标记，点下划线中心。
+    """
     for txt, rect, score in items:
         if score < 0.55 or rect[0] >= task_tracker.PANEL_MAX_X:
             continue
         if keyword not in txt or not task_tracker.is_green_text(img_np, rect):
             continue
-        cx, cy = (rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2
+        cx, cy = task_tracker.green_text_center(img_np, rect)
         human_click(win, cx, cy)
         log(f"[五倍] 已点击追踪链接「{txt}」@({cx},{cy})", "SYS")
         move_away(win)
