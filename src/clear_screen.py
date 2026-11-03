@@ -89,20 +89,34 @@ def _game_foreground(win):
         return False
 
 
+def _press_hotkey(win, key):
+    """按 Alt+key：静默操作走消息投递（游戏窗口无需前台），否则物理热键。
+    返回是否已投递。"""
+    if app_utils.silent_mode_on():
+        from . import silent_click  # 延迟导入：避免模块级循环
+        info = silent_click.send_silent_hotkey(win, ("alt",), key)
+        return info is not None
+    Keyboard.key_hot("alt", key)
+    return True
+
+
 def _ensure_hotkey_on(win, key, ok_sig, cancel_sig, label):
     """连按热键直到「开启」成为本次按键的有效结果。返回 (成功, 描述)。
 
     分辨规则（用户确认，见模块 docstring）：每轮与上一轮观察做差值，
     新出现的文案才是本次有效结果；A+B 同屏检查 B（命中=取消再按）。
+    静默操作：按键走消息投递，免前台校验与激活。
     """
     last = _read_popup(win)  # 按键前基线：历史飘字可能仍滞留屏上
     for i in range(MAX_PRESS):
-        if not _game_foreground(win):
-            win.activate()
-            time.sleep(0.3)
+        if not app_utils.silent_mode_on():
             if not _game_foreground(win):
-                return False, f"游戏窗口未在前台，{label}清屏未执行"
-        Keyboard.key_hot("alt", key)
+                win.activate()
+                time.sleep(0.3)
+                if not _game_foreground(win):
+                    return False, f"游戏窗口未在前台，{label}清屏未执行"
+        if not _press_hotkey(win, key):
+            return False, f"{label}清屏按键投递失败"
         found = _read_popup_after_press(win)
         newly = found - last
         last = found
@@ -123,20 +137,19 @@ def _ensure_hotkey_on(win, key, ok_sig, cancel_sig, label):
 def run_clear_screen(win):
     """启动清屏：Alt+6 屏蔽非队伍玩家 + Alt+5 屏蔽摊位。返回 (成功, 描述)。
 
-    执行前激活游戏窗口并校验前台——热键经前台窗口送达，游戏未置前时
-    按键无效甚至触发其他窗口的快捷键，此时直接跳过并告警。
-    静默操作且游戏不在前台：热键不可用且不允许激活，直接跳过。
+    物理路径：执行前激活游戏窗口并校验前台——热键经前台窗口送达，
+    游戏未置前时按键无效甚至触发其他窗口的快捷键，此时直接跳过。
+    静默操作：按键走消息投递（无需前台），飘字 OCR 判定照常。
     """
-    if not app_utils.keyboard_ok(win):
-        return False, "静默操作且游戏不在前台：跳过清屏（Alt+6/Alt+5 需前台）"
-    try:
-        win.activate()
-        time.sleep(0.5)
-        import win32gui
-        if win32gui.GetForegroundWindow() != win.hwnd:
-            return False, "游戏窗口未在前台（激活失败），跳过清屏"
-    except Exception as e:
-        log(f"[清屏] 前台检查异常: {e}", "WARN")
+    if not app_utils.silent_mode_on():
+        try:
+            win.activate()
+            time.sleep(0.5)
+            import win32gui
+            if win32gui.GetForegroundWindow() != win.hwnd:
+                return False, "游戏窗口未在前台（激活失败），跳过清屏"
+        except Exception as e:
+            log(f"[清屏] 前台检查异常: {e}", "WARN")
     ok6, info6 = _ensure_hotkey_on(win, "6", "player_ok", "player_cancel",
                                    "屏蔽玩家")
     ok5, info5 = _ensure_hotkey_on(win, "5", "stall_ok", "stall_cancel",

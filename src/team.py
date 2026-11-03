@@ -37,12 +37,10 @@ import time
 import cv2
 import numpy as np
 from PIL import Image
-from ascript.windows.hardware.keyboard import Keyboard
 from ascript.windows.system import R
 from ascript.windows.screen.find_images import FindImages
 
 from .app_utils import log, human_click, human_move, norm_text
-from . import app_utils  # 静默操作门控（silent_mode_on）
 from . import map as game_map  # 找图与 OCR 能力复用
 from . import debug_overlay  # 调试信息悬浮层（队伍信息行更新）
 from . import task_tracker  # 对话框区域 OCR（允许失败提示检测）
@@ -137,8 +135,7 @@ def _close_apply_panel(win):
     """
     pt = game_map.find_template(win, ZUDUI_CLOSE_ICON, _TEMPLATE_THRESHOLD)
     if pt is None:
-        _try_close_menu()
-        return False, "申请加入面板未找到关闭按钮（zudui_close），已退回 ESC"
+        return False, "申请加入面板未找到关闭按钮（zudui_close）"
     human_move(win.rect.left + pt[0], win.rect.top + pt[1])
     time.sleep(0.15)  # 悬停让按钮进入可点击状态（与队伍面板关闭同款交互）
     human_click(win, pt[0], pt[1])
@@ -458,20 +455,6 @@ def _wait_panel(win):
     return False
 
 
-def _try_close_menu():
-    """尽力关闭组队菜单（ESC；对面板无效，仅菜单场景兜底用）。
-
-    静默操作：ESC 是键盘事件只进前台窗口，直接跳过（本就是兜底尽力而为）。
-    """
-    if app_utils.silent_mode_on():
-        return
-    try:
-        Keyboard.key("esc")
-        time.sleep(0.3)
-    except Exception as e:
-        log(f"[组队] ESC 关闭菜单失败: {e}", "WARN")
-
-
 def _parse_level(txt):
     """解析转生等级文案，返回 (转生段, 等级数字) 或 None。
 
@@ -670,22 +653,20 @@ def _close_menu(win):
     """关闭组队菜单：菜单打开时再点一次组队按钮（开关式）即关闭。
 
     用户实测：菜单打开状态下点击 zudui_item 会让子菜单消失。
-    关闭后校验菜单消失，失败时退回 ESC。返回 (是否关闭, 描述)。
+    关闭后校验菜单消失。返回 (是否关闭, 描述)。
     """
     img = win.capture(force_activate=False)
     if img is None or not _is_menu_open(img):
         return True, "组队菜单本就未打开"
     pt = game_map.find_template_in(img, ZUDUI_ITEM_ICON, _TEMPLATE_THRESHOLD)
     if pt is None:
-        _try_close_menu()
-        return False, "未定位到组队按钮，已退回 ESC"
+        return False, "未定位到组队按钮"
     human_click(win, pt[0], pt[1])
     for _ in range(_MENU_WAIT_TRIES):
         time.sleep(_MENU_WAIT_INTERVAL)
         img2 = win.capture(force_activate=False)
         if img2 is None or not _is_menu_open(img2):
             return True, "组队菜单已关闭"
-    _try_close_menu()
     return False, "组队菜单关闭失败"
 
 

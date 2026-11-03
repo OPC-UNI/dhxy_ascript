@@ -16,7 +16,9 @@ import pytest
 
 from src import silent_click
 from src.silent_click import (MK_LBUTTON, MK_RBUTTON, WM_LBUTTONDOWN, WM_LBUTTONUP,
-                              WM_MOUSEMOVE, WM_RBUTTONDOWN, WM_RBUTTONUP)
+                              WM_MOUSEMOVE, WM_RBUTTONDOWN, WM_RBUTTONUP,
+                              WM_CHAR, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN,
+                              WM_SYSKEYUP)
 
 _RECT_PTR = ctypes.POINTER(wintypes.RECT)
 
@@ -205,3 +207,168 @@ def test_send_silent_click_custom_point_no_rect_fallback(monkeypatch):
     info = silent_click.send_silent_click(_FakeWinNoRect(0x123), x=100, y=200)
     assert info["point"] == (100, 200)
     assert info["screen_point"] == (200, 250)
+
+
+# ---- 静默按键投递序列（键盘消息通道可行性验证） ----
+
+def test_send_silent_hotkey_alt_c_sequence(monkeypatch):
+    fake = _FakeUser32(client=(1366, 768))
+    monkeypatch.setattr(silent_click, "user32", fake)
+    monkeypatch.setattr(silent_click.game, "list_tab_windows", lambda w: [])
+    info = silent_click.send_silent_hotkey(_FakeWin(0x123), ("alt",), "c")
+    assert info["modifiers"] == ["alt"] and info["key"] == "c"
+    # Alt 组合全走 WM_SYSKEY*：Alt 按下 → C 按下 → C 抬起 → Alt 抬起
+    assert [m[1] for m in fake.msgs] == [WM_SYSKEYDOWN, WM_SYSKEYDOWN,
+                                         WM_SYSKEYUP, WM_SYSKEYUP]
+    assert [m[2] for m in fake.msgs] == [0x12, 0x43, 0x43, 0x12]
+    assert fake.msgs[1][3] & (1 << 29)      # C 键消息带 Alt 上下文位
+    assert fake.msgs[2][3] & (1 << 31)      # C 键抬起带转换位
+    assert fake.msgs[3][3] & (1 << 31)      # Alt 抬起带转换位
+    assert all(m[0] == 0x123 for m in fake.msgs)
+
+
+def test_send_silent_hotkey_ctrl_tab_sequence(monkeypatch):
+    fake = _FakeUser32(client=(1366, 768))
+    monkeypatch.setattr(silent_click, "user32", fake)
+    monkeypatch.setattr(silent_click.game, "list_tab_windows", lambda w: [])
+    info = silent_click.send_silent_hotkey(_FakeWin(0x123), ("ctrl",), "tab")
+    assert info["modifiers"] == ["ctrl"] and info["key"] == "tab"
+    # Ctrl 组合走 WM_KEY*，主键消息无 Alt 上下文位
+    assert [m[1] for m in fake.msgs] == [WM_KEYDOWN, WM_KEYDOWN, WM_KEYUP, WM_KEYUP]
+    assert [m[2] for m in fake.msgs] == [0x11, 0x09, 0x09, 0x11]
+    assert not fake.msgs[1][3] & (1 << 29)
+    assert fake.msgs[2][3] & (1 << 31)  # 抬起转换位
+
+
+def test_send_silent_hotkey_invalid(monkeypatch):
+    monkeypatch.setattr(silent_click.game, "list_tab_windows", lambda w: [])
+    with pytest.raises(ValueError):
+        silent_click.send_silent_hotkey(_FakeWin(0x123), ("shift",), "c")
+    with pytest.raises(ValueError):
+        silent_click.send_silent_hotkey(_FakeWin(0x123), ("alt",), "alt")
+
+
+def test_send_and_report_key(monkeypatch):
+    fake = _FakeUser32(client=(1366, 768))
+    monkeypatch.setattr(silent_click, "user32", fake)
+    monkeypatch.setattr(silent_click.game, "list_tab_windows", lambda w: [])
+    logs = []
+    ok, info = silent_click.send_and_report_key(_FakeWin(0x123), logs.append)
+    assert ok
+    assert "Alt+C" in info
+    assert [m[1] for m in fake.msgs] == [WM_SYSKEYDOWN, WM_SYSKEYDOWN,
+                                         WM_SYSKEYUP, WM_SYSKEYUP]
+    assert any("已投递" in l and "Alt+C" in l for l in logs)
+    assert any("请自行观察游戏效果" in l for l in logs)
+
+
+def test_send_silent_hotkey_enter_plain(monkeypatch):
+    fake = _FakeUser32(client=(1366, 768))
+    monkeypatch.setattr(silent_click, "user32", fake)
+    monkeypatch.setattr(silent_click.game, "list_tab_windows", lambda w: [])
+    info = silent_click.send_silent_hotkey(_FakeWin(0x123), (), "enter")
+    assert info["modifiers"] == [] and info["key"] == "enter"
+    assert [m[1] for m in fake.msgs] == [WM_KEYDOWN, WM_KEYUP]
+    assert [m[2] for m in fake.msgs] == [0x0D, 0x0D]
+    assert not fake.msgs[0][3] & (1 << 29)  # 无 Alt 上下文位
+    assert fake.msgs[1][3] & (1 << 31)      # 抬起转换位
+
+
+def test_send_silent_hotkey_main_window_target(monkeypatch):
+    fake = _FakeUser32(client=(1366, 768))
+    monkeypatch.setattr(silent_click, "user32", fake)
+    # 存在可见子窗口（click_target 会选 0x222），但 main_window=True 投主窗口
+    monkeypatch.setattr(silent_click.game, "list_tab_windows",
+                        lambda w: [{"hwnd": 0x222, "visible": True}])
+    info = silent_click.send_silent_hotkey(_FakeWin(0x123), ("ctrl",), "tab",
+                                           main_window=True)
+    assert info["main_window"] is True
+    assert all(m[0] == 0x123 for m in fake.msgs)
+
+
+def test_send_silent_hotkey_with_char(monkeypatch):
+    fake = _FakeUser32(client=(1366, 768))
+    monkeypatch.setattr(silent_click, "user32", fake)
+    monkeypatch.setattr(silent_click.game, "list_tab_windows", lambda w: [])
+    info = silent_click.send_silent_hotkey(_FakeWin(0x123), (), "enter",
+                                           char=0x0D)
+    assert [m[1] for m in fake.msgs] == [WM_KEYDOWN, WM_CHAR, WM_KEYUP]
+    assert [m[2] for m in fake.msgs] == [0x0D, 0x0D, 0x0D]
+    assert fake.msgs[2][3] & (1 << 31)  # 抬起转换位
+
+
+# ---- 静默粘贴（剪贴板打桩，不污染真实剪贴板） ----
+
+def test_send_silent_paste_sequence(monkeypatch):
+    fake = _FakeUser32(client=(1366, 768))
+    monkeypatch.setattr(silent_click, "user32", fake)
+    monkeypatch.setattr(silent_click.game, "list_tab_windows", lambda w: [])
+    clip = []
+    monkeypatch.setattr(silent_click, "set_clipboard_text", clip.append)
+    info = silent_click.send_silent_paste(_FakeWin(0x123), "测试粘贴")
+    assert clip == ["测试粘贴"]
+    assert [(m[1], m[2], m[3]) for m in fake.msgs] == [(0x0302, 0, 0)]  # WM_PASTE
+
+
+def test_send_and_report_paste(monkeypatch):
+    fake = _FakeUser32(client=(1366, 768))
+    monkeypatch.setattr(silent_click, "user32", fake)
+    monkeypatch.setattr(silent_click.game, "list_tab_windows", lambda w: [])
+    monkeypatch.setattr(silent_click, "set_clipboard_text", lambda t: None)
+    logs = []
+    ok, info = silent_click.send_and_report_paste(_FakeWin(0x123), logs.append)
+    assert ok
+    assert "测试粘贴" in info
+    assert [m[1] for m in fake.msgs] == [0x0302]
+    assert any("WM_PASTE" in l for l in logs)
+
+
+def test_send_silent_unichar_sequence(monkeypatch):
+    fake = _FakeUser32(client=(1366, 768))
+    monkeypatch.setattr(silent_click, "user32", fake)
+    monkeypatch.setattr(silent_click.game, "list_tab_windows", lambda w: [])
+    # 返回值非零=该字符已消费（记录进 msg_results）
+    def _send(hwnd, msg, wparam, lparam):
+        fake.msgs.append((hwnd, msg, wparam, lparam))
+        return 1
+    monkeypatch.setattr(fake, "SendMessageW", _send)
+    info = silent_click.send_silent_unichar(_FakeWin(0x123), "测")
+    assert info["text"] == "测"
+    assert [(m[1], m[2], m[3]) for m in fake.msgs] == [(0x0109, ord("测"), 0)]
+    assert info["msg_results"] == (1,)
+
+
+def test_dump_child_windows_no_hwnd():
+    from src import game as game_mod
+    assert game_mod.dump_child_windows(type("W", (), {"hwnd": 0})()) == ["窗口句柄无效"]
+
+
+def test_send_silent_char_sequence(monkeypatch):
+    fake = _FakeUser32(client=(1366, 768))
+    monkeypatch.setattr(silent_click, "user32", fake)
+    monkeypatch.setattr(silent_click.game, "list_tab_windows", lambda w: [])
+    info = silent_click.send_silent_char(_FakeWin(0x123), "测")
+    assert info["text"] == "测"
+    assert [(m[1], m[2]) for m in fake.msgs] == [(WM_CHAR, ord("测"))]
+    assert info["msg_results"] == (0,)
+
+
+def test_send_silent_text_with_enter(monkeypatch):
+    fake = _FakeUser32(client=(1366, 768))
+    monkeypatch.setattr(silent_click, "user32", fake)
+    monkeypatch.setattr(silent_click.game, "list_tab_windows", lambda w: [])
+    info = silent_click.send_silent_text(_FakeWin(0x123), "测试", end_enter=True)
+    assert info["text"] == "测试" and info["end_enter"] is True
+    # 逐字符 WM_CHAR + 回车 WM_CHAR(0x0D)
+    assert [(m[1], m[2]) for m in fake.msgs] == [
+        (WM_CHAR, ord("测")), (WM_CHAR, ord("试")), (WM_CHAR, 0x0D)]
+    assert info["msg_results"] == (0, 0, 0)
+
+
+def test_send_silent_text_no_enter(monkeypatch):
+    fake = _FakeUser32(client=(1366, 768))
+    monkeypatch.setattr(silent_click, "user32", fake)
+    monkeypatch.setattr(silent_click.game, "list_tab_windows", lambda w: [])
+    info = silent_click.send_silent_text(_FakeWin(0x123), "1000")
+    assert [(m[1], m[2]) for m in fake.msgs] == [
+        (WM_CHAR, ord("1")), (WM_CHAR, ord("0")), (WM_CHAR, ord("0")), (WM_CHAR, ord("0"))]

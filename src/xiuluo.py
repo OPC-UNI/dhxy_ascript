@@ -164,7 +164,7 @@ WUYI_BLOCK_TIMEOUT = 3                       # 领取完成后等待该对话框
                                               # 取消；未出现直接去巫医（对话框可能走近巫医时
                                               # 才弹出，由 _find_wuyi_npc 到达窗口兜底）
 CLAIM_VERIFY_WAIT = 5                         # 领取后任务进入追踪的正常轮询时长（秒）：
-                                              # 超时未检索到 → 按一次 Alt+C 飞行后仅再检索一次，
+                                              # 超时未检索到 → 小地图重走领取点后仅再检索一次，
                                               # 仍无即判定失败（用户确认：多次重试无效）
 
 # ---- 领取前队伍检查 ----
@@ -973,7 +973,7 @@ def _claim_task(win, allow_fill=False):
 
     返回 (是否成功, 描述, 校验帧)：校验帧为任务进追踪的确认帧
     （items, img_np），供 follow_task 首轮复用免重复截图+OCR
-    （省 ~1.2s，点击任务追踪绿字立即进行）；Alt+C 兜底路径无帧返回 None。
+    （省 ~1.2s，点击任务追踪绿字立即进行）；小地图重走兜底路径无帧返回 None。
 
     领取时序优化（实测 09:05 一轮：入口点击→选项点击 4s、选项点击→
     已领取判定 4s、判定→追踪点击 2s）：
@@ -1152,20 +1152,9 @@ def _claim_task(win, allow_fill=False):
     if found_frame is not None:
         tail = f"（{CLAIM_COUNT_TEXT}：{count}）" if count is not None else ""
         return True, f"修罗任务已领取{tail}", found_frame
-    # 未检索到：按 Alt+C 飞行后再次检索（仅一次，多次重试无效）；
-    # 静默操作且游戏不在前台：跳过 Alt+C（键盘事件只进前台窗口）
-    if app_utils.keyboard_ok(win):
-        Keyboard.key_hot("alt", "c")
-        log("[修罗] 任务追踪未检索到任务，按 Alt+C 飞行后再次检索", "WARN")
-        time.sleep(1.0)
-    else:
-        log("[修罗] 任务追踪未检索到任务，静默操作且游戏不在前台：跳过 Alt+C", "WARN")
-    if task_tracker.has_task(win, TASK_TITLE, TASK_FALLBACK_TEXTS):
-        log("[修罗] Alt+C 飞行后任务已出现在追踪面板", "SYS")
-        tail = f"（{CLAIM_COUNT_TEXT}：{count}）" if count is not None else ""
-        return True, f"修罗任务已领取{tail}", None
-    # Alt+C 后仍无：小地图重走领取点坐标后再次检索（用户 2026-10-09
-    # 确认：重走可能触发任务渲染，不直接判失败）
+    # 未检索到：小地图重走领取点坐标后再次检索（用户 2026-10-09
+    # 确认：重走可能触发任务渲染，不直接判失败）。原 Alt+C 飞行重查
+    # 已移除——多余逻辑
     ok2, info2 = _relocate_to_claim_spot(win)
     if not ok2:
         log(f"[修罗] {info2}", "WARN")
@@ -1181,7 +1170,7 @@ def _claim_task(win, allow_fill=False):
             f"{' / '.join(titles) if titles else '(无标题行)'}", "WARN")
     except Exception:
         pass
-    return False, "已点击领取选项，但任务追踪中未检测到任务（Alt+C 飞行后仍无）", None
+    return False, "已点击领取选项，但任务追踪中未检测到任务（重走领取点后仍无）", None
 
 
 def _check_team_ready(win):
@@ -1697,11 +1686,17 @@ def _shout_recruit(win):
     日志有喊话但游戏无消息，代码 diff 无区别，差异在游戏侧状态）。
     """
     global _shout_last_at
-    # 静默操作且游戏不在前台：键盘事件只进前台窗口且不允许激活，
-    # 跳过本次喊话（时间戳照记，保持喊话间隔节奏防快速重试刷屏）
-    if not app_utils.keyboard_ok(win):
-        log("[修罗] 静默操作且游戏不在前台：跳过缺人喊话", "WARN")
+    # 静默操作：文本经 WM_CHAR 逐字符注入 + 回车 WM_CHAR 发送
+    # （游戏自定义输入系统已实证消费 WM_CHAR，无需前台无需键盘，
+    # 2026-11-03 用户实测有效）；投递失败不记时间戳，下轮重试
+    if app_utils.silent_mode_on():
+        from . import silent_click  # 延迟导入：避免模块级循环
+        info = silent_click.send_silent_text(win, _shout_text, end_enter=True)
+        if info is None:
+            log("[修罗] 静默喊话投递失败（窗口不存在）", "WARN")
+            return
         _shout_last_at = time.time()
+        log(f"[修罗] 已静默喊话: {_shout_text}", "SYS")
         return
     # 先激活游戏窗口：键盘事件只进前台窗口（与五倍同款修复——
     # 偶现喊话静默丢失的头号嫌疑，喊话测试按钮因带激活从不失败）

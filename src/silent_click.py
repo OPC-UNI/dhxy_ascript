@@ -24,6 +24,7 @@ from . import app_utils  # 全局输入锁：与物理鼠标点击互斥
 from . import game  # 多标签客户端：点击目标优先可见的 Tab 子窗口
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
+kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
 WM_MOUSEMOVE = 0x0200
 WM_LBUTTONDOWN = 0x0201
@@ -39,6 +40,33 @@ _BUTTON_MESSAGES = {
     "secondary": (WM_RBUTTONDOWN, WM_RBUTTONUP, MK_RBUTTON),
 }
 _BUTTON_NAMES = {"primary": "左键", "secondary": "右键"}
+
+# ---- 键盘消息投递（静默按键可行性验证：与点击同思路，游戏是否
+# 消费键盘消息待实测——若游戏以 GetKeyState/原始输入读键则无效） ----
+WM_KEYDOWN = 0x0100
+WM_KEYUP = 0x0101
+WM_CHAR = 0x0102
+WM_SYSKEYDOWN = 0x0104
+WM_SYSKEYUP = 0x0105
+WM_PASTE = 0x0302
+WM_UNICHAR = 0x0109
+
+CF_UNICODETEXT = 13
+_GMEM_MOVEABLE = 0x0042
+
+# 键表：名 → (虚拟键码, 扫描码)。扫描码为美式键盘标准布局，按需扩展。
+_KEY_CODES = {
+    "alt": (0x12, 0x38),
+    "ctrl": (0x11, 0x1D),
+    "tab": (0x09, 0x0F),
+    "enter": (0x0D, 0x1C),
+    "esc": (0x1B, 0x01),
+    "e": (0x45, 0x12),
+    "c": (0x43, 0x2E),
+    "v": (0x56, 0x2F),
+    "5": (0x35, 0x06),
+    "6": (0x36, 0x07),
+}
 
 # 帧差异判定：任一通道差 >32 判该像素变化
 _CHANGED_PX = 32
@@ -61,6 +89,21 @@ def _setup_prototypes():
     user32.GetForegroundWindow.restype = wintypes.HWND
     user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPCWSTR, ctypes.c_int]
     user32.GetClassNameW.restype = ctypes.c_int
+    # 剪贴板（静默粘贴用）
+    user32.OpenClipboard.argtypes = [wintypes.HWND]
+    user32.OpenClipboard.restype = wintypes.BOOL
+    user32.EmptyClipboard.argtypes = []
+    user32.EmptyClipboard.restype = wintypes.BOOL
+    user32.SetClipboardData.argtypes = [wintypes.UINT, wintypes.HANDLE]
+    user32.SetClipboardData.restype = wintypes.HANDLE
+    user32.CloseClipboard.argtypes = []
+    user32.CloseClipboard.restype = wintypes.BOOL
+    kernel32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
+    kernel32.GlobalAlloc.restype = wintypes.HGLOBAL
+    kernel32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+    kernel32.GlobalLock.restype = ctypes.c_void_p
+    kernel32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+    kernel32.GlobalUnlock.restype = wintypes.BOOL
 
 
 _setup_prototypes()
@@ -169,18 +212,18 @@ def _diff_ratio(a, b):
     return changed, float(d.mean())
 
 
-def _begin(win, log_fn, button):
-    """解析点击目标并写开头日志（主窗口/点击目标/当前前台）；
+def _begin(win, log_fn, label):
+    """解析点击/按键目标并写开头日志（主窗口/目标/当前前台）；
     返回 (main_hwnd, target)，失败返回 (None, None)。"""
     main_hwnd = int(getattr(win, "hwnd", 0) or 0)
     target = click_target(win)
     if not target:
         return None, None
     fg = user32.GetForegroundWindow()
-    log_fn(f"==== 静默点击验证开始（{_BUTTON_NAMES[button]}） ====")
+    log_fn(f"==== 静默操作验证开始（{label}） ====")
     log_fn(f"游戏主窗口: hwnd={main_hwnd:#x} 类名={win_class(main_hwnd)} | "
            f"当前前台: {'游戏窗口' if fg in (main_hwnd, target) else '非游戏窗口（符合验证条件）'}")
-    log_fn(f"点击目标: hwnd={target:#x} 类名={win_class(target)} "
+    log_fn(f"投递目标: hwnd={target:#x} 类名={win_class(target)} "
            f"{'(Tab 子窗口)' if target != main_hwnd else '(主窗口)'}")
     return main_hwnd, target
 
@@ -215,7 +258,7 @@ def send_and_report(win, log_fn, button="primary", x=None, y=None):
         x = int(x)
     if y is not None:
         y = int(y)
-    main_hwnd, target = _begin(win, log_fn, button)
+    main_hwnd, target = _begin(win, log_fn, _BUTTON_NAMES[button])
     if not target:
         return False, "未找到可投递的游戏窗口"
     info_click = send_silent_click(win, x=x, y=y, button=button)
@@ -230,6 +273,236 @@ def send_and_report(win, log_fn, button="primary", x=None, y=None):
     return True, f"已投递{_BUTTON_NAMES[button]}点击（画面中心），请自行观察效果"
 
 
+def _key_lparam(scan, down, alt=False):
+    """键盘消息 lParam：位 16-23 扫描码、位 29 上下文（Alt 按下）、
+    位 30 前态、位 31 抬起转换位、低 16 位重复计数 1。"""
+    lp = ((scan & 0xFF) << 16) | 1
+    if alt:
+        lp |= 1 << 29
+    if not down:
+        lp |= (1 << 30) | (1 << 31)
+    return lp
+
+
+def send_silent_hotkey(win, modifiers, key, main_window=False, char=None):
+    """向游戏窗口投递一次修饰键组合按键（如 Alt+C / Ctrl+Tab），
+    不移动鼠标、不激活窗口。
+
+    modifiers 仅支持 "alt"/"ctrl"（alt 组合走 WM_SYSKEY*，ctrl 组合
+    走 WM_KEY*）；key 见 _KEY_CODES。序列：修饰键按下 → 主键按下 →
+    （char 不为 None 时 WM_CHAR）→ 主键抬起 → 修饰键抬起（反向）。
+    main_window=True 时投给主框架窗口而非 Tab 子窗口（客户端外壳
+    功能如 Ctrl+Tab 切 Tab 可能在主窗口处理）。返回投递描述 dict；
+    窗口获取失败返回 None。可行性待实测：游戏若以 GetKeyState/
+    原始输入读键，消息投递无效（与旧客户端鼠标消息同类的风险）。
+    """
+    mods = tuple(modifiers or ())
+    if any(m not in ("alt", "ctrl") for m in mods):
+        raise ValueError(f"不支持的修饰键: {modifiers!r}（仅 alt/ctrl）")
+    if key not in _KEY_CODES or key in ("alt", "ctrl"):
+        raise ValueError(f"不支持的主键: {key!r}")
+    target = (int(getattr(win, "hwnd", 0) or 0) if main_window
+              else click_target(win))
+    if not target:
+        return None
+    seq = []  # (消息, wParam, lParam)
+    for m in mods:
+        vk, sc = _KEY_CODES[m]
+        seq.append((WM_SYSKEYDOWN if m == "alt" else WM_KEYDOWN,
+                    vk, _key_lparam(sc, True)))
+    vk, sc = _KEY_CODES[key]
+    alt_combo = "alt" in mods
+    seq.append((WM_SYSKEYDOWN if alt_combo else WM_KEYDOWN,
+                vk, _key_lparam(sc, True, alt=alt_combo)))
+    if char is not None:
+        seq.append((WM_CHAR, int(char), _key_lparam(sc, True, alt=alt_combo)))
+    seq.append((WM_SYSKEYUP if alt_combo else WM_KEYUP,
+                vk, _key_lparam(sc, False, alt=alt_combo)))
+    for m in reversed(mods):
+        vk, sc = _KEY_CODES[m]
+        seq.append((WM_SYSKEYUP if m == "alt" else WM_KEYUP,
+                    vk, _key_lparam(sc, False)))
+    results = []
+    with app_utils._INPUT_LOCK:
+        for msg, wparam, lparam in seq:
+            results.append(user32.SendMessageW(target, msg, wparam, lparam))
+            time.sleep(0.05)
+    return {"hwnd": target, "class": win_class(target),
+            "modifiers": list(mods), "key": key,
+            "main_window": bool(main_window),
+            "seq": [(hex(m), hex(w)) for m, w, _ in seq],
+            "msg_results": tuple(results)}
+
+
+def _hotkey_label(modifiers, key):
+    """组合键显示文案（如「Alt+C」）。"""
+    return "+".join([m.capitalize() for m in modifiers] + [key.upper()])
+
+
+def send_and_report_key(win, log_fn, modifiers=("alt",), key="c",
+                        main_window=False, char=None):
+    """只投递一次静默按键并写日志（不做判定，结果用户自行观察——
+    Alt+C 生效信号：人物降落/位置显示刷新）。返回 (ok, info)。"""
+    label = f"按键 {_hotkey_label(modifiers, key)}"
+    if main_window:
+        label += "→主窗口"
+    if char is not None:
+        label += "+WM_CHAR"
+    main_hwnd, target = _begin(win, log_fn, label)
+    if not target:
+        return False, "未找到可投递的游戏窗口"
+    info_key = send_silent_hotkey(win, modifiers, key,
+                                  main_window=main_window, char=char)
+    if info_key is None:
+        return False, "消息按键投递失败（获取目标窗口失败）"
+    log_fn(f"已投递: {label} 消息序列 "
+           f"{' → '.join(f'{m}({w})' for m, w in info_key['seq'])} | "
+           f"消息返回 {info_key['msg_results']}")
+    _log_fg_after(log_fn, main_hwnd, target)
+    log_fn("==== 结束：已投递，请自行观察游戏效果 ====")
+    return True, f"已投递{label}，请自行观察效果"
+
+
+def set_clipboard_text(text):
+    """把文本写入系统剪贴板（CF_UNICODETEXT，ctypes 直调；
+    失败抛异常由调用方兜底）。"""
+    if not user32.OpenClipboard(None):
+        raise OSError("OpenClipboard 失败")
+    try:
+        user32.EmptyClipboard()
+        data = str(text).encode("utf-16-le") + b"\x00\x00"
+        h = kernel32.GlobalAlloc(_GMEM_MOVEABLE, len(data))
+        if not h:
+            raise OSError("GlobalAlloc 失败")
+        ptr = kernel32.GlobalLock(h)
+        if not ptr:
+            kernel32.GlobalUnlock(h)
+            raise OSError("GlobalLock 失败")
+        ctypes.memmove(ptr, data, len(data))
+        kernel32.GlobalUnlock(h)
+        if not user32.SetClipboardData(CF_UNICODETEXT, h):
+            raise OSError("SetClipboardData 失败")
+    finally:
+        user32.CloseClipboard()
+
+
+def send_silent_paste(win, text):
+    """静默粘贴：剪贴板写入 text → 向游戏窗口投递 WM_PASTE（标准
+    EDIT 控件直接消费，比 Ctrl+V 键序更可行——游戏不消费
+    WM_KEYDOWN/UP）。前提：游戏内输入框已打开且处于输入状态。
+    返回投递描述 dict；失败返回 None。"""
+    target = click_target(win)
+    if not target:
+        return None
+    set_clipboard_text(text)
+    with app_utils._INPUT_LOCK:
+        r = user32.SendMessageW(target, WM_PASTE, 0, 0)
+    return {"hwnd": target, "class": win_class(target),
+            "text": str(text), "msg_results": (r,)}
+
+
+def send_and_report_paste(win, log_fn, text="测试粘贴"):
+    """只投递一次静默粘贴并写日志（不做判定，结果用户自行观察——
+    游戏输入框出现「测试粘贴」即生效；前提：先手动点开游戏聊天
+    输入框）。返回 (ok, info)。"""
+    main_hwnd, target = _begin(win, log_fn, f"粘贴「{text}」")
+    if not target:
+        return False, "未找到可投递的游戏窗口"
+    info_paste = send_silent_paste(win, text)
+    if info_paste is None:
+        return False, "消息粘贴投递失败（获取目标窗口失败）"
+    log_fn(f"已投递: WM_PASTE（剪贴板已写入「{text}」）| "
+           f"消息返回 {info_paste['msg_results']}")
+    _log_fg_after(log_fn, main_hwnd, target)
+    log_fn("==== 结束：已投递，请自行观察游戏输入框 ====")
+    return True, f"已投递 WM_PASTE「{text}」，请自行观察输入框"
+
+
+def send_silent_unichar(win, text):
+    """向游戏窗口投递 WM_UNICHAR 字符序列（Unicode 字符注入）。
+
+    标准 EDIT 控件逐字符插入并返回非零表示已消费；游戏自定义输入
+    控件不保证。返回投递描述 dict（msg_results 为逐字符返回值，
+    0 = 该字符未被消费）；窗口获取失败返回 None。
+    """
+    target = click_target(win)
+    if not target:
+        return None
+    results = []
+    with app_utils._INPUT_LOCK:
+        for ch in str(text):
+            results.append(int(user32.SendMessageW(target, WM_UNICHAR, ord(ch), 0)))
+            time.sleep(0.05)
+    return {"hwnd": target, "class": win_class(target),
+            "text": str(text), "msg_results": tuple(results)}
+
+
+def send_and_report_unichar(win, log_fn, text="测"):
+    """只投递一次 WM_UNICHAR 字符序列并写日志（结果用户自行观察——
+    游戏聊天输入框出现「测」即生效；前提：先手动点开聊天输入框）。
+    返回 (ok, info)。"""
+    label = f"WM_UNICHAR「{text}」"
+    main_hwnd, target = _begin(win, log_fn, label)
+    if not target:
+        return False, "未找到可投递的游戏窗口"
+    info_key = send_silent_unichar(win, text)
+    if info_key is None:
+        return False, "消息字符投递失败（获取目标窗口失败）"
+    log_fn(f"已投递: {label} 逐字符消息返回 {info_key['msg_results']}"
+           f"（非零=该字符已消费）")
+    _log_fg_after(log_fn, main_hwnd, target)
+    log_fn("==== 结束：已投递，请自行观察游戏输入框 ====")
+    return True, f"已投递{label}，请自行观察输入框"
+
+
+def send_silent_text(win, text, end_enter=False):
+    """向游戏窗口投递文本字符序列（WM_CHAR 逐字符，wParam 为 UTF-16
+    码元）。游戏自定义输入系统已实证消费 WM_CHAR（中文/数字/标点均
+    直投，2026-11-03 用户实测「测」生效）。
+
+    end_enter=True 时末尾追加 WM_CHAR(0x0D) 回车（发送/确认），
+    追加前等待 0.3s 与物理路径输入落地时序一致。返回投递描述
+    dict；窗口获取失败返回 None。
+    """
+    target = click_target(win)
+    if not target:
+        return None
+    results = []
+    with app_utils._INPUT_LOCK:
+        for ch in str(text):
+            results.append(int(user32.SendMessageW(target, WM_CHAR, ord(ch), 1)))
+            time.sleep(0.05)
+        if end_enter:
+            time.sleep(0.3)  # 输入落地后回车（与物理路径同序）
+            results.append(int(user32.SendMessageW(target, WM_CHAR, 0x0D, 1)))
+    return {"hwnd": target, "class": win_class(target),
+            "text": str(text), "end_enter": bool(end_enter),
+            "msg_results": tuple(results)}
+
+
+def send_silent_char(win, text):
+    """向游戏窗口投递 WM_CHAR 字符序列（send_silent_text 别名，
+    诊断按钮用；不追加回车）。"""
+    return send_silent_text(win, text)
+
+
+def send_and_report_char(win, log_fn, text="测"):
+    """只投递一次 WM_CHAR 字符序列并写日志（结果用户自行观察——
+    游戏聊天输入框出现「测」即生效；前提：先手动点开聊天输入框）。
+    返回 (ok, info)。"""
+    label = f"WM_CHAR「{text}」"
+    main_hwnd, target = _begin(win, log_fn, label)
+    if not target:
+        return False, "未找到可投递的游戏窗口"
+    info_key = send_silent_char(win, text)
+    if info_key is None:
+        return False, "消息字符投递失败（获取目标窗口失败）"
+    log_fn(f"已投递: {label} 逐字符消息返回 {info_key['msg_results']}")
+    _log_fg_after(log_fn, main_hwnd, target)
+    log_fn("==== 结束：已投递，请自行观察游戏输入框 ====")
+    return True, f"已投递{label}，请自行观察输入框"
+
+
 def run_diag(win, log_fn, button="primary"):
     """静默点击可行性验证：截点击前帧 → 投递一次静默点击 → 截点击后帧对比。
 
@@ -241,7 +514,7 @@ def run_diag(win, log_fn, button="primary"):
     """
     if button not in _BUTTON_MESSAGES:
         return False, f"不支持的按键类型: {button!r}（primary/secondary）"
-    main_hwnd, target = _begin(win, log_fn, button)
+    main_hwnd, target = _begin(win, log_fn, _BUTTON_NAMES[button])
     if not target:
         return False, "未找到可投递的游戏窗口"
 

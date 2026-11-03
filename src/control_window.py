@@ -706,6 +706,22 @@ class _ApiBridge:
             return None
 
 
+# 静默按键诊断按钮白名单：hotkey 标识 → (修饰键, 主键, 展示文案,
+# 投主框架窗口, WM_CHAR 字符码)。后两项为变体按钮：Ctrl+Tab 切 Tab
+# 是客户端外壳功能改投主框架窗口；Enter 追加 WM_CHAR（部分应用只
+# 消费 WM_CHAR 不消费 WM_KEYDOWN）。
+_SILENT_KEY_HOTKEYS = {
+    "altc": (("alt",), "c", "Alt+C", False, None),
+    "alte": (("alt",), "e", "Alt+E", False, None),
+    "alt5": (("alt",), "5", "Alt+5", False, None),
+    "alt6": (("alt",), "6", "Alt+6", False, None),
+    "ctrltab": (("ctrl",), "tab", "Ctrl+Tab", False, None),
+    "enter": ((), "enter", "Enter", False, None),
+    "ctrltabmain": (("ctrl",), "tab", "Ctrl+Tab→主窗口", True, None),
+    "enterchar": ((), "enter", "Enter+WM_CHAR", False, 0x0D),
+}
+
+
 class ControlWindow(WebWindow):
     """应用主窗口：任务启动/停止、配置页面；日志展示在面板内日志抽屉。
 
@@ -775,6 +791,11 @@ class ControlWindow(WebWindow):
         self.expose(self.verify_position)
         self.expose(self.verify_capture_diag)
         self.expose(self.verify_silent_click)
+        self.expose(self.verify_silent_key)
+        self.expose(self.verify_silent_paste)
+        self.expose(self.verify_silent_unichar)
+        self.expose(self.verify_silent_char)
+        self.expose(self.verify_child_windows)
         self.expose(self.unbind_license)
         self.expose(self.get_env_info)
         self.expose(self.unbind_window)
@@ -1920,6 +1941,262 @@ class ControlWindow(WebWindow):
             pass
         self._notify_silent_click_result(ok, info, button, action)
         self._verifying = False
+
+    def verify_silent_key(self, hotkey="altc"):
+        """诊断-静默按键按钮：向游戏窗口投递一次组合键消息（不移动
+        鼠标、不激活窗口），验证键盘消息通道可行性。hotkey 白名单：
+        altc（降落/位置刷新）/ alte（开包）/ alt5+alt6（清屏屏蔽）/
+        ctrltab（切 Tab）/ enter（聊天输入开关）。结果用户自判。
+        """
+        entry = _SILENT_KEY_HOTKEYS.get(hotkey)
+        if entry is None:
+            return {"status": "error", "msg": f"不支持的按键类型: {hotkey}"}
+        if self._tm.is_running():
+            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if self._verifying:
+            return {"status": "error", "msg": "验证进行中，请稍候"}
+        win = game.find_main_window()
+        if win is None:
+            return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
+        self._verifying = True
+        threading.Thread(target=self._run_silent_key_verify, args=(win, hotkey),
+                         daemon=True, name="silent-key-verify").start()
+        return {"status": "success",
+                "msg": f"已开始：投递一次 {entry[2]} 按键消息，请自行观察游戏效果"}
+
+    def _run_silent_key_verify(self, win, hotkey):
+        """静默按键验证线程体：逐行写入本地日志文件与日志窗，结束回推页面。"""
+        from . import silent_click  # 延迟导入：与其余验证模块保持一致
+
+        def emit(msg):
+            app_utils.log(f"[诊断] {msg}")
+            try:
+                self.add_logs([f"[诊断] {msg}"])
+            except Exception:
+                pass
+
+        try:
+            modifiers, key, _label, main_window, char = _SILENT_KEY_HOTKEYS[hotkey]
+            ok, info = silent_click.send_and_report_key(
+                win, emit, modifiers, key, main_window=main_window, char=char)
+        except Exception as e:
+            ok, info = False, f"诊断异常: {e}"
+        try:
+            app_utils.log(f"[诊断] 结果: {info}")
+            self.add_logs([f"[诊断] 结果: {info}"])
+        except Exception:
+            pass
+        self._notify_silent_key_result(ok, info, hotkey)
+        self._verifying = False
+
+    def verify_silent_paste(self):
+        """诊断-静默粘贴按钮：剪贴板写入「测试粘贴」后向游戏窗口
+        投递 WM_PASTE（不移动鼠标、不激活窗口），验证文本输入通道
+        可行性——游戏聊天输入框出现粘贴文本即生效（前提：先手动
+        点开聊天输入框）。结果用户自判。
+        """
+        if self._tm.is_running():
+            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if self._verifying:
+            return {"status": "error", "msg": "验证进行中，请稍候"}
+        win = game.find_main_window()
+        if win is None:
+            return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
+        self._verifying = True
+        threading.Thread(target=self._run_silent_paste_verify, args=(win,),
+                         daemon=True, name="silent-paste-verify").start()
+        return {"status": "success",
+                "msg": "已开始：投递一次 WM_PASTE，请自行观察游戏输入框"}
+
+    def _run_silent_paste_verify(self, win):
+        """静默粘贴验证线程体：逐行写入本地日志文件与日志窗，结束回推页面。"""
+        from . import silent_click  # 延迟导入：与其余验证模块保持一致
+
+        def emit(msg):
+            app_utils.log(f"[诊断] {msg}")
+            try:
+                self.add_logs([f"[诊断] {msg}"])
+            except Exception:
+                pass
+
+        try:
+            ok, info = silent_click.send_and_report_paste(win, emit)
+        except Exception as e:
+            ok, info = False, f"诊断异常: {e}"
+        try:
+            app_utils.log(f"[诊断] 结果: {info}")
+            self.add_logs([f"[诊断] 结果: {info}"])
+        except Exception:
+            pass
+        self._notify_silent_paste_result(ok, info)
+        self._verifying = False
+
+    def verify_silent_unichar(self):
+        """诊断-静默字符按钮：向游戏窗口投递 WM_UNICHAR「测」字符
+        消息（不移动鼠标、不激活窗口），验证 Unicode 字符注入通道
+        可行性——游戏聊天输入框出现「测」即生效（前提：先手动点开
+        聊天输入框）。结果用户自判。
+        """
+        if self._tm.is_running():
+            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if self._verifying:
+            return {"status": "error", "msg": "验证进行中，请稍候"}
+        win = game.find_main_window()
+        if win is None:
+            return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
+        self._verifying = True
+        threading.Thread(target=self._run_silent_unichar_verify, args=(win,),
+                         daemon=True, name="silent-unichar-verify").start()
+        return {"status": "success",
+                "msg": "已开始：投递 WM_UNICHAR「测」，请自行观察游戏输入框"}
+
+    def _run_silent_unichar_verify(self, win):
+        """静默字符验证线程体：逐行写入本地日志文件与日志窗，结束回推页面。"""
+        from . import silent_click  # 延迟导入：与其余验证模块保持一致
+
+        def emit(msg):
+            app_utils.log(f"[诊断] {msg}")
+            try:
+                self.add_logs([f"[诊断] {msg}"])
+            except Exception:
+                pass
+
+        try:
+            ok, info = silent_click.send_and_report_unichar(win, emit)
+        except Exception as e:
+            ok, info = False, f"诊断异常: {e}"
+        try:
+            app_utils.log(f"[诊断] 结果: {info}")
+            self.add_logs([f"[诊断] 结果: {info}"])
+        except Exception:
+            pass
+        self._notify_silent_unichar_result(ok, info)
+        self._verifying = False
+
+    def _notify_silent_unichar_result(self, ok, info):
+        """静默字符验证结果回推页面（诊断-静默字符行的结果文案）。"""
+        if self.webview_instance:
+            try:
+                ok_js = "true" if ok else "false"
+                self.webview_instance.evaluate_js(
+                    f"if(window.onSilentUnicharVerifyResult){{window.onSilentUnicharVerifyResult({ok_js}, {json.dumps(info)});}}")
+            except Exception:
+                pass
+
+    def verify_silent_char(self):
+        """诊断-静默字符 WM_CHAR 按钮：向游戏窗口投递 WM_CHAR「测」
+        字符消息（不移动鼠标、不激活窗口）。游戏已实证消费 WM_CHAR
+        （Enter+WM_CHAR 生效），中文/数字可能同样被其输入系统消费
+        ——聊天输入框出现「测」即生效（前提：先手动点开输入框）。
+        """
+        if self._tm.is_running():
+            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if self._verifying:
+            return {"status": "error", "msg": "验证进行中，请稍候"}
+        win = game.find_main_window()
+        if win is None:
+            return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
+        self._verifying = True
+        threading.Thread(target=self._run_silent_char_verify, args=(win,),
+                         daemon=True, name="silent-char-verify").start()
+        return {"status": "success",
+                "msg": "已开始：投递 WM_CHAR「测」，请自行观察游戏输入框"}
+
+    def _run_silent_char_verify(self, win):
+        """静默字符 WM_CHAR 验证线程体：逐行写入本地日志文件与日志窗。"""
+        from . import silent_click  # 延迟导入：与其余验证模块保持一致
+
+        def emit(msg):
+            app_utils.log(f"[诊断] {msg}")
+            try:
+                self.add_logs([f"[诊断] {msg}"])
+            except Exception:
+                pass
+
+        try:
+            ok, info = silent_click.send_and_report_char(win, emit)
+        except Exception as e:
+            ok, info = False, f"诊断异常: {e}"
+        try:
+            app_utils.log(f"[诊断] 结果: {info}")
+            self.add_logs([f"[诊断] 结果: {info}"])
+        except Exception:
+            pass
+        self._notify_silent_char_result(ok, info)
+        self._verifying = False
+
+    def _notify_silent_char_result(self, ok, info):
+        """静默字符 WM_CHAR 验证结果回推页面（诊断-静默字符行的结果文案）。"""
+        if self.webview_instance:
+            try:
+                ok_js = "true" if ok else "false"
+                self.webview_instance.evaluate_js(
+                    f"if(window.onSilentCharVerifyResult){{window.onSilentCharVerifyResult({ok_js}, {json.dumps(info)});}}")
+            except Exception:
+                pass
+
+    def verify_child_windows(self):
+        """诊断-子窗口枚举按钮：枚举游戏主窗口下所有可见子窗口
+        （只读，不点击不按键），逐行写入日志——定位聊天输入框等
+        子控件，为静默文本输入通道排查提供依据。
+        """
+        if self._verifying:
+            return {"status": "error", "msg": "验证进行中，请稍候"}
+        win = game.find_main_window()
+        if win is None:
+            return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
+        self._verifying = True
+        threading.Thread(target=self._run_child_windows_dump, args=(win,),
+                         daemon=True, name="child-windows-dump").start()
+        return {"status": "success",
+                "msg": "已开始：枚举游戏窗口可见子窗口（只读，结果写入日志）"}
+
+    def _run_child_windows_dump(self, win):
+        """子窗口枚举线程体：逐行写入本地日志文件与日志窗，结束回推页面。"""
+        try:
+            self.add_logs(["[诊断] 开始枚举游戏窗口可见子窗口..."])
+            for row in game.dump_child_windows(win):
+                app_utils.log(f"[诊断] {row}")
+                try:
+                    self.add_logs([f"[诊断] {row}"])
+                except Exception:
+                    pass
+            ok, info = True, "子窗口枚举完成（结果见日志）"
+        except Exception as e:
+            ok, info = False, f"诊断异常: {e}"
+        self._notify_child_windows_result(ok, info)
+        self._verifying = False
+
+    def _notify_child_windows_result(self, ok, info):
+        """子窗口枚举结果回推页面（诊断-子窗口枚举行的结果文案）。"""
+        if self.webview_instance:
+            try:
+                ok_js = "true" if ok else "false"
+                self.webview_instance.evaluate_js(
+                    f"if(window.onChildWindowsVerifyResult){{window.onChildWindowsVerifyResult({ok_js}, {json.dumps(info)});}}")
+            except Exception:
+                pass
+
+    def _notify_silent_paste_result(self, ok, info):
+        """静默粘贴验证结果回推页面（诊断-静默粘贴行的结果文案）。"""
+        if self.webview_instance:
+            try:
+                ok_js = "true" if ok else "false"
+                self.webview_instance.evaluate_js(
+                    f"if(window.onSilentPasteVerifyResult){{window.onSilentPasteVerifyResult({ok_js}, {json.dumps(info)});}}")
+            except Exception:
+                pass
+
+    def _notify_silent_key_result(self, ok, info, hotkey):
+        """静默按键验证结果回推页面（按 hotkey 分发到对应按钮的结果文案）。"""
+        if self.webview_instance:
+            try:
+                ok_js = "true" if ok else "false"
+                self.webview_instance.evaluate_js(
+                    f"if(window.onSilentKeyVerifyResult){{window.onSilentKeyVerifyResult"
+                    f"({ok_js}, {json.dumps(info)}, {json.dumps(hotkey)});}}")
+            except Exception:
+                pass
 
     def _notify_silent_click_result(self, ok, info, button="primary", action=None):
         """静默点击验证结果回推页面（诊断-静默点击行的结果文案；

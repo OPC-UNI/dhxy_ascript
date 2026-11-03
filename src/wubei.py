@@ -172,7 +172,7 @@ CLAIM_DIALOG_APPEAR_TIMEOUT = 4                    # 点击领取入口后等待
                                                    # （正常 ~1.5s 即出）：超时未见选项判定
                                                    # 坐标不对，走小地图重定位兜底
 CLAIM_VERIFY_WAIT = 5                              # 领取后任务进入追踪的正常轮询时长（秒）：
-                                                   # 超时未检索到 → 按一次 Alt+C 飞行后仅再检索一次，
+                                                   # 超时未检索到 → 小地图重走领取点后仅再检索一次，
                                                    # 仍无即判定失败（用户确认：多次重试无效）
 
 # ---- 对话开打（寻路到达后出现对话面板）----
@@ -1240,7 +1240,7 @@ def _claim_task(win, allow_fill=False):
 
     返回 (是否成功, 描述, 校验帧)：校验帧为任务进追踪的确认帧
     （items, img_np），供 follow_task 首轮复用免重复截图+OCR；
-    Alt+C 兜底路径无帧返回 None。
+    小地图重走兜底路径无帧返回 None。
 
     领取时序优化（与修罗同款，实测一轮入口点击→选项点击 4s、选项点击
     →已领取判定 4s、判定→追踪点击 2s）：
@@ -1323,19 +1323,9 @@ def _claim_task(win, allow_fill=False):
         time.sleep(1.0)
     if found_frame is not None:
         return True, "五倍任务已领取", found_frame
-    # 未检索到：按 Alt+C 飞行后再次检索（仅一次，多次重试无效）；
-    # 静默操作且游戏不在前台：跳过 Alt+C（键盘事件只进前台窗口）
-    if app_utils.keyboard_ok(win):
-        Keyboard.key_hot("alt", "c")
-        log("[五倍] 任务追踪未检索到任务，按 Alt+C 飞行后再次检索", "WARN")
-        time.sleep(1.0)
-    else:
-        log("[五倍] 任务追踪未检索到任务，静默操作且游戏不在前台：跳过 Alt+C", "WARN")
-    if task_tracker.has_task(win, TASK_TITLE, TASK_FALLBACK_TEXTS):
-        log("[五倍] Alt+C 飞行后任务已出现在追踪面板", "SYS")
-        return True, "五倍任务已领取", None
-    # Alt+C 后仍无：小地图重走领取点坐标后再次检索（修罗同款，用户
-    # 2026-10-09 确认：重走可能触发任务渲染，不直接判失败）
+    # 未检索到：小地图重走领取点坐标后再次检索（修罗同款，用户
+    # 2026-10-09 确认：重走可能触发任务渲染，不直接判失败）。
+    # 原 Alt+C 飞行重查已移除——多余逻辑
     ok2, info2 = _relocate_to_claim_spot(win)
     if not ok2:
         log(f"[五倍] {info2}", "WARN")
@@ -1350,7 +1340,7 @@ def _claim_task(win, allow_fill=False):
             f"{' / '.join(titles) if titles else '(无标题行)'}", "WARN")
     except Exception:
         pass
-    return False, "已点击领取选项，但任务追踪中未检测到任务（Alt+C 飞行后仍无）", None
+    return False, "已点击领取选项，但任务追踪中未检测到任务（重走领取点后仍无）", None
 
 
 def _click_xianxingjing_use(win, items, img_np):
@@ -2296,11 +2286,17 @@ def _shout_recruit(win):
     发送到游戏当前默认频道（如需世界频道请预先在游戏内切换默认频道）。
     """
     global _shout_last_at
-    # 静默操作且游戏不在前台：键盘事件只进前台窗口且不允许激活，
-    # 跳过本次喊话（时间戳照记，保持喊话间隔节奏防快速重试刷屏）
-    if not app_utils.keyboard_ok(win):
-        log("[五倍] 静默操作且游戏不在前台：跳过缺人喊话", "WARN")
+    # 静默操作：文本经 WM_CHAR 逐字符注入 + 回车 WM_CHAR 发送
+    # （游戏自定义输入系统已实证消费 WM_CHAR，无需前台无需键盘，
+    # 2026-11-03 用户实测有效）；投递失败不记时间戳，下轮重试
+    if app_utils.silent_mode_on():
+        from . import silent_click  # 延迟导入：避免模块级循环
+        info = silent_click.send_silent_text(win, _shout_text, end_enter=True)
+        if info is None:
+            log("[五倍] 静默喊话投递失败（窗口不存在）", "WARN")
+            return
         _shout_last_at = time.time()
+        log(f"[五倍] 已静默喊话: {_shout_text}", "SYS")
         return
     # 先激活游戏窗口：键盘事件只进前台窗口（用户测试时焦点常在面板/
     # 编辑器，偶现喊话静默丢失——与喊话测试按钮同款前置，实测按钮

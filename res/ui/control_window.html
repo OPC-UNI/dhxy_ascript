@@ -923,6 +923,11 @@
                         <span class="verify-result" id="capture-diag-verify-result"></span>
                     </div>
                     <div class="group-hint">对比 PrintWindow(3)/PrintWindow(0)/窗口 BitBlt/全屏 BitBlt 四条截屏通道并记录环境事实（显卡/DWM/进程提权/兼容模式），逐行写入本地日志文件与面板日志抽屉，用于定位黑屏/识别全失效问题。只读不点击（任务未运行时额外尝试置前游戏窗口复测），约 10 秒。任务运行中也可诊断（跳过置前复测）。</div>
+                    <div class="verify-row">
+                        <button id="btn-verify-child-windows" class="btn" onclick="verifyChildWindows()">子窗口枚举</button>
+                        <span class="verify-result" id="child-windows-verify-result"></span>
+                    </div>
+                    <div class="group-hint">枚举游戏主窗口下所有可见子窗口（hwnd/类名/矩形，只读）逐行写入日志——定位聊天输入框等子控件用，为静默文本输入通道排查提供依据。任务运行中也可使用。</div>
                 </div>
                 <div class="group-box">
                     <div class="group-title">静默点击</div>
@@ -942,7 +947,51 @@
                         <button id="btn-verify-silent-hp" class="btn" onclick="verifySilentHp()">静默回血</button>
                         <span class="verify-result" id="silent-hp-verify-result"></span>
                     </div>
-                    <div class="group-hint">不移动物理鼠标、不激活游戏窗口，直接向游戏窗口投递一次消息点击（游戏画面中心），用于验证「游戏窗口不在前台」时能否后台点击——左键已实测有效，可行性确认后部分原走鼠标的点击可切换为静默点击。右键投递 WM_RBUTTONDOWN/UP（游戏世界右键会弹操作菜单，可直接观察）。点击后自动对比前后画面差异给出疑似生效/未生效，请同时观察游戏画面（左键看人物是否走向画面中心，右键看是否弹出操作菜单）做最终确认。静默回蓝=右键投递窗口坐标 (1316,105) 一次；静默回血=右键投递窗口坐标 (1316,87) 一次；均只投递不做判定，结果请自行观察血蓝条变化。请先把控制窗口移到游戏窗口上层遮挡（或切到其他窗口）再点击。任务运行中不可验证。</div>
+                    <div class="verify-row">
+                        <button id="btn-verify-silent-key-altc" class="btn" onclick="verifySilentKey('altc')">静默按键 Alt+C</button>
+                        <span class="verify-result" id="silent-key-altc-verify-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="btn-verify-silent-key-alte" class="btn" onclick="verifySilentKey('alte')">静默按键 Alt+E</button>
+                        <span class="verify-result" id="silent-key-alte-verify-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="btn-verify-silent-key-alt5" class="btn" onclick="verifySilentKey('alt5')">静默按键 Alt+5</button>
+                        <span class="verify-result" id="silent-key-alt5-verify-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="btn-verify-silent-key-alt6" class="btn" onclick="verifySilentKey('alt6')">静默按键 Alt+6</button>
+                        <span class="verify-result" id="silent-key-alt6-verify-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="btn-verify-silent-key-ctrltab" class="btn" onclick="verifySilentKey('ctrltab')">静默按键 Ctrl+Tab</button>
+                        <span class="verify-result" id="silent-key-ctrltab-verify-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="btn-verify-silent-key-enter" class="btn" onclick="verifySilentKey('enter')">静默按键 Enter</button>
+                        <span class="verify-result" id="silent-key-enter-verify-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="btn-verify-silent-key-ctrltabmain" class="btn" onclick="verifySilentKey('ctrltabmain')">静默按键 Ctrl+Tab→主窗口</button>
+                        <span class="verify-result" id="silent-key-ctrltabmain-verify-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="btn-verify-silent-key-enterchar" class="btn" onclick="verifySilentKey('enterchar')">静默按键 Enter+WM_CHAR</button>
+                        <span class="verify-result" id="silent-key-enterchar-verify-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="btn-verify-silent-paste" class="btn" onclick="verifySilentPaste()">静默粘贴 WM_PASTE</button>
+                        <span class="verify-result" id="silent-paste-verify-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="btn-verify-silent-unichar" class="btn" onclick="verifySilentUnichar()">静默字符 WM_UNICHAR</button>
+                        <span class="verify-result" id="silent-unichar-verify-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="btn-verify-silent-char" class="btn" onclick="verifySilentChar()">静默字符 WM_CHAR</button>
+                        <span class="verify-result" id="silent-char-verify-result"></span>
+                    </div>
+                    <div class="group-hint">不移动物理鼠标、不激活游戏窗口，直接向游戏窗口投递一次消息点击（游戏画面中心），用于验证「游戏窗口不在前台」时能否后台点击——左键已实测有效，可行性确认后部分原走鼠标的点击可切换为静默点击。右键投递 WM_RBUTTONDOWN/UP（游戏世界右键会弹操作菜单，可直接观察）。点击后自动对比前后画面差异给出疑似生效/未生效，请同时观察游戏画面（左键看人物是否走向画面中心，右键看是否弹出操作菜单）做最终确认。静默回蓝=右键投递窗口坐标 (1316,105) 一次；静默回血=右键投递窗口坐标 (1316,87) 一次；均只投递不做判定，结果请自行观察血蓝条变化。静默按键=投递组合键消息一次（Alt 组合走 WM_SYSKEYDOWN/UP、Ctrl 组合走 WM_KEYDOWN/UP，实测：Alt+C/Alt+E/Alt+5/Alt+6 有效，Ctrl+Tab 与 Enter 无效），生效信号：Alt+C 人物降落/位置显示刷新、Alt+E 背包打开、Alt+5/Alt+6 屏蔽飘字提示、Ctrl+Tab 切换 Tab、Enter 聊天输入框开关。实测结论：Alt 组合/Enter+WM_CHAR/WM_CHAR 中文字符注入有效，Ctrl+Tab 无效（切 Tab 维持键盘门控），WM_PASTE/WM_UNICHAR 无效（子窗口枚举无标准 Edit 控件）。静默字符 WM_CHAR=投递「测」字符消息，请先手动点开游戏聊天输入框再测。请先把控制窗口移到游戏窗口上层遮挡（或切到其他窗口）再点击。任务运行中不可验证。</div>
                 </div>
             </div>
         </div>
@@ -2456,6 +2505,187 @@
         btnVerifySilentHp.disabled = false;
         silentHpVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
         silentHpVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+    };
+
+    // 静默按键：投递一次组合键消息（键盘消息通道可行性验证，结果自判）；
+    // hotkey 标识见 Python 侧白名单（altc/alte/alt5/alt6/ctrltab/enter）
+    async function verifySilentKey(hotkey) {
+        if (verifying) return;
+        verifying = true;
+        const btn = document.getElementById('btn-verify-silent-key-' + hotkey);
+        const resEl = document.getElementById('silent-key-' + hotkey + '-verify-result');
+        btn.disabled = true;
+        resEl.style.color = 'var(--text)';
+        resEl.innerText = '投递中...';
+        try {
+            const r = await callPython('verify_silent_key', hotkey);
+            if (!r || r.status !== 'success') {
+                resEl.style.color = 'var(--danger)';
+                resEl.innerText = (r && r.msg) || '验证请求失败';
+                verifying = false;
+                btn.disabled = false;
+            }
+            // 成功：等待 Python 侧 onSilentKeyVerifyResult 回推最终结果
+        } catch (e) {
+            resEl.style.color = 'var(--danger)';
+            resEl.innerText = '验证请求异常';
+            verifying = false;
+            btn.disabled = false;
+        }
+    }
+    window.onSilentKeyVerifyResult = function (ok, info, hotkey) {
+        verifying = false;
+        const btn = document.getElementById('btn-verify-silent-key-' + hotkey);
+        const resEl = document.getElementById('silent-key-' + hotkey + '-verify-result');
+        if (btn) btn.disabled = false;
+        if (resEl) {
+            resEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+            resEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+        }
+    };
+
+    // 静默粘贴：剪贴板写入后投递 WM_PASTE（文本输入通道可行性验证，结果自判）
+    async function verifySilentPaste() {
+        if (verifying) return;
+        verifying = true;
+        const btn = document.getElementById('btn-verify-silent-paste');
+        const resEl = document.getElementById('silent-paste-verify-result');
+        btn.disabled = true;
+        resEl.style.color = 'var(--text)';
+        resEl.innerText = '投递中...';
+        try {
+            const r = await callPython('verify_silent_paste');
+            if (!r || r.status !== 'success') {
+                resEl.style.color = 'var(--danger)';
+                resEl.innerText = (r && r.msg) || '验证请求失败';
+                verifying = false;
+                btn.disabled = false;
+            }
+            // 成功：等待 Python 侧 onSilentPasteVerifyResult 回推最终结果
+        } catch (e) {
+            resEl.style.color = 'var(--danger)';
+            resEl.innerText = '验证请求异常';
+            verifying = false;
+            btn.disabled = false;
+        }
+    }
+    window.onSilentPasteVerifyResult = function (ok, info) {
+        verifying = false;
+        const btn = document.getElementById('btn-verify-silent-paste');
+        const resEl = document.getElementById('silent-paste-verify-result');
+        if (btn) btn.disabled = false;
+        if (resEl) {
+            resEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+            resEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+        }
+    };
+
+    // 静默字符：投递 WM_UNICHAR「测」（Unicode 字符注入通道验证，结果自判）
+    async function verifySilentUnichar() {
+        if (verifying) return;
+        verifying = true;
+        const btn = document.getElementById('btn-verify-silent-unichar');
+        const resEl = document.getElementById('silent-unichar-verify-result');
+        btn.disabled = true;
+        resEl.style.color = 'var(--text)';
+        resEl.innerText = '投递中...';
+        try {
+            const r = await callPython('verify_silent_unichar');
+            if (!r || r.status !== 'success') {
+                resEl.style.color = 'var(--danger)';
+                resEl.innerText = (r && r.msg) || '验证请求失败';
+                verifying = false;
+                btn.disabled = false;
+            }
+            // 成功：等待 Python 侧 onSilentUnicharVerifyResult 回推最终结果
+        } catch (e) {
+            resEl.style.color = 'var(--danger)';
+            resEl.innerText = '验证请求异常';
+            verifying = false;
+            btn.disabled = false;
+        }
+    }
+    window.onSilentUnicharVerifyResult = function (ok, info) {
+        verifying = false;
+        const btn = document.getElementById('btn-verify-silent-unichar');
+        const resEl = document.getElementById('silent-unichar-verify-result');
+        if (btn) btn.disabled = false;
+        if (resEl) {
+            resEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+            resEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+        }
+    };
+
+    // 静默字符 WM_CHAR：投递 WM_CHAR「测」（游戏已实证消费 WM_CHAR，中文待验）
+    async function verifySilentChar() {
+        if (verifying) return;
+        verifying = true;
+        const btn = document.getElementById('btn-verify-silent-char');
+        const resEl = document.getElementById('silent-char-verify-result');
+        btn.disabled = true;
+        resEl.style.color = 'var(--text)';
+        resEl.innerText = '投递中...';
+        try {
+            const r = await callPython('verify_silent_char');
+            if (!r || r.status !== 'success') {
+                resEl.style.color = 'var(--danger)';
+                resEl.innerText = (r && r.msg) || '验证请求失败';
+                verifying = false;
+                btn.disabled = false;
+            }
+            // 成功：等待 Python 侧 onSilentCharVerifyResult 回推最终结果
+        } catch (e) {
+            resEl.style.color = 'var(--danger)';
+            resEl.innerText = '验证请求异常';
+            verifying = false;
+            btn.disabled = false;
+        }
+    }
+    window.onSilentCharVerifyResult = function (ok, info) {
+        verifying = false;
+        const btn = document.getElementById('btn-verify-silent-char');
+        const resEl = document.getElementById('silent-char-verify-result');
+        if (btn) btn.disabled = false;
+        if (resEl) {
+            resEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+            resEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+        }
+    };
+
+    // 子窗口枚举：只读诊断，逐行写入日志（定位聊天输入框等子控件）
+    async function verifyChildWindows() {
+        if (verifying) return;
+        verifying = true;
+        const btn = document.getElementById('btn-verify-child-windows');
+        const resEl = document.getElementById('child-windows-verify-result');
+        btn.disabled = true;
+        resEl.style.color = 'var(--text)';
+        resEl.innerText = '枚举中...';
+        try {
+            const r = await callPython('verify_child_windows');
+            if (!r || r.status !== 'success') {
+                resEl.style.color = 'var(--danger)';
+                resEl.innerText = (r && r.msg) || '验证请求失败';
+                verifying = false;
+                btn.disabled = false;
+            }
+            // 成功：等待 Python 侧 onChildWindowsVerifyResult 回推最终结果
+        } catch (e) {
+            resEl.style.color = 'var(--danger)';
+            resEl.innerText = '验证请求异常';
+            verifying = false;
+            btn.disabled = false;
+        }
+    }
+    window.onChildWindowsVerifyResult = function (ok, info) {
+        verifying = false;
+        const btn = document.getElementById('btn-verify-child-windows');
+        const resEl = document.getElementById('child-windows-verify-result');
+        if (btn) btn.disabled = false;
+        if (resEl) {
+            resEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+            resEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+        }
     };
 
     /* ================= 初始化 ================= */

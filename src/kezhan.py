@@ -80,7 +80,7 @@ FAST_DIALOG_TEXT = "你要到洛阳客栈"    # 点击后可能出现的快送�
 FAST_DIALOG_OPTION = "快送我去"       # 快送对话框绿色选项
 ARRIVE_TIMEOUT = 120                  # 等待寻路完成的超时（秒）
 NAV_MAX_ATTEMPTS = 3                 # 前往客栈的最多尝试轮数（防死循环）
-ALT6_RETRY_WAIT = 1.5                # Alt+6 后等待画面刷新的时间（秒）
+ALT6_RETRY_WAIT = 1.5                # 兜底点击后等待画面刷新的时间（秒）
 # 领取任务对话框中的绿色选项（点击掌柜后出现）
 DIALOG_OPTION_LINGQU = "接取客栈任务"
 YAOCHI_DIALOG_OPTION = "广寒宫我熟悉的很，包在我身上！"  # 瑶池对话选项（高性能快速链用）
@@ -583,8 +583,10 @@ def _zhanggui_scan(win):
 
 
 def _find_zhanggui(win):
-    """查找掌柜模板；未找到时按 Alt+6 后重试，仍无则点击兜底点
-    (530,593) 后重试一次（用户实测有效）。返回 (x, y) 或 None。
+    """查找掌柜模板；未找到时点击兜底点 (530,593) 后重试一次（用户
+    实测有效）。返回 (x, y) 或 None。
+
+    原 Alt+6 画面刷新重试已移除（启动清屏已处理屏蔽，无需重复按键）。
 
     模板 1 实测匹配 0.806，NPC 待机动画会小幅波动，阈值取 0.75 留余量
     （实测 0.7 以上无其他误匹配）；模板 2 与模板 1 同阈值。掌柜随站位
@@ -593,21 +595,9 @@ def _find_zhanggui(win):
     pt = _zhanggui_scan(win)
     if pt is not None:
         return pt
-    # 静默操作且游戏不在前台：跳过 Alt+6（键盘事件只进前台窗口），
-    # 直接走点击兜底点路径
-    if app_utils.keyboard_ok(win):
-        log("[客栈] 未找到掌柜，按 Alt+6 后重试", "WARN")
-        Keyboard.key_hot("alt", "6")
-        time.sleep(ALT6_RETRY_WAIT)  # 等待画面刷新
-        pt = _zhanggui_scan(win)
-        if pt is not None:
-            log("[客栈] Alt+6 后已找到掌柜", "SYS")
-            return pt
-    else:
-        log("[客栈] 未找到掌柜，静默操作且游戏不在前台：跳过 Alt+6", "WARN")
     # 用户实测兜底：点击 (530,593) 后重试（点位在对话框区域之下，
     # 即使有对话框打开，点击也不会落在选项上）
-    log(f"[客栈] Alt+6 后仍无，点击兜底点 {ZHANGGUI_FALLBACK_CLICK_POS} 后重试", "WARN")
+    log(f"[客栈] 未找到掌柜，点击兜底点 {ZHANGGUI_FALLBACK_CLICK_POS} 后重试", "WARN")
     human_click(win, ZHANGGUI_FALLBACK_CLICK_POS[0], ZHANGGUI_FALLBACK_CLICK_POS[1])
     time.sleep(ALT6_RETRY_WAIT)  # 等待点击响应/画面刷新
     pt = _zhanggui_scan(win)
@@ -825,14 +815,20 @@ def _check_awang(win):
 
     pt, ap = _locate()
     if pt is None:
-        # 静默操作且游戏不在前台：跳过 Alt+C（键盘事件只进前台窗口）
-        if app_utils.keyboard_ok(win):
+        if app_utils.silent_mode_on():
+            # 静默操作：Alt+C 走消息投递（无需前台，2026-11-03 实测有效）
+            from . import silent_click  # 延迟导入：避免模块级循环
+            silent_click.send_silent_hotkey(win, ("alt",), "c")
+            log("[客栈] 未找到阿旺，静默 Alt+C 降落后重试", "WARN")
+            time.sleep(1.5)  # 等待降落落地
+            pt, ap = _locate()
+        elif app_utils.keyboard_ok(win):
             log("[客栈] 未找到阿旺，按 Alt+C 降落后重试", "WARN")
             Keyboard.key_hot("alt", "c")
             time.sleep(1.5)  # 等待降落落地
             pt, ap = _locate()
         else:
-            log("[客栈] 未找到阿旺，静默操作且游戏不在前台：跳过 Alt+C", "WARN")
+            log("[客栈] 未找到阿旺，游戏不在前台：跳过 Alt+C", "WARN")
     if pt is None:
         return False, "未找到阿旺（模板与 OCR 名字均未命中，Alt+C 后重试仍失败）"
     # 两段点击：先点名字左侧 30px 走近（点击远处 NPC 会先走过去）；
@@ -1624,17 +1620,18 @@ def _give_item_for_npc(win):
 
 
 def _give_money(win, npc_name):
-    """银两给与（钱老四/钓鱼大赛主理人等）：点银两输入框 → 全选清空 →
-    输入 1000 → 点给与按钮。返回是否已处理（面板仍在时同样返回 True，
-    由调用方的已给与标记防重复点击）。静默操作且游戏不在前台：金额
-    输入走键盘不可用，跳过本次（返回 False，下轮轮询重试）。"""
-    if not app_utils.keyboard_ok(win):
-        log(f"[客栈] {npc_name}给与：静默操作且游戏不在前台，金额输入不可用，本次跳过", "WARN")
-        return False
+    """银两给与（钱老四/钓鱼大赛主理人等）：点银两输入框 → 输入
+    1000 → 点给与按钮。返回是否已处理（面板仍在时同样返回 True，
+    由调用方的已给与标记防重复点击）。输入框无默认值，无需清空
+    （用户确认 2026-11-03）。静默操作：金额走 WM_CHAR 注入。"""
     human_click(win, MONEY_GIVE_INPUT_POS[0], MONEY_GIVE_INPUT_POS[1])
     time.sleep(0.3)
-    Keyboard.key_hot("ctrl", "a")  # 全选清空默认值
-    Keyboard.input(MONEY_GIVE_AMOUNT)
+    if app_utils.silent_mode_on():
+        from . import silent_click  # 延迟导入：避免模块级循环
+        silent_click.send_silent_text(win, MONEY_GIVE_AMOUNT)
+        log(f"[客栈] {npc_name}给与：已静默输入 {MONEY_GIVE_AMOUNT}", "SYS")
+    else:
+        Keyboard.input(MONEY_GIVE_AMOUNT)
     time.sleep(0.3)
     pt = game_map.find_template(win, GIVE_BTN_ICON)
     if pt is None:

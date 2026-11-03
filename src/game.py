@@ -1,6 +1,7 @@
 """游戏窗口相关操作：窗口查找、登录 Tab 读取、多开窗口绑定。"""
 import ctypes
 import re
+from ctypes import wintypes
 
 from ascript.windows.window import Window
 from ascript.windows.window.Selector import Selector
@@ -149,6 +150,43 @@ def _child_window_text(hwnd):
         return buf.value
     ctypes.windll.user32.SendMessageW(hwnd, _WM_GETTEXT, 512, buf)
     return buf.value
+
+
+def dump_child_windows(win):
+    """枚举主窗口下所有可见子窗口（hwnd/类名/标题/矩形），返回行列表。
+
+    诊断用（只读）：定位聊天输入框等子控件——静默文本输入通道的
+    排查依据（WM_PASTE 投游戏视图无效时，真实输入控件可能是某个
+    标准 EDIT 子窗口，需按类名/矩形找出来直投）。
+    """
+    hwnd = int(getattr(win, "hwnd", 0) or 0)
+    if not hwnd:
+        return ["窗口句柄无效"]
+    rows = []
+    _EnumProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p,
+                                   ctypes.c_void_p)
+
+    def _cb(h, _l):
+        try:
+            if not ctypes.windll.user32.IsWindowVisible(h):
+                return True
+            cls = ctypes.create_unicode_buffer(256)
+            ctypes.windll.user32.GetClassNameW(h, cls, 256)
+            r = wintypes.RECT()
+            if not ctypes.windll.user32.GetWindowRect(h, ctypes.byref(r)):
+                return True
+            rows.append(f"hwnd={int(h):#x} 类名={cls.value} "
+                        f"矩形=({r.left},{r.top},{r.right},{r.bottom})")
+        except Exception:
+            pass
+        return True
+
+    try:
+        ctypes.windll.user32.EnumChildWindows(ctypes.c_void_p(hwnd),
+                                              _EnumProc(_cb), 0)
+    except Exception:
+        return rows or ["枚举失败"]
+    return rows or ["无可见子窗口"]
 
 
 def list_tab_windows(win):
