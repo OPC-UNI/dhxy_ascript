@@ -27,6 +27,7 @@ import time
 from ascript.windows.hardware.keyboard import Keyboard
 
 from .app_utils import log
+from . import app_utils  # 静默操作门控（keyboard_ok）
 from . import map as game_map
 
 # 中央飘字 OCR 区域（实测标定 x535-845 / y415-465，四周留 ≥50px 余量）
@@ -124,7 +125,10 @@ def run_clear_screen(win):
 
     执行前激活游戏窗口并校验前台——热键经前台窗口送达，游戏未置前时
     按键无效甚至触发其他窗口的快捷键，此时直接跳过并告警。
+    静默操作且游戏不在前台：热键不可用且不允许激活，直接跳过。
     """
+    if not app_utils.keyboard_ok(win):
+        return False, "静默操作且游戏不在前台：跳过清屏（Alt+6/Alt+5 需前台）"
     try:
         win.activate()
         time.sleep(0.5)

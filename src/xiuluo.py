@@ -301,7 +301,7 @@ def _find_wuyi_npc(win):
 
 
 def _run_wuyi_chain(win, hover_before_click=False, report_condition=False,
-                    click_option_self=False):
+                    click_option_self=False, silent=False):
     """自动巫医主链路（自动流程与验证共用）：前往巫医 NPC 医治。
 
     1. 巫医条件（2026-10-09 用户确认）：自动巫医按间隔设置无条件
@@ -328,7 +328,9 @@ def _run_wuyi_chain(win, hover_before_click=False, report_condition=False,
     站在 NPC 旁位置显示缺失，坐标判定卡死到达循环），NPC 模板远距离
     也会命中（使者教训）。单次尝试（用户 2026-10-09 确认）：找不到
     NPC/对话框未出现即本次取消，下次轮到再试——失败不阻塞修罗主流程。
-    返回 (是否成功, 描述)。
+    silent=True（静默巫医验证）：调用方已开 app_utils.silent_clicks()
+    ——全部点击走消息通道；位置读取失败跳过 Alt+C 恢复（键盘事件
+    只进前台窗口，静默模式游戏可能不在前台）。返回 (是否成功, 描述)。
     """
     if is_in_battle(win):
         return False, "战斗中，跳过自动巫医"
@@ -339,7 +341,7 @@ def _run_wuyi_chain(win, hover_before_click=False, report_condition=False,
     # 2. 位置检查（严格容差：小距离移动宽松容差会漏判偏移；坐标
     #    读不到按不在处理——走去巫医无害）
     pos = game_map.read_map_position(win)
-    if pos is None:
+    if pos is None and not silent:
         pos = game_map.read_position_with_recovery(win)
     need_walk = not _near_wuyi_spot(pos)
     # 3. 走位（需要时）：小地图点击巫医位置，等待走到坐标附近
@@ -459,16 +461,19 @@ def _auto_wuyi(win):
     return ok, info
 
 
-def verify_wuyi_flow(win):
+def verify_wuyi_flow(win, silent=False):
     """验证自动巫医流程（高级设置-验证按钮，主进程调用）。
 
     与 _auto_wuyi 同一链路，区别：血蓝状态检查并仅报告（不影响执行），
     NPC 点击前先移动鼠标定位（无延时），并自行点击医治选项
     （主进程没有战斗线程——真实环境中该点击由任务进程的战斗线程
-    完成，二者行为等效）。返回 (是否成功, 描述)。
+    完成，二者行为等效）。silent=True（静默修罗巫医按钮）：调用方
+    已开 app_utils.silent_clicks()——全程消息点击、不移动鼠标、
+    不激活窗口，悬停定位步骤跳过（无物理鼠标可定位）。
+    返回 (是否成功, 描述)。
     """
-    return _run_wuyi_chain(win, hover_before_click=True, report_condition=True,
-                           click_option_self=True)
+    return _run_wuyi_chain(win, hover_before_click=not silent, report_condition=True,
+                           click_option_self=True, silent=silent)
 
 
 def verify_tab_wuyi_flow(win):
@@ -1147,10 +1152,14 @@ def _claim_task(win, allow_fill=False):
     if found_frame is not None:
         tail = f"（{CLAIM_COUNT_TEXT}：{count}）" if count is not None else ""
         return True, f"修罗任务已领取{tail}", found_frame
-    # 未检索到：按 Alt+C 飞行后再次检索（仅一次，多次重试无效）
-    Keyboard.key_hot("alt", "c")
-    log("[修罗] 任务追踪未检索到任务，按 Alt+C 飞行后再次检索", "WARN")
-    time.sleep(1.0)
+    # 未检索到：按 Alt+C 飞行后再次检索（仅一次，多次重试无效）；
+    # 静默操作且游戏不在前台：跳过 Alt+C（键盘事件只进前台窗口）
+    if app_utils.keyboard_ok(win):
+        Keyboard.key_hot("alt", "c")
+        log("[修罗] 任务追踪未检索到任务，按 Alt+C 飞行后再次检索", "WARN")
+        time.sleep(1.0)
+    else:
+        log("[修罗] 任务追踪未检索到任务，静默操作且游戏不在前台：跳过 Alt+C", "WARN")
     if task_tracker.has_task(win, TASK_TITLE, TASK_FALLBACK_TEXTS):
         log("[修罗] Alt+C 飞行后任务已出现在追踪面板", "SYS")
         tail = f"（{CLAIM_COUNT_TEXT}：{count}）" if count is not None else ""
@@ -1571,12 +1580,15 @@ def _return_to_npc(win):
     return True, "已返回灵兽村"
 
 
-def verify_return_flow(win):
+def verify_return_flow(win, silent=False):
     """验证修罗回程流程（高级设置-验证按钮，主进程调用）。
 
     与实际返程 _return_to_npc 完全一致，唯一区别是不右键使用回城符：
     仅将鼠标移动到回城符上（不点击，无延时——时序与真实返程一致），
-    然后关闭世界地图/小地图/背包。返回 (是否成功, 描述)。
+    然后关闭世界地图/小地图/背包。
+    silent=True（静默修罗回程按钮）：调用方已开 app_utils.silent_clicks()
+    ——全程消息点击、不移动鼠标、不激活窗口，「仅移动鼠标定位」步骤
+    改为仅日志定位（无物理鼠标可定位）。返回 (是否成功, 描述)。
     """
     # 前置：确保战斗已结束（与实际返程一致）
     if is_in_battle(win):
@@ -1592,22 +1604,28 @@ def verify_return_flow(win):
     if pt is None:
         _close_return_panels(win)
         return False, info
-    human_move(win.rect.left + pt[0], win.rect.top + pt[1])
-    log(f"[修罗][验证] 已移动鼠标到修罗回城符 ({pt[0]}, {pt[1]})，"
-        f"已定位到（不点击，验证时序与真实流程一致）", "SYS")
+    if silent:
+        log(f"[修罗][验证] 已识别修罗回城符 ({pt[0]}, {pt[1]})"
+            f"（静默模式，不移动鼠标）", "SYS")
+    else:
+        human_move(win.rect.left + pt[0], win.rect.top + pt[1])
+        log(f"[修罗][验证] 已移动鼠标到修罗回城符 ({pt[0]}, {pt[1]})，"
+            f"已定位到（不点击，验证时序与真实流程一致）", "SYS")
     # 3. 关闭世界地图、小地图、背包
     _close_return_panels(win)
     return True, f"验证通过：回城符位于 ({pt[0]}, {pt[1]})"
 
 
-def verify_claim_flow(win):
+def verify_claim_flow(win, silent=False):
     """验证修罗领取流程（高级设置-验证按钮，主进程调用）。
 
     与领取流程一致，但在「点击绿色选项完成领取」前停止：走位 → 领取
     按钮识别 → 点击按钮打开对话框（领取发生在点选项之后，开对话框
     不改变任务状态）→ 识别绿色选项（完整/尾部/帮忙）→ 仅移动鼠标定位（不点击）
     仅定位不点击 → 点击屏幕中间关闭对话框。
-    返回 (是否成功, 描述)。
+    silent=True（静默修罗领取按钮）：调用方已开 app_utils.silent_clicks()
+    ——全程消息点击、不移动鼠标、不激活窗口，「仅移动鼠标定位」步骤
+    改为仅日志定位（无物理鼠标可定位）。返回 (是否成功, 描述)。
     """
     # 前置：确保战斗已结束（与实际领取一致）
     if is_in_battle(win):
@@ -1624,7 +1642,7 @@ def verify_claim_flow(win):
     # 2. 领取入口：鼠标定位 → 点击打开对话框；点击后对话框未出现则
     #    小地图重定位后重试（与领取流程共用同一兜底助手）
     ok, info, src2, pt2, _frame = _click_entry_ensuring_dialog(
-        win, log_tag="[修罗][验证]", hover_before_click=True)
+        win, log_tag="[修罗][验证]", hover_before_click=not silent)
     if not ok:
         return False, info
     # 3. 识别绿色选项：仅移动鼠标悬停，不点击（点击即领取）
@@ -1640,9 +1658,13 @@ def verify_claim_flow(win):
         found = _find_claim_option(items, img_np)
         if found is not None:
             cx, cy, txt, _ = found
-            human_move(win.rect.left + cx, win.rect.top + cy)
-            log(f"[修罗][验证] 已移动鼠标到绿色选项「{txt}」({cx}, {cy})，"
-                f"已定位到（不点击，验证时序与真实流程一致）", "SYS")
+            if silent:
+                log(f"[修罗][验证] 已识别绿色选项「{txt}」({cx}, {cy})"
+                    f"（静默模式，不移动鼠标）", "SYS")
+            else:
+                human_move(win.rect.left + cx, win.rect.top + cy)
+                log(f"[修罗][验证] 已移动鼠标到绿色选项「{txt}」({cx}, {cy})，"
+                    f"已定位到（不点击，验证时序与真实流程一致）", "SYS")
             # 4. 点击屏幕中间关闭对话框（不领取）
             human_click(win, SCREEN_CENTER_POS[0], SCREEN_CENTER_POS[1])
             log("[修罗][验证] 已点击屏幕中间关闭对话框（未领取）", "SYS")
@@ -1675,6 +1697,12 @@ def _shout_recruit(win):
     日志有喊话但游戏无消息，代码 diff 无区别，差异在游戏侧状态）。
     """
     global _shout_last_at
+    # 静默操作且游戏不在前台：键盘事件只进前台窗口且不允许激活，
+    # 跳过本次喊话（时间戳照记，保持喊话间隔节奏防快速重试刷屏）
+    if not app_utils.keyboard_ok(win):
+        log("[修罗] 静默操作且游戏不在前台：跳过缺人喊话", "WARN")
+        _shout_last_at = time.time()
+        return
     # 先激活游戏窗口：键盘事件只进前台窗口（与五倍同款修复——
     # 偶现喊话静默丢失的头号嫌疑，喊话测试按钮因带激活从不失败）
     win.activate()

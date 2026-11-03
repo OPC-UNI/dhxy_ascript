@@ -42,6 +42,7 @@ from ascript.windows.system import R
 from ascript.windows.screen.find_images import FindImages
 
 from .app_utils import log, human_click, human_move, norm_text
+from . import app_utils  # 静默操作门控（silent_mode_on）
 from . import map as game_map  # 找图与 OCR 能力复用
 from . import debug_overlay  # 调试信息悬浮层（队伍信息行更新）
 from . import task_tracker  # 对话框区域 OCR（允许失败提示检测）
@@ -458,7 +459,12 @@ def _wait_panel(win):
 
 
 def _try_close_menu():
-    """尽力关闭组队菜单（ESC；对面板无效，仅菜单场景兜底用）。"""
+    """尽力关闭组队菜单（ESC；对面板无效，仅菜单场景兜底用）。
+
+    静默操作：ESC 是键盘事件只进前台窗口，直接跳过（本就是兜底尽力而为）。
+    """
+    if app_utils.silent_mode_on():
+        return
     try:
         Keyboard.key("esc")
         time.sleep(0.3)

@@ -90,3 +90,63 @@ def test_user_abort_is_base_exception_not_swallowed():
             raise app_utils.UserAbort("人工接管")
         except Exception:  # noqa: BLE001 —— 本测试专门验证不被该分支吞掉
             pytest.fail("except Exception 不应吞掉 UserAbort")
+
+
+# ---- 静默点击模式（2026-11-03 静默修罗领取/巫医：点击走消息通道） ----
+
+def test_silent_clicks_context_restores_flag():
+    assert app_utils._SILENT_CLICK is False
+    with app_utils.silent_clicks():
+        assert app_utils._SILENT_CLICK is True
+    assert app_utils._SILENT_CLICK is False
+
+
+def test_human_click_silent_mode_delegates(monkeypatch):
+    monkeypatch.setattr(app_utils, "_SILENT_CLICK", True)
+    calls = []
+    monkeypatch.setattr("src.silent_click.send_silent_click",
+                        lambda w, x=None, y=None, button="primary":
+                        calls.append((w, x, y, button)))
+    fake_mouse = _FakeMouse()
+    monkeypatch.setattr(app_utils, "Mouse", fake_mouse)
+    win = _FakeWin()
+    app_utils.human_click(win, 100, 200)
+    app_utils.human_click(win, 50, 60, button="secondary")
+    assert calls == [(win, 100, 200, "primary"), (win, 50, 60, "secondary")]
+    assert fake_mouse.calls == []  # 物理鼠标零操作
+
+
+def test_precise_click_silent_mode_repeats(monkeypatch):
+    monkeypatch.setattr(app_utils, "_SILENT_CLICK", True)
+    calls = []
+    monkeypatch.setattr("src.silent_click.send_silent_click",
+                        lambda w, x=None, y=None, button="primary": calls.append((x, y)))
+    monkeypatch.setattr(app_utils, "Mouse", _FakeMouse())
+    app_utils.precise_click(_FakeWin(), 10, 20, times=2, interval=0)
+    assert calls == [(10, 20), (10, 20)]
+
+
+def test_human_move_and_move_away_silent_mode_noop(monkeypatch):
+    monkeypatch.setattr(app_utils, "_SILENT_CLICK", True)
+    fake_mouse = _FakeMouse()
+    monkeypatch.setattr(app_utils, "Mouse", fake_mouse)
+    app_utils.human_move(123, 456)
+    app_utils.move_away(_FakeWin())
+    assert fake_mouse.calls == []
+
+
+def test_keyboard_ok_not_silent_always_true(monkeypatch):
+    monkeypatch.setattr(app_utils, "_SILENT_CLICK", False)
+    assert app_utils.keyboard_ok(None) is True
+
+
+def test_keyboard_ok_silent_no_win_false(monkeypatch):
+    monkeypatch.setattr(app_utils, "_SILENT_CLICK", True)
+    assert app_utils.keyboard_ok(None) is False
+
+
+def test_set_silent_mode_toggle():
+    app_utils.set_silent_mode(True)
+    assert app_utils.silent_mode_on() is True
+    app_utils.set_silent_mode(False)
+    assert app_utils.silent_mode_on() is False

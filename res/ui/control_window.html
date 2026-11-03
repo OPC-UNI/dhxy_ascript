@@ -639,6 +639,11 @@
                     <span class="switch-track"></span>
                     <span>启动时自动清屏（屏蔽其他玩家和摊位，默认开启）</span>
                 </label>
+                <label class="switch-row">
+                    <input type="checkbox" id="silent-mode">
+                    <span class="switch-track"></span>
+                    <span>静默操作（点击走窗口消息，不占用鼠标/不抢前台，默认开启；关闭恢复物理鼠标方案）</span>
+                </label>
             </div>
             <div class="group-box">
                 <div class="group-title">血量蓝量阈值（步进 5%）</div>
@@ -845,7 +850,19 @@
                         <button id="btn-verify-xiuluo-tab-wuyi" class="btn" onclick="verifyXiuluoTabWuyi()">验证组号巫医</button>
                         <span class="verify-result" id="tab-wuyi-verify-result"></span>
                     </div>
-                    <div class="group-hint">与实际流程一致、时序无额外延时，且都不改变任务状态：回程=定位回城符不点击；领取=点击领取按钮开对话框、选项仅定位不点击、点屏幕中间关闭；巫医=走位到 NPC、定位后点击打开对话框（医治选项由战斗线程处理）；组号巫医=巫医完整链路后逐个切换队员 Tab 点击其医治对话框并切回队长（需窗口内 ≥2 个已登录 Tab，开关状态不校验）。任务运行中不可验证。</div>
+                    <div class="verify-row">
+                        <button id="btn-verify-xiuluo-claim-silent" class="btn" onclick="verifyXiuluoClaimSilent()">静默修罗领取</button>
+                        <span class="verify-result" id="silent-claim-verify-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="btn-verify-xiuluo-wuyi-silent" class="btn" onclick="verifyXiuluoWuyiSilent()">静默修罗巫医</button>
+                        <span class="verify-result" id="silent-wuyi-verify-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="btn-verify-xiuluo-return-silent" class="btn" onclick="verifyXiuluoReturnSilent()">静默修罗回程</button>
+                        <span class="verify-result" id="silent-return-verify-result"></span>
+                    </div>
+                    <div class="group-hint">与实际流程一致、时序无额外延时，且都不改变任务状态：回程=定位回城符不点击；领取=点击领取按钮开对话框、选项仅定位不点击、点屏幕中间关闭；巫医=走位到 NPC、定位后点击打开对话框（医治选项由战斗线程处理）；组号巫医=巫医完整链路后逐个切换队员 Tab 点击其医治对话框并切回队长（需窗口内 ≥2 个已登录 Tab，开关状态不校验）。静默修罗领取/静默修罗巫医/静默修罗回程=与领取/巫医/回程验证同流程，但全程静默点击（不移动物理鼠标、不激活游戏窗口，游戏窗口可不前台），用于验证静默通道跑通完整链路。任务运行中不可验证。</div>
                 </div>
                 <div class="group-box">
                     <div class="group-title">五倍链路</div>
@@ -907,6 +924,26 @@
                     </div>
                     <div class="group-hint">对比 PrintWindow(3)/PrintWindow(0)/窗口 BitBlt/全屏 BitBlt 四条截屏通道并记录环境事实（显卡/DWM/进程提权/兼容模式），逐行写入本地日志文件与面板日志抽屉，用于定位黑屏/识别全失效问题。只读不点击（任务未运行时额外尝试置前游戏窗口复测），约 10 秒。任务运行中也可诊断（跳过置前复测）。</div>
                 </div>
+                <div class="group-box">
+                    <div class="group-title">静默点击</div>
+                    <div class="verify-row">
+                        <button id="btn-verify-silent-click" class="btn" onclick="verifySilentClick()">左键一次</button>
+                        <span class="verify-result" id="silent-click-verify-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="btn-verify-silent-click-right" class="btn" onclick="verifySilentClickRight()">右键一次</button>
+                        <span class="verify-result" id="silent-click-right-verify-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="btn-verify-silent-mp" class="btn" onclick="verifySilentMp()">静默回蓝</button>
+                        <span class="verify-result" id="silent-mp-verify-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="btn-verify-silent-hp" class="btn" onclick="verifySilentHp()">静默回血</button>
+                        <span class="verify-result" id="silent-hp-verify-result"></span>
+                    </div>
+                    <div class="group-hint">不移动物理鼠标、不激活游戏窗口，直接向游戏窗口投递一次消息点击（游戏画面中心），用于验证「游戏窗口不在前台」时能否后台点击——左键已实测有效，可行性确认后部分原走鼠标的点击可切换为静默点击。右键投递 WM_RBUTTONDOWN/UP（游戏世界右键会弹操作菜单，可直接观察）。点击后自动对比前后画面差异给出疑似生效/未生效，请同时观察游戏画面（左键看人物是否走向画面中心，右键看是否弹出操作菜单）做最终确认。静默回蓝=右键投递窗口坐标 (1316,105) 一次；静默回血=右键投递窗口坐标 (1316,87) 一次；均只投递不做判定，结果请自行观察血蓝条变化。请先把控制窗口移到游戏窗口上层遮挡（或切到其他窗口）再点击。任务运行中不可验证。</div>
+                </div>
             </div>
         </div>
     </div>
@@ -947,6 +984,7 @@
     const highPerf = document.getElementById('high-perf');
     const autoRefill = document.getElementById('auto-refill');
     const clearScreen = document.getElementById('clear-screen');
+    const silentMode = document.getElementById('silent-mode');
     const autoFamen = document.getElementById('auto-famen');
     const xiuluoWuyiIntervalEl = document.getElementById('xiuluo-wuyi-interval');
     const wubeiHezi = document.getElementById('wubei-hezi');
@@ -965,6 +1003,12 @@
     const wuyiVerifyResultEl = document.getElementById('wuyi-verify-result');
     const btnVerifyXiuluoTabWuyi = document.getElementById('btn-verify-xiuluo-tab-wuyi');
     const tabWuyiVerifyResultEl = document.getElementById('tab-wuyi-verify-result');
+    const btnVerifyXiuluoClaimSilent = document.getElementById('btn-verify-xiuluo-claim-silent');
+    const silentClaimVerifyResultEl = document.getElementById('silent-claim-verify-result');
+    const btnVerifyXiuluoWuyiSilent = document.getElementById('btn-verify-xiuluo-wuyi-silent');
+    const silentWuyiVerifyResultEl = document.getElementById('silent-wuyi-verify-result');
+    const btnVerifyXiuluoReturnSilent = document.getElementById('btn-verify-xiuluo-return-silent');
+    const silentReturnVerifyResultEl = document.getElementById('silent-return-verify-result');
     const btnVerifyWubeiClaim = document.getElementById('btn-verify-wubei-claim');
     const wubeiClaimVerifyResultEl = document.getElementById('wubei-claim-verify-result');
     const btnVerifyWubeiReturn = document.getElementById('btn-verify-wubei-return');
@@ -985,6 +1029,14 @@
     const positionVerifyResultEl = document.getElementById('position-verify-result');
     const btnVerifyCaptureDiag = document.getElementById('btn-verify-capture-diag');
     const captureDiagVerifyResultEl = document.getElementById('capture-diag-verify-result');
+    const btnVerifySilentClick = document.getElementById('btn-verify-silent-click');
+    const silentClickVerifyResultEl = document.getElementById('silent-click-verify-result');
+    const btnVerifySilentClickRight = document.getElementById('btn-verify-silent-click-right');
+    const silentClickRightVerifyResultEl = document.getElementById('silent-click-right-verify-result');
+    const btnVerifySilentMp = document.getElementById('btn-verify-silent-mp');
+    const silentMpVerifyResultEl = document.getElementById('silent-mp-verify-result');
+    const btnVerifySilentHp = document.getElementById('btn-verify-silent-hp');
+    const silentHpVerifyResultEl = document.getElementById('silent-hp-verify-result');
     const licenseStatusEl = document.getElementById('license-status');
     const licenseExpireEl = document.getElementById('license-expire');
     const licenseBanner = document.getElementById('license-banner');
@@ -1710,6 +1762,9 @@
     clearScreen.addEventListener('change', () => {
         callPython('save_clear_screen', clearScreen.checked);
     });
+    silentMode.addEventListener('change', () => {
+        callPython('save_silent_mode', silentMode.checked);
+    });
     autoFamen.addEventListener('change', () => {
         callPython('save_auto_famen', autoFamen.checked);
     });
@@ -1757,6 +1812,7 @@
         highPerf.checked = !!info.high_perf;
         autoRefill.checked = !!info.auto_refill;
         clearScreen.checked = !!info.clear_screen;
+        silentMode.checked = !!info.silent_mode;
         autoFamen.checked = !!info.auto_famen;
         applyLicense(info.license || {});
         const env = info.env || {};
@@ -1969,6 +2025,96 @@
         btnVerifyXiuluoTabWuyi.disabled = false;
         tabWuyiVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
         tabWuyiVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+    };
+
+    // 静默修罗领取：与验证领取同流程，全程静默点击，结果经 onSilentClaimVerifyResult 异步回推
+    async function verifyXiuluoClaimSilent() {
+        if (verifying) return;
+        verifying = true;
+        btnVerifyXiuluoClaimSilent.disabled = true;
+        silentClaimVerifyResultEl.style.color = 'var(--text)';
+        silentClaimVerifyResultEl.innerText = '验证中...';
+        try {
+            const r = await callPython('verify_xiuluo_claim_silent');
+            if (!r || r.status !== 'success') {
+                silentClaimVerifyResultEl.style.color = 'var(--danger)';
+                silentClaimVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
+                verifying = false;
+                btnVerifyXiuluoClaimSilent.disabled = false;
+            }
+            // 成功：等待 Python 侧 onSilentClaimVerifyResult 回推最终结果
+        } catch (e) {
+            silentClaimVerifyResultEl.style.color = 'var(--danger)';
+            silentClaimVerifyResultEl.innerText = '验证请求异常';
+            verifying = false;
+            btnVerifyXiuluoClaimSilent.disabled = false;
+        }
+    }
+    window.onSilentClaimVerifyResult = function (ok, info) {
+        verifying = false;
+        btnVerifyXiuluoClaimSilent.disabled = false;
+        silentClaimVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        silentClaimVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+    };
+
+    // 静默修罗巫医：与验证巫医同流程，全程静默点击，结果经 onSilentWuyiVerifyResult 异步回推
+    async function verifyXiuluoWuyiSilent() {
+        if (verifying) return;
+        verifying = true;
+        btnVerifyXiuluoWuyiSilent.disabled = true;
+        silentWuyiVerifyResultEl.style.color = 'var(--text)';
+        silentWuyiVerifyResultEl.innerText = '验证中...';
+        try {
+            const r = await callPython('verify_xiuluo_wuyi_silent');
+            if (!r || r.status !== 'success') {
+                silentWuyiVerifyResultEl.style.color = 'var(--danger)';
+                silentWuyiVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
+                verifying = false;
+                btnVerifyXiuluoWuyiSilent.disabled = false;
+            }
+            // 成功：等待 Python 侧 onSilentWuyiVerifyResult 回推最终结果
+        } catch (e) {
+            silentWuyiVerifyResultEl.style.color = 'var(--danger)';
+            silentWuyiVerifyResultEl.innerText = '验证请求异常';
+            verifying = false;
+            btnVerifyXiuluoWuyiSilent.disabled = false;
+        }
+    }
+    window.onSilentWuyiVerifyResult = function (ok, info) {
+        verifying = false;
+        btnVerifyXiuluoWuyiSilent.disabled = false;
+        silentWuyiVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        silentWuyiVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+    };
+
+    // 静默修罗回程：与验证回程同流程，全程静默点击，结果经 onSilentReturnVerifyResult 异步回推
+    async function verifyXiuluoReturnSilent() {
+        if (verifying) return;
+        verifying = true;
+        btnVerifyXiuluoReturnSilent.disabled = true;
+        silentReturnVerifyResultEl.style.color = 'var(--text)';
+        silentReturnVerifyResultEl.innerText = '验证中...';
+        try {
+            const r = await callPython('verify_xiuluo_return_silent');
+            if (!r || r.status !== 'success') {
+                silentReturnVerifyResultEl.style.color = 'var(--danger)';
+                silentReturnVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
+                verifying = false;
+                btnVerifyXiuluoReturnSilent.disabled = false;
+            }
+            // 成功：等待 Python 侧 onSilentReturnVerifyResult 回推最终结果
+        } catch (e) {
+            silentReturnVerifyResultEl.style.color = 'var(--danger)';
+            silentReturnVerifyResultEl.innerText = '验证请求异常';
+            verifying = false;
+            btnVerifyXiuluoReturnSilent.disabled = false;
+        }
+    }
+    window.onSilentReturnVerifyResult = function (ok, info) {
+        verifying = false;
+        btnVerifyXiuluoReturnSilent.disabled = false;
+        silentReturnVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        silentReturnVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
     // 五倍领取验证：与修罗领取验证同模式，结果经 onWubeiClaimVerifyResult 异步回推
@@ -2226,6 +2372,90 @@
         btnVerifyCaptureDiag.disabled = false;
         captureDiagVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
         captureDiagVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+    };
+
+    async function verifySilentClick(button) {
+        if (verifying) return;
+        verifying = true;
+        const btn = button === 'secondary' ? btnVerifySilentClickRight : btnVerifySilentClick;
+        const resEl = button === 'secondary' ? silentClickRightVerifyResultEl : silentClickVerifyResultEl;
+        btn.disabled = true;
+        resEl.style.color = 'var(--text)';
+        resEl.innerText = '验证中...';
+        try {
+            const r = await callPython('verify_silent_click', button || 'primary');
+            if (!r || r.status !== 'success') {
+                resEl.style.color = 'var(--danger)';
+                resEl.innerText = (r && r.msg) || '验证请求失败';
+                verifying = false;
+                btn.disabled = false;
+            }
+            // 成功：等待 Python 侧 onSilentClickVerifyResult/onSilentClickRightVerifyResult 回推最终结果
+        } catch (e) {
+            resEl.style.color = 'var(--danger)';
+            resEl.innerText = '验证请求异常';
+            verifying = false;
+            btn.disabled = false;
+        }
+    }
+    function verifySilentClickRight() {
+        verifySilentClick('secondary');
+    }
+    window.onSilentClickVerifyResult = function (ok, info) {
+        verifying = false;
+        btnVerifySilentClick.disabled = false;
+        silentClickVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        silentClickVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+    };
+    window.onSilentClickRightVerifyResult = function (ok, info) {
+        verifying = false;
+        btnVerifySilentClickRight.disabled = false;
+        silentClickRightVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        silentClickRightVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+    };
+
+    // 静默回蓝/回血：右键窗口坐标 (1316,105)/(1316,87) 血蓝条一次，
+    // 结果自判（不做帧差判定）；action 标识结果回推路由
+    async function verifySilentPoint(action, btn, resEl) {
+        if (verifying) return;
+        verifying = true;
+        btn.disabled = true;
+        resEl.style.color = 'var(--text)';
+        resEl.innerText = '投递中...';
+        const y = action === 'hp' ? 87 : 105;
+        try {
+            const r = await callPython('verify_silent_click', 'secondary', 1316, y, action);
+            if (!r || r.status !== 'success') {
+                resEl.style.color = 'var(--danger)';
+                resEl.innerText = (r && r.msg) || '验证请求失败';
+                verifying = false;
+                btn.disabled = false;
+            }
+            // 成功：等待 Python 侧 onSilentMpVerifyResult/onSilentHpVerifyResult 回推最终结果
+        } catch (e) {
+            resEl.style.color = 'var(--danger)';
+            resEl.innerText = '验证请求异常';
+            verifying = false;
+            btn.disabled = false;
+        }
+    }
+    async function verifySilentMp() {
+        await verifySilentPoint('mp', btnVerifySilentMp, silentMpVerifyResultEl);
+    }
+    async function verifySilentHp() {
+        await verifySilentPoint('hp', btnVerifySilentHp, silentHpVerifyResultEl);
+    }
+    window.onSilentMpVerifyResult = function (ok, info) {
+        verifying = false;
+        btnVerifySilentMp.disabled = false;
+        silentMpVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        silentMpVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+    };
+    window.onSilentHpVerifyResult = function (ok, info) {
+        verifying = false;
+        btnVerifySilentHp.disabled = false;
+        silentHpVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        silentHpVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
     /* ================= 初始化 ================= */

@@ -249,9 +249,16 @@ def verify_map_position(win):
 
 
 def read_position_with_recovery(win):
-    """识别当前位置；失败时按 Alt+C 恢复位置显示后重试一次（常见于人物未落地）。"""
+    """识别当前位置；失败时按 Alt+C 恢复位置显示后重试一次（常见于人物未落地）。
+
+    静默操作且游戏不在前台：跳过 Alt+C（键盘事件只进前台窗口），
+    直接返回 None——调用方按「位置不可读」处理。
+    """
     pos = read_map_position(win)
     if pos is None:
+        if not app_utils.keyboard_ok(win):
+            log("[地图] 位置识别失败，静默操作且游戏不在前台：跳过 Alt+C 恢复", "WARN")
+            return None
         log("[地图] 位置识别失败，按 Alt+C 后重试", "WARN")
         Keyboard.key_hot("alt", "c")
         time.sleep(1.0)  # 等待位置显示恢复

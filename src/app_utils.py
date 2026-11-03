@@ -6,6 +6,7 @@ import random
 import re
 import threading
 import time
+from contextlib import contextmanager
 
 from ascript.windows.hardware.mouse import Mouse
 from ascript.windows.system.key_value import KeyValue
@@ -104,6 +105,62 @@ _INPUT_LOCK = threading.RLock()
 # 流程互斥；新增背包用户必须整段持本锁。
 _BAG_LOCK = threading.RLock()
 
+# 静默点击模式：置位期间所有鼠标点击改走窗口消息投递（不移动物理
+# 鼠标、不激活窗口），鼠标移动/移开变为空操作——消息点击不产生物理
+# 悬停态，move_away 的防悬停变色不再需要。诊断页静默修罗领取/巫医
+# 验证按钮使用（流程代码与物理鼠标版完全复用，仅点击通道切换）；
+# 主进程一次只跑一个验证（_verifying 互斥），普通全局开关即可。
+# 任务子进程不启用该通道（维持物理鼠标方案，两通道并存时由
+# _INPUT_LOCK 在消息投递侧互斥）。
+_SILENT_CLICK = False
+
+
+@contextmanager
+def silent_clicks():
+    """上下文：期间所有鼠标点击走静默消息通道（见 _SILENT_CLICK）。"""
+    global _SILENT_CLICK
+    prev = _SILENT_CLICK
+    _SILENT_CLICK = True
+    try:
+        yield
+    finally:
+        _SILENT_CLICK = prev
+
+
+def set_silent_mode(on):
+    """设置静默操作开关（通用设置，默认开启；主进程与任务子进程启动
+    时按持久化配置调用）。开启后全部点击走消息通道（见 _SILENT_CLICK），
+    鼠标移动变空操作——游戏窗口可不前台。"""
+    global _SILENT_CLICK
+    _SILENT_CLICK = bool(on)
+
+
+def silent_mode_on():
+    """静默操作开关是否开启。"""
+    return _SILENT_CLICK
+
+
+def keyboard_ok(win=None):
+    """键盘/激活类操作的前置：非静默模式恒可用（各流程自带激活）；
+    静默模式下键盘事件只进前台窗口——游戏已在前台才允许，不再额外
+    激活（激活违背静默约束）。win=None 或读取失败返回 False 保守处理。"""
+    if not _SILENT_CLICK:
+        return True
+    if win is None:
+        return False
+    try:
+        import win32gui
+        return win32gui.GetForegroundWindow() == int(getattr(win, "hwnd", 0))
+    except Exception:
+        return False
+
+
+def _silent_click(win, x, y, button="primary"):
+    """静默点击统一出口：延迟导入防循环（silent_click 反向导入本模块
+    拿 _INPUT_LOCK）。"""
+    from . import silent_click
+    silent_click.send_silent_click(win, x=x, y=y, button=button)
+
 
 class UserAbort(BaseException):
     """用户人工接管鼠标（fail-safe 触发）——任务应干净中止。
@@ -149,6 +206,8 @@ def human_move(target_x: int, target_y: int, duration: float = None):
         target_y: 目标屏幕 Y 坐标
         duration: 移动耗时（秒），None 时随机 40~90 毫秒
     """
+    if _SILENT_CLICK:
+        return  # 静默模式：消息点击不需要物理移动
     with _INPUT_LOCK:
         if duration is None:
             duration = random.uniform(0.04, 0.09)
@@ -167,6 +226,9 @@ def human_click(win, x: int, y: int, button: str = "primary"):
         y: 窗口相对 Y 坐标
         button: 鼠标按键，'primary' 左键 / 'secondary' 右键
     """
+    if _SILENT_CLICK:
+        _silent_click(win, x, y, button=button)
+        return
     with _INPUT_LOCK:
         sx = win.rect.left + x + random.randint(-2, 2)
         sy = win.rect.top + y + random.randint(-2, 2)
@@ -189,6 +251,12 @@ def precise_click(win, x: int, y: int, times: int = 1, interval: float = 0.4,
         interval: 连点间隔（秒）
         move_duration: 移动耗时（秒），None 时随机 40~90 毫秒
     """
+    if _SILENT_CLICK:
+        for _ in range(int(times)):
+            _silent_click(win, x, y)
+            if interval:
+                time.sleep(interval)
+        return
     with _INPUT_LOCK:
         sx = win.rect.left + int(x)
         sy = win.rect.top + int(y)
@@ -208,6 +276,9 @@ def rapid_click(win, x: int, y: int, press: float = 0.02):
     50ms（游戏点击注册通常 10ms 即足够，20ms 为保守折中，如出现漏
     注册可调回 0.05）。仍持全局输入锁防与战斗/任务线程交错。
     """
+    if _SILENT_CLICK:
+        _silent_click(win, x, y)
+        return
     with _INPUT_LOCK:
         sx = win.rect.left + int(x)
         sy = win.rect.top + int(y)
@@ -223,6 +294,8 @@ def move_away(win):
     鼠标停留在选项上会使选项进入悬停变色状态，干扰后续的绿字判定
     （选项变色后绿色占比下降，二次 OCR 会漏判/误判——用户实测）。
     """
+    if _SILENT_CLICK:
+        return  # 静默模式无物理悬停态，无需移开
     human_move(win.rect.left + 20, win.rect.top + win.rect.height - 20)
 
 

@@ -23,6 +23,7 @@ from ascript.windows.window.Window import WindowCaptureFormat
 
 from .app_utils import (log, human_click, move_away, current_task_mode,
                         fixed_pos_get, fixed_pos_set)
+from . import app_utils  # 静默操作门控（silent_mode_on/keyboard_ok）
 from .control_window import load_high_perf  # 高性能开关：巫医 pass 直点门控
 from . import game  # 子窗口枚举（每个 Tab 一个 Win32Window）
 from . import map as game_map  # 模板匹配快速接口
@@ -182,10 +183,14 @@ def _current_id(win):
 
 
 def _ensure_foreground(win):
-    """Ctrl+Tab 经前台窗口送达：激活游戏窗口并校验前台（同清屏链路）。"""
+    """Ctrl+Tab 经前台窗口送达：激活游戏窗口并校验前台（同清屏链路）。
+
+    静默操作模式：不再激活（激活违背静默约束），仅检查当前前台。
+    """
     try:
-        win.activate()
-        time.sleep(0.3)
+        if not app_utils.silent_mode_on():
+            win.activate()
+            time.sleep(0.3)
         import win32gui
         return win32gui.GetForegroundWindow() == int(win.hwnd)
     except Exception as e:
@@ -198,7 +203,12 @@ def _switch_next(win):
 
     返回切换后当前 Tab 的账号 ID；空串 = 切换成功但该 Tab 未登录；
     None = 切换失败（按键未送达/前台丢失，重试一次后仍失败）。
+    静默操作且游戏不在前台：键盘事件只进前台窗口且不允许激活，
+    直接判失败（调用方按切换失败处理，如队员 pass 跳过）。
     """
+    if not app_utils.keyboard_ok(win):
+        log("[组号] 静默操作且游戏不在前台：无法 Ctrl+Tab 切换 Tab", "WARN")
+        return None
     before_hwnd, _before_id = _current(win)
     Keyboard.key_hot("ctrl", "tab")
     time.sleep(TAB_SWITCH_SETTLE)

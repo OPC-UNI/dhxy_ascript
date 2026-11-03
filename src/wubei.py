@@ -1323,10 +1323,14 @@ def _claim_task(win, allow_fill=False):
         time.sleep(1.0)
     if found_frame is not None:
         return True, "五倍任务已领取", found_frame
-    # 未检索到：按 Alt+C 飞行后再次检索（仅一次，多次重试无效）
-    Keyboard.key_hot("alt", "c")
-    log("[五倍] 任务追踪未检索到任务，按 Alt+C 飞行后再次检索", "WARN")
-    time.sleep(1.0)
+    # 未检索到：按 Alt+C 飞行后再次检索（仅一次，多次重试无效）；
+    # 静默操作且游戏不在前台：跳过 Alt+C（键盘事件只进前台窗口）
+    if app_utils.keyboard_ok(win):
+        Keyboard.key_hot("alt", "c")
+        log("[五倍] 任务追踪未检索到任务，按 Alt+C 飞行后再次检索", "WARN")
+        time.sleep(1.0)
+    else:
+        log("[五倍] 任务追踪未检索到任务，静默操作且游戏不在前台：跳过 Alt+C", "WARN")
     if task_tracker.has_task(win, TASK_TITLE, TASK_FALLBACK_TEXTS):
         log("[五倍] Alt+C 飞行后任务已出现在追踪面板", "SYS")
         return True, "五倍任务已领取", None
@@ -2292,6 +2296,12 @@ def _shout_recruit(win):
     发送到游戏当前默认频道（如需世界频道请预先在游戏内切换默认频道）。
     """
     global _shout_last_at
+    # 静默操作且游戏不在前台：键盘事件只进前台窗口且不允许激活，
+    # 跳过本次喊话（时间戳照记，保持喊话间隔节奏防快速重试刷屏）
+    if not app_utils.keyboard_ok(win):
+        log("[五倍] 静默操作且游戏不在前台：跳过缺人喊话", "WARN")
+        _shout_last_at = time.time()
+        return
     # 先激活游戏窗口：键盘事件只进前台窗口（用户测试时焦点常在面板/
     # 编辑器，偶现喊话静默丢失——与喊话测试按钮同款前置，实测按钮
     # 路径从不失败而任务路径偶现，差异即此激活）

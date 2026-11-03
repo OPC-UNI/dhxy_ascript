@@ -746,10 +746,14 @@ def _play_jiguan_puzzle(win, title):
     human_click(win, SCREEN_CENTER_POS[0], SCREEN_CENTER_POS[1])
     log("[玄枢轶闻] 已点击关闭封印提示对话框", "SYS")
     time.sleep(0.5)
-    # 2. Alt+C 降落（飞行状态下落地，机关才可见可点）
-    Keyboard.key_hot("alt", "c")
-    log("[玄枢轶闻] 已按 Alt+C 降落", "SYS")
-    time.sleep(1.0)
+    # 2. Alt+C 降落（飞行状态下落地，机关才可见可点）；
+    #    静默操作且游戏不在前台：跳过 Alt+C（键盘事件只进前台窗口）
+    if app_utils.keyboard_ok(win):
+        Keyboard.key_hot("alt", "c")
+        log("[玄枢轶闻] 已按 Alt+C 降落", "SYS")
+        time.sleep(1.0)
+    else:
+        log("[玄枢轶闻] 静默操作且游戏不在前台：跳过 Alt+C 降落", "WARN")
     # 3. 按序点击机关（每次点击后 5s 检查任务追踪）
     sig0 = _current_task_sig(win, title)
     clicked = 0

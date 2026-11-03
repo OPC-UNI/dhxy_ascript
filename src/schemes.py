@@ -127,6 +127,7 @@ def _settings_spec():
         cw._HIGH_PERF_KEY: True,
         cw._AUTO_REFILL_KEY: True,
         cw._CLEAR_SCREEN_KEY: True,
+        cw._SILENT_MODE_KEY: True,
         cw._AUTO_FAMEN_KEY: False,
         cw._DEBUG_OVERLAY_KEY: False,
         cw._UI_THEME_KEY: "light",
@@ -169,6 +170,7 @@ def _snapshot_current():
         cw._HIGH_PERF_KEY: cw.load_high_perf(),
         cw._AUTO_REFILL_KEY: cw.load_auto_refill(),
         cw._CLEAR_SCREEN_KEY: cw.load_clear_screen(),
+        cw._SILENT_MODE_KEY: cw.load_silent_mode(),
         cw._AUTO_FAMEN_KEY: cw.load_auto_famen(),
         cw._DEBUG_OVERLAY_KEY: cw.load_debug_overlay(),
         cw._UI_THEME_KEY: cw.load_ui_theme(),
@@ -215,6 +217,11 @@ def _apply(settings):
     mapping = {key: _coerce(key, settings[key]) if key in settings else default
                for key, default in spec.items()}
     app_utils.kv_save_many_merged(mapping)
+    # 静默操作：主进程立即生效（验证/诊断流程；任务子进程启动时按配置置位）
+    try:
+        app_utils.set_silent_mode(mapping[_control_window()._SILENT_MODE_KEY])
+    except Exception:
+        pass
 
 
 def _valid_name(name):

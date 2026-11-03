@@ -171,7 +171,11 @@ def _press_bag_hotkey(win):
     热键经前台窗口送达（Keyboard.key_hot 即 pyautogui）：按键前校验
     游戏窗口在前台，非前台先激活再校验（同 clear_screen 路径）——
     任务执行期间游戏保持前台，正常零额外开销。返回 (是否已发送, 描述)。
+    静默点击模式（app_utils.silent_clicks 内）：热键需要激活窗口，
+    违背静默约束，直接回退识别点击（human_click 会路由到消息通道）。
     """
+    if app_utils._SILENT_CLICK:
+        return False, "静默模式不走 Alt+E 热键（回退识别点击）"
     try:
         import win32gui
         if win32gui.GetForegroundWindow() != win.hwnd:

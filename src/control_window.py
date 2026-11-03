@@ -466,6 +466,26 @@ def save_clear_screen(on):
     return {"status": "success"}
 
 
+# ---- 静默操作（UI 开关，通用设置，KeyValue 持久化，默认开启；
+#      开启后全部点击走窗口消息通道、鼠标移动变空操作，游戏窗口
+#      可不前台——实现见 app_utils._SILENT_CLICK 与 silent_click.py；
+#      关闭时保持原物理鼠标方案（各键盘/激活类操作恢复原行为）） ----
+_SILENT_MODE_KEY = "silent_mode"
+
+
+def load_silent_mode():
+    """读取静默操作开关（首次默认开启）。"""
+    return bool(KeyValue.get(_SILENT_MODE_KEY, True))
+
+
+def save_silent_mode(on):
+    """保存静默操作开关并让主进程立即生效（验证/诊断流程），
+    返回操作结果。任务子进程在启动时按配置置位。"""
+    _kv_save(_SILENT_MODE_KEY, bool(on))
+    app_utils.set_silent_mode(bool(on))
+    return {"status": "success"}
+
+
 # ---- 修罗检查队伍（UI 开关，KeyValue 持久化；关闭时领取前跳过全部
 #      队伍检查，默认关闭——用户确认每轮回程后开面板检查耗时 5~7s） ----
 _XIULUO_CHECK_TEAM_KEY = "xiuluo_check_team"
@@ -724,6 +744,7 @@ class ControlWindow(WebWindow):
         self.expose(self.save_high_perf)
         self.expose(self.save_auto_refill)
         self.expose(self.save_clear_screen)
+        self.expose(self.save_silent_mode)
         self.expose(self.save_wubei_hezi)
         self.expose(self.save_wubei_check_team)
         self.expose(self.save_wubei_shout_switch)
@@ -741,6 +762,9 @@ class ControlWindow(WebWindow):
         self.expose(self.verify_xiuluo_claim)
         self.expose(self.verify_xiuluo_wuyi)
         self.expose(self.verify_xiuluo_tab_wuyi)
+        self.expose(self.verify_xiuluo_claim_silent)
+        self.expose(self.verify_xiuluo_wuyi_silent)
+        self.expose(self.verify_xiuluo_return_silent)
         self.expose(self.verify_wubei_claim)
         self.expose(self.verify_wubei_return)
         self.expose(self.verify_wubei_wuyi)
@@ -750,6 +774,7 @@ class ControlWindow(WebWindow):
         self.expose(self.verify_jiguan)
         self.expose(self.verify_position)
         self.expose(self.verify_capture_diag)
+        self.expose(self.verify_silent_click)
         self.expose(self.unbind_license)
         self.expose(self.get_env_info)
         self.expose(self.unbind_window)
@@ -980,6 +1005,7 @@ class ControlWindow(WebWindow):
                 "high_perf": load_high_perf(),
                 "auto_refill": load_auto_refill(),
                 "clear_screen": load_clear_screen(),
+                "silent_mode": load_silent_mode(),
                 "wubei": {"hezi": load_wubei_hezi(),
                           "check_team": load_wubei_check_team(),
                           "shout": load_wubei_shout_switch(),
@@ -1078,6 +1104,10 @@ class ControlWindow(WebWindow):
     def save_clear_screen(self, on):
         """通用设置变更：保存启动清屏开关状态。"""
         return save_clear_screen(on)
+
+    def save_silent_mode(self, on):
+        """通用设置变更：保存静默操作开关状态（主进程立即生效）。"""
+        return save_silent_mode(on)
 
     def save_wubei_hezi(self, on):
         """五倍设置变更：保存自动抢盒子开关状态。"""
@@ -1290,6 +1320,141 @@ class ControlWindow(WebWindow):
             pass
         self._notify_claim_verify_result(ok, info)
         self._verifying = False
+
+    def verify_xiuluo_claim_silent(self):
+        """诊断-静默修罗领取按钮：与验证领取同一流程，但全程静默点击
+        （不移动鼠标、不激活游戏窗口，游戏窗口可不前台）——验证静默
+        通道跑通完整领取链路。不需要 _game_window_clickable 前置
+        （消息点击不落屏幕坐标，遮挡无关）。
+        """
+        if self._tm.is_running():
+            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if self._verifying:
+            return {"status": "error", "msg": "验证进行中，请稍候"}
+        win = game.find_main_window()
+        if win is None:
+            return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
+        self._verifying = True
+        threading.Thread(target=self._run_claim_verify_silent, args=(win,),
+                         daemon=True, name="xiuluo-claim-silent-verify").start()
+        return {"status": "success",
+                "msg": "验证已开始：静默修罗领取（全程消息点击，不动鼠标不抢前台）"}
+
+    def _run_claim_verify_silent(self, win):
+        """静默修罗领取验证线程体：与领取验证同一流程，全程静默点击。"""
+        from . import xiuluo  # 延迟导入：xiuluo 反向导入本模块（避免循环）
+        try:
+            self.add_logs(["[验证] 开始静默修罗领取（全程消息点击，不动鼠标不抢前台）..."])
+            with app_utils.silent_clicks():
+                ok, info = xiuluo.verify_claim_flow(win, silent=True)
+        except Exception as e:
+            ok, info = False, f"验证异常: {e}"
+        try:
+            self.add_logs([f"[验证] 结果: {info}"])
+        except Exception:
+            pass
+        self._notify_silent_claim_verify_result(ok, info)
+        self._verifying = False
+
+    def _notify_silent_claim_verify_result(self, ok, info):
+        """静默修罗领取验证结果回推页面（诊断-静默修罗领取行的结果文案）。"""
+        if self.webview_instance:
+            try:
+                ok_js = "true" if ok else "false"
+                self.webview_instance.evaluate_js(
+                    f"if(window.onSilentClaimVerifyResult){{window.onSilentClaimVerifyResult({ok_js}, {json.dumps(info)});}}")
+            except Exception:
+                pass
+
+    def verify_xiuluo_wuyi_silent(self):
+        """诊断-静默修罗巫医按钮：与验证巫医同一流程，但全程静默点击
+        （不移动鼠标、不激活游戏窗口，游戏窗口可不前台）——验证静默
+        通道跑通完整巫医链路。不需要 _game_window_clickable 前置
+        （消息点击不落屏幕坐标，遮挡无关）。
+        """
+        if self._tm.is_running():
+            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if self._verifying:
+            return {"status": "error", "msg": "验证进行中，请稍候"}
+        win = game.find_main_window()
+        if win is None:
+            return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
+        self._verifying = True
+        threading.Thread(target=self._run_wuyi_verify_silent, args=(win,),
+                         daemon=True, name="xiuluo-wuyi-silent-verify").start()
+        return {"status": "success",
+                "msg": "验证已开始：静默修罗巫医（全程消息点击，不动鼠标不抢前台）"}
+
+    def _run_wuyi_verify_silent(self, win):
+        """静默修罗巫医验证线程体：与巫医验证同一流程，全程静默点击。"""
+        from . import xiuluo  # 延迟导入：xiuluo 反向导入本模块（避免循环）
+        try:
+            self.add_logs(["[验证] 开始静默修罗巫医（全程消息点击，不动鼠标不抢前台）..."])
+            with app_utils.silent_clicks():
+                ok, info = xiuluo.verify_wuyi_flow(win, silent=True)
+        except Exception as e:
+            ok, info = False, f"验证异常: {e}"
+        try:
+            self.add_logs([f"[验证] 结果: {info}"])
+        except Exception:
+            pass
+        self._notify_silent_wuyi_verify_result(ok, info)
+        self._verifying = False
+
+    def _notify_silent_wuyi_verify_result(self, ok, info):
+        """静默修罗巫医验证结果回推页面（诊断-静默修罗巫医行的结果文案）。"""
+        if self.webview_instance:
+            try:
+                ok_js = "true" if ok else "false"
+                self.webview_instance.evaluate_js(
+                    f"if(window.onSilentWuyiVerifyResult){{window.onSilentWuyiVerifyResult({ok_js}, {json.dumps(info)});}}")
+            except Exception:
+                pass
+
+    def verify_xiuluo_return_silent(self):
+        """诊断-静默修罗回程按钮：与验证回程同一流程，但全程静默点击
+        （不移动鼠标、不激活游戏窗口，游戏窗口可不前台）——验证静默
+        通道跑通完整回程链路。不需要 _game_window_clickable 前置
+        （消息点击不落屏幕坐标，遮挡无关）。
+        """
+        if self._tm.is_running():
+            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if self._verifying:
+            return {"status": "error", "msg": "验证进行中，请稍候"}
+        win = game.find_main_window()
+        if win is None:
+            return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
+        self._verifying = True
+        threading.Thread(target=self._run_return_verify_silent, args=(win,),
+                         daemon=True, name="xiuluo-return-silent-verify").start()
+        return {"status": "success",
+                "msg": "验证已开始：静默修罗回程（全程消息点击，不动鼠标不抢前台）"}
+
+    def _run_return_verify_silent(self, win):
+        """静默修罗回程验证线程体：与回程验证同一流程，全程静默点击。"""
+        from . import xiuluo  # 延迟导入：xiuluo 反向导入本模块（避免循环）
+        try:
+            self.add_logs(["[验证] 开始静默修罗回程（全程消息点击，不动鼠标不抢前台）..."])
+            with app_utils.silent_clicks():
+                ok, info = xiuluo.verify_return_flow(win, silent=True)
+        except Exception as e:
+            ok, info = False, f"验证异常: {e}"
+        try:
+            self.add_logs([f"[验证] 结果: {info}"])
+        except Exception:
+            pass
+        self._notify_silent_return_verify_result(ok, info)
+        self._verifying = False
+
+    def _notify_silent_return_verify_result(self, ok, info):
+        """静默修罗回程验证结果回推页面（诊断-静默修罗回程行的结果文案）。"""
+        if self.webview_instance:
+            try:
+                ok_js = "true" if ok else "false"
+                self.webview_instance.evaluate_js(
+                    f"if(window.onSilentReturnVerifyResult){{window.onSilentReturnVerifyResult({ok_js}, {json.dumps(info)});}}")
+            except Exception:
+                pass
 
     def verify_wubei_claim(self):
         """高级设置-五倍领取验证按钮：与五倍领取流程一致，但到绿色选项
@@ -1690,6 +1855,92 @@ class ControlWindow(WebWindow):
             except Exception:
                 pass
 
+    def verify_silent_click(self, button="primary", x=None, y=None, action=None):
+        """诊断-静默点击按钮：不移动鼠标、不激活窗口，向游戏窗口投递
+        一次消息点击，验证游戏窗口不在前台时是否响应后台点击（经典版
+        客户端曾实测不消费合成鼠标消息，多标签客户端下重新验证）。
+        button：'primary' 左键 / 'secondary' 右键（右键点击世界会弹
+        操作菜单，同为生效信号）。x/y 为窗口坐标（human_click 同空间，
+        如静默回蓝右键血蓝条 (1316,105)）：给了 x/y 只投递不打分，
+        结果由用户自行观察；不给时点画面中心并对比前后画面差异。
+        action：点位按钮的结果回推路由（'mp' 静默回蓝 / 'hp' 静默回血），
+        不给时回推到中心点击诊断的对应回调。
+        """
+        if button not in ("primary", "secondary"):
+            return {"status": "error", "msg": "不支持的按键类型（primary/secondary）"}
+        if action not in (None, "mp", "hp"):
+            return {"status": "error", "msg": "不支持的按钮类型（mp/hp）"}
+        if (x is None) != (y is None):
+            return {"status": "error", "msg": "坐标 x/y 须同时提供"}
+        try:
+            x = int(x) if x is not None else None
+            y = int(y) if y is not None else None
+        except (TypeError, ValueError):
+            return {"status": "error", "msg": "坐标必须是整数"}
+        if self._tm.is_running():
+            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if self._verifying:
+            return {"status": "error", "msg": "验证进行中，请稍候"}
+        win = game.find_main_window()
+        if win is None:
+            return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
+        self._verifying = True
+        threading.Thread(target=self._run_silent_click_verify,
+                         args=(win, button, x, y, action),
+                         daemon=True, name="silent-click-verify").start()
+        if x is not None and y is not None:
+            return {"status": "success",
+                    "msg": f"已开始：投递{('右键' if button == 'secondary' else '左键')}"
+                           f"点击 窗口({x},{y})，请自行观察游戏效果"}
+        return {"status": "success",
+                "msg": "验证已开始：投递一次消息点击并对比前后画面（约 4 秒）"}
+
+    def _run_silent_click_verify(self, win, button, x, y, action):
+        """静默点击验证线程体：逐行写入本地日志文件与日志窗，结束回推页面。"""
+        from . import silent_click  # 延迟导入：与其余验证模块保持一致
+
+        def emit(msg):
+            app_utils.log(f"[诊断] {msg}")
+            try:
+                self.add_logs([f"[诊断] {msg}"])
+            except Exception:
+                pass
+
+        try:
+            if x is not None and y is not None:
+                ok, info = silent_click.send_and_report(win, emit, button=button, x=x, y=y)
+            else:
+                ok, info = silent_click.run_diag(win, emit, button=button)
+        except Exception as e:
+            ok, info = False, f"诊断异常: {e}"
+        try:
+            app_utils.log(f"[诊断] 结果: {info}")
+            self.add_logs([f"[诊断] 结果: {info}"])
+        except Exception:
+            pass
+        self._notify_silent_click_result(ok, info, button, action)
+        self._verifying = False
+
+    def _notify_silent_click_result(self, ok, info, button="primary", action=None):
+        """静默点击验证结果回推页面（诊断-静默点击行的结果文案；
+        action 点位按钮路由：mp=回蓝 / hp=回血；无 action 时按
+        左键/右键回推到中心点击诊断各自的回调）。"""
+        if self.webview_instance:
+            try:
+                if action == "mp":
+                    handler = "onSilentMpVerifyResult"
+                elif action == "hp":
+                    handler = "onSilentHpVerifyResult"
+                elif button == "secondary":
+                    handler = "onSilentClickRightVerifyResult"
+                else:
+                    handler = "onSilentClickVerifyResult"
+                ok_js = "true" if ok else "false"
+                self.webview_instance.evaluate_js(
+                    f"if(window.{handler}){{window.{handler}({ok_js}, {json.dumps(info)});}}")
+            except Exception:
+                pass
+
     def _notify_claim_verify_result(self, ok, info):
         """领取验证结果回推页面（高级设置-领取验证行的结果文案）。"""
         if self.webview_instance:
@@ -1839,8 +2090,12 @@ def _game_window_clickable(win):
     截图不依赖前台（窗口 DC 直接读取），但鼠标点击是屏幕坐标——
     游戏被最大化窗口遮挡时点击全落到遮挡窗口上。沿父窗口链向上
     查找，能走到游戏窗口 hwnd 才认为可点击。
+    静默操作模式：点击走窗口消息通道、不落屏幕坐标，遮挡无关，
+    直接放行。
     注意：必须放在类定义之后（模块级），否则类方法会被吞进本函数体。
     """
+    if app_utils.silent_mode_on():
+        return True
     try:
         import win32gui
         cx = win.rect.left + win.rect.width // 2

@@ -57,7 +57,8 @@ from src.control_window import (ControlWindow, bound_short_label,
                                 load_battle_actions,
                                 load_high_perf,
                                 load_auto_refill,
-                                load_clear_screen)  # 网页控制窗口（启动/停止/重置、配置持久化）
+                                load_clear_screen,
+                                load_silent_mode)  # 网页控制窗口（启动/停止/重置、配置持久化）
 from src import app_utils  # 通用工具（日志、高性能模式共享设施）
 from src.app_utils import log, log_file_path  # 日志
 from src import game  # 游戏窗口操作
@@ -258,6 +259,11 @@ def _task_start_body():
     # 固定位置缓存点击（主进程验证流程不受影响，恒为识别路径）
     app_utils.set_high_perf(load_high_perf())
     log(f"[配置] 高性能模式: {'开（固定位置缓存点击）' if app_utils.high_perf_on() else '关'}", "SYS")
+    # 静默操作（通用设置开关，默认开启）：全部点击走窗口消息通道、
+    # 鼠标移动变空操作，游戏窗口可不前台；键盘/激活类操作按
+    # app_utils.keyboard_ok 门控（游戏已在前台才执行，不再激活）
+    app_utils.set_silent_mode(load_silent_mode())
+    log(f"[配置] 静默操作: {'开（消息点击，不占用鼠标）' if app_utils.silent_mode_on() else '关（物理鼠标）'}", "SYS")
     # 当前任务模式：任务主循环切换任务时更新，战斗线程/摄妖香线程
     # 按当前模式决策（多任务顺序执行下替代旧的单一模式读取）
     app_utils.set_current_task_mode(modes[0] if modes else "")
@@ -538,6 +544,10 @@ if __name__ == '__main__':
     # 必须放在 __main__ 内：Windows spawn 子进程会重新导入本模块但不执行此段
     # （解决打包后子进程重复启动问题）；同时保证授权窗口阶段 webview 窗口
     # 列表里只有授权窗口自己，其关闭即结束该次消息循环
+    # 静默操作（通用设置）：主进程按配置置位（验证/诊断流程的点击通道；
+    # 任务子进程在 task_start 内自行置位）
+    app_utils.set_silent_mode(load_silent_mode())
+    log(f"[配置] 静默操作: {'开（消息点击，不占用鼠标）' if app_utils.silent_mode_on() else '关（物理鼠标）'}", "SYS")
     tm = TaskManager(task_start, task_stop)
     control_win = ControlWindow(tm, license_info=license_info)  # 构造内已接线 tm 的状态/日志回调
     # 面板重设计后默认尺寸 720×560（侧边导航 + 运行看板，见 docs/ui-redesign.md）

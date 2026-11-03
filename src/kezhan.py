@@ -593,13 +593,18 @@ def _find_zhanggui(win):
     pt = _zhanggui_scan(win)
     if pt is not None:
         return pt
-    log("[客栈] 未找到掌柜，按 Alt+6 后重试", "WARN")
-    Keyboard.key_hot("alt", "6")
-    time.sleep(ALT6_RETRY_WAIT)  # 等待画面刷新
-    pt = _zhanggui_scan(win)
-    if pt is not None:
-        log("[客栈] Alt+6 后已找到掌柜", "SYS")
-        return pt
+    # 静默操作且游戏不在前台：跳过 Alt+6（键盘事件只进前台窗口），
+    # 直接走点击兜底点路径
+    if app_utils.keyboard_ok(win):
+        log("[客栈] 未找到掌柜，按 Alt+6 后重试", "WARN")
+        Keyboard.key_hot("alt", "6")
+        time.sleep(ALT6_RETRY_WAIT)  # 等待画面刷新
+        pt = _zhanggui_scan(win)
+        if pt is not None:
+            log("[客栈] Alt+6 后已找到掌柜", "SYS")
+            return pt
+    else:
+        log("[客栈] 未找到掌柜，静默操作且游戏不在前台：跳过 Alt+6", "WARN")
     # 用户实测兜底：点击 (530,593) 后重试（点位在对话框区域之下，
     # 即使有对话框打开，点击也不会落在选项上）
     log(f"[客栈] Alt+6 后仍无，点击兜底点 {ZHANGGUI_FALLBACK_CLICK_POS} 后重试", "WARN")
@@ -820,10 +825,14 @@ def _check_awang(win):
 
     pt, ap = _locate()
     if pt is None:
-        log("[客栈] 未找到阿旺，按 Alt+C 降落后重试", "WARN")
-        Keyboard.key_hot("alt", "c")
-        time.sleep(1.5)  # 等待降落落地
-        pt, ap = _locate()
+        # 静默操作且游戏不在前台：跳过 Alt+C（键盘事件只进前台窗口）
+        if app_utils.keyboard_ok(win):
+            log("[客栈] 未找到阿旺，按 Alt+C 降落后重试", "WARN")
+            Keyboard.key_hot("alt", "c")
+            time.sleep(1.5)  # 等待降落落地
+            pt, ap = _locate()
+        else:
+            log("[客栈] 未找到阿旺，静默操作且游戏不在前台：跳过 Alt+C", "WARN")
     if pt is None:
         return False, "未找到阿旺（模板与 OCR 名字均未命中，Alt+C 后重试仍失败）"
     # 两段点击：先点名字左侧 30px 走近（点击远处 NPC 会先走过去）；
@@ -1617,7 +1626,11 @@ def _give_item_for_npc(win):
 def _give_money(win, npc_name):
     """银两给与（钱老四/钓鱼大赛主理人等）：点银两输入框 → 全选清空 →
     输入 1000 → 点给与按钮。返回是否已处理（面板仍在时同样返回 True，
-    由调用方的已给与标记防重复点击）。"""
+    由调用方的已给与标记防重复点击）。静默操作且游戏不在前台：金额
+    输入走键盘不可用，跳过本次（返回 False，下轮轮询重试）。"""
+    if not app_utils.keyboard_ok(win):
+        log(f"[客栈] {npc_name}给与：静默操作且游戏不在前台，金额输入不可用，本次跳过", "WARN")
+        return False
     human_click(win, MONEY_GIVE_INPUT_POS[0], MONEY_GIVE_INPUT_POS[1])
     time.sleep(0.3)
     Keyboard.key_hot("ctrl", "a")  # 全选清空默认值
