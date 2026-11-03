@@ -25,6 +25,10 @@
 四象镇魂按 青龙→白虎→朱雀→玄武 依次点击加固；三才锁阴阵（循法固阵）
 按 引灯阵法→镇煞阵法→定魂阵法 依次点击加固（文案阅读序与点击序不一致，
 按「第N处阵法已加固完成」计数选下一个关键词，同玄枢轶闻封印按序开启）；
+音律小游戏（辨八音：对话「来吧，我还怕了你不成？」→ 窗口横幅
+kezhan_yinlv.png 出现 → 记住五编钟位置 → 点开始演奏 → 倒计时 3s 后
+按序点击 5 1 4 5 1 1 5 5 1 5 4 3 2 3 5（15 次、1s 间隔，用户 2026-11-03
+提供）→ 横幅消失结束）；
 提交物品/无跟踪两类特殊任务后续单独处理。
 """
 import re
@@ -84,6 +88,10 @@ DIALOG_TIMEOUT = 10                  # 等待对话框出现的超时（秒）
 # 任务对话处理（对话框文案 → 点击的绿色选项，同 xuanshu.DIALOG_OPTION_MAP）：
 # 对话框出现相应文案时，点击其绿色选项推进。领取对话链与跟踪期间均按此处理，
 # 后续新增对话直接在此追加条目。
+# 音律小游戏入口选项：点击后开启小游戏窗口检测（armed 门控——只有这对话
+# 被点过才检测 kezhan_yinlv.png，其他任务阶段零检测开销、零误配）。
+# 必须先于 DIALOG_OPTION_MAP 定义；其余音律常量见下方 YINLV_* 区块。
+YINLV_ENTRY_OPTION = "来吧，我还怕了你不成？"
 DIALOG_OPTION_MAP = {
     "瑶池近日要办迎仙大会，宴上那道琉璃映月羹": YAOCHI_DIALOG_OPTION,
     "少侠有什么事吗": "客栈任务",
@@ -218,7 +226,7 @@ DIALOG_OPTION_MAP = {
     "少侠将锦盒置于西侧玉案即可。":"将锦盒放到西侧玉案上",
     "有些事，知道的多了反而对自己没有好处，少侠切记。":"你说啥是啥吧，告辞！",
     "宝象国近日来了个叫阿拉普的乐师，整日鼓吹西域音律冠绝天下，还放话我":"西域乐师也敢在我大唐放肆？这便去会会他。",
-    "不瞒少侠，我三岁便能辨八音，五岁可奏《婆罗门曲》。少侠若是不信，不":"来吧，我还怕了你不成？",
+    "不瞒少侠，我三岁便能辨八音，五岁可奏《婆罗门曲》。少侠若是不信，不": YINLV_ENTRY_OPTION,
     "嘿嘿，若少侠不服，我便让你一步，今日算是咱俩打个平手，日后再决胜负":"日后等你把吹牛的功夫分一半到琴艺上再说，告辞。",
     "花果山的小猴精贪玩不小心摔到了筋骨，陶小桃为此特地向孙神医要了几副":"包在我身上。",
     "切记叮嘱陶小桃一—药膏凝前需轻揉伤处，活其气血。":"孙神医仁心，我定会转达。",
@@ -452,6 +460,43 @@ DUCHONG_ICONS = ["duchong1.png", "duchong2.png", "duchong3.png"]  # 三种毒虫
 BUG_CHECK_INTERVAL = 0.14              # 毒虫检索间隔（秒，用户指定 140ms）
 BUG_TIMEOUT = 60                       # 小游戏总超时（秒）
 BUG_IDLE_END = 5.0                     # 连续无虫出现达到该时长视为游戏结束（秒）
+# ---- 音律小游戏（辨八音：与西域乐师阿拉普比试编钟演奏） ----
+# 流程：对话「来吧，我还怕了你不成？」→ 小游戏窗口出现（kezhan_yinlv.png
+# 横幅命中）→ 记住五个编钟位置 → 点「开始演奏」（kezhan_kaishiyanzou.png，
+# 点后倒计时 3s 正式开始）→ 按固定顺序/间隔循环点击编钟 → 窗口横幅消失
+# 即小游戏结束。编钟 1-5 对应宫商角徵羽（模板 OCR：2=商 3=角 4=徵）。
+YINLV_WINDOW_ICON = "kezhan_yinlv.png"       # 小游戏窗口横幅（出现=窗口已开，消失=结束）
+YINLV_START_ICON = "kezhan_kaishiyanzou.png"  # 「开始演奏」按钮
+YINLV_BELLS = ("kezhan_bianzhong1_ring.png",   # 五个编钟模板（点开始前记住位置）
+               "kezhan_bianzhong2_ring.png",
+               "kezhan_bianzhong3_ring.png",
+               "kezhan_bianzhong4_ring.png",
+               "kezhan_bianzhong5_ring.png")
+YINLV_THRESHOLD = 0.75              # 模板匹配阈值（待实测校准，同毒虫/掌柜初值）
+YINLV_ARM_TIMEOUT = 120             # 入口选项点击后检测窗口的最长时限（秒）；超时自动
+                                    # 关闭检测（任务未进入小游戏等异常场景兜底）
+YINLV_CHECK_INTERVAL = 3.0          # extras 链窗口横幅检测限频（秒；热路径防全帧匹配空烧，
+                                    # 性能规则 3——带区待真实截图标定后收紧）
+YINLV_WINDOW_REGION = None          # 窗口横幅搜索条带 (l,t,r,b)；TODO 真实截图标定
+YINLV_LOCATE_TIMEOUT = 15           # 点开始前定位按钮+全部编钟的超时（秒）
+YINLV_COUNTDOWN = 3.0               # 点开始演奏后的倒计时（秒，用户指定）
+# 点击序列（用户提供 2026-11-03）：5 1 4 5 1 1 5 5 1 5 4 3 2 3 5 共 15 次。
+# 节奏：点开始 → 倒计时 3s → 再等 1s → 点 5 → 等 1s → 点 1 → ...
+YINLV_CLICK_SEQ = ("kezhan_bianzhong5_ring.png", "kezhan_bianzhong1_ring.png",
+                   "kezhan_bianzhong4_ring.png", "kezhan_bianzhong5_ring.png",
+                   "kezhan_bianzhong1_ring.png", "kezhan_bianzhong1_ring.png",
+                   "kezhan_bianzhong5_ring.png", "kezhan_bianzhong5_ring.png",
+                   "kezhan_bianzhong1_ring.png", "kezhan_bianzhong5_ring.png",
+                   "kezhan_bianzhong4_ring.png", "kezhan_bianzhong3_ring.png",
+                   "kezhan_bianzhong2_ring.png", "kezhan_bianzhong3_ring.png",
+                   "kezhan_bianzhong5_ring.png")
+YINLV_CLICK_INTERVAL = 1.0          # 编钟点击间隔（秒，用户指定）
+YINLV_CLICK_ROUNDS = 1              # 序列循环轮数（用户指定：共点击 15 次）
+YINLV_END_TIMEOUT = 120             # 小游戏总超时（秒）
+YINLV_END_MISSES = 3                # 窗口横幅连续未命中次数即判结束（0.5s×3=1.5s
+                                    # 防抖窗口，防单帧误判结束）
+_yinlv_last_check = 0.0             # 上次 extras 窗口检测时间（限频）
+_yinlv_armed_at = 0.0               # 音律入口选项点击时间；>0 且未超时=检测开启
 CLAIM_CHAIN_TIMEOUT = 30             # 整条领取对话链（含接取与任务对话）的总超时（秒）
 # ---- 特殊任务步骤：前往洛阳城大理寺墙外（追踪文案出现时手动寻路） ----
 DALI_TRACK_TEXT = "前往洛阳城大理寺墙外附近"   # 任务追踪文案（出现即需手动寻路）
@@ -1208,6 +1253,112 @@ def _play_duchong(win):
     return True, f"拍毒虫超时结束（共拍 {clicked} 只）"
 
 
+def _yinlv_locate_bells(bgr):
+    """同一帧批量定位五个编钟，返回 {模板名: (x, y) 中心}；未全部命中
+    返回 None（下轮重试，不缓存——小游戏窗口内位置固定，但仅流程内
+    轮询，有界低频，无需高性能缓存白名单）。"""
+    res = game_map.match_frame_multi(bgr, YINLV_BELLS, threshold=YINLV_THRESHOLD)
+    if any(pt is None for pt in res.values()):
+        return None
+    return res
+
+
+def _yinlv_window_gone(win, timeout=3.0):
+    """音律小游戏结束判定：窗口横幅连续 YINLV_END_MISSES 次轮询未命中
+    （0.5s 间隔，1.5s 防抖窗口，防单帧误判）。最多观察 timeout 秒，
+    未确认消失返回 False（窗口仍在）。"""
+    misses = 0
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        time.sleep(0.5)
+        img = win.capture(force_activate=False)
+        if img is None:
+            continue
+        bgr = cv2.cvtColor(np.asarray(img)[:, :, :3], cv2.COLOR_RGB2BGR)
+        if game_map.match_frame_np(bgr, YINLV_WINDOW_ICON,
+                                   threshold=YINLV_THRESHOLD) is None:
+            misses += 1
+            if misses >= YINLV_END_MISSES:
+                return True
+        else:
+            misses = 0
+    return False
+
+
+def _play_yinlv(win):
+    """音律小游戏完整流程（阻塞执行到窗口横幅消失）。返回 (是否完成, 描述)。
+
+    1. 同帧定位「开始演奏」按钮与五个编钟（编钟位置在点开始前记住；
+       点开始后倒计时期间画面会变化，不能点后再定位）
+    2. 点开始 → 倒计时 YINLV_COUNTDOWN 秒 → 再等 1 个点击间隔 → 按
+       YINLV_CLICK_SEQ 每点一次等 YINLV_CLICK_INTERVAL 秒（用户节奏：
+       倒计时 3s → 等 1s → 点 5 → 等 1s → 点 1 → ...）；多轮时每轮
+       结束确认窗口仍在再继续——横幅没了再点会点到世界里，防误操作
+    3. 等窗口横幅连续 YINLV_END_MISSES 次未命中即结束
+    """
+    # 阶段一：定位开始按钮与全部编钟（小游戏窗口内，帧间位置稳定）
+    deadline = time.time() + YINLV_LOCATE_TIMEOUT
+    start_pt = None
+    bells = None
+    while time.time() < deadline:
+        img = win.capture(force_activate=False)
+        if img is None:
+            time.sleep(0.3)
+            continue
+        bgr = cv2.cvtColor(np.asarray(img)[:, :, :3], cv2.COLOR_RGB2BGR)
+        if is_in_battle_frame(bgr):
+            time.sleep(1.0)
+            continue
+        start_pt = game_map.match_frame_np(bgr, YINLV_START_ICON,
+                                           threshold=YINLV_THRESHOLD)
+        bells = _yinlv_locate_bells(bgr) if start_pt is not None else None
+        if start_pt is not None and bells is not None:
+            break
+        time.sleep(0.3)
+    if start_pt is None or bells is None:
+        return False, "音律小游戏：定位开始按钮/编钟超时（模板未命中，待校准阈值）"
+    log(f"[客栈] 音律小游戏：已定位 5 个编钟，点击开始演奏 "
+        f"@({start_pt[0]},{start_pt[1]})，倒计时 {YINLV_COUNTDOWN}s", "SYS")
+    human_click(win, start_pt[0], start_pt[1])
+    # 等倒计时结束（正式开始的直接信号待实测后轮询化，性能规则 7；
+    # 固定延时只作上限），再等 1 个点击间隔才点第一个编钟（用户节奏）
+    time.sleep(YINLV_COUNTDOWN)
+    time.sleep(YINLV_CLICK_INTERVAL)
+    # 阶段二：按固定顺序/间隔循环点击编钟（点击节奏优先，中途不截帧）
+    deadline = time.time() + YINLV_END_TIMEOUT
+    if not YINLV_CLICK_SEQ:
+        log("[客栈] 音律点击顺序未配置（YINLV_CLICK_SEQ 为空），跳过点击直接等结束", "WARN")
+    else:
+        clicked = 0
+        rounds = 0
+        while time.time() < deadline:
+            for icon in YINLV_CLICK_SEQ:
+                pt = bells.get(icon)
+                if pt is not None:
+                    human_click(win, pt[0], pt[1])
+                    clicked += 1
+                time.sleep(YINLV_CLICK_INTERVAL)
+            rounds += 1
+            if YINLV_CLICK_ROUNDS is not None and rounds >= YINLV_CLICK_ROUNDS:
+                break
+            # 窗口消失即停止点击（横幅没了再点会点到世界里）。
+            # 单帧快速检查保点击节奏（帧在时仅 ~40-140ms），疑似消失
+            # 才走 1.5s 防抖确认——防单帧误判打断节奏
+            img = win.capture(force_activate=False)
+            if img is not None:
+                bgr2 = cv2.cvtColor(np.asarray(img)[:, :, :3], cv2.COLOR_RGB2BGR)
+                if game_map.match_frame_np(bgr2, YINLV_WINDOW_ICON,
+                                           threshold=YINLV_THRESHOLD) is None \
+                        and _yinlv_window_gone(win, timeout=3.0):
+                    break
+        log(f"[客栈] 音律小游戏：已点击编钟 {clicked} 次（{rounds} 轮）", "SYS")
+    # 阶段三：等窗口横幅消失（连续 YINLV_END_MISSES 次未命中）
+    while time.time() < deadline:
+        if _yinlv_window_gone(win, timeout=5.0):
+            return True, "音律小游戏结束（窗口横幅消失）"
+    return True, f"音律小游戏超时结束（{YINLV_END_TIMEOUT}s）"
+
+
 def _match_baoxiang(img):
     """神秘宝箱双模板比分数匹配。
 
@@ -1352,6 +1503,29 @@ def _handle_follow_extras(win, items, img_np):
             ok, info = _play_duchong(win)
             log(f"[客栈] {info}", "SYS" if ok else "WARN")
             return True
+        # 音律小游戏（辨八音）：仅入口选项被点击后（armed 门控）才检测
+        # 窗口横幅，其他任务阶段零开销、零误配；窗口出现即完整处理
+        # （阻塞到横幅消失）。检测限频 YINLV_CHECK_INTERVAL（热路径全帧
+        # 匹配，性能规则 3；带区待真实截图标定）。
+        global _yinlv_last_check, _yinlv_armed_at
+        armed = _yinlv_armed_at > 0 \
+            and time.time() - _yinlv_armed_at <= YINLV_ARM_TIMEOUT
+        if armed and bgr is not None \
+                and time.time() - _yinlv_last_check >= YINLV_CHECK_INTERVAL:
+            _yinlv_last_check = time.time()
+            # 取全局最高分并记录：阈值/带区标定的实测数据来源
+            score, wpt = game_map.best_match_np(bgr, YINLV_WINDOW_ICON,
+                                                region=YINLV_WINDOW_REGION)
+            if wpt is not None and score >= YINLV_THRESHOLD:
+                log(f"[客栈] 检测到音律小游戏窗口 @({wpt[0]},{wpt[1]})"
+                    f"（匹配度 {score:.2f}）", "SYS")
+                ok, info = _play_yinlv(win)
+                if ok:
+                    # 小游戏结束 → 关闭检测（任务未进小游戏/处理失败的
+                    # 情况保持 armed，窗口仍在时下轮询重试）
+                    _yinlv_armed_at = 0.0
+                log(f"[客栈] {info}", "SYS" if ok else "WARN")
+                return True
         if _task_needs_dali_walk(task) \
                 and time.time() - _dali_last_done >= DALI_REDO_INTERVAL:
             # 寻路阻塞执行，本轮 items 已过期，不再做对话处理
@@ -1792,6 +1966,20 @@ def _handle_qiyu_dialog(win, items, img_np):
     return False
 
 
+def _arm_yinlv_check(opt):
+    """音律入口选项被点击 → 开启小游戏窗口检测（armed 门控）。
+
+    只有「来吧，我还怕了你不成？」被实际点击后才检测 kezhan_yinlv.png
+    横幅，其他任务阶段不跑这个模板匹配（无开销、无误配）。重复点击
+    入口选项会刷新时限；窗口处理完成或超时后检测自动关闭。
+    """
+    global _yinlv_armed_at
+    if opt == YINLV_ENTRY_OPTION:
+        _yinlv_armed_at = time.time()
+        log(f"[客栈] 已点击音律入口选项，开启小游戏窗口检测"
+            f"（{YINLV_ARM_TIMEOUT}s 内有效）", "SYS")
+
+
 def _handle_dialog_options(win, items, img_np):
     """处理任务对话：奇遇对话框（多选项点第一个）优先，其次
     DIALOG_OPTION_MAP 绿字选项，再按 DIALOG_SKIP_TEXTS 连点屏幕
@@ -1821,6 +2009,7 @@ def _handle_dialog_options(win, items, img_np):
             continue
         if _click_green_option_fuzzy(win, items, img_np, opt):
             log(f"[客栈] 检测到任务对话，已点击绿色选项「{opt}」", "SYS")
+            _arm_yinlv_check(opt)
             return True
         # 选项 OCR 漏检重试：跟踪轮询的帧复用机制会让漏检帧的 OCR
         # 结果持续复用（静止对话框帧不重 OCR），直接绿字块兜底只能
@@ -1836,6 +2025,7 @@ def _handle_dialog_options(win, items, img_np):
             if _click_green_option_fuzzy(win, items2, img_np2, opt):
                 log(f"[客栈] 检测到任务对话，已点击绿色选项「{opt}」"
                     f"（重 OCR 补识）", "SYS")
+                _arm_yinlv_check(opt)
                 return True
             # 重 OCR 仍漏：对话框区 2x 放大重识别一次（答题选项字小或
             # 渲染特殊，区域快引擎原尺寸漏检——2026-11-01 子曰第一题
@@ -1852,15 +2042,18 @@ def _handle_dialog_options(win, items, img_np):
             if _click_green_option_fuzzy(win, mapped, img_np2, opt):
                 log(f"[客栈] 检测到任务对话，已点击绿色选项「{opt}」"
                     f"（2x 放大补识）", "SYS")
+                _arm_yinlv_check(opt)
                 return True
         # 选项 OCR 不可识别（如单字「哎」）：按问题行下方绿字块点击
         if _click_green_option_fallback(win, items, img_np, dtxt):
             log("[客栈] 检测到任务对话（选项 OCR 不可识别，绿字块兜底点击）", "SYS")
+            _arm_yinlv_check(opt)
             return True
         # 纯标点选项（如省略号「……」）：OCR 不识别、点阵单点 ~2x2px
         # 绿字块过滤也漏——按绿色像素行聚类点击点阵中心
         if _click_green_dots_below(win, items, img_np, dtxt):
             log("[客栈] 检测到任务对话（省略号点阵选项，点阵兜底点击）", "SYS")
+            _arm_yinlv_check(opt)
             return True
     for dtxt, clicks in DIALOG_SKIP_TEXTS.items():
         if _dialog_text_present(norm_items, norm_text(dtxt)):
