@@ -3,7 +3,8 @@
 流程（与玄枢轶闻基本一致）：
 0. 任务追踪中已有「客栈」任务（续跑）→ 直接跟踪（复用 xuanshu.follow_task）
 1. 没有任务时，前往洛阳客栈领取任务：
-   1.1 已在洛阳客栈 → 查找掌柜 zhanggui.png；未找到 → Alt+6 后重试一次，
+   1.1 已在洛阳客栈 → 查找掌柜（双模板 zhanggui.png / zhanggui2.png，
+       任一匹配即命中）；未找到 → Alt+6 后重试一次，
        仍无 → 点击兜底点 (530,593) 后重试一次（用户实测有效），
        仍没有 → 终止任务
    1.2 不在洛阳客栈 → 世界地图 → 点击洛阳城 → 小地图点击 (884,600)
@@ -66,7 +67,9 @@ class DailyLimitError(Exception):
 # ---- 前往洛阳客栈找掌柜 ----
 KEZHAN_MAP = "洛阳客栈"               # 位置识别地名（精确匹配）
 LUOYANG_CITY = "洛阳城"               # 世界地图城市名
-ZHANGGUI_ICON = "zhanggui.png"       # 掌柜模板（实测素材）
+ZHANGGUI_ICON = "zhanggui.png"       # 掌柜模板 1（实测素材）
+ZHANGGUI_ICON2 = "zhanggui2.png"     # 掌柜模板 2（另一种外观/状态，用户提供素材）
+ZHANGGUI_THRESHOLD = 0.75            # 双模板共用阈值（模板 1 实测 0.806，0.7 以上无误匹配留余量）
 ZHANGGUI_FALLBACK_CLICK_POS = (530, 593)  # 找不到掌柜时的兜底点击点（用户实测：点击后重试可找到）
 INN_MAP_CLICK_POS = (884, 600)       # 洛阳小地图上客栈位置的点击点（窗口相对坐标）
 FAST_DIALOG_TEXT = "你要到洛阳客栈"    # 点击后可能出现的快送对话框文案
@@ -501,21 +504,42 @@ def _at_inn(win):
     return pos is not None and pos[0].strip() == KEZHAN_MAP
 
 
+def _zhanggui_on_frame(img):
+    """单帧双模板查找掌柜：zhanggui.png / zhanggui2.png 任一匹配
+    即命中（掌柜两种外观/状态）；两者同时匹配时取分数高者（相似
+    模板双模板比分数规则，防互相弱匹配误判）。返回 (x, y) 或 None。
+    """
+    if img is None:
+        return None
+    c1, p1 = game_map.best_match_in(img, ZHANGGUI_ICON)
+    c2, p2 = game_map.best_match_in(img, ZHANGGUI_ICON2)
+    best = (c1, p1) if c1 >= c2 else (c2, p2)
+    if best[0] < ZHANGGUI_THRESHOLD:
+        return None
+    return best[1]
+
+
+def _zhanggui_scan(win):
+    """截一帧并双模板查找掌柜（先截帧再匹配，不激活窗口抢焦点）。"""
+    img = win.capture(force_activate=False)
+    return _zhanggui_on_frame(img)
+
+
 def _find_zhanggui(win):
     """查找掌柜模板；未找到时按 Alt+6 后重试，仍无则点击兜底点
     (530,593) 后重试一次（用户实测有效）。返回 (x, y) 或 None。
 
-    模板实测匹配 0.806，NPC 待机动画会小幅波动，阈值取 0.75 留余量
-    （实测 0.7 以上无其他误匹配）。掌柜随站位渲染位置变化，必须识图
-    定位，不缓存。
+    模板 1 实测匹配 0.806，NPC 待机动画会小幅波动，阈值取 0.75 留余量
+    （实测 0.7 以上无其他误匹配）；模板 2 与模板 1 同阈值。掌柜随站位
+    渲染位置变化，必须识图定位，不缓存。
     """
-    pt = game_map.find_template(win, ZHANGGUI_ICON, threshold=0.75)
+    pt = _zhanggui_scan(win)
     if pt is not None:
         return pt
     log("[客栈] 未找到掌柜，按 Alt+6 后重试", "WARN")
     Keyboard.key_hot("alt", "6")
     time.sleep(ALT6_RETRY_WAIT)  # 等待画面刷新
-    pt = game_map.find_template(win, ZHANGGUI_ICON, threshold=0.75)
+    pt = _zhanggui_scan(win)
     if pt is not None:
         log("[客栈] Alt+6 后已找到掌柜", "SYS")
         return pt
@@ -524,7 +548,7 @@ def _find_zhanggui(win):
     log(f"[客栈] Alt+6 后仍无，点击兜底点 {ZHANGGUI_FALLBACK_CLICK_POS} 后重试", "WARN")
     human_click(win, ZHANGGUI_FALLBACK_CLICK_POS[0], ZHANGGUI_FALLBACK_CLICK_POS[1])
     time.sleep(ALT6_RETRY_WAIT)  # 等待点击响应/画面刷新
-    pt = game_map.find_template(win, ZHANGGUI_ICON, threshold=0.75)
+    pt = _zhanggui_scan(win)
     if pt is not None:
         log("[客栈] 点击兜底点后已找到掌柜", "SYS")
     return pt
