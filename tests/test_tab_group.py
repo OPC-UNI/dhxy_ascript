@@ -50,12 +50,19 @@ def _silent_mode_off():
     app_utils.set_silent_mode(False)
 
 
-def _mock_silent_click(monkeypatch, clicks, tab=None, count=3, cur=0):
-    """打桩 silent_click 的 Tab 条原语：clicks 记录点击序号。"""
+def _mock_silent_click(monkeypatch, clicks, tab=None, count=3, cur=0,
+                       names=None):
+    """打桩 silent_click 的 Tab 条原语：clicks 记录点击序号。
+
+    names 缺省 = 全部已登录（角色名，!= 游戏标题）。
+    """
     from src import silent_click
     monkeypatch.setattr(silent_click, "tab_control_hwnd", lambda _w: tab)
     monkeypatch.setattr(silent_click, "tab_item_count", lambda _t: count)
     monkeypatch.setattr(silent_click, "tab_current_index", lambda _t: cur)
+    names = names if names is not None else [f"角色{i}" for i in range(count)]
+    monkeypatch.setattr(silent_click, "tab_items",
+                        lambda _w, _c: [(n, (0, 0, 174, 23)) for n in names])
 
     def click(_w, index):
         clicks.append(index)
@@ -115,6 +122,63 @@ def test_switch_next_by_click_bad_tab_read(monkeypatch):
     _mock_silent_click(monkeypatch, clicks, tab=TAB_HWND, count=0, cur=-1)
     assert tab_group._switch_next_by_click(_FakeWin()) is None
     assert clicks == []
+
+
+def test_switch_next_by_click_skips_unlogged_tab(monkeypatch):
+    clicks = []
+    # Tab 1 未登录（UIA 名 = 游戏标题）：cur=0 直接点击已登录的 Tab 2
+    _mock_silent_click(monkeypatch, clicks, tab=TAB_HWND, count=3, cur=0,
+                       names=["角色0", tab_group.game.GAME_TITLE, "角色2"])
+    list_tabs, _ = _list_tabs_script([0xA, 0xC])
+    monkeypatch.setattr(tab_group.game, "list_tab_windows", list_tabs)
+    assert tab_group._switch_next_by_click(_FakeWin()) == "idc"
+    assert clicks == [2]  # 跳过未登录 Tab 1，不投递点击
+
+
+def test_switch_next_by_click_skips_wraps_to_logged(monkeypatch):
+    clicks = []
+    # cur=2，下一圈 Tab 0 未登录 → 绕回已登录的 Tab 1
+    _mock_silent_click(monkeypatch, clicks, tab=TAB_HWND, count=3, cur=2,
+                       names=[tab_group.game.GAME_TITLE, "角色1", "角色2"])
+    list_tabs, _ = _list_tabs_script([0xC, 0xB])
+    monkeypatch.setattr(tab_group.game, "list_tab_windows", list_tabs)
+    assert tab_group._switch_next_by_click(_FakeWin()) == "idb"
+    assert clicks == [1]
+
+
+# ---- _next_logged_index ----
+
+def test_next_logged_index_skip_and_wrap(monkeypatch):
+    from src import silent_click
+    g = tab_group.game.GAME_TITLE
+    items = [(g, (0, 0, 1, 1)), ("角色1", (0, 0, 1, 1)), (g, (0, 0, 1, 1)),
+             ("角色3", (0, 0, 1, 1))]
+    monkeypatch.setattr(silent_click, "tab_items", lambda _w, _c: items)
+    assert tab_group._next_logged_index(_FakeWin(), None, 0, 4) == 1
+    assert tab_group._next_logged_index(_FakeWin(), None, 1, 4) == 3
+    # 从 3 绕回 1（0 与 2 未登录）
+    assert tab_group._next_logged_index(_FakeWin(), None, 3, 4) == 1
+
+
+def test_next_logged_index_fallbacks(monkeypatch):
+    from src import silent_click
+    # UIA 不可用 → 回退 (cur+1)%count
+    monkeypatch.setattr(silent_click, "tab_items", lambda _w, _c: None)
+    assert tab_group._next_logged_index(_FakeWin(), None, 2, 5) == 3
+    # 其余 Tab 全未登录 → None（无切换目标，调用方放弃本轮）
+    g = tab_group.game.GAME_TITLE
+    items = [("角色2", (0, 0, 1, 1)), (g, (0, 0, 1, 1)), (g, (0, 0, 1, 1))]
+    monkeypatch.setattr(silent_click, "tab_items", lambda _w, _c: items)
+    assert tab_group._next_logged_index(_FakeWin(), None, 0, 3) is None
+
+
+def test_switch_next_by_click_no_other_logged_tab(monkeypatch):
+    clicks = []
+    _mock_silent_click(monkeypatch, clicks, tab=TAB_HWND, count=3, cur=0,
+                       names=["角色0", tab_group.game.GAME_TITLE,
+                              tab_group.game.GAME_TITLE])
+    assert tab_group._switch_next_by_click(_FakeWin()) is None
+    assert clicks == []  # 无切换目标：不投递任何点击
 
 
 # ---- _switch_next 路由 ----

@@ -462,7 +462,8 @@ def test_tab_item_read_helpers(monkeypatch):
 
 # Tab 条窗口矩形原点 (100,50)（_FakeUser32 winrect 默认值）；
 # UIA 屏幕矩形 (102,52)-(276,75) → 中心 (189,63) → 客户区 (89,13)
-_FAKE_TAB_RECTS = [(102, 52, 276, 75), (276, 52, 450, 75), (450, 52, 624, 75)]
+_FAKE_TAB_ITEMS = [("甲", (102, 52, 276, 75)), ("乙", (276, 52, 450, 75)),
+                   ("丙", (450, 52, 624, 75))]
 
 
 @pytest.fixture
@@ -473,8 +474,8 @@ def _clear_tab_rects_cache(monkeypatch):
 def test_send_silent_tab_click_sequence(monkeypatch, _clear_tab_rects_cache):
     fake = _FakeUser32Tab(tcm={silent_click.TCM_GETITEMCOUNT: 3})
     monkeypatch.setattr(silent_click, "user32", fake)
-    monkeypatch.setattr(silent_click, "_uia_tab_item_rects",
-                        lambda _w, _c: list(_FAKE_TAB_RECTS))
+    monkeypatch.setattr(silent_click, "_uia_tab_items",
+                        lambda _w, _c: list(_FAKE_TAB_ITEMS))
     info = silent_click.send_silent_tab_click(_FakeWin(0x123), 1)
     assert info is not None and info["hwnd"] == _TAB_HWND and info["index"] == 1
     assert info["point"] == (263, 13)  # (276+450)/2-100, (52+75)/2-50
@@ -502,10 +503,10 @@ def test_send_silent_tab_click_no_tab_control(monkeypatch, _clear_tab_rects_cach
     assert silent_click.send_silent_tab_click(_FakeWin(0x123), 0) is None
 
 
-def test_send_silent_tab_click_no_uia_rects(monkeypatch, _clear_tab_rects_cache):
+def test_send_silent_tab_click_no_uia_items(monkeypatch, _clear_tab_rects_cache):
     fake = _FakeUser32Tab(tcm={silent_click.TCM_GETITEMCOUNT: 3})
     monkeypatch.setattr(silent_click, "user32", fake)
-    monkeypatch.setattr(silent_click, "_uia_tab_item_rects",
+    monkeypatch.setattr(silent_click, "_uia_tab_items",
                         lambda _w, _c: None)
     assert silent_click.send_silent_tab_click(_FakeWin(0x123), 1) is None
     assert not any(m[1] in (WM_LBUTTONDOWN, WM_LBUTTONUP) for m in fake.msgs)
@@ -515,23 +516,23 @@ def test_send_silent_tab_click_uia_count_mismatch(monkeypatch,
                                                   _clear_tab_rects_cache):
     fake = _FakeUser32Tab(tcm={silent_click.TCM_GETITEMCOUNT: 3})
     monkeypatch.setattr(silent_click, "user32", fake)
-    monkeypatch.setattr(silent_click, "_uia_tab_item_rects",
-                        lambda _w, _c: _FAKE_TAB_RECTS[:2])  # UIA 少一个
+    monkeypatch.setattr(silent_click, "_uia_tab_items",
+                        lambda _w, _c: _FAKE_TAB_ITEMS[:2])  # UIA 少一个
     assert silent_click.send_silent_tab_click(_FakeWin(0x123), 1) is None
 
 
-def test_tab_rects_cache_reuse_and_count_invalidate(monkeypatch,
+def test_tab_items_cache_reuse_and_count_invalidate(monkeypatch,
                                                     _clear_tab_rects_cache):
     calls = []
 
     def _uia(_w, count):
         calls.append(count)
-        return list(_FAKE_TAB_RECTS[:count])
-    monkeypatch.setattr(silent_click, "_uia_tab_item_rects", _uia)
+        return list(_FAKE_TAB_ITEMS[:count])
+    monkeypatch.setattr(silent_click, "_uia_tab_items", _uia)
     win = _FakeWin(0x123)
-    assert silent_click._tab_item_rects(win, 3) == _FAKE_TAB_RECTS
-    assert silent_click._tab_item_rects(win, 3) == _FAKE_TAB_RECTS
+    assert silent_click.tab_items(win, 3) == _FAKE_TAB_ITEMS
+    assert silent_click.tab_items(win, 3) == _FAKE_TAB_ITEMS
     assert calls == [3]  # 第二次命中缓存
     # Tab 数变化 → 失效重读
-    assert silent_click._tab_item_rects(win, 2) == _FAKE_TAB_RECTS[:2]
+    assert silent_click.tab_items(win, 2) == _FAKE_TAB_ITEMS[:2]
     assert calls == [3, 2]

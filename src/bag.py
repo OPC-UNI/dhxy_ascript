@@ -277,6 +277,32 @@ def use_sheyaoxiang(win):
         return _use_sheyaoxiang_inner(win)
 
 
+def use_sheyaoxiang_if_due(win):
+    """寻路期摄妖香续用入口：到期才执行完整使用流程。
+
+    替代原任意时机的定时续用线程（每分钟查一次，撞上任务领取/
+    巫医等对话弹框时弹框挡住背包交互——储物格切换点击无效，
+    用户 2026-11-04 实测）：调用方在点击任务追踪成功（进入寻路期、
+    无弹框、窗口空闲）后调用本函数。组号模式下调用方须在队员
+    血蓝 pass 之前调用（顺序：点击寻路 → 摄妖香 → 切 Tab 血蓝）。
+    战斗中跳过（下轮寻路再查）。返回 (是否执行了使用, 描述)。
+    """
+    from . import battle  # 函数内导入：bag→battle→team→dialog_common→bag 环
+    from . import control_window  # 开关读取（任务子进程同 KeyValue）
+    if not control_window.load_use_sheyaoxiang():
+        return False, "开关关闭，跳过"
+    if not app_utils.sheyaoxiang_due(win):
+        return False, "距上次使用不足 1 小时，跳过"
+    if app_utils.sheyaoxiang_skip_nonleader():  # 缺省取当前任务模式
+        return False, "非队长无需使用，跳过"
+    if battle.watch_in_battle() or battle.is_in_battle(win):
+        return False, "战斗中跳过，下轮寻路再查"
+    ok, info = use_sheyaoxiang(win)
+    if ok:
+        app_utils.sheyaoxiang_mark_used(win)
+    return ok, info
+
+
 def _in_battle_any(win):
     """战斗状态判定（摄妖香使用流程内）：watch 确认状态免费，覆盖
     战斗 UI 被背包面板遮挡致单帧模板漏检；单帧模板检查覆盖刚开局、

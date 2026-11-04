@@ -131,51 +131,40 @@ def _ensure_window_binding():
         log("[绑定] 未选择窗口，本次按自动选择运行", "WARN")
 
 
-def _sheyaoxiang_watchdog(win):
-    """摄妖香定时续用线程（任务子进程内 daemon 线程，随进程强杀终止）。
+# 空闲期兜底：任务持续运行但该时长内无「点击追踪寻路」（连续回城符/
+# 地图点击赶路、流程卡在无寻路环节）时，寻路期续用没有触发机会——
+# 到期后空闲期补用，防非寻路走路（回城/地图点击）无香遇敌。正常轮次
+# 内点击追踪间隔远小于此值，不会与常规寻路期续用重叠。
+_SHEYAOXIANG_IDLE_FALLBACK_MINUTES = 10
 
-    每分钟检查一次到期状态；到期时执行完整使用流程（与任务/战斗
-    线程的点击经全局输入锁互斥），成功后记录时间。失败不记录时间，
-    下一分钟自动重试直到成功。战斗中跳过——物品栏战斗中打不开
-    （实测 2026-10-18 第 71 场战斗期间三次点击背包按钮均未打开面板，
-    战斗 UI 覆盖按钮区）；跳过后续用重查间隔缩短为 10 秒，战斗链
-    结束后尽快补用，缩短无摄妖香走路的遇敌窗口。
-    修罗/五倍模式下非队长不续用（跟队无需自用，用户 2026-10-21）。
-    有效期 1 小时，按 57 分钟续用提前 3 分钟覆盖，避免到期空挡遇敌
-    （日志文案仍按「1 小时」表述）。使用流程内部还有多处战斗检查
-    （bag.use_sheyaoxiang，watch 状态 + 单帧判定）：入口检查落在
-    战斗开场动画期会漏检，流程内检查兜底（实测 2026-10-19 第 15 场
-    战斗内整段流程执行完、摄妖香未生效却标记成功形成空挡遇敌）。
+
+def _sheyaoxiang_idle_fallback(win):
+    """摄妖香空闲期兜底续用线程（任务子进程内 daemon 线程，随进程强杀终止）。
+
+    每 60 秒检查：到期且距上次点击追踪寻路 ≥ 10 分钟时走完整门控
+    使用流程（bag.use_sheyaoxiang_if_due：开关/到期/非队长/战斗四重
+    门，成功记时间）。与寻路期续用（xuanshu._maybe_sheyaoxiang）双
+    通道互补：寻路期覆盖常规轮次、空闲期兜底覆盖无寻路窗口。
+    pass 期间跳过（队员 Tab 切换中，下分钟再查）。失败静默，
+    下分钟重试。
     """
-    skip_logged = False  # 非队长跳过仅提示一次，防每分钟刷屏
+    from src import tab_group  # 延迟导入：pass_active 抑制
     while True:
         time.sleep(60)
         try:
-            if not app_utils.sheyaoxiang_due(win):
-                skip_logged = False
+            if tab_group.pass_active:
+                continue  # pass 进行中（当前可能在队员 Tab）：下分钟再查
+            if not app_utils.sheyaoxiang_idle_due(
+                    win, _SHEYAOXIANG_IDLE_FALLBACK_MINUTES):
                 continue
-            if app_utils.sheyaoxiang_skip_nonleader():  # 缺省取当前任务模式
-                if not skip_logged:
-                    log("[摄妖香] 定时续用: 非队长无需使用，跳过", "INFO")
-                    skip_logged = True
-                continue
-            skip_logged = False
-            if battle.watch_in_battle() or battle.is_in_battle(win):
-                log("[摄妖香] 定时续用: 战斗中跳过，10 秒后重查", "INFO")
-                time.sleep(10)
-                continue
-            # use_sheyaoxiang 内部整段持 _BAG_LOCK（与其他背包流程互斥），
-            # 单次点击仍走 _INPUT_LOCK——不能在外层再包输入锁，否则与
-            # 返程流程（先 _BAG_LOCK 后点击取 _INPUT_LOCK）锁序相反死锁
-            ok, info = bag.use_sheyaoxiang(win)
-            if ok:
-                app_utils.sheyaoxiang_mark_used(win)
-            log(f"[摄妖香] 定时续用: {info}", "SYS" if ok else "WARN")
+            ran, info = bag.use_sheyaoxiang_if_due(win)
+            if ran:
+                log(f"[摄妖香] 空闲期兜底续用: {info}", "SYS")
         except app_utils.UserAbort as e:
-            log(f"[摄妖香] {e}，定时续用线程退出", "WARN")
+            log(f"[摄妖香] {e}，空闲期兜底线程退出", "WARN")
             break
         except Exception as e:
-            log(f"[摄妖香] 定时续用异常: {e}", "WARN")
+            log(f"[摄妖香] 空闲期兜底异常: {e}", "WARN")
 
 
 def _run_task_mode(win, mode):
@@ -300,8 +289,8 @@ def _task_start_body():
     # app_utils.keyboard_ok 门控（游戏已在前台才执行，不再激活）
     app_utils.set_silent_mode(load_silent_mode())
     log(f"[配置] 静默操作: {'开（消息点击，不占用鼠标）' if app_utils.silent_mode_on() else '关（物理鼠标）'}", "SYS")
-    # 当前任务模式：任务主循环切换任务时更新，战斗线程/摄妖香线程
-    # 按当前模式决策（多任务顺序执行下替代旧的单一模式读取）
+    # 当前任务模式：任务主循环切换任务时更新，战斗线程/寻路期摄妖香
+    # 续用按当前模式决策（多任务顺序执行下替代旧的单一模式读取）
     app_utils.set_current_task_mode(modes[0] if modes else "")
     # 调试悬浮层初始状态：任务队列与战斗配置（战斗场次/进度由各模块实时更新）
     debug_overlay.set_task("、".join(modes) if modes else "未选择任务")
@@ -404,8 +393,8 @@ def _task_start_body():
                 log("[摄妖香] 启动检查: 非队长无需使用，跳过", "INFO")
             elif battle.watch_in_battle() or battle.is_in_battle(main_win):
                 # 战斗中跳过：物品栏战斗中打不开（实测 2026-10-18），
-                # 由定时续用线程在战斗结束后补用
-                log("[摄妖香] 启动时处于战斗中，跳过本次使用，由定时续用补用", "INFO")
+                # 由寻路期续用（点击任务追踪后）在战斗结束后补用
+                log("[摄妖香] 启动时处于战斗中，跳过本次使用，由寻路期续用补用", "INFO")
             else:
                 ok, info = bag.use_sheyaoxiang(main_win)
                 if ok:
@@ -413,14 +402,16 @@ def _task_start_body():
                     log(f"[摄妖香] {info}", "SYS")
                 else:
                     log(f"[摄妖香] {info}", "WARN")
-        # 3.5 摄妖香定时续用：任务持续运行时每小时检查一次，到期自动
-        #     补用（战斗中跳过——物品栏战斗中打不开，实测 2026-10-18
-        #     第 71 场战斗期间三次点击均未打开背包；
-        #     全局输入锁与任务/战斗线程互斥，不打断当前点击）
+        # 3.5 摄妖香持续续用双通道：①寻路期——任务每轮点击任务追踪后
+        #     （寻路期安全窗口，无弹框遮挡）到期自动补用，见
+        #     xuanshu._maybe_sheyaoxiang；②空闲期兜底——任务运行但
+        #     10 分钟无寻路（连续回城符/地图赶路、流程卡顿）时到期补用。
+        #     替代原任意时机的定时续用线程（任务领取/巫医弹框阶段
+        #     背包交互被挡住、储物格切换无效，用户 2026-11-04）
         if logged_in and use_sheyaoxiang:
             threading.Thread(
-                target=_sheyaoxiang_watchdog, args=(main_win,),
-                daemon=True, name="sheyaoxiang-watchdog").start()
+                target=_sheyaoxiang_idle_fallback, args=(main_win,),
+                daemon=True, name="sheyaoxiang-idle-fallback").start()
 
         # 4. 战斗监控线程（已登录时启动，任何模式下自动执行人物/召唤兽战斗操作；
         #    启动日志由 watch_loop 内部输出，此处不重复打）
@@ -434,7 +425,7 @@ def _task_start_body():
         #    每日次数已满/活力不足等）后进入下一个任务，全部结束后
         #    任务进程退出，面板自动显示已结束（无需逐个任务重启）。
         #    任务前置（退队/清屏等）与循环逻辑由 _run_task_mode 按模式分发；
-        #    当前任务模式经 app_utils 共享，战斗线程/摄妖香线程按当前模式决策。
+        #    当前任务模式经 app_utils 共享，战斗线程/寻路期续用按当前模式决策。
         if logged_in and modes:
             for mode in modes:
                 app_utils.set_current_task_mode(mode)

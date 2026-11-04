@@ -12,7 +12,8 @@
   Ctrl+Tab 不可用——改走 Tab 条消息点击（UIA 矩形 + DOWN/UP 最小
   序列，silent_click.send_silent_tab_click；2026-11-04 实机验证：
   视图切换、客户端稳定），切换成败仍按可见子窗口句柄变化判定
-  （与键盘路径同判据）
+  （与键盘路径同判据）；未登录 Tab 按 UIA 名（= 游戏标题）跳过
+  不切换（_next_logged_index），不浪费切换轮次
 - 【禁区】Tab 条（SysTabControl32 子窗口）带指针的消息不可投递：
   2026-11-04 实测 TCM_GETITEMRECT 的 lParam 裸指针跨进程不封送，
   游戏按我方虚拟地址在自身进程写内存直接崩溃退出（无 WER 记录，
@@ -246,14 +247,36 @@ def _switch_next(win):
     return after_id if after_id is not None else ""
 
 
+def _next_logged_index(win, tab, cur, count):
+    """下一已登录 Tab 序号：未登录 Tab 跳过不切换（UIA 名字过滤）。
+
+    未登录 Tab 的 UIA 名为游戏标题（客户端默认 Tab 名，已登录为
+    角色名）；从 cur+1 环形找第一个名字 != 游戏标题的 Tab。返回
+    None = 绕一圈回到自己、除当前 Tab 外无已登录 Tab（无切换目标，
+    调用方放弃本轮）。UIA 不可用时回退 (cur+1)%count（旧行为：
+    切换后按可见子窗口 ID 判空跳过，兜底语义不变）。
+    """
+    from . import silent_click  # 函数内导入：保持模块间依赖单向
+    items = silent_click.tab_items(win, count)
+    if items:
+        for i in range(1, count + 1):
+            idx = (cur + i) % count
+            if idx == cur:
+                return None
+            if items[idx][0] != game.GAME_TITLE:
+                return idx
+    return (cur + 1) % count
+
+
 def _switch_next_by_click(win):
     """静默+后台的切 Tab 兜底：Tab 条消息点击（2026-11-04 实机验证
     生效——无需前台、无需键盘、不移动物理鼠标）。
 
-    下一 Tab 序号 = TCM_GETCURSEL + 1（模 Tab 数，先读后点）；点击后
-    按可见子窗口句柄变化判定（与键盘路径同判据）。未生效重试一次
-    同一 Tab（不重算序号——首次点击已生效而判定竞态时，重点同一
-    Tab 是无操作，重算会连切两个）。返回语义同 _switch_next。
+    下一 Tab 序号 = 下一已登录 Tab（未登录 Tab 按 UIA 名字跳过不切，
+    _next_logged_index）；点击后按可见子窗口句柄变化判定（与键盘
+    路径同判据）。未生效重试一次同一 Tab（不重算序号——首次点击已
+    生效而判定竞态时，重点同一 Tab 是无操作，重算会连切两个）。
+    返回语义同 _switch_next。
     """
     from . import silent_click  # 函数内导入：保持模块间依赖单向
     tab = silent_click.tab_control_hwnd(win)
@@ -265,7 +288,10 @@ def _switch_next_by_click(win):
     if count <= 0 or cur < 0:
         log(f"[组号] Tab 条读取失败（总数 {count}、当前 {cur}），无法静默切 Tab", "WARN")
         return None
-    next_i = (cur + 1) % count
+    next_i = _next_logged_index(win, tab, cur, count)
+    if next_i is None:
+        log("[组号] 除当前 Tab 外无已登录 Tab，跳过切换", "WARN")
+        return None
     before_hwnd, _before_id = _current(win)
     info = silent_click.send_silent_tab_click(win, next_i)
     if info is None:

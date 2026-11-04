@@ -150,3 +150,32 @@ def test_set_silent_mode_toggle():
     assert app_utils.silent_mode_on() is True
     app_utils.set_silent_mode(False)
     assert app_utils.silent_mode_on() is False
+
+
+# ---- 寻路信号（摄妖香续用双通道的时钟） ----
+
+def test_track_walk_signal(monkeypatch):
+    monkeypatch.setattr(app_utils, "_last_track_walk", 0.0)  # 复位：防用例间状态泄漏
+    fake_time = {"t": 1000.0}
+    monkeypatch.setattr(app_utils.time, "time", lambda: fake_time["t"])
+    assert app_utils.track_walk_idle_seconds() > 1e8  # 从未寻路：视为长期空闲
+    app_utils.mark_track_walk()
+    fake_time["t"] = 1600.0
+    assert app_utils.track_walk_idle_seconds() == 600.0
+
+
+def test_sheyaoxiang_idle_due(monkeypatch):
+    fake_time = {"t": 1000.0}
+    monkeypatch.setattr(app_utils.time, "time", lambda: fake_time["t"])
+    monkeypatch.setattr(app_utils, "sheyaoxiang_due", lambda _w: True)
+    app_utils.mark_track_walk()
+    fake_time["t"] = 1000.0 + 9 * 60  # 空闲 9 分钟：未到 10 分钟阈值
+    assert not app_utils.sheyaoxiang_idle_due(_win(), 10)
+    fake_time["t"] = 1000.0 + 10 * 60  # 恰满 10 分钟：命中
+    assert app_utils.sheyaoxiang_idle_due(_win(), 10)
+    monkeypatch.setattr(app_utils, "sheyaoxiang_due", lambda _w: False)
+    assert not app_utils.sheyaoxiang_idle_due(_win(), 10)  # 未到期不命中
+
+
+def _win():
+    return type("W", (), {"hwnd": 1})()

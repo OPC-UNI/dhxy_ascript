@@ -403,9 +403,10 @@ def send_and_report_key(win, log_fn, modifiers=("alt",), key="c",
 TCM_GETITEMCOUNT = 0x1304
 TCM_GETCURSEL = 0x130B
 
-# Tab 项屏幕矩形缓存：main hwnd -> (count, [屏幕矩形×count])。
+# Tab 项缓存：main hwnd -> (count, [(名字, 屏幕矩形)×count])。
 # Tab 条是固定 UI（会话内 Tab 数不变则矩形不变，与高性能缓存白名单
-# 同原则）；Tab 数变化即失效重读。
+# 同原则）；Tab 数变化即失效重读。名字用于未登录过滤（未登录 Tab
+# 名 = 游戏标题，已登录 = 角色名）。
 _tab_rects_cache = {}
 
 
@@ -446,8 +447,9 @@ def tab_current_index(tab):
     return int(user32.SendMessageW(tab, TCM_GETCURSEL, 0, 0) or 0)
 
 
-def _uia_tab_item_rects(win, count):
-    """UIA 读 Tab 项屏幕矩形列表（按 Tab 顺序，长度须 == count；失败 None）。
+def _uia_tab_items(win, count):
+    """UIA 读 Tab 项 (名字, 屏幕矩形) 列表（按 Tab 顺序，长度须 == count；
+    失败 None）。
 
     COM 封送跨进程安全（TCM_GETITEMRECT 裸指针不可用，2026-11-04
     崩溃教训）。线程内 COM 惰性初始化：调用方线程（任务/战斗线程）
@@ -463,27 +465,30 @@ def _uia_tab_item_rects(win, count):
                 items = []
                 for it in c.GetChildren():
                     br = it.BoundingRectangle
-                    items.append((br.left, br.top, br.right, br.bottom))
+                    items.append((it.Name or "",
+                                 (br.left, br.top, br.right, br.bottom)))
                 return items if len(items) == count else None
         return None
     except Exception:
         return None
 
 
-def _tab_item_rects(win, count):
-    """Tab 项屏幕矩形（带缓存；Tab 数变化或无缓存时 UIA 重读）。
+def tab_items(win, count):
+    """Tab 项 (名字, 屏幕矩形) 列表（带缓存；Tab 数变化或无缓存时
+    UIA 重读）。
 
     长度必须与 count 一致才可用（UIA 读到的项数与 TCM 计数不一致
-    视为失败——布局可能正在变化，宁可重试不点错 Tab）。
+    视为失败——布局可能正在变化，宁可重试不点错 Tab）。名字供
+    未登录过滤（未登录 Tab 名 = 游戏标题，见 tab_group）。
     """
     hwnd = int(getattr(win, "hwnd", 0) or 0)
     cached = _tab_rects_cache.get(hwnd)
     if cached is not None and cached[0] == count:
         return cached[1]
-    rects = _uia_tab_item_rects(win, count)
-    if rects and len(rects) == count:
-        _tab_rects_cache[hwnd] = (count, rects)
-        return rects
+    items = _uia_tab_items(win, count)
+    if items and len(items) == count:
+        _tab_rects_cache[hwnd] = (count, items)
+        return items
     return None
 
 
@@ -502,13 +507,13 @@ def send_silent_tab_click(win, index):
     count = tab_item_count(tab)
     if count <= 0 or index < 0 or index >= count:
         return None
-    rects = _tab_item_rects(win, count)
-    if not rects:
+    items = tab_items(win, count)
+    if not items:
         return None
     tr = wintypes.RECT()
     if not user32.GetWindowRect(tab, ctypes.byref(tr)):
         return None
-    r = rects[index]
+    r = items[index][1]
     # UIA 屏幕矩形 → Tab 条控件客户区坐标（控件窗口矩形左上为原点）
     cx = (r[0] + r[2]) // 2 - tr.left
     cy = (r[1] + r[3]) // 2 - tr.top

@@ -476,7 +476,7 @@ def sheyaoxiang_mark_used(win):
 
 
 # ---- 当前任务模式（多任务顺序执行：任务主循环切换任务时更新，
-#      战斗线程/摄妖香线程按当前模式决策，替代旧的单一模式读取） ----
+#      战斗线程/寻路期摄妖香续用按当前模式决策，替代旧的单一模式读取） ----
 _current_task_mode = ""
 
 
@@ -501,6 +501,38 @@ def sheyaoxiang_skip_nonleader(mode=None):
         return False
     from . import team  # 函数内导入：team 依赖 app_utils，避免循环导入
     return team.known_leader() is False
+
+
+# ---- 寻路信号（摄妖香续用双通道：寻路期续用 + 空闲期兜底的时钟） ----
+_last_track_walk = 0.0
+
+
+def mark_track_walk():
+    """记录一次「点击任务追踪成功」（寻路开始）的时间戳。
+
+    follow_task 点击任务绿字成功后调用；空闲期兜底据此判断
+    「任务运行但 N 分钟无寻路」（寻路期续用没机会触发——连续
+    回城符/地图点击赶路、流程卡在无寻路环节等）。
+    """
+    global _last_track_walk
+    _last_track_walk = time.time()
+
+
+def track_walk_idle_seconds():
+    """距上次点击追踪寻路的秒数（从未寻路返回大值——视为长期空闲）。"""
+    if not _last_track_walk:
+        return 1e9
+    return time.time() - _last_track_walk
+
+
+def sheyaoxiang_idle_due(win, idle_minutes):
+    """空闲期兜底条件：摄妖香到期且距上次寻路 ≥ idle_minutes 分钟。
+
+    win 仅供 due 判定（角色维度时间戳）；空闲期兜底线程每分钟查
+    此条件，命中才走 use_sheyaoxiang_if_due 完整门控使用流程。
+    """
+    return sheyaoxiang_due(win) \
+        and track_walk_idle_seconds() >= idle_minutes * 60
 
 
 # ---- 当天任务完成进度持久化（停止/重启不重置完成度） ----

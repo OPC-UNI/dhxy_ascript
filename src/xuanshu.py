@@ -1274,6 +1274,23 @@ def _task_gone_dialog_guard(win, extra_dialog_handler):
         return False
 
 
+def _maybe_sheyaoxiang(win):
+    """点击任务追踪后（寻路期）的摄妖香续用（到期才执行）。
+
+    任务领取/巫医等对话弹框阶段背包交互被弹框挡住（储物格切换
+    点击无效，用户 2026-11-04），寻路期无弹框、窗口空闲，是安全
+    使用窗口——替代原任意时机的定时续用线程。每轮寻路都过此门，
+    仅使用成功/异常时记日志（跳过态不刷屏）。
+    """
+    from . import bag  # 函数内导入防循环：bag→battle→…→xuanshu 环
+    try:
+        ran, info = bag.use_sheyaoxiang_if_due(win)
+        if ran:
+            log(f"[摄妖香] 寻路期续用: {info}", "SYS")
+    except Exception as e:
+        log(f"[摄妖香] 寻路期续用异常: {e}", "WARN")
+
+
 def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶闻",
                 extra_dialog_handler=None, green_order=None, progress_key=None,
                 green_picker=None, fallback_keywords=None, first_items=None,
@@ -1447,6 +1464,11 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
         progressed = False
         debug_overlay.set_phase("寻路中")  # 看板阶段（点击任务绿字后自动寻路）
         log(f"[{prefix}] 第 {rounds} 轮跟踪完成，等待任务信息变化", "SYS")
+        # 寻路期安全窗口：先续用摄妖香（到期才执行）再跑回调——组号
+        # 模式回调 = 队员血蓝 pass，顺序「点击寻路 → 摄妖香 → 切 Tab
+        # 血蓝」（用户 2026-11-04；弹框阶段背包交互无效）
+        app_utils.mark_track_walk()  # 寻路信号：空闲期摄妖香兜底的时钟
+        _maybe_sheyaoxiang(win)
         if post_track_handler is not None:
             try:
                 post_track_handler(win)
