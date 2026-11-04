@@ -15,6 +15,12 @@ background-input-postmessage-analysis）；当前多标签客户端（xy2_tab_x6
 WM_MOUSEMOVE→WM_LBUTTONDOWN→WM_LBUTTONUP。投递全程持 app_utils
 全局输入锁（_INPUT_LOCK），与物理鼠标点击序列互斥——与战斗线程/
 任务线程共享输入通道时的交错防护同一把锁。
+
+Tab 条切 Tab（静默+后台通道，2026-11-04 实机验证生效）：Tab 条是
+标准 SysTabControl32 子窗口，UIA 读 Tab 项矩形（send_silent_tab_click，
+DOWN+UP 最小序列）。【禁区】带指针的消息（TCM_GETITEMRECT 等）跨
+进程不封送、会令客户端崩溃（当日教训）；TCM_SETCURSEL 不切视图；
+TCM 消息仅用 int-only（GETITEMCOUNT/GETCURSEL）。
 """
 import ctypes
 import time
@@ -85,6 +91,11 @@ def _setup_prototypes():
     user32.GetClientRect.restype = wintypes.BOOL
     user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
     user32.GetWindowRect.restype = wintypes.BOOL
+    user32.GetParent.argtypes = [wintypes.HWND]
+    user32.GetParent.restype = wintypes.HWND
+    user32.EnumChildWindows.argtypes = [wintypes.HWND, ctypes.c_void_p,
+                                        wintypes.LPARAM]
+    user32.EnumChildWindows.restype = wintypes.BOOL
     user32.GetForegroundWindow.argtypes = []
     user32.GetForegroundWindow.restype = wintypes.HWND
     user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPCWSTR, ctypes.c_int]
@@ -174,12 +185,27 @@ def send_silent_click(win, x=None, y=None, button="primary"):
         base_y = wr.top if wr is not None else tr.top
         sx, sy = base_x + int(x), base_y + int(y)
         cx, cy = sx - tr.left, sy - tr.top
+    results = _post_mouse_click(target, cx, cy, down, up, mk,
+                                cl.right, cl.bottom)
+    return {"hwnd": target, "class": win_class(target),
+            "button": button,
+            "client": (cl.right, cl.bottom),
+            "point": (cx, cy),
+            "screen_point": (sx, sy),
+            "msg_results": results}
+
+
+def _post_mouse_click(target, cx, cy, down, up, mk, client_w, client_h):
+    """向指定句柄投递一次鼠标点击序列（WM_MOUSEMOVE→按下→抬起→移开），
+    持全局输入锁与物理鼠标点击互斥。cx/cy 为目标窗口客户区坐标。
+
+    点击后虚拟光标移出：消息点击会把游戏内部光标位置留在点击点上，
+    悬停高亮随之残留——对话框切换后新选项带悬停变色（黄色），干扰
+    绿字判定（用户 2026-11-03 实测）。末尾投一条 WM_MOUSEMOVE 到客户区
+    左下角中性区（与物理模式 move_away 等效目标）。返回四消息返回值。
+    """
     lp = (cy << 16) | (cx & 0xFFFF)
-    # 点击后虚拟光标移出：消息点击会把游戏内部光标位置留在点击点上，
-    # 悬停高亮随之残留——对话框切换后新选项带悬停变色（黄色），干扰
-    # 绿字判定（用户 2026-11-03 实测）。投一条 WM_MOUSEMOVE 到客户区
-    # 左下角中性区（与物理模式 move_away 等效目标）。
-    away_lp = ((cl.bottom - 20) << 16) | 20
+    away_lp = ((client_h - 20) << 16) | 20
     with app_utils._INPUT_LOCK:
         # WM_MOUSEMOVE 先投：部分客户端据此更新内部光标位置，缺它可能
         # 忽略后续按下/抬起
@@ -190,12 +216,7 @@ def send_silent_click(win, x=None, y=None, button="primary"):
         r_up = user32.SendMessageW(target, up, 0, lp)
         time.sleep(0.05)
         r_away = user32.SendMessageW(target, WM_MOUSEMOVE, 0, away_lp)
-    return {"hwnd": target, "class": win_class(target),
-            "button": button,
-            "client": (cl.right, cl.bottom),
-            "point": (cx, cy),
-            "screen_point": (sx, sy),
-            "msg_results": (r_move, r_down, r_up, r_away)}
+    return (r_move, r_down, r_up, r_away)
 
 
 def _frame(img):
@@ -361,6 +382,143 @@ def send_and_report_key(win, log_fn, modifiers=("alt",), key="c",
     _log_fg_after(log_fn, main_hwnd, target)
     log_fn("==== 结束：已投递，请自行观察游戏效果 ====")
     return True, f"已投递{label}，请自行观察效果"
+
+
+# ---- Tab 条静默切 Tab（SysTabControl32 标准控件） ----
+# 多标签客户端（xy2_tab_x64）Tab 条是主窗口的直接子窗口、标准
+# SysTabControl32 控件（2026-11-04 实机探测：主窗口客户区偏移 (16,30)、
+# 尺寸 1362x23、每 Tab 174x23，Tab 名=角色名）。
+# 切换通道（2026-11-04 实机验证生效）：UIA 读 Tab 项屏幕矩形
+# （TabItemControl.BoundingRectangle，COM 封送跨进程安全）→ 换算
+# Tab 条客户区坐标 → 投递 WM_LBUTTONDOWN+WM_LBUTTONUP 最小序列
+# （无前置移动、无移出——Tab 条无中性区，移出会悬停到别的 Tab）。
+# 【禁区】两条，均 2026-11-04 实测：
+#   1) 不得投递带指针的消息（TCM_GETITEMRECT 等）：lParam 裸指针
+#      跨进程不封送，游戏按我方虚拟地址在自身进程写内存，直接崩溃
+#      退出（无 WER 记录，客户端内部处理）——当日首次「点击实验」
+#      崩溃根因即此，点击消息本身从未送达
+#   2) TCM_SETCURSEL 实测只动控件选中、游戏视图不切（客户端不响应
+#      TCN_SELCHANGE），无切换价值
+# TCM 消息仅用 int-only（GETITEMCOUNT/GETCURSEL）。
+TCM_GETITEMCOUNT = 0x1304
+TCM_GETCURSEL = 0x130B
+
+# Tab 项屏幕矩形缓存：main hwnd -> (count, [屏幕矩形×count])。
+# Tab 条是固定 UI（会话内 Tab 数不变则矩形不变，与高性能缓存白名单
+# 同原则）；Tab 数变化即失效重读。
+_tab_rects_cache = {}
+
+
+def tab_control_hwnd(win):
+    """主窗口的 Tab 条控件句柄（SysTabControl32 直接子窗口；无则 None）。"""
+    hwnd = int(getattr(win, "hwnd", 0) or 0)
+    if not hwnd:
+        return None
+    found = []
+
+    @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+    def _cb(h, _l):
+        try:
+            if user32.GetParent(h) != hwnd:
+                return True
+            buf = ctypes.create_unicode_buffer(256)
+            user32.GetClassNameW(h, buf, 256)
+            if buf.value == "SysTabControl32":
+                found.append(int(h))
+        except Exception:
+            pass
+        return True
+
+    try:
+        user32.EnumChildWindows(ctypes.c_void_p(hwnd), _cb, 0)
+    except Exception:
+        return None
+    return found[0] if found else None
+
+
+def tab_item_count(tab):
+    """Tab 条 Tab 总数（TCM_GETITEMCOUNT；失败返回 0）。"""
+    return int(user32.SendMessageW(tab, TCM_GETITEMCOUNT, 0, 0) or 0)
+
+
+def tab_current_index(tab):
+    """Tab 条当前选中序号（TCM_GETCURSEL；失败返回 -1）。"""
+    return int(user32.SendMessageW(tab, TCM_GETCURSEL, 0, 0) or 0)
+
+
+def _uia_tab_item_rects(win, count):
+    """UIA 读 Tab 项屏幕矩形列表（按 Tab 顺序，长度须 == count；失败 None）。
+
+    COM 封送跨进程安全（TCM_GETITEMRECT 裸指针不可用，2026-11-04
+    崩溃教训）。线程内 COM 惰性初始化：调用方线程（任务/战斗线程）
+    首次调用时 CoInitializeEx，实例随调用结束配对释放——与 main.py
+    任务线程持有的常驻实例引用计数互补，重入安全。
+    """
+    import uiautomation as auto  # 惰性导入：仅切 Tab 路径需要
+    try:
+        auto.UIAutomationInitializerInThread()
+        root = auto.ControlFromHandle(int(getattr(win, "hwnd", 0) or 0))
+        for c in root.GetChildren():
+            if c.ControlTypeName == "TabControl":
+                items = []
+                for it in c.GetChildren():
+                    br = it.BoundingRectangle
+                    items.append((br.left, br.top, br.right, br.bottom))
+                return items if len(items) == count else None
+        return None
+    except Exception:
+        return None
+
+
+def _tab_item_rects(win, count):
+    """Tab 项屏幕矩形（带缓存；Tab 数变化或无缓存时 UIA 重读）。
+
+    长度必须与 count 一致才可用（UIA 读到的项数与 TCM 计数不一致
+    视为失败——布局可能正在变化，宁可重试不点错 Tab）。
+    """
+    hwnd = int(getattr(win, "hwnd", 0) or 0)
+    cached = _tab_rects_cache.get(hwnd)
+    if cached is not None and cached[0] == count:
+        return cached[1]
+    rects = _uia_tab_item_rects(win, count)
+    if rects and len(rects) == count:
+        _tab_rects_cache[hwnd] = (count, rects)
+        return rects
+    return None
+
+
+def send_silent_tab_click(win, index):
+    """向 Tab 条投递一次点击（第 index 个 Tab 的中心），等效真实点击
+    切 Tab——无需前台、无需键盘、不移动物理鼠标。
+
+    消息集最小化：仅 WM_LBUTTONDOWN→WM_LBUTTONUP（无前置移动、无
+    移出——Tab 条无中性区，移出会悬停到别的 Tab 上）；2026-11-04
+    实机验证：视图切换、客户端稳定。序号越界/控件不存在/矩形获取
+    失败返回 None；成功返回投递描述 dict。
+    """
+    tab = tab_control_hwnd(win)
+    if not tab:
+        return None
+    count = tab_item_count(tab)
+    if count <= 0 or index < 0 or index >= count:
+        return None
+    rects = _tab_item_rects(win, count)
+    if not rects:
+        return None
+    tr = wintypes.RECT()
+    if not user32.GetWindowRect(tab, ctypes.byref(tr)):
+        return None
+    r = rects[index]
+    # UIA 屏幕矩形 → Tab 条控件客户区坐标（控件窗口矩形左上为原点）
+    cx = (r[0] + r[2]) // 2 - tr.left
+    cy = (r[1] + r[3]) // 2 - tr.top
+    lp = (cy << 16) | (cx & 0xFFFF)
+    with app_utils._INPUT_LOCK:
+        r_down = user32.SendMessageW(tab, WM_LBUTTONDOWN, MK_LBUTTON, lp)
+        time.sleep(0.08)
+        r_up = user32.SendMessageW(tab, WM_LBUTTONUP, 0, lp)
+    return {"hwnd": tab, "class": win_class(tab), "index": index,
+            "point": (cx, cy), "msg_results": (r_down, r_up)}
 
 
 def set_clipboard_text(text):

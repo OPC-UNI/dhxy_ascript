@@ -5,11 +5,24 @@
   「角色名（ID：账号）」；当前 Tab 子窗口可见、其余隐藏——
   计数/登录判定/当前身份全部走句柄枚举（game.list_tab_windows），零 OCR
 - 切换：Ctrl+Tab（Keyboard.key_hot 经前台窗口送达，切换前校验前台）；
-  TCM_SETCURSEL 消息与 Alt+Tab 实测均无效（2026-10-31 探测）
+  TCM_SETCURSEL 消息与 Alt+Tab 实测均无效（2026-10-31 探测；
+  2026-11-04 定位 SysTabControl32 子窗口后复测仍无效：控件选中
+  序号变化但游戏视图不切——客户端不响应 TCN_SELCHANGE）
+- 静默操作且游戏不在前台：键盘事件只进前台窗口且不允许激活，
+  Ctrl+Tab 不可用——改走 Tab 条消息点击（UIA 矩形 + DOWN/UP 最小
+  序列，silent_click.send_silent_tab_click；2026-11-04 实机验证：
+  视图切换、客户端稳定），切换成败仍按可见子窗口句柄变化判定
+  （与键盘路径同判据）
+- 【禁区】Tab 条（SysTabControl32 子窗口）带指针的消息不可投递：
+  2026-11-04 实测 TCM_GETITEMRECT 的 lParam 裸指针跨进程不封送，
+  游戏按我方虚拟地址在自身进程写内存直接崩溃退出（无 WER 记录，
+  客户端内部处理）——TCM 系仅用 int-only 消息（GETITEMCOUNT/
+  GETCURSEL）
 - pass 期间 pass_active 置位：战斗线程与任务线程轮询见此标志跳过
   本轮处理（防误点队员屏幕/误判战斗结束）；pass 由单线程同步执行
 - 护栏：Tab 条区域（窗口相对 y < 60）为鼠标禁入区，pass 点击经
-  _guarded_click 过滤；切 Tab 只走 Ctrl+Tab，鼠标永不碰 Tab 条
+  _guarded_click 过滤；切 Tab 只走 Ctrl+Tab/静默 Tab 条点击，
+  普通流程点击永不碰 Tab 条
 - 激活条件（active()）：init_task 时开关开 + 已登录 Tab ≥2 + 队长
   ID 可解析，且当前任务模式仍为修罗/五倍——单号（已登录 Tab <2）
   或开关关闭时全部新代码路径不执行，行为与旧版完全一致
@@ -198,17 +211,25 @@ def _ensure_foreground(win):
         return False
 
 
+def _pass_foreground_ok(win):
+    """pass 前置检查：静默模式下无需前台（切 Tab 走 Tab 条消息点击、
+    pass 点击走消息通道，均不激活窗口；2026-11-04 实机验证）；
+    非静默模式须激活并确认前台（Ctrl+Tab 经前台窗口送达）。"""
+    if app_utils.silent_mode_on():
+        return True
+    return _ensure_foreground(win)
+
+
 def _switch_next(win):
-    """Ctrl+Tab 切到下一个 Tab。
+    """切到下一个 Tab（Ctrl+Tab 键盘通道；静默+后台走 Tab 条点击）。
 
     返回切换后当前 Tab 的账号 ID；空串 = 切换成功但该 Tab 未登录；
     None = 切换失败（按键未送达/前台丢失，重试一次后仍失败）。
     静默操作且游戏不在前台：键盘事件只进前台窗口且不允许激活，
-    直接判失败（调用方按切换失败处理，如队员 pass 跳过）。
+    改走 _switch_next_by_click（Tab 条消息点击，无需前台）。
     """
     if not app_utils.keyboard_ok(win):
-        log("[组号] 静默操作且游戏不在前台：无法 Ctrl+Tab 切换 Tab", "WARN")
-        return None
+        return _switch_next_by_click(win)
     before_hwnd, _before_id = _current(win)
     Keyboard.key_hot("ctrl", "tab")
     time.sleep(TAB_SWITCH_SETTLE)
@@ -221,6 +242,46 @@ def _switch_next(win):
     time.sleep(TAB_SWITCH_SETTLE)
     after_hwnd, after_id = _current(win)
     if after_hwnd is None or after_hwnd == before_hwnd:
+        return None
+    return after_id if after_id is not None else ""
+
+
+def _switch_next_by_click(win):
+    """静默+后台的切 Tab 兜底：Tab 条消息点击（2026-11-04 实机验证
+    生效——无需前台、无需键盘、不移动物理鼠标）。
+
+    下一 Tab 序号 = TCM_GETCURSEL + 1（模 Tab 数，先读后点）；点击后
+    按可见子窗口句柄变化判定（与键盘路径同判据）。未生效重试一次
+    同一 Tab（不重算序号——首次点击已生效而判定竞态时，重点同一
+    Tab 是无操作，重算会连切两个）。返回语义同 _switch_next。
+    """
+    from . import silent_click  # 函数内导入：保持模块间依赖单向
+    tab = silent_click.tab_control_hwnd(win)
+    if not tab:
+        log("[组号] 未找到 Tab 条控件（SysTabControl32），无法静默切 Tab", "WARN")
+        return None
+    count = silent_click.tab_item_count(tab)
+    cur = silent_click.tab_current_index(tab)
+    if count <= 0 or cur < 0:
+        log(f"[组号] Tab 条读取失败（总数 {count}、当前 {cur}），无法静默切 Tab", "WARN")
+        return None
+    next_i = (cur + 1) % count
+    before_hwnd, _before_id = _current(win)
+    info = silent_click.send_silent_tab_click(win, next_i)
+    if info is None:
+        log("[组号] 静默切 Tab 点击投递失败（Tab 条不可达）", "WARN")
+        return None
+    log(f"[组号] 静默切 Tab：已点击 Tab {next_i} 中心 "
+        f"({info['point'][0]},{info['point'][1]})", "INFO")
+    time.sleep(TAB_SWITCH_SETTLE)
+    after_hwnd, after_id = _current(win)
+    if after_hwnd is not None and after_hwnd != before_hwnd:
+        return after_id if after_id is not None else ""
+    silent_click.send_silent_tab_click(win, next_i)  # 重试同一 Tab
+    time.sleep(TAB_SWITCH_SETTLE)
+    after_hwnd, after_id = _current(win)
+    if after_hwnd is None or after_hwnd == before_hwnd:
+        log("[组号] 静默切 Tab 未生效（点击投递未被消费），中止本轮", "WARN")
         return None
     return after_id if after_id is not None else ""
 
@@ -264,7 +325,8 @@ def _guarded_click(win, x, y, button="primary"):
     """pass 专用点击：Tab 条区域（y<60）为鼠标禁入区，落点进禁区跳过。
 
     防 OCR 抖动坐标漂移把点击落到 Tab 条上误切账号——切 Tab 只走
-    Ctrl+Tab，鼠标永不碰 Tab 条。返回是否执行了点击。
+    Ctrl+Tab 或静默 Tab 条点击通道，pass 流程点击永不碰 Tab 条。
+    返回是否执行了点击。
     """
     if y < NO_CLICK_ZONE_Y:
         log(f"[组号] 点击落点 ({x},{y}) 进入 Tab 条禁入区，已跳过", "WARN")
@@ -320,7 +382,7 @@ def member_auto_pass(win, wait_auto=AUTO_WAIT_FIRST):
     if not _try_enter_pass():
         return  # 另一 pass 进行中：放弃本轮，等下一轮时机
     try:
-        if not _ensure_foreground(win):
+        if not _pass_foreground_ok(win):
             log("[组号] 游戏窗口未在前台，跳过战斗自动 pass", "WARN")
             return
         _for_each_member(win, lambda w, cur: _auto_one(w, cur, wait_auto),
@@ -386,7 +448,7 @@ def member_wuyi_pass(win, force=False):
     if not _try_enter_pass():
         return  # 另一 pass 进行中：放弃本轮，等下一轮时机
     try:
-        if not _ensure_foreground(win):
+        if not _pass_foreground_ok(win):
             log("[组号] 游戏窗口未在前台，跳过巫医 pass", "WARN")
             return
         from . import battle  # 函数内导入，避免循环依赖
@@ -491,7 +553,7 @@ def member_bars_pass(win):
     if not _try_enter_pass():
         return  # 另一 pass 进行中：放弃本轮，等下一轮时机
     try:
-        if not _ensure_foreground(win):
+        if not _pass_foreground_ok(win):
             log("[组号] 游戏窗口未在前台，跳过回血回蓝 pass", "WARN")
             return
         _for_each_member(win, _bars_one, "回血回蓝 pass")

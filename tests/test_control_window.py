@@ -17,12 +17,22 @@ def test_sanitize_keeps_battle_only_when_alone():
 def test_sanitize_drops_battle_only_when_mixed():
     assert _sanitize_modes(["五环", "仅战斗"]) == ["五环"]
     assert _sanitize_modes(["仅战斗", "修罗", "五倍"]) == ["修罗", "五倍"]
-    # 顺序按 TASK_MODES 固定顺序返回
-    assert _sanitize_modes(["五倍", "仅战斗", "五环"]) == ["五环", "五倍"]
+    # 顺序按选择顺序保留（面板拖动排序，不再重排为 TASK_MODES 固定顺序）
+    assert _sanitize_modes(["五倍", "仅战斗", "五环"]) == ["五倍", "五环"]
+
+
+def test_sanitize_preserves_selection_order():
+    """执行顺序 = 选择顺序：清洗不得重排（面板拖动排序依赖）。"""
+    assert _sanitize_modes(["五倍", "五环", "客栈"]) == ["五倍", "五环", "客栈"]
+    assert _sanitize_modes(["玄枢轶闻", "修罗"]) == ["玄枢轶闻", "修罗"]
+    # 全量反转（含仅战斗混合 → 剔除仅战斗）后其余仍保持反转顺序
+    rev = [m for m in TASK_MODES[::-1] if m != BATTLE_ONLY_MODE]
+    assert _sanitize_modes(TASK_MODES[::-1]) == rev
 
 
 def test_sanitize_filters_invalid_modes():
     assert _sanitize_modes(["五环", "不存在", "仅战斗"]) == ["五环"]
+    assert _sanitize_modes(["五环", "不存在", "五倍"]) == ["五环", "五倍"]
     assert _sanitize_modes(["不存在"]) == []
     assert _sanitize_modes([]) == []
 

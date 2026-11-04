@@ -75,12 +75,14 @@ def save_ui_theme(theme):
 
 
 def _sanitize_modes(modes):
-    """过滤非法任务模式并强制「仅战斗」互斥。
+    """过滤非法任务模式并强制「仅战斗」互斥，保留输入顺序。
 
-    仅战斗与其它任务不可共存：混合列表（页面已禁用互斥，正常不出现，
-    此处兜底旧数据/方案导入）按保留普通任务、剔除仅战斗处理。
+    返回顺序 = 保存/选择顺序（任务按列表顺序执行，面板拖动排序的
+    顺序必须原样保留）；仅战斗与其它任务不可共存：混合列表（页面已
+    禁用互斥，正常不出现，此处兜底旧数据/方案导入）按保留普通任务、
+    剔除仅战斗处理。
     """
-    modes = [m for m in TASK_MODES if m in modes]
+    modes = [m for m in modes if m in TASK_MODES]
     if BATTLE_ONLY_MODE in modes and len(modes) > 1:
         modes = [m for m in modes if m != BATTLE_ONLY_MODE]
     return modes
@@ -89,8 +91,8 @@ def _sanitize_modes(modes):
 def load_selected_modes():
     """读取选中的任务模式列表（首次默认五环；旧单选键自动迁移）。
 
-    按 TASK_MODES 固定顺序返回（执行顺序与列表一致）；旧版本保存的
-    单选值 task_mode 首次读取时迁移到多选列表。
+    按保存顺序返回（= 面板已选任务的拖动顺序，执行顺序与列表一致）；
+    旧数据本就按 TASK_MODES 固定顺序保存，读取结果与旧版一致。
     """
     raw = KeyValue.get(_MODES_KEY, None)
     if raw is None:
@@ -118,8 +120,8 @@ def _kv_remove(key):
     app_utils.kv_remove_merged(key)
 
 def save_selected_modes(modes):
-    """保存任务模式多选列表（过滤非法项并强制「仅战斗」互斥，
-    允许空列表），返回操作结果。"""
+    """保存任务模式多选列表（过滤非法项、强制「仅战斗」互斥并保留
+    传入顺序 = 面板拖动顺序，允许空列表），返回操作结果。"""
     modes = _sanitize_modes(modes)
     _kv_save(_MODES_KEY, modes)
     return {"status": "success", "modes": modes}

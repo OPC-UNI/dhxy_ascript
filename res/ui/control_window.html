@@ -219,8 +219,15 @@
         .skill-select { background: var(--panel2); color: var(--text); border: 1px solid var(--border2); border-radius: 4px; padding: 2px 6px; min-width: 110px; font-size: 13px; font-family: "微软雅黑"; cursor: pointer; }
         /* 种族选择：独立成行，4 列全宽（12 项 3 行） */
         .race-grid { grid-template-columns: repeat(4, 1fr); width: 100%; }
-        /* ---- 任务卡（选择 + 次数 + 专属设置手风琴；进度展示在运行看板） ---- */
+        /* ---- 任务页双区（已选/待选 + 拖动排序 + 次数 + 专属设置手风琴） ---- */
         #page-task { gap: 8px; }
+        .task-zone { display: flex; flex-direction: column; gap: 6px; }
+        .task-zone .zone-hint { font-weight: normal; font-size: 11px; color: var(--text-dim); margin-left: 8px; }
+        .task-list { display: flex; flex-direction: column; gap: 8px; }
+        .task-zone-empty {
+            padding: 10px 12px; border: 1px dashed var(--border2);
+            border-radius: 8px; color: var(--text-dim); font-size: 12px;
+        }
         .task-card {
             width: 100%; flex-shrink: 0; background: var(--panel);
             border: 1px solid var(--border); border-radius: 8px;
@@ -230,34 +237,53 @@
             display: flex; flex-direction: row; align-items: center; gap: 8px;
             padding: 12px; cursor: pointer; position: relative; z-index: 0;
         }
-        /* 运行中锁定态：仅任务卡自身的复选框禁用才置灰（不得匹配
-           手风琴内禁用的设置开关，如锁妖网） */
-        .task-card:has(.task-radio input:disabled) { cursor: not-allowed; }
-        .task-order { width: 18px; text-align: center; color: var(--text-dim); font-family: 'Consolas', monospace; font-size: 12px; flex-shrink: 0; }
-        .task-radio {
+        /* 互斥禁用态（仅战斗选中时其它待选卡 / 选其它时仅战斗卡）：置灰不可点 */
+        .task-card.zone-disabled .task-card-main { cursor: not-allowed; }
+        .task-card.zone-disabled { opacity: 0.45; }
+        /* 执行顺序号（已选区显示 ①②③…，待选区隐藏） */
+        .task-order {
+            width: 18px; text-align: center; color: var(--accent);
+            font-family: 'Consolas', monospace; font-size: 12px; flex-shrink: 0;
+        }
+        .task-name {
             flex: 1; display: flex; align-items: center; gap: 6px;
             color: var(--text); font-size: 13px; font-family: "微软雅黑";
-            cursor: pointer; user-select: none; min-width: 0;
+            user-select: none; min-width: 0;
         }
-        /* 选中指示 = 可见原生复选框；卡片边框/文案颜色不随选中变化 */
-        .task-radio input[type="checkbox"] {
-            display: inline-block; width: 14px; height: 14px; margin: 0;
-            accent-color: var(--accent); cursor: pointer; flex-shrink: 0;
-        }
-        .task-radio input:disabled + span { opacity: 0.35; }
         .badge {
             font-size: 11px; padding: 1px 8px; border-radius: 8px;
             border: 1px solid var(--gold); color: var(--gold); flex-shrink: 0;
         }
         .task-count { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
         .task-expand {
-            width: 24px; height: 24px; flex-shrink: 0; border-radius: 4px;
+            width: 19px; height: 19px; flex-shrink: 0; border-radius: 3px;
             border: 1px solid var(--border2); background: var(--panel2); color: var(--text-dim);
-            font-size: 12px; line-height: 1; cursor: pointer; user-select: none;
+            font-size: 10px; line-height: 1; cursor: pointer; user-select: none;
         }
         .task-expand:hover { color: var(--accent); border-color: var(--accent); }
-        /* 展开按钮内嵌任务名（label 内）：更小，紧贴名字，次数步进右对齐 */
-        .task-radio .task-expand { width: 19px; height: 19px; font-size: 10px; border-radius: 3px; }
+        /* 拖动排序手柄 + ↑↓ 移动（已选区专属，待选区隐藏；WCAG：拖动必须有按钮替代） */
+        .drag-handle {
+            flex-shrink: 0; cursor: grab; color: var(--text-dim);
+            font-size: 13px; letter-spacing: -1px; user-select: none;
+            padding: 2px 4px; border-radius: 3px;
+        }
+        .drag-handle:hover { color: var(--accent); background: var(--panel2); }
+        .task-move {
+            width: 20px; height: 20px; flex-shrink: 0; border-radius: 3px;
+            border: 1px solid var(--border2); background: var(--panel2);
+            color: var(--text-dim); font-size: 11px; line-height: 1;
+            cursor: pointer; user-select: none;
+        }
+        .task-move:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+        .task-move:disabled { opacity: 0.3; cursor: default; }
+        .task-card.dragging { opacity: 0.5; z-index: 2; }
+        /* 待选区隐藏排序三件套（手柄/↑↓/序号），仅已选区展示 */
+        #task-available-list .drag-handle,
+        #task-available-list .task-move,
+        #task-available-list .task-order { display: none; }
+        /* 落位指示：目标卡顶部插入线（box-shadow 不受卡片自身
+           overflow:hidden 裁切，::before 会被裁掉） */
+        .task-card.drop-target { box-shadow: 0 -2px 0 0 var(--accent); }
         /* 任务专属设置手风琴（展开态记忆到 localStorage） */
         .task-accordion {
             display: none; flex-direction: column; gap: 10px;
@@ -447,13 +473,21 @@
                 <div id="dash-log-box"></div>
             </div>
         </div>
-        <!-- ============ 任务页（选择 + 次数 + 专属设置手风琴） ============ -->
+        <!-- ============ 任务页（待选/已选双区 + 拖动排序 + 次数 + 专属设置手风琴） ============ -->
         <div class="page" id="page-task">
-            <div class="banner warn" id="task-lock-banner" style="display:none">任务运行中：勾选与次数不可修改，停止后可编辑；专属设置修改下次启动生效</div>
+            <div class="banner warn" id="task-lock-banner" style="display:none">任务运行中：任务选择、顺序与次数不可修改，停止后可编辑；专属设置修改下次启动生效</div>
+            <div class="task-zone">
+                <div class="group-title">已选任务<span class="zone-hint">按顺序执行 · 拖动「≡」手柄或用 ↑↓ 调整</span></div>
+                <div id="task-selected-list" class="task-list"></div>
+                <div class="task-zone-empty" id="task-selected-empty" style="display:none">未选择任务——点击下方「待选任务」卡片加入</div>
+            </div>
+            <div class="task-zone">
+                <div class="group-title">待选任务<span class="zone-hint">点击卡片加入已选</span></div>
+                <div id="task-available-list" class="task-list">
             <div class="task-card" data-mode="五环">
                 <div class="task-card-main">
-                    <span class="task-order">①</span>
-                    <label class="task-radio"><input type="checkbox" name="task-mode" value="五环"><span>五环</span></label>
+                    <span class="task-order"></span>
+                    <span class="task-name">五环</span>
                     <div class="task-count">
                         <button class="th-btn" onclick="count('五环', -1)">−</button>
                         <span class="th-val" id="cnt-五环">2</span>
@@ -463,8 +497,8 @@
             </div>
             <div class="task-card" data-mode="客栈">
                 <div class="task-card-main">
-                    <span class="task-order">②</span>
-                    <label class="task-radio"><input type="checkbox" name="task-mode" value="客栈"><span>客栈</span></label>
+                    <span class="task-order"></span>
+                    <span class="task-name">客栈</span>
                     <div class="task-count">
                         <button class="th-btn" onclick="count('客栈', -1)">−</button>
                         <span class="th-val" id="cnt-客栈">20</span>
@@ -474,9 +508,9 @@
             </div>
             <div class="task-card" data-mode="修罗">
                 <div class="task-card-main">
-                    <span class="task-order">③</span>
-                    <label class="task-radio"><input type="checkbox" name="task-mode" value="修罗"><span>修罗</span>
-                        <button class="task-expand" data-mode="修罗" title="修罗专属设置">▾</button></label>
+                    <span class="task-order"></span>
+                    <span class="task-name">修罗</span>
+                        <button class="task-expand" data-mode="修罗" title="修罗专属设置">▾</button>
                     <div class="task-count">
                         <button class="th-btn" onclick="count('修罗', -1)">−</button>
                         <span class="th-val" id="cnt-修罗">90</span>
@@ -533,9 +567,9 @@
             </div>
             <div class="task-card" data-mode="五倍">
                 <div class="task-card-main">
-                    <span class="task-order">④</span>
-                    <label class="task-radio"><input type="checkbox" name="task-mode" value="五倍"><span>五倍</span>
-                        <button class="task-expand" data-mode="五倍" title="五倍专属设置">▾</button></label>
+                    <span class="task-order"></span>
+                    <span class="task-name">五倍</span>
+                        <button class="task-expand" data-mode="五倍" title="五倍专属设置">▾</button>
                     <div class="task-count">
                         <button class="th-btn" onclick="count('五倍', -1)">−</button>
                         <span class="th-val" id="cnt-五倍">100</span>
@@ -592,8 +626,8 @@
             </div>
             <div class="task-card" data-mode="玄枢轶闻">
                 <div class="task-card-main">
-                    <span class="task-order">⑤</span>
-                    <label class="task-radio"><input type="checkbox" name="task-mode" value="玄枢轶闻"><span>玄枢轶闻</span></label>
+                    <span class="task-order"></span>
+                    <span class="task-name">玄枢轶闻</span>
                     <div class="task-count">
                         <button class="th-btn" onclick="count('玄枢轶闻', -1)">−</button>
                         <span class="th-val" id="cnt-玄枢轶闻">5</span>
@@ -603,8 +637,8 @@
             </div>
             <div class="task-card" data-mode="名望">
                 <div class="task-card-main">
-                    <span class="task-order">⑥</span>
-                    <label class="task-radio"><input type="checkbox" name="task-mode" value="名望"><span>名望</span></label>
+                    <span class="task-order"></span>
+                    <span class="task-name">名望</span>
                     <span class="badge">规划中</span>
                     <div class="task-count">
                         <button class="th-btn" onclick="count('名望', -1)">−</button>
@@ -615,12 +649,15 @@
             </div>
             <div class="task-card" data-mode="仅战斗">
                 <div class="task-card-main">
-                    <span class="task-order">⑦</span>
-                    <label class="task-radio"><input type="checkbox" name="task-mode" value="仅战斗"><span>仅战斗</span></label>
+                    <span class="task-order"></span>
+                    <span class="task-name">仅战斗</span>
                     <span class="badge">持续运行</span>
                 </div>
             </div>
-            <div class="group-hint">按顺序号 ①→⑥ 依次执行，全部完成后自动结束；每卡点空白处可勾选/取消（运行中锁定）。「名望」暂无自动化实现，选中后自动跳过。「仅战斗」与其它任务互斥：选中后仅运行战斗监控（自动战斗/补血蓝/巫医，不做任务与队伍操作），持续运行至手动停止。</div>
+                </div>
+                <div class="task-zone-empty" id="task-available-empty" style="display:none">全部任务已选择</div>
+            </div>
+            <div class="group-hint">点击「待选任务」卡片加入已选（按加入顺序排列）；「已选任务」按顺序依次执行，拖动「≡」手柄或点 ↑↓ 调整顺序，点卡片移回待选。「仅战斗」与其它任务互斥：选中后仅运行战斗监控（自动战斗/补血蓝/巫医，不做任务与队伍操作），持续运行至手动停止。「名望」暂无自动化实现，选中后自动跳过。全部完成后自动结束。</div>
         </div>
         <!-- ============ 设置页（通用 + 显示与调试 + 血蓝阈值 + 战斗动作） ============ -->
         <div class="page" id="page-general">
@@ -1028,7 +1065,10 @@
     const btnTheme = document.getElementById('btn-theme');
     const iconMoon = document.getElementById('theme-icon-moon');
     const iconSun = document.getElementById('theme-icon-sun');
-    const taskSelects = document.querySelectorAll('input[name="task-mode"]');
+    const taskSelectedList = document.getElementById('task-selected-list');
+    const taskAvailableList = document.getElementById('task-available-list');
+    const taskSelectedEmpty = document.getElementById('task-selected-empty');
+    const taskAvailableEmpty = document.getElementById('task-available-empty');
     const countBtns = document.querySelectorAll('.task-count .th-btn');
     const taskLockBanner = document.getElementById('task-lock-banner');
     const useSyx = document.getElementById('use-syx');
@@ -1228,7 +1268,9 @@
     }
 
     function selectedModes() {
-        return [...taskSelects].filter(el => el.checked).map(el => el.value);
+        // 执行顺序 = 已选区 DOM 顺序（定义于任务页交互段，此处为看板用）
+        return [...taskSelectedList.querySelectorAll('.task-card')]
+            .map(c => c.dataset.mode);
     }
 
     function renderDash() {
@@ -1362,9 +1404,9 @@
         const hotkeySuffix = bossHotkey ? '(' + bossHotkey.toUpperCase() + ')' : '';
         btnStart.innerText = (running ? '停 止' : '启 动') + hotkeySuffix;
         btnStart.classList.toggle('running', running);
-        // 运行期间任务勾选与次数不可更改（用户确认：只能停止后修改）；
-        // 停止后按仅战斗互斥重新启用可用项
-        updateModeExclusion();
+        // 运行期间任务选择/顺序与次数不可更改（用户确认：只能停止后
+        // 修改）；停止后按仅战斗互斥重新启用可用项（渲染内已含）
+        renderTaskZones();
         countBtns.forEach(btn => { btn.disabled = running; });
         taskLockBanner.classList.toggle('warn', running);
         taskLockBanner.style.display = running ? 'block' : 'none';
@@ -1571,10 +1613,9 @@
         if (r && r.status === 'success') applyTheme(next);
     }
 
-    /* ================= 任务卡交互（勾选/步进/手风琴） ================= */
-    // 手风琴展开态记忆（localStorage 键按任务模式）；
-    // 按钮内嵌在 label 中：preventDefault 阻断 label 激活勾选（虽为交互
-    // 元素本不触发，双保险），stopPropagation 阻断整卡点击切换
+    /* ============ 任务页双区交互（待选/已选 + 拖动排序 + 步进/手风琴） ============ */
+    // 手风琴展开态记忆（localStorage 键按任务模式）；preventDefault
+    // 阻断整卡点击切换，stopPropagation 双重保险
     document.querySelectorAll('.task-expand').forEach(btn => {
         btn.addEventListener('click', e => {
             e.preventDefault();
@@ -1587,55 +1628,180 @@
         });
     });
 
-    // 任务条目整卡点击切换勾选（选中指示为可见复选框，卡片不整体染色）；
-    // 次数步进按钮/展开按钮不触发。
-    // 注意：脚本设置 checked 不触发 change 事件（Edge/WebView2 实测，
-    // change 只在用户交互时派发）——卡片空白处点击需直接保存；
-    // 点击落在 label 上时浏览器已原生切换，此处跳过防双重切换
-    document.querySelectorAll('.task-card-main').forEach(main => {
-        main.addEventListener('click', e => {
-            if (running) return;
-            if (e.target.closest('.th-btn') || e.target.closest('.task-expand')) return;
-            const input = main.querySelector('input[name="task-mode"]');
-            if (input && !e.target.closest('.task-radio')) {
-                if (input.disabled) return;  // 仅战斗互斥禁用态：点击无效
-                input.checked = !input.checked;
-                updateModeExclusion();
-                saveSelectedModes();
+    // 每张卡注入拖动排序手柄（≡）与 ↑↓ 移动按钮（WCAG：拖动必须有
+    // 单指针替代操作，不能只靠拖动手柄）
+    document.querySelectorAll('#page-task .task-card').forEach(card => {
+        const main = card.querySelector('.task-card-main');
+        const handle = document.createElement('span');
+        handle.className = 'drag-handle';
+        handle.textContent = '≡';
+        handle.title = '拖动调整执行顺序';
+        main.insertBefore(handle, main.firstChild);
+        const wrap = document.createElement('div');
+        wrap.style.display = 'flex';
+        wrap.style.gap = '4px';
+        wrap.style.flexShrink = '0';
+        for (const [txt, tip] of [['↑', '上移'], ['↓', '下移']]) {
+            const btn = document.createElement('button');
+            btn.className = 'task-move';
+            btn.textContent = txt;
+            btn.title = tip;
+            wrap.appendChild(btn);
+        }
+        main.appendChild(wrap);
+    });
+
+    const ORDER_BADGES = ['①', '②', '③', '④', '⑤', '⑥', '⑦'];
+    let selModes = [];      // 已选任务（列表顺序 = 执行顺序，持久化）
+
+    function cardByMode(mode) {
+        return document.querySelector('#page-task .task-card[data-mode="' + mode + '"]');
+    }
+
+    // 双区渲染：已选卡按 selModes 顺序进入已选区（序号 ①②③…），
+    // 其余按 TASK_MODES 固定顺序回待选区；↑↓ 首尾禁用；空态显隐；
+    // 互斥禁用态（仅战斗选中 → 其它待选卡禁用，选其它 → 仅战斗禁用）
+    function renderTaskZones() {
+        selModes.forEach((mode, i) => {
+            const card = cardByMode(mode);
+            if (card) {
+                taskSelectedList.appendChild(card);
+                card.querySelector('.task-order').textContent = ORDER_BADGES[i] || '';
             }
         });
-    });
-
-    // 勾选变更：立即保存（运行期间禁用，双保险）
-    taskSelects.forEach(input => {
-        input.addEventListener('change', () => {
-            if (running) return;
-            updateModeExclusion();
-            saveSelectedModes();
+        TASK_MODES.forEach(mode => {
+            const card = cardByMode(mode);
+            if (card && !selModes.includes(mode)) {
+                taskAvailableList.appendChild(card);
+                card.querySelector('.task-order').textContent = '';
+            }
         });
-    });
+        [...taskSelectedList.querySelectorAll('.task-card')].forEach((card, i) => {
+            const [up, down] = card.querySelectorAll('.task-move');
+            up.disabled = running || i === 0;
+            down.disabled = running || i === selModes.length - 1;
+        });
+        taskSelectedEmpty.style.display = selModes.length ? 'none' : '';
+        taskAvailableEmpty.style.display =
+            selModes.length === TASK_MODES.length ? '' : 'none';
+        updateModeExclusion();
+    }
 
-    // 仅战斗互斥：勾选「仅战斗」时其它任务禁用，勾选任一其它任务时
-    // 「仅战斗」禁用（都不勾选时全部可用）；运行期间全部禁用。
-    // 纯派生状态：勾选态/运行态任一变化后重算即可
+    // 仅战斗互斥：仅战斗选中时其它待选卡禁用，选任一其它任务时
+    // 「仅战斗」禁用（都不选时全部可用）；运行期间待选卡全部禁用。
+    // 纯派生状态：selModes/运行态任一变化后重算即可
     function updateModeExclusion() {
-        const battleOnlySel = document.querySelector('input[name="task-mode"][value="仅战斗"]');
-        if (!battleOnlySel) return;
-        const battleOnly = battleOnlySel.checked;
-        const anyOther = [...taskSelects].some(el => el.value !== BATTLE_ONLY && el.checked);
-        taskSelects.forEach(el => {
-            if (running) { el.disabled = true; return; }
-            if (battleOnly) el.disabled = (el.value !== BATTLE_ONLY);
-            else if (anyOther) el.disabled = (el.value === BATTLE_ONLY);
-            else el.disabled = false;
+        const battleOnly = selModes.includes(BATTLE_ONLY);
+        const anyOther = selModes.some(m => m !== BATTLE_ONLY);
+        [...taskAvailableList.querySelectorAll('.task-card')].forEach(card => {
+            const m = card.dataset.mode;
+            const disabled = running
+                || (battleOnly ? m !== BATTLE_ONLY : (anyOther && m === BATTLE_ONLY));
+            card.classList.toggle('zone-disabled', disabled);
+            card.title = !running && disabled
+                ? (m === BATTLE_ONLY ? '与其它任务互斥：请先移出其它任务'
+                                     : '与「仅战斗」互斥：请先移出仅战斗')
+                : '';
         });
     }
 
-    // 选中任务列表保存：按面板顺序收集勾选项（Python 侧过滤非法项并
-    // 强制互斥），保存后刷新总进度（勾选变化影响进度分母）
+    // 点击卡片切换选区：待选 → 追加到已选末尾；已选 → 移回待选
+    // （次数步进/展开/↑↓ 按钮不触发；互斥禁用卡不响应）
+    function toggleTaskMode(mode) {
+        const i = selModes.indexOf(mode);
+        if (i >= 0) {
+            selModes.splice(i, 1);
+        } else if (!cardByMode(mode).classList.contains('zone-disabled')) {
+            selModes.push(mode);
+        } else {
+            return;
+        }
+        renderTaskZones();
+        saveSelectedModes();
+    }
+
+    let suppressClick = false;  // 拖动松手后抑制一次点击（防误触卡片移出）
+    for (const list of [taskSelectedList, taskAvailableList]) {
+        list.addEventListener('click', e => {
+            if (running) return;
+            if (suppressClick) { suppressClick = false; return; }
+            if (e.target.closest('.th-btn') || e.target.closest('.task-expand')
+                || e.target.closest('.task-move') || e.target.closest('.drag-handle')) return;
+            const card = e.target.closest('.task-card');
+            if (card) toggleTaskMode(card.dataset.mode);
+        });
+    }
+
+    // ↑↓ 移动：相邻交换后保存（拖动的按钮替代操作，同为执行顺序调整）
+    taskSelectedList.addEventListener('click', e => {
+        if (running) return;
+        const btn = e.target.closest('.task-move');
+        if (!btn) return;
+        const mode = btn.closest('.task-card').dataset.mode;
+        const i = selModes.indexOf(mode);
+        const j = i + (btn.textContent === '↑' ? -1 : 1);
+        if (i < 0 || j < 0 || j >= selModes.length) return;
+        [selModes[i], selModes[j]] = [selModes[j], selModes[i]];
+        renderTaskZones();
+        saveSelectedModes();
+    });
+
+    // 拖动排序：WebView2 内嵌控件不支持 HTML5 原生 drag & drop
+    // （dragover/drop 不触发，Edge 浏览器正常但嵌入控件失效），改用
+    // 指针事件自实现——按住「≡」手柄拖动，卡片跟随指针位移，指针
+    // 悬停的目标卡显示插入线（插到其前面），松手落位并保存
+    let dragState = null;   // {card, startY, moved}
+    document.querySelectorAll('#page-task .drag-handle').forEach(handle => {
+        handle.addEventListener('pointerdown', e => {
+            if (running) return;
+            dragState = {card: handle.closest('.task-card'),
+                         startY: e.clientY, moved: false};
+            dragState.card.classList.add('dragging');
+            e.preventDefault();  // 防文本选择/原生拖拽
+        });
+    });
+    document.addEventListener('pointermove', e => {
+        if (!dragState) return;
+        if (!dragState.moved && Math.abs(e.clientY - dragState.startY) < 4) return;
+        dragState.moved = true;
+        dragState.card.style.transform =
+            'translateY(' + (e.clientY - dragState.startY) + 'px)';
+        const target = [...taskSelectedList.querySelectorAll('.task-card')].find(c => {
+            if (c === dragState.card) return false;
+            const r = c.getBoundingClientRect();
+            return e.clientY >= r.top && e.clientY <= r.bottom;
+        });
+        [...taskSelectedList.querySelectorAll('.task-card')]
+            .forEach(c => c.classList.remove('drop-target'));
+        if (target) target.classList.add('drop-target');
+    });
+    document.addEventListener('pointerup', () => {
+        if (!dragState) return;
+        const moved = dragState.moved;
+        dragState.card.style.transform = '';
+        dragState.card.classList.remove('dragging');
+        const target = taskSelectedList.querySelector('.task-card.drop-target');
+        [...taskSelectedList.querySelectorAll('.task-card')]
+            .forEach(c => c.classList.remove('drop-target'));
+        if (moved) {
+            suppressClick = true;  // 拖动松手后的 click 不再触发卡片移出
+            const from = selModes.indexOf(dragState.card.dataset.mode);
+            if (from >= 0) {
+                selModes.splice(from, 1);
+                const to = target
+                    ? selModes.indexOf(target.dataset.mode) : selModes.length;
+                selModes.splice(to, 0, dragState.card.dataset.mode);
+                renderTaskZones();
+                saveSelectedModes();
+            }
+        }
+        dragState = null;
+    });
+
+    // 已选任务列表保存：按已选区顺序收集（Python 侧过滤非法项并
+    // 强制互斥、按保存顺序返回），保存后刷新总进度（勾选变化影响进度分母）
     function saveSelectedModes() {
-        const modes = [...taskSelects].filter(el => el.checked).map(el => el.value);
-        callPython('save_task_modes', modes).then(refreshProgress);
+        callPython('save_task_modes', [...selModes]).then(refreshProgress);
     }
 
     // 任务次数步进：±1，下限 0，部分模式有上限（五环2/客栈20/玄枢轶闻5/名望5），变更立即保存
@@ -1881,8 +2047,8 @@
         if (info.schemes) renderSchemes(info.schemes);  // 顶部方案下拉
         bossHotkey = info.boss_hotkey || '';  // 老板键名（按钮文案提示）
         if (info.modes) {
-            taskSelects.forEach(el => { el.checked = info.modes.includes(el.value); });
-            updateModeExclusion();  // 方案切换/初始化后按勾选态重算互斥禁用
+            selModes = [...info.modes];  // 保存顺序 = 选择顺序（后端按保存顺序返回）
+            renderTaskZones();           // 初始化/方案切换后重渲染双区 + 互斥禁用
         }
         useSyx.checked = !!info.use_sheyaoxiang;
         debugOverlay.checked = !!info.debug_overlay;
