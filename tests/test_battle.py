@@ -149,6 +149,7 @@ def test_wuyi_noise_streak_degrades_and_recovers(monkeypatch):
     battle._wuyi_noise_streak = 0
     battle._wuyi_last_ocr = 0.0
     battle._wuyi_option_missing_warned = False
+    monkeypatch.setattr(battle, "last_wuyi_option_pos", None)  # 无缓存走识别路径
     clock = [100.0]
     monkeypatch.setattr(battle.time, "time", lambda: clock[0])
     ocr_n = [0]
@@ -200,6 +201,7 @@ def test_wuyi_click_degrades_immediately(monkeypatch):
     battle._wuyi_option_missing_warned = False
     battle._wuyi_degraded = False
     battle._wuyi_noise_streak = 0
+    monkeypatch.setattr(battle, "last_wuyi_option_pos", None)  # 无缓存走识别路径
     clicks = []
     monkeypatch.setattr(battle, "human_click",
                         lambda win, x, y: clicks.append((x, y)))
@@ -215,6 +217,62 @@ def test_wuyi_click_degrades_immediately(monkeypatch):
     assert clicks == [(650, 420)]           # 选项中心被点击
     assert battle._wuyi_degraded is True    # 点击成功即降级
     assert battle._wuyi_noise_streak == battle.WUYI_DEGRADE_STREAK
+
+
+def _wuyi_img_np(green_band):
+    """构造巫医 OCR 帧：对话框区外置黑、指定条带内放亮绿选项文字。"""
+    img_np = np.zeros((831, 1378, 3), dtype=np.uint8)
+    l, t, r, b = green_band
+    img_np[t:b, l:r] = (0, 186, 0)  # RGB 亮绿（与任务绿字同款）
+    return img_np
+
+
+def test_wuyi_click_uses_cached_position(monkeypatch):
+    """高性能直点：缓存点条带内有绿字 → 直接点击，不重新识别选项。"""
+    battle._wuyi_prev_roi = None
+    battle._wuyi_option_missing_warned = False
+    battle._wuyi_degraded = False
+    battle._wuyi_noise_streak = 0
+    monkeypatch.setattr(battle, "last_wuyi_option_pos", (534, 408))
+    clicks = []
+    monkeypatch.setattr(battle, "human_click",
+                        lambda win, x, y: clicks.append((x, y)))
+    monkeypatch.setattr(battle, "move_away", lambda win: None)
+    img_np = _wuyi_img_np((494, 398, 574, 418))  # 缓存点周围绿字
+    monkeypatch.setattr(battle.game_map, "ocr_regions",
+                        lambda img, regions: (
+                            [("我是超级巫医，可以帮你医治召唤兽",
+                              [500, 300, 900, 340], 0.96)], img_np))
+
+    def _boom(*a, **k):
+        raise AssertionError("有缓存不应再识别选项")
+
+    monkeypatch.setattr(battle, "_find_wuyi_option", _boom)
+    assert battle._handle_wuyi_dialog(object(), img=_make_noisy_pil(1)) is True
+    assert clicks == [(534, 408)]
+
+
+def test_wuyi_click_cache_mismatch_falls_back_to_recognition(monkeypatch):
+    """两种巫医弹窗选项位置不同：缓存点条带无绿字 → 走识别流程。"""
+    battle._wuyi_prev_roi = None
+    battle._wuyi_option_missing_warned = False
+    battle._wuyi_degraded = False
+    battle._wuyi_noise_streak = 0
+    monkeypatch.setattr(battle, "last_wuyi_option_pos", (650, 420))  # 受伤弹窗缓存
+    clicks = []
+    monkeypatch.setattr(battle, "human_click",
+                        lambda win, x, y: clicks.append((x, y)))
+    monkeypatch.setattr(battle, "move_away", lambda win: None)
+    img_np = _wuyi_img_np((494, 398, 574, 418))  # 当前 NPC 弹窗：绿字在另一位置
+    monkeypatch.setattr(battle.game_map, "ocr_regions",
+                        lambda img, regions: (
+                            [("我是超级巫医，可以帮你医治召唤兽",
+                              [500, 300, 900, 340], 0.96)], img_np))
+    monkeypatch.setattr(battle, "_find_wuyi_option",
+                        lambda items, np_img: (534, 408))
+    assert battle._handle_wuyi_dialog(object(), img=_make_noisy_pil(1)) is True
+    assert clicks == [(534, 408)]               # 识别结果被点击
+    assert battle.last_wuyi_option_pos == (534, 408)  # 缓存被刷新
 
 
 def test_handle_hezi_reuses_frame(monkeypatch):

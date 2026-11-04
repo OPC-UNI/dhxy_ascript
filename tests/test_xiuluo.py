@@ -124,3 +124,80 @@ def test_dismiss_wuyi_block_dialog_not_found(world):
     assert xiuluo._dismiss_wuyi_block_dialog(_FakeWin()) is False
     assert world["clicks"] == []
     assert world["clock"].t >= 3.0
+
+
+# ---- 巫医链超时路径：战斗线程已点击时不重复兜底点击（2026-11-04） ----
+
+DIALOG_ITEMS = [("我是超级巫医，可以帮你医治召唤兽",
+                 (400, 300, 900, 600), 0.96)]
+NPC_PT = (678, 496)
+OPTION_PT = (534, 408)
+
+
+@pytest.fixture
+def wuyi_chain(monkeypatch):
+    """装配 _run_wuyi_chain 外部依赖：对话框恒在场、超时缩短为 1s。"""
+    clock = _FakeClock()
+    clock.t = 1000.0  # 真实时间戳语义（>0：区分「从未点击」的 last_wuyi_option_at=0）
+    clicks = []
+    logs = []
+    monkeypatch.setattr(xiuluo, "time", clock)
+    monkeypatch.setattr(xiuluo, "is_in_battle", lambda win: False)
+    monkeypatch.setattr(xiuluo, "human_click",
+                        lambda win, x, y, **k: clicks.append((x, y)))
+    monkeypatch.setattr(xiuluo, "move_away", lambda win: None)
+    monkeypatch.setattr(xiuluo, "log",
+                        lambda msg, level="INFO": logs.append((msg, level)))
+    monkeypatch.setattr(xiuluo.game_map, "read_map_position",
+                        lambda win: ("灵兽村", *xiuluo.WUYI_SPOT))
+    monkeypatch.setattr(xiuluo.game_map, "ocr_regions",
+                        lambda img, regions: (list(DIALOG_ITEMS), None))
+    monkeypatch.setattr(xiuluo, "_find_wuyi_npc",
+                        lambda win: (NPC_PT, ""))
+    monkeypatch.setattr(xiuluo, "_find_wuyi_option",
+                        lambda items, img_np: OPTION_PT)
+    monkeypatch.setattr(xiuluo, "WUYI_HANDLE_TIMEOUT", 1.0)  # 单轮即超时
+    monkeypatch.setattr(xiuluo.battle, "last_wuyi_option_at", 0)
+    monkeypatch.setattr(xiuluo.battle, "last_wuyi_option_pos", None)
+    return {"clock": clock, "clicks": clicks, "logs": logs}
+
+
+def test_wuyi_chain_click_detected_returns_immediately(wuyi_chain):
+    """战斗线程点击后（时间戳晚于点 NPC）→ 随机 1~1.2s 即返回，
+    不等对话框关闭（用户 2026-11-04：点击全部医治后立即寻路）。"""
+    xiuluo.battle.last_wuyi_option_at = 1000.5  # 点 NPC 之后战斗线程点击
+    ok, info = xiuluo._run_wuyi_chain(_FakeWin())
+    assert ok is True
+    assert "自动巫医完成" in info
+    assert wuyi_chain["clicks"] == [NPC_PT]      # 仅点 NPC，无重复点击
+    t = wuyi_chain["clock"].t
+    assert 1001.0 <= t <= 1001.2                 # 随机 1~1.2s 等待后返回
+
+
+def test_wuyi_chain_timeout_no_click_self_clicks(wuyi_chain):
+    """超时时战斗线程未点击且对话框在场 → 兜底自行点击一次。"""
+    xiuluo.battle.last_wuyi_option_at = 0
+    ok, info = xiuluo._run_wuyi_chain(_FakeWin())
+    assert ok is True
+    assert "已自行点击选项" in info
+    assert wuyi_chain["clicks"] == [NPC_PT, OPTION_PT]  # 点 NPC + 兜底点选项
+
+
+def test_wuyi_chain_timeout_self_click_uses_cached_pos(wuyi_chain, monkeypatch):
+    """兜底自点优先用绿字校验过的缓存位置，不重新识别。"""
+    import numpy as np
+    xiuluo.battle.last_wuyi_option_at = 0
+    xiuluo.battle.last_wuyi_option_pos = (650, 420)  # 历史缓存（受伤弹窗）
+    img_np = np.zeros((831, 1378, 3), dtype=np.uint8)
+    img_np[410:430, 610:690] = (0, 186, 0)  # 缓存点周围亮绿
+    monkeypatch.setattr(xiuluo.game_map, "ocr_regions",
+                        lambda img, regions: (list(DIALOG_ITEMS), img_np))
+
+    def _boom(*a, **k):
+        raise AssertionError("有缓存不应再识别")
+
+    monkeypatch.setattr(xiuluo, "_find_wuyi_option", _boom)
+    ok, info = xiuluo._run_wuyi_chain(_FakeWin())
+    assert ok is True
+    assert "已自行点击选项" in info
+    assert wuyi_chain["clicks"] == [NPC_PT, (650, 420)]

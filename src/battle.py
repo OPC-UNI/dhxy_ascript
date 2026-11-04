@@ -128,9 +128,35 @@ WUYI_DIALOG_TEXTS = (
 WUYI_OPTION_TEXT = "全部医治和修复"                    # 对话框绿色选项（游戏内原文，精确子串匹配）
 # 最近一次巫医选项点击位置与时间（组号模式队员 pass 高性能直点复用：
 # 同一客户端同一对话框布局，队员选项位置与队长一致——新鲜期内
-# 切到队员直接点同一坐标，省截图+OCR；见 tab_group._wuyi_click_direct）
+# 切到队员直接点同一坐标，省截图+OCR；见 tab_group._wuyi_click_direct。
+# 同时是主流程选项直点的位置缓存——注意两种巫医弹窗选项位置不同
+# （NPC 服务面板 (534,408) / 召唤兽受伤弹窗 (650,420)，2026-11-04
+# 日志实测），直点前必须经 _wuyi_cached_pt 绿字校验，跨弹窗缓存不
+# 校验会点偏）
 last_wuyi_option_pos = None
 last_wuyi_option_at = 0.0
+
+
+def _wuyi_cached_pt(img_np):
+    """缓存选项位置的绿字校验：通过返回缓存点，否则 None（走识别流程）。
+
+    缓存点周围 ±40x±10 条带内须存在亮绿文字（选项绿字/下划线，
+    G≥150）才直点——两种巫医弹窗的选项条带互不重叠（实测 NPC 服务
+    面板选项 x≈490-580 / 受伤弹窗 x≈590-710），校验可区分弹窗类型；
+    不通过时走完整识别（识别成功后 record_wuyi_option_pos 刷新缓存）。
+    """
+    if last_wuyi_option_pos is None or img_np is None:
+        return None
+    x, y = last_wuyi_option_pos
+    if not (0 <= x < img_np.shape[1] and 0 <= y < img_np.shape[0]):
+        return None
+    l, t = max(0, x - 40), max(0, y - 10)
+    r, b = min(img_np.shape[1], x + 40), min(img_np.shape[0], y + 10)
+    if task_tracker.green_ratio(img_np, (l, t, r, b),
+                                min_g=task_tracker.GREEN_BRIGHT_MIN) \
+            >= WUYI_CACHE_GREEN_RATIO:
+        return (x, y)
+    return None
 WUYI_CHECK_INTERVAL = 2.0    # 战斗结束后高发窗口内的巫医对话框检查间隔（秒）。
                              # 实测 5s 节奏弹窗最多等 5s 才被点击，人物寻路走远后
                              # 对话框关闭、点击失效；2s 下最坏延迟 ~2s——该节奏
@@ -153,6 +179,9 @@ WUYI_IDLE_CHECK_INTERVAL = 10.0  # 高发窗口/预期窗口之外的安全兜�
 wuyi_fast_idle = False
 WUYI_RETRY_COOLDOWN = 15.0   # 点击选项后的冷却期（对话框未关闭时防重复点击）
 WUYI_DIFF_THRESHOLD = 2.0    # 对话框区域平均像素差阈值：低于则跳过 OCR（区域无变化）
+WUYI_CACHE_GREEN_RATIO = 0.02  # 缓存直点的绿字校验：条带内亮绿像素占比下限
+                               # （选项文字占条带 6~25%，阈值留量；场景植被
+                               # 亮绿在无对话框时不参与——校验仅在文案命中后）
 
 # ---- 巫医空闲 OCR 自适应降级（2026-11-04 实测） ----
 # 差分门校准假设被实测推翻：非队长站立场景 2s 间隔噪声差分 2.5~66
@@ -756,7 +785,15 @@ def _handle_wuyi_dialog(win, img=None, idle=False):
     # 重试路径本就绕过降级门；若点击成功，下方点击路径立即再降级
     _wuyi_noise_streak = 0
     _wuyi_degraded = False
-    pt = _find_wuyi_option(items, img_np)
+    # 高性能直点（用户 2026-11-04 确认：弹窗在窗口上位置不变）：缓存
+    # 位置经绿字条带校验后直接点击，省绿字定位与 2x 放大 OCR（选项
+    # 小字原尺寸常漏检，放大识别慢且偶发「未识别到选项」告警）。
+    # 注意两种巫医弹窗选项位置不同（NPC 服务面板 (534,408) / 召唤兽
+    # 受伤弹窗 (650,420)，2026-11-04 日志实测）——缓存必须带校验，
+    # 校验不过走完整识别流程（识别成功后刷新缓存）
+    pt = _wuyi_cached_pt(img_np)
+    if pt is None:
+        pt = _find_wuyi_option(items, img_np)
     if pt is None:
         # 选项文字可能很小（实测五倍对话框「全部医治和修复」字高仅 13px，
         # 区域 OCR 原尺寸漏检），对对话框区 2 倍放大重识别一次

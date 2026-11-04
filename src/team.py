@@ -702,7 +702,12 @@ def open_team_panel(win):
         return False, "菜单中未定位到「队伍信息」"
     human_click(win, pt[0], pt[1])
     if not _wait_panel(win):
-        _try_close_menu()
+        # 面板未打开：关闭为打开面板而拉起的组队菜单，避免菜单残留
+        # 干扰后续操作（同函数上方两条失败路径同款处理）。
+        # 原 _try_close_menu（ESC 兜底）已在静默通道落地时移除
+        # （e9eaae7），此处调用点漏改导致 NameError（2026-11-04 五倍
+        # 主循环异常日志）
+        _close_menu(win)
         return False, "队伍面板未打开"
     return True, "队伍面板已打开"
 

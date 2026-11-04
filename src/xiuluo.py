@@ -153,8 +153,11 @@ WUYI_ARRIVE_TIMEOUT = 8                       # 走到巫医坐标附近的超�
                                               # 确认：走到附近超时 24s 不合理，压缩上限）
 WUYI_NPC_TIMEOUT = 3                          # 到达后识别巫医 NPC 模板的窗口：3s 内未识别到
                                               # 即本次取消，下次轮到再试（用户 2026-10-09 确认）
-WUYI_HANDLE_TIMEOUT = 8                       # 点击 NPC 后等待战斗线程处理对话框的超时
-                                              # （用户 2026-10-28 指定：15s 太长，最长 8s；
+WUYI_HANDLE_TIMEOUT = 12                      # 点击 NPC 后等待战斗线程处理对话框的超时
+                                              # （用户 2026-10-28 指定 8s；2026-11-04 实测
+                                              # 整链 = 对话框动画 ~2s + 2s 节奏相位空检 ~2s +
+                                              # 医治动画 ~2s + 检测 ~1s，相位最差轮次恰好顶满
+                                              # 8s 零余量——放宽到 12s 覆盖连续两次相位空检；
                                               # 超时后自行点击选项兜底，见 _run_wuyi_chain）
 WUYI_BLOCK_DIALOG_TEXT = "阻止它为非作歹"     # 领取任务后弹出的遮挡对话框文案：面板遮挡巫医
                                               # NPC 模板（2026-10-31 用户反馈），点击屏幕中间
@@ -314,10 +317,13 @@ def _run_wuyi_chain(win, hover_before_click=False, report_condition=False,
        即取消）→ 到达后 3s 窗口识别 NPC 模板（未识别到即本次取消，
        下次轮到再试——用户 2026-10-09 确认）
     4. 点击巫医 NPC（xiuluo_lingshoucunwuyi.png）打开医治对话框。
-       真实流程：等待战斗线程点击「全部医治和修复」（battle.py 已有
-       完整逻辑，无需重复实现——对话框出现→消失即处理完成）；
-       点击后设置 battle.wuyi_expected_at 通知战斗线程切入 2s 高频
-       检查（10s 空闲节奏会错过 8s 等待上限，被迫兜底自点）；
+       真实流程：轮询 battle.last_wuyi_option_at 检测战斗线程已点击
+       「全部医治和修复」（battle.py 已有完整逻辑——选项位置固定走
+       缓存直点），点击后随机 1~1.2s 即返回继续寻路，**不等待对话框
+       关闭**（医治动画 ~2s 不阻塞寻路，用户 2026-11-04 确认）；
+       点击 NPC 后设置 battle.wuyi_expected_at 通知战斗线程切入 2s
+       高频检查（10s 空闲节奏会错过等待上限，被迫兜底自点，
+       2026-10-29 日志教训）；
        click_option_self=True（验证模式）：主进程没有战斗线程，验证
        自行点击医治选项（复用 battle._find_wuyi_option，与战斗线程
        行为等效——不宜把常驻 battle 线程拉进主进程，避免与后续任务
@@ -393,59 +399,92 @@ def _run_wuyi_chain(win, hover_before_click=False, report_condition=False,
     human_click(win, pt[0], pt[1])
     # 通知战斗线程：巫医对话框即将出现，切入 2s 高频检查（10s 空闲节奏
     # 相位不巧时会错过 8s 等待上限，被迫兜底自点，2026-10-29 日志教训）
-    battle.wuyi_expected_at = time.time()
+    npc_click_ts = time.time()
+    battle.wuyi_expected_at = npc_click_ts
     log(f"[修罗][巫医] 已点击巫医 NPC ({pt[0]}, {pt[1]})，等待医治对话框处理", "SYS")
-    # 等待对话框出现并处理（出现→消失）
     deadline = time.time() + WUYI_HANDLE_TIMEOUT
-    appeared = False
-    option_clicked = False
-    last_items = None   # 对话框打开期间的最近 OCR（超时自行点击兜底用）
-    last_img_np = None
-    while time.time() < deadline:
-        img = win.capture(force_activate=False)
-        if img is None:
+    if click_option_self:
+        # 验证模式：主进程无战斗线程——OCR 检测对话框并自行点击，
+        # 等待对话框关闭确认整链（与真实环境行为等效）
+        appeared = False
+        option_clicked = False
+        last_items = None   # 对话框打开期间的最近 OCR（超时自行点击兜底用）
+        last_img_np = None
+        while time.time() < deadline:
+            img = win.capture(force_activate=False)
+            if img is None:
+                time.sleep(0.5)
+                continue
+            items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
+            # 与 battle.py 的巫医判定同款调用（内部模糊匹配，无需预规范化）
+            has_dialog = any(_dialog_text_present(items, t) for t in WUYI_DIALOG_TEXTS)
+            if has_dialog:
+                appeared = True
+                last_items, last_img_np = items, img_np
+                if not option_clicked:
+                    pt_opt = _find_wuyi_option(items, img_np)
+                    if pt_opt is not None:
+                        human_click(win, pt_opt[0], pt_opt[1])
+                        log(f"[修罗][验证] 已点击「全部医治和修复」"
+                            f"@ ({pt_opt[0]}, {pt_opt[1]})", "SYS")
+                        battle.record_wuyi_option_pos(pt_opt)  # 组号队员 pass 直点复用
+                        move_away(win)  # 悬停会让选项变色，干扰绿字判定
+                        option_clicked = True
+                time.sleep(1.0)
+                continue
+            if appeared:
+                log("[修罗][巫医] 医治对话框已处理完毕", "SYS")
+                return True, "自动巫医完成"
             time.sleep(0.5)
-            continue
-        items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
-        # 与 battle.py 的巫医判定同款调用（内部模糊匹配，无需预规范化）
-        has_dialog = any(_dialog_text_present(items, t) for t in WUYI_DIALOG_TEXTS)
-        if has_dialog:
-            appeared = True
-            last_items, last_img_np = items, img_np
-            if click_option_self and not option_clicked:
-                # 验证模式：主进程无战斗线程，自行点击医治选项
-                # （与真实环境的战斗线程行为等效）
-                pt_opt = _find_wuyi_option(items, img_np)
-                if pt_opt is not None:
-                    human_click(win, pt_opt[0], pt_opt[1])
-                    log(f"[修罗][验证] 已点击「全部医治和修复」"
-                        f"@ ({pt_opt[0]}, {pt_opt[1]})", "SYS")
-                    battle.record_wuyi_option_pos(pt_opt)  # 组号队员 pass 直点复用
-                    move_away(win)  # 悬停会让选项变色，干扰绿字判定
-                    option_clicked = True
-            time.sleep(1.0)
-            continue
-        if appeared:
-            log("[修罗][巫医] 医治对话框已处理完毕", "SYS")
-            return True, "自动巫医完成"
-        time.sleep(0.5)
-    if appeared:
-        # 超时仍未关闭：战斗线程未及时点击（弹窗动画吞掉过早点击等）。
-        # 自行点击一次兜底，保证「巫医完 → 再追踪」的顺序
-        # （用户 2026-10-28：超时上限 8s + 兜底自行点击）
-        if not option_clicked and last_items is not None:
+        if appeared and not option_clicked and last_items is not None:
             pt_opt = _find_wuyi_option(last_items, last_img_np)
             if pt_opt is not None:
                 human_click(win, pt_opt[0], pt_opt[1])
-                log(f"[修罗][巫医] 等待超时，自行点击「全部医治和修复」"
+                log(f"[修罗][验证] 等待超时，自行点击「全部医治和修复」"
                     f"@ ({pt_opt[0]}, {pt_opt[1]})", "WARN")
                 battle.record_wuyi_option_pos(pt_opt)  # 组号队员 pass 直点复用
                 move_away(win)  # 悬停会让选项变色，干扰绿字判定
                 time.sleep(1.0)  # 等待点击生效
                 return True, "医治对话框超时未关闭，已自行点击选项"
+        return (True, "医治对话框已出现（继续处理）") if appeared \
+            else (False, "点击巫医后未出现医治对话框（本次取消）")
+    # 真实流程：战斗线程在预期窗口内 2s 高频检查并点击选项。轮询点击
+    # 时间戳（内存读，零截图零 OCR）——战斗线程点击后随机 1~1.2s 让
+    # 点击生效即返回，不等待对话框关闭（医治动画 ~2s 不阻塞寻路，
+    # 用户 2026-11-04 确认「点击全部医治后立即寻路」）
+    while time.time() < deadline:
+        if battle.last_wuyi_option_at >= npc_click_ts:
+            time.sleep(random.uniform(1.0, 1.2))
+            return True, "自动巫医完成"
+        time.sleep(0.5)
+    # 超时：战斗线程未点击——OCR 判定对话框是否出现（最多 2 次，1s 间隔）
+    items = None
+    has_dialog = False
+    for _ in range(2):
+        img = win.capture(force_activate=False)
+        if img is not None:
+            items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
+            if any(_dialog_text_present(items, t) for t in WUYI_DIALOG_TEXTS):
+                has_dialog = True
+                break
+        time.sleep(1.0)
+    if not has_dialog:
+        # 对话框未出现（距离不够）：本次取消，下次轮到再试
+        return False, "点击巫医后未出现医治对话框（本次取消）"
+    # 对话框在场但战斗线程没点上：兜底自行点击——优先绿字校验过的
+    # 缓存位置直点（两种巫医弹窗选项位置不同，见 battle._wuyi_cached_pt）
+    pt_opt = battle._wuyi_cached_pt(img_np)
+    if pt_opt is None and items:
+        pt_opt = _find_wuyi_option(items, img_np)
+    if pt_opt is None:
         return True, "医治对话框已出现（战斗线程将继续处理）"
-    # 对话框未出现（距离不够）：本次取消，下次轮到再试
-    return False, "点击巫医后未出现医治对话框（本次取消）"
+    human_click(win, pt_opt[0], pt_opt[1])
+    log(f"[修罗][巫医] 等待超时，自行点击「全部医治和修复」"
+        f"@ ({pt_opt[0]}, {pt_opt[1]})", "WARN")
+    battle.record_wuyi_option_pos(pt_opt)  # 组号队员 pass 直点复用 + 位置缓存
+    move_away(win)  # 悬停会让选项变色，干扰绿字判定
+    time.sleep(random.uniform(1.0, 1.2))
+    return True, "医治对话框超时未关闭，已自行点击选项"
 
 
 def _auto_wuyi(win):
