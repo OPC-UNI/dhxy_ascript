@@ -148,7 +148,9 @@ def save_debug_overlay(on):
 
 
 # ---- 任务次数设置（每个任务模式独立，步进 1，下限 0；部分模式有上限） ----
-TASK_COUNT_DEFAULTS = {"五环": 2, "客栈": 20, "修罗": 90, "五倍": 100, "玄枢轶闻": 5, "名望": 5}
+TASK_COUNT_DEFAULTS = {"五环": 2, "客栈": 20, "修罗": 90, "五倍": 100, "玄枢轶闻": 5, "名望": 5,
+                       "仅战斗": 0}  # 仅战斗持续运行无次数概念（0=不限；页面无步进器，
+                                     # 方案快照 _settings_spec 按 _COUNT_KEYS 展开需要该键）
 # 上限约束：未列出的模式（修罗、五倍）无上限
 TASK_COUNT_MAX = {"五环": 2, "客栈": 20, "玄枢轶闻": 5, "名望": 5}
 _COUNT_KEYS = {mode: f"task_count_{mode}" for mode in TASK_MODES}

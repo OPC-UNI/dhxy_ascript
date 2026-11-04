@@ -6,7 +6,8 @@
 - 仅战斗单独选中 → 保留
 - 非法模式过滤不受影响
 """
-from src.control_window import BATTLE_ONLY_MODE, TASK_MODES, _sanitize_modes
+from src.control_window import (BATTLE_ONLY_MODE, TASK_MODES, _sanitize_modes,
+                                _COUNT_KEYS, TASK_COUNT_DEFAULTS)
 
 
 def test_sanitize_keeps_battle_only_when_alone():
@@ -29,3 +30,14 @@ def test_sanitize_filters_invalid_modes():
 def test_sanitize_single_mode_each_valid():
     for mode in TASK_MODES:
         assert _sanitize_modes([mode]) == [mode]
+
+
+def test_settings_spec_covers_all_task_modes():
+    """方案快照按 _COUNT_KEYS 展开时不得缺键——「仅战斗」加入
+    TASK_MODES 后 TASK_COUNT_DEFAULTS 漏键导致切换方案 KeyError
+    （2026-11-04 面板报错）的回归测试。"""
+    from src import schemes
+    spec = schemes._settings_spec()
+    for mode, key in _COUNT_KEYS.items():
+        assert key in spec
+        assert spec[key] == TASK_COUNT_DEFAULTS[mode]
