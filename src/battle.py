@@ -160,9 +160,15 @@ WUYI_DIFF_THRESHOLD = 2.0    # 对话框区域平均像素差阈值：低于则�
 # 击穿；区域 OCR 实测均值 553ms/次（1053ms 极端）——2s 节奏下空闲
 # OCR 是任务进程非战斗 CPU 的第一大头。差分幅值与绿字像素占比均无法
 # 区分噪声与对话框（植被亮绿 0.25%+ 与选项文字同量级），可靠手段只有
-# 「连续空检降级」：空闲检查连续 N 次 OCR 未命中文案 → 降级为 4s 兜底
-# 重查节奏（最坏弹窗延迟 4s+OCR ≈ 4.6s < 队长流程 8s 弹窗窗口；
-# 5s 教训：弹窗等久人物走远即关闭，不得再放宽）；命中文案立即恢复。
+# 限频降级（最坏弹窗延迟 4s+OCR ≈ 4.6s < 队长流程 8s 弹窗窗口；
+# 5s 教训：弹窗等久人物走远即关闭，不得再放宽）。
+# 进入降级两条路（用户 2026-11-04 确认）：
+# 1. 点击「全部医治和修复」成功 → 立即降级——刚治疗完，下次巫医弹窗
+#    只可能来自下一场战斗结束（战后窗口 2s 不受降级影响）或数轮后的
+#    队长巫医轮次（降级态兜底节奏覆盖）；点击后 15s 冷却内本就不检查，
+#    旧「恢复快节奏→4 次空检再降级」的快速期被冷却完全覆盖、纯属浪费
+# 2. 启动后从未点过巫医的空转期 → 空闲检查连续 N 次 OCR 未命中文案
+#    → 降级（覆盖第一次弹窗到来前的长空闲）
 # 窗口期检查（战后高发/主流程预期窗口）与已知对话框重试不受降级影响。
 WUYI_DEGRADE_STREAK = 4      # 空闲 OCR 连续无文案次数门槛 → 进入降级
 WUYI_DEGRADE_RECHECK = 4.0   # 降级态 OCR 兜底重查间隔（秒）
@@ -704,10 +710,10 @@ def _handle_wuyi_dialog(win, img=None, idle=False):
     - img 传入时复用轮询帧（watch_loop 单帧复用），不再二次截窗；
     - 像素差分预过滤——区域与上一帧几乎相同时跳过 OCR；站立场景
       差分门被动画/玩家活动恒击穿（实测噪声 2.5~66 均 > 2.0 门限），
-      故叠加自适应降级：空闲检查（idle=True）连续 WUYI_DEGRADE_STREAK
-      次 OCR 未命中文案后进入降级态，按 WUYI_DEGRADE_RECHECK 兜底
-      节奏 OCR（见 _wuyi_ocr_gate）；命中文案立即恢复。窗口期检查与
-      已知对话框重试（告警中）不受降级影响。
+      故叠加限频降级：点击选项成功即进入降级态（见 WUYI_DEGRADE_*
+      常量说明），未点过巫医的空转期由连续空检降级兜底；降级态空闲
+      检查按 WUYI_DEGRADE_RECHECK 兜底节奏 OCR（见 _wuyi_ocr_gate）。
+      窗口期检查与已知对话框重试（告警中）不受降级影响。
     """
     global _wuyi_option_missing_warned, _wuyi_prev_roi
     global _wuyi_noise_streak, _wuyi_degraded, _wuyi_last_ocr
@@ -746,7 +752,8 @@ def _handle_wuyi_dialog(win, img=None, idle=False):
         else:
             _wuyi_noise_streak = 0
         return False
-    # 命中文案：恢复快节奏
+    # 命中文案（对话框在场）：恢复快节奏高频重试——选项未识别时告警
+    # 重试路径本就绕过降级门；若点击成功，下方点击路径立即再降级
     _wuyi_noise_streak = 0
     _wuyi_degraded = False
     pt = _find_wuyi_option(items, img_np)
@@ -771,6 +778,12 @@ def _handle_wuyi_dialog(win, img=None, idle=False):
     record_wuyi_option_pos(pt)  # 组号模式队员 pass 高性能直点复用坐标
     move_away(win)  # 移走鼠标：悬停会让选项变色（切队员 Tab 后干扰绿字判定）
     _wuyi_option_missing_warned = False
+    # 点击成功即降级：刚治疗完，下次巫医弹窗只可能来自下一场战斗结束
+    # （战后窗口 2s 不受降级影响）或数轮后的队长巫医轮次（降级态 4s
+    # 兜底覆盖，最坏 4.6s 与原稳态一致）；点击后 15s 冷却内本就不检查，
+    # 无需「恢复快节奏→再空检 4 次」的快速期（每轮省 4 次 OCR）
+    _wuyi_noise_streak = WUYI_DEGRADE_STREAK
+    _wuyi_degraded = True
     return True
 
 

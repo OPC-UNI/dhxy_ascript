@@ -194,6 +194,29 @@ def test_handle_wuyi_dialog_reuses_frame(monkeypatch):
     assert battle._handle_wuyi_dialog(object(), img=_make_noisy_pil(1)) is False
 
 
+def test_wuyi_click_degrades_immediately(monkeypatch):
+    """点击「全部医治和修复」成功 → 立即降级（无需再空检 4 次）。"""
+    battle._wuyi_prev_roi = None
+    battle._wuyi_option_missing_warned = False
+    battle._wuyi_degraded = False
+    battle._wuyi_noise_streak = 0
+    clicks = []
+    monkeypatch.setattr(battle, "human_click",
+                        lambda win, x, y: clicks.append((x, y)))
+    monkeypatch.setattr(battle, "move_away", lambda win: None)
+    monkeypatch.setattr(battle.game_map, "ocr_regions",
+                        lambda img, regions: (
+                            [("我是超级巫医，可以帮你医治召唤兽",
+                              [500, 300, 900, 340], 0.96)], None))
+    # 选项定位打桩（真实定位另有 test_find_wuyi_option 覆盖）
+    monkeypatch.setattr(battle, "_find_wuyi_option",
+                        lambda items, img_np: (650, 420))
+    assert battle._handle_wuyi_dialog(object(), img=_make_noisy_pil(1)) is True
+    assert clicks == [(650, 420)]           # 选项中心被点击
+    assert battle._wuyi_degraded is True    # 点击成功即降级
+    assert battle._wuyi_noise_streak == battle.WUYI_DEGRADE_STREAK
+
+
 def test_handle_hezi_reuses_frame(monkeypatch):
     """bgr 传入时复用轮询帧：开关全开且无盒子时不截窗。"""
     monkeypatch.setattr(battle, "current_task_mode", lambda: "修罗")
