@@ -199,7 +199,7 @@ def _coerce(key, value):
             return v
         if isinstance(default, list):
             if isinstance(value, list) and key == cw._MODES_KEY:
-                return [m for m in value if m in cw.TASK_MODES]
+                return cw._sanitize_modes(value)  # 过滤非法项 + 仅战斗互斥
             return list(value) if isinstance(value, list) else default
         if isinstance(default, str):
             return value if isinstance(value, str) else default

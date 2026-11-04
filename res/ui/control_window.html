@@ -613,7 +613,14 @@
                     </div>
                 </div>
             </div>
-            <div class="group-hint">按顺序号 ①→⑥ 依次执行，全部完成后自动结束；每卡点空白处可勾选/取消（运行中锁定）。「名望」暂无自动化实现，选中后自动跳过。</div>
+            <div class="task-card" data-mode="仅战斗">
+                <div class="task-card-main">
+                    <span class="task-order">⑦</span>
+                    <label class="task-radio"><input type="checkbox" name="task-mode" value="仅战斗"><span>仅战斗</span></label>
+                    <span class="badge">持续运行</span>
+                </div>
+            </div>
+            <div class="group-hint">按顺序号 ①→⑥ 依次执行，全部完成后自动结束；每卡点空白处可勾选/取消（运行中锁定）。「名望」暂无自动化实现，选中后自动跳过。「仅战斗」与其它任务互斥：选中后仅运行战斗监控（自动战斗/补血蓝/巫医，不做任务与队伍操作），持续运行至手动停止。</div>
         </div>
         <!-- ============ 设置页（通用 + 显示与调试 + 血蓝阈值 + 战斗动作） ============ -->
         <div class="page" id="page-general">
@@ -1006,7 +1013,8 @@
     let runtimeStatus = null;   // 任务运行状态（get_runtime_status 轮询，看板展示）
     let progressData = null;    // 任务进度汇总（get_task_progress 轮询）
     let verifying = false;      // 验证请求在途标记（防连点，回程/领取/巫医共用）
-    const TASK_MODES = ['五环', '客栈', '修罗', '五倍', '玄枢轶闻', '名望'];
+    const TASK_MODES = ['五环', '客栈', '修罗', '五倍', '玄枢轶闻', '名望', '仅战斗'];
+    const BATTLE_ONLY = '仅战斗';   // 与其它任务互斥：勾选时禁用其它，勾选其它时禁用本项
     const COUNT_MAX = {'五环': 2, '客栈': 20, '玄枢轶闻': 5, '名望': 5};
     // 印章动效：移动类阶段（左右轻摆走路节奏；其余按战斗/对话/默认分档）
     const WALK_PHASES = ['寻路中', '前往领取点', '前往客栈', '返程',
@@ -1242,7 +1250,8 @@
             const rows = [];
             if (cur) {
                 const t = per[cur];
-                const progText = (t && t.count > 0) ? `${t.done}/${t.count}` : (t ? `${t.done} 轮` : '');
+                const progText = cur === BATTLE_ONLY ? ''
+                    : ((t && t.count > 0) ? `${t.done}/${t.count}` : (t ? `${t.done} 轮` : ''));
                 rows.push(['当前任务', cur + (progText ? '（' + progText + '）' : '')]);
             }
             // 阶段：任务进程各模块写入的结构化 phase（战斗中/寻路中/
@@ -1262,7 +1271,8 @@
             dashSeal.className = 'seal idle';
             dashSeal.innerHTML = '<span>待</span><span>命</span>';
             const plan = sel.length
-                ? sel.map(m => m + ' ×' + document.getElementById('cnt-' + m).innerText).join(' · ')
+                ? sel.map(m => m === BATTLE_ONLY ? m + '（持续运行）'
+                        : m + ' ×' + document.getElementById('cnt-' + m).innerText).join(' · ')
                 : '未选择任务（请到「任务」页勾选）';
             // 单行省略展示；今日合计在下方队列卡（与队列明细一处，不重复）
             dashInfo.innerHTML =
@@ -1278,7 +1288,8 @@
         } else {
             dashQueue.innerHTML = sel.map(mode => {
                 const t = per[mode];
-                const cnt = parseInt(document.getElementById('cnt-' + mode).innerText) || 0;
+                const cnt = mode === BATTLE_ONLY ? 0
+                    : (parseInt(document.getElementById('cnt-' + mode).innerText) || 0);
                 const done = t ? t.done : 0;
                 const pct = (t && t.percent !== undefined) ? t.percent : 0;
                 let state = 'waiting', stateIcon = '·', cls = '';
@@ -1286,7 +1297,8 @@
                     if (t && t.count > 0 && t.done >= t.count) { state = 'done'; stateIcon = '✓'; cls = 'done'; }
                     else if (mode === cur) { state = 'active'; stateIcon = '▶'; cls = 'active'; }
                 }
-                const text = cnt > 0 ? `${Math.min(done, cnt)}/${cnt}` : `${done} 轮`;
+                const text = mode === BATTLE_ONLY ? '持续运行'
+                    : (cnt > 0 ? `${Math.min(done, cnt)}/${cnt}` : `${done} 轮`);
                 const stateTitle = running ? (state === 'done' ? '已完成' : (state === 'active' ? '执行中' : '待执行')) : '';
                 return '<div class="queue-row ' + cls + '" title="' + stateTitle + '">' +
                     '<span class="queue-state">' + stateIcon + '</span>' +
@@ -1350,8 +1362,9 @@
         const hotkeySuffix = bossHotkey ? '(' + bossHotkey.toUpperCase() + ')' : '';
         btnStart.innerText = (running ? '停 止' : '启 动') + hotkeySuffix;
         btnStart.classList.toggle('running', running);
-        // 运行期间任务勾选与次数不可更改（用户确认：只能停止后修改）
-        taskSelects.forEach(el => { el.disabled = running; });
+        // 运行期间任务勾选与次数不可更改（用户确认：只能停止后修改）；
+        // 停止后按仅战斗互斥重新启用可用项
+        updateModeExclusion();
         countBtns.forEach(btn => { btn.disabled = running; });
         taskLockBanner.classList.toggle('warn', running);
         taskLockBanner.style.display = running ? 'block' : 'none';
@@ -1585,7 +1598,9 @@
             if (e.target.closest('.th-btn') || e.target.closest('.task-expand')) return;
             const input = main.querySelector('input[name="task-mode"]');
             if (input && !e.target.closest('.task-radio')) {
+                if (input.disabled) return;  // 仅战斗互斥禁用态：点击无效
                 input.checked = !input.checked;
+                updateModeExclusion();
                 saveSelectedModes();
             }
         });
@@ -1595,12 +1610,29 @@
     taskSelects.forEach(input => {
         input.addEventListener('change', () => {
             if (running) return;
+            updateModeExclusion();
             saveSelectedModes();
         });
     });
 
-    // 选中任务列表保存：按面板顺序收集勾选项（Python 侧过滤非法项），
-    // 保存后刷新总进度（勾选变化影响进度分母）
+    // 仅战斗互斥：勾选「仅战斗」时其它任务禁用，勾选任一其它任务时
+    // 「仅战斗」禁用（都不勾选时全部可用）；运行期间全部禁用。
+    // 纯派生状态：勾选态/运行态任一变化后重算即可
+    function updateModeExclusion() {
+        const battleOnlySel = document.querySelector('input[name="task-mode"][value="仅战斗"]');
+        if (!battleOnlySel) return;
+        const battleOnly = battleOnlySel.checked;
+        const anyOther = [...taskSelects].some(el => el.value !== BATTLE_ONLY && el.checked);
+        taskSelects.forEach(el => {
+            if (running) { el.disabled = true; return; }
+            if (battleOnly) el.disabled = (el.value !== BATTLE_ONLY);
+            else if (anyOther) el.disabled = (el.value === BATTLE_ONLY);
+            else el.disabled = false;
+        });
+    }
+
+    // 选中任务列表保存：按面板顺序收集勾选项（Python 侧过滤非法项并
+    // 强制互斥），保存后刷新总进度（勾选变化影响进度分母）
     function saveSelectedModes() {
         const modes = [...taskSelects].filter(el => el.checked).map(el => el.value);
         callPython('save_task_modes', modes).then(refreshProgress);
@@ -1850,6 +1882,7 @@
         bossHotkey = info.boss_hotkey || '';  // 老板键名（按钮文案提示）
         if (info.modes) {
             taskSelects.forEach(el => { el.checked = info.modes.includes(el.value); });
+            updateModeExclusion();  // 方案切换/初始化后按勾选态重算互斥禁用
         }
         useSyx.checked = !!info.use_sheyaoxiang;
         debugOverlay.checked = !!info.debug_overlay;

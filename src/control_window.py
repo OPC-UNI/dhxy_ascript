@@ -42,10 +42,11 @@ from . import hotkey  # 老板键（启动/停止按钮文案展示热键名）
 from . import __version__  # 版本号唯一来源（src/__init__.py，面板关于/侧边栏展示）
 
 # ---- 任务模式（UI 多选项，KeyValue 持久化，记住上次选择） ----
-TASK_MODES = ["五环", "客栈", "修罗", "五倍", "玄枢轶闻", "名望"]
+TASK_MODES = ["五环", "客栈", "修罗", "五倍", "玄枢轶闻", "名望", "仅战斗"]
 _DEFAULT_MODES = ["五环"]  # 首次默认选中五环（与原单选默认一致）
 _MODES_KEY = "task_modes"           # 多选列表（新键）
 _MODE_KEY_OLD = "task_mode"         # 旧单选键（自动迁移）
+BATTLE_ONLY_MODE = "仅战斗"  # 特殊任务：与其它任务互斥，启动后仅运行战斗线程
 
 # ---- 使用环境（高级设置-使用环境展示；只读信息） ----
 ENV_THEME = "水墨"               # 已适配的游戏 UI 主题
@@ -73,6 +74,18 @@ def save_ui_theme(theme):
     return {"status": "success"}
 
 
+def _sanitize_modes(modes):
+    """过滤非法任务模式并强制「仅战斗」互斥。
+
+    仅战斗与其它任务不可共存：混合列表（页面已禁用互斥，正常不出现，
+    此处兜底旧数据/方案导入）按保留普通任务、剔除仅战斗处理。
+    """
+    modes = [m for m in TASK_MODES if m in modes]
+    if BATTLE_ONLY_MODE in modes and len(modes) > 1:
+        modes = [m for m in modes if m != BATTLE_ONLY_MODE]
+    return modes
+
+
 def load_selected_modes():
     """读取选中的任务模式列表（首次默认五环；旧单选键自动迁移）。
 
@@ -85,7 +98,7 @@ def load_selected_modes():
         raw = [old] if old in TASK_MODES else list(_DEFAULT_MODES)
     if not isinstance(raw, list):
         raw = []
-    return [m for m in TASK_MODES if m in raw]
+    return _sanitize_modes(raw)
 
 
 def _kv_save(key, value):
@@ -105,8 +118,9 @@ def _kv_remove(key):
     app_utils.kv_remove_merged(key)
 
 def save_selected_modes(modes):
-    """保存任务模式多选列表（过滤非法项，允许空列表），返回操作结果。"""
-    modes = [m for m in TASK_MODES if m in modes]
+    """保存任务模式多选列表（过滤非法项并强制「仅战斗」互斥，
+    允许空列表），返回操作结果。"""
+    modes = _sanitize_modes(modes)
     _kv_save(_MODES_KEY, modes)
     return {"status": "success", "modes": modes}
 

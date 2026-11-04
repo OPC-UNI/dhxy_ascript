@@ -50,6 +50,7 @@ from ascript.windows.system import Runtime  # 生命周期驻留（防止程序�
 from ascript.windows.ui import LicenseWindow  # 安全验证组件
 from src.task_manager import TaskManager  # 任务子进程管理（启停/强杀/日志回流）
 from src.control_window import (ControlWindow, bound_short_label,
+                                BATTLE_ONLY_MODE,
                                 load_selected_modes,
                                 load_task_counts,
                                 load_use_sheyaoxiang,
@@ -207,6 +208,41 @@ def _run_task_mode(win, mode):
     return f"{mode} 暂无自动化实现，跳过"
 
 
+def _battle_only_loop(win):
+    """仅战斗模式：只启动战斗监控线程并驻留任务进程。
+
+    与其它任务互斥（面板禁用 + 保存逻辑双重保证），不做任何任务侧
+    操作：跳过清屏/摄妖香/队伍检查/任务循环/血蓝条检查，游戏界面
+    零干预（组队跟战时队长侧操作不受干扰）。战斗线程按通用设置
+    自动战斗/战后补血蓝/巫医对话框，持续运行至用户停止（TaskManager
+    强杀进程，战斗线程随进程一并终止）；战斗线程自行退出（如
+    UserAbort 人工接管）时任务自然结束。
+    """
+    debug_overlay.start(win)
+    debug_overlay.set_phase("准备中")  # 看板阶段：启动检查期间显示
+    tab = game.read_login_tab(win)
+    if tab == game.GAME_TITLE:
+        log("[检查] 当前未登录（Tab 显示为大话西游2经典版）", "WARN")
+    elif tab:
+        log(f"[检查] 当前登录角色: {tab}", "SYS")
+        debug_overlay.set_name(tab)  # 悬浮层角色名
+    else:
+        log("[检查] Tab 读取为空（游戏加载中？）", "WARN")
+    logged_in = bool(tab and tab != game.GAME_TITLE)
+    if not logged_in:
+        log("[检查] 未登录，无可执行任务，任务结束（登录后可重新启动）", "WARN")
+        return
+    log("[任务] 仅战斗模式：仅运行战斗监控线程"
+        "（跳过清屏/摄妖香/队伍检查/任务循环），持续至手动停止", "SYS")
+    battle_thread = threading.Thread(target=battle.watch_loop,
+                                     args=(win,), daemon=True,
+                                     name="battle-watch")
+    battle_thread.start()
+    while battle_thread.is_alive():  # 驻留直至停止或战斗线程退出
+        time.sleep(5)
+    log("[任务] 战斗监控线程已退出，仅战斗任务结束", "WARN")
+
+
 def _overall_progress_text(win, modes):
     """总进度文案（任务切换间隙更新悬浮层；任务运行中由各模块更新
     自己的进度行）。次数上限为 0（不限）的任务无法度量，不计入分母；
@@ -319,6 +355,12 @@ def _task_start_body():
         debug_overlay.shutdown()
         return
     else:
+        # 仅战斗模式：与其它任务互斥，启动后只跑战斗监控线程——不做
+        # 清屏/摄妖香/队伍检查等任何任务侧操作，游戏界面零干预
+        if BATTLE_ONLY_MODE in modes:
+            _battle_only_loop(main_win)
+            debug_overlay.shutdown()
+            return
         # 调试信息悬浮层：在游戏窗口上绘制任务/配置/进度（开关在控制窗口
         # 切换后实时生效；开关关闭时不创建绘制窗口，行为与未启用一致）
         debug_overlay.start(main_win)

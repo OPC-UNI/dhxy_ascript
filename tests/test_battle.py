@@ -1,11 +1,18 @@
 """battle.py：技能坐标解析、文案规范化、战斗帧判定、巫医选项定位。"""
 import cv2
 import numpy as np
+from PIL import Image
 from ascript.windows.system import R
 
 from src import battle
 
 from .conftest import make_bgr_frame, paste_template
+
+
+def _make_noisy_pil(seed, w=1378, h=831):
+    """合成 PIL 帧（随机噪声，与真实截帧同尺寸，差分必超门限）。"""
+    r = np.random.default_rng(seed)
+    return Image.fromarray(r.integers(0, 256, (h, w, 3), dtype=np.uint8))
 
 
 def _tpl(icon):
@@ -110,3 +117,87 @@ def test_wuyi_check_interval_fast_idle():
             == battle.WUYI_CHECK_INTERVAL
     finally:
         battle.wuyi_fast_idle = old
+
+
+# ---- 巫医空闲 OCR 降级（2026-11-04：站立场景差分门恒击穿，空检降级限频） ----
+
+def test_wuyi_ocr_gate_not_degraded_passes(monkeypatch):
+    monkeypatch.setattr(battle, "_wuyi_degraded", False)
+    assert battle._wuyi_ocr_gate(100.0, idle=True)
+
+
+def test_wuyi_ocr_gate_window_not_throttled(monkeypatch):
+    """窗口期检查（idle=False）不受降级限频。"""
+    monkeypatch.setattr(battle, "_wuyi_degraded", True)
+    monkeypatch.setattr(battle, "_wuyi_last_ocr", 100.0)
+    assert battle._wuyi_ocr_gate(100.5, idle=False)
+
+
+def test_wuyi_ocr_gate_degraded_idle_throttled(monkeypatch):
+    """降级态空闲检查：兜底间隔内跳过，达间隔放行。"""
+    monkeypatch.setattr(battle, "_wuyi_degraded", True)
+    monkeypatch.setattr(battle, "_wuyi_last_ocr", 100.0)
+    assert not battle._wuyi_ocr_gate(100.0 + battle.WUYI_DEGRADE_RECHECK - 0.1,
+                                     idle=True)
+    assert battle._wuyi_ocr_gate(100.0 + battle.WUYI_DEGRADE_RECHECK, idle=True)
+
+
+def test_wuyi_noise_streak_degrades_and_recovers(monkeypatch):
+    """空闲连续空检 → 降级（兜底间隔内跳过 OCR）→ 命中文案恢复。"""
+    battle._wuyi_prev_roi = None
+    battle._wuyi_degraded = False
+    battle._wuyi_noise_streak = 0
+    battle._wuyi_last_ocr = 0.0
+    battle._wuyi_option_missing_warned = False
+    clock = [100.0]
+    monkeypatch.setattr(battle.time, "time", lambda: clock[0])
+    ocr_n = [0]
+    items_slot = [[]]
+    monkeypatch.setattr(battle.game_map, "ocr_regions",
+                        lambda img, regions: (ocr_n.__setitem__(0, ocr_n[0] + 1)
+                                              or (list(items_slot[0]), None)))
+    # 命中后选项定位与点击打桩：只验证降级恢复，不实际点击
+    monkeypatch.setattr(battle, "_find_wuyi_option", lambda items, img_np: None)
+    seed = [0]
+
+    def check():
+        seed[0] += 1
+        return battle._handle_wuyi_dialog(object(), img=_make_noisy_pil(seed[0]),
+                                          idle=True)
+
+    for _ in range(battle.WUYI_DEGRADE_STREAK):  # 连续空检喂满降级
+        assert check() is False
+    assert ocr_n[0] == battle.WUYI_DEGRADE_STREAK
+    assert battle._wuyi_degraded is True
+    clock[0] += 0.5
+    assert check() is False                  # 降级态兜底间隔内：跳过 OCR
+    assert ocr_n[0] == battle.WUYI_DEGRADE_STREAK
+    clock[0] += battle.WUYI_DEGRADE_RECHECK  # 达兜底间隔：重查一次
+    assert check() is False
+    assert ocr_n[0] == battle.WUYI_DEGRADE_STREAK + 1
+    items_slot[0] = [("我是超级巫医，可以帮你医治召唤兽",
+                      [500, 400, 800, 440], 0.96)]
+    clock[0] += battle.WUYI_DEGRADE_RECHECK  # 降级态：达兜底间隔才 OCR
+    assert check() is False                  # 命中文案：恢复快节奏
+    assert battle._wuyi_degraded is False
+    assert battle._wuyi_noise_streak == 0
+
+
+def test_handle_wuyi_dialog_reuses_frame(monkeypatch):
+    """img 传入时复用轮询帧：不二次截窗（win 无 capture 属性即证）。"""
+    battle._wuyi_prev_roi = None
+    battle._wuyi_option_missing_warned = False
+    battle._wuyi_degraded = False
+    battle._wuyi_noise_streak = 0
+    monkeypatch.setattr(battle.game_map, "ocr_regions",
+                        lambda img, regions: ([], None))
+    assert battle._handle_wuyi_dialog(object(), img=_make_noisy_pil(1)) is False
+
+
+def test_handle_hezi_reuses_frame(monkeypatch):
+    """bgr 传入时复用轮询帧：开关全开且无盒子时不截窗。"""
+    monkeypatch.setattr(battle, "current_task_mode", lambda: "修罗")
+    monkeypatch.setattr(battle, "load_xiuluo_hezi", lambda: True)
+    monkeypatch.setattr(battle.team, "known_leader", lambda: True)
+    monkeypatch.setattr(battle.game_map, "match_frame_np", lambda *a, **k: None)
+    assert battle._handle_hezi(object(), bgr=make_bgr_frame()) is False

@@ -154,6 +154,19 @@ wuyi_fast_idle = False
 WUYI_RETRY_COOLDOWN = 15.0   # 点击选项后的冷却期（对话框未关闭时防重复点击）
 WUYI_DIFF_THRESHOLD = 2.0    # 对话框区域平均像素差阈值：低于则跳过 OCR（区域无变化）
 
+# ---- 巫医空闲 OCR 自适应降级（2026-11-04 实测） ----
+# 差分门校准假设被实测推翻：非队长站立场景 2s 间隔噪声差分 2.5~66
+# 全部超过 WUYI_DIFF_THRESHOLD（其他玩家走动/飘字/场景动画），门恒
+# 击穿；区域 OCR 实测均值 553ms/次（1053ms 极端）——2s 节奏下空闲
+# OCR 是任务进程非战斗 CPU 的第一大头。差分幅值与绿字像素占比均无法
+# 区分噪声与对话框（植被亮绿 0.25%+ 与选项文字同量级），可靠手段只有
+# 「连续空检降级」：空闲检查连续 N 次 OCR 未命中文案 → 降级为 4s 兜底
+# 重查节奏（最坏弹窗延迟 4s+OCR ≈ 4.6s < 队长流程 8s 弹窗窗口；
+# 5s 教训：弹窗等久人物走远即关闭，不得再放宽）；命中文案立即恢复。
+# 窗口期检查（战后高发/主流程预期窗口）与已知对话框重试不受降级影响。
+WUYI_DEGRADE_STREAK = 4      # 空闲 OCR 连续无文案次数门槛 → 进入降级
+WUYI_DEGRADE_RECHECK = 4.0   # 降级态 OCR 兜底重查间隔（秒）
+
 # ---- 修罗/五倍盒子（福源广泽盒：出现时点「我需要」） ----
 XIULUO_HEZI_ICON = "xiuluohezi.png"                 # 盒子面板（用户提供 5.png 素材）
 XIULUO_HEZI_WOXUYAO_ICON = "xiuluohezi_woxuyao.png"  # 「我需要」按钮（用户提供 6.png 素材）
@@ -173,6 +186,23 @@ _watch_in_battle = False
 # 此后 WUYI_EXPECT_WINDOW 内战斗线程用 2s 高频检查，8s 等待窗口内
 # 必能捡到对话框；只读共享、时间戳自然过期，无需复位
 wuyi_expected_at = 0.0
+
+# ---- 巫医空闲 OCR 降级状态（见 WUYI_DEGRADE_* 常量说明） ----
+_wuyi_noise_streak = 0   # 空闲 OCR 连续未命中文案的次数
+_wuyi_degraded = False   # 降级态：空闲检查按 4s 兜底节奏 OCR
+_wuyi_last_ocr = 0.0     # 上次实际执行 OCR 的时间（兜底节奏基准）
+
+
+def _wuyi_ocr_gate(now, idle):
+    """巫医 OCR 执行门：降级态下空闲检查按 WUYI_DEGRADE_RECHECK 限频。
+
+    idle=False（战后高发窗口/主流程预期窗口/队长普通空闲节奏）与
+    未降级时一律放行；降级态空闲检查距上次 OCR 不足兜底间隔则跳过。
+    命中文案由调用方复位降级状态。纯函数便于单测。
+    """
+    if not _wuyi_degraded or not idle:
+        return True
+    return now - _wuyi_last_ocr >= WUYI_DEGRADE_RECHECK
 
 
 def watch_in_battle():
@@ -663,19 +693,26 @@ _wuyi_option_missing_warned = False
 _wuyi_prev_roi = None
 
 
-def _handle_wuyi_dialog(win):
+def _handle_wuyi_dialog(win, img=None, idle=False):
     """巫医对话框：文案含「我是超级巫医…」时点击绿色选项「全部医治和修复」。
 
     文案用模糊匹配（抗 OCR 误读）；选项去标点后精确子串匹配（游戏内原文，
     记忆规则：选项匹配不"纠正"用字）；限定对话框区域（x≥PANEL_MAX_X）
     且为绿字行，避免误点追踪面板的绿字链接。返回是否已点击。
 
-    性能：对话框区域像素差分预过滤——区域与上一帧几乎相同（无弹窗/
-    动画）时跳过 OCR（实测 OCR 148-311ms）；已知对话框存在但选项
-    未识别（告警中）时不跳过，保持重试。
+    性能（2026-11-04 实测校准）：
+    - img 传入时复用轮询帧（watch_loop 单帧复用），不再二次截窗；
+    - 像素差分预过滤——区域与上一帧几乎相同时跳过 OCR；站立场景
+      差分门被动画/玩家活动恒击穿（实测噪声 2.5~66 均 > 2.0 门限），
+      故叠加自适应降级：空闲检查（idle=True）连续 WUYI_DEGRADE_STREAK
+      次 OCR 未命中文案后进入降级态，按 WUYI_DEGRADE_RECHECK 兜底
+      节奏 OCR（见 _wuyi_ocr_gate）；命中文案立即恢复。窗口期检查与
+      已知对话框重试（告警中）不受降级影响。
     """
     global _wuyi_option_missing_warned, _wuyi_prev_roi
-    img = win.capture(force_activate=False)
+    global _wuyi_noise_streak, _wuyi_degraded, _wuyi_last_ocr
+    if img is None:
+        img = win.capture(force_activate=False)
     if img is None:
         return False
     l, t, r, b = task_tracker.DIALOG_REGION
@@ -691,12 +728,27 @@ def _handle_wuyi_dialog(win):
         if diff < WUYI_DIFF_THRESHOLD:
             _wuyi_prev_roi = roi
             return False
+        if not _wuyi_ocr_gate(time.time(), idle):
+            _wuyi_prev_roi = roi
+            return False
     _wuyi_prev_roi = roi
+    _wuyi_last_ocr = time.time()
     items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
     from .xuanshu import _dialog_text_present  # 函数内导入，避免循环依赖
     if not any(_dialog_text_present(items, t) for t in WUYI_DIALOG_TEXTS):
         _wuyi_option_missing_warned = False
+        # 空检计数：仅空闲检查累计（窗口期检查不受降级约束，
+        # 也不应被窗口期空检喂满降级）
+        if idle:
+            _wuyi_noise_streak += 1
+            if _wuyi_noise_streak >= WUYI_DEGRADE_STREAK:
+                _wuyi_degraded = True
+        else:
+            _wuyi_noise_streak = 0
         return False
+    # 命中文案：恢复快节奏
+    _wuyi_noise_streak = 0
+    _wuyi_degraded = False
     pt = _find_wuyi_option(items, img_np)
     if pt is None:
         # 选项文字可能很小（实测五倍对话框「全部医治和修复」字高仅 13px，
@@ -791,7 +843,7 @@ def _wuyi_check_interval(now, last_battle_end_at, expected_at):
     return WUYI_IDLE_CHECK_INTERVAL
 
 
-def _handle_hezi(win):
+def _handle_hezi(win, bgr=None):
     """修罗/五倍盒子：不在战斗时若出现福源广泽盒，点击「我需要」。
 
     开关规则：仅修罗/五倍模式执行；抢盒子开关只在**非队长**时生效，
@@ -800,6 +852,7 @@ def _handle_hezi(win):
     检查队伍时任务寻路/领取成功即记队长）。
     性能（见 CLAUDE.md 性能规则）：5 秒节奏单帧检查；两段匹配——先
     盒子后按钮，按钮只有盒子命中才匹配；点击后冷却防重复。
+    bgr 传入时复用轮询帧（watch_loop 单帧复用），不再二次截窗。
     盒子出现位置暂未标定条带（素材为裁剪图无绝对坐标），全帧匹配
     单模板 ~27ms/次（5 秒节奏占空比 <1%）；后续拿到窗口内位置后
     可收紧为条带匹配。
@@ -813,14 +866,15 @@ def _handle_hezi(win):
         return False
     if not (team.known_leader() is True or enabled):
         return False  # 非队长/身份未知且开关关闭：不抢
-    img = win.capture(force_activate=False, format=WindowCaptureFormat.OPENCV)
-    if img is None:
+    if bgr is None:
+        bgr = win.capture(force_activate=False, format=WindowCaptureFormat.OPENCV)
+    if bgr is None:
         return False
-    box_pt = game_map.match_frame_np(img, XIULUO_HEZI_ICON, fallback=False)
+    box_pt = game_map.match_frame_np(bgr, XIULUO_HEZI_ICON, fallback=False)
     if box_pt is None:
         return False
     # 按钮小（82x26），用户要求 0.92 以上才点，防误点
-    btn_pt = game_map.match_frame_np(img, XIULUO_HEZI_WOXUYAO_ICON,
+    btn_pt = game_map.match_frame_np(bgr, XIULUO_HEZI_WOXUYAO_ICON,
                                      threshold=XIULUO_HEZI_WOXUYAO_THRESHOLD,
                                      fallback=False)
     if btn_pt is None:
@@ -877,7 +931,16 @@ def watch_loop(win):
                 # 任务线程的 pass 进行中：跳过本轮处理（屏幕是队员 Tab）
                 time.sleep(WATCH_POLL_INTERVAL)
                 continue
-            if is_in_battle(win):
+            # 每轮询只截一帧（性能规则 1）：PIL 帧供巫医 OCR/差分（绿字
+            # 判定必须 RGB），转 BGR 供模板匹配——与 OPENCV 格式截帧
+            # 同像素同转换（docs/performance.md 实测），截帧失败本轮
+            # 全部检查跳过（最坏推迟 0.5s，无正确性影响）
+            img = win.capture(force_activate=False)
+            if img is None:
+                time.sleep(WATCH_POLL_INTERVAL)
+                continue
+            bgr = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
+            if is_in_battle_frame(bgr):
                 out_polls = 0
                 if not in_battle:
                     in_polls += 1
@@ -934,15 +997,21 @@ def watch_loop(win):
                 # NPC 场景人物静止无走远关闭问题）
                 wuyi_interval = _wuyi_check_interval(now, last_battle_end_at,
                                                      wuyi_expected_at)
+                # 窗口期标志：战后高发/主流程预期窗口内检查不受 OCR
+                # 降级影响（非队长空闲节奏的 2s 检查才是降级对象）
+                wuyi_in_window = (now - last_battle_end_at < WUYI_POST_BATTLE_WINDOW
+                                  or now - wuyi_expected_at < WUYI_EXPECT_WINDOW)
                 if now - last_wuyi_check >= wuyi_interval:
                     last_wuyi_check = now
                     if now - wuyi_click_at >= WUYI_RETRY_COOLDOWN \
-                            and _handle_wuyi_dialog(win):
+                            and _handle_wuyi_dialog(win, img=img,
+                                                    idle=wuyi_fast_idle
+                                                    and not wuyi_in_window):
                         wuyi_click_at = now
                 if now - last_hezi_check >= XIULUO_HEZI_CHECK_INTERVAL:
                     last_hezi_check = now
                     if now - hezi_click_at >= XIULUO_HEZI_RETRY_COOLDOWN \
-                            and _handle_hezi(win):
+                            and _handle_hezi(win, bgr=bgr):
                         hezi_click_at = now
         except UserAbort as e:
             log(f"[战斗] {e}，战斗监控退出", "WARN")
