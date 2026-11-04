@@ -10,6 +10,7 @@
 - task_signature：任务信息签名（检测任务信息是否变化）
 - is_green_text：绿色文案判定（供对话框等场景复用）
 """
+import difflib
 import re
 import time
 
@@ -436,6 +437,46 @@ def task_signature(task):
     """
     first = task["lines"][0][0] if task["lines"] else ""
     return norm_text(f"{task['title']}|{first}")
+
+
+def task_signature_in(items, title):
+    """OCR 结果中指定任务的文本签名（标题 + 首行）；无该任务或标题
+    未读出返回 None。"""
+    tasks = group_tasks(items)
+    task = find_task(tasks, title)
+    return task_signature(task) if task else None
+
+
+def has_new_task_in(items, img_np, title, fallback_texts, pre_sig,
+                    ratio=0.8):
+    """领取校验：面板存在任务且与领取前签名不同（新任务已渲染）。
+
+    领取前有未完成旧任务遗留面板时（如显形镜 AB 两点未命中走回
+    重新领取），领取后面板刷新有延迟——裸 has_task 会立即命中旧
+    任务，首轮点击追踪点到旧任务绿字、组号 pass 期间面板刷新又被
+    误判为任务进展（2026-11-04 五倍日志实测）。须签名变化才确认
+    新任务已渲染。pre_sig 为 None（领取前无任务）时出现即确认，
+    兼容旧语义。签名相似（ratio）过滤 OCR 单字抖动，与 follow_task
+    的签名相似判定同口径；标题未读出（签名为 None）不确认、等
+    下一帧。
+    """
+    if not has_task_in(items, img_np, title, fallback_texts):
+        return False
+    if pre_sig is None:
+        return True
+    sig = task_signature_in(items, title)
+    if sig is None or sig == pre_sig:
+        return False
+    return difflib.SequenceMatcher(None, sig, pre_sig).ratio() < ratio
+
+
+def has_new_task(win, title, fallback_texts, pre_sig):
+    """has_new_task_in 的窗口版（内部截图 + 面板区域 OCR）。"""
+    img = win.capture(force_activate=False)
+    if img is None:
+        return False
+    items, img_np = game_map.ocr_regions(img, (TRACK_REGION,))
+    return has_new_task_in(items, img_np, title, fallback_texts, pre_sig)
 
 
 def _keyword_fallback(items, img_np, keywords, arect, require_coord=False):

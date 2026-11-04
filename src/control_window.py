@@ -1718,9 +1718,10 @@ class ControlWindow(WebWindow):
 
     def verify_clear_screen(self):
         """高级设置-清屏验证按钮：执行真实清屏流程（Alt+6 屏蔽非队伍
-        玩家 + Alt+5 屏蔽摊位，真实按键；结束时两个屏蔽均处于开启态，
-        与任务启动时的清屏结果一致）。流程自带游戏窗口激活与前台账校验，
-        故不做遮挡检查（热键经前台窗口送达，而非点击屏幕坐标）。
+        玩家 + Alt+5 屏蔽摊位 + 收起游戏活动侧栏；结束时两个屏蔽均
+        处于开启态、活动侧栏收起，与任务启动时的清屏结果一致）。
+        流程自带游戏窗口激活与前台账校验，故不做遮挡检查（热键经前台
+        窗口送达，而非点击屏幕坐标；活动侧栏点击走 human_click）。
         """
         if self._tm.is_running():
             return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
@@ -1733,13 +1734,13 @@ class ControlWindow(WebWindow):
         threading.Thread(target=self._run_clear_screen_verify, args=(win,),
                          daemon=True, name="clear-screen-verify").start()
         return {"status": "success",
-                "msg": "验证已开始：激活游戏 → Alt+6 屏蔽玩家 → Alt+5 屏蔽摊位（真实按键，结束均为屏蔽开启态）"}
+                "msg": "验证已开始：激活游戏 → Alt+6 屏蔽玩家 → Alt+5 屏蔽摊位 → 收起活动侧栏（结束均为屏蔽开启态+侧栏收起）"}
 
     def _run_clear_screen_verify(self, win):
         """清屏验证线程体：跑真实清屏流程，结果回推页面与日志窗。"""
         from . import clear_screen  # 延迟导入：与其余验证模块保持一致
         try:
-            self.add_logs(["[验证] 开始验证清屏（Alt+6 屏蔽玩家 + Alt+5 屏蔽摊位）..."])
+            self.add_logs(["[验证] 开始验证清屏（Alt+6 屏蔽玩家 + Alt+5 屏蔽摊位 + 收起活动侧栏）..."])
             ok, info = clear_screen.run_clear_screen(win)
         except Exception as e:
             ok, info = False, f"验证异常: {e}"

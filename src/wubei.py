@@ -175,6 +175,10 @@ CLAIM_DIALOG_APPEAR_TIMEOUT = 4                    # 点击领取入口后等待
 CLAIM_VERIFY_WAIT = 5                              # 领取后任务进入追踪的正常轮询时长（秒）：
                                                    # 超时未检索到 → 小地图重走领取点后仅再检索一次，
                                                    # 仍无即判定失败（用户确认：多次重试无效）
+CLAIM_VERIFY_WAIT_STALE = 20                       # 领取前有旧任务遗留面板时的轮询时长：
+                                                   # 旧任务未完成走回重领（显形镜 AB 未中）时，
+                                                   # 面板刷新延迟实测约 5-9s（2026-11-04），须等
+                                                   # 新任务签名变化才确认，正常 5s 窗口不够
 
 # ---- 对话开打（寻路到达后出现对话面板）----
 # 绿色选项文案随场景变化（用户实测五倍不是「看打！」，可能是
@@ -1283,10 +1287,20 @@ def _claim_task(win, allow_fill=False):
     领取时序优化（与修罗同款，实测一轮入口点击→选项点击 4s、选项点击
     →已领取判定 4s、判定→追踪点击 2s）：
     1. 选项点击直接复用「对话框已出现」的同一帧（免重截+重 OCR）
-    2. 校验循环内确认任务出现即返回，不再重复一次 has_task 全量检查
+    2. 校验循环内确认新任务渲染即返回（领取前有旧任务遗留面板时须
+       签名变化才确认，不再重复一次 has_task 全量检查）
     """
     if is_in_battle(win):
         return False, "战斗中，跳过本轮领取", None
+    # 领取前面板签名：旧任务未完成遗留面板时（如显形镜 AB 两点未
+    # 命中走回重新领取），领取后面板刷新有延迟——校验须等新任务
+    # 渲染（签名变化）才确认，防首轮点击追踪点到旧任务绿字、组号
+    # pass 期间面板刷新被误判为任务进展（2026-11-04 20:32 日志实测）
+    pre_sig = None
+    img0 = win.capture(force_activate=False)
+    if img0 is not None:
+        items0, _ = game_map.ocr_regions(img0, (task_tracker.TRACK_REGION,))
+        pre_sig = task_tracker.task_signature_in(items0, TASK_TITLE)
     # 识图领取入口（按钮或降魔侍卫）并点击；点击后对话框未出现
     # （短窗口内选项不可见）判定坐标不对：打开小地图点击领取点坐标
     # 重定位后重试一次（修罗同款兜底路径）
@@ -1319,11 +1333,14 @@ def _claim_task(win, allow_fill=False):
         time.sleep(0.3)
     if not claimed:
         return False, "领取对话框处理失败", None
-    # 校验任务出现在追踪面板：正常轮询 CLAIM_VERIFY_WAIT 秒；任务
-    # 出现即确认（不再重复一次 has_task 全量检查）；缓存点击未生效
-    # 时选项仍在，识别补点（并刷新缓存）。未出现则按一次 Alt+C
-    # （飞行/刷新界面状态）后仅再检索一次——修罗实测多次重试无效
-    deadline = time.time() + CLAIM_VERIFY_WAIT
+    # 校验任务出现在追踪面板：正常轮询 CLAIM_VERIFY_WAIT 秒；新任务
+    # 渲染即确认（旧任务遗留面板时须签名变化，窗口延长到
+    # CLAIM_VERIFY_WAIT_STALE——不再重复一次 has_task 全量检查）；
+    # 缓存点击未生效时选项仍在，识别补点（并刷新缓存）。未出现则
+    # 按一次 Alt+C（飞行/刷新界面状态）后仅再检索一次——修罗实测
+    # 多次重试无效
+    deadline = time.time() + (CLAIM_VERIFY_WAIT_STALE if pre_sig is not None
+                              else CLAIM_VERIFY_WAIT)
     found_frame = None
     track_gate = task_tracker.TrackGate(min_interval=0.0)  # 面板差分门（领取校验短窗口
         # 关键检测，不限频——同修罗 _claim_task，防「未出现」结论被
@@ -1353,7 +1370,8 @@ def _claim_task(win, allow_fill=False):
                 return False, "队伍已补齐（监控循环判定），下轮重试领取", None
             log("[五倍] 领取被拒：队伍人数不足（检查队伍开关关闭，不补人）", "WARN")
             return False, "队伍人数不足，领取被拒（未开启检查队伍开关）", None
-        if task_tracker.has_task_in(items, img_np, TASK_TITLE, TASK_FALLBACK_TEXTS):
+        if task_tracker.has_new_task_in(items, img_np, TASK_TITLE,
+                                        TASK_FALLBACK_TEXTS, pre_sig):
             found_frame = (items, img_np)
             break
         if used_cached and _find_claim_option(items, img_np) is not None:
@@ -1367,8 +1385,8 @@ def _claim_task(win, allow_fill=False):
     ok2, info2 = _relocate_to_claim_spot(win)
     if not ok2:
         log(f"[五倍] {info2}", "WARN")
-    elif task_tracker.has_task(win, TASK_TITLE, TASK_FALLBACK_TEXTS):
-        log("[五倍] 重走领取点后任务已出现在追踪面板", "SYS")
+    elif task_tracker.has_new_task(win, TASK_TITLE, TASK_FALLBACK_TEXTS, pre_sig):
+        log("[五倍] 重走领取点后新任务已出现在追踪面板", "SYS")
         return True, "五倍任务已领取", None
     # 重走后仍无：不再重试，直接失败（下一轮 has_task 检查兜底，
     # 任务若随后渲染出现会以续跑方式被拾起）

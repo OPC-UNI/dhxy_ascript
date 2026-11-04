@@ -295,3 +295,56 @@ def test_gate_paste_track_fresh_pixels():
     l, t, r, b = task_tracker.TRACK_REGION
     assert (img_np[t:b, l:r] == np.asarray(f)[t:b, l:r]).all()
     assert (img_np[b:, :] == 0).all() and (img_np[:t, :] == 0).all()
+
+
+# ---- 领取校验：新任务渲染判定（旧任务遗留面板时防误确认） ----
+
+def _track_img_np():
+    """面板区域假帧（黑底非绿，is_green_text 判定 False）。"""
+    return np.zeros((800, 1400, 3), dtype=np.uint8)
+
+
+def _old_task_items(first="前往火云戈壁使用显形镜查探"):
+    return [_item("宝象迷情[除魔任务]"), _item(first, y=280)]
+
+
+OLD_SIG = task_tracker.task_signature(
+    task_tracker.group_tasks(_old_task_items())[0])
+
+
+def test_task_signature_in():
+    sig = task_tracker.task_signature_in(_old_task_items(), "除魔任务")
+    assert sig == OLD_SIG
+    assert task_tracker.task_signature_in([_item("对话选项")], "除魔任务") is None
+
+
+def test_has_new_task_in_no_task():
+    assert not task_tracker.has_new_task_in([_item("对话选项")], _track_img_np(),
+                                            "除魔任务", (), OLD_SIG)
+
+
+def test_has_new_task_in_pre_sig_none_confirms_on_appear():
+    # 领取前无任务（常规路径）：出现即确认，兼容旧语义
+    assert task_tracker.has_new_task_in(_old_task_items(), _track_img_np(),
+                                        "除魔任务", (), None)
+
+
+def test_has_new_task_in_stale_same_sig_waits():
+    # 旧任务遗留面板：签名未变（仍是旧任务）→ 不确认，等新任务渲染
+    assert not task_tracker.has_new_task_in(_old_task_items(), _track_img_np(),
+                                            "除魔任务", (), OLD_SIG)
+
+
+def test_has_new_task_in_new_sig_confirms():
+    # 新任务渲染：标题与首行都变 → 确认
+    items = [_item("三藏逢魔[除魔任务]"),
+             _item("义士速赶至莲花洞处消灭魔尊", y=280)]
+    assert task_tracker.has_new_task_in(items, _track_img_np(),
+                                        "除魔任务", (), OLD_SIG)
+
+
+def test_has_new_task_in_similar_sig_filtered():
+    # 单字 OCR 抖动（相似度 ≥0.8）不确认——与 follow_task 同口径
+    items = _old_task_items(first="前往火云戈壁使用显形镜探查")
+    assert not task_tracker.has_new_task_in(items, _track_img_np(),
+                                            "除魔任务", (), OLD_SIG)

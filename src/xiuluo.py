@@ -169,6 +169,10 @@ WUYI_BLOCK_TIMEOUT = 3                       # 领取完成后等待该对话框
 CLAIM_VERIFY_WAIT = 5                         # 领取后任务进入追踪的正常轮询时长（秒）：
                                               # 超时未检索到 → 小地图重走领取点后仅再检索一次，
                                               # 仍无即判定失败（用户确认：多次重试无效）
+CLAIM_VERIFY_WAIT_STALE = 20                  # 领取前有旧任务遗留面板时的轮询时长：
+                                              # 旧任务未完成走回重领时面板刷新延迟实测约
+                                              # 5-9s（2026-11-04 五倍日志），须等新任务签名
+                                              # 变化才确认，正常 5s 窗口不够
 
 # ---- 领取前队伍检查 ----
 TEAM_CHECK_RETRY_INTERVAL = 10  # 缺人且无申请人可补时的重查间隔（秒）
@@ -1019,10 +1023,20 @@ def _claim_task(win, allow_fill=False):
     1. 选项点击直接复用「对话框已出现」的同一帧（免重截+重 OCR）
     2. 完成次数解析并入校验循环的同一批双区域 OCR 帧（原独立 1.2s
        窗口从未命中，每轮空转）
-    3. 校验循环内确认任务出现即返回，不再重复一次 has_task 全量检查
+    3. 校验循环内确认新任务渲染即返回（领取前有旧任务遗留面板时须
+       签名变化才确认），不再重复一次 has_task 全量检查
     """
     if is_in_battle(win):
         return False, "战斗中，跳过本轮领取", None
+    # 领取前面板签名：旧任务未完成遗留面板时，领取后面板刷新有延迟
+    # ——校验须等新任务渲染（签名变化）才确认，防首轮点击追踪点到旧
+    # 任务绿字、组号 pass 期间面板刷新被误判为任务进展（2026-11-04
+    # 五倍日志实测，修罗同款机制）
+    pre_sig = None
+    img0 = win.capture(force_activate=False)
+    if img0 is not None:
+        items0, _ = game_map.ocr_regions(img0, (task_tracker.TRACK_REGION,))
+        pre_sig = task_tracker.task_signature_in(items0, TASK_TITLE)
     # 识图领取入口（按钮或灵兽村使者）并点击；点击后对话框未出现
     # （短窗口内选项不可见）判定坐标不对：打开小地图点击领取点坐标
     # 重定位后重试一次（用户确认的兜底路径）
@@ -1078,11 +1092,13 @@ def _claim_task(win, allow_fill=False):
             time.sleep(0.3)
         if not claimed:
             return False, "领取对话框处理失败", None
-    # 校验任务出现在追踪面板（正常轮询 CLAIM_VERIFY_WAIT 秒）与
-    # 「今日已完成次数：N」解析共用同一批双区域 OCR 帧：任务出现即
-    # 确认（不再重复一次 has_task 全量检查）；期间处理队伍不足提示
+    # 校验任务出现在追踪面板（正常轮询 CLAIM_VERIFY_WAIT 秒；旧任务
+    # 遗留面板时须签名变化、窗口延长到 CLAIM_VERIFY_WAIT_STALE）与
+    # 「今日已完成次数：N」解析共用同一批双区域 OCR 帧：新任务渲染
+    # 即确认（不再重复一次 has_task 全量检查）；期间处理队伍不足提示
     # 对话框（点击选项后队伍掉到 3 人以下时出现）
-    deadline = time.time() + CLAIM_VERIFY_WAIT
+    deadline = time.time() + (CLAIM_VERIFY_WAIT_STALE if pre_sig is not None
+                              else CLAIM_VERIFY_WAIT)
     count = None
     found_frame = None
     polls = 0
@@ -1121,7 +1137,8 @@ def _claim_task(win, allow_fill=False):
             items = track_items
             img_np = np.zeros_like(np.asarray(img))
             track_gate.paste_track(img, img_np)
-        if task_tracker.has_task_in(items, img_np, TASK_TITLE, TASK_FALLBACK_TEXTS):
+        if task_tracker.has_new_task_in(items, img_np, TASK_TITLE,
+                                        TASK_FALLBACK_TEXTS, pre_sig):
             found_frame = (items, img_np)
             break
         if not need_dialog:
@@ -1197,8 +1214,8 @@ def _claim_task(win, allow_fill=False):
     ok2, info2 = _relocate_to_claim_spot(win)
     if not ok2:
         log(f"[修罗] {info2}", "WARN")
-    elif task_tracker.has_task(win, TASK_TITLE, TASK_FALLBACK_TEXTS):
-        log("[修罗] 重走领取点后任务已出现在追踪面板", "SYS")
+    elif task_tracker.has_new_task(win, TASK_TITLE, TASK_FALLBACK_TEXTS, pre_sig):
+        log("[修罗] 重走领取点后新任务已出现在追踪面板", "SYS")
         tail = f"（{CLAIM_COUNT_TEXT}：{count}）" if count is not None else ""
         return True, f"修罗任务已领取{tail}", None
     # 重走后仍无：不再重试，直接失败（下一轮 has_task 检查兜底，

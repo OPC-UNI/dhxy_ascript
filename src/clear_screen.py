@@ -1,6 +1,14 @@
-"""启动清屏：Alt+6 屏蔽非队伍玩家 + Alt+5 屏蔽摊位（通用设置开关，默认开启）。
+"""启动清屏：Alt+6 屏蔽非队伍玩家 + Alt+5 屏蔽摊位 + 收起游戏活动侧栏
+（通用设置开关，默认开启）。
 
 每个任务启动时执行一次（main.task_start 在登录检查后调用）。
+
+活动侧栏（2026-11-04）：左边缘固定图标两态——展开态 game_activity_open
+（16px 带边框盒）点击一次切换为收起态 game_activity_close（14px 窄条，
+用户实机确认）。两态图标几乎同形（实测收起态画面 open 模板交叉得分
+0.811），判定一律双模板比分数：达标（0.8）且更高者胜，禁止单模板
+阈值判定（会把收起态误判成展开态点击、反而展开侧栏）。点击后轮询
+收起态出现（2s 上限），未确认保守报失败。
 
 实测标定（2026-10-12，一生所爱服 1378x831 窗口）：
 - 两个热键的提示都是主窗口中央飘字（实测 x535-845 / y415-465，一到两行），
@@ -24,9 +32,11 @@
 """
 import time
 
+import cv2
+import numpy as np
 from ascript.windows.hardware.keyboard import Keyboard
 
-from .app_utils import log
+from .app_utils import human_click, log
 from . import app_utils  # 静默操作门控（keyboard_ok）
 from . import map as game_map
 
@@ -34,6 +44,16 @@ from . import map as game_map
 POPUP_BAND = (470, 360, 920, 520)
 # 每次按键最多尝试次数（超限保守判定失败，不阻塞任务启动）
 MAX_PRESS = 4
+
+# 游戏活动侧栏图标搜索区域（用户标定，窗口相对坐标；左边缘固定 UI，
+# 实测图标中心 (14,161)、图标宽 14~16px 高 34px，区域余量横 3~34px、
+# 纵 9~19px，固定 UI 无漂移足够）
+ACTIVITY_REGION = (3, 135, 56, 197)
+ACTIVITY_OPEN_ICON = "game_activity_open.png"
+ACTIVITY_CLOSE_ICON = "game_activity_close.png"
+ACTIVITY_THRESHOLD = 0.8
+# 点击后确认收起的轮询上限（收起动画约 1s，留一倍余量）
+ACTIVITY_CLOSE_TIMEOUT = 2.0
 
 
 def _classify(text):
@@ -134,12 +154,79 @@ def _ensure_hotkey_on(win, key, ok_sig, cancel_sig, label):
     return False, f"{label}屏蔽未确认成功（已按 {MAX_PRESS} 次）"
 
 
+def _capture_frame(win):
+    """截一帧转 BGR numpy（模板匹配热路径；失败返回 None）。"""
+    img = win.capture(force_activate=False)
+    if img is None:
+        return None
+    return cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
+
+
+def _activity_frame_state(frame):
+    """活动栏状态判定：双模板比分数，达标（0.8）且更高者胜。
+
+    返回 (状态, 位置)，状态 ∈ 'open'/'close'/None。两态图标几乎同形，
+    收起态画面 open 模板交叉得分 0.811——单模板阈值判定会把收起态
+    误判成展开态点击、反而展开侧栏，必须双模板比分数（实测校准）。
+    """
+    open_score, open_pos = game_map.best_match_np(frame, ACTIVITY_OPEN_ICON,
+                                                  region=ACTIVITY_REGION)
+    close_score, close_pos = game_map.best_match_np(frame, ACTIVITY_CLOSE_ICON,
+                                                    region=ACTIVITY_REGION)
+    if open_score >= ACTIVITY_THRESHOLD and open_score > close_score:
+        return "open", open_pos
+    if close_score >= ACTIVITY_THRESHOLD and close_score > open_score:
+        return "close", close_pos
+    return None, None
+
+
+def _ensure_activity_closed(win):
+    """收起游戏活动侧栏：区域内出现展开态图标则点击一次，轮询确认
+    变成收起态。返回 (成功, 描述)。
+
+    未找到图标视为无需操作（场景不可见或已收起）；点击后 2s 内未见
+    收起态保守报失败，不凭推断宣告成功（与热键判定同原则）。
+    """
+    frame = _capture_frame(win)
+    if frame is None:
+        return False, "截帧失败，未检查活动侧栏"
+    state, pos = _activity_frame_state(frame)
+    if state == "close":
+        return True, "游戏活动侧栏已收起"
+    if state is None:
+        return True, "未检测到游戏活动图标（场景不可见），跳过"
+    # 双帧确认后再点击（防动画瞬态误检，同 close_map_if_open 模式）
+    frame = _capture_frame(win)
+    if frame is None:
+        return False, "复检截帧失败，未执行活动侧栏点击"
+    state, pos = _activity_frame_state(frame)
+    if state == "close":
+        return True, "游戏活动侧栏已收起"
+    if state is None:
+        return True, "复检时活动图标不可见，跳过"
+    log(f"[清屏] 收起活动侧栏: 点击展开图标 @ ({pos[0]},{pos[1]})", "INFO")
+    human_click(win, pos[0], pos[1])
+    # 轮询收起状态出现（直接信号；固定时延只作超时上限）
+    deadline = time.time() + ACTIVITY_CLOSE_TIMEOUT
+    while time.time() < deadline:
+        time.sleep(0.4)
+        frame = _capture_frame(win)
+        if frame is None:
+            continue
+        state, _ = _activity_frame_state(frame)
+        if state == "close":
+            return True, "游戏活动侧栏已点击收起"
+    return False, "点击后未确认活动侧栏收起（2s 内未见收起态）"
+
+
 def run_clear_screen(win):
-    """启动清屏：Alt+6 屏蔽非队伍玩家 + Alt+5 屏蔽摊位。返回 (成功, 描述)。
+    """启动清屏：Alt+6 屏蔽非队伍玩家 + Alt+5 屏蔽摊位 + 收起游戏活动
+    侧栏。返回 (成功, 描述)。
 
     物理路径：执行前激活游戏窗口并校验前台——热键经前台窗口送达，
     游戏未置前时按键无效甚至触发其他窗口的快捷键，此时直接跳过。
-    静默操作：按键走消息投递（无需前台），飘字 OCR 判定照常。
+    静默操作：按键走消息投递（无需前台），飘字 OCR 判定照常；
+    活动侧栏点击走 human_click（静默模式内部切换消息投递）。
     """
     if not app_utils.silent_mode_on():
         try:
@@ -154,4 +241,5 @@ def run_clear_screen(win):
                                    "屏蔽玩家")
     ok5, info5 = _ensure_hotkey_on(win, "5", "stall_ok", "stall_cancel",
                                    "屏蔽摊位")
-    return ok6 and ok5, f"{info6}；{info5}"
+    ok_act, info_act = _ensure_activity_closed(win)
+    return ok6 and ok5 and ok_act, f"{info6}；{info5}；{info_act}"
