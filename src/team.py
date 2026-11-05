@@ -87,11 +87,14 @@ MEMBER_REGION_OFFSET = 15
 # 种族竖排文字贴区域右缘并右溢约 12px 进间隔（OCR 框实测），
 # 区域 OCR 向右扩此宽度保证完整覆盖
 MEMBER_RACE_SPILL = 20
-# 空位（无人）区域模板：用户 2026-11-05 提供（124x263，区域裁剪去右侧
-# 溢出 7px）。真帧校准：空位区域 0.993 命中（阈值 0.8）、成员区域
-# 0.26~0.39 远低于阈值（4 人/5 人面板双向验证）。未提供时以区域 OCR
-# 兜底（无种族且无等级文案视为空位）。存在性运行时判断，缺文件自动降级
+# 空位（无人）区域模板（双模板：空位占位图有两种渲染形态，任一命中
+# 即空位）：wurenquyu 用户 2026-11-05 提供（124x263，区域裁剪去右侧
+# 溢出 7px，真帧校准空位 0.993 / 成员 0.26~0.39）；wurenquyu2 用户
+# 2026-11-05 补充（124x267 同款裁剪）。全部缺失时以区域 OCR 兜底
+# （无种族且无等级文案视为空位）。存在性运行时判断，缺文件自动降级
 EMPTY_REGION_ICON = "duiwumianban_wurenquyu.png"
+EMPTY_REGION_ICON2 = "duiwumianban_wurenquyu2.png"
+EMPTY_REGION_ICONS = (EMPTY_REGION_ICON, EMPTY_REGION_ICON2)
 EMPTY_REGION_THRESHOLD = 0.8
 # 空位匹配裁剪外扩（左, 上, 右, 下）：容用户裁剪 1~2px 偏差与面板渲染
 # 漂移（实测 4 人帧：区域内 0.837、正确对齐位在区域左 1px 外 0.993）；
@@ -612,7 +615,7 @@ def _member_regions(banner_rect):
              y0 + MEMBER_REGION_H) for i in range(MEMBER_REGION_COUNT)]
 
 
-def _empty_tpl_path():
+def _empty_tpl_path(icon=EMPTY_REGION_ICON):
     """空位模板文件路径；未提供时返回不存在的路径（调用方降级）。
 
     与加载器同根（find_template_in 内部走 R.img 按 R.get_root() 解析；
@@ -620,31 +623,52 @@ def _empty_tpl_path():
     不直接调 R.img——缺文件时 R 会 print 警告，GBK 管道下抛
     UnicodeEncodeError（2026-11-05 实测）；用 R.get_root() 拼接无此问题。
     """
-    return pathlib.Path(R.get_root()) / "res" / "img" / EMPTY_REGION_ICON
+    return pathlib.Path(R.get_root()) / "res" / "img" / icon
 
 
 _EMPTY_TPL_MISSING_LOGGED = False
 
 
-def _region_is_empty(img, rect):
-    """帧内判定成员区域是否为空位（无人）。
+def _empty_icons_present():
+    """存在的空位模板列表（可能为空：全部缺失走 OCR 兜底）。"""
+    return [icon for icon in EMPTY_REGION_ICONS if _empty_tpl_path(icon).exists()]
 
-    优先空位模板（duiwumianban_wurenquyu，用户提供后自动启用）；
-    模板缺失时返回 None（调用方用 OCR 内容兜底）。
+
+def _log_missing_tpls():
+    """空位模板缺失提示（每进程一次）。"""
+    global _EMPTY_TPL_MISSING_LOGGED
+    if _EMPTY_TPL_MISSING_LOGGED:
+        return
+    _EMPTY_TPL_MISSING_LOGGED = True
+    missing = [icon for icon in EMPTY_REGION_ICONS if not _empty_tpl_path(icon).exists()]
+    if not missing:
+        return
+    if len(missing) == len(EMPTY_REGION_ICONS):
+        log(f"[组队] 空位模板全部未提供，空位判定用区域 OCR 兜底"
+            f"（放入 res/img 后自动启用模板判定）", "INFO")
+    else:
+        log(f"[组队] 空位模板 {len(missing)}/{len(EMPTY_REGION_ICONS)} 个缺失"
+            f"（{'、'.join(missing)}），按现有模板判定", "INFO")
+
+
+def _region_is_empty(img, rect):
+    """帧内判定成员区域是否为空位（无人）：双空位模板任一命中即空。
+
+    空位占位图有两种渲染形态（wurenquyu/wurenquyu2），任一匹配达标
+    即判空；模板全部缺失时返回 None（调用方用 OCR 内容兜底）。
     """
-    path = _empty_tpl_path()
-    if not path.exists():
-        global _EMPTY_TPL_MISSING_LOGGED
-        if not _EMPTY_TPL_MISSING_LOGGED:
-            _EMPTY_TPL_MISSING_LOGGED = True
-            log(f"[组队] 空位模板 {EMPTY_REGION_ICON} 未提供，空位判定用区域 OCR 兜底"
-                f"（放入 res/img 后自动启用模板判定）", "INFO")
+    icons = _empty_icons_present()
+    if not icons:
+        _log_missing_tpls()
         return None
+    _log_missing_tpls()
     l, t, r, b = rect
     pl, pt, pr, pb = EMPTY_REGION_PAD
     crop = img.crop((l - pl, t - pt, r + pr, b + pb))
-    return game_map.find_template_in(crop, EMPTY_REGION_ICON,
-                                     EMPTY_REGION_THRESHOLD) is not None
+    for icon in icons:
+        if game_map.find_template_in(crop, icon, EMPTY_REGION_THRESHOLD) is not None:
+            return True
+    return False
 
 
 def _parse_member_region(img_np, img, rect, idx, glyphs):
@@ -783,13 +807,34 @@ def _harvest_glyphs(img_np, race_items, glyphs):
     return changed
 
 
+def _empty_region_score(img, rect):
+    """空位双模板在区域内的最佳匹配分（取两模板较高者；全部缺失返回 None）。
+
+    可疑原因日志用（_region_is_empty 只给布尔结果）；与
+    _region_is_empty 同裁剪（含 EMPTY_REGION_PAD 外扩）。
+    """
+    icons = _empty_icons_present()
+    if not icons:
+        return None
+    l, t, r, b = rect
+    pl, pt, pr, pb = EMPTY_REGION_PAD
+    crop = img.crop((l - pl, t - pt, r + pr, b + pb))
+    best = 0.0
+    for icon in icons:
+        results = FindImages.find_all_template(R.img(icon), im_source=crop,
+                                               threshold=0.0, max_res=1)
+        if results:
+            best = max(best, float(results[0].confidence))
+    return best
+
+
 def _scan_member_regions(img_np, img, regions, glyphs):
-    """逐区域扫描成员，返回 (成员列表, 人数, 是否可疑需重截)。
+    """逐区域扫描成员，返回 (成员列表, 人数, 可疑原因或None, 字形库是否变化)。
 
     成员列表 = [(种族或'?', 等级文案或None), ...]；人数 = 首空位序号
     （区域自第 1 位起连续填充，首空位之后不再解析）。
     空位判定：优先空位模板；模板缺失时以区域 OCR 无种族且无等级兜底。
-    可疑（返回 False）场景——面板数据渲染中：
+    可疑（原因非 None）场景——面板数据渲染中：
     - 空位模板判定某区域有人但 OCR 读不到任何信息
     - 空位之后又出现有内容区域（与连续填充矛盾）
     调用方应重截一帧再扫。
@@ -801,58 +846,84 @@ def _scan_member_regions(img_np, img, regions, glyphs):
         if tpl_empty is True:
             # 模板判空：其后区域应全空，抽查下一个区域防数据渲染中
             if i + 1 < MEMBER_REGION_COUNT and not _region_is_empty(img, regions[i + 1]):
-                return members, i, True, changed
-            return members, i, False, changed
+                s = _empty_region_score(img, regions[i + 1])
+                reason = (f"区域{i + 1}命中空位模板，但区域{i + 2}仍有人"
+                          f"（空位分 {s:.2f} < {EMPTY_REGION_THRESHOLD}），数据渲染中")
+                return members, i, reason, changed
+            return members, i, None, changed
         race, lv, c = _parse_member_region(img_np, img, rect, i, glyphs)
         changed = changed or c
         if race is None and lv is None:
             if tpl_empty is False:
                 # 模板确认有人但 OCR 读不到：数据渲染中，重截再扫
-                return members, i, True, changed
+                s = _empty_region_score(img, rect)
+                reason = (f"区域{i + 1}空位模板未命中（分数 {s:.2f}）"
+                          f"且区域 OCR 无种族/等级文案，数据渲染中")
+                return members, i, reason, changed
             # 模板缺失（None）：OCR 兜底判空，抽查下一区域防漏
             if i + 1 < MEMBER_REGION_COUNT:
                 race2, lv2, c2 = _parse_member_region(img_np, img, regions[i + 1],
                                                       i + 1, glyphs)
                 changed = changed or c2
                 if race2 is not None or lv2 is not None:
-                    return members, i, True, changed
-            return members, i, False, changed
+                    reason = f"区域{i + 1}OCR 判空，但区域{i + 2}仍有成员（渲染中）"
+                    return members, i, reason, changed
+            return members, i, None, changed
         members.append((race or "?", lv))
-    return members, MEMBER_REGION_COUNT, False, changed
+    return members, MEMBER_REGION_COUNT, None, changed
 
 
 def _scan_panel_img(img):
-    """帧内队伍面板扫描：返回 (成员列表, 人数, 是否成功)。
+    """帧内队伍面板扫描：返回 (成员列表, 人数, 是否成功, 可疑原因或None)。
 
     单帧完成：标志模板定位 → 5 区域划分 → 逐区域解析（空位模板优先）。
     字形库新增样本在扫描后落盘。
     """
     _score, banner = _find_banner_rect(img)
     if banner is None:
-        return [], 0, False
+        return [], 0, False, "标志模板未命中（面板不可见或未渲染）"
     glyphs = _load_glyphs()
     img_np = np.asarray(img)
-    members, count, suspicious, changed = _scan_member_regions(
+    members, count, reason, changed = _scan_member_regions(
         img_np, img, _member_regions(banner), glyphs)
     if changed:
         _save_glyphs(glyphs)
-    if suspicious:
-        return members, count, False
-    return members, count, True
+    if reason:
+        return members, count, False, reason
+    return members, count, True, None
+
+
+# 可疑扫描重截间隔：面板数据渲染滞后自愈窗口（16:48:38 实测 1 人队
+# 区域 2 空位模板未命中 + OCR 无文案、0.5s 单次重试仍未渲染完——
+# 旧 0.5s×1 太短；重试总预算 ~2.5s，仅失败路径消耗）
+_SCAN_RETRY_INTERVALS = (0.5, 1.0, 1.0)
 
 
 def _analyze_panel_frame(win, img):
-    """帧内解析队伍面板（含一次重截兜底），返回 (是否成功, 成员列表, 人数)。
+    """帧内解析队伍面板（含重截兜底），返回 (是否成功, 成员列表, 人数)。
 
-    面板数据渲染滞后（空位模板判定有人但 OCR 空/空位后有内容）时
-    等 0.5s 重截一帧再扫；仍失败返回 (False, 已得成员, 已得人数)。
+    面板数据渲染滞后（空位模板判定有人但 OCR 空/空位后有内容）时按
+    _SCAN_RETRY_INTERVALS 重截再扫；仍失败返回已得部分结果并打
+    可疑原因日志、存现场帧 tmp_team_err.png 供人工排查。
     """
-    members, count, ok = _scan_panel_img(img)
-    if not ok:
-        time.sleep(0.5)
+    members, count, ok, reason = _scan_panel_img(img)
+    for interval in _SCAN_RETRY_INTERVALS:
+        if ok:
+            break
+        time.sleep(interval)
         img2 = win.capture(force_activate=False)
-        if img2 is not None:
-            members, count, ok = _scan_panel_img(img2)
+        if img2 is None:
+            continue
+        members, count, ok, reason = _scan_panel_img(img2)
+    if not ok:
+        log(f"[组队] 成员扫描可疑: {reason}（重截 {len(_SCAN_RETRY_INTERVALS)} 次"
+            f"仍不明确，现场帧已存 tmp_team_err.png）", "WARN")
+        try:
+            img2 = win.capture(force_activate=False)
+            if img2 is not None:
+                img2.save("tmp_team_err.png")
+        except Exception:
+            pass
     return ok, members, count
 
 
@@ -1140,6 +1211,31 @@ def check_team_min(win, min_members=None):
             f"（当前 {count} 人: {member_txt}）", "WARN")
         return "wait", f"队伍人数不足（{count}/{min_members}，当前: {member_txt}）", members
     return "ready", f"队伍满足人数要求（{count} 人: {member_txt}）", members
+
+
+def diagnose_team_check(win):
+    """诊断页「检查队伍信息」：走真实队伍检查链路（check_team_min），
+    结果输出到日志。
+
+    流程：申请人证据检查 → 队伍面板开合 → 队长三分类判定（含复核）
+    → 5 固定区域成员扫描（空位模板截断、种族/等级逐区识别）→ 关闭
+    面板，全程真实点击。check_team_min 内部 [组队] 日志已逐步骤输出，
+    本函数补成员明细与最终结论。返回 (状态, 描述)。
+    """
+    log("[组队] ===== 诊断：检查队伍信息（真实 check_team_min 链路）=====", "SYS")
+    status, info, members = check_team_min(win, min_members=None)
+    log(f"[组队] 检查结果: {status} - {info}", "SYS")
+    incomplete = "识别失败" in info  # 扫描中断：成员列表是中断前部分结果，非完整明细
+    if members:
+        detail = "、".join(f"{r} {lv or '等级未识别'}" for r, lv in members)
+        label = "扫描中断前已识别" if incomplete else "成员明细"
+        log(f"[组队] {label}（{len(members)} 人）: {detail}",
+            "WARN" if incomplete else "INFO")
+    elif incomplete:
+        log("[组队] 扫描未识别到任何成员（面板数据未渲染）", "WARN")
+    else:
+        log("[组队] 成员明细: 未识别到成员", "INFO")
+    return status, info
 
 
 def update_overlay_team(status, info, members):

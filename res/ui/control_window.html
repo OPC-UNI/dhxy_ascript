@@ -19,6 +19,8 @@
             --gold: #C9A15C;
             --danger: #E5484D;
             --seal: #C0392B;
+            --team: #5C9BD1;
+            --seal-ink: #0E1411;   /* 相位章（石绿/黛蓝/藤黄为亮色底）用深墨字 */
             --progress-tint: rgba(47, 191, 113, 0.12);
         }
         body.light {
@@ -34,6 +36,8 @@
             --gold: #8A6A2E;
             --danger: #C23B33;
             --seal: #B3352F;
+            --team: #3A6EA5;
+            --seal-ink: #FFFFFF;   /* 浅色主题相位章为深色底，用白字 */
             --progress-tint: rgba(23, 122, 70, 0.10);
         }
         html, body {
@@ -334,13 +338,51 @@
             0%, 100% { box-shadow: 0 0 8px 1px rgba(192, 57, 43, 0.35); transform: rotate(-3deg); }
             50% { box-shadow: 0 0 14px 4px rgba(192, 57, 43, 0.7); transform: rotate(-3deg); }
         }
+        /* 相位章共用：亮色底配 --seal-ink 墨字（朱砂红章保持白字） */
+        .seal.running.phase-heal, .seal.running.phase-team,
+        .seal.running.phase-claim { color: var(--seal-ink); }
+        /* 巫医：石绿章——治愈柔光（印章蘸色换颜料） */
+        .seal.running.phase-heal { background: var(--accent); border-color: var(--accent); animation: sealHeal 2.4s ease-in-out infinite; }
+        @keyframes sealHeal {
+            0%, 100% { box-shadow: 0 0 8px 1px rgba(47, 191, 113, 0.30); }
+            50% { box-shadow: 0 0 14px 4px rgba(47, 191, 113, 0.60); }
+        }
+        /* 组队：黛蓝章——汇聚脉冲 */
+        .seal.running.phase-team { background: var(--team); border-color: var(--team); animation: sealTeam 2s ease-in-out infinite; }
+        @keyframes sealTeam {
+            0%, 100% { box-shadow: 0 0 8px 1px rgba(92, 155, 209, 0.30); }
+            50% { box-shadow: 0 0 14px 4px rgba(92, 155, 209, 0.60); }
+        }
+        /* 领取任务：藤黄章——柔光 */
+        .seal.running.phase-claim { background: var(--gold); border-color: var(--gold); animation: sealClaim 2.4s ease-in-out infinite; }
+        @keyframes sealClaim {
+            0%, 100% { box-shadow: 0 0 8px 1px rgba(201, 161, 92, 0.30); }
+            50% { box-shadow: 0 0 14px 4px rgba(201, 161, 92, 0.60); }
+        }
         .dash-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
         .info-row { font-size: 13px; color: var(--text); display: flex; gap: 8px; line-height: 1.4; }
         .info-k { color: var(--text-dim); width: 58px; flex-shrink: 0; }
         .info-v { flex: 1; min-width: 0; word-break: break-all; }
+        /* 配置行（方案 · 人物 · 召唤兽 单行摘要）：可点击跳设置页 */
+        .info-row.config-row { cursor: pointer; }
+        .info-row.config-row:hover .info-k,
+        .info-row.config-row:hover .info-v { color: var(--accent); }
+        /* 队伍行：摘要 + 悬浮看成员明细 */
+        .info-row.team-row { cursor: help; }
+        /* 阶段徽章：与印章蘸色同源（战斗朱砂/巫医石绿/组队黛蓝/领取藤黄） */
+        .phase-chip {
+            display: inline-block; padding: 0 8px; border-radius: 10px;
+            font-size: 11px; line-height: 17px; border: 1px solid var(--border2);
+            color: var(--text); background: var(--panel2);
+        }
+        .phase-chip.battle { color: var(--seal); border-color: var(--seal); }
+        .phase-chip.heal { color: var(--accent); border-color: var(--accent); }
+        .phase-chip.team { color: var(--team); border-color: var(--team); }
+        .phase-chip.claim { color: var(--gold); border-color: var(--gold); }
+        .phase-chip.walk { color: var(--text-dim); }
+        .phase-chip.talk { color: var(--accent-dim); }
         /* 今日计划等长文案：单行省略不换行（明细在下方任务队列） */
         .info-v.nowrap { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .info-hint { font-size: 11px; color: var(--text-dim); }
         /* 任务队列 */
         .queue-card { flex: 1; min-height: 0; overflow-y: auto; }
         .queue-head { display: flex; align-items: center; gap: 8px; }
@@ -939,6 +981,14 @@
                     <div class="group-hint">与实际流程一致、时序无额外延时，且不改变任务状态：领取=走位到宝象国领取点 → 点击领取入口（领取任务按钮/降魔侍卫）打开对话框 → 选项「除魔卫国，义不容辞」仅定位不点击 → 点拒绝选项「事态严重，我等退散」关闭对话框；回程=定位回城符不点击（回城符模板待提供，缺失时报模板未提供）；巫医=走位到巫医 NPC、定位后点击打开对话框（医治选项由验证流程自行点击，与任务进程中战斗线程点击行为等效）；白龙马模板=按任务流程实际点击候选（找全部候选→逐一真实点击→误点对话框自动关闭→开打对话出现即停止并停留，请手动关闭对话框）。任务运行中不可验证。</div>
                 </div>
                 <div class="group-box">
+                    <div class="group-title">队伍</div>
+                    <div class="verify-row">
+                        <button id="btn-verify-team-check" class="btn" onclick="verifyTeamCheck()">检查队伍信息</button>
+                        <span class="verify-result" id="team-check-verify-result"></span>
+                    </div>
+                    <div class="group-hint">走真实队伍检查链路（与任务检查同一套逻辑）：打开队伍面板 → 队长判定（双模板比分数+复核）→ 5 固定区域成员扫描（空位模板截断、种族/等级逐区识别）→ 关闭面板，全程真实点击（组队按钮/面板/关闭按钮），逐步骤结果输出到日志抽屉。任务运行中不可使用。</div>
+                </div>
+                <div class="group-box">
                     <div class="group-title">清屏</div>
                     <div class="verify-row">
                         <button id="btn-verify-clear-screen" class="btn" onclick="verifyClearScreen()">验证清屏</button>
@@ -1135,6 +1185,8 @@
     const jiguanVerifyResultEl = document.getElementById('jiguan-verify-result');
     const btnVerifyPosition = document.getElementById('btn-verify-position');
     const positionVerifyResultEl = document.getElementById('position-verify-result');
+    const btnVerifyTeamCheck = document.getElementById('btn-verify-team-check');
+    const teamCheckVerifyResultEl = document.getElementById('team-check-verify-result');
     const btnVerifyCaptureDiag = document.getElementById('btn-verify-capture-diag');
     const captureDiagVerifyResultEl = document.getElementById('capture-diag-verify-result');
     const btnVerifySilentClick = document.getElementById('btn-verify-silent-click');
@@ -1284,42 +1336,101 @@
             .map(c => c.dataset.mode);
     }
 
+    // 人物/召唤兽当前战斗动作（与设置页单选/技能下拉同源读值；看板展示用）
+    function currentCharAction() {
+        const type = charBattle.container.querySelector('input:checked');
+        if (!type) return '—';
+        return type.value === '法术' ? charBattle.skillSel.value : type.value;
+    }
+
+    function currentBeastAction() {
+        const type = beastBattle.container.querySelector('input:checked');
+        if (!type) return '—';
+        return type.value === '法术' ? beastBattle.skillSel.value : type.value;
+    }
+
+    // 启动配置摘要（单行：方案 · 人物 · 召唤兽）
+    function currentConfigText() {
+        return (schemeActive || '—') + ' · 人物 ' + currentCharAction()
+            + ' · 召唤兽 ' + currentBeastAction();
+    }
+
+    // HTML 转义（状态文本来自任务进程，拼进 innerHTML 前必须转义）
+    function esc(s) {
+        return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    function infoRowHtml(k, vHtml) {
+        return '<div class="info-row"><span class="info-k">' + k + '</span>'
+            + '<span class="info-v">' + vHtml + '</span></div>';
+    }
+
+    // 阶段 → 动效/徽章类（与印章蘸色同源；返回 '' 表示默认红章）
+    function phaseClassOf(ph) {
+        if (ph.indexOf('战斗') >= 0) return 'battle';
+        if (ph.indexOf('巫医') >= 0) return 'heal';
+        if (ph.indexOf('检查队伍') >= 0 || ph.indexOf('组队') >= 0) return 'team';
+        if (ph.indexOf('领取任务') >= 0) return 'claim';
+        if (WALK_PHASES.includes(ph)) return 'walk';
+        if (ph === '任务对话') return 'talk';
+        return '';
+    }
+
+    // 队伍文本 → {身份, 人数, 成员明细}；格式不符返回 null（回退原文）
+    function parseTeam(raw) {
+        const m = raw.match(/^队伍:\s*(\S+?)\s*\|\s*(\d+)人:\s*(.*)$/);
+        if (!m) return null;
+        return { id: m[1], count: m[2], members: m[3] };
+    }
+
     function renderDash() {
         const sel = selectedModes();
         const per = (progressData && progressData.per_task) || {};
-        const hintText = '任务运行时请保持游戏窗口前台 · 老板键 '
-            + (bossHotkey ? bossHotkey.toUpperCase() : 'F11') + ' 一键启停';
         // ---- 状态印章与信息区（启停操作只在顶栏主按钮，看板不重复） ----
         if (running) {
-            // 印章动效类随阶段联动：战斗快速强脉冲 / 移动左右轻摆 / 对话柔光 / 默认标准脉冲
+            // 印章蘸色随阶段切换（动效语义化：战斗朱砂脉冲/巫医石绿柔光/
+            // 组队黛蓝汇聚/领取藤黄/移动轻摆/对话柔光/默认标准脉冲）；
+            // 类切换即重启动画，不依赖 animationend 状态
             const ph = (runtimeStatus && runtimeStatus.phase) || '';
-            let phaseCls = '';
-            if (ph.indexOf('战斗') >= 0) phaseCls = 'phase-battle';
-            else if (WALK_PHASES.includes(ph)) phaseCls = 'phase-walk';
-            else if (ph === '任务对话') phaseCls = 'phase-talk';
-            dashSeal.className = 'seal running' + (phaseCls ? ' ' + phaseCls : '');
+            const phCls = phaseClassOf(ph);
+            dashSeal.className = 'seal running' + (phCls ? ' phase-' + phCls : '');
             dashSeal.innerHTML = '<span>运</span><span>行</span><span>中</span>';
             const cur = currentTaskMode();
-            const rows = [];
+            const rowsHtml = [];
             if (cur) {
                 const t = per[cur];
                 const progText = cur === BATTLE_ONLY ? ''
                     : ((t && t.count > 0) ? `${t.done}/${t.count}` : (t ? `${t.done} 轮` : ''));
-                rows.push(['当前任务', cur + (progText ? '（' + progText + '）' : '')]);
+                rowsHtml.push(infoRowHtml('当前任务',
+                    esc(cur + (progText ? '（' + progText + '）' : ''))));
             }
-            // 阶段：任务进程各模块写入的结构化 phase（战斗中/寻路中/
-            // 领取任务/自动巫医/返程…）；空串（出战斗/无阶段信息）回退「执行中」
-            rows.push(['阶段', (runtimeStatus && runtimeStatus.phase) || '执行中']);
-            if (runtimeStatus && runtimeStatus.bars) rows.push(['血蓝', runtimeStatus.bars]);
-            if (runtimeStatus && runtimeStatus.team) rows.push(['队伍', runtimeStatus.team]);
-            dashInfo.innerHTML = rows.map(([k, v]) =>
-                '<div class="info-row"><span class="info-k">' + k + '</span>' +
-                '<span class="info-v"></span></div>').join('')
-                + '<div class="info-hint"></div>';
-            [...dashInfo.querySelectorAll('.info-v')].forEach((el, i) => {
-                el.textContent = rows[i][1];  // textContent 防注入（状态文本来自任务进程）
-            });
-            dashInfo.querySelector('.info-hint').textContent = hintText;
+            // 阶段：结构化 phase 渲染为徽章（颜色与印章蘸色同源）；
+            // 空串（出战斗/无阶段信息）回退「执行中」
+            rowsHtml.push('<div class="info-row"><span class="info-k">阶段</span><span class="info-v">'
+                + '<span class="phase-chip' + (phCls ? ' ' + phCls : '') + '">'
+                + esc(ph || '执行中') + '</span></span></div>');
+            // 队伍：摘要「队长 · 5人」，成员明细悬浮提示（长名单不再占行）
+            const teamRaw = runtimeStatus && runtimeStatus.team;
+            const team = teamRaw ? parseTeam(teamRaw) : null;
+            if (team) {
+                rowsHtml.push('<div class="info-row team-row" title="队伍: '
+                    + esc(team.id) + ' · ' + esc(team.members) + '">'
+                    + '<span class="info-k">队伍</span><span class="info-v">'
+                    + esc(team.id) + ' · ' + esc(team.count) + '人</span></div>');
+            } else if (teamRaw) {
+                rowsHtml.push(infoRowHtml('队伍', esc(teamRaw.replace(/^队伍:\s*/, ''))));
+            }
+            // 配置回显：单行摘要（任务运行中不可切换，展示启动时所用配置）
+            rowsHtml.push('<div class="info-row config-row"><span class="info-k">配置</span>'
+                + '<span class="info-v nowrap">' + esc(currentConfigText()) + '</span></div>');
+            dashInfo.innerHTML = rowsHtml.join('');
+            // 配置行交互：点击跳设置页（人物/召唤兽动作调整处）
+            const cfgRow = dashInfo.querySelector('.config-row');
+            if (cfgRow) {
+                cfgRow.title = '点击前往设置页调整人物/召唤兽战斗动作';
+                cfgRow.addEventListener('click', () => switchPage('general'));
+            }
         } else {
             dashSeal.className = 'seal idle';
             dashSeal.innerHTML = '<span>待</span><span>命</span>';
@@ -1327,12 +1438,17 @@
                 ? sel.map(m => m === BATTLE_ONLY ? m + '（持续运行）'
                         : m + ' ×' + document.getElementById('cnt-' + m).innerText).join(' · ')
                 : '未选择任务（请到「任务」页勾选）';
-            // 单行省略展示；今日合计在下方队列卡（与队列明细一处，不重复）
+            // 单行省略展示；今日合计在下方队列卡（与队列明细一处，不重复）。
+            // 配置为启动前预检单行摘要（与运行中同款）
             dashInfo.innerHTML =
                 '<div class="info-row"><span class="info-k">今日计划</span><span class="info-v nowrap"></span></div>'
-                + '<div class="info-hint"></div>';
-            dashInfo.querySelector('.info-v').textContent = plan;
-            dashInfo.querySelector('.info-hint').textContent = hintText;
+                + '<div class="info-row config-row"><span class="info-k">配置</span><span class="info-v nowrap"></span></div>';
+            const vs = dashInfo.querySelectorAll('.info-v');
+            vs[0].textContent = plan;
+            vs[1].textContent = currentConfigText();
+            const cfgRow = dashInfo.querySelector('.config-row');
+            cfgRow.title = '点击前往设置页调整人物/召唤兽战斗动作';
+            cfgRow.addEventListener('click', () => switchPage('general'));
         }
         // ---- 任务队列 ----
         const cur = running ? currentTaskMode() : '';
@@ -2606,6 +2722,35 @@
         btnVerifyPosition.disabled = false;
         positionVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
         positionVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+    };
+
+    async function verifyTeamCheck() {
+        if (verifying) return;
+        verifying = true;
+        btnVerifyTeamCheck.disabled = true;
+        teamCheckVerifyResultEl.style.color = 'var(--text)';
+        teamCheckVerifyResultEl.innerText = '检查中...';
+        try {
+            const r = await callPython('verify_team_check');
+            if (!r || r.status !== 'success') {
+                teamCheckVerifyResultEl.style.color = 'var(--danger)';
+                teamCheckVerifyResultEl.innerText = (r && r.msg) || '获取请求失败';
+                verifying = false;
+                btnVerifyTeamCheck.disabled = false;
+            }
+            // 成功：等待 Python 侧 onTeamCheckVerifyResult 回推最终结果
+        } catch (e) {
+            teamCheckVerifyResultEl.style.color = 'var(--danger)';
+            teamCheckVerifyResultEl.innerText = '获取请求异常';
+            verifying = false;
+            btnVerifyTeamCheck.disabled = false;
+        }
+    }
+    window.onTeamCheckVerifyResult = function (ok, info) {
+        verifying = false;
+        btnVerifyTeamCheck.disabled = false;
+        teamCheckVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        teamCheckVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
     async function verifyCaptureDiag() {

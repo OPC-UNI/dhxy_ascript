@@ -51,11 +51,11 @@ def test_scan_stops_at_first_empty_template(monkeypatch):
     monkeypatch.setattr(team, "_region_is_empty",
                         lambda img, rect: rect[0] >= EXPECTED_REGIONS[2][0])
     monkeypatch.setattr(team, "_parse_member_region", _member("男人", "飞升188"))
-    members, count, suspicious, changed = team._scan_member_regions(
+    members, count, reason, changed = team._scan_member_regions(
         _np_dummy(), _dummy_img(), REGIONS, {})
     assert count == 2
     assert len(members) == 2
-    assert not suspicious
+    assert reason is None
     assert not changed
 
 
@@ -64,9 +64,9 @@ def test_scan_suspicious_content_after_empty_template(monkeypatch):
     monkeypatch.setattr(team, "_region_is_empty",
                         lambda img, rect: rect[0] == EXPECTED_REGIONS[1][0])
     monkeypatch.setattr(team, "_parse_member_region", _member("男人", "飞升188"))
-    members, count, suspicious, _c = team._scan_member_regions(
+    members, count, reason, _c = team._scan_member_regions(
         _np_dummy(), _dummy_img(), REGIONS, {})
-    assert suspicious
+    assert reason and "区域2命中空位模板" in reason
     assert count == 1  # 已解析人数（首空位序号）
 
 
@@ -75,9 +75,9 @@ def test_scan_template_says_member_but_ocr_empty(monkeypatch):
     monkeypatch.setattr(team, "_region_is_empty", lambda img, rect: False)
     monkeypatch.setattr(team, "_parse_member_region",
                         lambda img_np, img, rect, idx, glyphs: (None, None, False))
-    members, count, suspicious, _c = team._scan_member_regions(
+    members, count, reason, _c = team._scan_member_regions(
         _np_dummy(), _dummy_img(), REGIONS, {})
-    assert suspicious
+    assert reason and "区域1空位模板未命中" in reason
     assert count == 0
 
 
@@ -92,11 +92,11 @@ def test_scan_ocr_fallback_empty_stops_and_probes(monkeypatch):
 
     monkeypatch.setattr(team, "_region_is_empty", lambda img, rect: None)
     monkeypatch.setattr(team, "_parse_member_region", parse)
-    members, count, suspicious, _c = team._scan_member_regions(
+    members, count, reason, _c = team._scan_member_regions(
         _np_dummy(), _dummy_img(), REGIONS, {})
     assert count == 2
     assert len(members) == 2
-    assert not suspicious
+    assert reason is None
     # 解析了区域 1、2、3（判空）与抽查区域 4
     assert calls == [r[0] for r in EXPECTED_REGIONS[:4]]
 
@@ -108,9 +108,9 @@ def test_scan_ocr_fallback_suspicious_content_after_ocr_empty(monkeypatch):
         return ("男人", "飞升188", False)   # 区域 1/3 有成员
     monkeypatch.setattr(team, "_region_is_empty", lambda img, rect: None)
     monkeypatch.setattr(team, "_parse_member_region", parse)
-    members, count, suspicious, _c = team._scan_member_regions(
+    members, count, reason, _c = team._scan_member_regions(
         _np_dummy(), _dummy_img(), REGIONS, {})
-    assert suspicious  # 空位后抽查出内容 → 重截
+    assert reason and "区域2OCR 判空" in reason  # 空位后抽查出内容 → 重截
     assert count == 1
 
 
@@ -166,15 +166,16 @@ def test_parse_member_region_glyph_rect_anchored_to_region(monkeypatch):
 
 def test_scan_panel_img_no_banner(monkeypatch):
     monkeypatch.setattr(team, "_find_banner_rect", lambda img: (0.0, None))
-    members, count, ok = team._scan_panel_img(_dummy_img())
+    members, count, ok, reason = team._scan_panel_img(_dummy_img())
     assert not ok
+    assert "标志模板未命中" in reason
     assert members == [] and count == 0
 
 
 def test_analyze_panel_frame_retry_on_suspicious(monkeypatch):
     frames = [
-        ([("男人", "飞升188")], 1, False),   # 可疑（渲染中）
-        ([("男人", "飞升188"), ("男魔", "飞升169")], 2, True),
+        ([("男人", "飞升188")], 1, False, "区域2空位模板未命中（分数 0.62）"),  # 可疑（渲染中）
+        ([("男人", "飞升188"), ("男魔", "飞升169")], 2, True, None),
     ]
     monkeypatch.setattr(team, "_scan_panel_img", lambda img: frames.pop(0))
     monkeypatch.setattr(team.time, "sleep", lambda _s: None)
@@ -191,7 +192,69 @@ def test_scan_panel_img_does_not_write_glyphs_when_no_change(monkeypatch, tmp_pa
     monkeypatch.setattr(team, "_load_glyphs", lambda: {})
     monkeypatch.setattr(team, "_save_glyphs", lambda glyphs: saved.append(glyphs))
     monkeypatch.setattr(team, "_scan_member_regions",
-                        lambda img_np, img, regions, glyphs: ([], 0, False, False))
-    members, count, ok = team._scan_panel_img(_dummy_img())
-    assert ok and members == [] and count == 0
+                        lambda img_np, img, regions, glyphs: ([], 0, None, False))
+    members, count, ok, reason = team._scan_panel_img(_dummy_img())
+    assert ok and members == [] and count == 0 and reason is None
     assert saved == []
+
+
+# ---- 空位双模板 ----
+
+def test_region_is_empty_dual_template_union(monkeypatch):
+    """双空位模板任一命中即空位；都未命中非空位；全部缺失返回 None（OCR 兜底）。"""
+    img = _dummy_img()
+    rect = (373, 320, 497, 585)
+    monkeypatch.setattr(team, "_empty_icons_present",
+                        lambda: [team.EMPTY_REGION_ICON, team.EMPTY_REGION_ICON2])
+    # 模板 1 未命中、模板 2 命中 → 空位（find_template_in 未命中返回 None）
+    monkeypatch.setattr(team.game_map, "find_template_in",
+                        lambda crop, icon, threshold: (0, 0) if icon == team.EMPTY_REGION_ICON2 else None)
+    assert team._region_is_empty(img, rect) is True
+    # 都未命中 → 非空位
+    monkeypatch.setattr(team.game_map, "find_template_in",
+                        lambda crop, icon, threshold: None)
+    assert team._region_is_empty(img, rect) is False
+    # 全部缺失 → None（OCR 兜底）
+    monkeypatch.setattr(team, "_empty_icons_present", lambda: [])
+    assert team._region_is_empty(img, rect) is None
+
+
+def test_region_is_empty_partial_templates(monkeypatch):
+    """仅模板 2 缺失：按现有模板判定（不降级 OCR）。"""
+    img = _dummy_img()
+    rect = (373, 320, 497, 585)
+    monkeypatch.setattr(team, "_empty_icons_present",
+                        lambda: [team.EMPTY_REGION_ICON])
+    monkeypatch.setattr(team.game_map, "find_template_in",
+                        lambda crop, icon, threshold: True)
+    assert team._region_is_empty(img, rect) is True
+
+
+# ---- 诊断入口（诊断页「检查队伍信息」按钮） ----
+
+def test_diagnose_team_check_logs_result(monkeypatch):
+    """诊断入口走真实 check_team_min（不传人数下限），结论与成员明细打日志。"""
+    logs = []
+    monkeypatch.setattr(team, "log", lambda msg, level="INFO": logs.append((msg, level)))
+    called = []
+    monkeypatch.setattr(team, "check_team_min",
+                        lambda win, min_members=None: called.append(min_members) or (
+                            "ready",
+                            "队伍满足人数要求（2 人: 男仙 飞升188、男魔 飞升169）",
+                            [("男仙", "飞升188"), ("男魔", "飞升169")]))
+    status, info = team.diagnose_team_check(object())
+    assert status == "ready"
+    assert called == [None]  # 诊断不设人数下限，纯检查
+    assert any("检查结果: ready" in m for m, _ in logs)
+    assert any("成员明细（2 人）" in m for m, _ in logs)
+    assert any("男仙 飞升188、男魔 飞升169" in m for m, _ in logs)
+
+
+def test_diagnose_team_check_empty_members(monkeypatch):
+    logs = []
+    monkeypatch.setattr(team, "log", lambda msg, level="INFO": logs.append((msg, level)))
+    monkeypatch.setattr(team, "check_team_min",
+                        lambda win, min_members=None: ("not_leader", "未组队（菜单中无「队伍信息」）", []))
+    status, info = team.diagnose_team_check(object())
+    assert status == "not_leader"
+    assert any("成员明细: 未识别到成员" in m for m, _ in logs)

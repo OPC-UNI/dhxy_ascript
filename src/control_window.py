@@ -825,6 +825,7 @@ class ControlWindow(WebWindow):
         self.expose(self.verify_shout)
         self.expose(self.verify_jiguan)
         self.expose(self.verify_position)
+        self.expose(self.verify_team_check)
         self.expose(self.verify_capture_diag)
         self.expose(self.verify_silent_click)
         self.expose(self.verify_silent_key)
@@ -1823,6 +1824,56 @@ class ControlWindow(WebWindow):
                 ok_js = "true" if ok else "false"
                 self.webview_instance.evaluate_js(
                     f"if(window.onJiguanVerifyResult){{window.onJiguanVerifyResult({ok_js}, {json.dumps(info)});}}")
+            except Exception:
+                pass
+
+    def verify_team_check(self):
+        """诊断-检查队伍信息按钮：走真实队伍检查逻辑（team.check_team_min
+        完整链路：面板开合 → 队长判定 → 5 区域成员扫描），检查过程会
+        真实点击组队按钮/面板开关/关闭按钮，结果输出到日志抽屉。
+        """
+        if self._tm.is_running():
+            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if self._verifying:
+            return {"status": "error", "msg": "验证进行中，请稍候"}
+        win = game.find_main_window()
+        if win is None:
+            return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
+        if not _game_window_clickable(win):
+            return {"status": "error", "msg": "游戏窗口被其他窗口遮挡，请将游戏窗口置于前台后再验证"}
+        self._verifying = True
+        threading.Thread(target=self._run_team_check_verify, args=(win,),
+                         daemon=True, name="team-check-verify").start()
+        return {"status": "success",
+                "msg": "检查已开始：队伍面板开合 → 队长判定 → 成员扫描，结果见日志"}
+
+    def _run_team_check_verify(self, win):
+        """检查队伍信息线程体：真实 check_team_min 链路，结果打印日志。"""
+        from . import team  # 延迟导入：与其余验证模块保持一致
+        try:
+            self.add_logs(["[验证] 开始检查队伍信息（组队菜单 → 队伍面板 → "
+                           "队长判定 → 成员扫描 → 关闭）..."])
+            status, info = team.diagnose_team_check(win)
+            # 检查完成即有确定性结论（ready/wait/非队长/未组队）均算通过；
+            # 「队长无法判定」等瞬态失败才算不通过
+            ok = "队长无法判定" not in info and "截图失败" not in info
+            self.add_logs([f"[验证] 队伍检查结论: {status} - {info}"])
+        except Exception as e:
+            ok, info = False, f"验证异常: {e}"
+            try:
+                self.add_logs([f"[验证] 队伍检查异常: {info}"])
+            except Exception:
+                pass
+        self._notify_team_check_verify_result(ok, info)
+        self._verifying = False
+
+    def _notify_team_check_verify_result(self, ok, info):
+        """检查队伍信息结果回推页面（诊断-检查队伍信息行的结果文案）。"""
+        if self.webview_instance:
+            try:
+                ok_js = "true" if ok else "false"
+                self.webview_instance.evaluate_js(
+                    f"if(window.onTeamCheckVerifyResult){{window.onTeamCheckVerifyResult({ok_js}, {json.dumps(info)});}}")
             except Exception:
                 pass
 
