@@ -16,8 +16,9 @@
      全部切换后仍未找到即终止任务）
      → 继续点击绿字 → 任务从追踪消失即完成一次
 3. 完成后回到云游大师领取下一次；达到次数上限、领取时出现活力值不足
-   对话框（点击「那可不行，我一会再来。」）或跟踪期间出现
-   「恭喜你完成了今天五环任务」对话框（今日五环全部完成）即结束任务进程
+   对话框（按五环设置分流：开关开启点「不差那点小钱，快给我任务吧。」
+   花钱领取继续任务；关闭点「那可不行，我一会再来。」结束任务）或跟踪
+   期间出现「恭喜你完成了今天五环任务」对话框（今日五环全部完成）即结束任务进程
 """
 import re
 import time
@@ -29,7 +30,8 @@ from . import map as game_map  # 地图操作（世界地图/小地图/位置识
 from . import task_tracker  # 任务追踪面板操作
 from .battle import is_in_battle, is_in_battle_frame  # 战斗状态判定（统一在 battle.py 中实现）
 from . import debug_overlay  # 调试信息悬浮层（任务进度更新）
-from .control_window import load_task_counts  # 任务次数上限（通用设置）
+from .control_window import (load_task_counts,                # 任务次数上限（通用设置）
+                             load_wuhuan_vitality_continue)   # 活力不足继续任务开关（五环设置）
 from .xuanshu import follow_task, _click_dialog_green_option  # 复用玄枢轶闻的任务跟踪/对话框逻辑
 from .dialog_common import (_dialog_text_present,
                             _click_screen_center,
@@ -75,7 +77,8 @@ YUNYOU_MAP_POS = (416, 368)                         # 小地图上云游大师�
 CLAIM_DIALOG_TEXT = "在我初入江湖时，有幸得到前辈大侠相助"  # 领取对话框文案
 CLAIM_DIALOG_OPTION = "我可以帮助这些人"            # 领取对话框绿色选项
 VITALITY_DIALOG_TEXT = "您的活力值在领取本次五环任务后将不足1800"  # 活力值不足对话框文案
-VITALITY_DIALOG_OPTION = "那可不行，我一会再来。"    # 活力值不足时点击的选项（点击后结束任务）
+VITALITY_DIALOG_OPTION = "那可不行，我一会再来。"    # 活力值不足时点击的选项（开关关闭：点击后结束任务）
+VITALITY_CONTINUE_OPTION = "不差那点小钱，快给我任务吧。"  # 开关开启时点击的选项（点击后领取成功继续任务）
 VITALITY_LIMIT_INFO = "活力值不足（领取本次五环任务后将不足1800）"  # 结束状态描述
 TASK_LINGQU_CHANGAN_ICON = "task_lingqu_changan.png"  # 长安云游大师的领取任务按钮（与洛阳城模板不同，实测 1.0）
 # ---- 提交装备（给与）流程 ----
@@ -327,19 +330,43 @@ def _wait_completion_dialog(win, timeout=8.0):
 def _handle_claim_blockers(win, items, img_np):
     """领取对话链中的结束条件对话框：今日两次已满/活力值不足。
 
-    活力值不足点「那可不行，我一会再来。」后结束任务（选项点击即
-    返回结束）；所有领取轮询路径（主循环/选项后窗口/兜底/校验）
+    活力值不足按五环设置分流：开关开启点「不差那点小钱，快给我
+    任务吧。」花钱领取继续任务（选项点击即领取成功，任务进入追踪
+    面板，由调用方轮询检出）；关闭则点「那可不行，我一会再来。」
+    后结束任务。所有领取轮询路径（主循环/选项后窗口/兜底/校验）
     每轮询调用，避免高性能缓存直点后选项不可见时漏检。
-    返回 (是否结束, 结束描述或 None)。
+    返回 (是否结束, 结束描述或 None, 是否已点继续选项)。
     """
     if _dialog_text_present(items, DAILY_LIMIT_TEXT):
         log(f"[五环] 检测到「{DAILY_LIMIT_TEXT}」", "SYS")
-        return True, DAILY_LIMIT_INFO
+        return True, DAILY_LIMIT_INFO, False
     if _dialog_text_present(items, VITALITY_DIALOG_TEXT):
+        if load_wuhuan_vitality_continue():
+            if _click_green_option(win, items, img_np, VITALITY_CONTINUE_OPTION):
+                log("[五环] 活力值不足，已点击「不差那点小钱，快给我任务吧。」继续任务", "SYS")
+                return False, None, True
+            return False, None, False  # 选项未渲染/OCR 未读出，下次轮询重试
         if _click_green_option(win, items, img_np, VITALITY_DIALOG_OPTION):
             log("[五环] 活力值不足，已点击「那可不行，我一会再来。」", "SYS")
-            return True, VITALITY_LIMIT_INFO
-    return False, None
+            return True, VITALITY_LIMIT_INFO, False
+    return False, None, False
+
+
+def _wait_tracked(win, timeout):
+    """轮询等待任务出现在追踪面板（入口防御点继续选项后确认领取成功）。
+
+    入口防御仅在遗留对话框场景触发，频率可接受（has_task 单次面板
+    区域 OCR 约 0.9s）；战斗中跳过（战斗画面遮挡面板）。
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if is_in_battle(win):
+            time.sleep(2.0)
+            continue
+        if task_tracker.has_task(win, WUHUAN_TITLE):
+            return True
+        time.sleep(1.0)
+    return False
 
 
 def _claim_task(win):
@@ -352,9 +379,16 @@ def _claim_task(win):
     img = win.capture(force_activate=False)
     if img is not None:
         items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
-        ended, info = _handle_claim_blockers(win, items, img_np)
+        ended, info, continued = _handle_claim_blockers(win, items, img_np)
         if ended:
             return False, info
+        if continued:
+            # 已点「不差那点小钱…」：选项点击即领取成功，任务进入
+            # 追踪面板（渲染较慢，实测 15s 压线）。轮询确认后直接
+            # 返回，不再走寻路重领——任务已在追踪时重领会误触
+            # NPC 其它对话
+            if _wait_tracked(win, CLAIM_VERIFY_TIMEOUT):
+                return True, "活力值不足已点继续领取，五环任务已领取"
     # 确保在长安：不在则世界地图点长安（打开长安小地图）
     if not game_map.is_in_map(win, CHANGAN_CITY):
         ok, info = game_map.open_mini_map_city(win, game_map.WORLD_MAP_CHANGAN_ICON, "长安")
@@ -392,7 +426,7 @@ def _claim_task(win):
             time.sleep(app_utils.HIGH_PERF_DIALOG_WAIT)
             human_click(win, pos[0], pos[1])
             log(f"[五环][高性能] 已按缓存坐标点击「{CLAIM_DIALOG_OPTION}」 ({pos[0]}, {pos[1]})", "SYS")
-    # 对话框：活力值不足则点击「那可不行，我一会再来。」结束任务；
+    # 对话框：活力值不足按设置分流（点继续/点结束，见 _handle_claim_blockers）；
     # 正常则点击「我可以帮助这些人」完成领取。
     # 每轮询截一帧 + 面板差分门 + 对话框区域 OCR（任务出现与对话框
     # 判定同帧复用；面板门复用静态结论，任务进追踪必开）
@@ -412,7 +446,7 @@ def _claim_task(win):
         if task_tracker.has_task_in(items, img_np, WUHUAN_TITLE):
             claimed = True
             break
-        ended, info = _handle_claim_blockers(win, items, img_np)
+        ended, info, _continued = _handle_claim_blockers(win, items, img_np)
         if ended:
             return False, info
         if _click_green_option(win, items, img_np, CLAIM_DIALOG_OPTION):
@@ -433,7 +467,7 @@ def _claim_task(win):
                 items = sorted(track_items + dialog_items, key=lambda x: x[1][1])
                 if task_tracker.has_task_in(items, img_np, WUHUAN_TITLE):
                     break
-                ended, info = _handle_claim_blockers(win, items, img_np)
+                ended, info, _continued = _handle_claim_blockers(win, items, img_np)
                 if ended:
                     return False, info
                 time.sleep(0.8)
@@ -455,7 +489,7 @@ def _claim_task(win):
             if task_tracker.has_task_in(items, img_np, WUHUAN_TITLE):
                 claimed = True
                 break
-            ended, info = _handle_claim_blockers(win, items, img_np)
+            ended, info, _continued = _handle_claim_blockers(win, items, img_np)
             if ended:
                 return False, info
             _click_green_option_if(win, items, img_np,
@@ -478,7 +512,7 @@ def _claim_task(win):
         items = sorted(track_items + dialog_items, key=lambda x: x[1][1])
         if task_tracker.has_task_in(items, img_np, WUHUAN_TITLE):
             break
-        ended, info = _handle_claim_blockers(win, items, img_np)
+        ended, info, _continued = _handle_claim_blockers(win, items, img_np)
         if ended:
             return False, info
         time.sleep(1.0)
@@ -721,7 +755,8 @@ def run_loop(win, cycle_interval=3.0):
     任务追踪中已有五环任务（续跑场景）时跳过购买装备与领取，直接跟踪。
     结束条件（满足其一即返回结束原因，任务随之停止）：
     1. 完成任务次数达到设置的次数上限（通用设置-任务次数）
-    2. 领取时出现活力值不足对话框（点击「那可不行，我一会再来。」后结束）
+    2. 领取时出现活力值不足对话框（开关关闭点「那可不行，我一会再来。」
+       后结束；开启点「不差那点小钱，快给我任务吧。」花钱领取继续任务）
     3. 领取时出现「互助友爱，铭记在心即可…请明天再来」对话框（今日两次已满）
     4. 跟踪期间出现「恭喜你完成了今天五环任务」对话框（今日五环全部完成）
     返回结束原因描述。

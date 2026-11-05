@@ -488,11 +488,21 @@
                 <div class="task-card-main">
                     <span class="task-order"></span>
                     <span class="task-name">五环</span>
+                        <button class="task-expand" data-mode="五环" title="五环专属设置">▾</button>
                     <div class="task-count">
                         <button class="th-btn" onclick="count('五环', -1)">−</button>
                         <span class="th-val" id="cnt-五环">2</span>
                         <button class="th-btn" onclick="count('五环', 1)">＋</button>
                     </div>
+                </div>
+                <!-- 五环设置手风琴：活力不足继续任务 -->
+                <div class="task-accordion">
+                    <div class="group-title">五环设置</div>
+                    <label class="switch-row">
+                        <input type="checkbox" id="wuhuan-vitality-continue">
+                        <span class="switch-track"></span>
+                        <span>活力不足继续任务（默认开启；开启时活力不足点「不差那点小钱，快给我任务吧。」花钱领取并继续，关闭时点「那可不行，我一会再来。」结束任务）</span>
+                    </label>
                 </div>
             </div>
             <div class="task-card" data-mode="客栈">
@@ -1092,6 +1102,7 @@
     const wubeiKuimulang = document.getElementById('wubei-kuimulang');
     const wubeiTabGroup = document.getElementById('wubei-tab-group');
     const xiuluoShout = document.getElementById('xiuluo-shout');
+    const wuhuanVitalityContinue = document.getElementById('wuhuan-vitality-continue');
     const btnVerifyXiuluo = document.getElementById('btn-verify-xiuluo');
     const verifyResultEl = document.getElementById('verify-result');
     const btnVerifyXiuluoClaim = document.getElementById('btn-verify-xiuluo-claim');
@@ -2036,6 +2047,9 @@
     xiuluoShout.addEventListener('change', () => {
         callPython('save_xiuluo_shout_switch', xiuluoShout.checked);
     });
+    wuhuanVitalityContinue.addEventListener('change', () => {
+        callPython('save_wuhuan_vitality_continue', wuhuanVitalityContinue.checked);
+    });
 
     /* ================= 全量同步设置到页面 ================= */
     // 初始化与方案切换后共用：主题、任务模式、各开关、巫医间隔、
@@ -2091,6 +2105,7 @@
         wubeiKuimulang.checked = !!(info.wubei && info.wubei.kuimulang);
         wubeiTabGroup.checked = !!(info.wubei && info.wubei.tab_group);
         xiuluoShout.checked = !!info.xiuluo_shout;
+        wuhuanVitalityContinue.checked = !!info.wuhuan_vitality_continue;
         const ths = info.thresholds || {};
         for (const key of ['char_hp', 'char_mp', 'beast_hp', 'beast_mp']) {
             const el = document.getElementById('th-' + key);

@@ -365,6 +365,23 @@ def save_xiuluo_races(races):
     return {"status": "success", "races": races}
 
 
+# ---- 五环设置：活力不足继续任务（UI 开关，KeyValue 持久化，默认开启；
+#      开启时活力值不足对话框点「不差那点小钱，快给我任务吧。」花钱
+#      领取继续任务；关闭时点「那可不行，我一会再来。」结束任务） ----
+_WUHUAN_VITALITY_CONTINUE_KEY = "wuhuan_vitality_continue"
+
+
+def load_wuhuan_vitality_continue():
+    """读取五环活力不足继续任务开关（首次默认开启）。"""
+    return bool(KeyValue.get(_WUHUAN_VITALITY_CONTINUE_KEY, True))
+
+
+def save_wuhuan_vitality_continue(on):
+    """保存五环活力不足继续任务开关，返回操作结果。"""
+    _kv_save(_WUHUAN_VITALITY_CONTINUE_KEY, bool(on))
+    return {"status": "success"}
+
+
 # 五倍设置：是否自动抢盒子（默认关闭；仅非队长时生效，队长一定抢）
 _WUBEI_HEZI_KEY = "wubei_auto_hezi"
 
@@ -770,6 +787,7 @@ class ControlWindow(WebWindow):
         self.expose(self.save_battle_action)
         self.expose(self.save_xiuluo_min)
         self.expose(self.save_xiuluo_races)
+        self.expose(self.save_wuhuan_vitality_continue)
         self.expose(self.save_xiuluo_hezi)
         self.expose(self.save_xiuluo_check_team)
         self.expose(self.save_xiuluo_auto_wuyi)
@@ -1036,6 +1054,7 @@ class ControlWindow(WebWindow):
                 "thresholds": load_thresholds(),
                 "battle": load_battle_actions(),
                 "xiuluo": load_xiuluo_settings(),
+                "wuhuan_vitality_continue": load_wuhuan_vitality_continue(),
                 "xiuluo_hezi": load_xiuluo_hezi(),
                 "xiuluo_check_team": load_xiuluo_check_team(),
                 "xiuluo_auto_wuyi": load_xiuluo_auto_wuyi(),
@@ -1111,6 +1130,10 @@ class ControlWindow(WebWindow):
     def save_xiuluo_races(self, races):
         """修罗设置变更：保存必须有的种族列表。"""
         return save_xiuluo_races(races)
+
+    def save_wuhuan_vitality_continue(self, on):
+        """五环设置变更：保存活力不足继续任务开关状态。"""
+        return save_wuhuan_vitality_continue(on)
 
     def save_xiuluo_hezi(self, on):
         """修罗设置变更：保存自动抢盒子开关状态。"""

@@ -105,19 +105,30 @@ def _setup_tray(icon_path, control_win):
 
 
 def _ensure_window_binding():
-    """多开时弹框选择要绑定的游戏窗口（单窗口/已有有效绑定时跳过）。
+    """多开时弹框选择要绑定的游戏窗口（单窗口自动绑定、已有有效绑定时跳过）。
 
     授权通过后、控制窗口创建前调用（webview 消息循环须独占一次，
     与控制窗口分属两次 start——同授权窗口路径）。绑定保存到
     KeyValue（bound_window_id = 句柄+账号 ID：句柄区分同账号多
     窗口，ID 跨重启延续匹配），find_main_window 优先返回绑定窗口
     （面板/任务子进程/悬浮层共用同一查找接缝）；绑定窗口不存在时
-    下次启动自动重新弹出。
+    下次启动自动重新弹出。单窗口同样保存绑定：后续窗口变多时按
+    绑定延续匹配、不再弹框（2026-11-05 用户反馈——此前单窗口
+    直接返回不保存，下次多开又弹框）。
     """
     from src.select_window import SelectWindow  # 弹框按需导入
     wins = game.list_main_windows()
-    if len(wins) <= 1:
-        return  # 单窗口无需选择
+    if not wins:
+        return  # 游戏未启动，无窗口可绑定
+    if len(wins) == 1:
+        if game.find_bound_window() is None and "（ID：" in wins[0].title:
+            # 单窗口自动保存绑定（无选择歧义）。仅限已登录窗口：
+            # 未登录标题无账号 ID，save_bound_window 会退用完整标题
+            # 作 ID——那是任意游戏窗口标题的公共子串，保存后多开时
+            # 会被错误匹配到枚举到的第一个窗口
+            game.save_bound_window(wins[0])
+            log(f"[绑定] 单窗口自动绑定游戏窗口: {wins[0].title}", "SYS")
+        return
     if game.find_bound_window() is not None:
         return  # 已有绑定且窗口存在
     log("[绑定] 检测到多个游戏窗口，弹出选择窗口", "SYS")

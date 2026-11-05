@@ -98,7 +98,8 @@ def _get_data():
 # 覆盖 control_window 全部设置键；默认值与各 load_* 函数首次默认相同：
 # 选中五环、次数 TASK_COUNT_DEFAULTS、摄妖香开、阈值 50、
 # 战斗 人物技能3-5/召唤兽攻击、修罗 5 人+男人男鬼、盒子/检查队伍/喊话
-# 关、高性能开、补血蓝开、清屏开、巫医开+间隔 5、法门关、悬浮关、主题浅色。
+# 关、五环活力继续开、高性能开、补血蓝开、清屏开、巫医开+间隔 5、
+# 法门关、悬浮关、主题浅色。
 def _settings_spec():
     """返回 {设置键: 默认值}（惰性取 control_window 常量）。"""
     cw = _control_window()
@@ -117,6 +118,7 @@ def _settings_spec():
         cw._XIULUO_WUYI_INTERVAL_KEY: 5,
         cw._XIULUO_SHOUT_SWITCH_KEY: False,
         cw._XIULUO_TAB_GROUP_KEY: False,
+        cw._WUHUAN_VITALITY_CONTINUE_KEY: True,
         cw._WUBEI_HEZI_KEY: False,
         cw._WUBEI_CHECK_TEAM_KEY: False,
         cw._WUBEI_SHOUT_SWITCH_KEY: False,
@@ -160,6 +162,7 @@ def _snapshot_current():
         cw._XIULUO_WUYI_INTERVAL_KEY: cw.load_xiuluo_wuyi_interval(),
         cw._XIULUO_SHOUT_SWITCH_KEY: cw.load_xiuluo_shout_switch(),
         cw._XIULUO_TAB_GROUP_KEY: cw.load_xiuluo_tab_group(),
+        cw._WUHUAN_VITALITY_CONTINUE_KEY: cw.load_wuhuan_vitality_continue(),
         cw._WUBEI_HEZI_KEY: cw.load_wubei_hezi(),
         cw._WUBEI_CHECK_TEAM_KEY: cw.load_wubei_check_team(),
         cw._WUBEI_SHOUT_SWITCH_KEY: cw.load_wubei_shout_switch(),
