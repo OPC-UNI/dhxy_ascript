@@ -12,10 +12,12 @@
    退化（5 人队实测 0.44~0.68 抖动）不达标时，以面板专属文案
    （队标/暂时离队/招募队友）OCR 兜底。不用关闭按钮判定——多个面板
    共用同款关闭按钮，不具区分性
-5. 队伍成员分析：面板打开后 OCR (300,260)-(1066,620) 区域，种族文案限定
-   男人/女人/男鬼/女鬼/男仙/女仙/男魔/女魔/男巫/女巫，
-   等级文案格式 未转102 / 1转120 / 2转120 / 3转120 / 飞升120，
-   按行配对（种族与等级对应）；成员最多 5 个、最少 1 个
+5. 队伍成员分析：以 duiwumianban 标志模板为锚点划分 5 个固定成员区域
+   （124x265，第 1 区域=队长，区域间间隔 20px），逐区域独立解析
+   （区域=一个角色，不跨区域拼信息）。空位判定优先用
+   duiwumianban_wurenquyu 无人区域模板（未提供时以区域 OCR 无
+   种族/等级文案兜底）；首空位之后不再解析，人数=首空位序号。
+   第 1 区域种族文字选中态为金色、OCR 读不到时用字形库形状匹配兜底
 6. 关闭队伍面板：面板内关闭按钮 zudui_close.png，鼠标移过去左键点击
    （ESC 实测关不掉队伍面板，勿依赖）
 7. 关闭组队菜单：菜单打开时再点一次 zudui_item.png（开关式）即消失
@@ -72,17 +74,34 @@ RACE_WORDS = ("男人", "女人", "男鬼", "女鬼", "男仙", "女仙", "男�
 TEAM_MENU_REGION = (950, 640, 1150, 830)
 TEAM_MENU_TEXTS = ("组队操作", "创建队伍", "附近队伍", "组队平台", "队伍信息")
 
-# 第 1 列种族文字固定区域（窗口相对坐标，实测多张截图一致）：
-# 该列文字在「选中态」为金色、灰度对比度低，OCR 稳定读不到；
-# 用固定坐标裁剪 + 颜色掩码提取字形，与字形库做模板匹配识别
-RACE_GLYPH_RECT = (455, 302, 478, 348)
-
-# 取消第 1 个成员选中的点击位置（窗口相对坐标）：
-# 面板打开时默认选中第 1 个成员，其种族渲染为选中态（金色）读不到；
-# 点击其他成员的位置会把选中移走，第 1 个成员恢复普通渲染（用户实测：
-# 空白处点击不能取消选中，点成员位置可以；第 2 列名字行坐标 552,505）
-DESELECT_CLICK_POS = (552, 505)
-DESELECT_SETTLE = 0.5  # 点击后等待选中状态更新
+# ---- 队伍面板成员区域（2026-11-05 重写：固定 5 区域，标志模板锚定） ----
+# 面板内固定 5 个成员区域，每个区域 = 一个角色（第 1 区域为队长），
+# 空位自后向前连续（2 人队伍第 3 区域起为空）。几何（用户提供并实测
+# 校准）：以 duiwumianban 标志模板匹配框为锚——第 1 区域左缘 = 模板
+# 右缘 +15px、顶缘 = 模板顶缘 +15px；区域宽高 124x265，间隔约 20px
+MEMBER_REGION_COUNT = 5
+MEMBER_REGION_W = 124
+MEMBER_REGION_H = 265
+MEMBER_REGION_GAP = 20
+MEMBER_REGION_OFFSET = 15
+# 种族竖排文字贴区域右缘并右溢约 12px 进间隔（OCR 框实测），
+# 区域 OCR 向右扩此宽度保证完整覆盖
+MEMBER_RACE_SPILL = 20
+# 空位（无人）区域模板：用户 2026-11-05 提供（124x263，区域裁剪去右侧
+# 溢出 7px）。真帧校准：空位区域 0.993 命中（阈值 0.8）、成员区域
+# 0.26~0.39 远低于阈值（4 人/5 人面板双向验证）。未提供时以区域 OCR
+# 兜底（无种族且无等级文案视为空位）。存在性运行时判断，缺文件自动降级
+EMPTY_REGION_ICON = "duiwumianban_wurenquyu.png"
+EMPTY_REGION_THRESHOLD = 0.8
+# 空位匹配裁剪外扩（左, 上, 右, 下）：容用户裁剪 1~2px 偏差与面板渲染
+# 漂移（实测 4 人帧：区域内 0.837、正确对齐位在区域左 1px 外 0.993）；
+# 右扩 12 覆盖种族溢出带，均不越出 20px 区域间隔
+EMPTY_REGION_PAD = (4, 4, 12, 4)
+# 第 1 区域种族文字固定位置（相对区域左上角，实测 x 116-136 / y 0-40；
+# 面板位置会漂移，窗口绝对坐标不可用）。选中态金色文字 OCR 读不到，
+# 用固定裁剪 + 颜色掩码字形库形状匹配识别（外扩 2px 容抖动，
+# 金色掩码可排除背景干扰）
+RACE_GLYPH_REL = (114, 0, 138, 41)
 # 字形匹配阈值（同字体不同颜色，掩码归一化后同种族实测 0.86+，
 # 不同种族 ≤0.31，取 0.80 留余量且不会误判）
 _RACE_GLYPH_MATCH = 0.80
@@ -427,8 +446,8 @@ def _has_duiwuxinxi(img):
     return any("队伍信息" in txt for txt, _, _ in items)
 
 
-def _is_panel_open(win):
-    """队伍面板是否已打开（面板专属信号判定）。
+def _panel_open_in(img):
+    """帧内判定队伍面板是否已打开（面板专属信号判定）。
 
     不依赖关闭按钮——多个面板共用同款关闭按钮（申请加入面板即同款），
     不具区分性。判定只看面板专属信号：
@@ -437,13 +456,17 @@ def _is_panel_open(win):
     2. 不达标时以面板专属文案（队标/暂时离队/招募队友）OCR 兜底——
        这些文案只在队伍面板内出现，申请加入面板与场景界面均无
     """
-    img = win.capture(force_activate=False)
     if img is None:
         return False
     if _best_match(img, DUIWU_MIANBAN_ICON)[0] >= _PANEL_FLAG_THRESHOLD:
         return True
     items, _ = game_map.ocr_region(img, RACE_REGION)
     return any(any(t in txt for t in _PANEL_TEXTS) for txt, _, _ in items)
+
+
+def _is_panel_open(win):
+    """队伍面板是否已打开（截帧后按 _panel_open_in 判定）。"""
+    return _panel_open_in(win.capture(force_activate=False))
 
 
 def _wait_panel(win):
@@ -485,41 +508,179 @@ def _best_match(img, icon):
     return game_map.best_match_in(img, icon)
 
 
-def _is_leader_in_frame(img):
-    """帧内队长判定：解散队伍分数达标且高于离开队伍分数（双模板比分数）。
+def _classify_leader_frame(img):
+    """帧内队伍身份三分类（双模板比分数）。
 
-    解散队伍模板与离开队伍按钮存在弱误匹配（实测 0.807 ≥ 0.8 阈值，
-    而离开按钮真实匹配 0.985），单模板判定会把队员误判为队长；
-    比分数即可区分两者，无需重裁模板。
+    解散队伍与离开队伍按钮会互误匹配（实测 0.807~0.834 ≥ 0.8 阈值），
+    必须比分数区分两者。返回 (分类, (解散分, 离开分))：
+    - leader 队长：解散分数达标且更高
+    - member 队员：离开分数达标且更高（真实队员面板离开按钮稳定高分，
+      确定性非队长判据）
+    - unclear 按钮未命中：两分数均不达标，面板内容不可读（渲染中/
+      瞬时遮挡/帧异常）——不能据此判非队长（2026-11-05 实测队长面板
+      单帧误判非队长，核心流程被永久挂起）
     """
     jiesan_score, _ = _best_match(img, JIESAN_DUIWU_ICON)
     likai_score, _ = _best_match(img, LIKAI_DUIWU_ICON)
-    return jiesan_score >= _TEMPLATE_THRESHOLD and jiesan_score > likai_score
+    if jiesan_score >= _TEMPLATE_THRESHOLD and jiesan_score > likai_score:
+        return "leader", (jiesan_score, likai_score)
+    if likai_score >= _TEMPLATE_THRESHOLD and likai_score > jiesan_score:
+        return "member", (jiesan_score, likai_score)
+    return "unclear", (jiesan_score, likai_score)
 
 
-def _parse_member_ocr(img):
-    """帧内解析队伍面板种族与等级行，按 x 分列排序（y 抖动不参与排序）。
+def _is_leader_in_frame(img):
+    """帧内队长判定（见 _classify_leader_frame，仅取 leader 分类）。"""
+    return _classify_leader_frame(img)[0] == "leader"
 
-    返回 (race_items, level_items)：race_items = [(种族, rect)]，
-    level_items = [((转生段, 等级), rect)]。
+
+_LEADER_RECHECK_TRIES = 3      # 按钮未命中复核次数（0.5s 间隔）
+_LEADER_RECHECK_INTERVAL = 0.5
+# member 分类直接采信的离开分数下限：真实离开按钮实测 ~0.985；低于
+# 0.9 可能是队长面板上离开模板的弱误匹配，须复核重判
+_MEMBER_CONFIRM_SCORE = 0.9
+
+
+def _recheck_leader_frames(win, first_scores):
+    """队长判定复核：重截重判至多 _LEADER_RECHECK_TRIES 次。
+
+    面板渲染滞后/打开动画帧/瞬时遮挡等单帧抖动会让解散/离开两按钮
+    同时失配（unclear），重截等面板稳定后命中；真实队员面板离开按钮
+    持续达标，复核即命中 member。复核帧必须面板可确认——帧内无面板
+    信号（面板已自关或面板检测误报）立即停，重截无意义。
+    返回 (分类, (解散分, 离开分))；全程不明返回 ("unclear", 末帧分数)。
     """
-    items, _ = game_map.ocr_region(img, RACE_REGION)
-    race_items = []
-    level_items = []
-    for txt, rect, score in items:
+    scores = [first_scores]
+    last_img = None
+    for _ in range(_LEADER_RECHECK_TRIES):
+        time.sleep(_LEADER_RECHECK_INTERVAL)
+        img = win.capture(force_activate=False)
+        if img is None or not _panel_open_in(img):
+            break
+        last_img = img
+        kind, s = _classify_leader_frame(img)
+        scores.append(s)
+        if kind != "unclear":
+            log(f"[组队] 队长判定复核命中 {kind}"
+                f"（解散/离开分: {'、'.join(f'{a:.2f}/{b:.2f}' for a, b in scores)}）",
+                "INFO")
+            return kind, s
+    log(f"[组队] 队长判定按钮未命中"
+        f"（解散/离开分: {'、'.join(f'{a:.2f}/{b:.2f}' for a, b in scores)}，"
+        f"阈值 {_TEMPLATE_THRESHOLD}），按无法判定处理", "WARN")
+    # 全程不明：存现场帧供人工排查（与组队按钮诊断共用 tmp_err_img.png）
+    try:
+        if last_img is not None:
+            last_img.save("tmp_err_img.png")
+    except Exception:
+        pass
+    return "unclear", scores[-1]
+
+
+def _confirm_leader_kind(win, kind, scores):
+    """首帧分类复核：unclear 或弱 member（离开分数 < _MEMBER_CONFIRM_SCORE）
+    重截重判（见 _recheck_leader_frames），返回 (分类, 分数)。"""
+    if kind == "unclear" or (kind == "member" and scores[1] < _MEMBER_CONFIRM_SCORE):
+        return _recheck_leader_frames(win, scores)
+    return kind, scores
+
+
+def _find_banner_rect(img):
+    """定位 duiwumianban 标志模板，返回 (分数, (l, t, r, b)) 或 (0.0, None)。
+
+    成员区域以模板匹配框（rect）锚定——FindImages 的 x/y 是中心，
+    rect 才是权威边界；面板位置会漂移，绝对坐标不可用。
+    """
+    results = FindImages.find_all_template(R.img(DUIWU_MIANBAN_ICON),
+                                           im_source=img,
+                                           threshold=0.0, max_res=1)
+    if not results:
+        return 0.0, None
+    r = results[0]
+    return float(r.confidence), (int(r.rect[0]), int(r.rect[1]),
+                                 int(r.rect[2]), int(r.rect[3]))
+
+
+def _member_regions(banner_rect):
+    """标志模板锚定的 5 个成员区域矩形 [(l, t, r, b), ...]（第 1 区域=队长）。"""
+    bl, bt, br, _bb = banner_rect
+    x0 = br + MEMBER_REGION_OFFSET
+    y0 = bt + MEMBER_REGION_OFFSET
+    pitch = MEMBER_REGION_W + MEMBER_REGION_GAP
+    return [(x0 + i * pitch, y0,
+             x0 + i * pitch + MEMBER_REGION_W,
+             y0 + MEMBER_REGION_H) for i in range(MEMBER_REGION_COUNT)]
+
+
+def _empty_tpl_path():
+    """空位模板文件路径；未提供时返回不存在的路径（调用方降级）。
+
+    与加载器同根（find_template_in 内部走 R.img 按 R.get_root() 解析；
+    打包后锚定解压目录/可执行文件目录，os.getcwd() 会错位）。
+    不直接调 R.img——缺文件时 R 会 print 警告，GBK 管道下抛
+    UnicodeEncodeError（2026-11-05 实测）；用 R.get_root() 拼接无此问题。
+    """
+    return pathlib.Path(R.get_root()) / "res" / "img" / EMPTY_REGION_ICON
+
+
+_EMPTY_TPL_MISSING_LOGGED = False
+
+
+def _region_is_empty(img, rect):
+    """帧内判定成员区域是否为空位（无人）。
+
+    优先空位模板（duiwumianban_wurenquyu，用户提供后自动启用）；
+    模板缺失时返回 None（调用方用 OCR 内容兜底）。
+    """
+    path = _empty_tpl_path()
+    if not path.exists():
+        global _EMPTY_TPL_MISSING_LOGGED
+        if not _EMPTY_TPL_MISSING_LOGGED:
+            _EMPTY_TPL_MISSING_LOGGED = True
+            log(f"[组队] 空位模板 {EMPTY_REGION_ICON} 未提供，空位判定用区域 OCR 兜底"
+                f"（放入 res/img 后自动启用模板判定）", "INFO")
+        return None
+    l, t, r, b = rect
+    pl, pt, pr, pb = EMPTY_REGION_PAD
+    crop = img.crop((l - pl, t - pt, r + pr, b + pb))
+    return game_map.find_template_in(crop, EMPTY_REGION_ICON,
+                                     EMPTY_REGION_THRESHOLD) is not None
+
+
+def _parse_member_region(img_np, img, rect, idx, glyphs):
+    """解析单个成员区域（区域=一个角色，不跨区域拼信息）。
+
+    返回 (种族词或None, 等级文案或None, 字形库是否新增样本)。
+    种族：OCR 竖排文字框（高≥宽，排除横向名字/帮派行误匹配）；
+    第 1 区域选中态金色文字 OCR 读不到时用字形库形状匹配兜底。
+    等级：OCR 区域内的转生等级文案。
+    """
+    l, t, r, b = rect
+    items, _ = game_map.ocr_region(img, (l, t, r + MEMBER_RACE_SPILL, b))
+    race, race_rect = None, None
+    lv = None
+    for txt, rect2, score in items:
         if score < _OCR_MIN_SCORE:
             continue
-        for w in RACE_WORDS:
-            if w in txt:
-                race_items.append((w, rect))
-                break
-        else:
+        if race is None and (rect2[3] - rect2[1]) >= (rect2[2] - rect2[0]):
+            for w in RACE_WORDS:
+                if w in txt:
+                    race, race_rect = w, rect2
+                    break
+        if lv is None and _parse_level(txt) is not None:
             lv = _parse_level(txt)
-            if lv is not None:
-                level_items.append((lv, rect))
-    race_items.sort(key=lambda it: it[1][0])
-    level_items.sort(key=lambda it: it[1][0])
-    return race_items, level_items
+            lv = f"{lv[0]}{lv[1]}"
+    changed = False
+    if race is not None:
+        changed = _harvest_glyphs(img_np, [(race, race_rect)], glyphs)
+    elif idx == 0:
+        # 第 1 区域金色选中态：固定裁剪 + 金色掩码字形库匹配兜底
+        gl_rect = (RACE_GLYPH_REL[0] + l, RACE_GLYPH_REL[1] + t,
+                   RACE_GLYPH_REL[2] + l, RACE_GLYPH_REL[3] + t)
+        matched, score = _match_glyph(img_np, glyphs, gl_rect)
+        if matched is not None and score >= _RACE_GLYPH_MATCH:
+            race = matched
+    return race, lv, changed
 
 
 # ---- 种族字形库（第 1 列金色种族文字的识别） ----
@@ -528,7 +689,7 @@ def _parse_member_ocr(img):
 # 方案：可读列的 OCR 结果自动采集 12 个种族的字形样本入库（随挂机
 # 积累），第 1 列按固定坐标裁剪 + 金色掩码提取字形，与库做形状匹配
 # 识别（颜色归一化后与颜色无关）。库在配置目录，不入 git。
-_GLYPH_SIZE = (23, 46)  # 与 RACE_GLYPH_RECT 尺寸一致
+_GLYPH_SIZE = (23, 46)  # 字形归一化目标尺寸（提取时 NEAREST 缩放）
 
 
 def _glyph_path():
@@ -581,11 +742,14 @@ def _extract_glyph(np_img, rect, gold=False):
     return np.asarray(small) > 0
 
 
-def _match_glyph(np_img, glyphs):
-    """第 1 列金色字形与库匹配，返回 (种族, 分数) 或 (None, 0.0)。"""
+def _match_glyph(np_img, glyphs, rect):
+    """金色种族字形与库匹配，返回 (种族, 分数) 或 (None, 0.0)。
+
+    rect：帧内绝对矩形（第 1 区域按 RACE_GLYPH_REL 相对区域左上角偏移）。
+    """
     if not glyphs:
         return None, 0.0
-    query = _extract_glyph(np_img, RACE_GLYPH_RECT, gold=True)
+    query = _extract_glyph(np_img, rect, gold=True)
     if query is None:
         return None, 0.0
     qf = query.astype(np.float32)
@@ -598,16 +762,6 @@ def _match_glyph(np_img, glyphs):
         if score > best_score:
             best, best_score = race, score
     return best, best_score
-
-
-def _deselect_first_member(win):
-    """点击第 2 个成员位置，取消第 1 个成员的默认选中。
-
-    第 1 个成员处于选中态时其种族文字为金色、OCR 读不到；
-    点击其他成员位置把选中移走后恢复普通渲染（用户实测）。
-    """
-    human_click(win, DESELECT_CLICK_POS[0], DESELECT_CLICK_POS[1])
-    time.sleep(DESELECT_SETTLE)
 
 
 def _harvest_glyphs(img_np, race_items, glyphs):
@@ -629,24 +783,77 @@ def _harvest_glyphs(img_np, race_items, glyphs):
     return changed
 
 
-def _count_members_frame(win, img):
-    """帧内统计队伍人数：优先按等级行计数，无等级行时退回种族数。
+def _scan_member_regions(img_np, img, regions, glyphs):
+    """逐区域扫描成员，返回 (成员列表, 人数, 是否可疑需重截)。
 
-    种族行第 1 列经常读不到（实测，原因待确认），导致种族数少于
-    实际人数；等级行稳定（实测 5 人识别 5 条）。
-    等级行缺失（面板数据尚未渲染完）时重截一次。
-    返回 (是否成功, 人数, 种族列表)。
+    成员列表 = [(种族或'?', 等级文案或None), ...]；人数 = 首空位序号
+    （区域自第 1 位起连续填充，首空位之后不再解析）。
+    空位判定：优先空位模板；模板缺失时以区域 OCR 无种族且无等级兜底。
+    可疑（返回 False）场景——面板数据渲染中：
+    - 空位模板判定某区域有人但 OCR 读不到任何信息
+    - 空位之后又出现有内容区域（与连续填充矛盾）
+    调用方应重截一帧再扫。
     """
-    race_items, level_items = _parse_member_ocr(img)
-    if not level_items:
+    members = []
+    changed = False
+    for i, rect in enumerate(regions):
+        tpl_empty = _region_is_empty(img, rect)
+        if tpl_empty is True:
+            # 模板判空：其后区域应全空，抽查下一个区域防数据渲染中
+            if i + 1 < MEMBER_REGION_COUNT and not _region_is_empty(img, regions[i + 1]):
+                return members, i, True, changed
+            return members, i, False, changed
+        race, lv, c = _parse_member_region(img_np, img, rect, i, glyphs)
+        changed = changed or c
+        if race is None and lv is None:
+            if tpl_empty is False:
+                # 模板确认有人但 OCR 读不到：数据渲染中，重截再扫
+                return members, i, True, changed
+            # 模板缺失（None）：OCR 兜底判空，抽查下一区域防漏
+            if i + 1 < MEMBER_REGION_COUNT:
+                race2, lv2, c2 = _parse_member_region(img_np, img, regions[i + 1],
+                                                      i + 1, glyphs)
+                changed = changed or c2
+                if race2 is not None or lv2 is not None:
+                    return members, i, True, changed
+            return members, i, False, changed
+        members.append((race or "?", lv))
+    return members, MEMBER_REGION_COUNT, False, changed
+
+
+def _scan_panel_img(img):
+    """帧内队伍面板扫描：返回 (成员列表, 人数, 是否成功)。
+
+    单帧完成：标志模板定位 → 5 区域划分 → 逐区域解析（空位模板优先）。
+    字形库新增样本在扫描后落盘。
+    """
+    _score, banner = _find_banner_rect(img)
+    if banner is None:
+        return [], 0, False
+    glyphs = _load_glyphs()
+    img_np = np.asarray(img)
+    members, count, suspicious, changed = _scan_member_regions(
+        img_np, img, _member_regions(banner), glyphs)
+    if changed:
+        _save_glyphs(glyphs)
+    if suspicious:
+        return members, count, False
+    return members, count, True
+
+
+def _analyze_panel_frame(win, img):
+    """帧内解析队伍面板（含一次重截兜底），返回 (是否成功, 成员列表, 人数)。
+
+    面板数据渲染滞后（空位模板判定有人但 OCR 空/空位后有内容）时
+    等 0.5s 重截一帧再扫；仍失败返回 (False, 已得成员, 已得人数)。
+    """
+    members, count, ok = _scan_panel_img(img)
+    if not ok:
         time.sleep(0.5)
         img2 = win.capture(force_activate=False)
         if img2 is not None:
-            race_items, level_items = _parse_member_ocr(img2)
-    count = len(level_items) or len(race_items)
-    if count == 0:
-        return False, 0, []
-    return True, count, [r for r, _ in race_items]
+            members, count, ok = _scan_panel_img(img2)
+    return ok, members, count
 
 
 def _close_menu(win):
@@ -769,8 +976,10 @@ def is_team_leader(win):
     """检查自己是否是队长：队伍面板打开后双模板比分数判定。
 
     流程：面板未打开则先打开（组队菜单 → 队伍信息），
-    帧内比较解散队伍/离开队伍两个模板的匹配分（见 _is_leader_in_frame，
-    单模板会把离开按钮误判为解散按钮）。检查后关闭面板。
+    帧内比较解散队伍/离开队伍两个模板的匹配分（见 _classify_leader_frame，
+    单模板会把离开按钮误判为解散按钮）；按钮未命中（unclear）时重截
+    复核——单帧抖动不算确定性非队长（2026-11-05 队长面板单帧误判
+    教训）。检查后关闭面板。
     返回 (是否队长, 描述)。
     """
     if not _is_panel_open(win):
@@ -778,74 +987,41 @@ def is_team_leader(win):
         if not ok:
             return False, info
     img = win.capture(force_activate=False)
-    is_leader = _is_leader_in_frame(img) if img is not None else False
+    if img is None:
+        close_team_panel(win)
+        return False, "窗口截图失败"
+    kind, scores = _classify_leader_frame(img)
+    kind, scores = _confirm_leader_kind(win, kind, scores)
     close_team_panel(win)
-    if is_leader:
+    if kind == "leader":
         return True, "是队长（面板可见「解散队伍」）"
-    return False, "不是队长（面板无「解散队伍」）"
+    if kind == "member":
+        return False, "不是队长（面板无「解散队伍」）"
+    return False, "队长无法判定（面板内解散/离开按钮未命中）"
 
 
 # ---- 队伍种族分析 ----
 
 def analyze_team_members(win):
-    """分析队伍成员：种族与转生等级按成员列（x 最近）配对识别。
+    """分析队伍成员：固定 5 成员区域逐区解析（区域=一个角色）。
 
     前置条件：队伍面板已打开（duiwumianban 模板可见）。
-    OCR 面板区域 (300,260)-(1066,620)：种族文案限定 RACE_WORDS
-    （竖排文字，位于成员头像旁），等级文案按
-    未转102/1转120/2转120/3转120/飞升120 格式解析（位于成员列表）。
-    配对：种族与等级都按 x 分列排序；等级多于种族时缺列按第 1 列
-    （实测第 1 列成员的种族文字 OCR 稳定读不到，原因待确认）处理，
-    其余列按序后移对齐，缺列补「?」成员占位；种族多于等级时记 WARN。
+    标志模板锚定 5 区域（124x265），每区域独立 OCR 种族/等级
+    （种族限 RACE_WORDS 竖排文字；第 1 区域金色选中态用字形库
+    形状匹配兜底）；空位模板（未提供时 OCR 内容兜底）截断。
+    不再取消第 1 成员选中——点击取消选中多余且会引入额外状态变化。
     返回 (是否成功, [(种族, 等级文案或None), ...])；识别到 0 条视为失败。
     """
     if not _is_panel_open(win):
         return False, "队伍面板未打开"
-    # 取消第 1 个成员的默认选中（选中态种族文字为金色、OCR 读不到）
-    _deselect_first_member(win)
     img = win.capture(force_activate=False)
     if img is None:
         return False, "窗口截图失败"
-    race_items, level_items = _parse_member_ocr(img)
-    if not race_items and not level_items:
-        return False, "种族区域内未识别到成员信息"
-    # 有种族但无等级：面板数据可能尚未渲染完，等待后重截一次
-    if not level_items:
-        time.sleep(0.5)
-        img2 = win.capture(force_activate=False)
-        if img2 is not None:
-            _, level_items = _parse_member_ocr(img2)
-    # 字形库：可读列样本自动入库（新种族采集）；第 1 列金色文字形状匹配识别
-    img_np = np.asarray(img)
-    glyphs = _load_glyphs()
-    if _harvest_glyphs(img_np, race_items, glyphs):
-        _save_glyphs(glyphs)
-    # 配对：等级多于种族时，缺列按第 1 列处理——实测第 1 列成员的种族
-    # 文字为金色、OCR 稳定读不到；用固定坐标裁剪 + 字形库形状匹配识别
-    # （库未积累到该种族时回退「?」），其余列按 x 序一一后移对齐
-    # （race[i] ↔ level[i+gap]）。种族多于等级（数据异常）才告警。
-    gap = len(level_items) - len(race_items)
-    gold_race = None
-    if gap > 0:
-        matched, score = _match_glyph(img_np, glyphs)
-        if matched is not None and score >= _RACE_GLYPH_MATCH:
-            gold_race = matched
-            log(f"[组队] 第 1 列金色种族字形匹配: {matched}（{score:.2f}）", "INFO")
-    members = []
-    for j in range(max(0, gap)):
-        lv = level_items[j][0]
-        race = gold_race if gold_race is not None else "?"
-        members.append((race, f"{lv[0]}{lv[1]}"))
-    for i, (race, _rect) in enumerate(race_items):
-        lv_txt = None
-        j = i + max(0, gap)
-        if j < len(level_items):
-            lv = level_items[j][0]
-            lv_txt = f"{lv[0]}{lv[1]}"
-        members.append((race, lv_txt))
-    if len(race_items) > len(level_items):
-        log(f"[组队] 种族({len(race_items)})多于等级({len(level_items)})，"
-            f"部分等级缺失，结果可能错位", "WARN")
+    ok, members, _count = _analyze_panel_frame(win, img)
+    if not ok:
+        return False, "成员区域识别失败（面板数据未渲染）"
+    if not members:
+        return False, "成员区域内未识别到成员信息"
     return True, members
 
 
@@ -865,7 +1041,7 @@ def check_team_conditions(win, min_members=None, required_races=None):
 
     流程：组队菜单 → 队伍信息 → 队伍面板 → 种族 OCR 统计 → 与条件比对，
     完成后关闭面板。
-    min_members: 人数下限（含自己，按识别到的种族数计），None 不检查
+    min_members: 人数下限（含自己，按成员区域数计），None 不检查
     required_races: 必须包含的种族列表（每个都须在队伍中出现，如
     ["男鬼", "女魔"]），None 不检查
     返回 (是否满足, 描述)。
@@ -901,8 +1077,12 @@ def check_team_min(win, min_members=None):
     直接按人数待补（wait）返回交监控循环补人，不算「队长无法判定」
     （2026-11-02 日志教训：zudui_item2 可点击打开申请面板查看队伍信息）。
     面板打不开（未组队等）与非队长均返回 not_leader。
-    队长判定为双模板比分数（防解散/离开按钮互误匹配）；人数按等级行
-    计数（种族行第 1 列读不到时也不漏）。
+    队长判定为双模板比分数（防解散/离开按钮互误匹配），按钮未命中
+    （unclear）时重截复核（见 _confirm_leader_kind）——单帧抖动不算
+    确定性非队长，返回「队长无法判定」由调用方按瞬态失败重查
+    （2026-11-05 队长面板单帧误判非队长、核心流程永久挂起的教训）；
+    人数与成员信息同帧完成（5 固定区域扫描，首空位截断），不再二次
+    截窗与取消选中。
     min_members: 人数下限（含自己），None 不检查
     返回 (状态, 描述, 成员列表)；状态：ready 可领取 / wait 队长但人数
     不足 / not_leader 非队长或队长无法判定。
@@ -926,26 +1106,27 @@ def check_team_min(win, min_members=None):
     if img is None:
         close_team_panel(win)
         return "not_leader", "窗口截图失败", []
-    if not _is_leader_in_frame(img):
-        # 非队长同样在同一面板打开内采集成员信息（悬浮层展示用）
+    kind, scores = _classify_leader_frame(img)
+    kind, scores = _confirm_leader_kind(win, kind, scores)
+    if kind != "leader":
+        # 非队长/无法判定同样在同一面板打开内采集成员信息（悬浮层展示用）
         ok2, members = analyze_team_members(win)
         close_team_panel(win)
         if not ok2:
             members = []
-        record_leader_status(False)
-        return "not_leader", "非队长（面板无「解散队伍」）", members
+        if kind == "member":
+            record_leader_status(False)
+            return "not_leader", "非队长（面板无「解散队伍」）", members
+        # unclear：按钮未命中不算确定性非队长（面板渲染滞后/瞬时遮挡），
+        # 按「队长无法判定」返回——调用方按瞬态失败间隔重查，不转保持模式
+        return "not_leader", "队长无法判定（面板内解散/离开按钮未命中）", members
     record_leader_status(True)
-    ok, count, _races = _count_members_frame(win, img)
-    # 成员详情（同一面板打开内采集，不重复开关面板；内含取消第 1 列
-    # 选中操作，种族识别结果以本次为准）
-    ok2, members = analyze_team_members(win)
+    # 人数与成员信息同帧完成（5 固定区域扫描，首空位截断；面板数据
+    # 渲染滞后时内部重截一帧兜底）——不重复开关面板、不取消选中
+    ok, members, count = _analyze_panel_frame(win, img)
     close_team_panel(win)
-    if not ok2:
-        members = []
     if not ok:
-        return "wait", "成员识别失败", members
-    # 种族/等级文案从成员分析结果取（_count_members_frame 用的是取消选中前
-    # 的帧，选中态下第 1 列种族读不到会误报「未识别到种族」）。
+        return "wait", "成员识别失败（面板数据未渲染）", members
     # 日志按成员逐条列「种族 等级」（用户 2026-10-14 要求；面板无名称列）
     member_parts = []
     for r, lv in members:
@@ -987,7 +1168,7 @@ def check_xiuluo_team(win, min_members=None):
 
     面板打不开（未组队/申请加入面板等）与非队长均返回 not_leader
     （修罗核心流程仅队长执行）。非队长不检查人数（修罗设置仅在队长生效）。
-    min_members: 人数下限（含自己，按识别到的种族数计），None 不检查
+    min_members: 人数下限（含自己，按成员区域数计），None 不检查
     返回 (状态, 描述)；状态：ready 可领取 / wait 队长但人数不足
     / not_leader 非队长或队长无法判定。
     """
