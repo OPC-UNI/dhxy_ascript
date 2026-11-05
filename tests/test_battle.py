@@ -149,7 +149,7 @@ def test_wuyi_noise_streak_degrades_and_recovers(monkeypatch):
     battle._wuyi_noise_streak = 0
     battle._wuyi_last_ocr = 0.0
     battle._wuyi_option_missing_warned = False
-    monkeypatch.setattr(battle, "last_wuyi_option_pos", None)  # 无缓存走识别路径
+    battle._wuyi_pos_by_key.clear()  # 无缓存走识别路径
     clock = [100.0]
     monkeypatch.setattr(battle.time, "time", lambda: clock[0])
     ocr_n = [0]
@@ -201,7 +201,7 @@ def test_wuyi_click_degrades_immediately(monkeypatch):
     battle._wuyi_option_missing_warned = False
     battle._wuyi_degraded = False
     battle._wuyi_noise_streak = 0
-    monkeypatch.setattr(battle, "last_wuyi_option_pos", None)  # 无缓存走识别路径
+    battle._wuyi_pos_by_key.clear()  # 无缓存走识别路径
     clicks = []
     monkeypatch.setattr(battle, "human_click",
                         lambda win, x, y: clicks.append((x, y)))
@@ -227,13 +227,18 @@ def _wuyi_img_np(green_band):
     return img_np
 
 
+WUYI_TEXT_XIULUO = "我是超级巫医，可以帮你医治召唤兽"
+WUYI_TEXT_WUBEI = "召唤兽和坐骑都是上天赐给我们的好朋友，要好好对待它们，会保佑你的。"
+
+
 def test_wuyi_click_uses_cached_position(monkeypatch):
-    """高性能直点：缓存点条带内有绿字 → 直接点击，不重新识别选项。"""
+    """高性能直点：同弹窗缓存点条带内有绿字 → 直接点击，不重新识别选项。"""
     battle._wuyi_prev_roi = None
     battle._wuyi_option_missing_warned = False
     battle._wuyi_degraded = False
     battle._wuyi_noise_streak = 0
-    monkeypatch.setattr(battle, "last_wuyi_option_pos", (534, 408))
+    battle._wuyi_pos_by_key.clear()
+    battle.record_wuyi_option_pos((534, 408), WUYI_TEXT_XIULUO)
     clicks = []
     monkeypatch.setattr(battle, "human_click",
                         lambda win, x, y: clicks.append((x, y)))
@@ -241,8 +246,8 @@ def test_wuyi_click_uses_cached_position(monkeypatch):
     img_np = _wuyi_img_np((494, 398, 574, 418))  # 缓存点周围绿字
     monkeypatch.setattr(battle.game_map, "ocr_regions",
                         lambda img, regions: (
-                            [("我是超级巫医，可以帮你医治召唤兽",
-                              [500, 300, 900, 340], 0.96)], img_np))
+                            [(WUYI_TEXT_XIULUO, [500, 300, 900, 340], 0.96)],
+                            img_np))
 
     def _boom(*a, **k):
         raise AssertionError("有缓存不应再识别选项")
@@ -252,27 +257,84 @@ def test_wuyi_click_uses_cached_position(monkeypatch):
     assert clicks == [(534, 408)]
 
 
-def test_wuyi_click_cache_mismatch_falls_back_to_recognition(monkeypatch):
-    """两种巫医弹窗选项位置不同：缓存点条带无绿字 → 走识别流程。"""
+def test_wuyi_click_cross_dialog_cache_not_reused(monkeypatch):
+    """不同弹窗（不同文案）缓存互不复用：五倍弹窗不得直点修罗缓存坐标
+    （2026-11-05 14:01:35 五倍直点修罗 (534,410) 教训）。"""
     battle._wuyi_prev_roi = None
     battle._wuyi_option_missing_warned = False
     battle._wuyi_degraded = False
     battle._wuyi_noise_streak = 0
-    monkeypatch.setattr(battle, "last_wuyi_option_pos", (650, 420))  # 受伤弹窗缓存
+    battle._wuyi_pos_by_key.clear()
+    battle.record_wuyi_option_pos((534, 410), WUYI_TEXT_XIULUO)  # 修罗弹窗缓存
     clicks = []
     monkeypatch.setattr(battle, "human_click",
                         lambda win, x, y: clicks.append((x, y)))
     monkeypatch.setattr(battle, "move_away", lambda win: None)
-    img_np = _wuyi_img_np((494, 398, 574, 418))  # 当前 NPC 弹窗：绿字在另一位置
+    img_np = _wuyi_img_np((610, 410, 690, 430))  # 五倍选项条带（另一位置）
     monkeypatch.setattr(battle.game_map, "ocr_regions",
                         lambda img, regions: (
-                            [("我是超级巫医，可以帮你医治召唤兽",
-                              [500, 300, 900, 340], 0.96)], img_np))
+                            [(WUYI_TEXT_WUBEI, [500, 300, 900, 340], 0.96)],
+                            img_np))
     monkeypatch.setattr(battle, "_find_wuyi_option",
-                        lambda items, np_img: (534, 408))
+                        lambda items, np_img: (650, 420))
     assert battle._handle_wuyi_dialog(object(), img=_make_noisy_pil(1)) is True
-    assert clicks == [(534, 408)]               # 识别结果被点击
-    assert battle.last_wuyi_option_pos == (534, 408)  # 缓存被刷新
+    assert clicks == [(650, 420)]               # 走识别流程，未复用修罗坐标
+    assert battle.last_wuyi_option_pos == (650, 420)  # 全局最新坐标已刷新
+    # 分键缓存：五倍键已建立、修罗键未被覆盖
+    assert battle._wuyi_pos_by_key[battle._wuyi_cache_key(WUYI_TEXT_WUBEI)] \
+        == (650, 420)
+    assert battle._wuyi_pos_by_key[battle._wuyi_cache_key(WUYI_TEXT_XIULUO)] \
+        == (534, 410)
+
+
+def test_wuyi_cache_keyed_by_text_and_mode(monkeypatch):
+    """缓存按（任务模式, 命中文案）分键：模式或文案不同均不得命中。"""
+    battle._wuyi_pos_by_key.clear()
+    monkeypatch.setattr(battle, "current_task_mode", lambda: "修罗")
+    battle.record_wuyi_option_pos((534, 408), WUYI_TEXT_XIULUO)
+    monkeypatch.setattr(battle, "current_task_mode", lambda: "五倍")
+    assert battle._wuyi_cached_pt(
+        _wuyi_img_np((494, 398, 574, 418)), WUYI_TEXT_XIULUO) is None  # 模式不同
+    assert battle._wuyi_cached_pt(
+        _wuyi_img_np((494, 398, 574, 418)), WUYI_TEXT_WUBEI) is None    # 文案不同
+    battle.record_wuyi_option_pos((650, 420), WUYI_TEXT_WUBEI)
+    assert battle._wuyi_cached_pt(
+        _wuyi_img_np((610, 410, 690, 430)), WUYI_TEXT_WUBEI) == (650, 420)
+    monkeypatch.setattr(battle, "current_task_mode", lambda: "修罗")
+    assert battle._wuyi_cached_pt(
+        _wuyi_img_np((494, 398, 574, 418)), WUYI_TEXT_XIULUO) == (534, 408)
+
+
+def test_record_without_text_does_not_pollute_keyed_cache(monkeypatch):
+    """无文案上下文的记录（旧调用方）只更新全局最新坐标，不进分键缓存。"""
+    battle._wuyi_pos_by_key.clear()
+    monkeypatch.setattr(battle, "current_task_mode", lambda: "修罗")
+    battle.record_wuyi_option_pos((123, 456))
+    assert battle.last_wuyi_option_pos == (123, 456)
+    assert battle._wuyi_pos_by_key == {}
+
+
+def test_wuyi_click_cache_green_check_still_guards(monkeypatch):
+    """同弹窗缓存但条带无绿字（布局漂移/误场景）→ 走识别流程。"""
+    battle._wuyi_prev_roi = None
+    battle._wuyi_option_missing_warned = False
+    battle._wuyi_degraded = False
+    battle._wuyi_noise_streak = 0
+    battle._wuyi_pos_by_key.clear()
+    battle.record_wuyi_option_pos((534, 408), WUYI_TEXT_XIULUO)
+    clicks = []
+    monkeypatch.setattr(battle, "human_click",
+                        lambda win, x, y: clicks.append((x, y)))
+    monkeypatch.setattr(battle, "move_away", lambda win: None)
+    img_np = _wuyi_img_np((610, 410, 690, 430))  # 绿字不在缓存点条带
+    monkeypatch.setattr(battle.game_map, "ocr_regions",
+                        lambda img, regions: (
+                            [(WUYI_TEXT_XIULUO, [500, 300, 900, 340], 0.96)],
+                            img_np))
+    monkeypatch.setattr(battle, "_find_wuyi_option",
+                        lambda items, np_img: (650, 420))
+    assert battle._handle_wuyi_dialog(object(), img=_make_noisy_pil(1)) is True
+    assert clicks == [(650, 420)]  # 绿字校验拦截缓存直点，识别结果被点击
 
 
 def test_handle_hezi_reuses_frame(monkeypatch):

@@ -159,6 +159,7 @@ def wuyi_chain(monkeypatch):
     monkeypatch.setattr(xiuluo, "WUYI_HANDLE_TIMEOUT", 1.0)  # 单轮即超时
     monkeypatch.setattr(xiuluo.battle, "last_wuyi_option_at", 0)
     monkeypatch.setattr(xiuluo.battle, "last_wuyi_option_pos", None)
+    monkeypatch.setattr(xiuluo.battle, "_wuyi_pos_by_key", {})  # 分键缓存隔离
     return {"clock": clock, "clicks": clicks, "logs": logs}
 
 
@@ -184,10 +185,12 @@ def test_wuyi_chain_timeout_no_click_self_clicks(wuyi_chain):
 
 
 def test_wuyi_chain_timeout_self_click_uses_cached_pos(wuyi_chain, monkeypatch):
-    """兜底自点优先用绿字校验过的缓存位置，不重新识别。"""
+    """兜底自点优先用绿字校验过的本弹窗缓存位置，不重新识别。"""
     import numpy as np
     xiuluo.battle.last_wuyi_option_at = 0
-    xiuluo.battle.last_wuyi_option_pos = (650, 420)  # 历史缓存（受伤弹窗）
+    # 本弹窗（命中文案）已缓存点击位置——经 record 走分键缓存
+    xiuluo.battle.record_wuyi_option_pos((650, 420), DIALOG_ITEMS[0][0])
+    xiuluo.battle.last_wuyi_option_at = 0  # 清点击信号（仅测分键缓存直点）
     img_np = np.zeros((831, 1378, 3), dtype=np.uint8)
     img_np[410:430, 610:690] = (0, 186, 0)  # 缓存点周围亮绿
     monkeypatch.setattr(xiuluo.game_map, "ocr_regions",

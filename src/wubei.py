@@ -588,6 +588,7 @@ def _run_wuyi_chain(win, hover_before_click=False, report_condition=False,
         option_clicked = False
         last_items = None   # 对话框打开期间的最近 OCR（超时自行点击兜底用）
         last_img_np = None
+        last_text = None    # 命中文案（分键缓存用，见 battle.record_wuyi_option_pos）
         while time.time() < deadline:
             img = win.capture(force_activate=False)
             if img is None:
@@ -595,17 +596,18 @@ def _run_wuyi_chain(win, hover_before_click=False, report_condition=False,
                 continue
             items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
             # 与 battle.py 的巫医判定同款调用（内部模糊匹配，无需预规范化）
-            has_dialog = any(_dialog_text_present(items, t) for t in WUYI_DIALOG_TEXTS)
-            if has_dialog:
+            matched_text = next((t for t in WUYI_DIALOG_TEXTS
+                                 if _dialog_text_present(items, t)), None)
+            if matched_text is not None:
                 appeared = True
-                last_items, last_img_np = items, img_np
+                last_items, last_img_np, last_text = items, img_np, matched_text
                 if not option_clicked:
                     pt_opt = _find_wuyi_option(items, img_np)
                     if pt_opt is not None:
                         human_click(win, pt_opt[0], pt_opt[1])
                         log(f"[五倍][验证] 已点击「全部医治和修复」"
                             f"@ ({pt_opt[0]}, {pt_opt[1]})", "SYS")
-                        battle.record_wuyi_option_pos(pt_opt)  # 组号队员 pass 直点复用
+                        battle.record_wuyi_option_pos(pt_opt, matched_text)  # 组号队员 pass 直点复用
                         move_away(win)  # 悬停会让选项变色，干扰绿字判定
                         option_clicked = True
                 time.sleep(1.0)
@@ -620,7 +622,7 @@ def _run_wuyi_chain(win, hover_before_click=False, report_condition=False,
                 human_click(win, pt_opt[0], pt_opt[1])
                 log(f"[五倍][验证] 等待超时，自行点击「全部医治和修复」"
                     f"@ ({pt_opt[0]}, {pt_opt[1]})", "WARN")
-                battle.record_wuyi_option_pos(pt_opt)  # 组号队员 pass 直点复用
+                battle.record_wuyi_option_pos(pt_opt, last_text)  # 组号队员 pass 直点复用
                 move_away(win)  # 悬停会让选项变色，干扰绿字判定
                 time.sleep(1.0)  # 等待点击生效
                 return True, "医治对话框超时未关闭，已自行点击选项"
@@ -637,21 +639,22 @@ def _run_wuyi_chain(win, hover_before_click=False, report_condition=False,
         time.sleep(0.5)
     # 超时：战斗线程未点击——OCR 判定对话框是否出现（最多 2 次，1s 间隔）
     items = None
-    has_dialog = False
+    matched_text = None
     for _ in range(2):
         img = win.capture(force_activate=False)
         if img is not None:
             items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
-            if any(_dialog_text_present(items, t) for t in WUYI_DIALOG_TEXTS):
-                has_dialog = True
+            matched_text = next((t for t in WUYI_DIALOG_TEXTS
+                                 if _dialog_text_present(items, t)), None)
+            if matched_text is not None:
                 break
         time.sleep(1.0)
-    if not has_dialog:
+    if matched_text is None:
         # 对话框未出现（距离不够）：本次取消，下次轮到再试
         return False, "点击巫医后未出现医治对话框（本次取消）"
     # 对话框在场但战斗线程没点上：兜底自行点击——优先绿字校验过的
-    # 缓存位置直点（两种巫医弹窗选项位置不同，见 battle._wuyi_cached_pt）
-    pt_opt = battle._wuyi_cached_pt(img_np)
+    # 本弹窗分键缓存直点（不同弹窗选项位置不同，见 battle._wuyi_cached_pt）
+    pt_opt = battle._wuyi_cached_pt(img_np, matched_text)
     if pt_opt is None and items:
         pt_opt = _find_wuyi_option(items, img_np)
     if pt_opt is None:
@@ -659,7 +662,7 @@ def _run_wuyi_chain(win, hover_before_click=False, report_condition=False,
     human_click(win, pt_opt[0], pt_opt[1])
     log(f"[五倍][巫医] 等待超时，自行点击「全部医治和修复」"
         f"@ ({pt_opt[0]}, {pt_opt[1]})", "WARN")
-    battle.record_wuyi_option_pos(pt_opt)  # 组号队员 pass 直点复用 + 位置缓存
+    battle.record_wuyi_option_pos(pt_opt, matched_text)  # 组号队员 pass 直点复用 + 分键缓存
     move_away(win)  # 悬停会让选项变色，干扰绿字判定
     time.sleep(random.uniform(1.0, 1.2))
     return True, "医治对话框超时未关闭，已自行点击选项"

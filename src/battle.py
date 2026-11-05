@@ -129,25 +129,41 @@ WUYI_OPTION_TEXT = "全部医治和修复"                    # 对话框绿色�
 # 最近一次巫医选项点击位置与时间（组号模式队员 pass 高性能直点复用：
 # 同一客户端同一对话框布局，队员选项位置与队长一致——新鲜期内
 # 切到队员直接点同一坐标，省截图+OCR；见 tab_group._wuyi_click_direct。
-# 同时是主流程选项直点的位置缓存——注意两种巫医弹窗选项位置不同
-# （NPC 服务面板 (534,408) / 召唤兽受伤弹窗 (650,420)，2026-11-04
-# 日志实测），直点前必须经 _wuyi_cached_pt 绿字校验，跨弹窗缓存不
-# 校验会点偏）
+# 同时是任务侧轮询的点击信号（xiuluo/wubei 以 last_wuyi_option_at
+# 是否晚于 NPC 点击判定战斗线程已处理），任意弹窗点击都更新。
 last_wuyi_option_pos = None
 last_wuyi_option_at = 0.0
+# 按弹窗分键的选项位置缓存（2026-11-05 五倍复用修罗坐标教训）：
+# 键 = (任务模式, 命中文案)。不同任务/不同弹窗的巫医对话框选项位置
+# 不同——修罗 NPC 面板 (534,408)、召唤兽受伤弹窗 (650,420)、五倍
+# 弹窗又不同；单全局缓存会把上一任务的坐标复用到下一任务
+# （14:01:35 五倍直点修罗缓存 (534,410) 实测），分键后各自独立学习。
+# 绿字条带校验仍保留：同键弹窗布局漂移/误命中会被校验拦截
+_wuyi_pos_by_key = {}   # (mode, text) -> (x, y)
 
 
-def _wuyi_cached_pt(img_np):
+def _wuyi_cache_key(text):
+    """巫医选项缓存键：任务模式 + 命中文案（验证模式无任务模式）。"""
+    try:
+        mode = current_task_mode()
+    except Exception:
+        mode = None
+    return (mode, text)
+
+
+def _wuyi_cached_pt(img_np, text=None):
     """缓存选项位置的绿字校验：通过返回缓存点，否则 None（走识别流程）。
 
+    text：当前对话框命中的文案（缓存键组成，见 _wuyi_cache_key）；
     缓存点周围 ±40x±10 条带内须存在亮绿文字（选项绿字/下划线，
-    G≥150）才直点——两种巫医弹窗的选项条带互不重叠（实测 NPC 服务
-    面板选项 x≈490-580 / 受伤弹窗 x≈590-710），校验可区分弹窗类型；
-    不通过时走完整识别（识别成功后 record_wuyi_option_pos 刷新缓存）。
+    G≥150）才直点——不通过时走完整识别（识别成功后
+    record_wuyi_option_pos 刷新本弹窗的缓存）。
     """
-    if last_wuyi_option_pos is None or img_np is None:
+    key = _wuyi_cache_key(text)
+    pos = _wuyi_pos_by_key.get(key)
+    if pos is None or img_np is None:
         return None
-    x, y = last_wuyi_option_pos
+    x, y = pos
     if not (0 <= x < img_np.shape[1] and 0 <= y < img_np.shape[0]):
         return None
     l, t = max(0, x - 40), max(0, y - 10)
@@ -770,7 +786,11 @@ def _handle_wuyi_dialog(win, img=None, idle=False):
     _wuyi_last_ocr = time.time()
     items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
     from .xuanshu import _dialog_text_present  # 函数内导入，避免循环依赖
-    if not any(_dialog_text_present(items, t) for t in WUYI_DIALOG_TEXTS):
+    # 命中文案用于分键缓存（不同弹窗=不同文案=不同选项位置，
+    # 2026-11-05 五倍复用修罗坐标教训）与点击日志标识
+    matched_text = next((t for t in WUYI_DIALOG_TEXTS
+                         if _dialog_text_present(items, t)), None)
+    if matched_text is None:
         _wuyi_option_missing_warned = False
         # 空检计数：仅空闲检查累计（窗口期检查不受降级约束，
         # 也不应被窗口期空检喂满降级）
@@ -785,13 +805,13 @@ def _handle_wuyi_dialog(win, img=None, idle=False):
     # 重试路径本就绕过降级门；若点击成功，下方点击路径立即再降级
     _wuyi_noise_streak = 0
     _wuyi_degraded = False
-    # 高性能直点（用户 2026-11-04 确认：弹窗在窗口上位置不变）：缓存
-    # 位置经绿字条带校验后直接点击，省绿字定位与 2x 放大 OCR（选项
-    # 小字原尺寸常漏检，放大识别慢且偶发「未识别到选项」告警）。
-    # 注意两种巫医弹窗选项位置不同（NPC 服务面板 (534,408) / 召唤兽
-    # 受伤弹窗 (650,420)，2026-11-04 日志实测）——缓存必须带校验，
-    # 校验不过走完整识别流程（识别成功后刷新缓存）
-    pt = _wuyi_cached_pt(img_np)
+    # 高性能直点（用户 2026-11-04 确认：弹窗在窗口上位置不变）：本弹窗
+    # 分键缓存位置经绿字条带校验后直接点击，省绿字定位与 2x 放大 OCR
+    # （选项小字原尺寸常漏检，放大识别慢且偶发「未识别到选项」告警）。
+    # 不同弹窗选项位置不同（修罗 NPC 面板 (534,408) / 受伤弹窗
+    # (650,420) / 五倍弹窗各异）——缓存按 (任务模式, 文案) 分键，
+    # 另带绿字校验，校验不过走完整识别流程（识别成功后刷新本键缓存）
+    pt = _wuyi_cached_pt(img_np, matched_text)
     if pt is None:
         pt = _find_wuyi_option(items, img_np)
     if pt is None:
@@ -811,8 +831,9 @@ def _handle_wuyi_dialog(win, img=None, idle=False):
             _wuyi_option_missing_warned = True
         return False
     human_click(win, pt[0], pt[1])
-    log(f"[战斗] 巫医对话框：已点击「全部医治和修复」 @ ({pt[0]},{pt[1]})", "SYS")
-    record_wuyi_option_pos(pt)  # 组号模式队员 pass 高性能直点复用坐标
+    log(f"[战斗] 巫医对话框：已点击「全部医治和修复」 @ ({pt[0]},{pt[1]})"
+        f"（弹窗: {matched_text[:6]}…）", "SYS")
+    record_wuyi_option_pos(pt, matched_text)  # 组号队员 pass 直点复用 + 分键缓存
     move_away(win)  # 移走鼠标：悬停会让选项变色（切队员 Tab 后干扰绿字判定）
     _wuyi_option_missing_warned = False
     # 点击成功即降级：刚治疗完，下次巫医弹窗只可能来自下一场战斗结束
@@ -863,16 +884,22 @@ def _auto_state_at(img, pos):
     return None
 
 
-def record_wuyi_option_pos(pt):
+def record_wuyi_option_pos(pt, text=None):
     """记录巫医选项点击位置与时间（组号模式队员 pass 高性能直点复用）。
 
     队长侧每次点击「全部医治和修复」（战斗线程/验证/超时兜底）后
     调用：同一客户端同一对话框布局，队员 Tab 的选项位置与队长一致，
     新鲜期内（tab_group.WUYI_POS_FRESH）队员 pass 直接点同一坐标。
+
+    text：对话框命中文案——同时写入按弹窗分键的缓存
+    （_wuyi_pos_by_key，见 _wuyi_cache_key）；无文案上下文（旧调用方）
+    只更新全局最新坐标，不污染分键缓存。
     """
     global last_wuyi_option_pos, last_wuyi_option_at
     last_wuyi_option_pos = (int(pt[0]), int(pt[1]))
     last_wuyi_option_at = time.time()
+    if text:
+        _wuyi_pos_by_key[_wuyi_cache_key(text)] = (int(pt[0]), int(pt[1]))
 
 
 def _wuyi_check_interval(now, last_battle_end_at, expected_at):
