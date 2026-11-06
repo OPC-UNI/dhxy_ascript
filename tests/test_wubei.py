@@ -145,3 +145,65 @@ def test_wuyi_chain_timeout_self_click_uses_cached_pos(wuyi_chain, monkeypatch):
     assert ok is True
     assert "已自行点击选项" in info
     assert wuyi_chain["clicks"] == [NPC_PT, (650, 420)]
+
+
+# ---- 黄袍怪多杀：重点链接后队员回血回蓝 pass（组号专用，2026-11-06） ----
+
+HPG_ITEMS = [("前往平顶山消灭黄袍怪", [14, 249, 185, 269], 0.99)]
+HPG_FRAME = np.zeros((831, 1378, 3), dtype=np.uint8)
+
+
+def _hpg_env(monkeypatch):
+    """装配 _handle_huangpaoguai 外部依赖：虚拟时钟、链接点击恒成功、
+    pass 调用记录、战斗共享标志恒 False（战斗结束沿由 _hpg_was_in_battle
+    直置模拟）。"""
+    clock = _FakeClock()
+    passes = []
+    monkeypatch.setattr(wubei, "time", clock)
+    monkeypatch.setattr(wubei, "battle_watch_in_battle", lambda: False)
+    monkeypatch.setattr(wubei, "_click_track_link", lambda *a, **k: True)
+    monkeypatch.setattr(wubei, "_maybe_tab_bars_pass", lambda win: passes.append(1))
+    monkeypatch.setattr(wubei, "log", lambda *a, **k: None)
+    wubei._reset_huangpaoguai_state()
+    return clock, passes
+
+
+def test_huangpaoguai_reclick_first_try_triggers_bars_pass_once(monkeypatch):
+    """战斗结束沿重点链接：首次点击成功即触发队员回血回蓝 pass，
+    重试点击（前次被结算吞掉）不再重复触发——每次战斗结束只补一次。"""
+    clock, passes = _hpg_env(monkeypatch)
+    wubei._hpg_was_in_battle = True  # 上一轮询在战斗：本轮为结束沿
+    win = object()
+    # 结束沿首轮询：重新武装待点标记（RECLICK_MIN 内不点）
+    assert wubei._handle_huangpaoguai(win, HPG_ITEMS, HPG_FRAME) is False
+    assert passes == []
+    # 首点成功 → pass 触发
+    clock.sleep(wubei.HUANGPAOGUAI_RECLICK_MIN + 0.1)
+    assert wubei._handle_huangpaoguai(win, HPG_ITEMS, HPG_FRAME) is True
+    assert passes == [1]
+    # 冷却后重试点（前次被结算吞掉）：不重复触发 pass
+    clock.sleep(wubei.HUANGPAOGUAI_RECLICK_COOLDOWN + 0.1)
+    assert wubei._handle_huangpaoguai(win, HPG_ITEMS, HPG_FRAME) is True
+    clock.sleep(wubei.HUANGPAOGUAI_RECLICK_COOLDOWN + 0.1)
+    assert wubei._handle_huangpaoguai(win, HPG_ITEMS, HPG_FRAME) is True
+    assert passes == [1]
+    # 尝试次数用尽：复位待点标记，状态干净
+    clock.sleep(wubei.HUANGPAOGUAI_RECLICK_COOLDOWN + 0.1)
+    assert wubei._handle_huangpaoguai(win, HPG_ITEMS, HPG_FRAME) is False
+    assert wubei._hpg_need_click is False
+
+
+def test_huangpaoguai_no_keyword_no_pass(monkeypatch):
+    """非黄袍怪任务（面板无关键词）：重点链接逻辑不启动，pass 不触发。"""
+    clock, passes = _hpg_env(monkeypatch)
+    wubei._hpg_was_in_battle = True
+    win = object()
+    items = [("前往平顶山消灭魔尊", [14, 249, 185, 269], 0.99)]
+    clock.sleep(wubei.HUANGPAOGUAI_RECLICK_MIN + 0.1)
+    assert wubei._handle_huangpaoguai(win, items, HPG_FRAME) is False
+    # 待点击期间关键词持续缺失：超时（一次都没点成）放弃并复位，
+    # 不点链接不 pass
+    clock.sleep(wubei.HUANGPAOGUAI_RECLICK_TIMEOUT + 0.1)
+    assert wubei._handle_huangpaoguai(win, items, HPG_FRAME) is False
+    assert passes == []
+    assert wubei._hpg_need_click is False

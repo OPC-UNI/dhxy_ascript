@@ -1491,7 +1491,9 @@ def _click_xianxingjing_walk(win, items, img_np, side="b"):
 
 # ---- 黄袍怪多杀任务（追踪「前往xxx消灭黄袍怪」；用户确认每杀之间
 #      追踪签名不变，仅最后一次杀完后任务消失——follow 不会重点链接，
-#      须在战斗结束后主动重点链接走下一处） ----
+#      须在战斗结束后主动重点链接走下一处；组号模式首次重点链接后
+#      触发队员回血回蓝 pass——多杀任务没有领取环节，这是每场战斗
+#      之间唯一的补血补蓝时机） ----
 HUANGPAOGUAI_LINK_KEYWORD = "黄袍"  # 追踪链接关键词（单字「袍」前半，抗 OCR 误读）
 # 重点链接时机：结束沿（watch 标志翻转，滞后真实战斗结束约 2s）后
 # 等最短 1s 跳过画面残留，链接在 OCR 中可见（面板已渲染）即点——
@@ -1618,6 +1620,15 @@ def _handle_huangpaoguai(win, items, img_np):
         _hpg_click_tries += 1
         if _hpg_click_tries == 1:
             log("[五倍] 黄袍怪：战斗结束后已重点追踪链接，前往下一处", "SYS")
+            # 组号模式：多杀任务每场战斗之间没有领取环节，队员回血回蓝
+            # 的唯一时机就是重点链接后的寻路期——复用寻路后 pass（与
+            # 领取后的 post_track 回调同路径：tab_group 内 60s 节流 +
+            # pass 互斥；队员在战斗中/战斗画面自动跳过血蓝检查）。
+            # 同步执行：pass 置位期间战斗线程跳过处理，屏幕在队员 Tab
+            # 上不会被误点；结束后 _for_each_member 已切回队长，后续
+            # 轮询的 FIGHT_DIALOG_OPTIONS 开打由 _handle_fight_dialog
+            # 正常接手。
+            _maybe_tab_bars_pass(win)
         else:
             log(f"[五倍] 黄袍怪：重新点击追踪链接（第 {_hpg_click_tries} 次，"
                 f"前次可能被结算画面吞掉）", "INFO")
