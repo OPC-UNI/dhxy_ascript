@@ -402,6 +402,23 @@ def save_wubei_check_team(on):
     return {"status": "success"}
 
 
+# ---- 仅战斗自动归队（UI 开关，KeyValue 持久化，默认开启；仅战斗
+#      模式不判定身份——死亡落轮回司自动点「归队」，队长身份由
+#      maybe_rejoin 自动跳过。实现见 main._battle_only_loop） ----
+_BATTLE_ONLY_AUTO_REJOIN_KEY = "battle_only_auto_rejoin"
+
+
+def load_battle_only_auto_rejoin():
+    """读取仅战斗自动归队开关（首次默认开启）。"""
+    return bool(KeyValue.get(_BATTLE_ONLY_AUTO_REJOIN_KEY, True))
+
+
+def save_battle_only_auto_rejoin(on):
+    """保存仅战斗自动归队开关，返回操作结果。"""
+    _kv_save(_BATTLE_ONLY_AUTO_REJOIN_KEY, bool(on))
+    return {"status": "success"}
+
+
 # ---- 五倍自动归队（UI 开关，KeyValue 持久化；默认开启。仅非队长
 #      生效：战斗死亡落轮回司后自动打开队伍面板点「归队」传送回队长，
 #      实现见 team.maybe_rejoin（归队按钮模板待用户提供）） ----
@@ -836,6 +853,7 @@ class ControlWindow(WebWindow):
         self.expose(self.save_wubei_hezi)
         self.expose(self.save_wubei_check_team)
         self.expose(self.save_wubei_auto_rejoin)
+        self.expose(self.save_battle_only_auto_rejoin)
         self.expose(self.save_wubei_shout_switch)
         self.expose(self.save_wubei_auto_wuyi)
         self.expose(self.save_wubei_wuyi_interval)
@@ -1117,6 +1135,7 @@ class ControlWindow(WebWindow):
                           "kuimulang": load_wubei_kuimulang_switch(),
                           "tab_group": load_wubei_tab_group()},
                 "xiuluo_shout": load_xiuluo_shout_switch(),
+                "battle_only_auto_rejoin": load_battle_only_auto_rejoin(),
                 "auto_famen": load_auto_famen(),
                 "debug_overlay": load_debug_overlay(),
                 "license": self._license_info,
@@ -1231,6 +1250,10 @@ class ControlWindow(WebWindow):
     def save_wubei_auto_rejoin(self, on):
         """五倍设置变更：保存自动归队开关状态。"""
         return save_wubei_auto_rejoin(on)
+
+    def save_battle_only_auto_rejoin(self, on):
+        """仅战斗设置变更：保存自动归队开关状态。"""
+        return save_battle_only_auto_rejoin(on)
 
     def save_wubei_shout_switch(self, on):
         """五倍设置变更：保存缺人自动喊话开关状态。"""

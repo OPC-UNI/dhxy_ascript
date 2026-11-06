@@ -714,12 +714,22 @@
                     <span class="task-order"></span>
                     <span class="task-name">仅战斗</span>
                     <span class="badge">持续运行</span>
+                    <button class="task-expand" data-mode="仅战斗" title="仅战斗专属设置">▾</button>
+                </div>
+                <!-- 仅战斗设置手风琴：自动归队 -->
+                <div class="task-accordion">
+                    <div class="group-title">仅战斗设置</div>
+                    <label class="switch-row">
+                        <input type="checkbox" id="battle-only-auto-rejoin">
+                        <span class="switch-track"></span>
+                        <span>自动归队（死亡落轮回司自动点归队，默认开启）</span>
+                    </label>
                 </div>
             </div>
                 </div>
                 <div class="task-zone-empty" id="task-available-empty" style="display:none">全部任务已选择</div>
             </div>
-            <div class="group-hint">点击「待选任务」卡片加入已选（按加入顺序排列）；「已选任务」按顺序依次执行，拖动「≡」手柄或点 ↑↓ 调整顺序，点卡片移回待选。「仅战斗」与其它任务互斥：选中后仅运行战斗监控（自动战斗/补血蓝/巫医，不做任务与队伍操作），持续运行至手动停止。「名望」暂无自动化实现，选中后自动跳过。全部完成后自动结束。</div>
+            <div class="group-hint">点击「待选任务」卡片加入已选（按加入顺序排列）；「已选任务」按顺序依次执行，拖动「≡」手柄或点 ↑↓ 调整顺序，点卡片移回待选。「仅战斗」与其它任务互斥：选中后仅运行战斗监控（自动战斗/补血蓝/巫医，不做任务操作；仅保留自动归队——死亡落轮回司自动点归队，开关默认开启），持续运行至手动停止。「名望」暂无自动化实现，选中后自动跳过。全部完成后自动结束。</div>
         </div>
         <!-- ============ 设置页（通用 + 显示与调试 + 血蓝阈值 + 战斗动作） ============ -->
         <div class="page" id="page-general">
@@ -1229,6 +1239,7 @@
     const teamKickAwayVerifyResultEl = document.getElementById('team-kick-away-verify-result');
     const btnVerifyGroupRejoin = document.getElementById('btn-verify-group-rejoin');
     const groupRejoinVerifyResultEl = document.getElementById('group-rejoin-verify-result');
+    const battleOnlyAutoRejoin = document.getElementById('battle-only-auto-rejoin');
     const btnVerifyCaptureDiag = document.getElementById('btn-verify-capture-diag');
     const captureDiagVerifyResultEl = document.getElementById('capture-diag-verify-result');
     const btnVerifySilentClick = document.getElementById('btn-verify-silent-click');
@@ -2196,6 +2207,9 @@
     wubeiAutoRejoin.addEventListener('change', () => {
         callPython('save_wubei_auto_rejoin', wubeiAutoRejoin.checked);
     });
+    battleOnlyAutoRejoin.addEventListener('change', () => {
+        callPython('save_battle_only_auto_rejoin', battleOnlyAutoRejoin.checked);
+    });
     wubeiShout.addEventListener('change', () => {
         callPython('save_wubei_shout_switch', wubeiShout.checked);
     });
@@ -2263,6 +2277,7 @@
         wubeiHezi.checked = !!(info.wubei && info.wubei.hezi);
         wubeiCheckTeam.checked = !!(info.wubei && info.wubei.check_team);
         wubeiAutoRejoin.checked = !!(info.wubei && info.wubei.auto_rejoin);
+        battleOnlyAutoRejoin.checked = !!info.battle_only_auto_rejoin;
         wubeiShout.checked = !!(info.wubei && info.wubei.shout);
         wubeiAutoWuyi.checked = !!(info.wubei && info.wubei.auto_wuyi);
         if (info.wubei && info.wubei.wuyi_interval) {

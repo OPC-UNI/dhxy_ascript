@@ -59,7 +59,8 @@ from src.control_window import (ControlWindow, bound_short_label,
                                 load_high_perf,
                                 load_auto_refill,
                                 load_clear_screen,
-                                load_silent_mode)  # 网页控制窗口（启动/停止/重置、配置持久化）
+                                load_silent_mode,
+                                load_battle_only_auto_rejoin)  # 网页控制窗口（启动/停止/重置、配置持久化）
 from src import app_utils  # 通用工具（日志、高性能模式共享设施）
 from src.app_utils import log, log_file_path  # 日志
 from src import game  # 游戏窗口操作
@@ -234,12 +235,38 @@ def _battle_only_loop(win):
         return
     log("[任务] 仅战斗模式：仅运行战斗监控线程"
         "（跳过清屏/摄妖香/队伍检查/任务循环），持续至手动停止", "SYS")
+    # 自动归队（仅战斗设置开关，默认开；用户 2026-11-07 要求）：仅战斗
+    # 不判定身份，死亡落轮回司即开队伍面板点「归队」——队长身份由
+    # maybe_rejoin 自动跳过（队长面板无归队按钮）。轮询与五倍/修罗
+    # 非队长保持循环同款：3s 位置轮询 + 归队尝试后 30s 放慢
+    auto_rejoin = load_battle_only_auto_rejoin()
+    log(f"[任务] 仅战斗自动归队: "
+        f"{'开（死亡落轮回司自动点归队回队长）' if auto_rejoin else '关'}", "SYS")
+    from src import tab_group  # 延迟导入：pass_active 抑制（与 162 行同款）
     battle_thread = threading.Thread(target=battle.watch_loop,
                                      args=(win,), daemon=True,
                                      name="battle-watch")
     battle_thread.start()
+    next_rejoin_at = 0.0
     while battle_thread.is_alive():  # 驻留直至停止或战斗线程退出
-        time.sleep(5)
+        time.sleep(1)
+        if not auto_rejoin or tab_group.pass_active:
+            continue
+        now = time.time()
+        if now < next_rejoin_at:
+            continue
+        next_rejoin_at = now + team.REJOIN_POLL_INTERVAL
+        # 战斗判定只在轮询到期时执行（is_in_battle 是截窗+模板匹配）
+        if battle.is_in_battle(win):
+            continue
+        try:
+            handled, desc = team.maybe_rejoin(win, prefix="[仅战斗]")
+            if handled:
+                log(f"[仅战斗][归队] {desc}",
+                    "SYS" if desc.startswith("已归队") else "WARN")
+                next_rejoin_at = time.time() + team.REJOIN_RETRY_INTERVAL
+        except Exception as e:
+            log(f"[仅战斗][归队] 归队检查异常: {e}", "WARN")
     log("[任务] 战斗监控线程已退出，仅战斗任务结束", "WARN")
 
 
