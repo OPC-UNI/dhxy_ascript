@@ -70,6 +70,7 @@ from .battle import _find_wuyi_option  # 「全部医治和修复」选项定位
 from . import battle  # 巫医预期时间戳（点 NPC 后通知战斗线程切入 2s 高频检查）
 from .control_window import (load_task_counts,  # 任务次数上限
                              load_wubei_check_team,  # 五倍设置：检查队伍开关
+                             load_wubei_auto_rejoin,  # 五倍设置：自动归队开关
                              load_wubei_shout_switch,  # 五倍设置：缺人自动喊话开关
                              load_wubei_auto_wuyi,  # 五倍设置：自动巫医开关
                              load_wubei_wuyi_interval,  # 五倍设置：自动巫医间隔（轮）
@@ -2312,7 +2313,7 @@ def _check_team_ready(win):
     返回 (状态, 描述)；状态见 team.check_team_min：
     ready 可领取 / wait 人数不足 / not_leader 非队长或队长无法判定。
     """
-    status, info, members = team.check_team_min(win, min_members=5)
+    status, info, members = team.check_team_min(win, min_members=5, allow_kick=True)
     team.update_overlay_team(status, info, members)
     return status, info
 
@@ -2351,11 +2352,36 @@ def _keep_alive(win, info):
     本进程不设 wuyi_expected_at——10s 空闲节奏会在队长走远关闭对话框
     后才赶到、点击失效（2026-10-30 实测），空闲节奏提升到 2s（人物
     静止，对话框区域差分门有效，OCR 成本可控）。
+    自动归队（设置开关默认开，仅非队长生效——本保持模式即非队长）：
+    战斗中死亡会被送回轮回司，此后仍在队伍（离队状态）但脱离大部队。
+    空闲轮询位置（复用战斗结束的坐标方案），落点轮回司即走
+    team.maybe_rejoin 打开队伍面板点「归队」传送回队长；归队尝试后
+    按 REJOIN_RETRY_INTERVAL 放慢（面板开合 5~7s，防频繁开关）。
     """
     log(f"[五倍] {info}，跳过核心流程，仅保持战斗线程运行", "SYS")
     battle.wuyi_fast_idle = True
+    auto_rejoin = load_wubei_auto_rejoin()
+    log(f"[五倍] 自动归队: {'开（死亡落轮回司自动点归队回队长）' if auto_rejoin else '关'}", "SYS")
+    next_rejoin_at = 0.0
     while True:
         time.sleep(1)
+        if not auto_rejoin or tab_group.pass_active:
+            continue
+        now = time.time()
+        if now < next_rejoin_at:
+            continue
+        next_rejoin_at = now + team.REJOIN_POLL_INTERVAL
+        # 战斗判定只在轮询到期时执行（is_in_battle 是截窗+模板匹配，
+        # 每秒跑会空烧）；战斗中死亡送回轮回司必在战斗结束后
+        if is_in_battle(win):
+            continue
+        try:
+            handled, desc = team.maybe_rejoin(win, prefix="[五倍][归队]")
+            if handled:
+                log(f"[五倍][归队] {desc}", "SYS" if desc.startswith("已归队") else "WARN")
+                next_rejoin_at = time.time() + team.REJOIN_RETRY_INTERVAL
+        except Exception as e:
+            log(f"[五倍][归队] 归队检查异常: {e}", "WARN")
 
 
 def _shout_recruit(win):

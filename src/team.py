@@ -615,8 +615,8 @@ def _member_regions(banner_rect):
              y0 + MEMBER_REGION_H) for i in range(MEMBER_REGION_COUNT)]
 
 
-def _empty_tpl_path(icon=EMPTY_REGION_ICON):
-    """空位模板文件路径；未提供时返回不存在的路径（调用方降级）。
+def _tpl_path(icon):
+    """模板文件路径；未提供时返回不存在的路径（调用方降级）。
 
     与加载器同根（find_template_in 内部走 R.img 按 R.get_root() 解析；
     打包后锚定解压目录/可执行文件目录，os.getcwd() 会错位）。
@@ -624,6 +624,11 @@ def _empty_tpl_path(icon=EMPTY_REGION_ICON):
     UnicodeEncodeError（2026-11-05 实测）；用 R.get_root() 拼接无此问题。
     """
     return pathlib.Path(R.get_root()) / "res" / "img" / icon
+
+
+def _empty_tpl_path(icon=EMPTY_REGION_ICON):
+    """空位模板文件路径（见 _tpl_path）。"""
+    return _tpl_path(icon)
 
 
 _EMPTY_TPL_MISSING_LOGGED = False
@@ -1139,7 +1144,7 @@ def check_team_conditions(win, min_members=None, required_races=None):
     return True, f"队伍满足条件（{len(races)} 人: {'、'.join(races)}）"
 
 
-def check_team_min(win, min_members=None):
+def check_team_min(win, min_members=None, allow_kick=False):
     """领取前队伍检查（通用，修罗/五倍等复用）：一次打开队伍面板完成
     队长判定、人数检查与成员信息采集。
 
@@ -1154,6 +1159,10 @@ def check_team_min(win, min_members=None):
     （2026-11-05 队长面板单帧误判非队长、核心流程永久挂起的教训）；
     人数与成员信息同帧完成（5 固定区域扫描，首空位截断），不再二次
     截窗与取消选中。
+    allow_kick=True（仅任务流程传入，诊断检查不踢人）：队长且成员
+    扫描稳定时在同一面板打开内执行超时暂离请离（todo2：按名字记账、
+    超 5 分钟未归队从后往前连踢，面板不关闭），踢人后重扫成员——
+    人数判定用最新值。
     min_members: 人数下限（含自己），None 不检查
     返回 (状态, 描述, 成员列表)；状态：ready 可领取 / wait 队长但人数
     不足 / not_leader 非队长或队长无法判定。
@@ -1195,6 +1204,23 @@ def check_team_min(win, min_members=None):
     # 人数与成员信息同帧完成（5 固定区域扫描，首空位截断；面板数据
     # 渲染滞后时内部重截一帧兜底）——不重复开关面板、不取消选中
     ok, members, count = _analyze_panel_frame(win, img)
+    if allow_kick and ok:
+        # todo2 超时暂离请离：面板保持打开按名字记账连踢（从后往前），
+        # 踢人后重扫成员——人数判定用最新值（请离后区域平移）
+        kicked, kick_info = _auto_kick_overdue(win)
+        if kicked:
+            log(f"[组队] {kick_info}", "SYS")
+        elif kick_info:
+            log(f"[组队] 超时请离未完成: {kick_info}", "WARN")
+        if kicked:
+            img2 = win.capture(force_activate=False)
+            if img2 is None:
+                close_team_panel(win)
+                return "wait", f"{kick_info}（请离后截图失败）", members
+            ok, members, count = _analyze_panel_frame(win, img2)
+            if not ok:
+                close_team_panel(win)
+                return "wait", "成员识别失败（请离后面板数据未渲染）", members
     close_team_panel(win)
     if not ok:
         return "wait", "成员识别失败（面板数据未渲染）", members
@@ -1298,6 +1324,485 @@ def self_test(win):
         log(f"[组队] 4.关闭面板: {ok} - {info}", "SYS")
     log("[组队] ========== 实机自检结束 ==========", "SYS")
     return "实机自检完成"
+
+
+# ---- 自动归队（todo1：非队长战斗死亡落轮回司 → 队伍面板点「归队」） ----
+# 用户 2026-11-06 确认机制：战斗中死亡会被自动送回轮回司，此时仍在
+# 队伍（面板显示离队状态），队员面板有「归队」按钮，点击即传送到
+# 队长身边恢复跟队。死亡判定复用战斗结束的坐标方案（read_map_position
+# 地名精确匹配轮回司），无需额外战斗状态判定——调用方保证非战斗时调用。
+LUNHUISI = "轮回司"                       # 死亡复活落点地图名（位置 OCR 地名精确匹配）
+ZUDUI_GUIDUI_ICON = "zudui_guidui.png"   # 队伍面板「回归队伍」归队按钮模板（用户
+                                         # 2026-11-06 提供，90x19 裁剪，OCR 文案
+                                         # 「回归队伍」1.00；缺失时归队降级为告警
+                                         # 跳过，绝不误点击）
+# 归队按钮匹配阈值（用户要求 0.9+；2026-11-06 实测校准：目标帧贴入
+# 原图 1.000 唯一命中、非目标帧（离开队伍/解散队伍按钮，同含「队伍」
+# 文案样式相近）最佳分 0.825、纯噪声帧 0.134——0.9 恰好把 1.000 与
+# 0.825 分开，不得放宽到通用 0.8（会把离开队伍按钮误判成归队按钮）
+GUIDUI_THRESHOLD = 0.9
+REJOIN_POS_INTERVAL = 1.0   # 轮回司判定轮询间隔（秒，连续 2 轮确认防 OCR 单次误读）
+REJOIN_POS_POLLS = 2        # 轮回司判定连续轮询数
+REJOIN_CLICK_TIMEOUT = 8    # 点击归队后等待位置离开轮回司的超时（秒，传送加载）
+REJOIN_POLL_INTERVAL = 3.0  # 调用方（非队长保持循环）空闲轮询节奏（秒）
+REJOIN_RETRY_INTERVAL = 30  # 归队尝试后（无论成败）的调用方放慢间隔（秒）：
+                            # 防频繁开关队伍面板（面板开合 5~7s，且遮挡画面）
+
+_guidui_missing_logged = False  # 归队模板缺失告警（每进程一次）
+
+
+def is_in_lunhuisi(pos):
+    """位置是否在轮回司（死亡复活落点，地名精确匹配）。
+
+    pos：read_map_position 结果 (地名, x, y)；None 按不在处理。
+    """
+    return pos is not None and pos[0].strip() == LUNHUISI
+
+
+def _at_lunhuisi(win):
+    """连续 REJOIN_POS_POLLS 轮询确认落点在轮回司（防位置 OCR 单次误读）。
+
+    每轮询只截一帧，位置 OCR 同帧复用。第一轮未命中即返回（热路径
+    免第二轮空转——不在轮回司是常态）。返回 (是否在轮回司, 描述)。
+    """
+    img = win.capture(force_activate=False)
+    if img is None or not is_in_lunhuisi(game_map.read_map_position(win, img=img)):
+        return False, "不在轮回司"
+    for _ in range(REJOIN_POS_POLLS - 1):
+        time.sleep(REJOIN_POS_INTERVAL)
+        img = win.capture(force_activate=False)
+        if img is None or not is_in_lunhuisi(game_map.read_map_position(win, img=img)):
+            return False, "不在轮回司"
+    return True, "在轮回司"
+
+
+def maybe_rejoin(win, prefix="[组队]"):
+    """非队长死亡归队检查（todo1）：落点在轮回司即战斗中死亡被送回
+    （离队状态），打开队伍面板点「归队」按钮传送回队长身边。
+
+    前置：调用方保证非战斗状态（battle 模块反向依赖 team，战斗判定
+    由调用方完成）。轮回司判定复用战斗结束的坐标方案（地名精确匹配，
+    每轮询只截一帧、位置 OCR 与模板匹配同帧复用）。
+
+    返回 (是否处理, 描述)：
+    - (False, ...)：不在轮回司，本轮无需归队，调用方按正常节奏轮询
+    - (True, ...)：已尝试归队（成功/失败/无归队条件，如已不在队伍或
+      队长身份无归队按钮），调用方按 REJOIN_RETRY_INTERVAL 放慢重查
+    """
+    global _guidui_missing_logged
+    ok, at = _at_lunhuisi(win)
+    if not ok:
+        return False, at
+    ok, info = open_team_panel(win)
+    if not ok:
+        # 未组队（被请离/队伍解散）同样打不开面板：无法归队，交由
+        # 调用方按间隔重查（可能被重新邀请入队）
+        return True, f"归队失败: {info}"
+    try:
+        img = win.capture(force_activate=False)
+        if img is None:
+            return True, "归队失败: 队伍面板截图失败"
+        kind, scores = _classify_leader_frame(img)
+        kind, scores = _confirm_leader_kind(win, kind, scores)
+        if kind != "member":
+            # 队长面板无归队按钮（队长即归队目标，自身无需归队）；
+            # unclear 是瞬态（渲染滞后/遮挡），不误点击，下轮重查
+            if kind == "leader":
+                return True, "归队跳过: 队长身份（面板无归队按钮）"
+            return True, "归队失败: 队伍身份无法判定（面板按钮未命中）"
+        if not _tpl_path(ZUDUI_GUIDUI_ICON).exists():
+            if not _guidui_missing_logged:
+                _guidui_missing_logged = True
+                log(f"[组队] 归队按钮模板未提供（待补充 res/img/{ZUDUI_GUIDUI_ICON}），"
+                    f"归队降级为告警跳过", "WARN")
+            return True, "归队按钮模板未提供（待补充 zudui_guidui.png）"
+        pt = game_map.find_template_in(img, ZUDUI_GUIDUI_ICON, GUIDUI_THRESHOLD)
+        if pt is None:
+            return True, "归队失败: 队伍面板中未找到归队按钮（zudui_guidui）"
+        human_click(win, pt[0], pt[1])
+        log(f"{prefix} 已点击归队按钮 @ ({pt[0]},{pt[1]})，等待传送回队长", "SYS")
+        # 点击后校验：位置离开轮回司即归队成功；传送加载期位置不可读
+        # 按加载中继续等待。每轮询只截一帧，位置 OCR 同帧复用
+        deadline = time.time() + REJOIN_CLICK_TIMEOUT
+        while time.time() < deadline:
+            img2 = win.capture(force_activate=False)
+            if img2 is None:
+                time.sleep(REJOIN_POS_INTERVAL)
+                continue
+            pos2 = game_map.read_map_position(win, img=img2)
+            if pos2 is not None and not is_in_lunhuisi(pos2):
+                return True, (f"已归队（当前位置: {pos2[0]}[{pos2[1]},{pos2[2]}]）")
+            time.sleep(REJOIN_POS_INTERVAL)
+        return True, "归队未确认: 点击归队后位置仍在轮回司（可能冷却/未生效，稍后重试）"
+    finally:
+        close_team_panel(win)
+
+
+# ---- 暂离成员检测与请离（todo2：队长侧离队成员识别与请离） ----
+# 用户 2026-11-07 确认交互：暂离成员卡在队伍面板对应成员区域内显示
+# 「召回」标记（32x15，找到即该队员暂离）；队长点选该成员卡后出现
+# 「请离队伍」按钮（88x21），点击即请离。识别链路先落诊断按钮，
+# 由用户实测反馈后再接入任务流程（5 分钟未归队自动请离）。
+ZHAOHUI_ICON = "duiwumianban_zhaohui.png"   # 队员卡「召回」标记（暂离成员卡出现，
+                                            # 区域内匹配，位置随面板渲染不固定）
+ZUDUI_QINGLI_ICON = "duiwumian_qingliduiwu.png"  # 「请离队伍」按钮（点选暂离成员后出现）
+ZHAOHUI_THRESHOLD = 0.9   # 召回标记阈值（实测校准 2026-11-07：目标 1.000 /
+                          # 其他按钮帧 0.271 / 纯噪声 0.216）
+QINGLI_THRESHOLD = 0.9    # 请离按钮阈值（实测校准 2026-11-07：目标 1.000 /
+                          # 归队+离开+解散按钮帧 0.821 / 纯噪声 0.115——
+                          # 0.9 恰好把请离与回归队伍按钮（交叉 0.821/0.773）
+                          # 分开，不得放宽到通用 0.8）
+AWAY_REGION_PAD = (4, 4, 4, 4)   # 召回标记区域搜索外扩（标记在卡内位置未标定，
+                                 # 外扩容 1~2px 裁剪/渲染漂移，不越区域间隔）
+QINGLI_WAIT_TRIES = 6       # 点选成员后等待请离按钮出现（0.5s 一次）
+KICK_VERIFY_WAIT = 1.5      # 点击请离后等待面板数据刷新的时间（秒）
+# 召回扫描的面板标志最低分门：_find_banner_rect 阈值 0.0 会取噪声帧的
+# 垃圾最优匹配（实测噪声 0.069~0.071），不门控会把垃圾矩形当面板区域
+# 扫出「无暂离成员」假结论；真实面板标志随成员数退化最低 0.436
+# （5 人队实测），0.3 门留足余量（2026-11-07 校准）
+_BANNER_MIN_SCORE = 0.3
+
+
+# 名字行与等级行的最大间距（像素）：实测布局（用户 2026-11-07 截图
+# 校准）名字行底与等级行顶相邻（间距 ~2px），称谓与等级间距 ~27px——
+# 名字行 OCR 漏检时宁可返回 None 也不把称谓误当名字
+_MEMBER_NAME_LEVEL_GAP = 12
+
+
+def _member_name(items):
+    """成员区域 OCR 行中取昵称：等级行的上一行（名字紧贴等级上方）。
+
+    卡内实测布局（用户 2026-11-07 截图，从上到下）：召回标记（顶部，
+    OCR 常读成「招回」）、种族（右缘竖排）、称谓信息、名字、等级
+    （如「飞升159级」）。称谓在名字上方但不取（用户确认不需要）；
+    名字与等级行相邻，取等级行上方最近的一行且间距 ≤
+    _MEMBER_NAME_LEVEL_GAP——名字行漏检时返回 None（报告端降级只
+    显示第 X 名），不把称谓/其他行误当名字。等级行未检出返回 None
+    （无锚点不猜）。
+    """
+    horiz = []
+    level_top = None
+    for txt, rect, score in items:
+        if score < _OCR_MIN_SCORE:
+            continue
+        w, h = rect[2] - rect[0], rect[3] - rect[1]
+        if w < h:
+            continue  # 竖排种族行（右缘）
+        if "召回" in txt or "招回" in txt:
+            continue  # 暂离标记自身文案（顶部，OCR 常读成「招回」）
+        if _parse_level(txt) is not None:
+            if level_top is None or rect[1] < level_top:
+                level_top = rect[1]
+            continue  # 等级行：名字行锚点
+        name = txt.strip()
+        if name:
+            horiz.append((name, rect))
+    if level_top is None or not horiz:
+        return None
+    above = [(n, r) for n, r in horiz if r[1] < level_top]
+    if not above:
+        return None
+    name, rect = max(above, key=lambda it: it[1][1])  # y 最大 = 最靠近等级行
+    if level_top - rect[3] > _MEMBER_NAME_LEVEL_GAP:
+        return None  # 等级上方最近的是称谓（间距 ~27px），不是名字
+    return name
+
+
+def _member_race(items):
+    """成员区域 OCR 行中取种族（右缘竖排文字，RACE_WORDS 之一）。
+
+    与 _parse_member_region 同判定（竖排框高≥宽 + 种族词表）。
+    返回种族词或 None。与 _member_name 共用同一份区域 OCR 结果
+    （_away_member_indices 只对召回命中区域 OCR 一次）。
+    """
+    for txt, rect, score in items:
+        if score < _OCR_MIN_SCORE:
+            continue
+        if (rect[3] - rect[1]) < (rect[2] - rect[0]):
+            continue  # 横向行
+        for w in RACE_WORDS:
+            if w in txt:
+                return w
+    return None
+
+
+def _away_member_indices(img):
+    """帧内扫描暂离成员：逐成员区域找「召回」标记，命中区域 OCR 提取
+    昵称与种族。
+
+    成员区域以 duiwumianban 标志锚定（面板位置会漂移）；每个区域独立
+    裁剪 + AWAY_REGION_PAD 外扩搜索。召回标记出现即该队员暂离
+    （用户确认语义；区域 i 对应第 i+1 名成员，第 1 区域为队长）。
+    只对标记命中的区域做 OCR（非暂离区域不付 OCR 成本），昵称与种族
+    共用同一份 OCR 结果。
+    返回 (暂离列表, 原因或None)：暂离列表 = [(区域序号, 昵称或None,
+    种族或None), ...]——「名字模糊+种族精确」复合身份是 5 分钟未归队
+    跟踪的记账身份（成员区域会随请离/加入整体平移，序号不可作身份）；
+    标志未命中返回 (None, 原因)。
+    """
+    score, banner = _find_banner_rect(img)
+    if banner is None or score < _BANNER_MIN_SCORE:
+        # _find_banner_rect 阈值 0.0 在噪声帧也会返回垃圾最优匹配
+        # （实测 0.07 档），按最低分门排除（真实面板 ≥0.436，见常量注释）
+        return None, "标志模板未命中（面板不可见或未渲染）"
+    away = []
+    for i, rect in enumerate(_member_regions(banner)):
+        l, t, r, b = rect
+        pl, pt, pr, pb = AWAY_REGION_PAD
+        crop = img.crop((l - pl, t - pt, r + pr, b + pb))
+        if game_map.find_template_in(crop, ZHAOHUI_ICON, ZHAOHUI_THRESHOLD) is None:
+            continue
+        # 命中区域 OCR 提取昵称与种族（同帧同区域一次 OCR，含右侧溢出带）
+        items, _ = game_map.ocr_region(img, (l, t, r + MEMBER_RACE_SPILL, b))
+        away.append((i, _member_name(items), _member_race(items)))
+    return away, None
+
+
+def scan_away_members(win):
+    """检查队伍暂离（诊断按钮/队长监控共用）：打开队伍面板扫描召回标记
+    并提取昵称与种族。
+
+    流程：确保面板打开 → 帧内 _away_member_indices → 关闭面板。
+    返回 (是否成功, 暂离成员列表, 描述)；暂离成员列表 =
+    [(序号, 昵称或None, 种族或None), ...]，序号从 1 起（面板第 1 区域
+    为队长）。无暂离成员也是成功（识别链路正常）。
+    """
+    if not _is_panel_open(win):
+        ok, info = open_team_panel(win)
+        if not ok:
+            return False, [], info
+    img = win.capture(force_activate=False)
+    if img is None:
+        close_team_panel(win)
+        return False, [], "窗口截图失败"
+    away, reason = _away_member_indices(img)
+    close_team_panel(win)
+    if away is None:
+        return False, [], reason or "召回标记扫描失败"
+    if not away:
+        return True, [], "无暂离成员"
+    parts = [f"第 {i + 1} 名" + (f"「{name}」" if name else "")
+             + (f"({race})" if race else "")
+             for i, name, race in away]
+    return True, away, "暂离成员: " + "、".join(parts)
+
+
+# ---- 暂离超时自动请离（todo2 任务流程接入：超过 5 分钟未归队请离） ----
+# 用户 2026-11-07 定稿逻辑：
+# 1. 5 分钟阈值——从「识别到该成员暂离」起算（按「名字模糊+种族精确」
+#    复合身份记账；成员区域随请离/加入整体平移，序号不可作身份）
+# 2. 队伍检查（领取被拒后每 10s 一次）时若该身份仍在暂离名单且超时
+#    即请离；归队/被请离/离队则从账本移除
+# 3. 同一次检查中多人超时：从后往前请离（后位成员先请离，前位区域
+#    序号不随移除平移，一次面板打开内可连踢，无需关闭面板）
+KICK_AWAY_TIMEOUT = 300     # 暂离超时阈值（秒）
+_AWAY_NAME_RATIO = 0.7      # 名字模糊匹配阈值（与申请列表 _same_applicant
+                            # 同款；「碧桃娘子/碧桃浪子」比 0.75 会命中，
+                            # 靠种族精确匹配排除——用户 2026-11-07 指定）
+
+_away_seen = {}  # (种族, 名字) → 首次识别为暂离的时间戳（任务进程内跨检查记账）
+
+
+def reset_away_tracking():
+    """清空暂离计时账本（任务进程重启自然清空；测试用）。"""
+    _away_seen.clear()
+
+
+def _away_identity_match(scan_name, scan_race, key_name, key_race):
+    """扫描身份与账本键是否同一成员：名字模糊 + 种族精确。
+
+    种族任一侧缺失（OCR 漏检）时退化为仅名字模糊匹配（保计时连续，
+    不因种族漏检重启 5 分钟）；两侧都有且不同即不是同一人
+    （「碧桃娘子 女人」与「碧桃浪子 男人」靠此区分）。
+    """
+    if not scan_name or not key_name:
+        return False
+    if scan_race is not None and key_race is not None and scan_race != key_race:
+        return False
+    return difflib.SequenceMatcher(None, scan_name, key_name).ratio() \
+        >= _AWAY_NAME_RATIO
+
+
+def _track_away(away):
+    """按「名字模糊+种族精确」复合身份记账暂离成员。
+
+    扫描身份与账本键匹配（_away_identity_match）则沿用原时间戳；
+    新身份记首次时间戳；账本中已无匹配者的移除（归队/被请离/离队）。
+    无名字成员不记账（后续检查无从匹配）。
+    """
+    cur = [(name, race) for _i, name, race in away if name]
+    for name, race in cur:
+        if not any(_away_identity_match(name, race, kr, kn)
+                   for kn, kr in _away_seen):
+            # 账本键 = (种族, 名字)，匹配参数为 (名字, 种族)——kn/kr 即
+            # 种族/名字，传参顺序必须反过来（2026-11-07 修复：传反会
+            # 拿种族比名字、永远匹配不上，计时每次重启）
+            _away_seen[(race, name)] = time.time()
+            race_txt = f"({race})" if race else ""
+            log(f"[组队] 首次识别暂离成员「{name}」{race_txt}，开始计时"
+                f"（{int(KICK_AWAY_TIMEOUT)}s 未归队自动请离）", "INFO")
+    for key in list(_away_seen):
+        kn, kr = key
+        if not any(_away_identity_match(name, race, kr, kn)
+                   for name, race in cur):
+            _away_seen.pop(key, None)
+
+
+def _overdue_away(away):
+    """本次扫描中已超时的暂离成员，按区域序号从后往前排序
+    （含名字者才可记账判定；第 1 区域队长自身永不请离）。"""
+    overdue = []
+    for i, name, race in sorted(away, key=lambda it: -it[0]):
+        if i <= 0 or not name:
+            continue
+        seen = next((v for (kn, kr), v in _away_seen.items()
+                     if _away_identity_match(name, race, kr, kn)), None)
+        if seen is not None and time.time() - seen >= KICK_AWAY_TIMEOUT:
+            overdue.append((i, name, race))
+    return overdue
+
+
+def _kick_one(win, idx, name, race, away_before):
+    """面板已打开：点选第 idx+1 名成员卡 → 请离队伍按钮 → 请离 → 校验。
+
+    校验（保守原则，宁报失败不报假成功——假成功会把身份移出账本，
+    下次扫描重新计时多等 5 分钟）：
+    - 有名字：该复合身份（名字模糊+种族精确）从重扫暂离名单消失
+      **且** 暂离总数减少才算成功（名字 OCR 单侧漏检/他人新暂离/
+      同名不同种族补位都不会误报）
+    - 无名字：仅按暂离总数减少判定
+    返回 (是否成功, 描述)。
+    """
+    img = win.capture(force_activate=False)
+    if img is None:
+        return False, "窗口截图失败"
+    score, banner = _find_banner_rect(img)
+    if banner is None or score < _BANNER_MIN_SCORE:
+        return False, "标志模板未命中（面板不可见或未渲染）"
+    rect = _member_regions(banner)[idx]
+    cx = (rect[0] + rect[2]) // 2
+    cy = (rect[1] + rect[3]) // 2
+    human_click(win, cx, cy)
+    name_txt = f"「{name}」" if name else ""
+    race_txt = f"({race})" if race else ""
+    log(f"[组队] 已点选暂离成员{name_txt}{race_txt}（第 {idx + 1} 名）"
+        f"@ ({cx},{cy})，等待请离队伍按钮", "SYS")
+    pt = None
+    for _ in range(QINGLI_WAIT_TRIES):
+        time.sleep(0.5)
+        img2 = win.capture(force_activate=False)
+        if img2 is None:
+            continue
+        pt = game_map.find_template_in(img2, ZUDUI_QINGLI_ICON, QINGLI_THRESHOLD)
+        if pt is not None:
+            break
+    if pt is None:
+        return False, (f"点选第 {idx + 1} 名成员{name_txt}{race_txt}后未出现"
+                       f"请离队伍按钮（duiwumian_qingliduiwu）")
+    human_click(win, pt[0], pt[1])
+    log(f"[组队] 已点击请离队伍按钮 @ ({pt[0]},{pt[1]})", "SYS")
+    time.sleep(KICK_VERIFY_WAIT)
+    img3 = win.capture(force_activate=False)
+    if img3 is None:
+        return False, "点击请离后截图失败（未确认是否生效）"
+    away2, _reason2 = _away_member_indices(img3)
+    if away2 is None:
+        return False, "点击请离后面板不可见（可能已自关），请人工确认是否生效"
+    still_away = any(_away_identity_match(name, race, n2, r2)
+                     for _i, n2, r2 in away2) if name is not None else None
+    count_down = len(away2) < len(away_before)
+    if name is not None:
+        if not still_away and count_down:
+            return True, f"已请离暂离成员「{name}」{race_txt}"
+        return False, (f"点击请离后「{name}」{race_txt}仍在暂离名单或人数未减少"
+                       f"（未生效或需确认对话框，请人工核对）")
+    if count_down:
+        return True, f"已请离第 {idx + 1} 名暂离成员"
+    return False, (f"已点击请离队伍（第 {idx + 1} 名），暂离标记未减少"
+                   f"（未生效或需确认对话框，请人工核对）")
+
+
+def kick_away_member(win):
+    """请离一名暂离成员（诊断按钮用）：面板开合由本函数管理，点选
+    第一个暂离成员（跳过第 1 区域队长自己）。任务流程的超时连踢走
+    _auto_kick_overdue（面板保持打开）。返回 (是否成功, 描述)。
+    """
+    try:
+        if not _is_panel_open(win):
+            ok, info = open_team_panel(win)
+            if not ok:
+                return False, info
+        img = win.capture(force_activate=False)
+        if img is None:
+            return False, "窗口截图失败"
+        away, reason = _away_member_indices(img)
+        if away is None:
+            return False, reason or "召回标记扫描失败"
+        tgt = next(((i, name, race) for i, name, race in away if i > 0), None)
+        if tgt is None:
+            if away:
+                return False, "仅第 1 区域（队长）有召回标记，不能请离自己"
+            return False, "无暂离成员可请离"
+        return _kick_one(win, tgt[0], tgt[1], tgt[2], away)
+    finally:
+        close_team_panel(win)
+
+
+def _auto_kick_overdue(win):
+    """面板保持打开：循环请离已超时的暂离成员（任务流程 todo2 接入）。
+
+    每轮重截帧重扫暂离名单（成员移除后面板重渲染；从后往前请离，
+    前方成员区域不随移除平移，序号持续有效）→ 按「名字模糊+种族
+    精确」复合身份记账更新（归队/离队者移除计时）→ 超时者取序号
+    最大（最靠后）先请离 → 成功后移出账本继续下一轮；请离失败即停
+    （识别问题不盲目连踢，下轮检查 10s 后自然重试）。
+    返回 (已请离数, 描述)；无超时且无异常返回 (0, "")。
+    """
+    kicked = 0
+    parts = []
+    while True:
+        img = win.capture(force_activate=False)
+        if img is None:
+            return kicked, ("截图失败" if not kicked
+                            else f"已请离 {'、'.join(parts)}；后续截图失败")
+        away, reason = _away_member_indices(img)
+        if away is None:
+            return kicked, (reason or "召回扫描失败") \
+                if not kicked else f"已请离 {'、'.join(parts)}；重扫失败: {reason}"
+        _track_away(away)
+        # todo3 组号处理：暂离队员若是本组号的队员 Tab，切到该 Tab 替其
+        # 点「回归队伍」归队（归队成功者离开暂离名单，账本自然移除）；
+        # 匹配到的自家队员 Tab 不参与超时请离（归队优先，踢了要重加）
+        matched_tabs = set()
+        try:
+            from . import tab_group  # 函数内导入：tab_group 顶层不依赖 team
+            if tab_group.active():
+                done, pass_info, matched_tabs = tab_group.member_rejoin_pass(
+                    win, [n for _i, n, _r in away if n])
+                if pass_info:
+                    log(f"[组队] {pass_info}", "SYS" if done else "WARN")
+        except Exception as e:
+            log(f"[组队] 组号归队 pass 异常: {e}", "WARN")
+        overdue = [o for o in _overdue_away(away)
+                   if o[1] not in matched_tabs]
+        if not overdue:
+            break
+        idx, name, race = overdue[0]  # 序号最大（最靠后）先请离，前方区域不移位
+        ok, info = _kick_one(win, idx, name, race, away)
+        if not ok:
+            return kicked, (info if not kicked
+                            else f"已请离 {'、'.join(parts)}；继续请离失败: {info}")
+        kicked += 1
+        # 移出账本：按复合身份匹配键（账本键 = (种族, 名字)，不能按
+        # 名字裸 pop——名字相同种族不同是不同账目）
+        for key in [k for k in _away_seen
+                    if _away_identity_match(name, race, k[1], k[0])]:
+            _away_seen.pop(key, None)
+        parts.append(f"「{name}」")
+        log(f"[组队] 暂离成员「{name}」超过 {int(KICK_AWAY_TIMEOUT)}s 未归队，已请离", "SYS")
+    if kicked:
+        return kicked, f"已请离超时暂离成员: {'、'.join(parts)}"
+    return 0, ""
 
 
 # ---- 待接入识别方式的操作 ----

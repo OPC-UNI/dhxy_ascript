@@ -575,7 +575,12 @@
                     <label class="switch-row">
                         <input type="checkbox" id="xiuluo-check-team">
                         <span class="switch-track"></span>
-                        <span>检查队伍（默认关闭）</span>
+                        <span>检查队伍（默认开启）</span>
+                    </label>
+                    <label class="switch-row">
+                        <input type="checkbox" id="xiuluo-auto-rejoin">
+                        <span class="switch-track"></span>
+                        <span>自动归队（非队长死亡落轮回司自动点归队，默认开启）</span>
                     </label>
                     <label class="switch-row">
                         <input type="checkbox" id="xiuluo-shout">
@@ -640,6 +645,11 @@
                         <input type="checkbox" id="wubei-check-team">
                         <span class="switch-track"></span>
                         <span>检查队伍（队伍固定 5 人，缺人自动补）</span>
+                    </label>
+                    <label class="switch-row">
+                        <input type="checkbox" id="wubei-auto-rejoin">
+                        <span class="switch-track"></span>
+                        <span>自动归队（非队长死亡落轮回司自动点归队，默认开启）</span>
                     </label>
                     <label class="switch-row">
                         <input type="checkbox" id="wubei-shout">
@@ -986,7 +996,23 @@
                         <button id="btn-verify-team-check" class="btn" onclick="verifyTeamCheck()">检查队伍信息</button>
                         <span class="verify-result" id="team-check-verify-result"></span>
                     </div>
-                    <div class="group-hint">走真实队伍检查链路（与任务检查同一套逻辑）：打开队伍面板 → 队长判定（双模板比分数+复核）→ 5 固定区域成员扫描（空位模板截断、种族/等级逐区识别）→ 关闭面板，全程真实点击（组队按钮/面板/关闭按钮），逐步骤结果输出到日志抽屉。任务运行中不可使用。</div>
+                    <div class="verify-row">
+                        <button id="btn-verify-rejoin" class="btn" onclick="verifyRejoin()">测试归队</button>
+                        <span class="verify-result" id="rejoin-verify-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="btn-verify-team-away" class="btn" onclick="verifyTeamAway()">检查队伍暂离</button>
+                        <span class="verify-result" id="team-away-verify-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="btn-verify-team-kick-away" class="btn" onclick="verifyTeamKickAway()">请离暂离成员</button>
+                        <span class="verify-result" id="team-kick-away-verify-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="btn-verify-group-rejoin" class="btn" onclick="verifyGroupRejoin()">组号自动归队</button>
+                        <span class="verify-result" id="group-rejoin-verify-result"></span>
+                    </div>
+                    <div class="group-hint">检查队伍信息=走真实队伍检查链路（与任务检查同一套逻辑）：打开队伍面板 → 队长判定（双模板比分数+复核）→ 5 固定区域成员扫描（空位模板截断、种族/等级逐区识别）→ 关闭面板，全程真实点击（组队按钮/面板/关闭按钮）。测试归队=读取当前位置判定是否在轮回司（打日志）→ 在轮回司则自动归队：开面板 → 身份判定 → 点「回归队伍」按钮传送回队长（按约定假设战斗已结束，不判战斗）。检查队伍暂离=开面板逐成员区域找「召回」标记（出现即该队员暂离），不改变队伍状态。请离暂离成员=真实执行请离链路：找召回标记 → 点选该成员卡 → 「请离队伍」按钮 → 请离并校验，会真实踢出队员（一次一名，仅手动测试/确认识别用）。组号自动归队=先检查暂离 → 暂离成员昵称与队员 Tab 标题角色名模糊匹配 → 匹配到则逐个切过去点「回归队伍」归队（需窗口内 ≥2 个已登录 Tab，开关状态不校验）。测试场景由用户手动操作，全程真实点击与真实切 Tab。任务运行中不可使用。</div>
                 </div>
                 <div class="group-box">
                     <div class="group-title">清屏</div>
@@ -1140,6 +1166,7 @@
     const devTools = document.getElementById('nav-diag');  // 调试信息开关控制「诊断」导航显隐
     const xiuluoHezi = document.getElementById('xiuluo-hezi');
     const xiuluoCheckTeam = document.getElementById('xiuluo-check-team');
+    const xiuluoAutoRejoin = document.getElementById('xiuluo-auto-rejoin');
     const xiuluoAutoWuyi = document.getElementById('xiuluo-auto-wuyi');
     const xiuluoTabGroup = document.getElementById('xiuluo-tab-group');
     const highPerf = document.getElementById('high-perf');
@@ -1150,6 +1177,7 @@
     const xiuluoWuyiIntervalEl = document.getElementById('xiuluo-wuyi-interval');
     const wubeiHezi = document.getElementById('wubei-hezi');
     const wubeiCheckTeam = document.getElementById('wubei-check-team');
+    const wubeiAutoRejoin = document.getElementById('wubei-auto-rejoin');
     const wubeiShout = document.getElementById('wubei-shout');
     const wubeiAutoWuyi = document.getElementById('wubei-auto-wuyi');
     const wubeiWuyiIntervalEl = document.getElementById('wubei-wuyi-interval');
@@ -1193,6 +1221,14 @@
     const dialogDetectVerifyResultEl = document.getElementById('dialog-detect-verify-result');
     const btnVerifyTeamCheck = document.getElementById('btn-verify-team-check');
     const teamCheckVerifyResultEl = document.getElementById('team-check-verify-result');
+    const btnVerifyRejoin = document.getElementById('btn-verify-rejoin');
+    const rejoinVerifyResultEl = document.getElementById('rejoin-verify-result');
+    const btnVerifyTeamAway = document.getElementById('btn-verify-team-away');
+    const teamAwayVerifyResultEl = document.getElementById('team-away-verify-result');
+    const btnVerifyTeamKickAway = document.getElementById('btn-verify-team-kick-away');
+    const teamKickAwayVerifyResultEl = document.getElementById('team-kick-away-verify-result');
+    const btnVerifyGroupRejoin = document.getElementById('btn-verify-group-rejoin');
+    const groupRejoinVerifyResultEl = document.getElementById('group-rejoin-verify-result');
     const btnVerifyCaptureDiag = document.getElementById('btn-verify-capture-diag');
     const captureDiagVerifyResultEl = document.getElementById('capture-diag-verify-result');
     const btnVerifySilentClick = document.getElementById('btn-verify-silent-click');
@@ -2127,6 +2163,9 @@
     xiuluoCheckTeam.addEventListener('change', () => {
         callPython('save_xiuluo_check_team', xiuluoCheckTeam.checked);
     });
+    xiuluoAutoRejoin.addEventListener('change', () => {
+        callPython('save_xiuluo_auto_rejoin', xiuluoAutoRejoin.checked);
+    });
     xiuluoAutoWuyi.addEventListener('change', () => {
         callPython('save_xiuluo_auto_wuyi', xiuluoAutoWuyi.checked);
     });
@@ -2153,6 +2192,9 @@
     });
     wubeiCheckTeam.addEventListener('change', () => {
         callPython('save_wubei_check_team', wubeiCheckTeam.checked);
+    });
+    wubeiAutoRejoin.addEventListener('change', () => {
+        callPython('save_wubei_auto_rejoin', wubeiAutoRejoin.checked);
     });
     wubeiShout.addEventListener('change', () => {
         callPython('save_wubei_shout_switch', wubeiShout.checked);
@@ -2191,6 +2233,7 @@
         applyDevTools();  // 调试信息开关：控制「诊断」导航入口显隐
         xiuluoHezi.checked = !!info.xiuluo_hezi;
         xiuluoCheckTeam.checked = !!info.xiuluo_check_team;
+        xiuluoAutoRejoin.checked = !!info.xiuluo_auto_rejoin;
         xiuluoAutoWuyi.checked = !!info.xiuluo_auto_wuyi;
         xiuluoTabGroup.checked = !!info.xiuluo_tab_group;
         highPerf.checked = !!info.high_perf;
@@ -2219,6 +2262,7 @@
         }
         wubeiHezi.checked = !!(info.wubei && info.wubei.hezi);
         wubeiCheckTeam.checked = !!(info.wubei && info.wubei.check_team);
+        wubeiAutoRejoin.checked = !!(info.wubei && info.wubei.auto_rejoin);
         wubeiShout.checked = !!(info.wubei && info.wubei.shout);
         wubeiAutoWuyi.checked = !!(info.wubei && info.wubei.auto_wuyi);
         if (info.wubei && info.wubei.wuyi_interval) {
@@ -2786,6 +2830,122 @@
         btnVerifyTeamCheck.disabled = false;
         teamCheckVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
         teamCheckVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+    };
+
+    async function verifyRejoin() {
+        if (verifying) return;
+        verifying = true;
+        btnVerifyRejoin.disabled = true;
+        rejoinVerifyResultEl.style.color = 'var(--text)';
+        rejoinVerifyResultEl.innerText = '测试中...';
+        try {
+            const r = await callPython('verify_rejoin');
+            if (!r || r.status !== 'success') {
+                rejoinVerifyResultEl.style.color = 'var(--danger)';
+                rejoinVerifyResultEl.innerText = (r && r.msg) || '获取请求失败';
+                verifying = false;
+                btnVerifyRejoin.disabled = false;
+            }
+            // 成功：等待 Python 侧 onRejoinVerifyResult 回推最终结果
+        } catch (e) {
+            rejoinVerifyResultEl.style.color = 'var(--danger)';
+            rejoinVerifyResultEl.innerText = '获取请求异常';
+            verifying = false;
+            btnVerifyRejoin.disabled = false;
+        }
+    }
+    window.onRejoinVerifyResult = function (ok, info) {
+        verifying = false;
+        btnVerifyRejoin.disabled = false;
+        rejoinVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        rejoinVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+    };
+
+    async function verifyTeamAway() {
+        if (verifying) return;
+        verifying = true;
+        btnVerifyTeamAway.disabled = true;
+        teamAwayVerifyResultEl.style.color = 'var(--text)';
+        teamAwayVerifyResultEl.innerText = '检查中...';
+        try {
+            const r = await callPython('verify_team_away');
+            if (!r || r.status !== 'success') {
+                teamAwayVerifyResultEl.style.color = 'var(--danger)';
+                teamAwayVerifyResultEl.innerText = (r && r.msg) || '获取请求失败';
+                verifying = false;
+                btnVerifyTeamAway.disabled = false;
+            }
+            // 成功：等待 Python 侧 onTeamAwayVerifyResult 回推最终结果
+        } catch (e) {
+            teamAwayVerifyResultEl.style.color = 'var(--danger)';
+            teamAwayVerifyResultEl.innerText = '获取请求异常';
+            verifying = false;
+            btnVerifyTeamAway.disabled = false;
+        }
+    }
+    window.onTeamAwayVerifyResult = function (ok, info) {
+        verifying = false;
+        btnVerifyTeamAway.disabled = false;
+        teamAwayVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        teamAwayVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+    };
+
+    async function verifyTeamKickAway() {
+        if (verifying) return;
+        verifying = true;
+        btnVerifyTeamKickAway.disabled = true;
+        teamKickAwayVerifyResultEl.style.color = 'var(--text)';
+        teamKickAwayVerifyResultEl.innerText = '请离中...';
+        try {
+            const r = await callPython('verify_team_kick_away');
+            if (!r || r.status !== 'success') {
+                teamKickAwayVerifyResultEl.style.color = 'var(--danger)';
+                teamKickAwayVerifyResultEl.innerText = (r && r.msg) || '获取请求失败';
+                verifying = false;
+                btnVerifyTeamKickAway.disabled = false;
+            }
+            // 成功：等待 Python 侧 onTeamKickAwayVerifyResult 回推最终结果
+        } catch (e) {
+            teamKickAwayVerifyResultEl.style.color = 'var(--danger)';
+            teamKickAwayVerifyResultEl.innerText = '获取请求异常';
+            verifying = false;
+            btnVerifyTeamKickAway.disabled = false;
+        }
+    }
+    window.onTeamKickAwayVerifyResult = function (ok, info) {
+        verifying = false;
+        btnVerifyTeamKickAway.disabled = false;
+        teamKickAwayVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        teamKickAwayVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+    };
+
+    async function verifyGroupRejoin() {
+        if (verifying) return;
+        verifying = true;
+        btnVerifyGroupRejoin.disabled = true;
+        groupRejoinVerifyResultEl.style.color = 'var(--text)';
+        groupRejoinVerifyResultEl.innerText = '归队中...';
+        try {
+            const r = await callPython('verify_group_rejoin');
+            if (!r || r.status !== 'success') {
+                groupRejoinVerifyResultEl.style.color = 'var(--danger)';
+                groupRejoinVerifyResultEl.innerText = (r && r.msg) || '获取请求失败';
+                verifying = false;
+                btnVerifyGroupRejoin.disabled = false;
+            }
+            // 成功：等待 Python 侧 onGroupRejoinVerifyResult 回推最终结果
+        } catch (e) {
+            groupRejoinVerifyResultEl.style.color = 'var(--danger)';
+            groupRejoinVerifyResultEl.innerText = '获取请求异常';
+            verifying = false;
+            btnVerifyGroupRejoin.disabled = false;
+        }
+    }
+    window.onGroupRejoinVerifyResult = function (ok, info) {
+        verifying = false;
+        btnVerifyGroupRejoin.disabled = false;
+        groupRejoinVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        groupRejoinVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
     async function verifyCaptureDiag() {

@@ -51,3 +51,23 @@ def test_settings_spec_covers_all_task_modes():
     for mode, key in _COUNT_KEYS.items():
         assert key in spec
         assert spec[key] == TASK_COUNT_DEFAULTS[mode]
+
+
+def test_settings_spec_rejoin_and_check_team_defaults():
+    """自动归队与检查队伍键在方案快照默认值表中存在且默认开启
+    （load_* 首次默认与 _settings_spec 必须一致，否则方案对比/
+    导入导出把默认值判成脏值）。"""
+    from src import schemes
+    from src.control_window import (_WUBEI_AUTO_REJOIN_KEY, _XIULUO_AUTO_REJOIN_KEY,
+                                    _WUBEI_CHECK_TEAM_KEY, _XIULUO_CHECK_TEAM_KEY,
+                                    load_wubei_auto_rejoin, load_xiuluo_auto_rejoin,
+                                    load_wubei_check_team, load_xiuluo_check_team)
+    spec = schemes._settings_spec()
+    assert spec[_WUBEI_AUTO_REJOIN_KEY] is True
+    assert spec[_XIULUO_AUTO_REJOIN_KEY] is True
+    assert spec[_WUBEI_CHECK_TEAM_KEY] is True
+    assert spec[_XIULUO_CHECK_TEAM_KEY] is True
+    # load_* 首次默认同开（KeyValue 未写入时）
+    for key, load in ((_WUBEI_AUTO_REJOIN_KEY, load_wubei_auto_rejoin),
+                      (_XIULUO_AUTO_REJOIN_KEY, load_xiuluo_auto_rejoin)):
+        assert load() == spec[key]

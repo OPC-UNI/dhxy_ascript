@@ -1,9 +1,12 @@
 """组号专用（一窗口多 Tab 多账号）：队员自动挂战斗、巫医、补血补蓝。
 
 机制（2026-10-31 实机验证，多标签客户端 xy2_tab_x64 系列）：
-- 每个登录 Tab 对应主窗口一个 Win32Window 子窗口，标题含
-  「角色名（ID：账号）」；当前 Tab 子窗口可见、其余隐藏——
-  计数/登录判定/当前身份全部走句柄枚举（game.list_tab_windows），零 OCR
+- 每个登录 Tab 对应主窗口一个 Win32Window 子窗口，标题格式
+  「[大话西游2_经典版] 大话西游2经典版 $Revision: xxx - 服务器
+  - 角色名（ID：账号）」（角色名解析见 _tab_char_name，与
+  game.read_login_tab 同款：split " - " 取末段）；当前 Tab 子窗口
+  可见、其余隐藏——计数/登录判定/当前身份全部走句柄枚举
+  （game.list_tab_windows），零 OCR
 - 切换：Ctrl+Tab（Keyboard.key_hot 经前台窗口送达，切换前校验前台）；
   TCM_SETCURSEL 消息与 Alt+Tab 实测均无效（2026-10-31 探测；
   2026-11-04 定位 SysTabControl32 子窗口后复测仍无效：控件选中
@@ -28,6 +31,8 @@
   ID 可解析，且当前任务模式仍为修罗/五倍——单号（已登录 Tab <2）
   或开关关闭时全部新代码路径不执行，行为与旧版完全一致
 """
+import difflib
+import re
 import threading
 import time
 
@@ -60,6 +65,10 @@ WUYI_OPTION_Y_OFFSET = 6   # 选项点击 y 下移修正：绿字中心比可点
 WUYI_POS_FRESH = 30.0      # 队长选项坐标新鲜期：期内队员 pass 可直点复用
                            # （队长点击后 pass 数秒内开始，30s 足够覆盖）
 PASS_TOTAL_DEADLINE = 30.0  # 单次 pass 总时长上限（防异常拖垮主流程）
+REJOIN_PASS_MIN_INTERVAL = 30.0  # 归队 pass 最小间隔：队伍检查每 10s 一次，
+                           # 暂离队员持续在场会每轮触发——30s 节流防频繁
+                           # 切 Tab；归队成功后暂离名单消失自然不再触发
+REJOIN_NAME_RATIO = 0.7     # Tab 标题角色名与面板 OCR 昵称的模糊比阈值
 
 # ---- 状态（任务进程内共享） ----
 _active = False        # 组号模式是否激活（init_task 置位）
@@ -70,6 +79,7 @@ _logged_count = 0      # 已登录 Tab 数
 _members = 0           # 队员数（已登录 - 队长）
 pass_active = False    # pass 进行中：战斗线程/任务线程轮询见此跳过处理
 _last_bars_pass_at = 0.0  # 上次队员血蓝 pass 时间（节流）
+_last_rejoin_pass_at = 0.0  # 上次归队 pass 时间（节流）
 _pass_lock = threading.Lock()  # pass 入口互斥：同一时刻至多一个 pass（双线程防撞车）
 
 
@@ -132,8 +142,13 @@ def init_task(win, mode, switch_on):
     _members = _logged_count - 1
     _mode = mode
     _active = True
+    # 队员 Tab 角色名一并列出（标题「角色名（ID：账号）」，解析失败
+    # 回退账号 ID——用户 2026-11-07 要求，方便人工核对队员对应关系）
+    member_names = [_tab_char_name(c["title"]) or c["id"]
+                    for c in children if c["id"] and c["id"] != _leader_id]
+    member_txt = f"（{'、'.join(member_names)}）" if member_names else ""
     log(f"[组号] 组号模式激活：{_tab_count} 个 Tab、已登录 {_logged_count} 个，"
-        f"队长 ID {_leader_id}，队员 {_members} 个", "SYS")
+        f"队长 ID {_leader_id}，队员 {_members} 个{member_txt}", "SYS")
 
 
 def active():
@@ -343,6 +358,48 @@ def ensure_leader_tab(win):
         return True
     return_to_leader(win)
     return _current_id(win) == _leader_id
+
+
+def ensure_bound_tab(win):
+    """主进程诊断护栏：游戏被手动切到别的 Tab 时，先切回绑定角色 Tab。
+
+    绑定记录（game.bound_window_id）含账号 ID（绑定语义「这个窗口的
+    这个角色」）；枚举 Tab 子窗口找到 ID 匹配的 Tab，循环切换直至
+    命中（Ctrl+Tab 前台 / Tab 条消息点击后台双通道，_switch_next）。
+    未绑定 / 已登录 Tab <2（单号无切换目标）/ 绑定 Tab 未登录时不做
+    切换。返回 (是否已在绑定 Tab, 描述)——False 时调用方应放弃本轮
+    诊断（在错误 Tab 上执行检查/点击会操作错账号）。
+    """
+    try:
+        bound = game.bound_window_id()
+        if not bound or not isinstance(bound, dict):
+            return True, "未绑定窗口，无切换目标"
+        m = re.search(r"ID：(\d+)", str(bound.get("id") or ""))
+        if not m:
+            return True, "绑定记录无账号 ID，无切换目标"
+        bound_id = m.group(1)
+        children = game.list_tab_windows(win)
+        logged = [c for c in children if c["id"]]
+        if len(logged) < 2:
+            return True, "单号（已登录 Tab <2），无需切 Tab"
+        if _current_id(win) == bound_id:
+            return True, "已在绑定角色 Tab"
+        if not any(c["id"] == bound_id for c in logged):
+            log(f"[组号] 绑定角色（ID {bound_id}）的 Tab 未登录，无法切回，"
+                f"按当前 Tab 执行", "WARN")
+            return True, "绑定角色 Tab 未登录，按当前 Tab 执行"
+        for _ in range(TAB_CYCLE_GUARD):
+            cur = _switch_next(win)
+            if cur is None:
+                log("[组号] 切回绑定 Tab 失败", "WARN")
+                return False, "切回绑定角色 Tab 失败（请手动切回后重试）"
+            if cur == bound_id:
+                log("[组号] 游戏停在队员 Tab，已切回绑定角色 Tab", "SYS")
+                return True, "已切回绑定角色 Tab"
+        return False, "切回绑定角色 Tab 超时（请手动切回后重试）"
+    except Exception as e:
+        log(f"[组号] 绑定 Tab 护栏异常: {e}", "WARN")
+        return True, "绑定 Tab 护栏异常（按当前 Tab 执行）"
 
 
 # ---- 护栏与队员遍历 ----
@@ -596,3 +653,111 @@ def _bars_one(win, tab_id):
         return
     log(f"[组号] 检查队员 Tab（ID {tab_id}）血蓝", "INFO")
     status_bars.check_all_bars(win)
+
+
+# ---- 暂离队员归队 pass（todo3：识别到的暂离队员是某个 Tab → 切过去归队） ----
+
+def _tab_char_name(title):
+    """Tab 标题中的角色名（与 game.read_login_tab 同解析）。
+
+    实测标题格式（2026-11-07 用户日志）：
+    「[大话西游2_经典版] 大话西游2经典版 $Revision: 2057701
+    - 佳期良年 - 碧桃娘子（ID：888888888）」——split " - " 取末段、
+    （ID： 之前即角色名。旧版注释的「角色名（ID：账号）」直接格式
+    （无 " - " 分隔）兼容：整个标题取（ID： 之前。
+    """
+    if not title:
+        return None
+    parts = title.split(" - ")
+    if len(parts) >= 2 and "（ID：" in parts[-1]:
+        name = parts[-1].split("（ID：")[0].strip()
+        return name or None
+    m = re.match(r"^(.+?)（ID：", title)
+    if m and " - " not in m.group(1):
+        return m.group(1).strip() or None
+    return None
+
+
+def _name_similar(a, b):
+    """角色名模糊比对（Tab 标题名 vs 队伍面板 OCR 昵称，容 OCR 噪声）。"""
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    return difflib.SequenceMatcher(None, a, b).ratio() >= REJOIN_NAME_RATIO
+
+
+def member_rejoin_pass(win, away_names, force=False):
+    """暂离队员归队 pass（todo3 用户 2026-11-07 定稿）：队长检查队伍
+    发现暂离队员后，切到对应队员 Tab 替其点「回归队伍」归队。
+
+    away_names：暂离成员昵称列表（队伍面板 OCR，含噪声）。与 Tab 标题
+    角色名模糊匹配（_name_similar）——匹配到的队员 Tab 才切过去执行
+    team.maybe_rejoin 完整链路（位置判定轮回司 → 开面板 → 身份判定 →
+    点归队 → 校验；队员视角非队长，面板有归队按钮）。无匹配不做任何
+    切换（零成本）。30s 节流（REJOIN_PASS_MIN_INTERVAL）防每轮检查
+    频繁切 Tab；归队成功后该成员离开暂离名单，自然不再触发。
+    pass 互斥/前台校验/未登录跳过/绕回队长与其余 pass 同款。
+    force=True 供验证模式绕过 active() 检查（主进程无任务模式）。
+    返回 (已归队数, 描述, 匹配到的暂离昵称集合)——昵称集合供调用方
+    （超时请离）排除自家号：自家队员 Tab 归队优先、不自动请离。
+    """
+    global pass_active, _last_rejoin_pass_at
+    if not _active and not force:
+        return 0, "", set()
+    now = time.time()
+    if not force and now - _last_rejoin_pass_at < REJOIN_PASS_MIN_INTERVAL:
+        return 0, "", set()  # 任务流程节流；force（诊断按钮）不节流
+    if not _try_enter_pass():
+        return 0, "", set()  # 另一 pass 进行中：放弃本轮，等下一轮时机
+    _last_rejoin_pass_at = now
+    try:
+        if not _pass_foreground_ok(win):
+            log("[组号] 游戏窗口未在前台，跳过归队 pass", "WARN")
+            return 0, "", set()
+        children = game.list_tab_windows(win)
+        matched = {}  # 账号 ID → (Tab 角色名, 匹配的暂离昵称)
+        for c in children:
+            if not c["id"] or c["id"] == _leader_id:
+                continue
+            cname = _tab_char_name(c["title"])
+            for n in away_names:
+                if n and _name_similar(cname, n):
+                    matched[c["id"]] = (cname, n)
+                    break
+        if not matched:
+            return 0, "", set()
+        from . import team  # 函数内导入：避免循环依赖
+        from . import battle  # 函数内导入：与 _auto_one 同款
+        done = 0
+
+        def _rejoin_one(w, tab_id):
+            nonlocal done
+            entry = matched.get(tab_id)
+            if entry is None:
+                return
+            cname, _n = entry
+            # 战斗判定必须用帧级 is_in_battle_frame——pass_active 期间
+            # is_in_battle 恒返回 True（battle.py 设计：pass 期间屏幕可能
+            # 是队员 Tab，统一按战斗等待），误用会把轮回司场景误报成
+            # 「战斗中」跳过归队（2026-11-07 用户日志实测）；与 _auto_one/
+            # _bars_one 同款帧级判定
+            img = w.capture(force_activate=False)
+            if img is not None and battle.is_in_battle_frame(img):
+                log(f"[组号] 队员 Tab（{cname}）战斗中，跳过归队", "INFO")
+                return
+            handled, info = team.maybe_rejoin(w, prefix="[组号]")
+            ok = handled and info.startswith("已归队")
+            log(f"[组号] 队员 Tab（{cname}）归队: {info}",
+                "SYS" if ok else "WARN")
+            if ok:
+                done += 1
+
+        _for_each_member(win, _rejoin_one, "归队 pass", force=force)
+        matched_away = {n for _cname, n in matched.values()}
+        if done:
+            return done, f"已归队 {done} 名队员", matched_away
+        return 0, f"队员归队未成功（{len(matched)} 名匹配队员）", matched_away
+    finally:
+        return_to_leader(win)
+        _exit_pass()

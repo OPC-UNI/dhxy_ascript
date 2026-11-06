@@ -60,9 +60,10 @@ from . import battle  # 巫医预期时间戳（点 NPC 后通知战斗线程切
 from .control_window import (load_task_counts, load_xiuluo_settings,
                              load_xiuluo_shout_switch,
                              load_xiuluo_check_team,
+                             load_xiuluo_auto_rejoin,
                              load_xiuluo_auto_wuyi,
                              load_xiuluo_wuyi_interval,
-                             load_xiuluo_tab_group)  # 任务次数上限/修罗设置/自动巫医/组号开关
+                             load_xiuluo_tab_group)  # 任务次数上限/修罗设置/自动巫医/自动归队/组号开关
 from .xuanshu import follow_task  # 任务跟踪（绿字点击寻路/战斗跳过/附加对话处理）
 from . import tab_group  # 组号模式（一窗口多 Tab）：初始化/队员 pass/抑制标志
 from .dialog_common import (_dialog_text_present, _norm_dialog_present,
@@ -1242,7 +1243,8 @@ def _check_team_ready(win):
     """
     settings = load_xiuluo_settings()
     status, info, members = team.check_team_min(win,
-                                                min_members=settings["min_members"])
+                                                min_members=settings["min_members"],
+                                                allow_kick=True)
     team.update_overlay_team(status, info, members)
     return status, info
 
@@ -1840,11 +1842,36 @@ def _keep_alive(win, info):
     本进程不设 wuyi_expected_at——10s 空闲节奏会在队长走远关闭对话框
     后才赶到、点击失效（2026-10-30 实测），空闲节奏提升到 2s（人物
     静止，对话框区域差分门有效，OCR 成本可控）。
+    自动归队（设置开关默认开，仅非队长生效——本保持模式即非队长）：
+    战斗中死亡会被送回轮回司，此后仍在队伍（离队状态）但脱离大部队。
+    空闲轮询位置（复用战斗结束的坐标方案），落点轮回司即走
+    team.maybe_rejoin 打开队伍面板点「归队」传送回队长；归队尝试后
+    按 REJOIN_RETRY_INTERVAL 放慢（面板开合 5~7s，防频繁开关）。
     """
     log(f"[修罗] {info}，跳过核心流程，仅保持战斗线程运行", "SYS")
     battle.wuyi_fast_idle = True
+    auto_rejoin = load_xiuluo_auto_rejoin()
+    log(f"[修罗] 自动归队: {'开（死亡落轮回司自动点归队回队长）' if auto_rejoin else '关'}", "SYS")
+    next_rejoin_at = 0.0
     while True:
         time.sleep(1)
+        if not auto_rejoin or tab_group.pass_active:
+            continue
+        now = time.time()
+        if now < next_rejoin_at:
+            continue
+        next_rejoin_at = now + team.REJOIN_POLL_INTERVAL
+        # 战斗判定只在轮询到期时执行（is_in_battle 是截窗+模板匹配，
+        # 每秒跑会空烧）；战斗中死亡送回轮回司必在战斗结束后
+        if is_in_battle(win):
+            continue
+        try:
+            handled, desc = team.maybe_rejoin(win, prefix="[修罗][归队]")
+            if handled:
+                log(f"[修罗][归队] {desc}", "SYS" if desc.startswith("已归队") else "WARN")
+                next_rejoin_at = time.time() + team.REJOIN_RETRY_INTERVAL
+        except Exception as e:
+            log(f"[修罗][归队] 归队检查异常: {e}", "WARN")
 
 
 def run_loop(win, cycle_interval=1.0):

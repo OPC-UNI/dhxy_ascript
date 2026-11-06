@@ -402,6 +402,23 @@ def save_wubei_check_team(on):
     return {"status": "success"}
 
 
+# ---- 五倍自动归队（UI 开关，KeyValue 持久化；默认开启。仅非队长
+#      生效：战斗死亡落轮回司后自动打开队伍面板点「归队」传送回队长，
+#      实现见 team.maybe_rejoin（归队按钮模板待用户提供）） ----
+_WUBEI_AUTO_REJOIN_KEY = "wubei_auto_rejoin"
+
+
+def load_wubei_auto_rejoin():
+    """读取五倍自动归队开关（首次默认开启）。"""
+    return bool(KeyValue.get(_WUBEI_AUTO_REJOIN_KEY, True))
+
+
+def save_wubei_auto_rejoin(on):
+    """保存五倍自动归队开关，返回操作结果。"""
+    _kv_save(_WUBEI_AUTO_REJOIN_KEY, bool(on))
+    return {"status": "success"}
+
+
 # ---- 五倍缺人自动喊话（UI 开关，KeyValue 持久化；默认开启。
 #      喊话内容为固定值（wubei.py WUBEI_SHOUT_DEFAULT），不再对外
 #      保留内容设置——用户 2026-10-14 确认） ----
@@ -535,6 +552,23 @@ def load_xiuluo_check_team():
 def save_xiuluo_check_team(on):
     """保存修罗检查队伍开关，返回操作结果。"""
     _kv_save(_XIULUO_CHECK_TEAM_KEY, bool(on))
+    return {"status": "success"}
+
+
+# ---- 修罗自动归队（UI 开关，KeyValue 持久化；默认开启。仅非队长
+#      生效：战斗死亡落轮回司后自动打开队伍面板点「归队」传送回队长，
+#      实现见 team.maybe_rejoin；与五倍同款） ----
+_XIULUO_AUTO_REJOIN_KEY = "xiuluo_auto_rejoin"
+
+
+def load_xiuluo_auto_rejoin():
+    """读取修罗自动归队开关（首次默认开启）。"""
+    return bool(KeyValue.get(_XIULUO_AUTO_REJOIN_KEY, True))
+
+
+def save_xiuluo_auto_rejoin(on):
+    """保存修罗自动归队开关，返回操作结果。"""
+    _kv_save(_XIULUO_AUTO_REJOIN_KEY, bool(on))
     return {"status": "success"}
 
 
@@ -791,6 +825,7 @@ class ControlWindow(WebWindow):
         self.expose(self.save_wuhuan_vitality_continue)
         self.expose(self.save_xiuluo_hezi)
         self.expose(self.save_xiuluo_check_team)
+        self.expose(self.save_xiuluo_auto_rejoin)
         self.expose(self.save_xiuluo_auto_wuyi)
         self.expose(self.save_xiuluo_wuyi_interval)
         self.expose(self.save_xiuluo_tab_group)
@@ -800,6 +835,7 @@ class ControlWindow(WebWindow):
         self.expose(self.save_silent_mode)
         self.expose(self.save_wubei_hezi)
         self.expose(self.save_wubei_check_team)
+        self.expose(self.save_wubei_auto_rejoin)
         self.expose(self.save_wubei_shout_switch)
         self.expose(self.save_wubei_auto_wuyi)
         self.expose(self.save_wubei_wuyi_interval)
@@ -828,6 +864,10 @@ class ControlWindow(WebWindow):
         self.expose(self.verify_position)
         self.expose(self.verify_dialog_detect)
         self.expose(self.verify_team_check)
+        self.expose(self.verify_rejoin)
+        self.expose(self.verify_team_away)
+        self.expose(self.verify_team_kick_away)
+        self.expose(self.verify_group_rejoin)
         self.expose(self.verify_capture_diag)
         self.expose(self.verify_silent_click)
         self.expose(self.verify_silent_key)
@@ -1060,6 +1100,7 @@ class ControlWindow(WebWindow):
                 "wuhuan_vitality_continue": load_wuhuan_vitality_continue(),
                 "xiuluo_hezi": load_xiuluo_hezi(),
                 "xiuluo_check_team": load_xiuluo_check_team(),
+                "xiuluo_auto_rejoin": load_xiuluo_auto_rejoin(),
                 "xiuluo_auto_wuyi": load_xiuluo_auto_wuyi(),
                 "xiuluo_wuyi_interval": load_xiuluo_wuyi_interval(),
                 "xiuluo_tab_group": load_xiuluo_tab_group(),
@@ -1069,6 +1110,7 @@ class ControlWindow(WebWindow):
                 "silent_mode": load_silent_mode(),
                 "wubei": {"hezi": load_wubei_hezi(),
                           "check_team": load_wubei_check_team(),
+                          "auto_rejoin": load_wubei_auto_rejoin(),
                           "shout": load_wubei_shout_switch(),
                           "auto_wuyi": load_wubei_auto_wuyi(),
                           "wuyi_interval": load_wubei_wuyi_interval(),
@@ -1146,6 +1188,10 @@ class ControlWindow(WebWindow):
         """修罗设置变更：保存检查队伍开关状态。"""
         return save_xiuluo_check_team(on)
 
+    def save_xiuluo_auto_rejoin(self, on):
+        """修罗设置变更：保存自动归队开关状态。"""
+        return save_xiuluo_auto_rejoin(on)
+
     def save_xiuluo_auto_wuyi(self, on):
         """修罗设置变更：保存自动巫医开关状态。"""
         return save_xiuluo_auto_wuyi(on)
@@ -1181,6 +1227,10 @@ class ControlWindow(WebWindow):
     def save_wubei_check_team(self, on):
         """五倍设置变更：保存检查队伍开关状态。"""
         return save_wubei_check_team(on)
+
+    def save_wubei_auto_rejoin(self, on):
+        """五倍设置变更：保存自动归队开关状态。"""
+        return save_wubei_auto_rejoin(on)
 
     def save_wubei_shout_switch(self, on):
         """五倍设置变更：保存缺人自动喊话开关状态。"""
@@ -1849,9 +1899,27 @@ class ControlWindow(WebWindow):
         return {"status": "success",
                 "msg": "检查已开始：队伍面板开合 → 队长判定 → 成员扫描，结果见日志"}
 
+    def _ensure_bound_tab(self, win):
+        """诊断线程前置护栏：游戏被手动切到别的 Tab 时先切回绑定角色
+        Tab（错误 Tab 上执行检查/请离会操作错账号——用户 2026-11-07
+        实测：手动切到队员 B 后点诊断在 B 上执行）。返回 (是否放行,
+        描述)，False 时调用方放弃本轮并回推失败。"""
+        from . import tab_group  # 延迟导入：与其余验证模块保持一致
+        ok, info = tab_group.ensure_bound_tab(win)
+        try:
+            self.add_logs([f"[验证] {info}"])
+        except Exception:
+            pass
+        return ok, info
+
     def _run_team_check_verify(self, win):
         """检查队伍信息线程体：真实 check_team_min 链路，结果打印日志。"""
         from . import team  # 延迟导入：与其余验证模块保持一致
+        ok_tab, tab_info = self._ensure_bound_tab(win)
+        if not ok_tab:
+            self._notify_team_check_verify_result(False, tab_info)
+            self._verifying = False
+            return
         try:
             self.add_logs(["[验证] 开始检查队伍信息（组队菜单 → 队伍面板 → "
                            "队长判定 → 成员扫描 → 关闭）..."])
@@ -1876,6 +1944,258 @@ class ControlWindow(WebWindow):
                 ok_js = "true" if ok else "false"
                 self.webview_instance.evaluate_js(
                     f"if(window.onTeamCheckVerifyResult){{window.onTeamCheckVerifyResult({ok_js}, {json.dumps(info)});}}")
+            except Exception:
+                pass
+
+    def verify_rejoin(self):
+        """诊断-测试归队按钮：读取当前位置判定是否在轮回司（打日志），
+        在轮回司则直接走 team.maybe_rejoin 自动归队链路（点「回归队伍」
+        按钮传送回队长）。测试流程由用户手动操作、无法模拟战斗结束——
+        按用户约定假设战斗已结束（maybe_rejoin 的战斗判定本就在调用方，
+        此处不判战斗）。全程真实点击（组队按钮/队伍面板/归队按钮）。
+        """
+        if self._tm.is_running():
+            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if self._verifying:
+            return {"status": "error", "msg": "验证进行中，请稍候"}
+        win = game.find_main_window()
+        if win is None:
+            return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
+        if not _game_window_clickable(win):
+            return {"status": "error", "msg": "游戏窗口被其他窗口遮挡，请将游戏窗口置于前台后再验证"}
+        self._verifying = True
+        threading.Thread(target=self._run_rejoin_verify, args=(win,),
+                         daemon=True, name="rejoin-verify").start()
+        return {"status": "success",
+                "msg": "测试已开始：读取当前位置 → 轮回司判定 → 自动归队，结果见日志"}
+
+    def _run_rejoin_verify(self, win):
+        """测试归队线程体：位置判定 + maybe_rejoin 链路，结果打印日志并回推页面。"""
+        from . import team  # 延迟导入：与其余验证模块保持一致
+        from . import map as game_map  # 位置读取（轮回司判定）
+        ok_tab, tab_info = self._ensure_bound_tab(win)
+        if not ok_tab:
+            self._notify_rejoin_verify_result(False, tab_info)
+            self._verifying = False
+            return
+        ok, info = False, ""
+        try:
+            self.add_logs(["[验证] 开始测试归队（读取当前位置 → 轮回司判定 → "
+                           "自动归队，按约定假设战斗已结束）..."])
+            pos = game_map.read_map_position(win)
+            if pos is None:
+                info = "位置读取失败（无法判定是否在轮回司），未执行归队"
+                self.add_logs([f"[验证] {info}"])
+            elif not team.is_in_lunhuisi(pos):
+                # 判定链路正常即算通过：不在轮回司是场景不对（归队测试
+                # 须死亡后落轮回司再点），不算链路失败
+                info = (f"当前位置: {pos[0]}[{pos[1]},{pos[2]}]，不在轮回司，"
+                        f"未执行归队（归队测试须死亡后落轮回司再点）")
+                self.add_logs([f"[验证] {info}"])
+                ok = True
+            else:
+                self.add_logs([f"[验证] 当前位置: {pos[0]}[{pos[1]},{pos[2]}]，"
+                               f"在轮回司，开始自动归队..."])
+                handled, desc = team.maybe_rejoin(win, prefix="[验证]")
+                info = desc
+                ok = handled and desc.startswith("已归队")
+                self.add_logs([f"[验证] 归队结果: {desc}"])
+        except Exception as e:
+            ok, info = False, f"验证异常: {e}"
+            try:
+                self.add_logs([f"[验证] 归队测试异常: {info}"])
+            except Exception:
+                pass
+        self._notify_rejoin_verify_result(ok, info)
+        self._verifying = False
+
+    def _notify_rejoin_verify_result(self, ok, info):
+        """测试归队结果回推页面（诊断-队伍卡片测试归队行的结果文案）。"""
+        if self.webview_instance:
+            try:
+                ok_js = "true" if ok else "false"
+                self.webview_instance.evaluate_js(
+                    f"if(window.onRejoinVerifyResult){{window.onRejoinVerifyResult({ok_js}, {json.dumps(info)});}}")
+            except Exception:
+                pass
+
+    def verify_team_away(self):
+        """诊断-检查队伍暂离按钮：打开队伍面板逐成员区域扫描「召回」
+        标记（出现即该队员暂离），结果输出到日志抽屉。全程真实点击
+        （组队按钮/面板开关），不改变队伍状态（不请离）。"""
+        if self._tm.is_running():
+            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if self._verifying:
+            return {"status": "error", "msg": "验证进行中，请稍候"}
+        win = game.find_main_window()
+        if win is None:
+            return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
+        if not _game_window_clickable(win):
+            return {"status": "error", "msg": "游戏窗口被其他窗口遮挡，请将游戏窗口置于前台后再验证"}
+        self._verifying = True
+        threading.Thread(target=self._run_team_away_verify, args=(win,),
+                         daemon=True, name="team-away-verify").start()
+        return {"status": "success",
+                "msg": "检查已开始：打开队伍面板 → 逐成员区域扫描召回标记，结果见日志"}
+
+    def _run_team_away_verify(self, win):
+        """检查队伍暂离线程体：scan_away_members 链路，结果打印日志并回推页面。"""
+        from . import team  # 延迟导入：与其余验证模块保持一致
+        ok_tab, tab_info = self._ensure_bound_tab(win)
+        if not ok_tab:
+            self._notify_team_away_verify_result(False, tab_info)
+            self._verifying = False
+            return
+        try:
+            self.add_logs(["[验证] 开始检查队伍暂离（开面板 → 逐成员区域找召回标记"
+                           "「召回」→ 关闭面板）..."])
+            ok, _idxs, info = team.scan_away_members(win)
+            self.add_logs([f"[验证] 暂离检查结论: {info}"])
+        except Exception as e:
+            ok, info = False, f"验证异常: {e}"
+            try:
+                self.add_logs([f"[验证] 暂离检查异常: {info}"])
+            except Exception:
+                pass
+        self._notify_team_away_verify_result(ok, info)
+        self._verifying = False
+
+    def _notify_team_away_verify_result(self, ok, info):
+        """检查队伍暂离结果回推页面（诊断-检查队伍暂离行的结果文案）。"""
+        if self.webview_instance:
+            try:
+                ok_js = "true" if ok else "false"
+                self.webview_instance.evaluate_js(
+                    f"if(window.onTeamAwayVerifyResult){{window.onTeamAwayVerifyResult({ok_js}, {json.dumps(info)});}}")
+            except Exception:
+                pass
+
+    def verify_team_kick_away(self):
+        """诊断-请离暂离成员按钮：真实执行请离链路——点选暂离成员 →
+        「请离队伍」按钮 → 请离。会真实踢出队员，仅手动测试/确认识别
+        链路用；一次调用至多请离一名（队首暂离成员）。"""
+        if self._tm.is_running():
+            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if self._verifying:
+            return {"status": "error", "msg": "验证进行中，请稍候"}
+        win = game.find_main_window()
+        if win is None:
+            return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
+        if not _game_window_clickable(win):
+            return {"status": "error", "msg": "游戏窗口被其他窗口遮挡，请将游戏窗口置于前台后再验证"}
+        self._verifying = True
+        threading.Thread(target=self._run_team_kick_away_verify, args=(win,),
+                         daemon=True, name="team-kick-away-verify").start()
+        return {"status": "success",
+                "msg": "请离已开始：点选暂离成员 → 请离队伍按钮（会真实踢人，一次一名），结果见日志"}
+
+    def _run_team_kick_away_verify(self, win):
+        """请离暂离成员线程体：kick_away_member 链路，结果打印日志并回推页面。"""
+        from . import team  # 延迟导入：与其余验证模块保持一致
+        ok_tab, tab_info = self._ensure_bound_tab(win)
+        if not ok_tab:
+            self._notify_team_kick_away_verify_result(False, tab_info)
+            self._verifying = False
+            return
+        try:
+            self.add_logs(["[验证] 开始请离暂离成员（找召回标记 → 点选成员 → "
+                           "请离队伍按钮 → 校验，会真实踢人）..."])
+            ok, info = team.kick_away_member(win)
+            self.add_logs([f"[验证] 请离结果: {info}"])
+        except Exception as e:
+            ok, info = False, f"验证异常: {e}"
+            try:
+                self.add_logs([f"[验证] 请离异常: {info}"])
+            except Exception:
+                pass
+        self._notify_team_kick_away_verify_result(ok, info)
+        self._verifying = False
+
+    def _notify_team_kick_away_verify_result(self, ok, info):
+        """请离暂离成员结果回推页面（诊断-请离暂离成员行的结果文案）。"""
+        if self.webview_instance:
+            try:
+                ok_js = "true" if ok else "false"
+                self.webview_instance.evaluate_js(
+                    f"if(window.onTeamKickAwayVerifyResult){{window.onTeamKickAwayVerifyResult({ok_js}, {json.dumps(info)});}}")
+            except Exception:
+                pass
+
+    def verify_group_rejoin(self):
+        """诊断-组号自动归队按钮：先检查队伍暂离（面板开合扫描召回标记+
+        昵称），暂离成员匹配本组号队员 Tab 则逐个切过去替其点「回归
+        队伍」归队。主进程无任务模式，走 init_task 枚举 + ready() 校验
+        + member_rejoin_pass(force=True)。全程真实点击与真实切 Tab。
+        """
+        if self._tm.is_running():
+            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if self._verifying:
+            return {"status": "error", "msg": "验证进行中，请稍候"}
+        win = game.find_main_window()
+        if win is None:
+            return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
+        if not _game_window_clickable(win):
+            return {"status": "error", "msg": "游戏窗口被其他窗口遮挡，请将游戏窗口置于前台后再验证"}
+        self._verifying = True
+        threading.Thread(target=self._run_group_rejoin_verify, args=(win,),
+                         daemon=True, name="group-rejoin-verify").start()
+        return {"status": "success",
+                "msg": "归队已开始：检查暂离 → 匹配队员 Tab → 切过去点归队，结果见日志"}
+
+    def _run_group_rejoin_verify(self, win):
+        """组号自动归队线程体：检查暂离 → 匹配队员 Tab → 切过去归队。"""
+        from . import team  # 延迟导入：与其余验证模块保持一致
+        from . import tab_group  # 组号枚举/切换（主进程走 force 路径）
+        ok_tab, tab_info = self._ensure_bound_tab(win)
+        if not ok_tab:
+            self._notify_group_rejoin_verify_result(False, tab_info)
+            self._verifying = False
+            return
+        try:
+            self.add_logs(["[验证] 开始组号自动归队（检查暂离 → 匹配队员 Tab → "
+                           "切过去点归队）..."])
+            ok, away, info = team.scan_away_members(win)
+            self.add_logs([f"[验证] 暂离检查结论: {info}"])
+            if not ok:
+                return_info = info
+            elif not away:
+                # 检查链路正常即算通过（无暂离成员 = 无归队对象）
+                return_info = "无暂离成员，无需归队"
+                ok = True
+            else:
+                # 主进程无任务模式（active() 不可用）：init_task 枚举 Tab +
+                # ready() 校验 + force pass（与组号巫医验证同款）
+                tab_group.init_task(win, "修罗", True)
+                if not tab_group.ready():
+                    return_info = (f"{info}；组号模式未激活"
+                                   f"（需窗口内 ≥2 个已登录 Tab），无法自动归队")
+                    ok = False
+                else:
+                    done, pass_info, _matched = tab_group.member_rejoin_pass(
+                        win, [n for _i, n, _r in away if n], force=True)
+                    if pass_info:
+                        self.add_logs([f"[验证] {pass_info}"])
+                    if done:
+                        return_info = pass_info
+                    else:
+                        return_info = pass_info or (f"{info}；暂离成员与本组号"
+                                                    f"队员 Tab 无匹配，无法自动归队")
+        except Exception as e:
+            ok, return_info = False, f"验证异常: {e}"
+            try:
+                self.add_logs([f"[验证] 组号归队异常: {return_info}"])
+            except Exception:
+                pass
+        self._notify_group_rejoin_verify_result(ok, return_info)
+        self._verifying = False
+
+    def _notify_group_rejoin_verify_result(self, ok, info):
+        """组号自动归队结果回推页面（诊断-组号自动归队行的结果文案）。"""
+        if self.webview_instance:
+            try:
+                ok_js = "true" if ok else "false"
+                self.webview_instance.evaluate_js(
+                    f"if(window.onGroupRejoinVerifyResult){{window.onGroupRejoinVerifyResult({ok_js}, {json.dumps(info)});}}")
             except Exception:
                 pass
 
