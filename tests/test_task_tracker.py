@@ -104,6 +104,34 @@ def test_green_text_center_underline_beyond_fragment_rect():
     assert task_tracker.has_underline(img, rect)
 
 
+def test_track_task_dialog_line_must_not_hijack_anchor(monkeypatch):
+    """对话框故事行含任务名不得成为锚点：2026-11-06 玄枢轶闻实测——
+    对话推进后对话框仍在场、面板标题行 OCR 抖动未检出，裸文案兜底
+    命中对话框故事行（含「玄枢轶闻」，x≈250），内容采集落入对话框，
+    NPC 收尾台词被当面板绿字点击 (261,260)（正确 (91,268)），点击
+    无效任务卡死至人工重启。锚点必须落在标题列（x<ANCHOR_MAX_X），
+    找不到标题即失败等重试，绝不点对话框文案。
+    """
+    img = np.zeros((831, 1378, 3), dtype=np.uint8)
+    img[255:268, 250:560:8] = (0, 255, 0)   # 对话框故事/收尾行（绿字笔画）
+    items = [("少侠可愿接受玄枢轶闻的考验？", [250, 240, 580, 267], 0.95),
+             ("再去找徐卿卿接受他的考验。", [250, 260, 580, 287], 0.95)]
+    clicks = []
+
+    class FakeWin:
+        def capture(self, force_activate=False):
+            from PIL import Image
+            return Image.fromarray(img)
+
+    monkeypatch.setattr(task_tracker, "human_click",
+                        lambda win, x, y: clicks.append((x, y)))
+    monkeypatch.setattr(task_tracker.game_map, "ocr_regions",
+                        lambda im, regions: (items, img))
+    ok, info = task_tracker.track_task(FakeWin(), "玄枢轶闻", retries=0,
+                                       pre_items=(items, img))
+    assert not ok and clicks == []  # 标题列无锚点：失败等待重试，不点对话框
+
+
 def test_track_task_require_coord_refuses_subgoal_and_time_rows(monkeypatch):
     """require_coord：坐标行未检出时拒绝行级兜底点击（替身行/剩余时间
     行同为绿字也不点），直接失败等外层复读（2026-10-31 点错教训）。

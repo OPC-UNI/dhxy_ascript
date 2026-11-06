@@ -29,6 +29,11 @@ GREEN_DOMINANCE = 30
 GREEN_MIN_RATIO = 0.01
 # 追踪面板左区边界（x），用于区分面板标题与居中对话框的绿色选项
 PANEL_MAX_X = 400
+# 锚点（任务标题行）x 上限：标题恒在追踪面板最左列（实测标题框
+# x≈20-130；内容链接行可延伸至 x≈400，故 PANEL_MAX_X 只用于内容/
+# 关键词过滤）。放宽到 400 会让居中对话框的故事行（x≥250）劫持锚点
+# （2026-11-06 玄枢轶闻点错教训，见 track_task 锚点注释）
+ANCHOR_MAX_X = 180
 # 地图坐标模式（链接行专属）：链接行恒含「(x, y)」（如「去找大唐边境
 # (358, 21)惯骗[」），描述行与计数碎片行不含；绿字行选择时坐标行优先，
 # 避免点击目标在描述行/计数碎片行间漂移。兼容实测 OCR 变体：全角括号
@@ -554,30 +559,33 @@ def track_task(win, title, text=None, green_index=0, retries=4, retry_interval=1
             items, img_np = game_map.ocr_regions(img, OCR_REGIONS)
 
         # 任务锚点行：优先取标题格式行（含方括号短行，_is_title_line），
-        # 无标题格式行再回退任意包含标题文案的行（兼容无方括号标题）。
+        # 无标题格式行再回退短行标题文案（兼容无方括号标题）。
         # 修罗实测：「狂风修罗」（无方括号的干扰行）抢先成为锚点后，
         # 内容采集在真实标题「修罗任务[常规玩法]」处中断，内容恒 0 行
-        # → 4 次渲染重试空转 ~8s 后放弃整轮。优先取追踪面板左区内的行，
-        # 避免居中对话框里的文案抢先
+        # → 4 次渲染重试空转 ~8s 后放弃整轮。锚点必须落在追踪面板
+        # 标题列（x<ANCHOR_MAX_X）：2026-11-06 玄枢轶闻实测，对话框
+        # 仍在场时标题行 OCR 抖动未过严格判定，宽松兜底命中对话框里
+        # 含「玄枢轶闻」的故事行（x≈250），内容采集随之落入对话框、
+        # 把 NPC 收尾台词当面板绿字点击 (261,260)（正确 (91,268)），
+        # 点击无效任务卡死至人工重启——居中对话框文案不得抢锚点
         anchor_idx = None
         for i, (txt, rect, score) in enumerate(items):
             if _is_title_line(txt) and title in txt and score >= 0.55 \
-                    and rect[0] < PANEL_MAX_X:
+                    and rect[0] < ANCHOR_MAX_X:
                 anchor_idx = i
                 break
         if anchor_idx is None:
             for i, (txt, rect, score) in enumerate(items):
-                if title in txt and score >= 0.55 and rect[0] < PANEL_MAX_X:
+                if title in txt and score >= 0.55 and rect[0] < ANCHOR_MAX_X \
+                        and len(txt.strip()) <= 20:
                     anchor_idx = i
                     break
         if anchor_idx is None:
+            # 末兜底仅认标题格式（方括号短行）——裸文案任意位置
+            # 匹配是对话框故事行劫持锚点的通道，已移除；标题行整行
+            # 漏检时由 fallback_keywords 面板区关键词兜底点击
             for i, (txt, rect, score) in enumerate(items):
                 if _is_title_line(txt) and title in txt and score >= 0.55:
-                    anchor_idx = i
-                    break
-        if anchor_idx is None:
-            for i, (txt, rect, score) in enumerate(items):
-                if title in txt and score >= 0.55:
                     anchor_idx = i
                     break
         if anchor_idx is None:

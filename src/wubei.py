@@ -2506,7 +2506,7 @@ def run_loop(win, cycle_interval=1.0):
     max_rounds = load_task_counts().get(TASK_MODE, 0)
     log(f"[五倍] 任务次数上限: {max_rounds if max_rounds > 0 else '不限'}", "SYS")
     log(f"[五倍] 领取点宝象国 {CLAIM_SPOT[0]},{CLAIM_SPOT[1]}，队伍固定 5 人", "SYS")
-    # 检查队伍开关（任务设置-五倍设置，默认关闭）：开启时领取前判定
+    # 检查队伍开关（任务设置-五倍设置，默认开启）：开启时领取前判定
     # 队长身份并监控人数（缺人自动补），非队长仅保持战斗线程；
     # 关闭时跳过全部队伍检查直接领取（可能不是队长，被拒也不补人）
     check_team = load_wubei_check_team()

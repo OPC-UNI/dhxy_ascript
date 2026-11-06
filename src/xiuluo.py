@@ -1871,7 +1871,7 @@ def run_loop(win, cycle_interval=1.0):
     max_rounds = load_task_counts().get(TASK_MODE, 0)
     log(f"[修罗] 任务次数上限: {max_rounds if max_rounds > 0 else '不限'}", "SYS")
     # 高性能模式开关由 main.task_start 按通用设置置位（共享设施）
-    # 检查队伍开关（通用设置-修罗设置，默认关闭）：关闭时领取前跳过
+    # 检查队伍开关（通用设置-修罗设置，默认开启）：关闭时领取前跳过
     # 全部队伍检查（非队长判定/人数监控），直接走位领取
     check_team = load_xiuluo_check_team()
     # 自动巫医（通用设置开关，默认开、每 5 轮一次）：每 N 轮领取后
@@ -1930,7 +1930,7 @@ def run_loop(win, cycle_interval=1.0):
             # 位置识别失败时等待传送加载完成，见 _walk_to_claim_spot）
             just_returned = _returned_last_round
             _returned_last_round = False
-            # 队伍检查受「检查队伍」开关门控（默认关闭=完全跳过），且仅在
+            # 队伍检查受「检查队伍」开关门控（默认开启；关闭=完全跳过），且仅在
             # 首次领取前执行（_team_checked 置位后跳过）：每轮回程后开面板
             # 检查耗时 5~7s，首次领取成功后不再重复
             pre_status = None  # 1.0 预检结果（ready/wait）：走位后按结果

@@ -386,14 +386,14 @@ def save_wuhuan_vitality_continue(on):
 _WUBEI_HEZI_KEY = "wubei_auto_hezi"
 
 
-# ---- 五倍检查队伍（UI 开关，KeyValue 持久化；默认关闭，关闭时
+# ---- 五倍检查队伍（UI 开关，KeyValue 持久化；默认开启，关闭时
 #      跳过全部队伍检查直接领取——可能不是队长，被拒也不补人） ----
 _WUBEI_CHECK_TEAM_KEY = "wubei_check_team"
 
 
 def load_wubei_check_team():
-    """读取五倍检查队伍开关（首次默认关闭）。"""
-    return bool(KeyValue.get(_WUBEI_CHECK_TEAM_KEY, False))
+    """读取五倍检查队伍开关（首次默认开启）。"""
+    return bool(KeyValue.get(_WUBEI_CHECK_TEAM_KEY, True))
 
 
 def save_wubei_check_team(on):
@@ -402,15 +402,15 @@ def save_wubei_check_team(on):
     return {"status": "success"}
 
 
-# ---- 五倍缺人自动喊话（UI 开关，KeyValue 持久化；默认关闭。
+# ---- 五倍缺人自动喊话（UI 开关，KeyValue 持久化；默认开启。
 #      喊话内容为固定值（wubei.py WUBEI_SHOUT_DEFAULT），不再对外
 #      保留内容设置——用户 2026-10-14 确认） ----
 _WUBEI_SHOUT_SWITCH_KEY = "wubei_shout"
 
 
 def load_wubei_shout_switch():
-    """读取五倍缺人自动喊话开关（首次默认关闭）。"""
-    return bool(KeyValue.get(_WUBEI_SHOUT_SWITCH_KEY, False))
+    """读取五倍缺人自动喊话开关（首次默认开启）。"""
+    return bool(KeyValue.get(_WUBEI_SHOUT_SWITCH_KEY, True))
 
 
 def save_wubei_shout_switch(on):
@@ -522,13 +522,14 @@ def save_silent_mode(on):
 
 
 # ---- 修罗检查队伍（UI 开关，KeyValue 持久化；关闭时领取前跳过全部
-#      队伍检查，默认关闭——用户确认每轮回程后开面板检查耗时 5~7s） ----
+#      队伍检查，默认开启（关闭时每轮回程后开面板检查 5~7s 的耗时
+#      也一并跳过——用户可按需关闭）） ----
 _XIULUO_CHECK_TEAM_KEY = "xiuluo_check_team"
 
 
 def load_xiuluo_check_team():
-    """读取修罗检查队伍开关（首次默认关闭）。"""
-    return bool(KeyValue.get(_XIULUO_CHECK_TEAM_KEY, False))
+    """读取修罗检查队伍开关（首次默认开启）。"""
+    return bool(KeyValue.get(_XIULUO_CHECK_TEAM_KEY, True))
 
 
 def save_xiuluo_check_team(on):
@@ -539,14 +540,14 @@ def save_xiuluo_check_team(on):
 
 # ---- 修罗自动巫医（UI 开关+间隔，KeyValue 持久化；默认开启、每 5 轮
 #      一次——每 N 轮领取后无条件前往巫医 NPC 医治，血蓝正常也照常） ----
-# ---- 修罗缺人自动喊话（UI 开关，KeyValue 持久化；默认关闭。
+# ---- 修罗缺人自动喊话（UI 开关，KeyValue 持久化；默认开启。
 #      喊话内容按必须种族拼装（xiuluo._build_shout_text），无内容设置） ----
 _XIULUO_SHOUT_SWITCH_KEY = "xiuluo_shout"
 
 
 def load_xiuluo_shout_switch():
-    """读取修罗缺人自动喊话开关（首次默认关闭）。"""
-    return bool(KeyValue.get(_XIULUO_SHOUT_SWITCH_KEY, False))
+    """读取修罗缺人自动喊话开关（首次默认开启）。"""
+    return bool(KeyValue.get(_XIULUO_SHOUT_SWITCH_KEY, True))
 
 
 def save_xiuluo_shout_switch(on):
