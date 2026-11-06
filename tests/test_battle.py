@@ -63,6 +63,65 @@ def test_is_in_battle_frame_banner_hit(monkeypatch):
     assert battle.is_in_battle_frame(frame)
 
 
+# ---- 战斗结束证据推进（_end_poll_advance：坐标快速结束信号 + 模板路径） ----
+
+def test_end_poll_advance_pos_signal_shortcuts_end():
+    """坐标可读（战斗实质结束）连续 2 轮询即确认，比模板路径（4 轮询）快。"""
+    out = 0
+    out, ended = battle._end_poll_advance(True, True, True, 60.0, out)
+    assert (out, ended) == (1, False)
+    out, ended = battle._end_poll_advance(True, True, True, 60.0, out)
+    assert (out, ended) == (2, True)
+
+
+def test_end_poll_advance_pos_signal_resets_when_unreadable():
+    """坐标证据中断（战斗帧坐标不可读）即清零，防战斗画面 OCR 噪声累计。"""
+    out, ended = battle._end_poll_advance(True, True, True, 60.0, 0)
+    assert (out, ended) == (1, False)
+    out, ended = battle._end_poll_advance(True, True, False, 60.0, out)
+    assert (out, ended) == (0, False)
+
+
+def test_end_poll_advance_pos_gated_before_min_elapsed():
+    """进场未满 BATTLE_END_POS_AFTER：坐标可读也不作证据（开场过渡帧防误判）。"""
+    out, ended = battle._end_poll_advance(
+        True, True, True, battle.BATTLE_END_POS_AFTER - 1, 0)
+    assert (out, ended) == (0, False)
+
+
+def test_end_poll_advance_template_path_needs_four():
+    """模板路径：连续 4 轮询非战斗帧才确认（回合间隙防抖窗口保持）。"""
+    out = 0
+    for _ in range(battle.BATTLE_END_CONFIRM_POLLS - 1):
+        out, ended = battle._end_poll_advance(True, False, False, 0.0, out)
+        assert not ended
+    out, ended = battle._end_poll_advance(True, False, False, 0.0, out)
+    assert ended
+
+
+def test_end_poll_advance_template_reset_on_battle_frame():
+    """模板证据被战斗帧打断即清零（回合间隙横幅复现不误判结束）。"""
+    out, _ = battle._end_poll_advance(True, False, False, 0.0, 0)
+    assert out == 1
+    out, ended = battle._end_poll_advance(True, True, False, 60.0, out)
+    assert (out, ended) == (0, False)
+
+
+def test_end_poll_advance_not_in_battle_always_clear():
+    """未在战斗：任何输入都不累积证据（开场帧防提前结束）。"""
+    out, ended = battle._end_poll_advance(False, False, True, 0.0, 3)
+    assert (out, ended) == (0, False)
+
+
+def test_end_poll_advance_mixed_evidence_shares_counter():
+    """坐标证据与模板证据共享计数：坐标 1 次 + 非战斗帧 3 次 = 模板 4 次确认。"""
+    out, ended = battle._end_poll_advance(True, True, True, 60.0, 0)
+    assert (out, ended) == (1, False)
+    for _ in range(battle.BATTLE_END_CONFIRM_POLLS - 1):
+        out, ended = battle._end_poll_advance(True, False, False, 0.0, out)
+    assert ended
+
+
 # ---- 巫医选项定位 ----
 
 def test_find_wuyi_option():

@@ -104,6 +104,15 @@ AUTO_ASSERT_TIMEOUT = 35     # 例行确认自动时等待自动按钮出现的�
 BATTLE_CONFIRM_POLLS = 2     # 战斗进入的连续轮询确认次数（防开场抖动）
 BATTLE_END_CONFIRM_POLLS = 4  # 战斗结束的连续轮询确认次数（0.5s×4=2s 窗口，
                               # 与原先 1s×2 相同，防回合间隙误判结束）
+BATTLE_END_POS_POLLS = 2     # 坐标快速结束确认次数（0.5s×2，见 _end_poll_advance）：
+                             # 战斗实际结束后场景（地图坐标）先于战斗 UI 模板恢复，
+                             # 坐标可读即战斗实质结束（2026-11-06 实测坐标恢复后
+                             # 模板路径仍要 4 轮询约 2~3s 才确认结束）；连续 2 轮询
+                             # 可读防战斗画面 OCR 噪声
+BATTLE_END_POS_AFTER = 10.0  # 进场多久后才启用坐标快速结束信号（秒）：战斗开场
+                             # 过渡帧可能「战斗 UI 已现、场景坐标仍可读」，提前启用
+                             # 会把开场误判成结束；实测战斗均 ≥30s，秒杀级短战斗
+                             # 走原模板路径
 
 # ---- 自动按钮高性能缓存（位置固定：操作条在窗口底部，按钮布局不变） ----
 AUTO_POS_CACHE_KEY = "battle_auto"  # 固定位置缓存键（识别成功后 fixed_pos_set）
@@ -976,6 +985,31 @@ def _member_auto_pass_hook(win, wait_auto):
         log(f"[战斗] 组号队员自动 pass 异常: {e}", "WARN")
 
 
+def _end_poll_advance(in_battle, battle_frame, pos_readable, battle_elapsed,
+                      out_polls):
+    """单轮询战斗结束证据推进（纯函数，watch_loop 调用，便于单测）。
+
+    返回 (out_polls, ended)：
+    - 未在战斗：清零（战斗外/开场帧不得累积结束证据）
+    - 战斗帧且坐标可读且进场满 BATTLE_END_POS_AFTER：累积坐标证据，
+      连续 BATTLE_END_POS_POLLS 轮询确认结束——坐标可读即战斗实质
+      结束（场景先于战斗 UI 模板恢复），比模板路径提前 1~2s 放行
+      血蓝/巫医检查与任务线程共享状态
+    - 其余（战斗帧坐标不可读 / 非战斗帧）：战斗帧清零，非战斗帧累积
+      模板证据，连续 BATTLE_END_CONFIRM_POLLS 轮询确认结束（防回合
+      间隙误判——回合变化时场景不恢复，坐标信号天然免疫）
+    """
+    if not in_battle:
+        return 0, False
+    if battle_frame:
+        if pos_readable and battle_elapsed >= BATTLE_END_POS_AFTER:
+            out_polls += 1
+            return out_polls, out_polls >= BATTLE_END_POS_POLLS
+        return 0, False
+    out_polls += 1
+    return out_polls, out_polls >= BATTLE_END_CONFIRM_POLLS
+
+
 def watch_loop(win):
     """战斗监控线程入口：轮询战斗状态，按场次调度战斗操作。
 
@@ -1002,6 +1036,11 @@ def watch_loop(win):
     last_battle_end_at = 0.0  # 上次战斗结束时间（巫医弹窗高发窗口起点）
     last_hezi_check = 0.0  # 上次修罗盒子检查时间
     hezi_click_at = 0.0    # 上次点击「我需要」时间（冷却）
+    battle_enter_at = 0.0  # 本场战斗进场时刻（坐标快速结束信号的启用门）
+    pos_hold = False       # 坐标路径结束确认后置位：先见一帧非战斗画面才允许
+                           # 重新进入判定（胜利画面残留回合横幅可能仍匹配战斗
+                           # 模板，防把残留横幅误判成新战斗开场）
+    bars_pending = False   # 坐标路径结束时血蓝检查延后到首个场景帧执行
     while True:
         try:
             if tab_group.pass_active:
@@ -1017,14 +1056,27 @@ def watch_loop(win):
                 time.sleep(WATCH_POLL_INTERVAL)
                 continue
             bgr = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
-            if is_in_battle_frame(bgr):
-                out_polls = 0
-                if not in_battle:
+            battle_frame = is_in_battle_frame(bgr)
+            # 坐标快速结束信号（2026-11-06 实测）：战斗实际结束后场景
+            # （地图坐标）先于战斗 UI 模板恢复，坐标可读即战斗实质结束。
+            # 仅战斗帧且进场满 BATTLE_END_POS_AFTER 时读（复用本帧 PIL，
+            # 区域 OCR；开场 10s 内跳过，防过渡帧把开场误判成结束）
+            pos_readable = False
+            if battle_frame and in_battle \
+                    and time.time() - battle_enter_at >= BATTLE_END_POS_AFTER:
+                pos_readable = game_map.read_map_position(win, img=img) is not None
+            out_polls, ended = _end_poll_advance(in_battle, battle_frame,
+                                                 pos_readable,
+                                                 time.time() - battle_enter_at,
+                                                 out_polls)
+            if battle_frame:
+                if not in_battle and not pos_hold:
                     in_polls += 1
                     if in_polls >= BATTLE_CONFIRM_POLLS:  # 连续两轮确认进入
                         in_battle = True
                         _watch_in_battle = True  # 任务侧共享状态
                         battle_no += 1
+                        battle_enter_at = time.time()  # 坐标快速结束信号启用门起点
                         debug_overlay.set_battle(battle_no)  # 调试悬浮层场次
                         debug_overlay.set_phase(f"战斗中 · 第 {battle_no} 场")  # 看板阶段
                         log(f"[战斗] 第 {battle_no} 场战斗开始", "SYS")
@@ -1049,24 +1101,34 @@ def watch_loop(win):
                         # 其余场次：不操作，等待游戏自动战斗结束
             else:
                 in_polls = 0
-                if in_battle:
-                    out_polls += 1
-                    # 结束确认保持 2s 窗口（0.5s×4 轮询，与原先 1s×2 相同，
-                    # 防回合间隙误判结束——退出判定不放宽）
-                    if out_polls >= BATTLE_END_CONFIRM_POLLS:
-                        in_battle = False
-                        _watch_in_battle = False  # 任务侧共享状态
-                        debug_overlay.set_phase("")  # 出战斗清阶段：看板回退「执行中」，待任务模块写下一阶段（防战后陈旧显示「战斗中」）
-                        log(f"[战斗] 第 {battle_no} 场战斗结束", "SYS")
-                        # 战后补血蓝受通用设置开关门控（默认开）：关闭时
-                        # 不检测血蓝条、不自动右键回满
-                        if load_auto_refill():
-                            status_bars.check_all_bars(win)
-                            debug_overlay.set_bars(status_bars.last_summary())  # 悬浮层血蓝摘要
-                        # 战后立即检查：先补血蓝（上一步），再巫医对话框/修罗盒子
-                        last_wuyi_check = 0.0
-                        last_battle_end_at = time.time()  # 巫医弹窗高发窗口起点
-                        last_hezi_check = 0.0
+                pos_hold = False  # 坐标路径结束后首帧非战斗画面：允许重新进入判定
+            if ended:
+                in_battle = False
+                _watch_in_battle = False  # 任务侧共享状态
+                pos_hold = True  # 见声明注释：胜利画面残留横幅防误判新战斗
+                debug_overlay.set_phase("")  # 出战斗清阶段：看板回退「执行中」，待任务模块写下一阶段（防战后陈旧显示「战斗中」）
+                log(f"[战斗] 第 {battle_no} 场战斗结束", "SYS")
+                # 战后补血蓝受通用设置开关门控（默认开）：关闭时
+                # 不检测血蓝条、不自动右键回满。模板路径结束帧即场景帧
+                # 直接查；坐标路径结束帧是胜利画面（血蓝条不渲染），
+                # 延后到首个非战斗帧（bars_pending）
+                if battle_frame:
+                    bars_pending = True
+                elif load_auto_refill():
+                    status_bars.check_all_bars(win)
+                    debug_overlay.set_bars(status_bars.last_summary())  # 悬浮层血蓝摘要
+                # 战后立即检查：先补血蓝（上一步），再巫医对话框/修罗盒子
+                last_wuyi_check = 0.0
+                last_battle_end_at = time.time()  # 巫医弹窗高发窗口起点
+                last_hezi_check = 0.0
+            if not battle_frame or ended:
+                # 坐标路径延后的血蓝检查：首个场景帧执行（血蓝条只在
+                # 场景渲染，胜利画面读会误报「未检测到填充」）
+                if bars_pending and not battle_frame:
+                    bars_pending = False
+                    if load_auto_refill():
+                        status_bars.check_all_bars(win)
+                        debug_overlay.set_bars(status_bars.last_summary())
                 now = time.time()
                 # 巫医检查节奏：战斗结束后高发窗口内 2s（5s 教训：弹窗等
                 # 久人物走远即关闭），主流程点 NPC 后预期窗口内同样 2s，

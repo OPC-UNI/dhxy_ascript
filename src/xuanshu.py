@@ -1351,6 +1351,11 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
     返回 (是否完成, 描述)。
     """
     deadline = time.time() + timeout
+    battle_since = None  # 战斗中等待起点：战斗时间不计入跟踪超时（2026-11-06
+                         # 实测黄袍怪多杀单轮任务内含 4~5 场战斗约 4 分钟，吃满
+                         # 300s 超时后 follow 死于战斗中途，主循环丢失任务完成
+                         # 信号——战后不走返程反而误入领取流程走回宝象国；
+                         # 战斗是任务推进的外部等待，不应消耗「任务卡死」预算）
     rounds = 0
     task_seen = False  # 本轮跟踪中任务是否曾被识别到：完成须满足
                        # 「无→有→无」——从未出现即确认消失是假完成
@@ -1377,10 +1382,16 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
         if tab_group.active() and not tab_group.ensure_leader_tab(win):
             time.sleep(FOLLOW_POLL_INTERVAL)
             continue
-        # 战斗中：任务追踪不可用（可能误判任务消失），等待战斗结束
+        # 战斗中：任务追踪不可用（可能误判任务消失），等待战斗结束。
+        # 战斗等待时间不计入超时（deadline 顺延，见 battle_since 说明）
         if is_in_battle(win):
+            if battle_since is None:
+                battle_since = time.time()
             time.sleep(FOLLOW_POLL_INTERVAL)
             continue
+        if battle_since is not None:
+            deadline += time.time() - battle_since
+            battle_since = None
         # 复用最近一次 OCR 结果（内层轮询确认推进时或领取校验命中时），
         # 省一次截图+OCR；该帧同样透传给 track_task 与进度键基线，
         # 点击路径上一共省掉约 3.5s 的重复 OCR
@@ -1506,6 +1517,10 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
             # 战斗期每轮空烧双区域 OCR（实测 1.4-2.2 CPU 秒/次）
             if is_in_battle_frame(img):
                 was_battle = True
+                # 战斗等待时间不计入超时（与外层 is_in_battle 门同一预算；
+                # 首个非战斗帧处一次性顺延 deadline）
+                if battle_since is None:
+                    battle_since = time.time()
                 # 确认轮询期战斗帧：保持原 2s 退避（确认轮询间隔仅 0.2s，
                 # 不退避会以 5Hz 截窗+匹配空烧）
                 if changed_once:
@@ -1521,6 +1536,11 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                         img, task_tracker.DIALOG_REGION)
                     extra_dialog_handler(win, items_d, img_np_d)
                 continue
+            if battle_since is not None:
+                # 首个非战斗帧：战斗等待时长一次性顺延 deadline（战斗不消耗
+                # 「任务卡死」超时预算，见 battle_since 说明）
+                deadline += time.time() - battle_since
+                battle_since = None
             if changed_once:
                 # 确认轮询：只复查追踪面板区域的任务签名/进度键（区域更小
                 # OCR 更快），跳过对话框处理，最快确认变化。战斗帧已在
