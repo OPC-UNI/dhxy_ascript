@@ -76,7 +76,8 @@ _jiantianpan_last_done = 0.0                      # 上次流程执行时间戳
 from .dialog_common import (DAILY_LIMIT_TEXT, DAILY_LIMIT_INFO,
                             DIALOG_LOSE_TEXTS, DIALOG_SKIP_CLICKS,
                             SCREEN_CENTER_POS,
-                            OPTION_FIRST_OFFSET, OPTION_ROW_STEP, OPTION_X_OFFSET)
+                            OPTION_FIRST_OFFSET, OPTION_ROW_STEP, OPTION_X_OFFSET,
+                            dialog_ocr_skip)
 # 每日任务次数已满的对话文案（出现即结束任务循环）
 # 需要点击屏幕中间跳过的对话框文案 → 点击次数（出现则连点屏幕中间推进
 # 对话，同 kezhan.DIALOG_SKIP_TEXTS）；不同文案要推进的屏数不同，次数
@@ -217,6 +218,16 @@ TASK_GONE_GATE_POLL_INTERVAL = 0.2 # 证据已足时等战斗线程确认门的�
 # 跟踪轮询的 OCR 区域见 task_tracker（TRACK_REGION/DIALOG_REGION/OCR_REGIONS）
 FOLLOW_TRACK_REGION = task_tracker.TRACK_REGION
 FOLLOW_OCR_REGIONS = task_tracker.OCR_REGIONS
+# 任务消失确认用面板条带（返程链路热路径，2026-11-06 实测标定）：
+# 面板全区 (0,200,400,600) OCR 约 0.9s/轮 ×2 轮是返程延迟大头。
+# 实测面板布局：标题行 y230-254、内容链接行 y250-291（多轮日志点击
+# y258-291 一致）；确认只需标题行（find_task）与各任务的兜底链接行
+# （五倍消灭黄袍怪/消灭魔尊/形镜/锁妖网/奎木狼、修罗消灭修罗、五环
+# 子目标替身/武痴等，均为前几行内容行）——条带取 (0,210,400,470)，
+# 标题+约 9 行内容行，最深实测链接 291 下留约 180px 余量，OCR 降至
+# ~0.6s。兜底行落到条带外的偶发漏判由主循环 has_task 全区域复查兜住
+# （判错任务消失 → 复查发现仍在 → 跳过返程继续跟踪，~2s 自愈）。
+TASK_GONE_REGION = (0, 210, 400, 470)
 # 面板差分门见 task_tracker.TrackGate（共享组件，领取校验循环同用；
 # 门区域/兜底时限为实测校准资产，见 task_tracker.TRACK_GATE_*）
 # 战斗中 extras 对话框 OCR 限频（秒）：战斗动画帧帧不同、差分门失效，
@@ -1151,13 +1162,17 @@ def _frames_equal(a, b):
 
 
 
-def _confirm_task_gone(win, title, fallback_texts=()):
+def _confirm_task_gone(win, title, fallback_texts=(), first_img=None,
+                       polls=TASK_GONE_CONFIRM_POLLS):
     """确认任务确实从追踪面板消失（连续轮询未见且无战斗遮挡）。
 
     OCR 偶发漏读（标题误读、面板瞬时遮挡）会误判任务消失——五环实测
     误判「任务消失」导致完成次数虚增、任务提前结束；战斗画面遮挡追踪
     面板时 OCR 必然读不到任务，战斗中不计入确认窗口（延长窗口等战斗
     结束后再观察）。返回 True=确认消失（任务完成）。
+
+    first_img：调用方本轮已截取的帧（PIL）——战斗结束转换帧上的首个
+    确认轮询跳过截图直接 OCR（返程链路上省一次截窗 ~0.3s）。
 
     fallback_texts：标题漏检防误判兜底——修罗实测标题行整个被区域
     OCR 漏检（彩色徽标前缀），领取后首次检查即误判「任务消失」，
@@ -1179,7 +1194,8 @@ def _confirm_task_gone(win, title, fallback_texts=()):
     hard_deadline = time.time() + TASK_GONE_CONFIRM_TIMEOUT * 4
     gone_polls = 0
     while time.time() < deadline and time.time() < hard_deadline:
-        img = win.capture(force_activate=False)
+        img = first_img if first_img is not None else win.capture(force_activate=False)
+        first_img = None
         if img is None:
             # 截窗失败不计入确认窗口（与战斗帧同待遇，防瞬时失败误判）
             deadline = time.time() + TASK_GONE_CONFIRM_TIMEOUT
@@ -1193,7 +1209,7 @@ def _confirm_task_gone(win, title, fallback_texts=()):
             deadline = time.time() + TASK_GONE_CONFIRM_TIMEOUT
             time.sleep(2.0)
             continue
-        items, img_np = game_map.ocr_regions(img, (FOLLOW_TRACK_REGION,))
+        items, img_np = game_map.ocr_regions(img, (TASK_GONE_REGION,))
         if task_tracker.find_task(task_tracker.group_tasks(items), title) is not None:
             return False  # 任务重新出现：此前为漏读，继续跟踪
         if fallback_texts:
@@ -1214,7 +1230,7 @@ def _confirm_task_gone(win, title, fallback_texts=()):
             # （2026-10-24 战斗结束→开背包恒为 2~3s）。门等待 ≤2s，
             # 最后一次 OCR 时效性与原逻辑（门后一轮 ~1.9s）无实质差异
             deadline = time.time() + TASK_GONE_CONFIRM_TIMEOUT
-            if gone_polls >= TASK_GONE_CONFIRM_POLLS:
+            if gone_polls >= polls:
                 while time.time() < deadline and battle_watch_in_battle():
                     time.sleep(TASK_GONE_GATE_POLL_INTERVAL)
                 if not battle_watch_in_battle():
@@ -1222,15 +1238,25 @@ def _confirm_task_gone(win, title, fallback_texts=()):
                 continue
             time.sleep(TASK_GONE_POLL_INTERVAL)
             continue
-        if gone_polls >= TASK_GONE_CONFIRM_POLLS:
+        if gone_polls >= polls:
             return True
         time.sleep(TASK_GONE_POLL_INTERVAL)
     if time.time() >= hard_deadline:
         return False  # 延长耗尽仍无法确认：继续跟踪，稍后重新确认
+    if battle_watch_in_battle():
+        # 战斗尚未结束：窗口耗尽也不得判定任务消失（2026-11-06 实测：
+        # 回合间隙操作条+横幅同时漏匹配 → follow 假转换进入确认 →
+        # 证据 1 轮后等门，门在战斗中永不开，6s 窗口耗尽走「视为完成」
+        # 兜底在战斗中误判任务消失 → 返程前置战斗检查被迫等 35s、
+        # has_task 在战斗中误判无任务——任务完成判定必须以战斗线程
+        # 确认为门，战斗未结束一律返回 False 继续跟踪，由外层战斗
+        # 检查等战斗结束后重新确认）
+        log("[任务追踪] 任务消失确认：窗口耗尽但战斗未结束，不判定消失", "WARN")
+        return False
     return True  # 确认窗口内始终未见任务：视为完成
 
 
-def _confirm_guard_dialog(win, img, extra_dialog_handler):
+def _confirm_guard_dialog(win, img, extra_dialog_handler, tpl_gate=True):
     """确认轮询跳出前的对话框复核（负面条件检查）。
 
     确认轮询只 OCR 追踪面板（快速路径），但跳出后要点击任务绿字——
@@ -1244,6 +1270,8 @@ def _confirm_guard_dialog(win, img, extra_dialog_handler):
     """
     if extra_dialog_handler is None:
         return False
+    if tpl_gate and dialog_ocr_skip(img):
+        return False  # 高性能+模板未命中：无对话框，跳过 OCR 与 extras
     try:
         items_d, _ = game_map.ocr_region(img, task_tracker.DIALOG_REGION)
         return bool(extra_dialog_handler(win, items_d, np.asarray(img)))
@@ -1251,7 +1279,7 @@ def _confirm_guard_dialog(win, img, extra_dialog_handler):
         return False
 
 
-def _task_gone_dialog_guard(win, extra_dialog_handler):
+def _task_gone_dialog_guard(win, extra_dialog_handler, tpl_gate=True):
     """任务消失确认后的对话框复核（任务消失时奇遇弹窗可能仍在）。
 
     任务从追踪面板消失后，奇遇弹窗可能还开着（如客栈开箱奇遇的结局
@@ -1268,6 +1296,10 @@ def _task_gone_dialog_guard(win, extra_dialog_handler):
         img = win.capture(force_activate=False)
         if img is None or is_in_battle_frame(img):
             return False
+        if tpl_gate and dialog_ocr_skip(img):
+            return False  # 高性能+模板未命中：无对话框，跳过 OCR 与
+                          # extras（返程链路省截窗后的 OCR ~0.4~2s，
+                          # 2026-11-06 开打 2x 放大重识别白耗教训）
         items_d, _ = game_map.ocr_region(img, task_tracker.DIALOG_REGION)
         return bool(extra_dialog_handler(win, items_d, np.asarray(img)))
     except Exception:
@@ -1296,7 +1328,8 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 green_picker=None, fallback_keywords=None, first_items=None,
                 signature_key=None, ignore_empty_key=False, skip_texts=None,
                 pre_click_handler=None, require_coord=False,
-                post_track_handler=None, signature_ratio=0.8):
+                post_track_handler=None, signature_ratio=0.8,
+                task_gone_polls=None, dialog_tpl_gate=True):
     """循环跟踪任务直到完成（prefix 供其他任务复用，如五环）。
 
     每轮：点击任务当前第一个绿色文案 → 等待任务信息变化（内容更新）
@@ -1348,6 +1381,17 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
     require_coord：透传 track_task——点击目标行须含地图坐标，坐标行
     未检出时重试而非行级兜底点击（五环子目标行/剩余时间行不可点，
     2026-10-31）。
+    task_gone_polls：任务消失确认的连续未见轮询数（传 _confirm_task_gone）。
+    默认 None = TASK_GONE_CONFIRM_POLLS(2)。可传可调用对象，确认时实时
+    求值——五倍非黄袍怪轮次传 1（该轮次战斗均为任务最终战斗，任务消失
+    即完成；误判由主循环 has_task 复查兜住自愈），黄袍怪多杀轮次保持 2
+    （两场战斗之间面板瞬时为空，1 轮会误判完成触发 4s 复查窗口）。
+    dialog_tpl_gate：高性能模式下用对话框模板门控对话区 OCR（未命中
+    模板即跳过，实测匹配 ~9ms vs OCR 470~930ms）。标准对话框
+    （巫医/修罗/客栈/五倍领取与开打等）均命中；无标准边框的例外
+    面板（客栈奇遇、给予面板、队伍面板、申请加入面板）依赖 OCR 的
+    调用方须传 False（如客栈）——给予/队伍面板本身走模板检测不受影响。
+    普通模式（高性能关）门控不生效，行为与旧版一致。
     返回 (是否完成, 描述)。
     """
     deadline = time.time() + timeout
@@ -1371,6 +1415,13 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
         if signature_key is not None:
             return signature_key(items, img_np)
         return task_tracker.task_signature(task)
+
+    def _gone_polls():
+        """任务消失确认轮数（可调用对象实时求值，见 task_gone_polls 说明）。"""
+        if callable(task_gone_polls):
+            return task_gone_polls()
+        return TASK_GONE_CONFIRM_POLLS if task_gone_polls is None \
+            else task_gone_polls
     while time.time() < deadline:
         # 组号 pass 进行中（战斗线程在切队员 Tab）：屏幕不是队长，
         # 跳过本轮识别防误点队员账号
@@ -1395,6 +1446,8 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
         # 复用最近一次 OCR 结果（内层轮询确认推进时或领取校验命中时），
         # 省一次截图+OCR；该帧同样透传给 track_task 与进度键基线，
         # 点击路径上一共省掉约 3.5s 的重复 OCR
+        img = None  # 本轮新截帧（复用 OCR 结果时无帧：不得把旧帧传给
+                    # 任务消失确认，防陈旧帧误导确认结论）
         if last_items is not None:
             items, img_np = last_items
             last_items = None
@@ -1409,8 +1462,10 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
             items, img_np = game_map.ocr_regions(img, FOLLOW_OCR_REGIONS)
         task = task_tracker.find_task(task_tracker.group_tasks(items), title)
         if task is None:
-            if _confirm_task_gone(win, title, fallback_keywords):
-                if _task_gone_dialog_guard(win, extra_dialog_handler):
+            if _confirm_task_gone(win, title, fallback_keywords,
+                first_img=img, polls=_gone_polls()):
+                if _task_gone_dialog_guard(win, extra_dialog_handler,
+                    tpl_gate=dialog_tpl_gate):
                     continue  # 弹窗仍在：先处理，下一轮再确认任务消失
                 if not task_seen:
                     # 诊断：转储追踪面板 OCR 行——宽松匹配（领取校验
@@ -1553,8 +1608,10 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 track_gate.paste_track(img, img_np)
                 task2 = task_tracker.find_task(task_tracker.group_tasks(items), title)
                 if task2 is None:
-                    if _confirm_task_gone(win, title, fallback_keywords):
-                        if _task_gone_dialog_guard(win, extra_dialog_handler):
+                    if _confirm_task_gone(win, title, fallback_keywords,
+                        first_img=img, polls=_gone_polls()):
+                        if _task_gone_dialog_guard(win, extra_dialog_handler,
+                            tpl_gate=dialog_tpl_gate):
                             changed_once = False
                             continue
                         if not task_seen:
@@ -1584,7 +1641,8 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                         # 的开场白，实测 2026-10-13）——补 OCR 对话框区域
                         # 交给 extras 处理，命中则回退正常轮询，避免对着
                         # 打开中的对话框点任务绿字
-                        if _confirm_guard_dialog(win, img, extra_dialog_handler):
+                        if _confirm_guard_dialog(win, img, extra_dialog_handler,
+                            tpl_gate=dialog_tpl_gate):
                             changed_once = False
                             continue
                         log(f"[{prefix}] 变化确认: 任务签名「{sig}」→「{sig2}」", "INFO")
@@ -1594,7 +1652,8 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                     changed_once = False
                     continue
                 if key_changed and key == changed_key:
-                    if _confirm_guard_dialog(win, img, extra_dialog_handler):
+                    if _confirm_guard_dialog(win, img, extra_dialog_handler,
+                        tpl_gate=dialog_tpl_gate):
                         changed_once = False
                         continue
                     log(f"[{prefix}] 变化确认: 进度键「{baseline_key}」→「{key}」", "INFO")
@@ -1612,8 +1671,10 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 was_battle = False
                 last_poll_items = None
                 last_poll_img = None
-                if _confirm_task_gone(win, title, fallback_keywords):
-                    if _task_gone_dialog_guard(win, extra_dialog_handler):
+                if _confirm_task_gone(win, title, fallback_keywords,
+                    first_img=img, polls=_gone_polls()):
+                    if _task_gone_dialog_guard(win, extra_dialog_handler,
+                        tpl_gate=dialog_tpl_gate):
                         changed_once = False
                         continue
                     if not task_seen:
@@ -1631,8 +1692,15 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 # 区域逐轮 OCR（对话随时可能出现，移动世界像素持续变化、
                 # 差分门不适用）
                 track_items = track_gate.ocr(img)
-                dialog_items, img_np = game_map.ocr_region(
-                    img, task_tracker.DIALOG_REGION)
+                if dialog_tpl_gate and dialog_ocr_skip(img):
+                    # 高性能+模板未命中：跳过对话区 OCR（无对话框空烧
+                    # 实测 470~930ms/轮询；模板匹配仅 ~9ms）。对话框
+                    # 出现时模板必命中，开打/选项处理不受影响
+                    dialog_items = []
+                    img_np = np.zeros_like(np.asarray(img))
+                else:
+                    dialog_items, img_np = game_map.ocr_region(
+                        img, task_tracker.DIALOG_REGION)
                 track_gate.paste_track(img, img_np)
                 items = sorted(track_items + dialog_items, key=lambda x: x[1][1])
                 last_poll_items = (items, img_np)
@@ -1662,8 +1730,10 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 continue
             task2 = task_tracker.find_task(task_tracker.group_tasks(items), title)
             if task2 is None:
-                if _confirm_task_gone(win, title, fallback_keywords):
-                    if _task_gone_dialog_guard(win, extra_dialog_handler):
+                if _confirm_task_gone(win, title, fallback_keywords,
+                    first_img=img, polls=_gone_polls()):
+                    if _task_gone_dialog_guard(win, extra_dialog_handler,
+                        tpl_gate=dialog_tpl_gate):
                         changed_once = False
                         continue
                     if not task_seen:

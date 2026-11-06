@@ -2165,7 +2165,11 @@ def _follow_kezhan(win):
                            extra_dialog_handler=_handle_follow_extras,
                            green_order=GREEN_CLICK_ORDER,
                            progress_key=_order_progress_key,
-                           green_picker=_pick_task_green)
+                           green_picker=_pick_task_green,
+                           # 对话框模板门控关闭：客栈奇遇对话框无标准边框
+                           # （多选项恒点第一个，靠 OCR 文案检测），高性能
+                           # 门控会漏掉奇遇处理；其余面板（给予=模板）不受影响
+                           dialog_tpl_gate=False)
     return ("done", info) if ok else ("fail", info)
 
 

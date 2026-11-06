@@ -826,6 +826,7 @@ class ControlWindow(WebWindow):
         self.expose(self.verify_shout)
         self.expose(self.verify_jiguan)
         self.expose(self.verify_position)
+        self.expose(self.verify_dialog_detect)
         self.expose(self.verify_team_check)
         self.expose(self.verify_capture_diag)
         self.expose(self.verify_silent_click)
@@ -1914,6 +1915,48 @@ class ControlWindow(WebWindow):
                 ok_js = "true" if ok else "false"
                 self.webview_instance.evaluate_js(
                     f"if(window.onPositionVerifyResult){{window.onPositionVerifyResult({ok_js}, {json.dumps(info)});}}")
+            except Exception:
+                pass
+
+    def verify_dialog_detect(self):
+        """诊断-测试对话框识别按钮：单帧模板判定对话框在场 + 对话区
+        OCR 计时（只读不点击）。有/无对话框场景各点一次，对照日志
+        中的模板分数/耗时与 OCR 耗时——验证「模板未命中即跳过对话
+        OCR」方案（模板 res/img/dialog_frame.png）。任务运行中允许
+        使用（只读操作不影响任务）。
+        """
+        if self._verifying:
+            return {"status": "error", "msg": "验证进行中，请稍候"}
+        win = game.find_main_window()
+        if win is None:
+            return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
+        self._verifying = True
+        threading.Thread(target=self._run_dialog_detect_verify, args=(win,),
+                         daemon=True, name="dialog-detect-verify").start()
+        return {"status": "success",
+                "msg": "正在测试对话框识别（模板匹配+对话区OCR计时），结果见下方与日志"}
+
+    def _run_dialog_detect_verify(self, win):
+        """对话框识别测试线程体：只读模板匹配+OCR 计时，结果回推页面与日志窗。"""
+        from . import dialog_common  # 延迟导入：与其余验证模块保持一致
+        try:
+            ok, info = dialog_common.verify_dialog_detect(win)
+        except Exception as e:
+            ok, info = False, f"验证异常: {e}"
+        try:
+            self.add_logs([f"[验证] 结果: {info}"])
+        except Exception:
+            pass
+        self._notify_dialog_detect_verify_result(ok, info)
+        self._verifying = False
+
+    def _notify_dialog_detect_verify_result(self, ok, info):
+        """对话框识别测试结果回推页面（诊断-测试对话框识别行的结果文案）。"""
+        if self.webview_instance:
+            try:
+                ok_js = "true" if ok else "false"
+                self.webview_instance.evaluate_js(
+                    f"if(window.onDialogDetectVerifyResult){{window.onDialogDetectVerifyResult({ok_js}, {json.dumps(info)});}}")
             except Exception:
                 pass
 

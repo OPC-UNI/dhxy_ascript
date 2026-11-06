@@ -2035,6 +2035,14 @@ def _handle_follow_extras(win, items, img_np):
     return _handle_huangpaoguai(win, items, img_np)
 
 
+def _hpg_gone_polls():
+    """任务消失确认轮数（实时求值）：黄袍怪多杀轮次保持 2 轮——两场战斗
+    之间面板瞬时为空，1 轮确认会误判完成、触发返程前 4s 复查窗口拖慢整轮；
+    非黄袍怪轮次的战斗都是任务最终战斗，任务消失即完成，1 轮确认足矣
+    （误判由主循环 has_task 复查兜住自愈），返程链路省 ~0.9s（2026-11-06）。"""
+    return 2 if _hpg_task_seen else 1
+
+
 def _follow_to_done(win, first_items=None):
     """寻路 + 对话开打 + 战斗：跟踪任务直到本轮完成。
 
@@ -2051,7 +2059,8 @@ def _follow_to_done(win, first_items=None):
                            skip_texts={},  # 禁用 xuanshu 默认跳过表（玄枢轶闻
                                            # 专属文案，五倍自有对话处理——审计问题 2）
                            pre_click_handler=_handle_pre_click,
-                           post_track_handler=_maybe_tab_bars_pass)
+                           post_track_handler=_maybe_tab_bars_pass,
+                           task_gone_polls=_hpg_gone_polls)
     return ok, info
 
 

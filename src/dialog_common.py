@@ -261,3 +261,86 @@ def close_scene_panels(win, prefix="", quiet=False):
     if bag.is_bag_open(win):
         ok, info = bag.close_bag(win)
         log(f"{tag}物品栏{info}", "SYS" if ok else "WARN")
+
+
+# ---- 对话框模板检测（性能方案，2026-11-06 验证中） ----
+# 用对话框特征块模板判断对话框是否在场：未命中即跳过对话区 OCR
+# （follow 内层轮询每轮对话区 OCR ~0.4s，无对话场景空烧）。模板由
+# 用户截取（res/img/dialog_frame.png，83x56）；预期覆盖巫医/修罗/
+# 客栈/五倍领取与开打等标准对话面板；不覆盖：客栈奇遇、客栈/五环
+# 给予面板、队伍面板、申请加入面板（无标准对话框边框，仍走原
+# OCR 路径）。诊断页「测试对话框识别」按钮可对照有/无对话框场景
+# 的分数与耗时；阈值待真图交叉验证后校准（当前 0.8 占位）。
+DIALOG_FRAME_ICON = "dialog_frame.png"
+DIALOG_FRAME_BAND = (350, 200, 1030, 650)  # 居中对话框搜索条带（DIALOG_REGION 外扩）
+DIALOG_FRAME_THRESHOLD = 0.8               # 命中阈值（模板交叉验证后校准）
+
+
+def dialog_frame_score(frame):
+    """对话框模板全局最高分（接受 PIL 或 BGR 帧，条带内匹配）。"""
+    import cv2
+    import numpy as np
+    if not isinstance(frame, np.ndarray):
+        frame = cv2.cvtColor(np.asarray(frame), cv2.COLOR_RGB2BGR)
+    score, _ = game_map.best_match_np(frame, DIALOG_FRAME_ICON,
+                                      region=DIALOG_FRAME_BAND)
+    return score
+
+
+_dlg_hit_state = False    # 上一轮询模板命中状态（上升沿日志用）
+_dlg_hit_log_at = 0.0    # 上次命中日志时间（多调用方交错时的去重下限）
+
+
+def dialog_ocr_skip(frame):
+    """对话区 OCR 跳过判定：高性能模式下模板未命中即跳过。
+
+    方案门控（用户 2026-11-06）：高性能模式才识别模板——普通模式
+    行为与旧版完全一致（模板匹配零开销）；高性能下模板未命中
+    （无标准对话框）即跳过对话区 OCR（实测匹配 ~9ms vs OCR
+    470~930ms）。标准对话框（巫医/修罗/客栈/五倍领取与开打等）
+    模板分数实测 ≥0.98，无对话框场景 ≤0.59，阈值 0.8 余量充足。
+
+    模板命中（上升沿）打一次 INFO 日志便于观察方案生效；多调用方
+    （follow/战斗线程/守卫）交错时的重复命中由 2s 下限去重。
+    """
+    global _dlg_hit_state, _dlg_hit_log_at
+    if not app_utils.high_perf_on():
+        return False
+    score = dialog_frame_score(frame)
+    hit = score >= DIALOG_FRAME_THRESHOLD
+    now = time.time()
+    if hit and not _dlg_hit_state and now - _dlg_hit_log_at >= 2.0:
+        _dlg_hit_log_at = now
+        log(f"[对话框] 模板命中（分数 {score:.3f}），检测到对话框，对话区 OCR 放行", "INFO")
+    _dlg_hit_state = hit
+    return not hit
+
+
+def verify_dialog_detect(win):
+    """诊断-测试对话框识别：单帧模板判定对话框在场 + 对话区 OCR 计时。
+
+    只读不点击（任务运行中也可用）；有/无对话框场景各点一次，
+    对照日志中的模板分数/耗时与 OCR 耗时。返回 (是否成功, 描述)。
+    """
+    import cv2
+    import numpy as np
+    img = win.capture(force_activate=False)
+    if img is None:
+        return False, "窗口截图失败"
+    frame = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
+    t0 = time.time()
+    score, pt = game_map.best_match_np(frame, DIALOG_FRAME_ICON,
+                                       region=DIALOG_FRAME_BAND)
+    t_match = time.time() - t0
+    hit = score >= DIALOG_FRAME_THRESHOLD
+    t0 = time.time()
+    items, _ = game_map.ocr_region(img, task_tracker.DIALOG_REGION)
+    t_ocr = time.time() - t0
+    lines = [t for t, _, s in items if s >= 0.55][:5]
+    log(f"[诊断] 对话框模板: 分数 {score:.3f}（阈值 {DIALOG_FRAME_THRESHOLD}）"
+        f"{' 命中' if hit else ' 未命中'} @ ({pt[0]},{pt[1]})，"
+        f"匹配耗时 {t_match * 1000:.0f}ms", "SYS")
+    log(f"[诊断] 对话区 OCR: 耗时 {t_ocr * 1000:.0f}ms，"
+        f"文案 {lines or '(无)'}", "SYS")
+    return True, (f"模板分数 {score:.3f}（{'命中' if hit else '未命中'}），"
+                  f"匹配 {t_match * 1000:.0f}ms / OCR {t_ocr * 1000:.0f}ms")

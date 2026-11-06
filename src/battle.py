@@ -58,6 +58,7 @@ from .control_window import (load_battle_actions,
                              load_xiuluo_hezi, load_wubei_hezi,
                              load_auto_famen, load_auto_refill)
 from . import tab_group  # 组号模式（一窗口多 Tab）：pass 抑制标志与队员自动 pass
+from . import dialog_common  # 对话框模板门控（高性能下未命中跳过对话区 OCR）
 
 # ---- 战斗 UI 坐标与模板（窗口相对坐标，用户实测） ----
 ATTACK_POS = (366, 415)        # 攻击按钮位置；技能选择后也在此位置再点一次
@@ -775,6 +776,10 @@ def _handle_wuyi_dialog(win, img=None, idle=False):
         img = win.capture(force_activate=False)
     if img is None:
         return False
+    if dialog_common.dialog_ocr_skip(img):
+        return False  # 高性能+模板未命中：无对话框，跳过巫医 OCR
+                      # （巫医对话框标准边框模板必命中；差分门/降级
+                      # 状态机不依赖被跳过的空检轮询，语义不受影响）
     l, t, r, b = task_tracker.DIALOG_REGION
     roi = np.asarray(img)[t:b, l:r]
     # 尺寸防护：窗口瞬时切换（最小化/缩放/遮挡裁切）会返回异常尺寸帧，
@@ -991,20 +996,22 @@ def _end_poll_advance(in_battle, battle_frame, pos_readable, battle_elapsed,
 
     返回 (out_polls, ended)：
     - 未在战斗：清零（战斗外/开场帧不得累积结束证据）
-    - 战斗帧且坐标可读且进场满 BATTLE_END_POS_AFTER：累积坐标证据，
-      连续 BATTLE_END_POS_POLLS 轮询确认结束——坐标可读即战斗实质
-      结束（场景先于战斗 UI 模板恢复），比模板路径提前 1~2s 放行
-      血蓝/巫医检查与任务线程共享状态
-    - 其余（战斗帧坐标不可读 / 非战斗帧）：战斗帧清零，非战斗帧累积
-      模板证据，连续 BATTLE_END_CONFIRM_POLLS 轮询确认结束（防回合
-      间隙误判——回合变化时场景不恢复，坐标信号天然免疫）
+    - 坐标可读且进场满 BATTLE_END_POS_AFTER（任一帧型）：累积坐标证据，
+      连续 BATTLE_END_POS_POLLS 轮询确认结束——坐标可读即战斗实质结束。
+      实测模板与坐标几乎同时恢复（2026-11-06：坐标恢复后模板路径仍要
+      4 轮询约 2.5~3s 才确认），坐标证据把确认缩短到 2 轮询约 1s；
+      同时覆盖「胜利画面残留横幅仍匹配战斗模板」的设备形态（战斗帧
+      坐标可读同样累积）
+    - 其余（坐标不可读）：战斗帧清零，非战斗帧累积模板证据，连续
+      BATTLE_END_CONFIRM_POLLS 轮询确认结束（防回合间隙误判——回合
+      变化时场景不恢复，坐标信号天然免疫）
     """
     if not in_battle:
         return 0, False
+    if pos_readable and battle_elapsed >= BATTLE_END_POS_AFTER:
+        out_polls += 1
+        return out_polls, out_polls >= BATTLE_END_POS_POLLS
     if battle_frame:
-        if pos_readable and battle_elapsed >= BATTLE_END_POS_AFTER:
-            out_polls += 1
-            return out_polls, out_polls >= BATTLE_END_POS_POLLS
         return 0, False
     out_polls += 1
     return out_polls, out_polls >= BATTLE_END_CONFIRM_POLLS
@@ -1058,11 +1065,11 @@ def watch_loop(win):
             bgr = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
             battle_frame = is_in_battle_frame(bgr)
             # 坐标快速结束信号（2026-11-06 实测）：战斗实际结束后场景
-            # （地图坐标）先于战斗 UI 模板恢复，坐标可读即战斗实质结束。
-            # 仅战斗帧且进场满 BATTLE_END_POS_AFTER 时读（复用本帧 PIL，
-            # 区域 OCR；开场 10s 内跳过，防过渡帧把开场误判成结束）
+            # （地图坐标）与战斗 UI 模板几乎同时恢复，坐标可读即战斗
+            # 实质结束。战斗中每轮询复用本帧 OCR 地图位置区域（区域
+            # OCR 约 0.1s；进场 10s 内跳过，防过渡帧把开场误判成结束）
             pos_readable = False
-            if battle_frame and in_battle \
+            if in_battle \
                     and time.time() - battle_enter_at >= BATTLE_END_POS_AFTER:
                 pos_readable = game_map.read_map_position(win, img=img) is not None
             out_polls, ended = _end_poll_advance(in_battle, battle_frame,
@@ -1107,7 +1114,11 @@ def watch_loop(win):
                 _watch_in_battle = False  # 任务侧共享状态
                 pos_hold = True  # 见声明注释：胜利画面残留横幅防误判新战斗
                 debug_overlay.set_phase("")  # 出战斗清阶段：看板回退「执行中」，待任务模块写下一阶段（防战后陈旧显示「战斗中」）
-                log(f"[战斗] 第 {battle_no} 场战斗结束", "SYS")
+                # 结束信号来源标注：坐标路径确认的轮询坐标必可读，模板
+                # 路径确认的轮询坐标不可读（可读时坐标分支先到先确认）——
+                # 后缀用于验证坐标快速信号是否生效
+                log(f"[战斗] 第 {battle_no} 场战斗结束"
+                    + ("（坐标信号）" if pos_readable else ""), "SYS")
                 # 战后补血蓝受通用设置开关门控（默认开）：关闭时
                 # 不检测血蓝条、不自动右键回满。模板路径结束帧即场景帧
                 # 直接查；坐标路径结束帧是胜利画面（血蓝条不渲染），

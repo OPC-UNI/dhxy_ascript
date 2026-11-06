@@ -74,6 +74,19 @@ def test_end_poll_advance_pos_signal_shortcuts_end():
     assert (out, ended) == (2, True)
 
 
+def test_end_poll_advance_pos_on_scene_frame_shortcuts_end():
+    """场景帧坐标可读（模板已先恢复的设备形态）连续 2 轮询同样快速确认。
+
+    实测 2026-11-06：模板与坐标几乎同时恢复，坐标证据只挂在战斗帧上
+    时永远不会累积（胜利画面不再匹配战斗模板），结束仍走 4 轮询模板
+    路径——坐标证据必须覆盖非战斗帧。
+    """
+    out, ended = battle._end_poll_advance(True, False, True, 60.0, 0)
+    assert (out, ended) == (1, False)
+    out, ended = battle._end_poll_advance(True, False, True, 60.0, out)
+    assert (out, ended) == (2, True)
+
+
 def test_end_poll_advance_pos_signal_resets_when_unreadable():
     """坐标证据中断（战斗帧坐标不可读）即清零，防战斗画面 OCR 噪声累计。"""
     out, ended = battle._end_poll_advance(True, True, True, 60.0, 0)
