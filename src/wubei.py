@@ -2061,7 +2061,8 @@ def _follow_to_done(win, first_items=None):
                                            # 专属文案，五倍自有对话处理——审计问题 2）
                            pre_click_handler=_handle_pre_click,
                            post_track_handler=_maybe_tab_bars_pass,
-                           task_gone_polls=_hpg_gone_polls)
+                           task_gone_polls=_hpg_gone_polls,
+                           battle_extras_tpl_gate=True)
     return ok, info
 
 

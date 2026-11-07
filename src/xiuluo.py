@@ -1389,7 +1389,8 @@ def _follow_to_done(win, first_items=None):
                            extra_dialog_handler=_handle_fight_dialog,
                            fallback_keywords=TASK_FALLBACK_TEXTS,
                            first_items=first_items,
-                           post_track_handler=_maybe_tab_bars_pass)
+                           post_track_handler=_maybe_tab_bars_pass,
+                           battle_extras_tpl_gate=True)
     if not ok and first_items is not None \
             and "任务内容中未找到绿色文案" in info \
             and time.time() - t0 < CLAIM_FOLLOW_RECOVER_WINDOW:
@@ -1400,7 +1401,8 @@ def _follow_to_done(win, first_items=None):
         ok, info = follow_task(win, TASK_TITLE, prefix="修罗",
                                extra_dialog_handler=_handle_fight_dialog,
                                fallback_keywords=TASK_FALLBACK_TEXTS,
-                               post_track_handler=_maybe_tab_bars_pass)
+                               post_track_handler=_maybe_tab_bars_pass,
+                               battle_extras_tpl_gate=True)
     return ok, info
 
 

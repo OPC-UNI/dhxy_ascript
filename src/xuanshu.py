@@ -1339,7 +1339,8 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 signature_key=None, ignore_empty_key=False, skip_texts=None,
                 pre_click_handler=None, require_coord=False,
                 post_track_handler=None, signature_ratio=0.8,
-                task_gone_polls=None, dialog_tpl_gate=True):
+                task_gone_polls=None, dialog_tpl_gate=True,
+                battle_extras_tpl_gate=False):
     """循环跟踪任务直到完成（prefix 供其他任务复用，如五环）。
 
     每轮：点击任务当前第一个绿色文案 → 等待任务信息变化（内容更新）
@@ -1402,6 +1403,14 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
     面板（客栈奇遇、给予面板、队伍面板、申请加入面板）依赖 OCR 的
     调用方须传 False（如客栈）——给予/队伍面板本身走模板检测不受影响。
     普通模式（高性能关）门控不生效，行为与旧版一致。
+    battle_extras_tpl_gate：战斗中 extras 通道（每 BATTLE_EXTRAS_INTERVAL
+    一次对话框区域 OCR）加模板预检——战斗 UI 无标准对话框边框时跳过
+    OCR（战斗帧模板分实测 0.52~0.63 < 0.79，2026-11-07），但保留
+    空 items 心跳调用：依赖战斗期调用维持状态的处理器（五倍黄袍怪
+    _hpg_was_in_battle）语义不变，空 items 也免去战斗 UI 文本误触发；
+    默认 False 保持原行为。真对话框在场时模板命中、OCR 照跑，行为
+    不变。仅当调用方确认其战斗中对话为标准边框时传 True（战斗中
+    可能出现无边框面板对话的调用方勿开）。
     返回 (是否完成, 描述)。
     """
     deadline = time.time() + timeout
@@ -1592,11 +1601,22 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                     time.sleep(2.0)
                     continue
                 # 战斗中也可能出现任务对话（如五环提交装备）：保留对话框
-                # 区域 OCR 供 extras 处理；限频替代差分门（动画帧门控失效）
+                # 区域 OCR 供 extras 处理；限频替代差分门（动画帧门控失效）。
+                # battle_extras_tpl_gate=True 的调用方（修罗/五倍）：战斗 UI
+                # 无标准对话框边框，模板未命中即跳过对话框区 OCR（实测
+                # ~1.2s/2s 白烧）；但保留空 items 心跳调用——五倍黄袍怪
+                # 状态机靠战斗期调用维护 _hpg_was_in_battle（多杀重链的
+                # 战斗结束沿），空 items 也天然免去战斗 UI 文本误触发
+                # （锁妖网关键词/开打 2x 兜底）。真对话框在场时模板命中、
+                # OCR 照跑，行为不变
                 now = time.time()
                 if extra_dialog_handler is not None \
                         and now - last_battle_extras_at >= BATTLE_EXTRAS_INTERVAL:
                     last_battle_extras_at = now
+                    if battle_extras_tpl_gate and dialog_ocr_skip(img):
+                        extra_dialog_handler(win, [],
+                                             np.zeros_like(np.asarray(img)))
+                        continue
                     items_d, img_np_d = game_map.ocr_region(
                         img, task_tracker.DIALOG_REGION)
                     extra_dialog_handler(win, items_d, img_np_d)
