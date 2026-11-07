@@ -1129,32 +1129,42 @@ def ensure_team_created(win, prefix="[组队]"):
     return False, "点击创建队伍后队伍面板未打开（创建失败或出现确认对话框）"
 
 
-def is_team_leader(win):
-    """检查自己是否是队长：队伍面板打开后双模板比分数判定。
+def classify_leader_with_panel(win):
+    """队长身份三分类（面板保持打开，调用方负责关闭）。
 
-    流程：面板未打开则先打开（组队菜单 → 队伍信息），
-    帧内比较解散队伍/离开队伍两个模板的匹配分（见 _classify_leader_frame，
-    单模板会把离开按钮误判为解散按钮）；按钮未命中（unclear）时重截
-    复核——单帧抖动不算确定性非队长（2026-11-05 队长面板单帧误判
-    教训）。检查后关闭面板。
-    返回 (是否队长, 描述)。
+    面板未打开则先打开（未组队/打不开返回 not_leader + 原因）；帧内
+    双模板比分数判定（单模板会把离开按钮误判为解散按钮）；按钮未
+    命中（unclear）时重截复核——单帧抖动不算确定性非队长
+    （2026-11-05 队长面板单帧误判教训）。复核只重截帧、面板保持
+    打开，供组号启动检查在同一面板打开内继续读成员昵称（2026-11-07
+    启动开 3 次面板的修复）。
+    返回 (kind, 描述)；kind：leader / not_leader / unclear。
     """
     if not _is_panel_open(win):
         ok, info = open_team_panel(win)
         if not ok:
-            return False, info
+            return "not_leader", info
     img = win.capture(force_activate=False)
     if img is None:
-        close_team_panel(win)
-        return False, "窗口截图失败"
+        return "unclear", "窗口截图失败"
     kind, scores = _classify_leader_frame(img)
     kind, scores = _confirm_leader_kind(win, kind, scores)
-    close_team_panel(win)
     if kind == "leader":
-        return True, "是队长（面板可见「解散队伍」）"
+        return "leader", "是队长（面板可见「解散队伍」）"
     if kind == "member":
-        return False, "不是队长（面板无「解散队伍」）"
-    return False, "队长无法判定（面板内解散/离开按钮未命中）"
+        return "not_leader", "不是队长（面板无「解散队伍」）"
+    return "unclear", "队长无法判定（面板内解散/离开按钮未命中）"
+
+
+def is_team_leader(win):
+    """检查自己是否是队长：队伍面板打开后双模板比分数判定。
+
+    流程同 classify_leader_with_panel（打开面板 → 三分类 → 复核），
+    检查后关闭面板。返回 (是否队长, 描述)。
+    """
+    kind, info = classify_leader_with_panel(win)
+    close_team_panel(win)
+    return kind == "leader", info
 
 
 # ---- 队伍种族分析 ----
@@ -1519,6 +1529,63 @@ def maybe_rejoin(win, prefix="[组队]"):
         close_team_panel(win)
 
 
+def rejoin_from_away(win, prefix="[组队]"):
+    """组号归队：暂离队员无论身处何地都点「回归队伍」归队。
+
+    与 maybe_rejoin（死亡落轮回司专用）的区别：**不做轮回司前置**
+    ——暂离（离队状态）队员在任何位置都能点归队传送回队长（2026-11-07
+    用户要求：启动阶段发现组号暂离，即使不在轮回司也要归队）。
+    成功校验 = 点击后归队按钮从面板消失（归队成功按钮即消失）或
+    面板已关闭（传送加载中/已归队）；按钮仍在 → 未生效报告重试。
+    暂离成员的队员面板必有归队按钮（用户确认机制）；面板无按钮
+    （非暂离/名字误报匹配）只报告不点击。
+
+    返回 (是否处理, 描述)；描述以「已归队」开头为成功。
+    """
+    global _guidui_missing_logged
+    ok, info = open_team_panel(win)
+    if not ok:
+        return True, f"归队失败: {info}"
+    try:
+        img = win.capture(force_activate=False)
+        if img is None:
+            return True, "归队失败: 队伍面板截图失败"
+        kind, scores = _classify_leader_frame(img)
+        kind, scores = _confirm_leader_kind(win, kind, scores)
+        if kind != "member":
+            if kind == "leader":
+                return True, "归队跳过: 队长身份（面板无归队按钮）"
+            return True, "归队失败: 队伍身份无法判定（面板按钮未命中）"
+        if not _tpl_path(ZUDUI_GUIDUI_ICON).exists():
+            if not _guidui_missing_logged:
+                _guidui_missing_logged = True
+                log(f"[组队] 归队按钮模板未提供（待补充 res/img/{ZUDUI_GUIDUI_ICON}），"
+                    f"归队降级为告警跳过", "WARN")
+            return True, "归队按钮模板未提供（待补充 zudui_guidui.png）"
+        pt = game_map.find_template_in(img, ZUDUI_GUIDUI_ICON, GUIDUI_THRESHOLD)
+        if pt is None:
+            return True, "归队失败: 队伍面板中未找到归队按钮（zudui_guidui）"
+        human_click(win, pt[0], pt[1])
+        log(f"{prefix} 已点击归队按钮 @ ({pt[0]},{pt[1]})，等待归队生效", "SYS")
+        # 点击后校验：归队按钮消失（归队成功按钮即消失）或面板已关闭
+        # （传送加载中/已归队）。每轮询只截一帧，模板判定同帧复用
+        deadline = time.time() + REJOIN_CLICK_TIMEOUT
+        while time.time() < deadline:
+            img2 = win.capture(force_activate=False)
+            if img2 is None:
+                time.sleep(REJOIN_POS_INTERVAL)
+                continue
+            if not _panel_open_in(img2):
+                return True, "已归队（队伍面板已关闭）"
+            if game_map.find_template_in(img2, ZUDUI_GUIDUI_ICON,
+                                         GUIDUI_THRESHOLD) is None:
+                return True, "已归队（归队按钮已消失）"
+            time.sleep(REJOIN_POS_INTERVAL)
+        return True, "归队未确认: 点击归队后按钮仍在（未生效或已不在离队状态，稍后重试）"
+    finally:
+        close_team_panel(win)
+
+
 # ---- 暂离成员检测与请离（todo2：队长侧离队成员识别与请离） ----
 # 用户 2026-11-07 确认交互：暂离成员卡在队伍面板对应成员区域内显示
 # 「召回」标记（32x15，找到即该队员暂离）；队长点选该成员卡后出现
@@ -1637,6 +1704,28 @@ def _away_member_indices(img):
         items, _ = game_map.ocr_region(img, (l, t, r + MEMBER_RACE_SPILL, b))
         away.append((i, _member_name(items), _member_race(items)))
     return away, None
+
+
+def panel_member_names(img):
+    """帧内队伍面板：逐成员区域读取昵称（组号成员匹配用）。
+
+    与 _away_member_indices 同款区域 OCR（含右侧种族溢出带），但全员
+    读取——空位区域 OCR 无文案时 _member_name 自然返回 None。全员 5
+    区域一次性 OCR ~0.5-0.9s，仅启动检查/组号设置面板检查时调用，
+    不在轮询热路径。
+    返回 None = 标志未命中（面板不可见/未渲染，调用方按「读不到」
+    宽松处理）；成功返回 [(序号, 昵称或None), ...]，序号从 0 起
+    （第 1 区域为队长）。
+    """
+    score, banner = _find_banner_rect(img)
+    if banner is None or score < _BANNER_MIN_SCORE:
+        return None
+    names = []
+    for i, rect in enumerate(_member_regions(banner)):
+        l, t, r, b = rect
+        items, _ = game_map.ocr_region(img, (l, t, r + MEMBER_RACE_SPILL, b))
+        names.append((i, _member_name(items)))
+    return names
 
 
 def scan_away_members(win):

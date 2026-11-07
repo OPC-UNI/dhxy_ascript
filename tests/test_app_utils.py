@@ -179,3 +179,32 @@ def test_sheyaoxiang_idle_due(monkeypatch):
 
 def _win():
     return type("W", (), {"hwnd": 1})()
+
+
+# ---- kv_read_fresh：主进程读任务进程运行时写入（2026-11-07） ----
+
+
+def test_kv_read_fresh_reads_disk_not_snapshot(monkeypatch):
+    """kv_read_fresh 锁内重读磁盘文件取键值；KeyValue.get 读本进程
+    旧快照读不到对侧进程 kv_save_merged 的写入（组号入口不展示的
+    根因回归测试）。"""
+    from ascript.windows.system.key_value import KeyValue
+
+    class _FakeLock:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    disk = {"group_detected": True}
+    monkeypatch.setattr(KeyValue, "_initialize", lambda: None)
+    monkeypatch.setattr(KeyValue, "_lock", _FakeLock())
+    monkeypatch.setattr(KeyValue, "_load_data", lambda: dict(disk))
+    monkeypatch.setattr(KeyValue, "get", lambda key, default=None: default)  # 旧快照恒无
+    assert app_utils.kv_read_fresh("group_detected", False) is True
+    assert app_utils.kv_read_fresh("missing", "dft") == "dft"
+    # 文件读取异常回退 default
+    monkeypatch.setattr(KeyValue, "_load_data",
+                        lambda: (_ for _ in ()).throw(OSError("disk")))
+    assert app_utils.kv_read_fresh("group_detected", False) is False

@@ -100,3 +100,69 @@ def test_settings_spec_auto_create_team_defaults(monkeypatch):
     for key, load in ((_WUBEI_AUTO_CREATE_TEAM_KEY, load_wubei_auto_create_team),
                       (_XIULUO_AUTO_CREATE_TEAM_KEY, load_xiuluo_auto_create_team)):
         assert load() == spec[key]
+
+
+# ---- 组号成员战斗动作持久化（2026-11-07） ----
+
+
+def _patch_kv_store(monkeypatch, data=None):
+    """KeyValue 内存存储打桩：get 读 store、kv_save_merged 写 store
+    （save_group_actions 的合并写路径）。"""
+    from ascript.windows.system.key_value import KeyValue
+    from src import control_window
+    store = dict(data or {})
+    monkeypatch.setattr(KeyValue, "get",
+                        lambda key, default=None: store.get(key, default))
+    monkeypatch.setattr(control_window.app_utils, "kv_save_merged",
+                        lambda key, value: store.__setitem__(key, value))
+    return store
+
+
+def test_save_group_actions_merges_without_pruning(monkeypatch):
+    """保存合并写入：已有账号条目保留（队员换队长/队伍变动后旧设置
+    不丢，2026-11-07 需求——CDE 第一天设置、第二天直接读出）。"""
+    from src import control_window
+    store = _patch_kv_store(monkeypatch, {
+        "group_member_actions": {
+            "oldA": {"char": "防御", "beast": "无"}}})
+    r = control_window.save_group_actions({
+        "idB": {"char": "攻击", "beast": "防御"}})
+    assert r == {"status": "success"}
+    saved = store["group_member_actions"]
+    assert saved["oldA"] == {"char": "防御", "beast": "无"}
+    assert saved["idB"] == {"char": "攻击", "beast": "防御"}
+    # 同账号再存覆盖旧值
+    r = control_window.save_group_actions({
+        "idB": {"char": "技能2-3", "beast": "攻击"}})
+    assert r == {"status": "success"}
+    assert store["group_member_actions"]["idB"] == {"char": "技能2-3",
+                                                    "beast": "攻击"}
+
+
+def test_save_group_actions_rejects_invalid(monkeypatch):
+    """任一值非法拒绝整单（UI 下拉只出合法值，此为双保险）。"""
+    from src import control_window
+    store = _patch_kv_store(monkeypatch)
+    r = control_window.save_group_actions({
+        "idB": {"char": "乱写", "beast": "攻击"}})
+    assert r["status"] == "error"
+    assert "group_member_actions" not in store
+    r = control_window.save_group_actions({"idB": "不是字典"})
+    assert r["status"] == "error"
+    r = control_window.save_group_actions(["不是字典"])
+    assert r["status"] == "error"
+
+
+def test_load_group_actions_filters_bad_entries(monkeypatch):
+    """读取过滤非法条目（旧数据/手工改坏文件自愈），账号 ID 归一为
+    字符串。"""
+    from src import control_window
+    _patch_kv_store(monkeypatch, {
+        "group_member_actions": {
+            12345: {"char": "攻击", "beast": "防御"},
+            "bad": {"char": "乱写", "beast": "攻击"},
+            "bad2": {"char": "攻击"},
+            "notdict": "x",
+        }})
+    result = control_window.load_group_actions()
+    assert result == {"12345": {"char": "攻击", "beast": "防御"}}

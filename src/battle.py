@@ -54,8 +54,7 @@ from . import status_bars  # 血蓝条检测回满（每场战斗结束后调用
 from . import task_tracker  # 对话框区域与绿色选项定位（巫医对话框）
 from . import debug_overlay  # 调试信息悬浮层（战斗场次更新）
 from . import team  # 队伍身份（抢盒子的队长规则）
-from .control_window import (load_battle_actions,
-                             load_xiuluo_hezi, load_wubei_hezi,
+from .control_window import (load_xiuluo_hezi, load_wubei_hezi,
                              load_auto_famen, load_auto_refill)
 from . import tab_group  # 组号模式（一窗口多 Tab）：pass 抑制标志与队员自动 pass
 from . import dialog_common  # 对话框模板门控（高性能下未命中跳过对话区 OCR）
@@ -91,6 +90,10 @@ WATCH_POLL_INTERVAL = 0.5   # 战斗监控轮询间隔（单帧判定 + 快速�
                             # 进场确认 2 次轮询 ≈ 0.5~1s，比原先 1~2s 更快）
 BAR_POLL_INTERVAL = 0.5     # 操作条出现/消失轮询间隔
 ROUND_BAR_TIMEOUT = 60      # 等待新回合操作条出现（含回合动画时间）
+MEMBER_BAR_TIMEOUT = 40     # 组号队员 Tab 等操作条（取消自动后当前回合
+                            # 手动条随即出现，最坏跨一个回合间隙；比队长
+                            # 60s 短——队员 pass 有时长预算，超时放弃由
+                            # 下场例行 pass 兜底）
 PHASE_SWITCH_DELAY = 2.0    # 点击操作后操作条关闭、召唤兽条出现
 BEAST_BAR_TIMEOUT = 10      # 等待召唤兽操作条出现
 IDLE_COUNTDOWN_WAIT = 40    # 无操作时等待游戏倒计时结束（游戏约 30 秒）
@@ -588,7 +591,7 @@ def _click_famen(win, bar_ready=False):
     """
     if not load_auto_famen():
         return
-    if not load_battle_actions()["char"].startswith("技能"):
+    if not tab_group.leader_battle_actions()["char"].startswith("技能"):
         return
     global _famen_missing_logged
     if FAMEN_CLICK_POS is None:
@@ -614,7 +617,8 @@ def handle_battle(win):
     其余场次交由游戏自动战斗），不再进入本函数；战斗结束的确认、
     血蓝条检查与巫医对话框处理也统一在 watch_loop 中完成。
     """
-    actions = load_battle_actions()  # 操作配置已在 main.py 启动时输出，不重复打日志
+    actions = tab_group.leader_battle_actions()  # 队长解析：账号组号设置优先，
+                                                 # 无则通用战斗设置（单号模式恒通用）
     auto_engaged = False
     rounds = 0
     round_1 = True
@@ -680,6 +684,61 @@ def handle_battle(win):
                    BAR_GONE_TIMEOUT if acted else IDLE_COUNTDOWN_WAIT,
                    want_found=False)
     return "auto_ok" if auto_engaged else "no_auto"
+
+
+def perform_member_actions(win, actions):
+    """组号队员 Tab 执行配置战斗动作（一次，与 handle_battle 对称）。
+
+    流程：帧级确认战斗 → 取消自动（已自动时）→ 等操作条 → 人物动作
+    → 召唤兽动作 → 点自动。阶段间帧级战斗结束检查，战斗结束随时
+    中断；取消自动后当前回合手动条随即出现（回合计时共享）。只执行
+    一次，后续场次自动跨场持续（与队长一致）。
+    返回状态描述字符串（tab_group 记日志）。
+    """
+    img = win.capture(force_activate=False, format=WindowCaptureFormat.OPENCV)
+    if img is None:
+        return "截图失败"
+    if not is_in_battle_frame(img):
+        return "战斗已结束"
+    _cancel_auto_frame(win, img)  # 已自动时取消恢复手动；未自动空操作
+    if not _wait_icon(win, FASHU_ICON, MEMBER_BAR_TIMEOUT, want_found=True):
+        # 取消自动后操作条未出现（回合间隙/战斗即将结束）：尝试点回
+        # 自动——取消后队员已脱离自动，不点回会整场停在手动漏操作
+        # （点不到由每 5 场例行 pass 兜底）
+        _click_auto_button(win)
+        _park_mouse(win)
+        return "等不到操作条（已尝试点回自动）"
+    time.sleep(0.5)  # 操作条刚出现，稍作稳定再操作（同 handle_battle）
+    # ---- 人物动作阶段 ----
+    if actions["char"] == "无":
+        _wait_icon(win, FASHU_ICON, BAR_GONE_TIMEOUT, want_found=False)
+    elif _do_action(win, actions["char"], "人物"):
+        time.sleep(PHASE_SWITCH_DELAY)  # 操作条关闭，召唤兽条出现
+    else:
+        _wait_icon(win, FASHU_ICON, IDLE_COUNTDOWN_WAIT, want_found=False)
+    if not _member_battle_alive(win):
+        return "战斗已结束"
+    # ---- 召唤兽动作阶段 ----
+    _wait_icon(win, FASHU_ICON, BEAST_BAR_TIMEOUT, want_found=True)
+    if actions["beast"] == "无":
+        _wait_icon(win, FASHU_ICON, BAR_GONE_TIMEOUT, want_found=False)
+    elif _do_action(win, actions["beast"], "召唤兽"):
+        time.sleep(SKILL_CONFIRM_DELAY)  # 等待面板收起
+    else:
+        _wait_icon(win, FASHU_ICON, IDLE_COUNTDOWN_WAIT, want_found=False)
+    # ---- 点自动（操作完成；点不到由每 5 场例行/下场补点兜底） ----
+    if _click_auto_button(win):
+        _park_mouse(win)  # 鼠标移开，避免遮挡操作条
+        return "已执行配置动作并点自动"
+    _park_mouse(win)
+    return "已执行配置动作（自动未点中，下场例行补点）"
+
+
+def _member_battle_alive(win):
+    """队员 Tab 战斗是否仍在进行（阶段间检查；截图失败按仍在处理，
+    后续阶段自行超时放弃）。"""
+    img = win.capture(force_activate=False, format=WindowCaptureFormat.OPENCV)
+    return img is None or is_in_battle_frame(img)
 
 
 def _click_auto_once(win):
@@ -976,16 +1035,19 @@ def _handle_hezi(win, bgr=None):
     return True
 
 
-def _member_auto_pass_hook(win, wait_auto):
-    """组号模式：队长点完自动后遍历队员 Tab 点击自动（仅激活时执行）。
+def _member_auto_pass_hook(win, wait_auto, act_configured=False):
+    """组号模式：队长点完自动后遍历队员 Tab（仅激活时执行）。
 
     队员与队长同场战斗，队长的自动触发时机即队员的触发时机
     （首场 wait_auto=5s 等操作条、每 5 场例行 wait_auto=1s 多半已挂
-    自动跳过）。任何异常只记日志，不影响战斗监控主循环。
+    自动跳过）。act_configured=True（首场/补挂自动场）：确认在队伍
+    中的队员按账号配置执行战斗动作（仅此一场）；每 5 场例行不执行
+    （自动跨场持续）。任何异常只记日志，不影响战斗监控主循环。
     """
     try:
         if tab_group.active():
-            tab_group.member_auto_pass(win, wait_auto)
+            tab_group.member_auto_pass(win, wait_auto,
+                                       act_configured=act_configured)
     except Exception as e:
         log(f"[战斗] 组号队员自动 pass 异常: {e}", "WARN")
 
@@ -1093,7 +1155,10 @@ def watch_loop(win):
                             if pending_auto:
                                 log("[战斗] 首场结束未挂上自动，下一场进场补点一次", "WARN")
                             else:
-                                _member_auto_pass_hook(win, wait_auto=True)
+                                # 首场：队员按账号配置执行战斗动作后点自动
+                                # （与队长对称，仅此一场）
+                                _member_auto_pass_hook(win, wait_auto=True,
+                                                       act_configured=True)
                         else:
                             # 自动使用法门：每场战斗第 1 回合点一次
                             # （首场由 handle_battle 内处理）
@@ -1103,7 +1168,10 @@ def watch_loop(win):
                                     _member_auto_pass_hook(win, wait_auto=False)
                             elif pending_auto:
                                 if _click_auto_once(win):  # 首场未挂上自动：本场进场补点
-                                    _member_auto_pass_hook(win, wait_auto=True)
+                                    # 首场队员配置动作被跳过（队长自动未点成）：
+                                    # 本场补执行一次后挂自动
+                                    _member_auto_pass_hook(win, wait_auto=True,
+                                                           act_configured=True)
                                 pending_auto = False
                         # 其余场次：不操作，等待游戏自动战斗结束
             else:

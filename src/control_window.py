@@ -795,6 +795,64 @@ def save_battle_action(target, value):
     return {"status": "success"}
 
 
+# ---- 组号成员战斗动作（按账号 ID 持久化，组号设置面板编辑） ----
+# 单键存整表 {账号ID: {"char":..., "beast":...}}：账号 ID 来自 Tab 标题
+# 「（ID：账号）」。只增改不删——队员换队长/队伍变动后旧账号设置保留
+# （用户 2026-11-07 需求：CDE 第一天设置、第二天换队长后直接读出）。
+_GROUP_ACTIONS_KEY = "group_member_actions"
+# 组号识别状态（任务进程启动检查写入，面板「组号」侧边栏入口显隐信号）：
+# 面板昵称可读且确认到 ≥1 名在队伍中的队员 Tab = 是组号 → True；可读且
+# 0 名 = 非组号（Tab ≥2 但队伍里没有这些账号的角色）→ False；读不到不写
+# （保留上次状态，宽松）。主进程读此键 + 组号开关 + 当前窗口已登录
+# Tab ≥2 决定入口显隐（用户 2026-11-07 需求：识别到是组号才展示）。
+_GROUP_DETECTED_KEY = "group_detected"
+
+
+def load_group_actions():
+    """读取全部组号成员战斗动作 {账号ID: {"char":..., "beast":...}}。
+
+    条目缺人物/召唤兽动作或值非法时丢弃（旧数据/手工改坏文件自愈）。
+    单号模式不使用本数据；任务进程跨进程读取（KeyValue 首次访问从
+    磁盘加载，与任务进度同机制）。
+    """
+    data = KeyValue.get(_GROUP_ACTIONS_KEY, {}) or {}
+    result = {}
+    for aid, entry in data.items():
+        if not isinstance(entry, dict):
+            continue
+        char = entry.get("char")
+        beast = entry.get("beast")
+        if char not in CHAR_BATTLE_ACTIONS or beast not in BEAST_BATTLE_ACTIONS:
+            continue
+        result[str(aid)] = {"char": char, "beast": beast}
+    return result
+
+
+def save_group_actions(mapping):
+    """保存组号成员战斗动作（合并写入，绝不删已有账号条目）。
+
+    mapping：{账号ID: {"char":..., "beast":...}}（组号设置页当前展示
+    的成员整表）。任一值非法即拒绝整单（UI 下拉只出合法值，此为双
+    保险）。跨进程合并写（app_utils.kv_save_merged，KeyValue 整文件
+    覆写时避免覆盖任务进程刚写入的其他键）。
+    """
+    if not isinstance(mapping, dict):
+        return {"status": "error", "msg": "INVALID_MAPPING"}
+    incoming = {}
+    for aid, entry in mapping.items():
+        if not isinstance(entry, dict):
+            return {"status": "error", "msg": "INVALID_ENTRY"}
+        char = entry.get("char")
+        beast = entry.get("beast")
+        if char not in CHAR_BATTLE_ACTIONS or beast not in BEAST_BATTLE_ACTIONS:
+            return {"status": "error", "msg": "INVALID_VALUE"}
+        incoming[str(aid)] = {"char": char, "beast": beast}
+    cur = load_group_actions()
+    cur.update(incoming)
+    app_utils.kv_save_merged(_GROUP_ACTIONS_KEY, cur)
+    return {"status": "success"}
+
+
 # ---- 自动使用法门（UI 开关，KeyValue 持久化，默认关闭；开启后每场
 #      战斗第 1 回合操作条出现时先点一次法门坐标再继续配置的战斗
 #      操作——坐标标定见 battle.FAMEN_CLICK_POS） ----
@@ -864,6 +922,7 @@ class ControlWindow(WebWindow):
         self._visible = True  # 启动时直接可见
         self._real_close = threading.Event()  # 置位后 X/销毁真正放行（退出路径）
         self._verifying = False  # 修罗回程验证进行中标记（防连点）
+        self._group_checking = False  # 组号设置页「检查当前队伍」进行中标记（防连点）
         self._scheme_dialog_busy = False  # 方案导入导出文件对话框在途标记（防连点）
         self._pending_import = None  # 待确认的导入（{"name", "settings"}；同名冲突时挂起）
         self._license_info = license_info or {}  # 授权信息（高级设置-授权信息展示）
@@ -884,6 +943,9 @@ class ControlWindow(WebWindow):
         self.expose(self.save_xiuluo_auto_wuyi)
         self.expose(self.save_xiuluo_wuyi_interval)
         self.expose(self.save_xiuluo_tab_group)
+        self.expose(self.group_check_team)
+        self.expose(self.group_save_actions)
+        self.expose(self.get_group_state)
         self.expose(self.save_high_perf)
         self.expose(self.save_auto_refill)
         self.expose(self.save_clear_screen)
@@ -1158,6 +1220,8 @@ class ControlWindow(WebWindow):
                 "use_sheyaoxiang": load_use_sheyaoxiang(),
                 "thresholds": load_thresholds(),
                 "battle": load_battle_actions(),
+                "group_check_team": {"xiuluo": load_xiuluo_check_team(),
+                                     "wubei": load_wubei_check_team()},
                 "xiuluo": load_xiuluo_settings(),
                 "wuhuan_vitality_continue": load_wuhuan_vitality_continue(),
                 "xiuluo_hezi": load_xiuluo_hezi(),
@@ -1194,6 +1258,68 @@ class ControlWindow(WebWindow):
         """战斗设置变更：保存人物/召唤兽默认战斗动作。"""
         return save_battle_action(target, value)
 
+    # ---- 组号设置页（侧边栏「组号」：检查当前队伍 + 成员战斗动作） ----
+
+    def group_check_team(self):
+        """组号设置页「检查当前队伍」：主进程枚举 Tab + 开队伍面板读
+        成员昵称匹配（tab_group.scan_group_members，不依赖任务状态），
+        结果经 onGroupCheckResult 异步回推页面。
+
+        前置：任务未运行、游戏窗口在前台（面板开合走真实点击）。
+        """
+        if self._tm.is_running():
+            return {"status": "error", "msg": "任务运行中，请先停止任务再检查"}
+        if self._group_checking:
+            return {"status": "error", "msg": "队伍检查进行中，请稍候"}
+        win = game.find_main_window()
+        if win is None:
+            return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
+        if not _game_window_clickable(win):
+            return {"status": "error", "msg": "游戏窗口被其他窗口遮挡，请将游戏窗口置于前台后再检查"}
+        self._group_checking = True
+        threading.Thread(target=self._run_group_check, args=(win,),
+                         daemon=True, name="group-check-team").start()
+        return {"status": "success",
+                "msg": "检查已开始：枚举 Tab → 开队伍面板读成员昵称 → 匹配本窗口队员"}
+
+    def _run_group_check(self, win):
+        """组号队伍检查线程体：结果（成员列表与已存动作）回推页面与日志窗。"""
+        from . import tab_group  # 延迟导入：与其余验证模块保持一致
+        try:
+            self.add_logs(["[组号] 开始检查当前队伍（枚举 Tab + 队伍面板成员匹配）..."])
+            ok, info, data = tab_group.scan_group_members(win)
+        except Exception as e:
+            ok, info, data = False, f"检查异常: {e}", None
+        try:
+            self.add_logs([f"[组号] 检查结果: {info}"])
+        except Exception:
+            pass
+        self._notify_group_check_result(ok, info, data)
+        self._group_checking = False
+
+    def _notify_group_check_result(self, ok, info, data):
+        """组号队伍检查结果回推页面（组号设置页成员行渲染）。
+
+        载荷先 json.dumps 成 JSON 文本，再 json.dumps 成 JS 字符串字面量
+        嵌入（与其余验证回调 onXxxVerifyResult 同款）——直接嵌 JSON 文本
+        会让 JS 收到对象而非字符串，页面 JSON.parse 报「结果解析失败」
+        （2026-11-07 实测教训）。
+        """
+        if self.webview_instance:
+            try:
+                payload = json.dumps({"ok": ok, "info": info, "data": data},
+                                     ensure_ascii=False)
+                self.webview_instance.evaluate_js(
+                    f"if(window.onGroupCheckResult){{window.onGroupCheckResult({json.dumps(payload)});}}")
+            except Exception:
+                pass
+
+    def group_save_actions(self, mapping):
+        """组号设置页保存成员战斗动作。任务运行中拒绝修改（同任务选择）。"""
+        if self._tm.is_running():
+            return {"status": "error", "msg": "任务运行中，请先停止任务再修改"}
+        return save_group_actions(mapping)
+
     def save_threshold(self, name, value):
         """阈值设置变更：保存某条血蓝阈值。"""
         return save_threshold(name, value)
@@ -1224,6 +1350,28 @@ class ControlWindow(WebWindow):
         或状态陈旧时返回 None。"""
         from . import debug_overlay  # 延迟导入：与其余验证模块保持一致
         return debug_overlay.read_runtime_status()
+
+    def get_group_state(self):
+        """组号侧边栏入口显隐状态（页面 1.5s 轮询，任务未运行也生效）：
+
+        show = 组号开关开（修罗/五倍任一）且任务启动检查曾识别到组号
+        （group_detected）且当前窗口已登录 Tab ≥2（实时枚举，账号变化
+        即时反映——tab2 角色不在队伍不算组号，用户 2026-11-07 定义）。
+        group_detected 由任务进程 kv_save_merged 写入，必须直读磁盘
+        （app_utils.kv_read_fresh）——KeyValue.get 读本进程旧快照，
+        跨进程写入永远看不到（2026-11-07 实测入口不展示）。
+        """
+        switch_on = load_xiuluo_tab_group() or load_wubei_tab_group()
+        detected = bool(app_utils.kv_read_fresh(_GROUP_DETECTED_KEY, False))
+        tabs = 0
+        if switch_on and detected:
+            try:
+                win = game.find_main_window()
+                if win is not None:
+                    tabs = len([c for c in game.list_tab_windows(win) if c["id"]])
+            except Exception:
+                tabs = 0
+        return {"show": switch_on and detected and tabs >= 2, "tabs": tabs}
 
     def save_use_sheyaoxiang(self, on):
         """摄妖香开关变更：保存开关状态。"""

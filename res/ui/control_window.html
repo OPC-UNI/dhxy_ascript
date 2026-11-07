@@ -453,6 +453,10 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
                 <span>任 务</span>
             </div>
+            <div class="nav-item" data-page="group" id="nav-group" style="display:none">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                <span>组 号</span>
+            </div>
             <div class="nav-item" data-page="general">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
                 <span>设 置</span>
@@ -740,6 +744,31 @@
                 <div class="task-zone-empty" id="task-available-empty" style="display:none">全部任务已选择</div>
             </div>
             <div class="group-hint">点击「待选任务」卡片加入已选（按加入顺序排列）；「已选任务」按顺序依次执行，拖动「≡」手柄或点 ↑↓ 调整顺序，点卡片移回待选。「仅战斗」与其它任务互斥：选中后仅运行战斗监控（自动战斗/补血蓝/巫医，不做任务操作；仅保留自动归队——死亡落轮回司自动点归队，开关默认开启），持续运行至手动停止。「名望」暂无自动化实现，选中后自动跳过。全部完成后自动结束。</div>
+        </div>
+        <!-- ============ 组号页（队伍成员检查 + 按账号战斗动作设置） ============ -->
+        <div class="page" id="page-group">
+            <div class="group-box">
+                <div class="group-title">组号设置</div>
+                <div class="group-hint">组号模式（修罗/五倍任务设置里的「组号专用」开关）要求已开启「检查队伍」。本页枚举当前窗口已登录 Tab 中在队伍内的队员，为每个队员单独设置战斗动作；队长使用通用战斗设置或其账号的组号设置。启动任务时未设置的队员会停止任务并提示先设置。</div>
+                <div class="group-row">
+                    <span class="group-label">队伍检查</span>
+                    <button class="btn" id="btn-group-check" onclick="groupCheckTeam()">检查当前队伍</button>
+                    <span class="group-sub" id="group-check-msg"></span>
+                </div>
+                <div class="group-row" id="group-switch-warn" style="display:none">
+                    <span class="group-sub" style="color:var(--danger)">注意：修罗/五倍「检查队伍」开关未开启，组号模式启动会停止任务。</span>
+                </div>
+                <div class="group-row" id="group-leader-row" style="display:none">
+                    <span class="group-label" id="group-leader-name">-</span>
+                    <span class="group-sub" id="group-leader-action">-</span>
+                </div>
+                <div class="group-sub" id="group-member-title" style="display:none">队员（本窗口 Tab 且在队伍中）</div>
+                <div id="group-member-list"></div>
+                <div class="group-row" id="group-save-row" style="display:none">
+                    <button class="btn" id="btn-group-save" onclick="groupSaveActions()">保存全部设置</button>
+                    <span class="group-sub" id="group-save-msg"></span>
+                </div>
+            </div>
         </div>
         <!-- ============ 设置页（通用 + 显示与调试 + 血蓝阈值 + 战斗动作） ============ -->
         <div class="page" id="page-general">
@@ -1235,6 +1264,18 @@
     const wubeiTabGroup = document.getElementById('wubei-tab-group');
     const xiuluoShout = document.getElementById('xiuluo-shout');
     const wuhuanVitalityContinue = document.getElementById('wuhuan-vitality-continue');
+    // 组号设置页
+    const navGroup = document.getElementById('nav-group');
+    const btnGroupCheck = document.getElementById('btn-group-check');
+    const groupCheckMsgEl = document.getElementById('group-check-msg');
+    const groupSwitchWarn = document.getElementById('group-switch-warn');
+    const groupLeaderRow = document.getElementById('group-leader-row');
+    const groupLeaderName = document.getElementById('group-leader-name');
+    const groupLeaderAction = document.getElementById('group-leader-action');
+    const groupMemberTitle = document.getElementById('group-member-title');
+    const groupMemberList = document.getElementById('group-member-list');
+    const groupSaveRow = document.getElementById('group-save-row');
+    const groupSaveMsgEl = document.getElementById('group-save-msg');
     const btnVerifyXiuluo = document.getElementById('btn-verify-xiuluo');
     const verifyResultEl = document.getElementById('verify-result');
     const btnVerifyXiuluoClaim = document.getElementById('btn-verify-xiuluo-claim');
@@ -1597,6 +1638,12 @@
             if (sig !== JSON.stringify(runtimeStatus)) {
                 runtimeStatus = s;
                 renderDash();
+            }
+            // 组号入口显隐：组号开关开 + 启动检查识别到组号 + 已登录
+            // Tab ≥2（任务未运行也轮询，启动识别后即展示入口）
+            const g = await callPython('get_group_state');
+            if (g && typeof g.show === 'boolean') {
+                navGroup.style.display = g.show ? 'flex' : 'none';
             }
         } catch (e) { /* 桥接未就绪时忽略 */ }
     }
@@ -2309,6 +2356,11 @@
         applyDevTools();  // 调试信息开关：控制「诊断」导航入口显隐
         xiuluoHezi.checked = !!info.xiuluo_hezi;
         xiuluoCheckTeam.checked = !!info.xiuluo_check_team;
+        // 组号设置页：修罗/五倍「检查队伍」未开启时提示（组号模式要求必须开启）
+        if (info.group_check_team) {
+            const bothOn = info.group_check_team.xiuluo && info.group_check_team.wubei;
+            groupSwitchWarn.style.display = bothOn ? 'none' : 'flex';
+        }
         xiuluoAutoCreateTeam.checked = !!info.xiuluo_auto_create_team;
         xiuluoAutoRejoin.checked = !!info.xiuluo_auto_rejoin;
         xiuluoAutoWuyi.checked = !!info.xiuluo_auto_wuyi;
@@ -2534,6 +2586,148 @@
         tabWuyiVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
         tabWuyiVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
+
+    /* ================= 组号设置页 ================= */
+    let groupChecking = false;   // 检查请求在途标记（防连点）
+    let groupData = null;        // 最近一次检查结果（成员行渲染与保存的数据源）
+
+    // 检查当前队伍：枚举 Tab + 开队伍面板读成员昵称匹配，结果经 onGroupCheckResult 异步回推
+    async function groupCheckTeam() {
+        if (groupChecking) return;
+        groupChecking = true;
+        btnGroupCheck.disabled = true;
+        groupCheckMsgEl.style.color = 'var(--text)';
+        groupCheckMsgEl.innerText = '检查中...';
+        try {
+            const r = await callPython('group_check_team');
+            if (!r || r.status !== 'success') {
+                groupCheckMsgEl.style.color = 'var(--danger)';
+                groupCheckMsgEl.innerText = (r && r.msg) || '检查请求失败';
+                groupChecking = false;
+                btnGroupCheck.disabled = false;
+            }
+        } catch (e) {
+            groupCheckMsgEl.style.color = 'var(--danger)';
+            groupCheckMsgEl.innerText = '检查请求异常';
+            groupChecking = false;
+            btnGroupCheck.disabled = false;
+        }
+    }
+
+    function groupSelect(options, value) {
+        // 动作下拉（与设置页 skill-select 同款样式）；无选中项时附加「未设置」占位
+        const sel = document.createElement('select');
+        sel.className = 'skill-select';
+        const has = value !== null && value !== undefined;
+        if (!has) {
+            const opt = document.createElement('option');
+            opt.value = '';
+            opt.innerText = '未设置';
+            opt.selected = true;
+            sel.appendChild(opt);
+        }
+        options.forEach(v => {
+            const opt = document.createElement('option');
+            opt.value = v;
+            opt.innerText = v;
+            if (has && v === value) opt.selected = true;
+            sel.appendChild(opt);
+        });
+        return sel;
+    }
+
+    function groupRender() {
+        // 按最近一次检查结果渲染队长行与成员行（只展示在队伍中的队员 Tab）
+        const d = groupData;
+        const hasData = d && d.leader && d.members && d.options;
+        groupLeaderRow.style.display = hasData ? 'flex' : 'none';
+        groupMemberTitle.style.display = 'none';
+        groupMemberList.innerHTML = '';
+        groupSaveRow.style.display = 'none';
+        groupSaveMsgEl.innerText = '';
+        if (!hasData) return;
+        const leader = d.leader;
+        groupLeaderName.innerText = `${leader.name || '未知'}（ID ${leader.id}）· 队长`;
+        groupLeaderAction.innerText = leader.char
+            ? `本账号组号设置：人物 ${leader.char} / 召唤兽 ${leader.beast}`
+            : '未设置本账号动作，使用通用战斗设置';
+        const members = d.members.filter(m => m.in_team);
+        if (!members.length) return;
+        groupMemberTitle.style.display = 'block';
+        groupSaveRow.style.display = 'flex';
+        members.forEach(m => {
+            const row = document.createElement('div');
+            row.className = 'group-row';
+            row.dataset.mid = m.id;
+            const label = document.createElement('span');
+            label.className = 'group-label';
+            label.innerText = `${m.name || '未知'}（ID ${m.id}）`;
+            if (m.char === null || m.char === undefined) {
+                label.style.color = 'var(--danger)';
+                label.innerText += '（未设置）';
+            }
+            const box = document.createElement('div');
+            box.className = 'group-ctrl';
+            box.style.gap = '4px';
+            const charSel = groupSelect(d.options.char, m.char);
+            charSel.title = '人物战斗动作';
+            const beastSel = groupSelect(d.options.beast, m.beast);
+            beastSel.title = '召唤兽战斗动作';
+            box.appendChild(charSel);
+            box.appendChild(beastSel);
+            row.appendChild(label);
+            row.appendChild(box);
+            groupMemberList.appendChild(row);
+        });
+    }
+
+    window.onGroupCheckResult = function (payload) {
+        groupChecking = false;
+        btnGroupCheck.disabled = false;
+        let ok = false, info = '', data = null;
+        try { ({ ok, info, data } = JSON.parse(payload)); } catch (e) { info = '结果解析失败'; }
+        groupCheckMsgEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        groupCheckMsgEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+        groupData = ok ? data : null;
+        groupRender();
+    };
+
+    async function groupSaveActions() {
+        if (!groupData || !groupData.members) return;
+        const mapping = {};
+        groupData.members.filter(m => m.in_team).forEach(m => {
+            const row = groupMemberList.querySelector('.group-row[data-mid="' + m.id + '"]');
+            if (!row) return;
+            const sels = row.querySelectorAll('select');
+            const char = sels[0].value, beast = sels[1].value;
+            if (!char || !beast) return;  // 仍有「未设置」占位：跳过，绝不写空值
+            mapping[m.id] = { char: char, beast: beast };
+        });
+        if (!Object.keys(mapping).length) {
+            groupSaveMsgEl.style.color = 'var(--danger)';
+            groupSaveMsgEl.innerText = '仍有成员未设置，无法保存';
+            return;
+        }
+        try {
+            const r = await callPython('group_save_actions', mapping);
+            if (r && r.status === 'success') {
+                groupSaveMsgEl.style.color = 'var(--accent)';
+                groupSaveMsgEl.innerText = '✔ 已保存';
+                // 本地同步已存值并重渲染：未设置红色标记即时清除
+                Object.keys(mapping).forEach(id => {
+                    const m = groupData.members.find(x => x.id === id);
+                    if (m) { m.char = mapping[id].char; m.beast = mapping[id].beast; }
+                });
+                groupRender();
+            } else {
+                groupSaveMsgEl.style.color = 'var(--danger)';
+                groupSaveMsgEl.innerText = (r && r.msg) || '保存失败';
+            }
+        } catch (e) {
+            groupSaveMsgEl.style.color = 'var(--danger)';
+            groupSaveMsgEl.innerText = '保存请求异常';
+        }
+    }
 
     // 静默修罗领取：与验证领取同流程，全程静默点击，结果经 onSilentClaimVerifyResult 异步回推
     async function verifyXiuluoClaimSilent() {

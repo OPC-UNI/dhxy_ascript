@@ -278,6 +278,62 @@ def test_maybe_rejoin_click_success(monkeypatch):
     assert clicked == [(120, 300)]
 
 
+# ---- 组号归队（rejoin_from_away：暂离不限于轮回司，2026-11-07 用户要求） ----
+
+
+def test_rejoin_from_away_no_lunhuisi_gate(monkeypatch):
+    """无轮回司前置：暂离队员在任何位置都点归队（maybe_rejoin 的
+    _at_lunhuisi 门槛不适用）。点击后校验帧面板已关闭 = 成功。"""
+    def _boom(win):
+        raise AssertionError("rejoin_from_away 不得做轮回司判定")
+    monkeypatch.setattr(team, "_at_lunhuisi", _boom)
+    monkeypatch.setattr(team, "open_team_panel", lambda win: (True, "队伍面板已打开"))
+    monkeypatch.setattr(team, "close_team_panel", lambda win: (True, ""))
+    monkeypatch.setattr(team, "_tpl_path", lambda icon: Path(__file__))
+    monkeypatch.setattr(team.game_map, "find_template_in",
+                        lambda img, icon, threshold=0.8: (120, 300))
+    clicked = []
+    monkeypatch.setattr(team, "human_click",
+                        lambda win, x, y: clicked.append((x, y)))
+    win = _SeqWin([_panel_flag_frame("likaiduiwu.png"), _frame()])
+    handled, desc = team.rejoin_from_away(win, prefix="[组号]")
+    assert handled and desc.startswith("已归队")
+    assert clicked == [(120, 300)]
+
+
+def test_rejoin_from_away_button_gone_success(monkeypatch):
+    """点击归队后归队按钮从面板消失 = 成功（面板仍开）。"""
+    monkeypatch.setattr(team, "open_team_panel", lambda win: (True, "队伍面板已打开"))
+    monkeypatch.setattr(team, "close_team_panel", lambda win: (True, ""))
+    monkeypatch.setattr(team, "_tpl_path", lambda icon: Path(__file__))
+    monkeypatch.setattr(team, "human_click", lambda win, x, y: None)
+    seq = iter([(120, 300), None])  # 首帧按钮命中；校验帧按钮消失
+    monkeypatch.setattr(team.game_map, "find_template_in",
+                        lambda img, icon, threshold=0.8: next(seq))
+    win = _SeqWin([_panel_flag_frame("likaiduiwu.png"),
+                   _panel_flag_frame()])  # 校验帧：面板开、无归队按钮
+    handled, desc = team.rejoin_from_away(win, prefix="[组号]")
+    assert handled and desc == "已归队（归队按钮已消失）"
+
+
+def test_rejoin_from_away_button_persists_unconfirmed(monkeypatch):
+    """点击后归队按钮持续在场：报告未确认（防假成功）。"""
+    monkeypatch.setattr(team, "open_team_panel", lambda win: (True, "队伍面板已打开"))
+    monkeypatch.setattr(team, "close_team_panel", lambda win: (True, ""))
+    monkeypatch.setattr(team, "_tpl_path", lambda icon: Path(__file__))
+    monkeypatch.setattr(team, "human_click", lambda win, x, y: None)
+    monkeypatch.setattr(team.game_map, "find_template_in",
+                        lambda img, icon, threshold=0.8: (120, 300))
+    t = {"t": 0}
+    monkeypatch.setattr(team.time, "time", lambda: t["t"])
+    monkeypatch.setattr(team.time, "sleep",
+                        lambda s: t.__setitem__("t", t["t"] + s))
+    win = _SeqWin([_panel_flag_frame("likaiduiwu.png"),
+                   _panel_flag_frame("likaiduiwu.png")])  # 校验帧按钮仍在
+    handled, desc = team.rejoin_from_away(win, prefix="[组号]")
+    assert handled and "未确认" in desc
+
+
 # ---- 自动创建队伍（修罗/五倍开关默认关：未组队点组队菜单「创建队伍」） ----
 
 def _mock_create_env(monkeypatch, menu_in_team=False, tpl_exists=True,

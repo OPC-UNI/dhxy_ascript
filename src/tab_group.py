@@ -27,9 +27,11 @@
 - 护栏：Tab 条区域（窗口相对 y < 60）为鼠标禁入区，pass 点击经
   _guarded_click 过滤；切 Tab 只走 Ctrl+Tab/静默 Tab 条点击，
   普通流程点击永不碰 Tab 条
-- 激活条件（active()）：init_task 时开关开 + 已登录 Tab ≥2 + 队长
-  ID 可解析，且当前任务模式仍为修罗/五倍——单号（已登录 Tab <2）
-  或开关关闭时全部新代码路径不执行，行为与旧版完全一致
+- 激活条件（active()）：init_task 时开关开 + 已登录 Tab ≥2 + 启动
+  Tab ID 可解析，且当前任务模式仍为修罗/五倍——单号（已登录 Tab
+  <2）或开关关闭时全部新代码路径不执行，行为与旧版完全一致。
+  init 阶段只陈述启动 Tab 与登录数；队长/组号结论必须由
+  startup_check（队伍检查 + Tab 标题角色名比对）给出
 """
 import difflib
 import re
@@ -43,7 +45,11 @@ from ascript.windows.window.Window import WindowCaptureFormat
 from .app_utils import (log, human_click, move_away, current_task_mode,
                         fixed_pos_get, fixed_pos_set)
 from . import app_utils  # 静默操作门控（silent_mode_on/keyboard_ok）
-from .control_window import load_high_perf  # 高性能开关：巫医 pass 直点门控
+from .control_window import (load_high_perf,  # 高性能开关：巫医 pass 直点门控
+                             load_group_actions,  # 组号成员战斗动作（按账号 ID）
+                             load_battle_actions,  # 通用战斗动作（队长回退）
+                             CHAR_BATTLE_ACTIONS,  # 组号设置页下拉选项（人物）
+                             BEAST_BATTLE_ACTIONS)  # 组号设置页下拉选项（召唤兽）
 from . import game  # 子窗口枚举（每个 Tab 一个 Win32Window）
 from . import map as game_map  # 模板匹配快速接口
 from . import status_bars  # 血蓝条检测回满（队员 pass 复用）
@@ -65,6 +71,12 @@ WUYI_OPTION_Y_OFFSET = 6   # 选项点击 y 下移修正：绿字中心比可点
 WUYI_POS_FRESH = 30.0      # 队长选项坐标新鲜期：期内队员 pass 可直点复用
                            # （队长点击后 pass 数秒内开始，30s 足够覆盖）
 PASS_TOTAL_DEADLINE = 30.0  # 单次 pass 总时长上限（防异常拖垮主流程）
+# 配置动作队员的 pass 时长（2026-11-07 组号战斗动作）：每名配置队员
+# 追加 MEMBER_ACT_BUDGET 预算（取消自动+等操作条+人物/召唤兽动作+
+# 点自动，典型 15~25s/人）；BASE 覆盖切换与截图开销。上限防异常
+# 拖垮主流程，超时未处理的队员下一场例行 pass 兜底（自动跨场持续）
+MEMBER_ACT_DEADLINE_BASE = 60.0
+MEMBER_ACT_BUDGET = 50.0
 REJOIN_PASS_MIN_INTERVAL = 30.0  # 归队 pass 最小间隔：队伍检查每 10s 一次，
                            # 暂离队员持续在场会每轮触发——30s 节流防频繁
                            # 切 Tab；归队成功后暂离名单消失自然不再触发
@@ -77,6 +89,14 @@ _leader_id = None      # 队长账号 ID（任务启动时可见 Tab 子窗口�
 _tab_count = 0         # 窗口内 Tab 总数
 _logged_count = 0      # 已登录 Tab 数
 _members = 0           # 队员数（已登录 - 队长）
+_team_member_ids = set()  # 启动检查确认「在队伍中」的队员账号 ID：仅这些
+                          # Tab 套用组号战斗动作配置（未确认的维持旧行为只
+                          # 点自动；启动成员检查时写入，init_task 清空）
+_acted_ids = set()        # 本次运行已执行过配置动作的队员账号 ID：动作只
+                          # 执行一次（与队长对称，自动跨场持续），pass 再次
+                          # 触发（补挂自动场）时这些队员直接点自动即可
+                          # （2026-11-07 用户反馈状态机），init_task 清空
+_no_members_logged = False  # 「未确认队员 Tab 跳过 pass」告警去重（每任务一次）
 pass_active = False    # pass 进行中：战斗线程/任务线程轮询见此跳过处理
 _last_bars_pass_at = 0.0  # 上次队员血蓝 pass 时间（节流）
 _last_rejoin_pass_at = 0.0  # 上次归队 pass 时间（节流）
@@ -110,16 +130,25 @@ def init_task(win, mode, switch_on):
     """任务启动时初始化组号状态（开关开才枚举，一次）。
 
     激活条件：mode ∈ {修罗, 五倍} 且 switch_on 且已登录 Tab ≥2 且
-    队长 ID 可解析（可见子窗口标题）。不满足时置不激活——单号
+    当前 Tab ID 可解析（可见子窗口标题）。不满足时置不激活——单号
     （已登录 Tab <2）行为与旧版完全一致。枚举失败只告警不激活。
+
+    注意（2026-11-07 用户纠正）：本阶段只能陈述「在哪个 Tab 启动、
+    窗口内登录了几个 Tab」——_leader_id 只是启动所在 Tab 的账号 ID
+    （队长候选），谁当队长/是否是组号必须等 startup_check 队伍检查
+    + 名称比对后的结论，激活日志不得提前下结论。
     """
-    global _active, _mode, _leader_id, _tab_count, _logged_count, _members
+    global _active, _mode, _leader_id, _tab_count, _logged_count, _members, \
+        _team_member_ids, _acted_ids, _no_members_logged
     _active = False
     _mode = ""
     _leader_id = None
     _tab_count = 0
     _logged_count = 0
     _members = 0
+    _team_member_ids = set()
+    _acted_ids = set()
+    _no_members_logged = False
     if mode not in ("修罗", "五倍") or not switch_on:
         return
     try:
@@ -138,17 +167,21 @@ def init_task(win, mode, switch_on):
     if not visible:
         log("[组号] 未识别到当前 Tab 身份（无可见已登录子窗口），组号模式不激活", "WARN")
         return
-    _leader_id = visible[0]["id"]
+    _leader_id = visible[0]["id"]  # 启动所在 Tab 的账号 ID（队长候选，
+                                   # 是否队长由 startup_check 队伍检查确认）
     _members = _logged_count - 1
     _mode = mode
     _active = True
-    # 队员 Tab 角色名一并列出（标题「角色名（ID：账号）」，解析失败
-    # 回退账号 ID——用户 2026-11-07 要求，方便人工核对队员对应关系）
-    member_names = [_tab_char_name(c["title"]) or c["id"]
-                    for c in children if c["id"] and c["id"] != _leader_id]
-    member_txt = f"（{'、'.join(member_names)}）" if member_names else ""
-    log(f"[组号] 组号模式激活：{_tab_count} 个 Tab、已登录 {_logged_count} 个，"
-        f"队长 ID {_leader_id}，队员 {_members} 个{member_txt}", "SYS")
+    # 其余 Tab 角色名一并列出（标题「角色名（ID：账号）」，解析失败
+    # 回退账号 ID——用户 2026-11-07 要求，方便人工核对对应关系）；
+    # 只陈述事实：这些 Tab 是否组员待队伍检查 + 名称比对确认
+    other_names = [_tab_char_name(c["title"]) or c["id"]
+                   for c in children if c["id"] and c["id"] != _leader_id]
+    other_txt = f"；其余已登录 Tab：{'、'.join(other_names)}" if other_names else ""
+    start_char = _tab_char_name(visible[0]["title"]) or _leader_id
+    log(f"[组号] 本任务在 Tab「{start_char}」（ID {_leader_id}）启动："
+        f"窗口内 {_tab_count} 个 Tab、已登录 {_logged_count} 个{other_txt}；"
+        f"队长与组号结论待队伍检查确认", "SYS")
 
 
 def active():
@@ -168,25 +201,232 @@ def ready():
     return _leader_id is not None and _logged_count >= 2
 
 
-def startup_leader_check(win):
-    """组号模式启动检查：强制队长判定（即使「检查队伍」开关关闭）。
+def leader_id():
+    """当前队长账号 ID（组号激活时解析；未激活/单号 None）。"""
+    return _leader_id
+
+
+def startup_check(win):
+    """组号模式启动检查：一次打开队伍面板完成队长判定与成员昵称读取。
 
     战斗中先等战斗结束（队伍面板战斗中不可用，误报非队长会停任务）；
-    确定性非队长（未组队/面板无解散按钮）立即返回；瞬态失败 3s 后
-    重试一次。返回 (是否队长, 描述)。
+    队长三分类（classify_leader_with_panel，面板保持打开）；unclear
+    3s 后同面板重判一次（不再重新开面板）；队长时同面板读成员昵称
+    （team.panel_member_names）供 startup_member_check 复用。
+    旧链路启动开 3 次队伍面板（队长判定 + 复核重开 + 成员检查），
+    2026-11-07 用户反馈后合并为 1 次。
+    返回 (是否队长, 描述, 成员昵称或None)；昵称仅队长时读取，
+    None 表示读不到（成员检查按宽松处理）。
     """
     from . import team  # 函数内导入：team 依赖 app_utils，避免循环依赖
     from .battle import is_in_battle  # 函数内导入，避免循环依赖
     deadline = time.time() + 90
     while is_in_battle(win) and time.time() < deadline:
         time.sleep(2.0)
-    ok, info = team.is_team_leader(win)
-    if ok:
-        return True, info
-    if team.is_definitive_not_leader(info):
-        return False, info
-    time.sleep(3)
-    return team.is_team_leader(win)
+    kind, info = team.classify_leader_with_panel(win)
+    if kind == "unclear":
+        time.sleep(3)
+        kind, info = team.classify_leader_with_panel(win)
+    names = None
+    if kind == "leader":
+        img = win.capture(force_activate=False)
+        if img is not None:
+            names = team.panel_member_names(img)
+        else:
+            log("[组号] 队伍面板截图失败，成员昵称未读取（按未确认处理）", "WARN")
+        if names is None or any(n is None for _i, n in names):
+            # 面板昵称未读到/部分区域 OCR 漏检：同面板重截一帧重读合并
+            # （不重新开面板）——单帧漏检会把真实队员误判「不在队伍」
+            # 而不参与队员操作（2026-11-07 用户基本原则：队伍检查+比对
+            # 得出组号结论，比对失败代价是队员全程无人管）
+            time.sleep(1.0)
+            img2 = win.capture(force_activate=False)
+            if img2 is not None:
+                names2 = team.panel_member_names(img2)
+                if names2 is not None:
+                    if names is None:
+                        names = names2
+                    else:
+                        # names/names2 均为 [(序号, 昵称或None), ...]：逐序号
+                        # 取两次读取的非 None 昵称（漏检区域由重读补齐）
+                        names = [(idx, name if name is not None else
+                                  (names2[idx][1] if idx < len(names2) else None))
+                                 for idx, (_i2, name) in enumerate(names)]
+    team.close_team_panel(win)
+    return kind == "leader", info, names
+
+
+# ---- 组号成员战斗动作（按账号 ID，组号设置面板编辑） ----
+
+def deactivate_group(reason=""):
+    """组号降级关闭（启动检查确定性未组队等场景，2026-11-07 用户反馈）。
+
+    本次运行不再切 Tab/队员 pass（_active 置 False，全部 pass 与
+    护栏自然跳过），并写组号识别状态 False（侧边栏「组号」入口隐藏）。
+    调用方随后按普通非队长流程继续运行（任务循环 check_team_min →
+    确定性非队长 → _keep_alive 保持模式）。队长 ID 保留：队长动作
+    解析仍可用（该账号有组号设置时继续用它的设置）。
+    """
+    global _active, _mode, _team_member_ids, _acted_ids
+    _active = False
+    _mode = ""
+    _team_member_ids = set()
+    _acted_ids = set()
+    log(f"[组号] 组号模式降级关闭{('：' + reason) if reason else ''}", "WARN")
+    try:
+        app_utils.kv_save_merged("group_detected", False)
+    except Exception as e:
+        log(f"[组号] 组号识别状态写入失败: {e}", "WARN")
+
+
+def leader_battle_actions():
+    """队长战斗动作解析：队长账号有组号设置则用之，否则通用战斗设置。
+
+    队长换人自动生效（新队长读自己账号的组号设置；无设置回退通用
+    设置——用户 2026-11-07 需求：B 昨天以队员身份设置过、今天当队长
+    直接读它的设置）。单号模式 _leader_id 为 None，恒返回通用设置
+    （行为与旧版完全一致）。
+    """
+    if _leader_id:
+        entry = load_group_actions().get(_leader_id)
+        if entry:
+            return entry
+    return load_battle_actions()
+
+
+def scan_group_members(win, panel_names=None):
+    """枚举 Tab + 成员昵称 → 匹配「在队伍中的队员 Tab」。
+
+    任务进程启动检查与主进程组号设置面板共用（不依赖 _active/_mode，
+    不切 Tab）。流程：枚举子窗口（队长 = 可见已登录 Tab）→ 面板昵称
+    匹配 → 每个已登录非队长 Tab 的标题角色名与面板昵称模糊匹配
+    （_name_similar）。
+    panel_names 缺省（None，组号设置面板检查路径）：自行打开队伍面板
+    → team.panel_member_names 读全员昵称 → 关闭面板；传入时（任务
+    启动路径，startup_check 同次面板打开已读取）直接复用不再开面板。
+    宽松兜底（用户确认）：面板打不开/名字读不到时全部成员标记
+    in_team=False——不拦截启动、不套动作配置（只点自动）。
+    返回 (是否成功, 描述, 数据)；数据 = {"leader": {"id","name","char",
+    "beast"}, "members": [{"id","name","in_team","char","beast"}, ...],
+    "panel_read": 面板昵称是否读到, "options": {...}}，char/beast 为
+    已保存的组号动作（未设置 None）。
+    """
+    try:
+        children = game.list_tab_windows(win)
+    except Exception as e:
+        return False, f"枚举 Tab 子窗口失败: {e}", None
+    logged = [c for c in children if c["id"]]
+    leader = next((c for c in logged if c["visible"]), None)
+    if leader is None:
+        return False, "未识别到当前 Tab 身份（无可见已登录子窗口）", None
+    member_children = [c for c in logged if c["id"] != leader["id"]]
+    saved = load_group_actions()
+    if panel_names is None:
+        # 组号设置面板检查路径：自行开面板读昵称（宽松兜底）
+        from . import team  # 函数内导入：team 顶层不依赖 tab_group
+        panel_open = False
+        try:
+            ok_open, open_info = team.is_team_panel_open(win)
+            if not ok_open:
+                ok_open, open_info = team.open_team_panel(win)
+                if not ok_open:
+                    log(f"[组号] 队伍面板未打开（{open_info}），成员按未确认处理", "WARN")
+            panel_open = ok_open
+            if ok_open:
+                img = win.capture(force_activate=False)
+                if img is None:
+                    log("[组号] 队伍面板截图失败，成员按未确认处理", "WARN")
+                else:
+                    panel_names = team.panel_member_names(img)
+        except Exception as e:
+            log(f"[组号] 读取队伍面板成员昵称异常: {e}，成员按未确认处理", "WARN")
+        finally:
+            if panel_open:
+                try:
+                    team.close_team_panel(win)
+                except Exception:
+                    pass
+        if panel_names is None:
+            log("[组号] 队伍面板成员昵称未识别（面板不可见或未渲染），成员按未确认处理", "WARN")
+    panel_name_list = [n for _i, n in (panel_names or []) if n]
+    members = []
+    for c in member_children:
+        cname = _tab_char_name(c["title"]) or ""
+        in_team = bool(panel_name_list) and any(
+            _name_similar(cname, n) for n in panel_name_list)
+        entry = saved.get(c["id"])
+        members.append({"id": c["id"], "name": cname,
+                        "in_team": in_team,
+                        "char": entry["char"] if entry else None,
+                        "beast": entry["beast"] if entry else None})
+    leader_entry = saved.get(leader["id"])
+    leader_data = {"id": leader["id"],
+                   "name": _tab_char_name(leader["title"]) or "",
+                   "char": leader_entry["char"] if leader_entry else None,
+                   "beast": leader_entry["beast"] if leader_entry else None}
+    confirmed = [m for m in members if m["in_team"]]
+    desc = [f"队长 {leader_data['name']}（ID {leader_data['id']}）"]
+    if panel_names is None:
+        desc.append("面板昵称未识别（成员未确认）")
+    elif confirmed:
+        desc.append("已确认队员 "
+                    + "、".join(f"{m['name']}({m['id']})" for m in confirmed))
+    elif member_children:
+        desc.append(f"已登录 {len(member_children)} 个队员 Tab 均未匹配到队伍成员")
+    else:
+        desc.append("窗口内无其他已登录 Tab")
+    return True, "；".join(desc), {"leader": leader_data, "members": members,
+                                  "panel_read": panel_names is not None,
+                                  "options": {"char": CHAR_BATTLE_ACTIONS,
+                                              "beast": BEAST_BATTLE_ACTIONS}}
+
+
+def startup_member_check(win, panel_names=None):
+    """组号启动成员动作检查（队长判定通过后调用，仅组号激活时）。
+
+    确认在队伍中的队员 Tab（标题角色名与面板昵称匹配）必须已设置
+    组号战斗动作，否则返回缺失名单——调用方停止任务并提示先到组号
+    设置面板设置。面板读不到名字时宽松放行（用户确认：不拦截启动，
+    未确认 Tab 维持旧行为只点自动）。
+    panel_names：startup_check 同次面板打开读到的成员昵称（复用免
+    二次开面板）；None 时内部再开面板读取（组号设置面板等独立路径）。
+    确认结果写入 _team_member_ids（队员 pass 套用动作配置的范围）；
+    面板昵称可读时同步写组号识别状态（group_detected）——面板侧栏
+    「组号」入口按此自动显隐（用户 2026-11-07 需求：识别到是组号
+    才展示入口）。
+    返回 (缺失队员列表或 None, 描述)；缺失列表 = [{"id","name"}, ...]。
+    """
+    global _team_member_ids
+    _team_member_ids = set()
+    ok, info, data = scan_group_members(win, panel_names)
+    if not ok or not data:
+        return None, info
+    members = data["members"]
+    confirmed = [m for m in members if m["in_team"]]
+    _team_member_ids = {m["id"] for m in confirmed}
+    if data.get("panel_read"):
+        try:
+            app_utils.kv_save_merged("group_detected", bool(confirmed))
+        except Exception as e:
+            log(f"[组号] 组号识别状态写入失败: {e}", "WARN")
+    missing = [m for m in confirmed if m["char"] is None]
+    if missing:
+        names = "、".join(f"{m['name']}(ID {m['id']})" for m in missing)
+        return missing, f"{names} 未设置战斗动作"
+    if confirmed:
+        unmanaged = len(members) - len(confirmed)
+        suffix = (f"；其余 {unmanaged} 个 Tab 不在队伍/未确认，不参与队员操作"
+                  if unmanaged else "")
+        return None, f"组号成员已确认并全部设置（{len(confirmed)} 名）{suffix}"
+    if data.get("panel_read"):
+        # 面板昵称读到了，但已登录队员 Tab 一个都没匹配上——队伍里
+        # 没有本窗口的其他账号（1 人队/队员还没进队/换人了），按基本
+        # 原则不算组号：不拦截启动，本次运行不管理任何队员 Tab
+        # （2026-11-07 日志 20:38 教训：此情形误报「面板昵称未识别」，
+        # 实际是启动时队伍仅队长 1 人）
+        return None, (f"队伍中无本窗口队员（{len(members)} 个队员 Tab 均未匹配），"
+                      f"本次运行按无组号处理（队员 pass 跳过）；队员入队后重启任务生效")
+    return None, "组号成员未确认（面板昵称未识别），按宽松放行（队员 pass 跳过，不操作未确认 Tab）"
 
 
 # ---- 切换与身份 ----
@@ -283,6 +523,20 @@ def _next_logged_index(win, tab, cur, count):
     return (cur + 1) % count
 
 
+def _tab_name_by_id(win, tab_id):
+    """按账号 ID 从 Tab 子窗口标题解析角色名（切换结果日志用）。
+
+    标题格式见 _tab_char_name；解析失败回退账号 ID 本身。
+    """
+    try:
+        for c in game.list_tab_windows(win):
+            if c["id"] == tab_id:
+                return _tab_char_name(c["title"]) or tab_id
+    except Exception:
+        pass
+    return tab_id
+
+
 def _switch_next_by_click(win):
     """静默+后台的切 Tab 兜底：Tab 条消息点击（2026-11-04 实机验证
     生效——无需前台、无需键盘、不移动物理鼠标）。
@@ -291,6 +545,9 @@ def _switch_next_by_click(win):
     _next_logged_index）；点击后按可见子窗口句柄变化判定（与键盘
     路径同判据）。未生效重试一次同一 Tab（不重算序号——首次点击已
     生效而判定竞态时，重点同一 Tab 是无操作，重算会连切两个）。
+    切换生效后输出「切至哪个角色」日志：角色名（子窗口标题解析）+
+    账号 ID（用户 2026-11-07 要求——只有切换生效后 ID 才可信，
+    点击时仅知道 Tab 序号）。
     返回语义同 _switch_next。
     """
     from . import silent_click  # 函数内导入：保持模块间依赖单向
@@ -307,16 +564,26 @@ def _switch_next_by_click(win):
     if next_i is None:
         log("[组号] 除当前 Tab 外无已登录 Tab，跳过切换", "WARN")
         return None
+
+    def _log_switch_ok(ok_id, info):
+        """切换生效日志：角色名 + 账号 ID（ok_id 为 None = 未登录 Tab）。"""
+        if ok_id:
+            cname = _tab_name_by_id(win, ok_id)
+            log(f"[组号] 静默切 Tab：已切至「{cname}」（ID {ok_id}）"
+                f"（Tab {next_i}，点击中心 ({info['point'][0]},{info['point'][1]})）", "INFO")
+        else:
+            log(f"[组号] 静默切 Tab：已点击 Tab {next_i} 中心 "
+                f"({info['point'][0]},{info['point'][1]})（当前 Tab 未登录）", "INFO")
+
     before_hwnd, _before_id = _current(win)
     info = silent_click.send_silent_tab_click(win, next_i)
     if info is None:
         log("[组号] 静默切 Tab 点击投递失败（Tab 条不可达）", "WARN")
         return None
-    log(f"[组号] 静默切 Tab：已点击 Tab {next_i} 中心 "
-        f"({info['point'][0]},{info['point'][1]})", "INFO")
     time.sleep(TAB_SWITCH_SETTLE)
     after_hwnd, after_id = _current(win)
     if after_hwnd is not None and after_hwnd != before_hwnd:
+        _log_switch_ok(after_id, info)
         return after_id if after_id is not None else ""
     silent_click.send_silent_tab_click(win, next_i)  # 重试同一 Tab
     time.sleep(TAB_SWITCH_SETTLE)
@@ -324,6 +591,7 @@ def _switch_next_by_click(win):
     if after_hwnd is None or after_hwnd == before_hwnd:
         log("[组号] 静默切 Tab 未生效（点击投递未被消费），中止本轮", "WARN")
         return None
+    _log_switch_ok(after_id, info)
     return after_id if after_id is not None else ""
 
 
@@ -418,18 +686,28 @@ def _guarded_click(win, x, y, button="primary"):
     return True
 
 
-def _for_each_member(win, handler, label, force=False):
+def _for_each_member(win, handler, label, force=False, total_deadline=None,
+                     only_members=False):
     """遍历队员 Tab：Ctrl+Tab 切一整圈（_tab_count 次），逐个执行 handler。
 
     handler 签名 (win, tab_id)；未登录 Tab（切换成功但无 ID，
     cur == ""）跳过；绕回队长提前结束；handler 异常内部消化；
-    整体受 PASS_TOTAL_DEADLINE 上限保护。结束切回队长。
+    整体受总时长上限保护（total_deadline 缺省 PASS_TOTAL_DEADLINE；
+    战斗动作 pass 按配置队员数放大）。结束切回队长。
+    only_members=True：只处理启动检查确认「在队伍中」的 Tab
+    （_team_member_ids）——一个窗口多个 Tab 不全是组号（2026-11-07
+    用户基本原则：队伍检查 + Tab 名比对才得出组号结论），不在队伍
+    的角色完全不碰（它可能在别的队伍/干别的事，切过去点自动会
+    干扰）；非组员 Tab 仍要切过去（遍历路径），但 handler 不执行。
+    force=True 供验证模式绕过 active() 检查（主进程无任务模式，无
+    队伍检查结果，维持全部遍历的旧语义）。
     pass_active 由调用方置位/复位。
-    force=True 供验证模式绕过 active() 检查（主进程无任务模式）。
     """
     if not _active and not force:
         return
-    deadline = time.time() + PASS_TOTAL_DEADLINE
+    if total_deadline is None:
+        total_deadline = PASS_TOTAL_DEADLINE
+    deadline = time.time() + total_deadline
     for _ in range(_tab_count):
         if time.time() > deadline:
             log(f"[组号] {label} 超总时长上限，提前切回队长", "WARN")
@@ -443,6 +721,9 @@ def _for_each_member(win, handler, label, force=False):
         if cur == "":
             log(f"[组号] {label}：当前 Tab 未登录，跳过", "INFO")
             continue
+        if only_members and not force and cur not in _team_member_ids:
+            log(f"[组号] {label}：Tab（ID {cur}）不在队伍/未确认，跳过不操作", "INFO")
+            continue
         try:
             handler(win, cur)
         except Exception as e:
@@ -452,15 +733,29 @@ def _for_each_member(win, handler, label, force=False):
 
 # ---- 战斗自动 pass ----
 
-def member_auto_pass(win, wait_auto=AUTO_WAIT_FIRST):
-    """战斗自动 pass：队长点完自动后遍历队员 Tab 点击自动。
+def member_auto_pass(win, wait_auto=AUTO_WAIT_FIRST, act_configured=False):
+    """战斗自动 pass：队长点完自动后遍历队员 Tab。
 
+    act_configured=True（首场挂自动后/补挂自动场）：确认在队伍中的
+    队员按账号配置执行战斗动作（与队长对称：取消自动→等操作条→
+    人物+召唤兽动作→点自动，仅此一场，此后自动跨场持续）；未确认
+    /未配置的 Tab 维持旧自动路径。总时长上限按配置队员数放大。
+    act_configured=False（每 5 场例行）：全部队员只点自动。
     触发时机跟随队长：首场挂自动后（wait_auto=5s，等队员操作条）、
     每 5 场例行确认后（wait_auto=1s，多半已挂自动跳过）。队员不在
     战斗中（单挑等）跳过；已挂自动时自动按钮不出现，轮询超时跳过。
     """
-    global pass_active
+    global pass_active, _no_members_logged
     if not _active:
+        return
+    if not _team_member_ids:
+        # 未确认到在队伍中的队员 Tab（面板昵称未识别/队伍无本窗口队员）：
+        # 一个窗口多个 Tab 不全是组号，未比对确认的 Tab 不碰
+        # （2026-11-07 用户基本原则），整个 pass 跳过不再切 Tab
+        if not _no_members_logged:
+            _no_members_logged = True
+            log("[组号] 未确认到在队伍中的队员 Tab，跳过队员自动 pass"
+                "（面板昵称未识别或队伍无本窗口队员）", "WARN")
         return
     if not _try_enter_pass():
         return  # 另一 pass 进行中：放弃本轮，等下一轮时机
@@ -468,10 +763,71 @@ def member_auto_pass(win, wait_auto=AUTO_WAIT_FIRST):
         if not _pass_foreground_ok(win):
             log("[组号] 游戏窗口未在前台，跳过战斗自动 pass", "WARN")
             return
-        _for_each_member(win, lambda w, cur: _auto_one(w, cur, wait_auto),
-                         "战斗自动 pass")
+        total_deadline = None
+        if act_configured:
+            saved = load_group_actions()
+            n_act = sum(1 for tid in _team_member_ids
+                        if saved.get(tid) and not _is_noop_actions(saved[tid]))
+            if n_act:
+                total_deadline = MEMBER_ACT_DEADLINE_BASE + n_act * MEMBER_ACT_BUDGET
+        _for_each_member(win, lambda w, cur: _member_one(w, cur, wait_auto,
+                                                         act_configured),
+                         "战斗自动 pass", total_deadline=total_deadline,
+                         only_members=True)
     finally:
         _exit_pass()
+
+
+def _is_noop_actions(actions):
+    """配置动作是否为空操作（人物与召唤兽均为「无」——等同未配置，
+    走旧自动路径，取消自动再挂回去纯属浪费一轮）。"""
+    return actions["char"] == "无" and actions["beast"] == "无"
+
+
+def _member_one(win, tab_id, wait_auto, act_configured):
+    """单个队员 Tab 的战斗处理：配置动作路径或旧自动路径。
+
+    配置动作仅套用在启动检查确认「在队伍中」的 Tab（_team_member_ids）
+    ——未确认 Tab 只点自动（其账号可能并不在队伍里，取消自动执行
+    动作会干扰它自己的场景）。已执行过配置动作的队员（_acted_ids）
+    直接走点自动路径——动作与队长对称只执行一次（2026-11-07 用户
+    反馈：pass 再次触发时不得取消自动重做动作）。
+    """
+    if act_configured and tab_id in _team_member_ids \
+            and tab_id not in _acted_ids:
+        actions = load_group_actions().get(tab_id)
+        if actions and not _is_noop_actions(actions):
+            if _act_one(win, tab_id, actions, wait_auto):
+                _acted_ids.add(tab_id)  # 已尝试动作（含等不到操作条）：
+                                        # 再触发时直接点自动，不重复尝试
+            return
+    _auto_one(win, tab_id, wait_auto)
+
+
+def _act_one(win, tab_id, actions, wait_auto):
+    """单个队员 Tab 的配置战斗动作（与队长 handle_battle 对称）。
+
+    截一帧确认战斗 → battle.perform_member_actions（取消自动→等操作
+    条→人物动作→召唤兽动作→点自动）。返回是否已尝试（True 记入
+    _acted_ids，pass 再触发时该队员直接点自动）；不在战斗/截图失败
+    返回 False（未消耗动作机会）。执行期受调用方总时长上限保护，
+    超时剩余队员由补挂自动场/例行 pass 兜底。
+    """
+    from . import battle  # 函数内导入：battle 顶层导入 tab_group，避免循环依赖
+    deadline = time.time() + max(1.0, wait_auto)
+    while time.time() < deadline:
+        img = win.capture(force_activate=False, format=WindowCaptureFormat.OPENCV)
+        if img is None:
+            time.sleep(0.5)
+            continue
+        if not battle.is_in_battle_frame(img):
+            log(f"[组号] 队员 Tab（ID {tab_id}）不在战斗中，跳过配置动作", "INFO")
+            return False
+        status = battle.perform_member_actions(win, actions)
+        log(f"[组号] 队员 Tab（ID {tab_id}）配置动作: {status}", "SYS")
+        return status != "截图失败"
+    log(f"[组号] 队员 Tab（ID {tab_id}）未确认战斗状态，跳过配置动作", "WARN")
+    return False
 
 
 def _auto_one(win, tab_id, wait_auto):
@@ -525,8 +881,14 @@ def member_wuyi_pass(win, force=False):
     同一对话框布局队员位置相同）时直点同一坐标，省每队员截图+OCR。
     force=True 供验证模式绕过 active() 检查（主进程无任务模式）。
     """
-    global pass_active
+    global pass_active, _no_members_logged
     if not _active and not force:
+        return
+    if not force and not _team_member_ids:
+        # 见 member_auto_pass 同款说明：未确认队员 Tab 不碰，跳过不切
+        if not _no_members_logged:
+            _no_members_logged = True
+            log("[组号] 未确认到在队伍中的队员 Tab，跳过巫医 pass", "WARN")
         return
     if not _try_enter_pass():
         return  # 另一 pass 进行中：放弃本轮，等下一轮时机
@@ -541,9 +903,11 @@ def member_wuyi_pass(win, force=False):
         if fresh and load_high_perf():
             log(f"[组号] 巫医 pass 高性能直点：复用队长选项坐标 ({pos[0]},{pos[1]})", "INFO")
             _for_each_member(win, lambda w, cur: _wuyi_click_direct(w, cur, pos),
-                             "巫医 pass（高性能直点）", force=force)
+                             "巫医 pass（高性能直点）", force=force,
+                             only_members=True)
         else:
-            _for_each_member(win, _wuyi_one, "巫医 pass", force=force)
+            _for_each_member(win, _wuyi_one, "巫医 pass", force=force,
+                             only_members=True)
     finally:
         _exit_pass()
 
@@ -626,20 +990,26 @@ def member_bars_pass(win):
     低于阈值右键回满（复用 status_bars.check_all_bars，阈值沿用
     通用设置）。队长自己的战后补血蓝不受影响（战斗线程原逻辑）。
     """
-    global pass_active, _last_bars_pass_at
+    global pass_active, _last_bars_pass_at, _no_members_logged
     if not _active:
         return
     now = time.time()
     if now - _last_bars_pass_at < BARS_PASS_INTERVAL:
         return
     _last_bars_pass_at = now
+    if not _team_member_ids:
+        # 见 member_auto_pass 同款说明：未确认队员 Tab 不碰
+        if not _no_members_logged:
+            _no_members_logged = True
+            log("[组号] 未确认到在队伍中的队员 Tab，跳过回血回蓝 pass", "WARN")
+        return
     if not _try_enter_pass():
         return  # 另一 pass 进行中：放弃本轮，等下一轮时机
     try:
         if not _pass_foreground_ok(win):
             log("[组号] 游戏窗口未在前台，跳过回血回蓝 pass", "WARN")
             return
-        _for_each_member(win, _bars_one, "回血回蓝 pass")
+        _for_each_member(win, _bars_one, "回血回蓝 pass", only_members=True)
     finally:
         _exit_pass()
 
@@ -693,10 +1063,12 @@ def member_rejoin_pass(win, away_names, force=False):
 
     away_names：暂离成员昵称列表（队伍面板 OCR，含噪声）。与 Tab 标题
     角色名模糊匹配（_name_similar）——匹配到的队员 Tab 才切过去执行
-    team.maybe_rejoin 完整链路（位置判定轮回司 → 开面板 → 身份判定 →
-    点归队 → 校验；队员视角非队长，面板有归队按钮）。无匹配不做任何
-    切换（零成本）。30s 节流（REJOIN_PASS_MIN_INTERVAL）防每轮检查
-    频繁切 Tab；归队成功后该成员离开暂离名单，自然不再触发。
+    team.rejoin_from_away 完整链路（开面板 → 身份判定 → 点归队 → 校验；
+    队员视角非队长，面板有归队按钮）。**不限于死亡落轮回司**——暂离
+    队员在任何位置都点归队传送回队长（2026-11-07 用户要求：启动阶段
+    发现暂离即使不在轮回司也要归队）。无匹配不做任何切换（零成本）。
+    30s 节流（REJOIN_PASS_MIN_INTERVAL）防每轮检查频繁切 Tab；归队
+    成功后该成员离开暂离名单，自然不再触发。
     pass 互斥/前台校验/未登录跳过/绕回队长与其余 pass 同款。
     force=True 供验证模式绕过 active() 检查（主进程无任务模式）。
     返回 (已归队数, 描述, 匹配到的暂离昵称集合)——昵称集合供调用方
@@ -746,7 +1118,7 @@ def member_rejoin_pass(win, away_names, force=False):
             if img is not None and battle.is_in_battle_frame(img):
                 log(f"[组号] 队员 Tab（{cname}）战斗中，跳过归队", "INFO")
                 return
-            handled, info = team.maybe_rejoin(w, prefix="[组号]")
+            handled, info = team.rejoin_from_away(w, prefix="[组号]")
             ok = handled and info.startswith("已归队")
             log(f"[组号] 队员 Tab（{cname}）归队: {info}",
                 "SYS" if ok else "WARN")

@@ -4,6 +4,7 @@ import os
 import pathlib
 import random
 import re
+import sys
 import threading
 import time
 from contextlib import contextmanager
@@ -24,14 +25,24 @@ _LOG_FH = None         # 当前日志文件句柄（惰性打开，每行 flush�
 _LOG_DATE = ""         # 句柄对应的日期（跨天滚动用）
 _LOG_LOCK = threading.Lock()  # 战斗监控线程与任务主线程都会打日志
 
+# 单测进程不落盘本地日志：pytest 从工程根目录运行，log() 会写进
+# logs/日期.log 与真实应用日志混排（如测试 _FakeWin 异常 WARN 混入
+# 生产日志，2026-11-06 排查时被误读）。控制台 print 保留（pytest
+# 自行捕获）。
+_UNDER_PYTEST = "pytest" in sys.modules \
+    or bool(os.environ.get("PYTEST_CURRENT_TEST"))
+
 
 def _open_log_file():
     """惰性打开本地日志文件（logs/YYYY-MM-DD.log），跨天自动滚动。
 
     打开新一天的日志文件时顺带清理超过 7 天的旧日志（保留近 7 天，
-    用户 2026-10-15 要求；进程内每天至多清理一次）。
+    用户 2026-10-15 要求；进程内每天至多清理一次）。单测进程跳过
+    （见 _UNDER_PYTEST）。
     """
     global _LOG_FILE, _LOG_FH, _LOG_DATE
+    if _UNDER_PYTEST:
+        return
     today = time.strftime("%Y-%m-%d")
     if _LOG_FH is not None and _LOG_DATE == today:
         return
@@ -362,6 +373,24 @@ def _kv_commit_locked():
     KeyValue._file_path.write_text(
         json.dumps(KeyValue._data, indent=4, ensure_ascii=False),
         encoding="utf-8")
+
+
+def kv_read_fresh(key, default=None):
+    """直读磁盘取单键——主进程读任务进程（或反向）的运行时写入。
+
+    KeyValue.get 读的是本进程 _data 快照（首次访问时从磁盘加载一次、
+    _load_data 不更新快照），对侧进程 kv_save_merged 写入后本进程
+    永远读不到新值（2026-11-07 实测：任务进程启动检查写 group_detected，
+    主进程入口不展示）。锁内重读文件与 kv_save_merged 同源，返回
+    该键当前值；文件读取异常返回 default。
+    """
+    try:
+        KeyValue._initialize()
+        with KeyValue._lock:
+            data = KeyValue._load_data()
+        return data.get(key, default)
+    except Exception:
+        return default
 
 
 # ---- 高性能模式共享设施（固定位置 UI 坐标缓存） ----

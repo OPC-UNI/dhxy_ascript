@@ -2594,8 +2594,8 @@ def run_loop(win, cycle_interval=1.0):
     # 补人流程；已有队伍时本开关无其他逻辑。战斗中不操作（组队菜单会
     # 遮挡战斗操作），顺延到主循环每轮开头（战斗检查通过后）重试。
     # 先于组号启动检查执行：组号模式下队长未组队时先创建再判身份
-    # （startup_leader_check 未组队会直接停任务）；成员/已组队场景
-    # 创建跳过或空操作，身份检查照旧
+    # （startup_check 未组队会直接停任务）；成员/已组队场景创建跳过
+    # 或空操作，身份检查照旧
     auto_create = load_wubei_auto_create_team()
     log(f"[五倍] 自动创建队伍: {'开（无队伍时任务开始自动创建）' if auto_create else '关'}", "SYS")
     pending_create = auto_create
@@ -2612,15 +2612,40 @@ def run_loop(win, cycle_interval=1.0):
         log(f"[五倍] 当天进度已达上限 {done}/{max_rounds}，无需再执行", "SYS")
         return f"已完成 {done} 次五倍任务，达到次数上限 {max_rounds}"
     # 组号专用（高级设置开关，默认关闭）：一窗口多 Tab 多账号时激活，
-    # 队长带队、队员自动挂战斗/巫医/补血蓝。激活时强制队长判定
-    # （即使「检查队伍」关闭）：非队长停止任务，提醒在队长 Tab 启动。
-    # 已登录 Tab <2（单号）不激活，行为与旧版完全一致。
+    # 队长带队、队员按账号配置挂战斗/巫医/补血蓝。激活时要求「检查
+    # 队伍」开关必须开启（队员身份靠队伍面板匹配，用户 2026-11-07
+    # 指定）；队长判定后检查队员组号战斗动作设置，缺失即停止任务
+    # 提示先设置。已登录 Tab <2（单号）不激活，行为与旧版完全一致。
     tab_group.init_task(win, TASK_MODE, load_wubei_tab_group())
     if tab_group.active():
-        ok_leader, leader_info = tab_group.startup_leader_check(win)
+        if not check_team:
+            log("[五倍] 组号模式要求开启「检查队伍」开关（五倍设置），停止任务，请开启后重新启动", "ERROR")
+            return "组号模式：请先在五倍设置开启「检查队伍」开关后重新启动"
+        # 启动检查一次开面板：队长判定 + 成员昵称读取（旧链路开 3 次）
+        ok_leader, leader_info, panel_names = tab_group.startup_check(win)
         if not ok_leader:
-            log(f"[五倍] {leader_info}，停止任务（组号模式要求队长带队，请在队长 Tab 下启动）", "ERROR")
-            return f"组号模式：{leader_info}，请在队长 Tab 下启动任务"
+            if "未组队" in leader_info:
+                # 确定性未组队（启动前解散队伍等）：组号降级关闭（隐藏
+                # 组号入口），按普通非队长模式继续运行——任务循环
+                # check_team_min → 保持模式（2026-11-07 用户反馈：
+                # 未组队不应停止任务）
+                tab_group.deactivate_group(reason=leader_info)
+                log(f"[五倍] {leader_info}，组号降级为普通非队长模式继续运行", "WARN")
+            else:
+                log(f"[五倍] {leader_info}，停止任务（组号模式要求队长带队，请在队长 Tab 下启动）", "ERROR")
+                return f"组号模式：{leader_info}，请在队长 Tab 下启动任务"
+        else:
+            missing, member_info = tab_group.startup_member_check(win, panel_names)
+            if missing:
+                names = "、".join(f"{m['name']}({m['id']})" for m in missing)
+                log(f"[五倍] 组号队员 {names} 未设置战斗动作，停止任务"
+                    f"（请在「组号」设置面板设置后重新启动）", "ERROR")
+                return f"组号模式：请在「组号」设置面板为 {names} 设置战斗动作后重新启动"
+            log(f"[五倍] 组号启动检查: {member_info}", "SYS")
+            acts = tab_group.leader_battle_actions()
+            log(f"[五倍] 组号队长战斗动作: 人物 {acts['char']}，召唤兽 {acts['beast']}"
+                + ("（本账号组号设置）" if tab_group.load_group_actions().get(tab_group.leader_id())
+                   else "（通用战斗设置）"), "SYS")
     round_no = 0
     while True:
         try:
