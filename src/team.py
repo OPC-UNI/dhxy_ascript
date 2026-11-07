@@ -149,32 +149,43 @@ def _is_menu_open(img):
     return any(any(mt in txt for mt in TEAM_MENU_TEXTS) for txt, _, _ in items)
 
 
-def _close_apply_panel(win):
+def _close_apply_panel(win, retries=3):
     """关闭申请加入面板：点击 zudui_close（与队伍面板同款关闭按钮）。
 
     面板不处理（暂不处理申请流程），关闭后让外层重试。
+    带重试（2026-11-07 日志 12:27 教训：单次点击未命中/按钮模板
+    偶发未命中会静默留下面板遮挡后续流程）——每次重试前先查面板
+    标志，已不在屏即达成目标；按钮找不到或点击后面板仍在则重试，
+    全部失败返回 False 由调用方记日志。
     返回 (是否关闭, 描述)。
     """
-    pt = game_map.find_template(win, ZUDUI_CLOSE_ICON, _TEMPLATE_THRESHOLD)
-    if pt is None:
-        return False, "申请加入面板未找到关闭按钮（zudui_close）"
-    human_move(win.rect.left + pt[0], win.rect.top + pt[1])
-    time.sleep(0.15)  # 悬停让按钮进入可点击状态（与队伍面板关闭同款交互）
-    human_click(win, pt[0], pt[1])
-    for _ in range(_PANEL_WAIT_TRIES):
-        time.sleep(_PANEL_WAIT_INTERVAL)
-        if game_map.find_template(win, ZUDUI_SHENQINGJIARU_ICON, _TEMPLATE_THRESHOLD) is None:
+    for attempt in range(1, retries + 1):
+        if game_map.find_template(win, ZUDUI_SHENQINGJIARU_ICON,
+                                  _TEMPLATE_THRESHOLD) is None:
             return True, "申请加入面板已关闭"
-    return False, "申请加入面板关闭失败"
+        pt = game_map.find_template(win, ZUDUI_CLOSE_ICON, _TEMPLATE_THRESHOLD)
+        if pt is None:
+            continue
+        human_move(win.rect.left + pt[0], win.rect.top + pt[1])
+        time.sleep(0.15)  # 悬停让按钮进入可点击状态（与队伍面板关闭同款交互）
+        human_click(win, pt[0], pt[1])
+        for _ in range(_PANEL_WAIT_TRIES):
+            time.sleep(_PANEL_WAIT_INTERVAL)
+            if game_map.find_template(win, ZUDUI_SHENQINGJIARU_ICON,
+                                      _TEMPLATE_THRESHOLD) is None:
+                return True, f"申请加入面板已关闭（第 {attempt} 次点击生效）"
+    return False, f"申请加入面板关闭失败（重试 {retries} 次仍在）"
 
 
 # ---- 补人流程（领取被拒后从申请加入面板允许申请人；五倍/修罗复用） ----
 APPLY_FAIL_TEXT = "对方已经加入其他队伍"    # 允许失败提示（屏幕中间，出现即换人）
 APPLY_PANEL_WAIT_TRIES = 6                 # 点击组队按钮后等待申请加入面板出现（0.5s 一次）
 APPLY_FAIL_WAIT = 2.5                      # 点击允许后等待失败提示的窗口（秒）
-APPLY_ROW_OFFSET = (-100, 55, 280, 350)    # 申请人列表区域（相对面板标志左上角；实测
+APPLY_ROW_OFFSET = (-100, 45, 280, 350)    # 申请人列表区域（相对面板标志左上角；实测
                                             # 固定布局：表头 y+51、列表行 y+67 起、
-                                            # 允许/拒绝按钮行 y+356）
+                                            # 允许/拒绝按钮行 y+356）；顶部 45 覆盖
+                                            # 表头行——表头在场是「面板确实打开」的
+                                            # 校验信号（2026-11-07 教训见 _apply_rows）
 APPLY_YUNXU_THRESHOLD = 0.8                # 允许按钮模板匹配阈值（实测 1.00）
 
 
@@ -214,10 +225,23 @@ def _apply_rows(img, fx, fy):
     返回 [{"yc": 行中心 y, "name": 名字文案, "rect": 名字框}]，
     按 y 排序；排除表头行（名字/等级/族群/性别）。
     fx/fy 为面板标志匹配中心。
+
+    双校验（2026-11-07 日志 12:27 教训）：面板关闭后标志模板仍误
+    命中时，行区域读到的场景按钮文字「任务」被当申请人点击，实际
+    点中任务领取入口、误开领取对话框卡死流程。① 区域内必须见表头
+    （名字/等级/族群/性别任一）——表头在场才证明面板确实打开；
+    ② 每行必须带等级（申请人列表每行 = 名字+等级）——无等级的单行
+    文字（场景按钮标签等）不是申请人。任一校验不过返回空列表，
+    放弃本轮点击，由监控循环重查自愈（漏一批申请人无害，误点场景
+    有真实卡死危害）。
     """
     l, t, r, b = (int(fx + APPLY_ROW_OFFSET[0]), int(fy + APPLY_ROW_OFFSET[1]),
                   int(fx + APPLY_ROW_OFFSET[2]), int(fy + APPLY_ROW_OFFSET[3]))
     items, _ = game_map.ocr_region(img, (l, t, r, b))
+    has_header = any(h in txt for txt, rect, score in items
+                     if score >= 0.55 for h in ("名字", "等级", "族群", "性别"))
+    if not has_header:
+        return []
     lines = []
     for txt, rect, score in items:
         if score < 0.55:
@@ -236,6 +260,8 @@ def _apply_rows(img, fx, fy):
     rows = []
     for c in clusters:
         c["lines"].sort(key=lambda it: it[1][0])
+        if not any(_parse_level(t[0]) is not None for t in c["lines"]):
+            continue  # 无等级行不是申请人（场景文字误入）
         name_line = next((it for it in c["lines"] if _parse_level(it[0]) is None),
                          None)
         if name_line is None:
@@ -276,7 +302,11 @@ def fill_team(win, target=5, max_allow=1):
     try:
         return _fill_team_loop(win, target, max_allow)
     finally:
-        _close_apply_panel(win)
+        ok_close, close_info = _close_apply_panel(win)
+        if not ok_close:
+            # 关闭失败必须留痕（此前静默丢弃：面板残留遮挡领取入口、
+            # 日志无迹可查，2026-11-07 教训）
+            log(f"[组队] 补人结束关闭申请加入面板失败: {close_info}", "WARN")
 
 
 def _fill_team_loop(win, target, max_allow):
@@ -318,10 +348,18 @@ def _fill_team_loop(win, target, max_allow):
                     # 误跳过下一个人），不能作键；身份用模糊比对
     allowed = 0
     while allowed < max_allow:
+        # 每轮迭代重截帧并重查面板标志：面板可能在两轮迭代间关闭
+        # （申请撤回/前次允许实际生效），标志模板仍会误命中场景
+        # （2026-11-07 日志 12:27「任务」被当申请人点击的根因路径）
+        # ——标志消失即停止点选，绝不在面板已关闭的画面上点行
+        img = win.capture(force_activate=False)
         if img is None:
-            img = win.capture(force_activate=False)
-            if img is None:
-                break
+            break
+        flag = _apply_panel_flag(img)
+        if flag is None:
+            return (allowed > 0,
+                    f"申请加入面板已关闭（已允许 {allowed} 人）"
+                    if allowed else "申请加入面板已关闭（无申请人处理）")
         rows = _apply_rows(img, flag[0], flag[1])
         tgt = next((r for r in rows
                     if not any(_same_applicant(r["id"], fid) for fid in failed)),
@@ -366,7 +404,8 @@ def _fill_team_loop(win, target, max_allow):
             continue
         allowed += 1
         log(f"[组队] 已允许「{tgt['name']}」加入队伍（本轮第 {allowed} 人）", "SYS")
-        img = img2 if img2 is not None else win.capture(force_activate=False)
+        # 下一轮迭代顶部重截帧并重查面板标志（img 不复用，防陈旧帧
+        # 误导行识别与标志判定）
     return True, f"已允许 {allowed} 名申请人"
 
 
