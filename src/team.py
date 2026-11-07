@@ -61,6 +61,9 @@ ZUDUI_SHENQINGJIARU_ICON = "zudui_shenqingjiaru.png"  # 申请加入面板标志
 ZUDUI_YUNXU_ICON = "zudui_yunxu.png"      # 申请加入面板「允许」按钮（用户提供模板，实测 1.00 匹配）
                                           # 点组队按钮可能打开该面板；检测到直接点关闭，不处理）
 LIKAI_DUIWU_ICON = "likaiduiwu.png"       # 队伍面板「离开队伍」按钮（队员可见）
+CHUANGJIAN_DUIWU_ICON = "chuangjianduiwu.png"  # 组队菜单「创建队伍」按钮（未组队时菜单
+                                               # 中出现；点击创建成功并自动打开队伍信息
+                                               # 面板，用户 2026-11-07 提供模板 113x22）
 
 # ---- 队伍面板内种族 OCR ----
 # 面板成员种族文案区域（窗口相对）；种族文案范围见 RACE_WORDS，
@@ -1085,6 +1088,45 @@ def is_in_team(win):
     if in_team:
         return True, "已在队伍中"
     return False, "未组队（菜单中无「队伍信息」）"
+
+
+def ensure_team_created(win, prefix="[组队]"):
+    """自动创建队伍（修罗/五倍「自动创建队伍」开关，默认关）：未组队时
+    创建，已组队无操作。
+
+    流程：确保组队菜单打开（复用 _ensure_menu_open，菜单已开直接复用）
+    → 菜单中出现「队伍信息」即已在队伍中，关闭菜单直接返回（开关打开
+    无其他逻辑）→ 未组队点击菜单「创建队伍」chuangjianduiwu 模板 →
+    创建成功会打开队伍信息面板（用户 2026-11-07 确认）→ 校验面板打开
+    后关闭面板，后续由调用方走正常队伍检查与补人流程。
+    模板缺失时降级为报错不点击（绝不误点菜单其他项）。
+    返回 (是否成功, 描述)；成功含「已在队伍中」与「创建成功」两种。
+    """
+    opened, img = _ensure_menu_open(win)
+    if not opened:
+        return False, "组队菜单未打开（无法判定队伍状态）"
+    if _has_duiwuxinxi(img):
+        _close_menu(win)
+        return True, "已在队伍中，无需创建"
+    if not _tpl_path(CHUANGJIAN_DUIWU_ICON).exists():
+        _close_menu(win)
+        return False, (f"创建队伍按钮模板未提供"
+                       f"（待补充 res/img/{CHUANGJIAN_DUIWU_ICON}）")
+    pt = game_map.find_template_in(img, CHUANGJIAN_DUIWU_ICON, _TEMPLATE_THRESHOLD)
+    if pt is None:
+        _close_menu(win)
+        return False, "菜单中未定位到「创建队伍」按钮（chuangjianduiwu）"
+    human_click(win, pt[0], pt[1])
+    log(f"{prefix} 已点击创建队伍 @ ({pt[0]},{pt[1]})，等待队伍面板打开", "SYS")
+    for _ in range(_PANEL_WAIT_TRIES):
+        time.sleep(_PANEL_WAIT_INTERVAL)
+        if _is_panel_open(win):
+            close_team_panel(win)
+            return True, "队伍创建成功（队伍信息面板已打开）"
+    # 创建失败时菜单可能仍残留，关闭防遮挡后续流程（_close_menu 内部
+    # 先查菜单是否打开，未打开即空操作）
+    _close_menu(win)
+    return False, "点击创建队伍后队伍面板未打开（创建失败或出现确认对话框）"
 
 
 def is_team_leader(win):

@@ -151,3 +151,57 @@ def test_link_picker_tail_only_read_clicks_underline():
     ])
     pt = wuhuan._wuhuan_link_picker(items, img)
     assert pt == (204, 268)
+
+
+# ---- 进服装店前降落检查（2026-11-07：飞行中无法点击进店，到达布店
+#      门口先 ensure_landed 再点入口；检查失败不阻断，超时兜底） ----
+
+def _buy_env(monkeypatch, land_ok=True):
+    """搭 _buy_equipments 桩环境（地图/寻路/店内交互全 mock），
+    返回 (事件列表, 点击列表)。"""
+    events = []
+    clicks = []
+    monkeypatch.setattr(wuhuan.game_map, "is_in_map", lambda win, name: True)
+    monkeypatch.setattr(wuhuan.game_map, "is_mini_map_open", lambda win: True)
+    monkeypatch.setattr(wuhuan, "close_scene_panels", lambda win, prefix: None)
+    monkeypatch.setattr(wuhuan, "_wait_near",
+                        lambda win, target, timeout, desc, interval:
+                        events.append("arrived") or (True, "已到达"))
+    monkeypatch.setattr(wuhuan.zuoqi, "ensure_landed",
+                        lambda win: events.append("landed")
+                        or (land_ok, "已降落" if land_ok else "面板内未定位到降落按钮"))
+    monkeypatch.setattr(wuhuan.zuoqi, "close_feixingyuqi_panel",
+                        lambda win: events.append("closed")
+                        or (True, "飞行驭器面板已关闭"))
+    monkeypatch.setattr(wuhuan, "human_click",
+                        lambda win, x, y: clicks.append((x, y)))
+    monkeypatch.setattr(wuhuan, "_click_dialog_green_option",
+                        lambda win, option, timeout=4: (True, "已点击"))
+    finds = {wuhuan.FUZHUANGDIAN_XIANGLIAN_ICON: (100, 100),
+             wuhuan.GOUMAI_ICON: (200, 200)}
+    monkeypatch.setattr(wuhuan.game_map, "find_template",
+                        lambda win, icon, threshold=None: finds.get(icon))
+    monkeypatch.setattr(wuhuan, "precise_click", lambda *a, **k: None)
+    monkeypatch.setattr(wuhuan, "log", lambda msg, level="INFO": None)
+    monkeypatch.setattr(wuhuan.time, "sleep", lambda s: None)
+    return events, clicks
+
+
+def test_buy_equipments_lands_before_enter(monkeypatch):
+    """到达布店门口后：先降落检查（ensure_landed → 关面板），
+    再点进店入口——顺序不可颠倒（飞行中进店点击无效）。"""
+    events, clicks = _buy_env(monkeypatch, land_ok=True)
+    ok, desc = wuhuan._buy_equipments(None)
+    assert ok
+    assert events == ["arrived", "landed", "closed"]
+    assert wuhuan.CLOTH_SHOP_ENTER_POS in clicks
+
+
+def test_buy_equipments_enter_proceeds_when_land_check_fails(monkeypatch):
+    """降落检查失败不阻断：照常关面板并尝试进店（真飞行中进店失败由
+    SHOP_ENTER_TIMEOUT 兜底后整轮重试，瞬态检查失败不影响正常进店）。"""
+    events, clicks = _buy_env(monkeypatch, land_ok=False)
+    ok, desc = wuhuan._buy_equipments(None)
+    assert ok
+    assert events == ["arrived", "landed", "closed"]
+    assert wuhuan.CLOTH_SHOP_ENTER_POS in clicks

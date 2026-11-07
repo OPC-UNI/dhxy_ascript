@@ -5,7 +5,9 @@
 1. 准备（任务开始一次）：打开背包检查是否已有项链，有则跳过购买；
    没有则确保在长安（不在则世界地图点击长安）
    → 长安小地图点击布店位置寻路，等待到达布店门口（长安 130,128 附近）
-   → 进入服装店 → 点老板（牛记布店固定坐标 643,463）→ 对话框点「我想买点东西」
+   → 到达门口先确保降落（飞行中无法点击进店：开飞行驭器面板识别飞行
+     状态、飞行中自动点降落，检查失败不阻断）→ 进入服装店 →
+     点老板（牛记布店固定坐标 643,463）→ 对话框点「我想买点东西」
    → 匹配项链图标后鼠标移过去左键点击两次 → 点购买（购买 2 件 2 级装备）
 2. 任务循环（次数按通用设置-任务次数）：
    - 到云游大师：长安小地图点击 (408,362) 寻路 → 等待到达长安 88,175 附近
@@ -33,6 +35,7 @@ from . import debug_overlay  # 调试信息悬浮层（任务进度更新）
 from .control_window import (load_task_counts,                # 任务次数上限（通用设置）
                              load_wuhuan_vitality_continue)   # 活力不足继续任务开关（五环设置）
 from .xuanshu import follow_task, _click_dialog_green_option  # 复用玄枢轶闻的任务跟踪/对话框逻辑
+from . import zuoqi  # 飞行驭器（进服装店前降落检查：飞行中无法点击进店）
 from .dialog_common import (_dialog_text_present,
                             _click_screen_center,
                             close_scene_panels,
@@ -67,7 +70,7 @@ CLOTH_SHOP_WALK_POS = (475, 443)                   # 长安小地图上布店位
 CLOTH_SHOP_ENTER_POS = (750, 373)                  # 进入服装店的点击点
 CLOTH_SHOP_TARGET_POS = (130, 128)                 # 布店门口地图坐标（长安 130,128）
 YUNYOU_TARGET_POS = (88, 175)                      # 云游大师附近地图坐标（长安 88,175）
-MAP_POS_TOLERANCE = 5                              # 到达判定容差（坐标 OCR 噪声）
+MAP_POS_TOLERANCE = 3                              # 到达判定容差（坐标 OCR 噪声）
 SHOP_OWNER_POS = (643, 463)                         # 牛记布店老板坐标（进店后点击开始对话）
 FUZHUANGDIAN_XIANGLIAN_ICON = "fuzhuangdian_xianglian.png"  # 服装店项链（21.png）
 GOUMAI_ICON = "goumai.png"                          # 购买按钮（24.png）
@@ -220,6 +223,15 @@ def _buy_equipments(win):
     if not ok:
         return False, info
     log("[五环] 已到达布店门口", "SYS")
+    # 飞行中无法点击进入服装店（空中进店点击无效，用户 2026-11-07 确认）：
+    # 进店前先确保降落——开飞行驭器面板识别飞行状态（降落按钮在场=飞行中，
+    # 点降落；未飞行空操作），再关面板防遮挡进店点击。仅在任务开始买装备
+    # 时执行一次（_buy_equipments 每任务一次），面板开合开销可接受。
+    # 降落检查失败不阻断：真飞行中进店点击会失败、由 SHOP_ENTER_TIMEOUT
+    # 兜底后整轮重试（下轮再查降落），瞬态检查失败不影响正常进店
+    ok, info = zuoqi.ensure_landed(win)
+    log(f"[五环][飞行驭器] 降落检查: {info}", "INFO" if ok else "WARN")
+    zuoqi.close_feixingyuqi_panel(win)
     # 进入服装店：点入口 → 点老板坐标开始对话 → 对话框出现「我想买点东西」
     deadline = time.time() + SHOP_ENTER_TIMEOUT
     while time.time() < deadline:

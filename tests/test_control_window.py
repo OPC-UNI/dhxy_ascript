@@ -53,7 +53,14 @@ def test_settings_spec_covers_all_task_modes():
         assert spec[key] == TASK_COUNT_DEFAULTS[mode]
 
 
-def test_settings_spec_rejoin_and_check_team_defaults():
+def _patch_kv_empty(monkeypatch):
+    """模拟 KeyValue 未写入状态：get 一律返回默认值（测试不得依赖
+    真实 config.json——用户在面板改过开关后断言「首次默认」会误报）。"""
+    from ascript.windows.system.key_value import KeyValue
+    monkeypatch.setattr(KeyValue, "get", lambda key, default=None: default)
+
+
+def test_settings_spec_rejoin_and_check_team_defaults(monkeypatch):
     """自动归队与检查队伍键在方案快照默认值表中存在且默认开启
     （load_* 首次默认与 _settings_spec 必须一致，否则方案对比/
     导入导出把默认值判成脏值）。"""
@@ -71,7 +78,25 @@ def test_settings_spec_rejoin_and_check_team_defaults():
     assert spec[_WUBEI_CHECK_TEAM_KEY] is True
     assert spec[_XIULUO_CHECK_TEAM_KEY] is True
     # load_* 首次默认同开（KeyValue 未写入时）
+    _patch_kv_empty(monkeypatch)
     for key, load in ((_WUBEI_AUTO_REJOIN_KEY, load_wubei_auto_rejoin),
                       (_XIULUO_AUTO_REJOIN_KEY, load_xiuluo_auto_rejoin),
                       (_BATTLE_ONLY_AUTO_REJOIN_KEY, load_battle_only_auto_rejoin)):
+        assert load() == spec[key]
+
+
+def test_settings_spec_auto_create_team_defaults(monkeypatch):
+    """自动创建队伍键在方案快照默认值表中存在且默认关闭（修罗/五倍
+    各一开关；load_* 首次默认与 _settings_spec 必须一致）。"""
+    from src import schemes
+    from src.control_window import (_WUBEI_AUTO_CREATE_TEAM_KEY,
+                                    _XIULUO_AUTO_CREATE_TEAM_KEY,
+                                    load_wubei_auto_create_team,
+                                    load_xiuluo_auto_create_team)
+    spec = schemes._settings_spec()
+    assert spec[_WUBEI_AUTO_CREATE_TEAM_KEY] is False
+    assert spec[_XIULUO_AUTO_CREATE_TEAM_KEY] is False
+    _patch_kv_empty(monkeypatch)
+    for key, load in ((_WUBEI_AUTO_CREATE_TEAM_KEY, load_wubei_auto_create_team),
+                      (_XIULUO_AUTO_CREATE_TEAM_KEY, load_xiuluo_auto_create_team)):
         assert load() == spec[key]

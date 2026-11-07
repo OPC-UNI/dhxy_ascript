@@ -227,6 +227,19 @@ def test_send_silent_hotkey_alt_c_sequence(monkeypatch):
     assert all(m[0] == 0x123 for m in fake.msgs)
 
 
+def test_send_silent_hotkey_alt_u_sequence(monkeypatch):
+    """Alt+U（飞行驭器面板打开，高性能+静默路径）走 WM_SYSKEY* 序列，
+    键码 0x55（VK_U）——2026-11-07 按键表缺 'u' 打崩任务的回归测试。"""
+    fake = _FakeUser32(client=(1366, 768))
+    monkeypatch.setattr(silent_click, "user32", fake)
+    monkeypatch.setattr(silent_click.game, "list_tab_windows", lambda w: [])
+    info = silent_click.send_silent_hotkey(_FakeWin(0x123), ("alt",), "u")
+    assert info["modifiers"] == ["alt"] and info["key"] == "u"
+    assert [m[1] for m in fake.msgs] == [WM_SYSKEYDOWN, WM_SYSKEYDOWN,
+                                         WM_SYSKEYUP, WM_SYSKEYUP]
+    assert [m[2] for m in fake.msgs] == [0x12, 0x55, 0x55, 0x12]
+
+
 def test_send_silent_hotkey_ctrl_tab_sequence(monkeypatch):
     fake = _FakeUser32(client=(1366, 768))
     monkeypatch.setattr(silent_click, "user32", fake)

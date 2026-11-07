@@ -578,6 +578,11 @@
                         <span>检查队伍（默认开启）</span>
                     </label>
                     <label class="switch-row">
+                        <input type="checkbox" id="xiuluo-auto-create-team">
+                        <span class="switch-track"></span>
+                        <span>自动创建队伍（任务开始时无队伍自动创建，默认关闭）</span>
+                    </label>
+                    <label class="switch-row">
                         <input type="checkbox" id="xiuluo-auto-rejoin">
                         <span class="switch-track"></span>
                         <span>自动归队（非队长死亡落轮回司自动点归队，默认开启）</span>
@@ -645,6 +650,11 @@
                         <input type="checkbox" id="wubei-check-team">
                         <span class="switch-track"></span>
                         <span>检查队伍（队伍固定 5 人，缺人自动补）</span>
+                    </label>
+                    <label class="switch-row">
+                        <input type="checkbox" id="wubei-auto-create-team">
+                        <span class="switch-track"></span>
+                        <span>自动创建队伍（任务开始时无队伍自动创建，默认关闭）</span>
                     </label>
                     <label class="switch-row">
                         <input type="checkbox" id="wubei-auto-rejoin">
@@ -1007,6 +1017,10 @@
                         <span class="verify-result" id="team-check-verify-result"></span>
                     </div>
                     <div class="verify-row">
+                        <button id="btn-verify-team-create" class="btn" onclick="verifyTeamCreate()">创建队伍</button>
+                        <span class="verify-result" id="team-create-verify-result"></span>
+                    </div>
+                    <div class="verify-row">
                         <button id="btn-verify-rejoin" class="btn" onclick="verifyRejoin()">测试归队</button>
                         <span class="verify-result" id="rejoin-verify-result"></span>
                     </div>
@@ -1022,7 +1036,27 @@
                         <button id="btn-verify-group-rejoin" class="btn" onclick="verifyGroupRejoin()">组号自动归队</button>
                         <span class="verify-result" id="group-rejoin-verify-result"></span>
                     </div>
-                    <div class="group-hint">检查队伍信息=走真实队伍检查链路（与任务检查同一套逻辑）：打开队伍面板 → 队长判定（双模板比分数+复核）→ 5 固定区域成员扫描（空位模板截断、种族/等级逐区识别）→ 关闭面板，全程真实点击（组队按钮/面板/关闭按钮）。测试归队=读取当前位置判定是否在轮回司（打日志）→ 在轮回司则自动归队：开面板 → 身份判定 → 点「回归队伍」按钮传送回队长（按约定假设战斗已结束，不判战斗）。检查队伍暂离=开面板逐成员区域找「召回」标记（出现即该队员暂离），不改变队伍状态。请离暂离成员=真实执行请离链路：找召回标记 → 点选该成员卡 → 「请离队伍」按钮 → 请离并校验，会真实踢出队员（一次一名，仅手动测试/确认识别用）。组号自动归队=先检查暂离 → 暂离成员昵称与队员 Tab 标题角色名模糊匹配 → 匹配到则逐个切过去点「回归队伍」归队（需窗口内 ≥2 个已登录 Tab，开关状态不校验）。测试场景由用户手动操作，全程真实点击与真实切 Tab。任务运行中不可使用。</div>
+                    <div class="group-hint">检查队伍信息=走真实队伍检查链路（与任务检查同一套逻辑）：打开队伍面板 → 队长判定（双模板比分数+复核）→ 5 固定区域成员扫描（空位模板截断、种族/等级逐区识别）→ 关闭面板，全程真实点击（组队按钮/面板/关闭按钮）。创建队伍=真实执行创建链路：组队菜单 → 队伍信息判定（已组队直接返回不操作）→ 点击「创建队伍」→ 校验队伍面板打开并关闭，未组队时会真实创建队伍（与任务「自动创建队伍」开关同一套链路，仅手动测试/确认识别用）。测试归队=读取当前位置判定是否在轮回司（打日志）→ 在轮回司则自动归队：开面板 → 身份判定 → 点「回归队伍」按钮传送回队长（按约定假设战斗已结束，不判战斗）。检查队伍暂离=开面板逐成员区域找「召回」标记（出现即该队员暂离），不改变队伍状态。请离暂离成员=真实执行请离链路：找召回标记 → 点选该成员卡 → 「请离队伍」按钮 → 请离并校验，会真实踢出队员（一次一名，仅手动测试/确认识别用）。组号自动归队=先检查暂离 → 暂离成员昵称与队员 Tab 标题角色名模糊匹配 → 匹配到则逐个切过去点「回归队伍」归队（需窗口内 ≥2 个已登录 Tab，开关状态不校验）。测试场景由用户手动操作，全程真实点击与真实切 Tab。任务运行中不可使用。</div>
+                </div>
+                <div class="group-box">
+                    <div class="group-title">飞行驭器</div>
+                    <div class="verify-row">
+                        <button id="btn-verify-zuoqi-open" class="btn" onclick="verifyZuoqiOpen()">打开飞行驭器面板</button>
+                        <span class="verify-result" id="zuoqi-open-verify-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="btn-verify-zuoqi-close" class="btn" onclick="verifyZuoqiClose()">关闭飞行驭器面板</button>
+                        <span class="verify-result" id="zuoqi-close-verify-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="btn-verify-zuoqi-fly" class="btn" onclick="verifyZuoqiFly()">测试飞行</button>
+                        <span class="verify-result" id="zuoqi-fly-verify-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="btn-verify-zuoqi-land" class="btn" onclick="verifyZuoqiLand()">测试降落</button>
+                        <span class="verify-result" id="zuoqi-land-verify-result"></span>
+                    </div>
+                    <div class="group-hint">打开=真实执行打开链路（仅非战斗可用，战斗中拒绝）：识别座骑按钮 zuoqi → 点击弹出菜单 → 点击「飞行驭器」菜单项 → 校验飞行驭器面板出现（面板已打开时复用不重复点击）。关闭=面板校验 → 点面板关闭按钮 → 校验面板消失；关闭按钮与队伍面板关闭按钮同款（实测互匹配 0.984），关闭前必须先校验飞行驭器面板打开，防止点到其他面板的同款按钮。测试飞行=面板打开/复用 → 面板内「飞行/降落」双模板比分数判飞行状态 → 未飞行点「飞行」按钮起飞 → 校验降落按钮出现（已在飞行中直接返回成功）；测试降落=镜像流程，飞行中点「降落」→ 校验飞行按钮出现。起飞/降落后面板保持打开，可连续测试。主进程无高性能开关，恒走识别路径（任务侧高性能模式用 Alt+U 直接打开，等效识别路径两步）。测试场景由用户手动操作，全程真实点击。任务运行中不可使用。</div>
                 </div>
                 <div class="group-box">
                     <div class="group-title">清屏</div>
@@ -1096,6 +1130,10 @@
                         <span class="verify-result" id="silent-key-altc-verify-result"></span>
                     </div>
                     <div class="verify-row">
+                        <button id="btn-verify-silent-key-altu" class="btn" onclick="verifySilentKey('altu')">静默按键 Alt+U</button>
+                        <span class="verify-result" id="silent-key-altu-verify-result"></span>
+                    </div>
+                    <div class="verify-row">
                         <button id="btn-verify-silent-key-alte" class="btn" onclick="verifySilentKey('alte')">静默按键 Alt+E</button>
                         <span class="verify-result" id="silent-key-alte-verify-result"></span>
                     </div>
@@ -1135,7 +1173,7 @@
                         <button id="btn-verify-silent-char" class="btn" onclick="verifySilentChar()">静默字符 WM_CHAR</button>
                         <span class="verify-result" id="silent-char-verify-result"></span>
                     </div>
-                    <div class="group-hint">不移动物理鼠标、不激活游戏窗口，直接向游戏窗口投递一次消息点击（游戏画面中心），用于验证「游戏窗口不在前台」时能否后台点击——左键已实测有效，可行性确认后部分原走鼠标的点击可切换为静默点击。右键投递 WM_RBUTTONDOWN/UP（游戏世界右键会弹操作菜单，可直接观察）。点击后自动对比前后画面差异给出疑似生效/未生效，请同时观察游戏画面（左键看人物是否走向画面中心，右键看是否弹出操作菜单）做最终确认。静默回蓝=右键投递窗口坐标 (1316,105) 一次；静默回血=右键投递窗口坐标 (1316,87) 一次；均只投递不做判定，结果请自行观察血蓝条变化。静默按键=投递组合键消息一次（Alt 组合走 WM_SYSKEYDOWN/UP、Ctrl 组合走 WM_KEYDOWN/UP，实测：Alt+C/Alt+E/Alt+5/Alt+6 有效，Ctrl+Tab 与 Enter 无效），生效信号：Alt+C 人物降落/位置显示刷新、Alt+E 背包打开、Alt+5/Alt+6 屏蔽飘字提示、Ctrl+Tab 切换 Tab、Enter 聊天输入框开关。实测结论：Alt 组合/Enter+WM_CHAR/WM_CHAR 中文字符注入有效，Ctrl+Tab 无效（切 Tab 维持键盘门控），WM_PASTE/WM_UNICHAR 无效（子窗口枚举无标准 Edit 控件）。静默字符 WM_CHAR=投递「测」字符消息，请先手动点开游戏聊天输入框再测。请先把控制窗口移到游戏窗口上层遮挡（或切到其他窗口）再点击。任务运行中不可验证。</div>
+                    <div class="group-hint">不移动物理鼠标、不激活游戏窗口，直接向游戏窗口投递一次消息点击（游戏画面中心），用于验证「游戏窗口不在前台」时能否后台点击——左键已实测有效，可行性确认后部分原走鼠标的点击可切换为静默点击。右键投递 WM_RBUTTONDOWN/UP（游戏世界右键会弹操作菜单，可直接观察）。点击后自动对比前后画面差异给出疑似生效/未生效，请同时观察游戏画面（左键看人物是否走向画面中心，右键看是否弹出操作菜单）做最终确认。静默回蓝=右键投递窗口坐标 (1316,105) 一次；静默回血=右键投递窗口坐标 (1316,87) 一次；均只投递不做判定，结果请自行观察血蓝条变化。静默按键=投递组合键消息一次（Alt 组合走 WM_SYSKEYDOWN/UP、Ctrl 组合走 WM_KEYDOWN/UP，实测：Alt+C/Alt+E/Alt+5/Alt+6 有效，Ctrl+Tab 与 Enter 无效），生效信号：Alt+C 人物降落/位置显示刷新、Alt+E 背包打开、Alt+5/Alt+6 屏蔽飘字提示、Alt+U 飞行驭器面板打开（高性能+静默任务的打开路径）、Ctrl+Tab 切换 Tab、Enter 聊天输入框开关。实测结论：Alt 组合/Enter+WM_CHAR/WM_CHAR 中文字符注入有效，Ctrl+Tab 无效（切 Tab 维持键盘门控），WM_PASTE/WM_UNICHAR 无效（子窗口枚举无标准 Edit 控件）。静默字符 WM_CHAR=投递「测」字符消息，请先手动点开游戏聊天输入框再测。请先把控制窗口移到游戏窗口上层遮挡（或切到其他窗口）再点击。任务运行中不可验证。</div>
                 </div>
             </div>
         </div>
@@ -1176,6 +1214,7 @@
     const devTools = document.getElementById('nav-diag');  // 调试信息开关控制「诊断」导航显隐
     const xiuluoHezi = document.getElementById('xiuluo-hezi');
     const xiuluoCheckTeam = document.getElementById('xiuluo-check-team');
+    const xiuluoAutoCreateTeam = document.getElementById('xiuluo-auto-create-team');
     const xiuluoAutoRejoin = document.getElementById('xiuluo-auto-rejoin');
     const xiuluoAutoWuyi = document.getElementById('xiuluo-auto-wuyi');
     const xiuluoTabGroup = document.getElementById('xiuluo-tab-group');
@@ -1187,6 +1226,7 @@
     const xiuluoWuyiIntervalEl = document.getElementById('xiuluo-wuyi-interval');
     const wubeiHezi = document.getElementById('wubei-hezi');
     const wubeiCheckTeam = document.getElementById('wubei-check-team');
+    const wubeiAutoCreateTeam = document.getElementById('wubei-auto-create-team');
     const wubeiAutoRejoin = document.getElementById('wubei-auto-rejoin');
     const wubeiShout = document.getElementById('wubei-shout');
     const wubeiAutoWuyi = document.getElementById('wubei-auto-wuyi');
@@ -1231,6 +1271,16 @@
     const dialogDetectVerifyResultEl = document.getElementById('dialog-detect-verify-result');
     const btnVerifyTeamCheck = document.getElementById('btn-verify-team-check');
     const teamCheckVerifyResultEl = document.getElementById('team-check-verify-result');
+    const btnVerifyTeamCreate = document.getElementById('btn-verify-team-create');
+    const teamCreateVerifyResultEl = document.getElementById('team-create-verify-result');
+    const btnVerifyZuoqiOpen = document.getElementById('btn-verify-zuoqi-open');
+    const zuoqiOpenVerifyResultEl = document.getElementById('zuoqi-open-verify-result');
+    const btnVerifyZuoqiClose = document.getElementById('btn-verify-zuoqi-close');
+    const zuoqiCloseVerifyResultEl = document.getElementById('zuoqi-close-verify-result');
+    const btnVerifyZuoqiFly = document.getElementById('btn-verify-zuoqi-fly');
+    const zuoqiFlyVerifyResultEl = document.getElementById('zuoqi-fly-verify-result');
+    const btnVerifyZuoqiLand = document.getElementById('btn-verify-zuoqi-land');
+    const zuoqiLandVerifyResultEl = document.getElementById('zuoqi-land-verify-result');
     const btnVerifyRejoin = document.getElementById('btn-verify-rejoin');
     const rejoinVerifyResultEl = document.getElementById('rejoin-verify-result');
     const btnVerifyTeamAway = document.getElementById('btn-verify-team-away');
@@ -1905,8 +1955,14 @@
         list.addEventListener('click', e => {
             if (running) return;
             if (suppressClick) { suppressClick = false; return; }
+            // 手风琴设置区（开关/种族多选等）点击不得触发卡片选区切换：
+            // 开关是 label 包 input，点一次会产生「原始点击 + 合成点击」
+            // 两个冒泡事件——第一个把任务移出已选、第二个（卡片已落入
+            // 待选区）又追加到已选末尾并持久化，净效果=任务被挪到队尾
+            // （实测：修罗+五倍 点修罗设置后变 五倍+修罗）
             if (e.target.closest('.th-btn') || e.target.closest('.task-expand')
-                || e.target.closest('.task-move') || e.target.closest('.drag-handle')) return;
+                || e.target.closest('.task-move') || e.target.closest('.drag-handle')
+                || e.target.closest('.task-accordion')) return;
             const card = e.target.closest('.task-card');
             if (card) toggleTaskMode(card.dataset.mode);
         });
@@ -2174,6 +2230,9 @@
     xiuluoCheckTeam.addEventListener('change', () => {
         callPython('save_xiuluo_check_team', xiuluoCheckTeam.checked);
     });
+    xiuluoAutoCreateTeam.addEventListener('change', () => {
+        callPython('save_xiuluo_auto_create_team', xiuluoAutoCreateTeam.checked);
+    });
     xiuluoAutoRejoin.addEventListener('change', () => {
         callPython('save_xiuluo_auto_rejoin', xiuluoAutoRejoin.checked);
     });
@@ -2203,6 +2262,9 @@
     });
     wubeiCheckTeam.addEventListener('change', () => {
         callPython('save_wubei_check_team', wubeiCheckTeam.checked);
+    });
+    wubeiAutoCreateTeam.addEventListener('change', () => {
+        callPython('save_wubei_auto_create_team', wubeiAutoCreateTeam.checked);
     });
     wubeiAutoRejoin.addEventListener('change', () => {
         callPython('save_wubei_auto_rejoin', wubeiAutoRejoin.checked);
@@ -2247,6 +2309,7 @@
         applyDevTools();  // 调试信息开关：控制「诊断」导航入口显隐
         xiuluoHezi.checked = !!info.xiuluo_hezi;
         xiuluoCheckTeam.checked = !!info.xiuluo_check_team;
+        xiuluoAutoCreateTeam.checked = !!info.xiuluo_auto_create_team;
         xiuluoAutoRejoin.checked = !!info.xiuluo_auto_rejoin;
         xiuluoAutoWuyi.checked = !!info.xiuluo_auto_wuyi;
         xiuluoTabGroup.checked = !!info.xiuluo_tab_group;
@@ -2276,6 +2339,7 @@
         }
         wubeiHezi.checked = !!(info.wubei && info.wubei.hezi);
         wubeiCheckTeam.checked = !!(info.wubei && info.wubei.check_team);
+        wubeiAutoCreateTeam.checked = !!(info.wubei && info.wubei.auto_create_team);
         wubeiAutoRejoin.checked = !!(info.wubei && info.wubei.auto_rejoin);
         battleOnlyAutoRejoin.checked = !!info.battle_only_auto_rejoin;
         wubeiShout.checked = !!(info.wubei && info.wubei.shout);
@@ -2845,6 +2909,151 @@
         btnVerifyTeamCheck.disabled = false;
         teamCheckVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
         teamCheckVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+    };
+
+    async function verifyTeamCreate() {
+        if (verifying) return;
+        verifying = true;
+        btnVerifyTeamCreate.disabled = true;
+        teamCreateVerifyResultEl.style.color = 'var(--text)';
+        teamCreateVerifyResultEl.innerText = '创建中...';
+        try {
+            const r = await callPython('verify_team_create');
+            if (!r || r.status !== 'success') {
+                teamCreateVerifyResultEl.style.color = 'var(--danger)';
+                teamCreateVerifyResultEl.innerText = (r && r.msg) || '获取请求失败';
+                verifying = false;
+                btnVerifyTeamCreate.disabled = false;
+            }
+            // 成功：等待 Python 侧 onTeamCreateVerifyResult 回推最终结果
+        } catch (e) {
+            teamCreateVerifyResultEl.style.color = 'var(--danger)';
+            teamCreateVerifyResultEl.innerText = '获取请求异常';
+            verifying = false;
+            btnVerifyTeamCreate.disabled = false;
+        }
+    }
+    window.onTeamCreateVerifyResult = function (ok, info) {
+        verifying = false;
+        btnVerifyTeamCreate.disabled = false;
+        teamCreateVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        teamCreateVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+    };
+
+    async function verifyZuoqiOpen() {
+        if (verifying) return;
+        verifying = true;
+        btnVerifyZuoqiOpen.disabled = true;
+        zuoqiOpenVerifyResultEl.style.color = 'var(--text)';
+        zuoqiOpenVerifyResultEl.innerText = '打开中...';
+        try {
+            const r = await callPython('verify_zuoqi_open');
+            if (!r || r.status !== 'success') {
+                zuoqiOpenVerifyResultEl.style.color = 'var(--danger)';
+                zuoqiOpenVerifyResultEl.innerText = (r && r.msg) || '获取请求失败';
+                verifying = false;
+                btnVerifyZuoqiOpen.disabled = false;
+            }
+            // 成功：等待 Python 侧 onZuoqiOpenVerifyResult 回推最终结果
+        } catch (e) {
+            zuoqiOpenVerifyResultEl.style.color = 'var(--danger)';
+            zuoqiOpenVerifyResultEl.innerText = '获取请求异常';
+            verifying = false;
+            btnVerifyZuoqiOpen.disabled = false;
+        }
+    }
+    window.onZuoqiOpenVerifyResult = function (ok, info) {
+        verifying = false;
+        btnVerifyZuoqiOpen.disabled = false;
+        zuoqiOpenVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        zuoqiOpenVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+    };
+
+    async function verifyZuoqiClose() {
+        if (verifying) return;
+        verifying = true;
+        btnVerifyZuoqiClose.disabled = true;
+        zuoqiCloseVerifyResultEl.style.color = 'var(--text)';
+        zuoqiCloseVerifyResultEl.innerText = '关闭中...';
+        try {
+            const r = await callPython('verify_zuoqi_close');
+            if (!r || r.status !== 'success') {
+                zuoqiCloseVerifyResultEl.style.color = 'var(--danger)';
+                zuoqiCloseVerifyResultEl.innerText = (r && r.msg) || '获取请求失败';
+                verifying = false;
+                btnVerifyZuoqiClose.disabled = false;
+            }
+            // 成功：等待 Python 侧 onZuoqiCloseVerifyResult 回推最终结果
+        } catch (e) {
+            zuoqiCloseVerifyResultEl.style.color = 'var(--danger)';
+            zuoqiCloseVerifyResultEl.innerText = '获取请求异常';
+            verifying = false;
+            btnVerifyZuoqiClose.disabled = false;
+        }
+    }
+    window.onZuoqiCloseVerifyResult = function (ok, info) {
+        verifying = false;
+        btnVerifyZuoqiClose.disabled = false;
+        zuoqiCloseVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        zuoqiCloseVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+    };
+
+    async function verifyZuoqiFly() {
+        if (verifying) return;
+        verifying = true;
+        btnVerifyZuoqiFly.disabled = true;
+        zuoqiFlyVerifyResultEl.style.color = 'var(--text)';
+        zuoqiFlyVerifyResultEl.innerText = '起飞中...';
+        try {
+            const r = await callPython('verify_zuoqi_fly');
+            if (!r || r.status !== 'success') {
+                zuoqiFlyVerifyResultEl.style.color = 'var(--danger)';
+                zuoqiFlyVerifyResultEl.innerText = (r && r.msg) || '获取请求失败';
+                verifying = false;
+                btnVerifyZuoqiFly.disabled = false;
+            }
+            // 成功：等待 Python 侧 onZuoqiFlyVerifyResult 回推最终结果
+        } catch (e) {
+            zuoqiFlyVerifyResultEl.style.color = 'var(--danger)';
+            zuoqiFlyVerifyResultEl.innerText = '获取请求异常';
+            verifying = false;
+            btnVerifyZuoqiFly.disabled = false;
+        }
+    }
+    window.onZuoqiFlyVerifyResult = function (ok, info) {
+        verifying = false;
+        btnVerifyZuoqiFly.disabled = false;
+        zuoqiFlyVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        zuoqiFlyVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+    };
+
+    async function verifyZuoqiLand() {
+        if (verifying) return;
+        verifying = true;
+        btnVerifyZuoqiLand.disabled = true;
+        zuoqiLandVerifyResultEl.style.color = 'var(--text)';
+        zuoqiLandVerifyResultEl.innerText = '降落中...';
+        try {
+            const r = await callPython('verify_zuoqi_land');
+            if (!r || r.status !== 'success') {
+                zuoqiLandVerifyResultEl.style.color = 'var(--danger)';
+                zuoqiLandVerifyResultEl.innerText = (r && r.msg) || '获取请求失败';
+                verifying = false;
+                btnVerifyZuoqiLand.disabled = false;
+            }
+            // 成功：等待 Python 侧 onZuoqiLandVerifyResult 回推最终结果
+        } catch (e) {
+            zuoqiLandVerifyResultEl.style.color = 'var(--danger)';
+            zuoqiLandVerifyResultEl.innerText = '获取请求异常';
+            verifying = false;
+            btnVerifyZuoqiLand.disabled = false;
+        }
+    }
+    window.onZuoqiLandVerifyResult = function (ok, info) {
+        verifying = false;
+        btnVerifyZuoqiLand.disabled = false;
+        zuoqiLandVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        zuoqiLandVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
     async function verifyRejoin() {

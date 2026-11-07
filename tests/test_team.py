@@ -278,6 +278,119 @@ def test_maybe_rejoin_click_success(monkeypatch):
     assert clicked == [(120, 300)]
 
 
+# ---- 自动创建队伍（修罗/五倍开关默认关：未组队点组队菜单「创建队伍」） ----
+
+def _mock_create_env(monkeypatch, menu_in_team=False, tpl_exists=True,
+                     find_pt=(120, 300), panel_results=None):
+    """搭 ensure_team_created 的桩环境，返回记录器 dict。"""
+    env = {"clicked": [], "menu_closed": 0, "panel_closed": 0}
+    monkeypatch.setattr(team, "_ensure_menu_open",
+                        lambda win: (True, _frame()))
+    monkeypatch.setattr(team, "_has_duiwuxinxi",
+                        lambda img: menu_in_team)
+    monkeypatch.setattr(team, "_close_menu",
+                        lambda win: env.__setitem__("menu_closed", env["menu_closed"] + 1)
+                        or (True, "组队菜单已关闭"))
+    monkeypatch.setattr(team, "_tpl_path",
+                        lambda icon: Path(__file__) if tpl_exists
+                        else Path("不存在_chuangjianduiwu.png"))
+    monkeypatch.setattr(team.game_map, "find_template_in",
+                        lambda img, icon, threshold=0.8: find_pt)
+    monkeypatch.setattr(team, "human_click",
+                        lambda win, x, y: env["clicked"].append((x, y)))
+    monkeypatch.setattr(team, "_is_panel_open",
+                        (lambda win: panel_results.pop(0))
+                        if panel_results else (lambda win: False))
+    monkeypatch.setattr(team, "close_team_panel",
+                        lambda win: env.__setitem__("panel_closed", env["panel_closed"] + 1)
+                        or (True, "队伍面板已关闭"))
+    monkeypatch.setattr(team.time, "sleep", lambda s: None)
+    return env
+
+
+def test_ensure_team_created_skips_when_in_team(monkeypatch):
+    """已在队伍中（菜单有「队伍信息」）：不点击创建，关闭菜单即返回。"""
+    env = _mock_create_env(monkeypatch, menu_in_team=True)
+    ok, desc = team.ensure_team_created(None)
+    assert ok and "已在队伍中" in desc
+    assert env["clicked"] == []
+    assert env["menu_closed"] == 1
+    assert env["panel_closed"] == 0
+
+
+def test_ensure_team_created_click_and_verify(monkeypatch):
+    """未组队：点击「创建队伍」→ 面板打开即创建成功并关闭面板。"""
+    env = _mock_create_env(monkeypatch, panel_results=[False, True])
+    ok, desc = team.ensure_team_created(None)
+    assert ok and "创建成功" in desc
+    assert env["clicked"] == [(120, 300)]
+    assert env["panel_closed"] == 1
+
+
+def test_ensure_team_created_template_missing(monkeypatch):
+    """创建按钮模板缺失：报模板未提供，绝不误点击。"""
+    env = _mock_create_env(monkeypatch, tpl_exists=False)
+    ok, desc = team.ensure_team_created(None)
+    assert not ok and "模板未提供" in desc
+    assert env["clicked"] == []
+    assert env["menu_closed"] == 1
+
+
+def test_ensure_team_created_template_not_found(monkeypatch):
+    """菜单中未定位到创建按钮：报失败关闭菜单，不点击。"""
+    env = _mock_create_env(monkeypatch, find_pt=None)
+    ok, desc = team.ensure_team_created(None)
+    assert not ok and "未定位到" in desc
+    assert env["clicked"] == []
+    assert env["menu_closed"] == 1
+
+
+def test_ensure_team_created_panel_never_opens(monkeypatch):
+    """点击后队伍面板始终未打开：报失败并兜底关闭菜单。"""
+    env = _mock_create_env(monkeypatch, panel_results=[False] * 9)
+    ok, desc = team.ensure_team_created(None)
+    assert not ok and "面板未打开" in desc
+    assert env["clicked"] == [(120, 300)]
+    assert env["menu_closed"] == 1
+
+
+def test_ensure_team_created_menu_not_open(monkeypatch):
+    """组队菜单打不开（瞬态）：报失败，不点击。"""
+    env = _mock_create_env(monkeypatch)
+    monkeypatch.setattr(team, "_ensure_menu_open", lambda win: (False, None))
+    ok, desc = team.ensure_team_created(None)
+    assert not ok and "菜单未打开" in desc
+    assert env["clicked"] == []
+
+
+def test_chuangjianduiwu_target_frame_unique_hit():
+    """创建队伍模板目标帧（贴入原模板）以 0.8 阈值唯一命中（用户
+    2026-11-07 提供 113x22 模板；真图交叉验证待实机菜单帧校准）。"""
+    frame = _paste_bgr(_bgr_frame(), "chuangjianduiwu.png", 600, 400)
+    hits = team.game_map.match_frame_all(frame, team.CHUANGJIAN_DUIWU_ICON,
+                                         team._TEMPLATE_THRESHOLD)
+    assert len(hits) == 1
+    # 命中中心 = 贴入中心（113x22 的一半偏移：113//2=56, 22//2=11）
+    _score, x, y = hits[0]
+    assert (x, y) == (656, 411)
+
+
+def test_chuangjianduiwu_noise_frame_below_threshold():
+    """纯噪声帧（非目标场景）创建队伍模板最佳分低于 0.8 阈值。"""
+    score, _ = team.game_map.best_match_np(_bgr_frame(), team.CHUANGJIAN_DUIWU_ICON)
+    assert score < team._TEMPLATE_THRESHOLD
+
+
+def test_chuangjianduiwu_not_confused_as_team_buttons():
+    """逆方向：创建队伍按钮不得被队伍信息/归队等既有模板命中
+    （菜单判定与归队链路不受新模板影响）。"""
+    frame = _paste_bgr(_bgr_frame(), "chuangjianduiwu.png", 600, 500)
+    for icon in (team.DUIWU_XINXI_ICON, team.ZUDUI_GUIDUI_ICON,
+                 team.ZUDUI_ITEM_ICON):
+        score, _ = team.game_map.best_match_np(frame, icon)
+        assert score < team._TEMPLATE_THRESHOLD, icon
+
+
 # ---- 归队按钮模板校准回归（2026-11-06 实测：目标帧 1.000 /
 #      非目标帧 离开/解散按钮 0.825 / 纯噪声 0.134） ----
 

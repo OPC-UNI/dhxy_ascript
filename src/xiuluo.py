@@ -60,6 +60,7 @@ from . import battle  # 巫医预期时间戳（点 NPC 后通知战斗线程切
 from .control_window import (load_task_counts, load_xiuluo_settings,
                              load_xiuluo_shout_switch,
                              load_xiuluo_check_team,
+                             load_xiuluo_auto_create_team,
                              load_xiuluo_auto_rejoin,
                              load_xiuluo_auto_wuyi,
                              load_xiuluo_wuyi_interval,
@@ -1876,6 +1877,21 @@ def _keep_alive(win, info):
             log(f"[修罗][归队] 归队检查异常: {e}", "WARN")
 
 
+def _auto_create_team_once(win):
+    """执行一次自动创建队伍（开关已确认开启，见 run_loop 门控）。
+
+    未组队时点组队按钮 → 菜单「创建队伍」创建并校验面板；已在队伍中
+    直接返回成功无操作（team.ensure_team_created 内部判定）。异常按
+    失败记日志，不阻断主流程——后续正常队伍检查会把未组队按确定性
+    非队长处理（_keep_alive），下次任务启动再重试创建。
+    """
+    try:
+        ok, info = team.ensure_team_created(win, prefix="[修罗][创建队伍]")
+    except Exception as e:
+        ok, info = False, f"创建队伍异常: {e}"
+    log(f"[修罗][创建队伍] {info}", "SYS" if ok else "WARN")
+
+
 def run_loop(win, cycle_interval=1.0):
     """修罗主循环：领任务 → 寻路 → 对话开打 → 战斗 → 返程 → 循环领取。
 
@@ -1913,6 +1929,22 @@ def run_loop(win, cycle_interval=1.0):
     _shout_text = _build_shout_text() if load_xiuluo_shout_switch() else ""
     if _shout_text:
         log(f"[修罗] 缺人自动喊话: 开（{_shout_text}，最短间隔 {SHOUT_MIN_INTERVAL}s）", "SYS")
+    # 自动创建队伍（修罗设置开关，默认关闭）：任务开始时若无队伍自动
+    # 创建（组队按钮 → 菜单「创建队伍」），创建成功后走正常队伍检查与
+    # 补人流程；已有队伍时本开关无其他逻辑。战斗中不操作（组队菜单会
+    # 遮挡战斗操作），顺延到主循环每轮开头重试。先于组号启动检查执行：
+    # 组号模式下队长未组队时先创建再判身份（startup_leader_check 未组队
+    # 会直接停任务）；成员/已组队场景创建跳过或空操作，身份检查照旧
+    auto_create = load_xiuluo_auto_create_team()
+    log(f"[修罗] 自动创建队伍: {'开（无队伍时任务开始自动创建）' if auto_create else '关'}", "SYS")
+    pending_create = auto_create
+    create_defer_logged = False
+    if pending_create and not is_in_battle(win):
+        pending_create = False
+        _auto_create_team_once(win)
+    elif pending_create:
+        create_defer_logged = True
+        log("[修罗] 战斗中，自动创建队伍顺延至战斗结束", "INFO")
 
     done = app_utils.task_progress_done(win, TASK_MODE)  # 当天已完成（跨重启持久）
     if done:
@@ -1938,6 +1970,15 @@ def run_loop(win, cycle_interval=1.0):
         if tab_group.active() and not tab_group.ensure_leader_tab(win):
             time.sleep(cycle_interval)
             continue
+        # 自动创建队伍顺延重试（启动时战斗中）：战斗结束后的首个非战斗
+        # 轮次执行创建，一次即消费（成败均不再重试，失败由正常队伍检查
+        # 按未组队处理）
+        if pending_create and not is_in_battle(win):
+            pending_create = False
+            _auto_create_team_once(win)
+        elif pending_create and not create_defer_logged:
+            create_defer_logged = True
+            log("[修罗] 战斗中，自动创建队伍顺延至战斗结束", "INFO")
         # 1. 领任务：任务追踪中已有修罗任务（续跑）→ 跳过领取，直接跟踪。
         #    上一轮已确认任务完成（follow_task 以任务消失为完成判据）时，
         #    本轮开始必然无任务——has_task（区域 OCR ~0.9s）只在可能

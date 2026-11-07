@@ -402,6 +402,24 @@ def save_wubei_check_team(on):
     return {"status": "success"}
 
 
+# ---- 五倍自动创建队伍（UI 开关，KeyValue 持久化；默认关闭。开启时
+#      任务启动若无队伍自动创建——点组队按钮 → 菜单「创建队伍」，
+#      创建成功后走正常队伍检查与补人流程；已有队伍无操作。
+#      实现见 team.ensure_team_created） ----
+_WUBEI_AUTO_CREATE_TEAM_KEY = "wubei_auto_create_team"
+
+
+def load_wubei_auto_create_team():
+    """读取五倍自动创建队伍开关（首次默认关闭）。"""
+    return bool(KeyValue.get(_WUBEI_AUTO_CREATE_TEAM_KEY, False))
+
+
+def save_wubei_auto_create_team(on):
+    """保存五倍自动创建队伍开关，返回操作结果。"""
+    _kv_save(_WUBEI_AUTO_CREATE_TEAM_KEY, bool(on))
+    return {"status": "success"}
+
+
 # ---- 仅战斗自动归队（UI 开关，KeyValue 持久化，默认开启；仅战斗
 #      模式不判定身份——死亡落轮回司自动点「归队」，队长身份由
 #      maybe_rejoin 自动跳过。实现见 main._battle_only_loop） ----
@@ -569,6 +587,24 @@ def load_xiuluo_check_team():
 def save_xiuluo_check_team(on):
     """保存修罗检查队伍开关，返回操作结果。"""
     _kv_save(_XIULUO_CHECK_TEAM_KEY, bool(on))
+    return {"status": "success"}
+
+
+# ---- 修罗自动创建队伍（UI 开关，KeyValue 持久化；默认关闭。开启时
+#      任务启动若无队伍自动创建——点组队按钮 → 菜单「创建队伍」，
+#      创建成功后走正常队伍检查与补人流程；已有队伍无操作。
+#      实现见 team.ensure_team_created） ----
+_XIULUO_AUTO_CREATE_TEAM_KEY = "xiuluo_auto_create_team"
+
+
+def load_xiuluo_auto_create_team():
+    """读取修罗自动创建队伍开关（首次默认关闭）。"""
+    return bool(KeyValue.get(_XIULUO_AUTO_CREATE_TEAM_KEY, False))
+
+
+def save_xiuluo_auto_create_team(on):
+    """保存修罗自动创建队伍开关，返回操作结果。"""
+    _kv_save(_XIULUO_AUTO_CREATE_TEAM_KEY, bool(on))
     return {"status": "success"}
 
 
@@ -799,6 +835,7 @@ class _ApiBridge:
 # 消费 WM_CHAR 不消费 WM_KEYDOWN）。
 _SILENT_KEY_HOTKEYS = {
     "altc": (("alt",), "c", "Alt+C", False, None),
+    "altu": (("alt",), "u", "Alt+U", False, None),
     "alte": (("alt",), "e", "Alt+E", False, None),
     "alt5": (("alt",), "5", "Alt+5", False, None),
     "alt6": (("alt",), "6", "Alt+6", False, None),
@@ -842,6 +879,7 @@ class ControlWindow(WebWindow):
         self.expose(self.save_wuhuan_vitality_continue)
         self.expose(self.save_xiuluo_hezi)
         self.expose(self.save_xiuluo_check_team)
+        self.expose(self.save_xiuluo_auto_create_team)
         self.expose(self.save_xiuluo_auto_rejoin)
         self.expose(self.save_xiuluo_auto_wuyi)
         self.expose(self.save_xiuluo_wuyi_interval)
@@ -852,6 +890,7 @@ class ControlWindow(WebWindow):
         self.expose(self.save_silent_mode)
         self.expose(self.save_wubei_hezi)
         self.expose(self.save_wubei_check_team)
+        self.expose(self.save_wubei_auto_create_team)
         self.expose(self.save_wubei_auto_rejoin)
         self.expose(self.save_battle_only_auto_rejoin)
         self.expose(self.save_wubei_shout_switch)
@@ -882,6 +921,11 @@ class ControlWindow(WebWindow):
         self.expose(self.verify_position)
         self.expose(self.verify_dialog_detect)
         self.expose(self.verify_team_check)
+        self.expose(self.verify_team_create)
+        self.expose(self.verify_zuoqi_open)
+        self.expose(self.verify_zuoqi_close)
+        self.expose(self.verify_zuoqi_fly)
+        self.expose(self.verify_zuoqi_land)
         self.expose(self.verify_rejoin)
         self.expose(self.verify_team_away)
         self.expose(self.verify_team_kick_away)
@@ -1118,6 +1162,7 @@ class ControlWindow(WebWindow):
                 "wuhuan_vitality_continue": load_wuhuan_vitality_continue(),
                 "xiuluo_hezi": load_xiuluo_hezi(),
                 "xiuluo_check_team": load_xiuluo_check_team(),
+                "xiuluo_auto_create_team": load_xiuluo_auto_create_team(),
                 "xiuluo_auto_rejoin": load_xiuluo_auto_rejoin(),
                 "xiuluo_auto_wuyi": load_xiuluo_auto_wuyi(),
                 "xiuluo_wuyi_interval": load_xiuluo_wuyi_interval(),
@@ -1128,6 +1173,7 @@ class ControlWindow(WebWindow):
                 "silent_mode": load_silent_mode(),
                 "wubei": {"hezi": load_wubei_hezi(),
                           "check_team": load_wubei_check_team(),
+                          "auto_create_team": load_wubei_auto_create_team(),
                           "auto_rejoin": load_wubei_auto_rejoin(),
                           "shout": load_wubei_shout_switch(),
                           "auto_wuyi": load_wubei_auto_wuyi(),
@@ -1207,6 +1253,10 @@ class ControlWindow(WebWindow):
         """修罗设置变更：保存检查队伍开关状态。"""
         return save_xiuluo_check_team(on)
 
+    def save_xiuluo_auto_create_team(self, on):
+        """修罗设置变更：保存自动创建队伍开关状态。"""
+        return save_xiuluo_auto_create_team(on)
+
     def save_xiuluo_auto_rejoin(self, on):
         """修罗设置变更：保存自动归队开关状态。"""
         return save_xiuluo_auto_rejoin(on)
@@ -1246,6 +1296,10 @@ class ControlWindow(WebWindow):
     def save_wubei_check_team(self, on):
         """五倍设置变更：保存检查队伍开关状态。"""
         return save_wubei_check_team(on)
+
+    def save_wubei_auto_create_team(self, on):
+        """五倍设置变更：保存自动创建队伍开关状态。"""
+        return save_wubei_auto_create_team(on)
 
     def save_wubei_auto_rejoin(self, on):
         """五倍设置变更：保存自动归队开关状态。"""
@@ -1967,6 +2021,267 @@ class ControlWindow(WebWindow):
                 ok_js = "true" if ok else "false"
                 self.webview_instance.evaluate_js(
                     f"if(window.onTeamCheckVerifyResult){{window.onTeamCheckVerifyResult({ok_js}, {json.dumps(info)});}}")
+            except Exception:
+                pass
+
+    def verify_team_create(self):
+        """诊断-创建队伍按钮：真实执行创建链路——组队菜单 → 队伍信息
+        判定（已组队直接返回）→ 点击「创建队伍」→ 校验队伍面板打开并
+        关闭。未组队时会真实创建队伍（点组队按钮/菜单创建队伍项），
+        仅手动测试/确认识别用。
+        """
+        if self._tm.is_running():
+            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if self._verifying:
+            return {"status": "error", "msg": "验证进行中，请稍候"}
+        win = game.find_main_window()
+        if win is None:
+            return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
+        if not _game_window_clickable(win):
+            return {"status": "error", "msg": "游戏窗口被其他窗口遮挡，请将游戏窗口置于前台后再验证"}
+        self._verifying = True
+        threading.Thread(target=self._run_team_create_verify, args=(win,),
+                         daemon=True, name="team-create-verify").start()
+        return {"status": "success",
+                "msg": "检查已开始：组队菜单 → 创建队伍 → 面板校验，结果见日志"}
+
+    def _run_team_create_verify(self, win):
+        """创建队伍线程体：ensure_team_created 链路，结果打印日志并回推页面。"""
+        from . import team  # 延迟导入：与其余验证模块保持一致
+        ok_tab, tab_info = self._ensure_bound_tab(win)
+        if not ok_tab:
+            self._notify_team_create_verify_result(False, tab_info)
+            self._verifying = False
+            return
+        try:
+            self.add_logs(["[验证] 开始创建队伍（组队菜单 → 队伍信息判定 → "
+                           "创建队伍 → 面板校验 → 关闭）..."])
+            ok, info = team.ensure_team_created(win, prefix="[验证]")
+            self.add_logs([f"[验证] 创建队伍结论: {info}"])
+        except Exception as e:
+            ok, info = False, f"验证异常: {e}"
+            try:
+                self.add_logs([f"[验证] 创建队伍异常: {info}"])
+            except Exception:
+                pass
+        self._notify_team_create_verify_result(ok, info)
+        self._verifying = False
+
+    def _notify_team_create_verify_result(self, ok, info):
+        """创建队伍结果回推页面（诊断-创建队伍行的结果文案）。"""
+        if self.webview_instance:
+            try:
+                ok_js = "true" if ok else "false"
+                self.webview_instance.evaluate_js(
+                    f"if(window.onTeamCreateVerifyResult){{window.onTeamCreateVerifyResult({ok_js}, {json.dumps(info)});}}")
+            except Exception:
+                pass
+
+    def verify_zuoqi_open(self):
+        """诊断-打开飞行驭器面板按钮：真实执行打开链路（座骑按钮 →
+        菜单「飞行驭器」→ 面板校验；主进程无高性能开关，恒识别路径，
+        战斗中拒绝）。全程真实点击，仅手动测试/确认识别用。
+        """
+        if self._tm.is_running():
+            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if self._verifying:
+            return {"status": "error", "msg": "验证进行中，请稍候"}
+        win = game.find_main_window()
+        if win is None:
+            return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
+        if not _game_window_clickable(win):
+            return {"status": "error", "msg": "游戏窗口被其他窗口遮挡，请将游戏窗口置于前台后再验证"}
+        self._verifying = True
+        threading.Thread(target=self._run_zuoqi_open_verify, args=(win,),
+                         daemon=True, name="zuoqi-open-verify").start()
+        return {"status": "success",
+                "msg": "检查已开始：座骑按钮 → 菜单「飞行驭器」 → 面板校验，结果见日志"}
+
+    def _run_zuoqi_open_verify(self, win):
+        """打开飞行驭器面板线程体：zuoqi.open_feixingyuqi_panel 链路。"""
+        from . import zuoqi  # 延迟导入：与其余验证模块保持一致
+        ok_tab, tab_info = self._ensure_bound_tab(win)
+        if not ok_tab:
+            self._notify_zuoqi_open_verify_result(False, tab_info)
+            self._verifying = False
+            return
+        try:
+            self.add_logs(["[验证] 开始打开飞行驭器面板（非战斗校验 → 座骑按钮 → "
+                           "菜单「飞行驭器」 → 面板校验）..."])
+            ok, info = zuoqi.open_feixingyuqi_panel(win)
+            self.add_logs([f"[验证] 打开飞行驭器面板结论: {info}"])
+        except Exception as e:
+            ok, info = False, f"验证异常: {e}"
+            try:
+                self.add_logs([f"[验证] 打开飞行驭器面板异常: {info}"])
+            except Exception:
+                pass
+        self._notify_zuoqi_open_verify_result(ok, info)
+        self._verifying = False
+
+    def _notify_zuoqi_open_verify_result(self, ok, info):
+        """打开飞行驭器面板结果回推页面（诊断-打开飞行驭器面板行的结果文案）。"""
+        if self.webview_instance:
+            try:
+                ok_js = "true" if ok else "false"
+                self.webview_instance.evaluate_js(
+                    f"if(window.onZuoqiOpenVerifyResult){{window.onZuoqiOpenVerifyResult({ok_js}, {json.dumps(info)});}}")
+            except Exception:
+                pass
+
+    def verify_zuoqi_close(self):
+        """诊断-关闭飞行驭器面板按钮：真实执行关闭链路（面板校验 →
+        点关闭按钮 → 校验面板消失）。关闭按钮与队伍面板关闭按钮同款，
+        关闭前必须先校验飞行驭器面板打开，防止点到其他面板的同款按钮。
+        """
+        if self._tm.is_running():
+            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if self._verifying:
+            return {"status": "error", "msg": "验证进行中，请稍候"}
+        win = game.find_main_window()
+        if win is None:
+            return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
+        if not _game_window_clickable(win):
+            return {"status": "error", "msg": "游戏窗口被其他窗口遮挡，请将游戏窗口置于前台后再验证"}
+        self._verifying = True
+        threading.Thread(target=self._run_zuoqi_close_verify, args=(win,),
+                         daemon=True, name="zuoqi-close-verify").start()
+        return {"status": "success",
+                "msg": "检查已开始：面板校验 → 点关闭按钮 → 面板消失校验，结果见日志"}
+
+    def _run_zuoqi_close_verify(self, win):
+        """关闭飞行驭器面板线程体：zuoqi.close_feixingyuqi_panel 链路。"""
+        from . import zuoqi  # 延迟导入：与其余验证模块保持一致
+        ok_tab, tab_info = self._ensure_bound_tab(win)
+        if not ok_tab:
+            self._notify_zuoqi_close_verify_result(False, tab_info)
+            self._verifying = False
+            return
+        try:
+            self.add_logs(["[验证] 开始关闭飞行驭器面板（面板校验 → 关闭按钮 → "
+                           "面板消失校验）..."])
+            ok, info = zuoqi.close_feixingyuqi_panel(win)
+            self.add_logs([f"[验证] 关闭飞行驭器面板结论: {info}"])
+        except Exception as e:
+            ok, info = False, f"验证异常: {e}"
+            try:
+                self.add_logs([f"[验证] 关闭飞行驭器面板异常: {info}"])
+            except Exception:
+                pass
+        self._notify_zuoqi_close_verify_result(ok, info)
+        self._verifying = False
+
+    def _notify_zuoqi_close_verify_result(self, ok, info):
+        """关闭飞行驭器面板结果回推页面（诊断-关闭飞行驭器面板行的结果文案）。"""
+        if self.webview_instance:
+            try:
+                ok_js = "true" if ok else "false"
+                self.webview_instance.evaluate_js(
+                    f"if(window.onZuoqiCloseVerifyResult){{window.onZuoqiCloseVerifyResult({ok_js}, {json.dumps(info)});}}")
+            except Exception:
+                pass
+
+    def verify_zuoqi_fly(self):
+        """诊断-测试飞行按钮：真实执行起飞链路（面板打开/复用 → 面板内
+        双模板比分数判飞行状态 → 未飞行点「飞行」按钮 → 校验降落按钮
+        出现即起飞）。已在飞行中直接返回成功。全程真实点击。
+        """
+        if self._tm.is_running():
+            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if self._verifying:
+            return {"status": "error", "msg": "验证进行中，请稍候"}
+        win = game.find_main_window()
+        if win is None:
+            return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
+        if not _game_window_clickable(win):
+            return {"status": "error", "msg": "游戏窗口被其他窗口遮挡，请将游戏窗口置于前台后再验证"}
+        self._verifying = True
+        threading.Thread(target=self._run_zuoqi_fly_verify, args=(win,),
+                         daemon=True, name="zuoqi-fly-verify").start()
+        return {"status": "success",
+                "msg": "检查已开始：面板 → 飞行状态判定 → 起飞 → 降落按钮校验，结果见日志"}
+
+    def _run_zuoqi_fly_verify(self, win):
+        """测试飞行线程体：zuoqi.ensure_flying 链路。"""
+        from . import zuoqi  # 延迟导入：与其余验证模块保持一致
+        ok_tab, tab_info = self._ensure_bound_tab(win)
+        if not ok_tab:
+            self._notify_zuoqi_fly_verify_result(False, tab_info)
+            self._verifying = False
+            return
+        try:
+            self.add_logs(["[验证] 开始测试飞行（面板 → 双模板飞行状态判定 → "
+                           "未飞行点「飞行」→ 降落按钮校验）..."])
+            ok, info = zuoqi.ensure_flying(win)
+            self.add_logs([f"[验证] 测试飞行结论: {info}"])
+        except Exception as e:
+            ok, info = False, f"验证异常: {e}"
+            try:
+                self.add_logs([f"[验证] 测试飞行异常: {info}"])
+            except Exception:
+                pass
+        self._notify_zuoqi_fly_verify_result(ok, info)
+        self._verifying = False
+
+    def _notify_zuoqi_fly_verify_result(self, ok, info):
+        """测试飞行结果回推页面（诊断-测试飞行行的结果文案）。"""
+        if self.webview_instance:
+            try:
+                ok_js = "true" if ok else "false"
+                self.webview_instance.evaluate_js(
+                    f"if(window.onZuoqiFlyVerifyResult){{window.onZuoqiFlyVerifyResult({ok_js}, {json.dumps(info)});}}")
+            except Exception:
+                pass
+
+    def verify_zuoqi_land(self):
+        """诊断-测试降落按钮：真实执行降落链路（面板打开/复用 → 面板内
+        双模板比分数判飞行状态 → 飞行中点「降落」按钮 → 校验飞行按钮
+        出现即降落）。已降落直接返回成功。全程真实点击。
+        """
+        if self._tm.is_running():
+            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if self._verifying:
+            return {"status": "error", "msg": "验证进行中，请稍候"}
+        win = game.find_main_window()
+        if win is None:
+            return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
+        if not _game_window_clickable(win):
+            return {"status": "error", "msg": "游戏窗口被其他窗口遮挡，请将游戏窗口置于前台后再验证"}
+        self._verifying = True
+        threading.Thread(target=self._run_zuoqi_land_verify, args=(win,),
+                         daemon=True, name="zuoqi-land-verify").start()
+        return {"status": "success",
+                "msg": "检查已开始：面板 → 飞行状态判定 → 降落 → 飞行按钮校验，结果见日志"}
+
+    def _run_zuoqi_land_verify(self, win):
+        """测试降落线程体：zuoqi.ensure_landed 链路。"""
+        from . import zuoqi  # 延迟导入：与其余验证模块保持一致
+        ok_tab, tab_info = self._ensure_bound_tab(win)
+        if not ok_tab:
+            self._notify_zuoqi_land_verify_result(False, tab_info)
+            self._verifying = False
+            return
+        try:
+            self.add_logs(["[验证] 开始测试降落（面板 → 双模板飞行状态判定 → "
+                           "飞行中点「降落」→ 飞行按钮校验）..."])
+            ok, info = zuoqi.ensure_landed(win)
+            self.add_logs([f"[验证] 测试降落结论: {info}"])
+        except Exception as e:
+            ok, info = False, f"验证异常: {e}"
+            try:
+                self.add_logs([f"[验证] 测试降落异常: {info}"])
+            except Exception:
+                pass
+        self._notify_zuoqi_land_verify_result(ok, info)
+        self._verifying = False
+
+    def _notify_zuoqi_land_verify_result(self, ok, info):
+        """测试降落结果回推页面（诊断-测试降落行的结果文案）。"""
+        if self.webview_instance:
+            try:
+                ok_js = "true" if ok else "false"
+                self.webview_instance.evaluate_js(
+                    f"if(window.onZuoqiLandVerifyResult){{window.onZuoqiLandVerifyResult({ok_js}, {json.dumps(info)});}}")
             except Exception:
                 pass
 
