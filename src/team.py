@@ -60,6 +60,9 @@ ZUDUI_CLOSE_ICON = "zudui_close.png"      # 队伍面板关闭按钮（鼠标移
 ZUDUI_SHENQINGJIARU_ICON = "zudui_shenqingjiaru.png"  # 申请加入面板标志（队伍人数不足时
 ZUDUI_YUNXU_ICON = "zudui_yunxu.png"      # 申请加入面板「允许」按钮（用户提供模板，实测 1.00 匹配）
                                           # 点组队按钮可能打开该面板；检测到直接点关闭，不处理）
+ZUDUI_QINGKONG_ICON = "zudui_qingkong.png"  # 申请加入面板「清空」按钮（用户 2026-11-07
+                                            # 提供模板 53x23；补满缺口或申请人全部失败后
+                                            # 清除残留申请，实测实机帧 1.000/噪声 0.136）
 LIKAI_DUIWU_ICON = "likaiduiwu.png"       # 队伍面板「离开队伍」按钮（队员可见）
 CHUANGJIAN_DUIWU_ICON = "chuangjianduiwu.png"  # 组队菜单「创建队伍」按钮（未组队时菜单
                                                # 中出现；点击创建成功并自动打开队伍信息
@@ -114,9 +117,14 @@ _RACE_GLYPH_MATCH = 0.80
 
 # 模板匹配与等待参数
 _TEMPLATE_THRESHOLD = 0.8
-# 组队按钮-申请待处理态单独阈值：item2 实测最佳 0.78，低于 0.8 漏检
-# （用户 2026-10-15 指定 0.77；其他模板仍用 _TEMPLATE_THRESHOLD）
-ZUDUI_ITEM2_THRESHOLD = 0.77
+# 组队按钮-申请待处理态单独阈值：item2 按钮带动效、帧间分数抖动
+# （2026-11-07 日志 22:03 实测 0.76 低于 0.77 漏检，启动检查把确定性
+# 队长当「队长无法判定」停任务；用户指定 0.7）。其他模板仍用
+# _TEMPLATE_THRESHOLD
+ZUDUI_ITEM2_THRESHOLD = 0.7
+# 组队按钮搜索条带：共用 map.TRAY_BTN_REGION（右下角托盘区，2026-11-07
+# 用户标定，组队/座骑/背包三按钮同区）
+ZUDUI_ITEM_REGION = game_map.TRAY_BTN_REGION
 # 面板标志模板匹配度随队伍成员数变化（单人队实测 ~0.99，两人队降至 0.65，
 # 5 人队实测 0.436~0.683 抖动）；判定不依赖关闭按钮——多个面板共用同款
 # 关闭按钮（申请加入面板即同款），不具区分性。低于阈值时 OCR 文案兜底
@@ -184,18 +192,30 @@ def _close_apply_panel(win, retries=3):
 APPLY_FAIL_TEXT = "对方已经加入其他队伍"    # 允许失败提示（屏幕中间，出现即换人）
 APPLY_PANEL_WAIT_TRIES = 6                 # 点击组队按钮后等待申请加入面板出现（0.5s 一次）
 APPLY_FAIL_WAIT = 2.5                      # 点击允许后等待失败提示的窗口（秒）
-APPLY_ROW_OFFSET = (-100, 45, 280, 350)    # 申请人列表区域（相对面板标志左上角；实测
-                                            # 固定布局：表头 y+51、列表行 y+67 起、
-                                            # 允许/拒绝按钮行 y+356）；顶部 45 覆盖
-                                            # 表头行——表头在场是「面板确实打开」的
-                                            # 校验信号（2026-11-07 教训见 _apply_rows）
+APPLY_ROWS_BELOW = 300    # 申请人列表扫描范围：面板标志模板底边向下（用户 2026-11-07
+                          # 校准：申请人行只在模板正下方该区域内，超出读到的文字
+                          # ——场景按钮「任务」、任务文案等——都是误识别，禁止放宽）
+APPLY_HEADER_STRIP = 25   # 表头校验条带：模板底边向上（新模板 356x59 内嵌表头行
+                          # 名字/等级/族群/性别，位于模板内 y41-58；表头在场是
+                          # 「面板确实打开」的校验信号，2026-11-07 教训见 _apply_rows）
 APPLY_YUNXU_THRESHOLD = 0.8                # 允许按钮模板匹配阈值（实测 1.00）
+APPLY_QINGKONG_THRESHOLD = 0.8             # 清空按钮模板匹配阈值（实测 1.000/噪声 0.136）
 
 
 def _apply_panel_flag(img):
-    """申请加入面板标志模板位置（打开时返回中心坐标，未打开返回 None）。"""
-    return game_map.find_template_in(img, ZUDUI_SHENQINGJIARU_ICON,
-                                     _TEMPLATE_THRESHOLD)
+    """申请加入面板标志模板位置（打开时返回匹配框 [l, t, r, b]，未打开返回 None）。
+
+    FindImages 的 x/y 是中心，rect 才是权威边界（同 _duiwumianban_rect）；
+    申请人列表区域以模板匹配框锚定——旧实现按中心+固定偏移算区域，
+    模板换宽（126x32→356x59）后偏移整体错位（2026-11-07 教训）。
+    """
+    results = FindImages.find_all_template(R.img(ZUDUI_SHENQINGJIARU_ICON),
+                                           im_source=img,
+                                           threshold=_TEMPLATE_THRESHOLD)
+    if not results:
+        return None
+    r = results[0]
+    return [int(r.rect[0]), int(r.rect[1]), int(r.rect[2]), int(r.rect[3])]
 
 
 def is_definitive_not_leader(info):
@@ -215,11 +235,12 @@ def has_pending_apply(img):
     if _apply_panel_flag(img) is not None:
         return True
     return game_map.find_template_in(img, ZUDUI_ITEM2_ICON,
-                                     ZUDUI_ITEM2_THRESHOLD) is not None
+                                     ZUDUI_ITEM2_THRESHOLD,
+                                     region=ZUDUI_ITEM_REGION) is not None
 
 
-def _apply_rows(img, fx, fy):
-    """申请人列表行（面板标志下方固定偏移区域 OCR）。
+def _apply_rows(img, box):
+    """申请人列表行（面板标志模板匹配框正下方区域 OCR）。
 
     每名申请人占一行，行内名字/等级/族群性别为同一 y 的多个 OCR 框
     （实测名字与等级同 y，旧实现按行序取首框会取到等级框——日志
@@ -227,19 +248,27 @@ def _apply_rows(img, fx, fy):
     簇内优先取非等级行作名字（等级文案可被 _parse_level 识别）。
     返回 [{"yc": 行中心 y, "name": 名字文案, "rect": 名字框}]，
     按 y 排序；排除表头行（名字/等级/族群/性别）。
-    fx/fy 为面板标志匹配中心。
+    box 为申请加入面板标志模板匹配框 [l, t, r, b]。
+
+    扫描区严格锚定模板匹配框：x ∈ [l, r]、申请人行仅取 y ∈
+    [b, b+APPLY_ROWS_BELOW]（2026-11-07 日志 10:25「任务」被当申请
+    人点击教训：区域过宽把场景任务文案识别成申请人，误开领取对话
+    框卡死流程——超出该区域的文字一律视为误识别）。表头校验条带
+    （b-APPLY_HEADER_STRIP..b）覆盖模板内嵌表头行。
 
     双校验（2026-11-07 日志 12:27 教训）：面板关闭后标志模板仍误
-    命中时，行区域读到的场景按钮文字「任务」被当申请人点击，实际
-    点中任务领取入口、误开领取对话框卡死流程。① 区域内必须见表头
-    （名字/等级/族群/性别任一）——表头在场才证明面板确实打开；
-    ② 每行必须带等级（申请人列表每行 = 名字+等级）——无等级的单行
-    文字（场景按钮标签等）不是申请人。任一校验不过返回空列表，
-    放弃本轮点击，由监控循环重查自愈（漏一批申请人无害，误点场景
-    有真实卡死危害）。
+    命中时，行区域读到的场景按钮文字被当申请人点击。① 区域内必须
+    见表头（名字/等级/族群/性别任一）——表头在场才证明面板确实
+    打开；② 每行必须带等级（申请人列表每行 = 名字+等级）——无等级
+    的单行文字（场景按钮标签等）不是申请人。任一校验不过返回空列
+    表，放弃本轮点击，由监控循环重查自愈（漏一批申请人无害，误点
+    场景有真实卡死危害）。
     """
-    l, t, r, b = (int(fx + APPLY_ROW_OFFSET[0]), int(fy + APPLY_ROW_OFFSET[1]),
-                  int(fx + APPLY_ROW_OFFSET[2]), int(fy + APPLY_ROW_OFFSET[3]))
+    l, _t0, r, b0 = (int(v) for v in box)
+    l = max(0, l)
+    r = min(img.size[0], r)
+    t = max(0, b0 - APPLY_HEADER_STRIP)
+    b = min(img.size[1], b0 + APPLY_ROWS_BELOW)
     items, _ = game_map.ocr_region(img, (l, t, r, b))
     has_header = any(h in txt for txt, rect, score in items
                      if score >= 0.55 for h in ("名字", "等级", "族群", "性别"))
@@ -251,6 +280,8 @@ def _apply_rows(img, fx, fy):
             continue
         if any(h in txt for h in ("名字", "等级", "族群", "性别")):
             continue  # 表头行
+        if (rect[1] + rect[3]) // 2 < b0:
+            continue  # 表头条带内非表头文字；申请人行只在模板底边之下
         lines.append((txt, rect))
     lines.sort(key=lambda it: it[1][1])
     clusters = []
@@ -287,6 +318,120 @@ def _same_applicant(id1, id2):
     return difflib.SequenceMatcher(None, id1, id2).ratio() >= 0.7
 
 
+def verify_apply_panel(win):
+    """诊断-测试申请加入按钮：单帧模板匹配申请加入面板 + 申请人行识别。
+
+    只读不点击（任务运行中也可用）。请打开申请加入面板（有人申请时
+    点组队按钮出现）后点一次，对照日志中的模板分数/匹配框与识别出
+    的申请人行（名字+等级+点击点坐标）是否与面板实际一致——区域
+    锚定修复（2026-11-07）的实测入口。返回 (是否成功, 描述)。
+    """
+    img = win.capture(force_activate=False)
+    if img is None:
+        return False, "窗口截图失败"
+    t0 = time.time()
+    results = FindImages.find_all_template(R.img(ZUDUI_SHENQINGJIARU_ICON),
+                                           im_source=img, threshold=0.0,
+                                           max_res=1)
+    t_match = time.time() - t0
+    if not results:
+        return False, "面板模板未匹配到任何结果——请打开申请加入面板后重试"
+    r = results[0]
+    score = float(r.confidence)
+    box = [int(r.rect[0]), int(r.rect[1]), int(r.rect[2]), int(r.rect[3])]
+    hit = score >= _TEMPLATE_THRESHOLD
+    log(f"[诊断] 申请加入面板模板: 分数 {score:.3f}（阈值 {_TEMPLATE_THRESHOLD}）"
+        f"{' 命中' if hit else ' 未命中'} @ {box}，匹配耗时 {t_match * 1000:.0f}ms", "SYS")
+    if not hit:
+        return False, (f"模板分数 {score:.3f} 未达阈值 {_TEMPLATE_THRESHOLD}"
+                       f"（匹配 {t_match * 1000:.0f}ms）——请打开申请加入面板后重试")
+    t0 = time.time()
+    rows = _apply_rows(img, box)
+    t_ocr = time.time() - t0
+    log(f"[诊断] 申请人行识别: 耗时 {t_ocr * 1000:.0f}ms，识别 {len(rows)} 行", "SYS")
+    for row in rows:
+        cx = (row["rect"][0] + row["rect"][2]) // 2
+        cy = (row["rect"][1] + row["rect"][3]) // 2
+        log(f"[诊断]   申请人: {row['name']}（身份 {row['id']}）"
+            f"点击点 ({cx},{cy})", "SYS")
+    if not rows:
+        return True, (f"面板命中（分数 {score:.3f}），未识别出申请人行"
+                      f"（列表为空或校验未过，OCR {t_ocr * 1000:.0f}ms）——见日志")
+    names = "、".join(row["name"] for row in rows)
+    return True, (f"面板命中（分数 {score:.3f}），识别申请人 {len(rows)} 名: {names}"
+                  f"（OCR {t_ocr * 1000:.0f}ms）")
+
+
+def _clear_apply_list(win, rows):
+    """点击「清空」清除申请列表残留（rows 为空时不动）。
+
+    补满缺口或申请人全部失败后调用：列表里残留的申请已是陈旧请求
+    （队伍已满 或 对方已加入其他队伍），不清掉会一直占据组队按钮的
+    申请待处理态，后续每轮重复打开面板重试失败申请（2026-11-07 用户
+    结论：缺 N 补 N、补满即清空、全失败也清空）。面板保持打开，
+    由 fill_team 的 finally 统一关闭。清空按钮未命中放弃不阻断
+    （监控循环重查自愈）。返回描述。
+    """
+    if not rows:
+        return "无残留申请"
+    pt = game_map.find_template(win, ZUDUI_QINGKONG_ICON,
+                                threshold=APPLY_QINGKONG_THRESHOLD)
+    if pt is None:
+        return "未找到清空按钮（放弃清空，下轮重查自愈）"
+    human_click(win, pt[0], pt[1])
+    time.sleep(0.3)  # 等待列表清空
+    log("[组队] 已点击「清空」清除残留申请列表", "SYS")
+    return "残留申请已清空"
+
+
+def clear_pending_apply(win):
+    """启动清场：处理组队按钮申请待处理态（zudui_item2），返回 (是否命中, 描述)。
+
+    2026-11-07 用户结论（日志 22:03 教训）：item2 命中即确定性队长
+    （只有队长收到入队申请），但申请态下组队菜单打不开、启动队伍
+    检查必失败，旧链路把队长当「队长无法判定」直接停任务。启动时的
+    申请多为陈旧请求（任务离线期间对方已加入其他队伍），按用户结论
+    直接清空：点组队按钮（item2 态点击打开申请加入面板）→ 点「清空」
+    → 关闭面板，调用方随后走正常队伍查询逻辑（缺人由监控循环喊话
+    等新申请）。申请加入面板已残留打开时直接清空。战斗中不可用
+    （按钮点不了），调用方先判战斗并顺延。
+    """
+    img = win.capture(force_activate=False)
+    if img is None:
+        return False, "窗口截图失败"
+    panel_open = game_map.find_template_in(img, ZUDUI_SHENQINGJIARU_ICON,
+                                           _TEMPLATE_THRESHOLD) is not None
+    if not panel_open:
+        pt = game_map.find_template_in(img, ZUDUI_ITEM2_ICON, ZUDUI_ITEM2_THRESHOLD,
+                                       region=ZUDUI_ITEM_REGION)
+        if pt is None:
+            return False, "无申请待处理态"
+        record_leader_status(True)  # item2 命中即确定性队长
+        human_click(win, pt[0], pt[1])
+        for _ in range(APPLY_PANEL_WAIT_TRIES):
+            time.sleep(0.5)
+            img = win.capture(force_activate=False)
+            if img is not None and game_map.find_template_in(
+                    img, ZUDUI_SHENQINGJIARU_ICON, _TEMPLATE_THRESHOLD) is not None:
+                panel_open = True
+                break
+        if not panel_open:
+            return True, "点击申请待处理态按钮后申请加入面板未打开（未清空）"
+    # 面板已开：点「清空」（启动清场；空列表点清空无害）
+    pt = game_map.find_template(win, ZUDUI_QINGKONG_ICON,
+                                threshold=APPLY_QINGKONG_THRESHOLD)
+    if pt is not None:
+        human_click(win, pt[0], pt[1])
+        time.sleep(0.3)
+        log("[组队] 启动清场：已点击「清空」清除申请列表", "SYS")
+    ok_close, close_info = _close_apply_panel(win)
+    if not ok_close:
+        log(f"[组队] 启动清场后关闭申请加入面板失败: {close_info}", "WARN")
+    if pt is None:
+        return True, "申请待处理态已处理（清空按钮未命中，仅关闭面板）"
+    return True, "已清空申请列表并关闭面板"
+
+
 def fill_team(win, target=5, max_allow=1):
     """从申请加入面板允许申请人补齐队伍（通用，五倍/修罗复用）。
 
@@ -298,9 +443,13 @@ def fill_team(win, target=5, max_allow=1):
        等待检测「对方已经加入其他队伍」提示（屏幕中间；出现则点掉、
        该申请人记失败换下一个）→ 成功判定 = 无失败提示且该行从
        列表消失（行仍在说明允许未生效，同样换下一个）
-    3. 结束关闭申请加入面板（不留面板遮挡后续流程），返回
-       (是否允许了至少一人, 描述)；调用方随后重试领取，以游戏
-       的「前途凶险」对话框作最终裁判（每允许一人重试一次）
+    3. 结束收尾（2026-11-07 用户结论）：max_allow = 队伍缺口（调用方
+       按最近一次人数检查传入，缺 N 补 N）——补满缺口或申请人全部
+       失败后点击「清空」（zudui_qingkong）清除残留申请（队伍已满/
+       对方已加入其他队伍的陈旧请求，不清会一直占据申请待处理态、
+       每轮重复失败尝试），再关闭面板（不留面板遮挡后续流程）。
+       返回 (是否允许了至少一人, 描述)；调用方随后重查人数，以游戏
+       的「前途凶险」对话框作最终裁判。
     """
     try:
         return _fill_team_loop(win, target, max_allow)
@@ -321,12 +470,14 @@ def _fill_team_loop(win, target, max_allow):
         # 面板未开：点击组队按钮。按钮为申请待处理态（zudui_item2，
         # 有人申请加入）时点击直接弹出申请加入面板——该状态即确定性
         # 队长（用户实测）；普通态点击弹出组队菜单
-        pt = game_map.find_template(win, ZUDUI_ITEM2_ICON, ZUDUI_ITEM2_THRESHOLD)
+        pt = game_map.find_template(win, ZUDUI_ITEM2_ICON, ZUDUI_ITEM2_THRESHOLD,
+                                    region=ZUDUI_ITEM_REGION)
         if pt is not None:
             record_leader_status(True)
             log("[组队] 组队按钮为申请待处理态（zudui_item2），队长确认，点击打开申请面板", "INFO")
         else:
-            pt = game_map.find_template(win, ZUDUI_ITEM_ICON, _TEMPLATE_THRESHOLD)
+            pt = game_map.find_template(win, ZUDUI_ITEM_ICON, _TEMPLATE_THRESHOLD,
+                                        region=ZUDUI_ITEM_REGION)
             if pt is None:
                 return False, "未找到组队按钮（zudui_item/zudui_item2）"
         human_click(win, pt[0], pt[1])
@@ -350,6 +501,7 @@ def _fill_team_loop(win, target, max_allow):
                     # 在允许成功后列表整体上移时失效（实测误判失败并
                     # 误跳过下一个人），不能作键；身份用模糊比对
     allowed = 0
+    rows_last = []  # 循环退出时最近一次行识别（补满/耗尽后清空判定用）
     while allowed < max_allow:
         # 每轮迭代重截帧并重查面板标志：面板可能在两轮迭代间关闭
         # （申请撤回/前次允许实际生效），标志模板仍会误命中场景
@@ -357,20 +509,23 @@ def _fill_team_loop(win, target, max_allow):
         # ——标志消失即停止点选，绝不在面板已关闭的画面上点行
         img = win.capture(force_activate=False)
         if img is None:
-            break
+            return True, f"已允许 {allowed} 名申请人（截图失败，未清空列表）"
         flag = _apply_panel_flag(img)
         if flag is None:
             return (allowed > 0,
                     f"申请加入面板已关闭（已允许 {allowed} 人）"
                     if allowed else "申请加入面板已关闭（无申请人处理）")
-        rows = _apply_rows(img, flag[0], flag[1])
+        rows = _apply_rows(img, flag)
+        rows_last = rows
         tgt = next((r for r in rows
                     if not any(_same_applicant(r["id"], fid) for fid in failed)),
                    None)
         if tgt is None:
+            # 无可选申请人（列表空或全部失败）：残留的失败申请清空
+            clear_info = _clear_apply_list(win, rows)
             return (allowed > 0,
-                    f"已允许 {allowed} 名申请人后无可选申请人"
-                    if allowed else "申请列表为空或全部失败")
+                    f"已允许 {allowed} 名申请人后无可选申请人（{clear_info}）"
+                    if allowed else f"申请列表为空或全部失败（{clear_info}）")
         rect0 = tgt["rect"]
         human_click(win, (rect0[0] + rect0[2]) // 2, (rect0[1] + rect0[3]) // 2)
         time.sleep(0.3)  # 等待行选中态刷新
@@ -398,18 +553,28 @@ def _fill_team_loop(win, target, max_allow):
             time.sleep(0.5)  # 失败提示自动消失（不点屏幕中间——用户确认无需点击）
             continue
         # 成功校验：该申请人从列表消失（按身份模糊比对——允许成功后
-        # 列表整体上移，y 坐标不能作判据）
+        # 列表整体上移，y 坐标不能作判据）。面板可能已关闭（允许生效），
+        # 行识别须重查当前帧的标志匹配框，不复用上一帧的 box——
+        # 面板关闭后旧框位置读到的场景文字会模糊命中身份（0.7 相似度）
+        # 误判「仍在」浪费重试
         img2 = win.capture(force_activate=False)
-        rows2 = _apply_rows(img2, flag[0], flag[1]) if img2 is not None else []
+        rows2 = []
+        if img2 is not None:
+            flag2 = _apply_panel_flag(img2)
+            if flag2 is not None:
+                rows2 = _apply_rows(img2, flag2)
         if any(_same_applicant(r["id"], tgt["id"]) for r in rows2):
             log(f"[组队] 允许「{tgt['name']}」后该申请人仍在，视为未生效换下一个", "WARN")
             failed.add(tgt["id"])
             continue
         allowed += 1
+        rows_last = rows2
         log(f"[组队] 已允许「{tgt['name']}」加入队伍（本轮第 {allowed} 人）", "SYS")
         # 下一轮迭代顶部重截帧并重查面板标志（img 不复用，防陈旧帧
         # 误导行识别与标志判定）
-    return True, f"已允许 {allowed} 名申请人"
+    # allowed == max_allow：缺口补满，列表里剩余申请为陈旧请求 → 清空
+    clear_info = _clear_apply_list(win, rows_last)
+    return True, f"已允许 {allowed} 名申请人（{clear_info}）"
 
 
 def _wait_menu(win):
@@ -442,7 +607,8 @@ def _ensure_menu_open(win):
         return False, None
     if _is_menu_open(img):
         return True, img
-    pt = game_map.find_template(win, ZUDUI_ITEM_ICON, _TEMPLATE_THRESHOLD)
+    pt = game_map.find_template(win, ZUDUI_ITEM_ICON, _TEMPLATE_THRESHOLD,
+                                region=ZUDUI_ITEM_REGION)
     if pt is None:
         # 按钮可能处于申请待处理态（zudui_item2，有人申请加入）：
         # 该状态点击打开的是申请加入面板而非菜单，菜单打不开——直接
@@ -451,7 +617,8 @@ def _ensure_menu_open(win):
         # 其余调用方）
         diag = win.capture(force_activate=False)
         if diag is not None and game_map.find_template_in(
-                diag, ZUDUI_ITEM2_ICON, ZUDUI_ITEM2_THRESHOLD) is not None:
+                diag, ZUDUI_ITEM2_ICON, ZUDUI_ITEM2_THRESHOLD,
+                region=ZUDUI_ITEM_REGION) is not None:
             log("[组队] 组队按钮为申请待处理态（zudui_item2），菜单无法打开，应先补人", "INFO")
             return False, None
         # 诊断：组队按钮两个形态都未命中——记录最佳匹配分（区分「按钮
@@ -462,7 +629,8 @@ def _ensure_menu_open(win):
                 score, _pos = game_map.best_match_in(diag, ZUDUI_ITEM_ICON)
                 score2, _ = game_map.best_match_in(diag, ZUDUI_ITEM2_ICON)
                 log(f"[组队] 组队按钮未命中：zudui_item 最佳 {score:.2f}、"
-                    f"zudui_item2 最佳 {score2:.2f}（阈值 {_TEMPLATE_THRESHOLD}），"
+                    f"zudui_item2 最佳 {score2:.2f}"
+                    f"（item 阈值 {_TEMPLATE_THRESHOLD} / item2 阈值 {ZUDUI_ITEM2_THRESHOLD}），"
                     f"现场已存 tmp_err_img.png", "WARN")
                 try:
                     diag.save("tmp_err_img.png")
@@ -983,7 +1151,8 @@ def _close_menu(win):
     img = win.capture(force_activate=False)
     if img is None or not _is_menu_open(img):
         return True, "组队菜单本就未打开"
-    pt = game_map.find_template_in(img, ZUDUI_ITEM_ICON, _TEMPLATE_THRESHOLD)
+    pt = game_map.find_template_in(img, ZUDUI_ITEM_ICON, _TEMPLATE_THRESHOLD,
+                                   region=ZUDUI_ITEM_REGION)
     if pt is None:
         return False, "未定位到组队按钮"
     human_click(win, pt[0], pt[1])
@@ -1143,6 +1312,19 @@ def classify_leader_with_panel(win):
     if not _is_panel_open(win):
         ok, info = open_team_panel(win)
         if not ok:
+            # 申请待处理态（zudui_item2/申请加入面板残留）下菜单打不开、
+            # 面板无法打开，但该证据即确定性队长（只有队长收到入队
+            # 申请）——不得按「队长无法判定」停任务（2026-11-07 日志
+            # 22:03 教训）。返回 leader 但面板未开：调用方成员读取按
+            # 宽松处理（读不到不拦截）。
+            img = win.capture(force_activate=False)
+            if img is not None and (game_map.find_template_in(
+                    img, ZUDUI_ITEM2_ICON, ZUDUI_ITEM2_THRESHOLD,
+                    region=ZUDUI_ITEM_REGION) is not None
+                    or game_map.find_template_in(img, ZUDUI_SHENQINGJIARU_ICON,
+                                                 _TEMPLATE_THRESHOLD) is not None):
+                record_leader_status(True)
+                return "leader", "队长（组队按钮为申请待处理态，确定性队长）"
             return "not_leader", info
     img = win.capture(force_activate=False)
     if img is None:
@@ -1272,6 +1454,16 @@ def check_team_min(win, min_members=None, allow_kick=False):
             # 面板打不开等瞬态类保留「队长无法判定」表述
             if "未组队" in info:
                 return "not_leader", info, []
+            # 申请待处理态兜底（2026-11-07 日志 22:17 教训）：item2 按钮
+            # 带动效帧间抖动，首帧 has_pending_apply 可能漏检（22:17:14
+            # 首帧漏、菜单路径帧命中），菜单路径因申请态打不开而失败
+            # 时却返回「队长无法判定」——申请态即确定性队长，重查 2 帧
+            # 仍按人数待补返回交监控循环补人，绝不把队长当无法判定
+            for _ in range(2):
+                img1 = win.capture(force_activate=False)
+                if img1 is not None and has_pending_apply(img1):
+                    record_leader_status(True)
+                    return "wait", "队伍人数待补（有申请人待处理，确定性队长）", []
             return "not_leader", f"队长无法判定（{info}）", []
     img = win.capture(force_activate=False)
     if img is None:

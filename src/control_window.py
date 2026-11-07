@@ -982,6 +982,7 @@ class ControlWindow(WebWindow):
         self.expose(self.verify_jiguan)
         self.expose(self.verify_position)
         self.expose(self.verify_dialog_detect)
+        self.expose(self.verify_apply_panel)
         self.expose(self.verify_team_check)
         self.expose(self.verify_team_create)
         self.expose(self.verify_zuoqi_open)
@@ -2763,6 +2764,47 @@ class ControlWindow(WebWindow):
                 ok_js = "true" if ok else "false"
                 self.webview_instance.evaluate_js(
                     f"if(window.onDialogDetectVerifyResult){{window.onDialogDetectVerifyResult({ok_js}, {json.dumps(info)});}}")
+            except Exception:
+                pass
+
+    def verify_apply_panel(self):
+        """诊断-测试申请加入按钮：单帧模板匹配申请加入面板 + 申请人行
+        识别（只读不点击，任务运行中可用）。请打开申请加入面板（有人
+        申请时点组队按钮出现）后点一次，对照日志中的模板分数/匹配框
+        与识别出的申请人行（名字+等级+点击点坐标）是否与面板实际一致。
+        """
+        if self._verifying:
+            return {"status": "error", "msg": "验证进行中，请稍候"}
+        win = game.find_main_window()
+        if win is None:
+            return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
+        self._verifying = True
+        threading.Thread(target=self._run_apply_panel_verify, args=(win,),
+                         daemon=True, name="apply-panel-verify").start()
+        return {"status": "success",
+                "msg": "正在测试申请加入面板识别（模板匹配+申请人行OCR），结果见下方与日志"}
+
+    def _run_apply_panel_verify(self, win):
+        """测试申请加入线程体：只读模板匹配+申请人行 OCR，结果回推页面与日志窗。"""
+        from . import team  # 延迟导入：与其余验证模块保持一致
+        try:
+            ok, info = team.verify_apply_panel(win)
+        except Exception as e:
+            ok, info = False, f"验证异常: {e}"
+        try:
+            self.add_logs([f"[验证] 结果: {info}"])
+        except Exception:
+            pass
+        self._notify_apply_panel_verify_result(ok, info)
+        self._verifying = False
+
+    def _notify_apply_panel_verify_result(self, ok, info):
+        """测试申请加入结果回推页面（诊断-测试申请加入行的结果文案）。"""
+        if self.webview_instance:
+            try:
+                ok_js = "true" if ok else "false"
+                self.webview_instance.evaluate_js(
+                    f"if(window.onApplyPanelVerifyResult){{window.onApplyPanelVerifyResult({ok_js}, {json.dumps(info)});}}")
             except Exception:
                 pass
 

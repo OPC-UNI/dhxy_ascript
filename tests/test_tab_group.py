@@ -637,6 +637,8 @@ def test_startup_check_single_panel_open(monkeypatch):
     import src.team as team_mod
     import src.battle as battle_mod
     monkeypatch.setattr(battle_mod, "is_in_battle", lambda win: False)
+    monkeypatch.setattr(team_mod, "clear_pending_apply",
+                        lambda win: (False, "无申请待处理态"))
     opens = []
 
     def classify(win):
@@ -660,6 +662,8 @@ def test_startup_check_unclear_rechecks_without_reopen(monkeypatch):
     import src.battle as battle_mod
     import time as time_mod
     monkeypatch.setattr(battle_mod, "is_in_battle", lambda win: False)
+    monkeypatch.setattr(team_mod, "clear_pending_apply",
+                        lambda win: (False, "无申请待处理态"))
     monkeypatch.setattr(time_mod, "sleep", lambda s: None)
     calls = {"n": 0}
 
@@ -675,6 +679,23 @@ def test_startup_check_unclear_rechecks_without_reopen(monkeypatch):
     ok, _info, names = tab_group.startup_check(_ScanWin())
     assert ok and calls["n"] == 2
     assert names is None
+
+
+def test_startup_check_clears_pending_apply_first(monkeypatch):
+    """启动检查先清申请待处理态再判队长（2026-11-07 22:03 教训：
+    item2 命中即确定性队长，不清空则菜单打不开、判定必失败停任务）。"""
+    import src.team as team_mod
+    import src.battle as battle_mod
+    order = []
+    monkeypatch.setattr(battle_mod, "is_in_battle", lambda win: False)
+    monkeypatch.setattr(team_mod, "clear_pending_apply",
+                        lambda win: order.append("clear") or (True, "已清空申请列表并关闭面板"))
+    monkeypatch.setattr(team_mod, "classify_leader_with_panel",
+                        lambda win: order.append("classify") or ("leader", "是队长"))
+    monkeypatch.setattr(team_mod, "panel_member_names", lambda img: [(0, "队长甲")])
+    monkeypatch.setattr(team_mod, "close_team_panel", lambda win: (True, ""))
+    ok, _info, _names = tab_group.startup_check(_ScanWin())
+    assert ok and order == ["clear", "classify"]
 
 
 def test_startup_member_check_writes_group_detected(monkeypatch):
@@ -836,6 +857,8 @@ def test_startup_check_merges_name_reread(monkeypatch):
     import src.battle as battle_mod
     import time as time_mod
     monkeypatch.setattr(battle_mod, "is_in_battle", lambda win: False)
+    monkeypatch.setattr(team_mod, "clear_pending_apply",
+                        lambda win: (False, "无申请待处理态"))
     monkeypatch.setattr(time_mod, "sleep", lambda s: None)
     monkeypatch.setattr(team_mod, "classify_leader_with_panel",
                         lambda win: ("leader", "是队长（面板可见「解散队伍」）"))

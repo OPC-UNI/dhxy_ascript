@@ -6,6 +6,7 @@ from ascript.windows.system import R
 from ascript.windows.screen.find_images import FindImages
 from .app_utils import log, human_click
 from . import app_utils  # 高性能模式共享设施（high_perf 开关等）
+from . import map as game_map  # 找图能力复用（TRAY_BTN_REGION 按钮条带等）
 
 # 背包按钮模板（res/img/bag.png，34x34，实测匹配度 0.999）
 BAG_ICON = "bag.png"
@@ -28,19 +29,48 @@ BOX_ONE_CLOSE_ICON = "box_one_close.png"
 SLOT_OFFSETS = [0, 35, 70, 105]
 
 
-def _match_template(win, icon, threshold=0.8):
+class _RegionMatch:
+    """区域匹配结果的轻量包装（字段与 MatchResult 对齐：x/y/center/
+    rect/confidence；调用方只用到 x/y/confidence）。"""
+
+    def __init__(self, x, y, rect, confidence):
+        self.x, self.y = x, y
+        self.center = (x, y)
+        self.rect = rect
+        self.confidence = confidence
+
+
+def _match_template(win, icon, threshold=0.8, region=None):
     """截一帧（不激活窗口）并在帧上匹配模板，返回首个匹配结果或 None。
 
     FindImages 的 im_source=Window 路径内部调用 win.capture() 且默认
     force_activate=True——每次匹配都先激活游戏窗口抢前台焦点（激活是
     耗时操作，且会干扰用户当前正在使用的窗口）。统一改为先截帧再在
     帧上匹配，与性能规则「轮询截图一律 force_activate=False」一致。
+    region=(l,t,r,b)：限定搜索条带（裁剪后匹配、坐标仍为全图坐标），
+    条带内未命中返回 None 不做全帧兜底——固定位置按钮（背包等）用
+    map.TRAY_BTN_REGION（2026-11-07 用户标定右下角托盘区）。
     """
     img = win.capture(force_activate=False)
     if img is None:
         return None
-    results = FindImages.find_all_template(R.img(icon), im_source=img, threshold=threshold)
-    return results[0] if results else None
+    if region is None:
+        results = FindImages.find_all_template(R.img(icon), im_source=img,
+                                               threshold=threshold)
+        return results[0] if results else None
+    l, t, r, b = region
+    l, t = max(0, int(l)), max(0, int(t))
+    r, b = min(img.size[0], int(r)), min(img.size[1], int(b))
+    crop = img.crop((l, t, r, b))
+    results = FindImages.find_all_template(R.img(icon), im_source=crop,
+                                           threshold=threshold)
+    if not results:
+        return None
+    res = results[0]
+    return _RegionMatch(res.x + l, res.y + t,
+                        [res.rect[0] + l, res.rect[1] + t,
+                         res.rect[2] + l, res.rect[3] + t],
+                        res.confidence)
 
 
 def _match_all_template(win, icon, threshold=0.8):
@@ -56,7 +86,7 @@ def find_and_click_bag(win):
 
     返回 (是否成功, 描述)。
     """
-    r = _match_template(win, BAG_ICON)
+    r = _match_template(win, BAG_ICON, region=game_map.TRAY_BTN_REGION)
     if r is None:
         return False, "未找到背包按钮"
     human_click(win, r.x, r.y)
@@ -216,7 +246,7 @@ def open_bag(win):
             else:
                 log(f"[背包][高性能] {desc}，回退识别点击", "WARN")
         if not via_hotkey:
-            r = _match_template(win, BAG_ICON)
+            r = _match_template(win, BAG_ICON, region=game_map.TRAY_BTN_REGION)
             if r is None:
                 return False, "未找到背包按钮"
             human_click(win, r.x, r.y)

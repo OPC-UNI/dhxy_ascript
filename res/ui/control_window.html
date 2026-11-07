@@ -1121,7 +1121,11 @@
                         <button id="btn-verify-dialog-detect" class="btn" onclick="verifyDialogDetect()">测试对话框识别</button>
                         <span class="verify-result" id="dialog-detect-verify-result"></span>
                     </div>
-                    <div class="group-hint">机关模板：对当前游戏画面逐一测试黄/蓝/红三个机关模板，打印全帧最佳匹配度与位置日志（只读不点击），请将游戏画面停在封印机关场景再测试。坐标：读取游戏左上角当前地图名与坐标并打印日志（只读）。对话框识别：单帧模板匹配判定对话框是否在场并计时、同时计时对话区 OCR——请分别在有对话框（如巫医/任务对话）和无对话框场景各点一次，对照日志中模板分数与两段耗时（方案验证：模板未命中即跳过对话 OCR）。三项任务运行中也可使用。</div>
+                    <div class="verify-row">
+                        <button id="btn-verify-apply-panel" class="btn" onclick="verifyApplyPanel()">测试申请加入</button>
+                        <span class="verify-result" id="apply-panel-verify-result"></span>
+                    </div>
+                    <div class="group-hint">机关模板：对当前游戏画面逐一测试黄/蓝/红三个机关模板，打印全帧最佳匹配度与位置日志（只读不点击），请将游戏画面停在封印机关场景再测试。坐标：读取游戏左上角当前地图名与坐标并打印日志（只读）。对话框识别：单帧模板匹配判定对话框是否在场并计时、同时计时对话区 OCR——请分别在有对话框（如巫医/任务对话）和无对话框场景各点一次，对照日志中模板分数与两段耗时（方案验证：模板未命中即跳过对话 OCR）。申请加入：单帧匹配申请加入面板并识别申请人行（名字+等级+点击点坐标，只读）——请打开申请加入面板（有人申请时点组队按钮出现）再点，对照日志中识别出的申请人是否与面板一致。四项任务运行中也可使用。</div>
                 </div>
                 <div class="group-box">
                     <div class="group-title">截屏通道</div>
@@ -1310,6 +1314,8 @@
     const positionVerifyResultEl = document.getElementById('position-verify-result');
     const btnVerifyDialogDetect = document.getElementById('btn-verify-dialog-detect');
     const dialogDetectVerifyResultEl = document.getElementById('dialog-detect-verify-result');
+    const btnVerifyApplyPanel = document.getElementById('btn-verify-apply-panel');
+    const applyPanelVerifyResultEl = document.getElementById('apply-panel-verify-result');
     const btnVerifyTeamCheck = document.getElementById('btn-verify-team-check');
     const teamCheckVerifyResultEl = document.getElementById('team-check-verify-result');
     const btnVerifyTeamCreate = document.getElementById('btn-verify-team-create');
@@ -3074,6 +3080,35 @@
         btnVerifyDialogDetect.disabled = false;
         dialogDetectVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
         dialogDetectVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+    };
+
+    async function verifyApplyPanel() {
+        if (verifying) return;
+        verifying = true;
+        btnVerifyApplyPanel.disabled = true;
+        applyPanelVerifyResultEl.style.color = 'var(--text)';
+        applyPanelVerifyResultEl.innerText = '测试中...';
+        try {
+            const r = await callPython('verify_apply_panel');
+            if (!r || r.status !== 'success') {
+                applyPanelVerifyResultEl.style.color = 'var(--danger)';
+                applyPanelVerifyResultEl.innerText = (r && r.msg) || '测试请求失败';
+                verifying = false;
+                btnVerifyApplyPanel.disabled = false;
+            }
+            // 成功：等待 Python 侧 onApplyPanelVerifyResult 回推最终结果
+        } catch (e) {
+            applyPanelVerifyResultEl.style.color = 'var(--danger)';
+            applyPanelVerifyResultEl.innerText = '测试请求异常';
+            verifying = false;
+            btnVerifyApplyPanel.disabled = false;
+        }
+    }
+    window.onApplyPanelVerifyResult = function (ok, info) {
+        verifying = false;
+        btnVerifyApplyPanel.disabled = false;
+        applyPanelVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        applyPanelVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
     async function verifyTeamCheck() {

@@ -31,6 +31,13 @@ from ascript.windows.screen.find_images import FindImages
 from .app_utils import human_click, log
 from . import app_utils  # 高性能模式共享设施（固定位置缓存点击）
 
+# 右下角功能按钮托盘搜索条带（组队/座骑/背包按钮固定位置；
+# 2026-11-07 用户标定 900,737-1378,831，含余量）：按钮位置固定，
+# 全屏匹配多余（全帧 ~137ms vs 条带 ~20ms，且场景其他位置可能出现
+# 近似图案误匹配）；条带内未命中即按钮不在该位置=场景不对，
+# 不做全帧兜底
+TRAY_BTN_REGION = (900, 737, 1378, 831)
+
 # 地图位置文字区域（窗口相对坐标，左上角）
 MAP_POS_REGION = (45, 60, 222, 90)
 # 世界地图按钮模板（实测匹配 0.969）
@@ -291,29 +298,44 @@ def is_at_position(pos, name, x, y, tolerance=5):
             and abs(py - y) <= tolerance)
 
 
-def find_template(win, icon, threshold=0.8):
+def find_template(win, icon, threshold=0.8, region=None):
     """在游戏窗口内查找模板，返回首个匹配的 (x, y) 窗口相对坐标或 None。
 
     先截一帧（force_activate=False）再在帧上匹配：FindImages 的
     im_source=Window 路径内部调用 win.capture() 且默认 force_activate=True，
     每次匹配都激活游戏窗口抢前台焦点（耗时且干扰用户其他窗口），
     违反性能规则「轮询截图一律 force_activate=False」。
+    region=(l,t,r,b) 同 find_template_in 的搜索条带。
     """
     img = win.capture(force_activate=False)
     if img is None:
         return None
-    return find_template_in(img, icon, threshold)
+    return find_template_in(img, icon, threshold, region=region)
 
 
-def find_template_in(img, icon, threshold=0.8):
+def find_template_in(img, icon, threshold=0.8, region=None):
     """在已捕获图像内查找模板，返回首个匹配的 (x, y) 图像相对坐标或 None。
 
     与 find_template 同模板同阈值，但不重新截窗（FindImages 对 Window
     源每次调用内部重新 win.capture，一帧多模板场景如战斗判定会重复截
     4 次窗；此函数复用调用方已抓帧，行为等价）。
+    region=(l,t,r,b)：限定搜索条带（裁剪后匹配、返回坐标仍为全图坐标），
+    条带内未命中返回 None，不做全帧兜底——条带是标定资产，目标不在
+    条带内即场景不对（性能规则：全帧 ~137ms vs 条带 ~20ms）。裁剪内
+    匹配分数与全图严格一致（TM_CCOEFF_NORMED），无需重标定阈值。
     """
-    results = FindImages.find_all_template(R.img(icon), im_source=img, threshold=threshold)
-    return (results[0].x, results[0].y) if results else None
+    source = img
+    ox = oy = 0
+    if region is not None:
+        l, t, r, b = region
+        l, t = max(0, int(l)), max(0, int(t))
+        r, b = min(img.size[0], int(r)), min(img.size[1], int(b))
+        source = img.crop((l, t, r, b))
+        ox, oy = l, t
+    results = FindImages.find_all_template(R.img(icon), im_source=source, threshold=threshold)
+    if not results:
+        return None
+    return results[0].x + ox, results[0].y + oy
 
 
 def best_match_in(img, icon):

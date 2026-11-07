@@ -113,7 +113,8 @@ def _close_menu_if_open(win):
     img = win.capture(force_activate=False)
     if img is None or not _menu_open_in(img):
         return True, "菜单本就未打开"
-    pt = game_map.find_template_in(img, ZUOQI_ICON, _TEMPLATE_THRESHOLD)
+    pt = game_map.find_template_in(img, ZUOQI_ICON, _TEMPLATE_THRESHOLD,
+                                   region=game_map.TRAY_BTN_REGION)
     if pt is None:
         return False, "菜单仍打开且未定位到座骑按钮"
     human_click(win, pt[0], pt[1])
@@ -147,7 +148,8 @@ def open_feixingyuqi_panel(win):
     img = win.capture(force_activate=False)
     if img is None:
         return False, "窗口截图失败"
-    pt = game_map.find_template_in(img, ZUOQI_ICON, _TEMPLATE_THRESHOLD)
+    pt = game_map.find_template_in(img, ZUOQI_ICON, _TEMPLATE_THRESHOLD,
+                                   region=game_map.TRAY_BTN_REGION)
     if pt is None:
         return False, "未找到座骑按钮（zuoqi）"
     human_click(win, pt[0], pt[1])

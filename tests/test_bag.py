@@ -89,3 +89,41 @@ def test_due_use_fail_no_mark(monkeypatch):
     assert not ran and "未找到" in info
     assert calls == [win]
     assert marks == []  # 失败不记录，下轮寻路重试
+
+
+# ---- 背包按钮搜索条带（2026-11-07 用户标定右下角托盘区） ----
+
+def test_match_template_region_offsets_coords(monkeypatch):
+    """区域匹配返回全图坐标：带内命中偏移正确、带外不搜。"""
+    import numpy as np
+    from PIL import Image
+    rng = np.random.default_rng(20261107)
+    frame = Image.fromarray(rng.integers(0, 256, (831, 1378, 3),
+                                         dtype=np.uint8))
+    import src.map as game_map
+    frame.paste(Image.open(__import__("ascript.windows.system",
+                                      fromlist=["R"]).R.img(bag.BAG_ICON)),
+                (1000, 750))
+
+    class _W:
+        def capture(self, force_activate=False):
+            return frame
+
+    r = bag._match_template(_W(), bag.BAG_ICON,
+                            region=game_map.TRAY_BTN_REGION)
+    assert r is not None
+    assert r.x >= 1000 and r.y >= 750
+    assert r.confidence >= 0.8
+    # 带外不搜：同帧左侧再贴一张，条带匹配不得命中左侧
+    frame2 = frame.copy()
+    frame2.paste(Image.open(__import__("ascript.windows.system",
+                                       fromlist=["R"]).R.img(bag.BAG_ICON)),
+                 (200, 100))
+
+    class _W2:
+        def capture(self, force_activate=False):
+            return frame2
+
+    r2 = bag._match_template(_W2(), bag.BAG_ICON,
+                             region=game_map.TRAY_BTN_REGION)
+    assert r2.x >= 1000 and r2.y >= 750  # 仍只命中带内，不命中带外

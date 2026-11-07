@@ -61,7 +61,7 @@ def _clicker(monkeypatch, find_in=None, find_win=None, panel_seq=None,
                         or (True, "座骑菜单已关闭"))
     monkeypatch.setattr(zuoqi, "time", _FakeTime())
 
-    def fake_find_in(img, icon, threshold=0.8):
+    def fake_find_in(img, icon, threshold=0.8, region=None):
         if find_in is None:
             return None
         return find_in(icon)

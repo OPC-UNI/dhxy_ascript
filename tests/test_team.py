@@ -919,3 +919,413 @@ def test_auto_kick_overdue_excludes_matched_tabs(monkeypatch):
     assert n == 1
     assert kicked == [(4, "乙")]   # 甲是自家 Tab：归队 pass 处理，不请离
     team.reset_away_tracking()
+
+
+# ---- 申请加入面板申请人行识别（_apply_rows）区域锚定（2026-11-07 10:25 教训） ----
+# 「任务」场景文案被当申请人点击、误开领取对话框卡死流程。修复后扫描区
+# 严格锚定面板标志模板匹配框：x ∈ [l, r]、申请人行仅取 y ∈ [b, b+300]，
+# 超出区域文字一律视为误识别；表头校验条带 b-25..b 覆盖新模板（356x59）
+# 内嵌表头行（名字/等级/族群/性别，模板内 y41-58）。
+
+class _FakeFrame:
+    size = (1378, 831)
+
+
+def _apply_rows_with(monkeypatch, box, items):
+    """替换 team.game_map.ocr_region 返回指定 items，记录实际请求区域。"""
+    calls = []
+
+    def stub(img, region):
+        calls.append(region)
+        return items, None
+
+    monkeypatch.setattr(team.game_map, "ocr_region", stub)
+    rows = team._apply_rows(_FakeFrame(), box)
+    return calls, rows
+
+
+def _apply_items_from_incident_screenshot():
+    """2026-11-07 申请加入面板实测 OCR 行（模板框 [116,86,472,145]，1378x831 帧）。
+
+    表头行内嵌模板底边（y127-147），申请人行在模板正下方（y158-178）；
+    场景干扰：NPC 对话 x17-112（区域外）、面板按钮行 y445-473
+    （b+300=445 之外）。
+    """
+    return [
+        ("族群性别", (354, 128, 436, 147), 0.89),          # 表头（条带内）
+        ("夜咏青灯@老北归", (177, 159, 271, 176), 0.99),    # 申请人名字
+        ("3转120级", (302, 161, 358, 175), 1.0),           # 申请人等级
+        ("魔", (371, 161, 386, 175), 0.97),                # 族群
+        ("女", (413, 161, 426, 175), 1.0),                 # 性别
+    ]
+
+
+def test_apply_rows_region_anchored_to_template_box(monkeypatch):
+    """扫描区域必须是模板框 x 全宽、底边向上 25 表头条带、向下 300。"""
+    calls, _rows = _apply_rows_with(monkeypatch, [116, 86, 472, 145],
+                                    _apply_items_from_incident_screenshot())
+    assert calls == [(116, 120, 472, 445)]
+
+
+def test_apply_rows_detects_applicant_below_template(monkeypatch):
+    _, rows = _apply_rows_with(monkeypatch, [116, 86, 472, 145],
+                               _apply_items_from_incident_screenshot())
+    assert len(rows) == 1
+    r = rows[0]
+    assert "老北归" in r["name"]
+    assert tuple(r["rect"]) == (177, 159, 271, 176)
+    assert "3转120级" in r["id"]
+
+
+def test_apply_rows_no_header_returns_empty(monkeypatch):
+    """表头校验：区域内无表头关键字 → 面板未真正打开 → 空列表。"""
+    items = [
+        ("夜咏青灯@老北归", (177, 159, 271, 176), 0.99),
+        ("3转120级", (302, 161, 358, 175), 1.0),
+    ]
+    _calls, rows = _apply_rows_with(monkeypatch, [116, 86, 472, 145], items)
+    assert rows == []
+
+
+def test_apply_rows_row_above_template_bottom_excluded(monkeypatch):
+    """条带内非表头文字（表头 OCR 误读）不得进入行候选。"""
+    items = [
+        ("族群性别", (354, 128, 436, 147), 0.89),
+        ("申请加入", (242, 95, 335, 126), 1.0),   # 标题误读进条带
+        ("夜咏青灯@老北归", (177, 159, 271, 176), 0.99),
+        ("3转120级", (302, 161, 358, 175), 1.0),
+    ]
+    _, rows = _apply_rows_with(monkeypatch, [116, 86, 472, 145], items)
+    assert len(rows) == 1
+
+
+def test_apply_rows_row_without_level_excluded(monkeypatch):
+    """每行必须带等级：场景按钮文字（如「任务」）不是申请人。"""
+    items = [
+        ("族群性别", (354, 128, 436, 147), 0.89),
+        ("任务", (177, 159, 271, 176), 0.99),   # 无等级行
+    ]
+    _, rows = _apply_rows_with(monkeypatch, [116, 86, 472, 145], items)
+    assert rows == []
+
+
+def test_apply_rows_region_clamped_to_frame(monkeypatch):
+    """模板框超出帧边界时区域截断，不产生负坐标。"""
+    calls, _rows = _apply_rows_with(monkeypatch, [-50, 100, 300, 159],
+                                    _apply_items_from_incident_screenshot())
+    assert calls == [(0, 134, 300, 459)]
+
+
+# ---- 诊断-测试申请加入（verify_apply_panel，只读） ----
+
+class _FrameWin:
+    def capture(self, force_activate=False):
+        return Image.fromarray(np.zeros((831, 1378, 3), dtype=np.uint8))
+
+
+class _FakeMatch:
+    def __init__(self, confidence, rect):
+        self.confidence = confidence
+        self.rect = rect
+
+
+def test_verify_apply_panel_reports_rows(monkeypatch):
+    calls = []
+    monkeypatch.setattr(team, "log", lambda *a, **k: None)
+    monkeypatch.setattr(team.FindImages, "find_all_template",
+                        lambda *a, **k: [_FakeMatch(0.95, [116, 86, 472, 145])])
+
+    def _rows(img, box):
+        calls.append(box)
+        return [{"yc": 168, "name": "夜咏青灯@老北归",
+                 "id": "夜咏青灯老北归3转120级", "rect": [177, 159, 271, 176]}]
+
+    monkeypatch.setattr(team, "_apply_rows", _rows)
+    ok, info = team.verify_apply_panel(_FrameWin())
+    assert ok and "夜咏青灯" in info and "1 名" in info
+    assert calls == [[116, 86, 472, 145]]
+
+
+def test_verify_apply_panel_below_threshold_no_rows_scan(monkeypatch):
+    monkeypatch.setattr(team, "log", lambda *a, **k: None)
+    monkeypatch.setattr(team.FindImages, "find_all_template",
+                        lambda *a, **k: [_FakeMatch(0.62, [116, 86, 472, 145])])
+
+    def _boom(img, box):
+        raise AssertionError("分数未达阈值不得进入行识别")
+
+    monkeypatch.setattr(team, "_apply_rows", _boom)
+    ok, info = team.verify_apply_panel(_FrameWin())
+    assert not ok and "0.62" in info and "未达阈值" in info
+
+
+def test_verify_apply_panel_no_applicant_rows(monkeypatch):
+    monkeypatch.setattr(team, "log", lambda *a, **k: None)
+    monkeypatch.setattr(team.FindImages, "find_all_template",
+                        lambda *a, **k: [_FakeMatch(0.95, [116, 86, 472, 145])])
+    monkeypatch.setattr(team, "_apply_rows", lambda img, box: [])
+    ok, info = team.verify_apply_panel(_FrameWin())
+    assert ok and "未识别出申请人行" in info
+
+
+def test_verify_apply_panel_no_match(monkeypatch):
+    monkeypatch.setattr(team, "log", lambda *a, **k: None)
+    monkeypatch.setattr(team.FindImages, "find_all_template",
+                        lambda *a, **k: [])
+    ok, info = team.verify_apply_panel(_FrameWin())
+    assert not ok and "请打开申请加入面板" in info
+
+
+# ---- 补人清空与一次补满缺口（2026-11-07 用户结论：缺 N 补 N、补满/全失败清空） ----
+
+class _FakeTime:
+    def __init__(self):
+        self.t = 0.0
+
+    def time(self):
+        return self.t
+
+    def sleep(self, s):
+        self.t += s
+
+
+def _appl(uid, yc=168):
+    return {"yc": yc, "name": uid, "id": uid, "rect": [177, yc - 10, 227, yc + 10]}
+
+
+def _run_fill_loop(monkeypatch, max_allow, rows_seq, clear_log, fail_stub):
+    """跑 _fill_team_loop：面板恒开、允许按钮恒命中、失败提示走 fail_stub。"""
+    monkeypatch.setattr(team, "time", _FakeTime())
+    monkeypatch.setattr(team, "log", lambda *a, **k: None)
+    monkeypatch.setattr(team, "_apply_panel_flag", lambda img: [116, 86, 472, 145])
+    it = iter(rows_seq)
+    monkeypatch.setattr(team, "_apply_rows", lambda img, box: next(it))
+    monkeypatch.setattr(team.game_map, "find_template", lambda *a, **k: (330, 458))
+    monkeypatch.setattr(team.game_map, "ocr_region", lambda *a, **k: ([], None))
+    monkeypatch.setattr(team, "_dialog_text_present", fail_stub)
+    monkeypatch.setattr(team, "human_click", lambda *a, **k: None)
+    monkeypatch.setattr(team, "_clear_apply_list",
+                        lambda win, rows: clear_log.append(list(rows)) or "清空OK")
+    win = _SeqWin([_frame()])
+    ok, info = team._fill_team_loop(win, 5, max_allow)
+    return ok, info, clear_log
+
+
+def test_fill_loop_two_success_clears_remaining(monkeypatch):
+    """缺 2 补 2：连续允许 2 人后清空剩余申请。"""
+    rows_seq = [[_appl("甲"), _appl("乙"), _appl("丙")],   # 选甲
+                [_appl("乙"), _appl("丙")],                # 甲成功离开
+                [_appl("乙"), _appl("丙")],                # 选乙
+                [_appl("丙")]]                             # 乙成功离开
+    clear_log = []
+    ok, info, _ = _run_fill_loop(monkeypatch, 2, rows_seq, clear_log,
+                                 lambda items, txt: False)
+    assert ok and "已允许 2 名申请人" in info and "清空OK" in info
+    assert [r["id"] for r in clear_log[0]] == ["丙"]
+
+
+def test_fill_loop_all_fail_clears_list(monkeypatch):
+    """缺 1、3 人全失败：逐人换试后清空申请列表。"""
+    rows_seq = [[_appl("甲"), _appl("乙"), _appl("丙")]] * 4
+    clear_log = []
+    ok, info, _ = _run_fill_loop(monkeypatch, 1, rows_seq, clear_log,
+                                 lambda items, txt: True)
+    assert not ok and "申请列表为空或全部失败" in info and "清空OK" in info
+    assert [r["id"] for r in clear_log[0]] == ["甲", "乙", "丙"]
+
+
+def test_fill_loop_one_success_one_fail_then_clear(monkeypatch):
+    """缺 2、2 人申请：甲成功乙失败 → 乙为残留，清空后返回。"""
+    rows_seq = [[_appl("甲"), _appl("乙")],   # 选甲（成功）
+                [_appl("乙")],                # 甲成功校验
+                [_appl("乙")],                # 选乙（失败）
+                [_appl("乙")]]                # 无未失败可选 → 清空
+    clear_log = []
+    checks = {"n": 0}
+
+    def fail_stub(items, txt):
+        checks["n"] += 1
+        return checks["n"] > 5   # 甲允许的 5 次窗口检查均无失败提示，乙的第 1 次即失败
+
+    ok, info, _ = _run_fill_loop(monkeypatch, 2, rows_seq, clear_log, fail_stub)
+    assert ok and "已允许 1 名申请人后无可选申请人" in info and "清空OK" in info
+    assert [r["id"] for r in clear_log[0]] == ["乙"]
+
+
+def test_clear_apply_list_empty_rows_no_click(monkeypatch):
+    clicks = []
+    monkeypatch.setattr(team.game_map, "find_template",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("列表空不应查模板")))
+    monkeypatch.setattr(team, "human_click", lambda *a, **k: clicks.append(a))
+    assert team._clear_apply_list(object(), []) == "无残留申请"
+    assert clicks == []
+
+
+def test_clear_apply_list_clicks_button(monkeypatch):
+    clicks = []
+    monkeypatch.setattr(team.game_map, "find_template", lambda *a, **k: (330, 458))
+    monkeypatch.setattr(team, "human_click", lambda win, x, y: clicks.append((x, y)))
+    monkeypatch.setattr(team.time, "sleep", lambda s: None)
+    monkeypatch.setattr(team, "log", lambda *a, **k: None)
+    assert team._clear_apply_list(object(), [_appl("甲")]) == "残留申请已清空"
+    assert clicks == [(330, 458)]
+
+
+def test_clear_apply_list_button_missing(monkeypatch):
+    clicks = []
+    monkeypatch.setattr(team.game_map, "find_template", lambda *a, **k: None)
+    monkeypatch.setattr(team, "human_click", lambda *a, **k: clicks.append(a))
+    info = team._clear_apply_list(object(), [_appl("甲")])
+    assert "未找到清空按钮" in info and clicks == []
+
+
+# ---- 启动清场（clear_pending_apply）与队长判定申请态兜底（2026-11-07 22:03 教训） ----
+
+def _run_clear_pending(monkeypatch, frames, tpl_seq, qingkong_pt=(330, 458)):
+    """跑 clear_pending_apply：模板匹配结果按 tpl_seq 逐次消费。"""
+    calls = {"tpl": [], "click": [], "leader": [], "close": []}
+    monkeypatch.setattr(team, "log", lambda *a, **k: None)
+    monkeypatch.setattr(team.time, "sleep", lambda s: None)
+    monkeypatch.setattr(team, "record_leader_status",
+                        lambda is_leader: calls["leader"].append(is_leader))
+    monkeypatch.setattr(team, "human_click",
+                        lambda win, x, y: calls["click"].append((x, y)))
+    monkeypatch.setattr(team, "_close_apply_panel",
+                        lambda win: calls["close"].append(1) or (True, "已关闭"))
+    monkeypatch.setattr(team.game_map, "find_template",
+                        lambda *a, **k: qingkong_pt)
+    seq = list(tpl_seq)
+
+    def fake_find_in(img, icon, threshold=0.8, region=None):
+        calls["tpl"].append(icon)
+        return seq.pop(0)
+
+    monkeypatch.setattr(team.game_map, "find_template_in", fake_find_in)
+    win = _SeqWin(frames)
+    hit, info = team.clear_pending_apply(win)
+    return hit, info, calls
+
+
+def test_clear_pending_apply_no_pending_state(monkeypatch):
+    hit, info, calls = _run_clear_pending(monkeypatch, [_frame()], [None, None])
+    assert not hit and info == "无申请待处理态"
+    assert calls["click"] == [] and calls["close"] == []
+
+
+def test_clear_pending_apply_item2_click_clear_close(monkeypatch):
+    """item2 命中 → 点按钮开面板 → 点清空 → 关面板，且记录确定性队长。"""
+    hit, info, calls = _run_clear_pending(
+        monkeypatch, [_frame()],
+        [None, (100, 100), None, None, (300, 300)])  # 面板检查×2 未开 → 第 3 帧开
+    assert hit and info == "已清空申请列表并关闭面板"
+    assert calls["click"] == [(100, 100), (330, 458)]
+    assert calls["leader"] == [True]
+    assert calls["close"] == [1]
+
+
+def test_clear_pending_apply_panel_already_open(monkeypatch):
+    """申请加入面板残留打开：不点组队按钮，直接清空+关闭。"""
+    hit, info, calls = _run_clear_pending(monkeypatch, [_frame()], [(300, 300)])
+    assert hit and info == "已清空申请列表并关闭面板"
+    assert calls["click"] == [(330, 458)] and calls["close"] == [1]
+
+
+def test_clear_pending_apply_panel_never_opens(monkeypatch):
+    """点了 item2 但面板未打开：不点清空，报告未清空。"""
+    hit, info, calls = _run_clear_pending(monkeypatch, [_frame()],
+                                          [None, (100, 100)] + [None] * 6)
+    assert hit and "面板未打开" in info
+    assert calls["click"] == [(100, 100)] and calls["close"] == []
+
+
+def test_clear_pending_apply_qingkong_missing(monkeypatch):
+    """清空按钮未命中：仅关面板，不阻断。"""
+    hit, info, calls = _run_clear_pending(monkeypatch, [_frame()],
+                                          [None, (100, 100), (300, 300)],
+                                          qingkong_pt=None)
+    assert hit and "清空按钮未命中" in info
+    assert calls["click"] == [(100, 100)] and calls["close"] == [1]
+
+
+def test_classify_leader_pending_apply_is_leader(monkeypatch):
+    """面板打不开但 item2 在场：确定性队长，不得按「队长无法判定」停任务。"""
+    monkeypatch.setattr(team, "_is_panel_open", lambda win: False)
+    monkeypatch.setattr(team, "open_team_panel",
+                        lambda win: (False, "组队菜单未打开"))
+    monkeypatch.setattr(team, "record_leader_status", lambda is_leader: None)
+    monkeypatch.setattr(team.game_map, "find_template_in",
+                        lambda img, icon, threshold=0.8, region=None: (100, 100)
+                        if icon == team.ZUDUI_ITEM2_ICON else None)
+    kind, info = team.classify_leader_with_panel(_SeqWin([_frame()]))
+    assert kind == "leader" and "申请待处理态" in info
+
+
+def test_classify_leader_panel_fail_no_evidence_not_leader(monkeypatch):
+    monkeypatch.setattr(team, "_is_panel_open", lambda win: False)
+    monkeypatch.setattr(team, "open_team_panel",
+                        lambda win: (False, "未组队（菜单中无「队伍信息」）"))
+    monkeypatch.setattr(team, "record_leader_status", lambda is_leader: None)
+    monkeypatch.setattr(team.game_map, "find_template_in",
+                        lambda img, icon, threshold=0.8, region=None: None)
+    kind, info = team.classify_leader_with_panel(_SeqWin([_frame()]))
+    assert kind == "not_leader" and "未组队" in info
+
+
+def test_check_team_min_pending_apply_fallback_after_menu_fail(monkeypatch):
+    """open_team_panel 因申请态打不开时重查 2 帧命中证据 → wait 确定性
+    队长，不得返回「队长无法判定」（2026-11-07 日志 22:17 教训：item2
+    动效抖动首帧漏检、菜单路径帧命中）。"""
+    monkeypatch.setattr(team, "_is_panel_open", lambda win: False)
+    monkeypatch.setattr(team, "open_team_panel",
+                        lambda win: (False, "组队菜单未打开"))
+    monkeypatch.setattr(team, "record_leader_status", lambda is_leader: None)
+    calls = {"n": 0}
+
+    def pending(img):
+        calls["n"] += 1
+        return calls["n"] >= 2  # 首帧漏检，兜底第 1 帧命中
+
+    monkeypatch.setattr(team, "has_pending_apply", pending)
+    win = _SeqWin([_frame()])
+    status, info, _members = team.check_team_min(win, min_members=None)
+    assert status == "wait" and "确定性队长" in info
+    assert calls["n"] == 2  # 首帧漏检 + 兜底第 1 帧命中即返回
+
+
+def test_check_team_min_menu_fail_no_pending_evidence(monkeypatch):
+    """菜单打不开且 3 帧都无申请证据：保持「队长无法判定」瞬态语义。"""
+    monkeypatch.setattr(team, "_is_panel_open", lambda win: False)
+    monkeypatch.setattr(team, "open_team_panel",
+                        lambda win: (False, "组队菜单未打开"))
+    monkeypatch.setattr(team, "record_leader_status", lambda is_leader: None)
+    monkeypatch.setattr(team, "has_pending_apply", lambda img: False)
+    win = _SeqWin([_frame()])
+    status, info, _members = team.check_team_min(win, min_members=None)
+    assert status == "not_leader" and "队长无法判定" in info
+
+
+# ---- 组队按钮搜索条带（2026-11-07 用户标定 900,737-1378,831） ----
+
+def test_find_template_in_region_cropped():
+    """条带内命中返回全图坐标；条带外不搜（None）。"""
+    from src import map as game_map
+    frame = _paste_tpl(_frame(), "zudui_item2.png", 1000, 750)
+    pt = game_map.find_template_in(frame, team.ZUDUI_ITEM2_ICON,
+                                   team.ZUDUI_ITEM2_THRESHOLD,
+                                   region=team.ZUDUI_ITEM_REGION)
+    assert pt is not None and pt[0] > 1000 and pt[1] > 750
+    frame2 = _paste_tpl(_frame(), "zudui_item2.png", 200, 100)  # 带外
+    assert game_map.find_template_in(frame2, team.ZUDUI_ITEM2_ICON,
+                                     team.ZUDUI_ITEM2_THRESHOLD,
+                                     region=team.ZUDUI_ITEM_REGION) is None
+
+
+def test_has_pending_apply_uses_item_region(monkeypatch):
+    """has_pending_apply 的 item2 查询限定右下角条带。"""
+    calls = []
+    monkeypatch.setattr(team.game_map, "find_template_in",
+                        lambda img, icon, threshold=0.8, region=None:
+                        calls.append(region) or None)
+    monkeypatch.setattr(team, "_apply_panel_flag", lambda img: None)
+    assert team.has_pending_apply(_frame()) is False
+    assert calls == [team.ZUDUI_ITEM_REGION]

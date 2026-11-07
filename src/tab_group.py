@@ -223,6 +223,13 @@ def startup_check(win):
     deadline = time.time() + 90
     while is_in_battle(win) and time.time() < deadline:
         time.sleep(2.0)
+    # 申请待处理态清场（2026-11-07 用户结论）：item2 命中即确定性
+    # 队长，但申请态下组队菜单打不开、队长判定必失败（22:03 停任务
+    # 教训）；先点按钮开面板 → 清空申请列表 → 关面板，再走正常判定。
+    # 启动时的申请多为陈旧请求，缺人由监控循环喊话等新申请
+    hit, clear_info = team.clear_pending_apply(win)
+    if hit:
+        log(f"[组号] 启动清场: {clear_info}", "SYS")
     kind, info = team.classify_leader_with_panel(win)
     if kind == "unclear":
         time.sleep(3)

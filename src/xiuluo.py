@@ -1780,9 +1780,10 @@ def _monitor_team_and_fill(win):
 
     每轮先看申请人证据（申请面板已开，或组队按钮为 zudui_item2
     申请待处理态——有人申请时按钮变样且该态即确定性队长）：有则先
-    补人（允许一名申请人后立即重查），无则查人数（最少人数按修罗
-    设置）——缺人按间隔重查、人满返回（调用方随即领取）；非队长
-    转保持模式（不返回）。
+    补人（按最近一次人数检查的缺口一次补满，缺 N 补 N、补满或全
+    失败后清空残留申请列表，2026-11-07 用户结论；立即重查），无则
+    查人数（最少人数按修罗设置）——缺人按间隔重查、人满返回（调用方
+    随即领取）；非队长转保持模式（不返回）。
 
     先补后查的原因：按钮处于申请态时菜单打不开（点击弹的是申请面板），
     查人数走菜单路径必失败；补完申请人后按钮恢复普通态，查人数才可用。
@@ -1793,14 +1794,17 @@ def _monitor_team_and_fill(win):
     全链路时序（被拒→补人→重领，含各步间隔）详见
     docs/xiuluo-team-fill-flow.md。
     """
+    shortfall = None  # 最近一次人数检查的缺口（缺 N 补 N，2026-11-07 用户结论）；
+                      # 申请态下查不到人数用最近值，None=未知按 1 人保守补
     while True:
         img = win.capture(force_activate=False)
         if img is not None and team.has_pending_apply(img):
             ok_fill, fill_info = team.fill_team(
-                win, target=load_xiuluo_settings()["min_members"], max_allow=1)
+                win, target=load_xiuluo_settings()["min_members"],
+                max_allow=shortfall or 1)
             log(f"[修罗] 补人: {fill_info}", "SYS" if ok_fill else "INFO")
             if ok_fill:
-                continue  # 已补一人，立即重查
+                continue  # 已补人，立即重查
         status, info = _check_team_with_retry(win)
         if status == "not_leader":
             if team.is_definitive_not_leader(info):
@@ -1814,16 +1818,22 @@ def _monitor_team_and_fill(win):
             continue
         if status == "ready":
             return
+        # 人数不足信息里解析缺口（成员识别失败/申请待处理态无人数信息
+        # 时保留旧值）：缺 2 人一次补 2 人，不是每轮只补 1 人
+        m = re.search(r"队伍人数不足（(\d+)/(\d+)", info)
+        if m:
+            shortfall = max(0, int(m.group(2)) - int(m.group(1)))
         # 等待状态下复查申请人证据：check_team_min 的帧可能比本循环
         # 首帧更晚拍到申请待处理态（申请人恰在两次截帧间出现），有则
         # 立即补人不空等重查间隔（2026-11-02 日志教训）
         img = win.capture(force_activate=False)
         if img is not None and team.has_pending_apply(img):
             ok_fill, fill_info = team.fill_team(
-                win, target=load_xiuluo_settings()["min_members"], max_allow=1)
+                win, target=load_xiuluo_settings()["min_members"],
+                max_allow=shortfall or 1)
             log(f"[修罗] 补人: {fill_info}", "SYS" if ok_fill else "INFO")
             if ok_fill:
-                continue  # 已补一人，立即重查
+                continue  # 已补人，立即重查
         interval = (TEAM_RECOG_RETRY_INTERVAL if "识别失败" in info
                     else TEAM_CHECK_RETRY_INTERVAL)
         # 缺人自动喊话（间隔限频；有申请人正在补时走上面的补人分支，
@@ -1937,6 +1947,19 @@ def run_loop(win, cycle_interval=1.0):
     # 直接停任务）；成员/已组队场景创建跳过或空操作，身份检查照旧
     auto_create = load_xiuluo_auto_create_team()
     log(f"[修罗] 自动创建队伍: {'开（无队伍时任务开始自动创建）' if auto_create else '关'}", "SYS")
+    # 申请待处理态清场（2026-11-07 用户结论，日志 22:03 教训）：启动时
+    # 组队按钮为 zudui_item2（有人申请）即确定性队长，但申请态下组队
+    # 菜单打不开、自动创建与组号启动检查都必失败；先点按钮开面板 →
+    # 清空申请列表 → 关面板，再走正常队伍查询（缺人由监控循环喊话等
+    # 新申请）。战斗中按钮不可点：顺延到主循环首个非战斗轮次（一次即消费）
+    pending_apply_clear = True
+    if not is_in_battle(win):
+        pending_apply_clear = False
+        hit, apply_clear_info = team.clear_pending_apply(win)
+        if hit:
+            log(f"[修罗] 启动清场: {apply_clear_info}", "SYS")
+    else:
+        log("[修罗] 战斗中，申请待处理态清场顺延至战斗结束", "INFO")
     pending_create = auto_create
     create_defer_logged = False
     if pending_create and not is_in_battle(win):
@@ -1995,6 +2018,14 @@ def run_loop(win, cycle_interval=1.0):
         if tab_group.active() and not tab_group.ensure_leader_tab(win):
             time.sleep(cycle_interval)
             continue
+        # 申请待处理态清场顺延（启动时战斗中）：战斗结束后的首个非战斗
+        # 轮次执行，一次即消费；先清场后创建——清场后按钮恢复普通态，
+        # 创建流程的菜单才能打开
+        if pending_apply_clear and not is_in_battle(win):
+            pending_apply_clear = False
+            hit, apply_clear_info = team.clear_pending_apply(win)
+            if hit:
+                log(f"[修罗] 启动清场: {apply_clear_info}", "SYS")
         # 自动创建队伍顺延重试（启动时战斗中）：战斗结束后的首个非战斗
         # 轮次执行创建，一次即消费（成败均不再重试，失败由正常队伍检查
         # 按未组队处理）
