@@ -28,10 +28,14 @@ DIALOG_LOSE_TEXTS = ["你输了", "平局"]
 # 跳过对话的点击次数与屏幕中间位置
 DIALOG_SKIP_CLICKS = 4               # 跳过对话的点击次数上限
 SCREEN_CENTER_POS = (689, 415)       # 屏幕中间（游戏窗口中心，点击推进对话）
-# 按序号点击选项的几何参数（选项无法 OCR 识别时使用）
-OPTION_FIRST_OFFSET = 10
-OPTION_ROW_STEP = 18
-OPTION_X_OFFSET = 1
+# 序号点击同文案防抖间隔（秒）：点击落空（对话框未推进）时下一轮询
+# 会再次命中同一问题文案，防抖避免每秒一次的连点刷屏（玄枢轶闻
+# 「太阳的别称」2026-11-07 实测连点 47 次不推进）；点击生效时问题
+# 文案随之消失/变化，防抖不影响正常推进，同题重问（下一轮任务）
+# 间隔远超该窗口不受影响
+INDEX_CLICK_DEBOUNCE = 3.0
+_INDEX_LAST_CLICK = {}    # (prefix, dtxt, idx) -> 上次点击时间戳
+_INDEX_LAST_WARN = {}     # (prefix, dtxt, idx) -> 上次未检出告警时间戳（限频用）
 
 
 def green_option_center(img_np, rect, opt_len, line_len, target_center=None):
@@ -159,12 +163,57 @@ def _click_green_option_once(win, items, img_np, text, prefix=""):
     return True
 
 
-def _click_dialog_option_by_index(win, items, dtxt, idx, prefix=""):
-    """按序号点击问题下方的选项（选项无法 OCR 识别时使用）。
+def _green_option_rows(img_np, qrect, y_max_offset=100, max_row_height=22):
+    """定位问题行下方的绿色选项行，返回每行 (cx, cy) 列表（像素级）。
 
-    定位问题文案所在行，选项在其下方纵向排列：
-    第 idx 项的点击位置 = 问题行下方 10 + 18*(idx-1) 像素、问题行左侧 +1 像素
-    （实测问答题三选项文字中心 咖啡 +12/果汁 +30/茶 +48，取略偏上避免点到行间）。
+    扫描条带取问题行 x 范围（±10px）与问题行下方 y_max_offset：
+    选项为绿色文字+下划线，逐行聚合绿色像素列，间隔 ≤3px 的连续
+    行合并为一行；过滤过矮（噪点/下划线，<8px）与过高（相邻选项
+    行合并，>max_row_height）的行、绿色像素过少（<10 个）的行。
+    行 x 中心取该行绿色像素列的中位数（抗条带边缘杂散绿点）。
+    条带异常或行数不足时由调用方不点击，等下一轮询重试。
+    """
+    import numpy as np
+    if img_np is None:
+        return None
+    l = max(0, qrect[0] - 10)
+    r = min(img_np.shape[1], qrect[2] + 10)
+    t = qrect[3]
+    b = min(img_np.shape[0], t + y_max_offset)
+    if r <= l or b <= t:
+        return None
+    region = img_np[t:b, l:r].astype(int)
+    mask = task_tracker.green_mask(region, task_tracker.GREEN_BRIGHT_MIN)
+    runs = []  # (y0, y1, 行内绿色像素列序号列表)
+    for yy in range(mask.shape[0]):
+        cols = np.where(mask[yy])[0]
+        if cols.size == 0:
+            continue
+        if runs and yy - runs[-1][1] <= 3:
+            runs[-1] = (runs[-1][0], yy, runs[-1][2] + cols.tolist())
+        else:
+            runs.append((yy, yy, cols.tolist()))
+    rows = []
+    for y0, y1, xs in runs:
+        h = y1 - y0 + 1
+        if h < 8 or h > max_row_height or len(xs) < 10:
+            continue
+        rows.append((l + int(np.median(xs)), t + (y0 + y1) // 2))
+    return rows
+
+
+def _click_dialog_option_by_index(win, items, img_np, dtxt, idx, prefix=""):
+    """按序号点击问题下方的绿色选项行（选项无法 OCR 识别时使用）。
+
+    定位问题文案所在行，在问题行下方条带内按绿色像素定位选项行，
+    点击第 idx 行的绿色像素中心。旧实现按问题行左缘固定偏移点击：
+    选项文字与问题行左缘的缩进不一致时会点空——「太阳的别称」
+    选项行 x=439 起、固定偏移点落在 x=438，2026-11-07 实测连点
+    47 次不推进（11-02 同日复现 6 连点，10-31 单点侥幸命中）。
+    检测不到足够的选项行时不点击（避免盲点）。
+    同文案点击防抖 INDEX_CLICK_DEBOUNCE 秒：点击生效问题文案随即
+    变化，防抖只拦落空后的连点；OCR 路径（文案点击）不受防抖影响，
+    落空等待期内 OCR 仍有机会读到选项推进对话。
     """
     tag = f"[{prefix}] " if prefix else ""
     qrect = None
@@ -174,8 +223,19 @@ def _click_dialog_option_by_index(win, items, dtxt, idx, prefix=""):
             break
     if qrect is None:
         return False
-    cx = qrect[0] + OPTION_X_OFFSET
-    cy = qrect[3] + OPTION_FIRST_OFFSET + OPTION_ROW_STEP * (idx - 1)
+    key = (prefix, dtxt, idx)
+    now = time.time()
+    if now - _INDEX_LAST_CLICK.get(key, 0.0) < INDEX_CLICK_DEBOUNCE:
+        return False  # 上一击未推进（问题文案仍在）：不连点，等 OCR 路径
+    rows = _green_option_rows(img_np, qrect)
+    if not rows or len(rows) < idx:
+        if now - _INDEX_LAST_WARN.get(key, 0.0) >= 10.0:
+            _INDEX_LAST_WARN[key] = now
+            log(f"{tag}问题「{dtxt}」下方仅检测到 {len(rows or [])} 行绿色选项"
+                f"（需第 {idx} 行），不点击", "WARN")
+        return False
+    cx, cy = rows[idx - 1]
+    _INDEX_LAST_CLICK[key] = now
     human_click(win, cx, cy)
     log(f"{tag}已按序号点击第 {idx} 项选项 @({cx},{cy})", "SYS")
     move_away(win)  # 鼠标停留选项上会使其悬停变色，干扰后续绿字判定
@@ -314,6 +374,30 @@ def dialog_ocr_skip(frame):
         log(f"[对话框] 模板命中（分数 {score:.3f}），检测到对话框，对话区 OCR 放行", "INFO")
     _dlg_hit_state = hit
     return not hit
+
+
+def clear_blocking_dialog(win, prefix="", max_clicks=3):
+    """对话框遮挡清理：模板命中（对话框在场）时点屏幕中间推进关闭。
+
+    目标模板（掌柜/领取按钮等）找不到时不一定是站位问题——对话框
+    会挡住画面（客栈奇遇弹窗、NPC 欢迎语等，2026-11-07 用户反馈）。
+    点一次后复查模板，仍在则继续点（多屏对话），至多 max_clicks 次。
+    返回 (是否检测到对话框, 是否已点击)——检测不到对话框时不动画面
+    （世界点击可能误开新对话）。
+    """
+    tag = f"[{prefix}] " if prefix else ""
+    img = win.capture(force_activate=False)
+    if img is None or dialog_frame_score(img) < DIALOG_FRAME_THRESHOLD:
+        return False, False
+    log(f"{tag}检测到对话框（模板命中），点击屏幕中间关闭", "WARN")
+    for _ in range(max_clicks):
+        human_click(win, SCREEN_CENTER_POS[0], SCREEN_CENTER_POS[1])
+        time.sleep(1.0)
+        img = win.capture(force_activate=False)
+        if img is not None and dialog_frame_score(img) < DIALOG_FRAME_THRESHOLD:
+            break
+    move_away(win)  # 鼠标停留选项上会使其悬停变色，干扰后续绿字判定
+    return True, True
 
 
 def verify_dialog_detect(win):

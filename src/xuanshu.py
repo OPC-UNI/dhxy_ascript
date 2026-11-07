@@ -76,8 +76,7 @@ _jiantianpan_last_done = 0.0                      # 上次流程执行时间戳
 from .dialog_common import (DAILY_LIMIT_TEXT, DAILY_LIMIT_INFO,
                             DIALOG_LOSE_TEXTS, DIALOG_SKIP_CLICKS,
                             SCREEN_CENTER_POS,
-                            OPTION_FIRST_OFFSET, OPTION_ROW_STEP, OPTION_X_OFFSET,
-                            dialog_ocr_skip)
+                            dialog_ocr_skip, clear_blocking_dialog)
 # 每日任务次数已满的对话文案（出现即结束任务循环）
 # 需要点击屏幕中间跳过的对话框文案 → 点击次数（出现则连点屏幕中间推进
 # 对话，同 kezhan.DIALOG_SKIP_TEXTS）；不同文案要推进的屏数不同，次数
@@ -134,7 +133,10 @@ DIALOG_OPTION_MAP = {
     "杜必赢使劲晃动杯中的三颗骰子":"轻轻摇晃"
 }
 # 选项无法被 OCR 识别（如单字选项「茶」）时，按序号点击：
-# 选项为问题文案下方的纵向列表，第 idx 项（对话框文案 → 序号）
+# 选项为问题文案下方的纵向绿色文字列表，第 idx 项（对话框文案 → 序号）。
+# 点击位置由 dialog_common 按问题行下方条带的绿色像素行定位（不再用
+# 固定偏移——「太阳的别称」选项行 x=439 起、问题行左缘 +1 点落在
+# x=438 点空，2026-11-07 实测连点 47 次不推进）
 DIALOG_OPTION_INDEX_MAP = {
     "大唐人最喜欢喝什么": 3,  # 茶（咖啡、果汁之后的第 3 项）
     "太阳的别称是什么": 2,    # 金乌（铜乌/金乌/银乌三选项中的第 2 项；
@@ -400,9 +402,9 @@ def _click_green_option_once(win, items, img_np, text, prefix="玄枢轶闻"):
     return _dc_click_green_option_once(win, items, img_np, text, prefix)
 
 
-def _click_dialog_option_by_index(win, items, dtxt, idx):
+def _click_dialog_option_by_index(win, items, img_np, dtxt, idx):
     """玄枢轶闻前缀包装（共享实现在 dialog_common）。"""
-    return _dc_click_dialog_option_by_index(win, items, dtxt, idx, "玄枢轶闻")
+    return _dc_click_dialog_option_by_index(win, items, img_np, dtxt, idx, "玄枢轶闻")
 
 
 def _option_present(items, text):
@@ -542,6 +544,14 @@ def navigate_to_task(win):
 
     # 领取任务（按钮随站位渲染位置变化，必须识图定位，不缓存）
     pt = game_map.find_template(win, TASK_LINGQU_ICON)
+    if pt is None:
+        # 对话框遮挡兜底：到达时若有对话框（NPC 欢迎语/奇遇弹窗）会
+        # 挡住领取按钮，点屏幕中间关闭后重试（2026-11-07 用户反馈）
+        had, _ = clear_blocking_dialog(win, "玄枢轶闻")
+        if had:
+            pt = game_map.find_template(win, TASK_LINGQU_ICON)
+            if pt is not None:
+                log("[玄枢轶闻] 关闭遮挡对话框后已找到领取任务按钮", "SYS")
     if pt is None:
         return False, "已到达但未找到领取任务按钮", None
     human_click(win, pt[0], pt[1])
@@ -1791,7 +1801,8 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                         break
                     # 选项未被 OCR 识别（如单字选项）：按序号点击兜底
                     idx = DIALOG_OPTION_INDEX_MAP.get(dtxt)
-                    if idx and _click_dialog_option_by_index(win, items, dtxt, idx):
+                    if idx and _click_dialog_option_by_index(win, items, img_np,
+                                                             dtxt, idx):
                         handled = True
                         break
             if not handled and any(_dialog_text_present(items, t)

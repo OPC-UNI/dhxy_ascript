@@ -53,7 +53,7 @@ from .dialog_common import (_click_green_option_once, _dialog_text_present,
                             _click_screen_center, _fuzzy_contains,
                             DAILY_LIMIT_TEXT, DAILY_LIMIT_INFO,
                             DIALOG_LOSE_TEXTS, green_option_center,
-                            _option_target_center)
+                            _option_target_center, clear_blocking_dialog)
 
 # 任务追踪面板中的任务标题
 TASK_MODE = "客栈"       # 控制面板任务模式名（任务次数配置键）
@@ -584,8 +584,13 @@ def _zhanggui_scan(win):
 
 
 def _find_zhanggui(win):
-    """查找掌柜模板；未找到时点击兜底点 (530,593) 后重试一次（用户
-    实测有效）。返回 (x, y) 或 None。
+    """查找掌柜模板；未找到时依次兜底重试（返回 (x, y) 或 None）：
+
+    1. 对话框遮挡清理：模板命中（对话框在场）时点屏幕中间推进关闭
+       后重试——掌柜可能被奇遇弹窗/NPC 对话挡住，找不到不一定是
+       站位问题（2026-11-07 用户反馈）
+    2. 点击兜底点 (530,593) 后重试（用户实测有效；点位在对话框区域
+       之下，即使有对话框打开，点击也不会落在选项上）
 
     原 Alt+6 画面刷新重试已移除（启动清屏已处理屏蔽，无需重复按键）。
 
@@ -596,6 +601,13 @@ def _find_zhanggui(win):
     pt = _zhanggui_scan(win)
     if pt is not None:
         return pt
+    # 对话框遮挡：有对话框（模板命中）时点屏幕中间推进关闭后重试
+    had, _ = clear_blocking_dialog(win, "客栈")
+    if had:
+        pt = _zhanggui_scan(win)
+        if pt is not None:
+            log("[客栈] 关闭遮挡对话框后已找到掌柜", "SYS")
+            return pt
     # 用户实测兜底：点击 (530,593) 后重试（点位在对话框区域之下，
     # 即使有对话框打开，点击也不会落在选项上）
     log(f"[客栈] 未找到掌柜，点击兜底点 {ZHANGGUI_FALLBACK_CLICK_POS} 后重试", "WARN")
