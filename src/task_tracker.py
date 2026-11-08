@@ -29,10 +29,13 @@ GREEN_DOMINANCE = 30
 GREEN_MIN_RATIO = 0.01
 # 追踪面板左区边界（x），用于区分面板标题与居中对话框的绿色选项
 PANEL_MAX_X = 400
-# 锚点（任务标题行）x 上限：标题恒在追踪面板最左列（实测标题框
-# x≈20-130；内容链接行可延伸至 x≈400，故 PANEL_MAX_X 只用于内容/
-# 关键词过滤）。放宽到 400 会让居中对话框的故事行（x≥250）劫持锚点
-# （2026-11-06 玄枢轶闻点错教训，见 track_task 锚点注释）
+# 锚点（任务标题行）与内容行（含折行续行）共用的左列 x 上限：面板
+# 行恒从最左列起（实测标题框 x≈20-130、内容行 x≈21-54）。放宽到 400
+# 会让居中对话框的故事行（x≥250）劫持锚点（2026-11-06 玄枢轶闻点错
+# 教训）；x≈200 起步的任务变化浮字提示行同文案、同为绿色，会挤进
+# 内容采集被点击（2026-11-08 玄枢轶闻点中浮字 (260,260) 而非链接
+# (91,268)，任务卡死 4 分钟教训）——锚点、内容采集、关键词兜底三处
+# 全部限本列
 ANCHOR_MAX_X = 180
 # 地图坐标模式（链接行专属）：链接行恒含「(x, y)」（如「去找大唐边境
 # (358, 21)惯骗[」），描述行与计数碎片行不含；绿字行选择时坐标行优先，
@@ -487,7 +490,9 @@ def has_new_task(win, title, fallback_texts, pre_sig):
 def _keyword_fallback(items, img_np, keywords, arect, require_coord=False):
     """在追踪面板区域内按关键词兜底查找绿字行（锚点内容采集失败时）。
 
-    搜索范围：面板左区（x<PANEL_MAX_X，排除居中对话框）、锚点行下方
+    搜索范围：面板左列（rect[0] < ANCHOR_MAX_X，排除居中对话框与
+    任务变化浮字提示——浮字同文案同为绿色，限 PANEL_MAX_X 仍会
+    被兜底点中，2026-11-08 玄枢轶闻教训）、锚点行下方
     （容 OCR 纵向抖动；arect 为 None 时不限纵向——标题行被区域 OCR
     整行漏检、锚点定位失败时用）；不过滤标题行判定（子目标行可能被
     误判为标题行）。返回 (txt, rect) 或 None。
@@ -497,7 +502,7 @@ def _keyword_fallback(items, img_np, keywords, arect, require_coord=False):
     """
     cands = []
     for txt, rect, score in items:
-        if score < 0.55 or rect[0] >= PANEL_MAX_X:
+        if score < 0.55 or rect[0] >= ANCHOR_MAX_X:
             continue
         if arect is not None and rect[1] < arect[3] - 30:  # 锚点行下方（容抖动）
             continue
@@ -583,9 +588,13 @@ def track_task(win, title, text=None, green_index=0, retries=4, retry_interval=1
         if anchor_idx is None:
             # 末兜底仅认标题格式（方括号短行）——裸文案任意位置
             # 匹配是对话框故事行劫持锚点的通道，已移除；标题行整行
-            # 漏检时由 fallback_keywords 面板区关键词兜底点击
+            # 漏检时由 fallback_keywords 面板区关键词兜底点击。
+            # 与严格/宽松两轮同限左列 x：任务变化浮字提示的小标题
+            # （如「【玄枢轶闻】」，x≥200）同为标题形态，不限列即
+            # 劫持锚点（2026-11-08 玄枢轶闻点错教训的锚点侧通道）
             for i, (txt, rect, score) in enumerate(items):
-                if _is_title_line(txt) and title in txt and score >= 0.55:
+                if _is_title_line(txt) and title in txt and score >= 0.55 \
+                        and rect[0] < ANCHOR_MAX_X:
                     anchor_idx = i
                     break
         if anchor_idx is None:
@@ -609,15 +618,30 @@ def track_task(win, title, text=None, green_index=0, retries=4, retry_interval=1
         last_items = items
         last_arect = arect
 
-        # 内容行：锚点下方、横向交叠、至下一个标题行或纵向超过 150px 为止（描述换行）
+        # 内容行：锚点下方、横向交叠、至下一个标题行或纵向超过 150px 为止（描述换行）。
+        # 行首须在面板左列（rect[0] < ANCHOR_MAX_X）：任务变化瞬间游戏在
+        # 面板右侧（x≈200~400）弹同文案的绿色浮字提示，横向交叠过滤
+        # （标题 rect 右缘 161+40=201）拦不住 x≈200 的浮字行；过渡帧面板
+        # 链接下划线/绿字判定失败时浮字行按 y 排序抢先成为点击目标——
+        # 2026-11-08 玄枢轶闻点中浮字 (260,260) 而非链接 (91,268)，任务
+        # 卡死 4 分钟。真实面板内容行（含折行续行）恒从最左列 x≈21~54 起。
+        # 左列外的「标题形态」行（浮字小标题/对话框括号行）不再截断内容
+        # 采集：旧逻辑在此 break 会把其后的真实链接行一并丢掉
         content = []
+        dropped = []  # 左列外行诊断（浮字/提示/对话框行，仅记录）
         for txt, rect, score in items[anchor_idx + 1:]:
             if rect[1] - arect[3] > 150:
                 break
-            if _is_title_line(txt):
+            if rect[0] < ANCHOR_MAX_X and _is_title_line(txt):
                 break
             if rect[0] < arect[2] + 40 and rect[2] > arect[0] - 40:
-                content.append((txt, rect, score))
+                if rect[0] < ANCHOR_MAX_X:
+                    content.append((txt, rect, score))
+                else:
+                    dropped.append(txt)
+        if dropped:
+            log(f"[任务追踪] 「{title}」忽略左列外内容行: "
+                + " | ".join(f"「{t}」" for t in dropped), "INFO")
         # 内容行按视觉自上而下排序（OCR 行序不稳定，五环链接行与计数行
         # 实测随机互换，点击目标随之摆动）；排序后首个绿字恒为链接行
         content.sort(key=lambda it: it[1][1])
