@@ -1016,10 +1016,11 @@ def _order_green_state(items, img_np):
     关键词，会把对话框的绿字选项误当成封印关键词（实测点到了 (711,391)
     的对话框选项）。
     """
-    pl, pt_, pr, pb = _track_panel_region(img_np)
+    _pl, pt_, _pr, pb = _track_panel_region(img_np)
+    xmax = task_tracker.panel_row_xmax(img_np)
     kw_lines = [(txt, rect) for txt, rect, _ in items
                 if any(kw in norm_text(txt) for kw in GREEN_CLICK_ORDER)
-                and rect[0] < pr and pt_ <= rect[1] <= pb]
+                and rect[0] < xmax and pt_ <= rect[1] <= pb]
     if not kw_lines:
         return [], [], (0, 0)
     l = min(rect[0] for _, rect in kw_lines)
@@ -1095,7 +1096,9 @@ def _order_progress_key(items, img_np):
     green_kws, _, _ = _order_green_state(items, img_np)
     if green_kws:
         return ",".join(green_kws)
-    task = task_tracker.find_task(task_tracker.group_tasks(items), TASK_TITLE)
+    task = task_tracker.find_task(
+        task_tracker.group_tasks(items, task_tracker.panel_row_xmax(img_np)),
+        TASK_TITLE)
     if task is None:
         return ""
     lines = task.get("lines") or []
@@ -1119,11 +1122,13 @@ def _pick_order_green(items, img_np):
 def _sancai_panel_lines(items, img_np=None):
     """三才任务关注的面板行（任务追踪面板区域内，排除居中对话框；
     领取/跟踪对话框同含关键词，面板外行命中会把对话框选项当链接）。
-    区域由标题条模板动态定位（面板漂移跟随）；img_np 为 None 时
-    回退静态区域（纯文本过滤场景）。"""
-    pl, pt_, pr, pb = _track_panel_region(img_np)
+    纵向取动态内容区（面板漂移跟随）；横向行首限 panel_row_xmax
+    （对话框行行首 ≥400 恒被排除）。img_np 为 None 时回退静态区域
+    （纯文本过滤场景）。"""
+    _pl, pt_, _pr, pb = _track_panel_region(img_np)
+    xmax = task_tracker.panel_row_xmax(img_np)
     return [(txt, rect, score) for txt, rect, score in items
-            if score >= 0.55 and rect[0] < pr and pt_ <= rect[1] <= pb]
+            if score >= 0.55 and rect[0] < xmax and pt_ <= rect[1] <= pb]
 
 
 def _sancai_stage(items, img_np=None):
@@ -1273,8 +1278,10 @@ def _has_task_fast(win):
     if img is None:
         return True
     items, _ = game_map.ocr_region(img, _track_title_region(np.asarray(img)))
-    return task_tracker.find_task(task_tracker.group_tasks(items),
-                                  TASK_TITLE) is not None
+    return task_tracker.find_task(
+        task_tracker.group_tasks(items,
+                                 task_tracker.panel_row_xmax(np.asarray(img))),
+        TASK_TITLE) is not None
 
 
 def _play_duchong(win):
@@ -1439,7 +1446,10 @@ def _baoxiang_done(win):
     if img is None:
         return False
     items, _ = task_tracker.ocr_track(img)
-    task = task_tracker.find_task(task_tracker.group_tasks(items), TASK_TITLE)
+    task = task_tracker.find_task(
+        task_tracker.group_tasks(items,
+                                 task_tracker.panel_row_xmax(np.asarray(img))),
+        TASK_TITLE)
     if task is None:
         return True  # 整个客栈任务已消失（宝箱为最后一步）
     return not _norm_dialog_present(task["lines"], BAOXIANG_TRACK_TEXT)
@@ -1545,7 +1555,9 @@ def _handle_follow_extras(win, items, img_np):
     返回是否已处理。
     """
     global _dali_last_done, _biwu_last_done, _baoxiang_last_done
-    task = task_tracker.find_task(task_tracker.group_tasks(items), TASK_TITLE)
+    task = task_tracker.find_task(
+        task_tracker.group_tasks(items, task_tracker.panel_row_xmax(img_np)),
+        TASK_TITLE)
     # 战斗判定复用本轮询共享帧（同轮询免重复截窗；见 _kj_frame）。
     # 帧不可用视为非战斗——与旧 is_in_battle 截窗失败返回 False 一致，
     # 特殊步骤分支各自重截；给与面板检测无帧时跳过（见 _handle_give_panel）

@@ -29,13 +29,16 @@ GREEN_DOMINANCE = 30
 GREEN_MIN_RATIO = 0.01
 # 追踪面板左区边界（x），用于区分面板标题与居中对话框的绿色选项
 PANEL_MAX_X = 400
-# 锚点（任务标题行）与内容行（含折行续行）共用的左列 x 上限：面板
-# 行恒从最左列起（实测标题框 x≈20-130、内容行 x≈21-54）。放宽到 400
-# 会让居中对话框的故事行（x≥250）劫持锚点（2026-11-06 玄枢轶闻点错
-# 教训）；x≈200 起步的任务变化浮字提示行同文案、同为绿色，会挤进
-# 内容采集被点击（2026-11-08 玄枢轶闻点中浮字 (260,260) 而非链接
-# (91,268)，任务卡死 4 分钟教训）——锚点、内容采集、关键词兜底三处
-# 全部限本列
+# 锚点（任务标题行）与内容行（含折行续行）共用的左列宽度：相对动态
+# 内容区左缘（track_content_region 的 l），面板漂移时左列跟随——
+# 面板行恒从区域左缘 x≈+11~54 起（实测标题框 +11~+130、内容行
+# +11~+54）。放宽到 400 会让居中对话框的故事行劫持锚点（2026-11-06
+# 玄枢轶闻点错教训）；距左列 ≥200px 的任务变化浮字提示行同文案、同为
+# 绿色，会挤进内容采集被点击（2026-11-08 玄枢轶闻点中浮字 (260,260)
+# 而非链接 (91,268)，任务卡死 4 分钟教训）——锚点、内容采集、关键词
+# 兜底三处全部限本列。绝对坐标使用（x<180）在面板被拖动右移后会把
+# 真实标题行拒之门外（2026-11-08 修罗死循环教训），一律以
+# col_lo/col_hi（区域左缘相对界）判定
 ANCHOR_MAX_X = 180
 # 地图坐标模式（链接行专属）：链接行恒含「(x, y)」（如「去找大唐边境
 # (358, 21)惯骗[」），描述行与计数碎片行不含；绿字行选择时坐标行优先，
@@ -167,6 +170,22 @@ def track_content_region(img_np, min_width=TRACK_MIN_WIDTH):
     return (l, b, right, bottom)
 
 
+def panel_row_xmax(img_np):
+    """面板行行首 x 上限：max(绝对 PANEL_MAX_X, 动态区域左缘+160)。
+
+    面板行（标题/内容/折行续行）恒从区域左缘 +11~54 起（+160 留
+    100px 余量）；居中对话框行行首恒 ≥400（DIALOG_REGION 起点 400），
+    绝对 400 是其天然分界。面板被拖动右移后（2026-11-08 实测左缘
+    256、标题行 x=270），取大者保证面板行仍被纳入——面板左缘 <~345
+    时对话框行始终被排除（行首 ≥400 > 左缘+160）。img_np 为 None 时
+    回退 PANEL_MAX_X（无帧可定位）。
+    """
+    if img_np is None:
+        return PANEL_MAX_X
+    base = (track_content_region(img_np) or TRACK_REGION)[0]
+    return max(PANEL_MAX_X, base + 160)
+
+
 def ocr_track(img):
     """OCR 任务追踪内容区（动态定位；模板未命中回退静态 TRACK_REGION）。
 
@@ -251,8 +270,16 @@ class TrackGate:
         return items
 
     def paste_track(self, img, img_np):
-        """把当前帧面板内容区裁剪贴入掩码帧（像素判定用，不复用陈旧像素）。"""
+        """把当前帧面板内容区裁剪贴入掩码帧（像素判定用，不复用陈旧像素）。
+
+        顶部上探 40px 覆盖标题条：掩码帧随后会交给 track_task 做
+        左列界定位（track_content_region），标题条像素不在帧内则模板
+        定位失败、左列界退回绝对坐标（面板漂移后锚点误拒）——
+        2026-11-08 修罗确认轮询链路教训。上探行不影响 OCR 行判定
+        （items 均在内容区 t 之下）。
+        """
         l, t, r, b = self.region or TRACK_REGION
+        t = max(0, t - 40)
         img_np[t:b, l:r] = np.asarray(img)[t:b, l:r]
 
 
@@ -469,8 +496,16 @@ def _is_title_line(txt):
     return True
 
 
-def group_tasks(items):
-    """把 OCR 行按标题行分组为任务列表。"""
+def group_tasks(items, xmax=None):
+    """把 OCR 行按标题行分组为任务列表。
+
+    xmax：内容行行首 x 上限，默认 PANEL_MAX_X（绝对 400，居中对话框
+    行行首恒 ≥400 被排除）。调用方有帧时传 panel_row_xmax(img_np)——
+    面板被拖动右移后内容行仍被纳入（面板左缘 <~345 时对话框行仍被
+    排除，2026-11-08 面板漂移教训）。
+    """
+    if xmax is None:
+        xmax = PANEL_MAX_X
     tasks = []
     cur = None
     for txt, rect, score in items:
@@ -478,7 +513,7 @@ def group_tasks(items):
             if cur is not None:
                 tasks.append(cur)
             cur = {"title": txt, "lines": [], "text": ""}
-        elif cur is not None and rect[0] < PANEL_MAX_X:
+        elif cur is not None and rect[0] < xmax:
             cur["lines"].append((txt, rect, score))
     if cur is not None:
         tasks.append(cur)
@@ -503,7 +538,7 @@ def read_tasks(win):
     if img is None:
         return []
     items, _ = ocr_track_read(img)
-    return group_tasks(items)
+    return group_tasks(items, panel_row_xmax(np.asarray(img)))
 
 
 def task_count(win):
@@ -520,13 +555,14 @@ def has_task_in(items, img_np, title, fallback_texts=()):
     区域 OCR 检测稳定且仅在任务存在时出现；允许绿色（链接行本身
     是绿色，标题判定才排除绿色）。
     """
+    xmax = panel_row_xmax(img_np)
     for txt, rect, score in items:
-        if title in txt and score >= 0.55 and rect[0] < PANEL_MAX_X:
+        if title in txt and score >= 0.55 and rect[0] < xmax:
             if not is_green_text(img_np, rect):
                 return True
     for ft in fallback_texts:
         for txt, rect, score in items:
-            if ft in txt and score >= 0.55 and rect[0] < PANEL_MAX_X:
+            if ft in txt and score >= 0.55 and rect[0] < xmax:
                 return True
     return False
 
@@ -566,7 +602,7 @@ def get_task(win, title):
     if img is None:
         return None
     items, _ = ocr_track_read(img)
-    return find_task(group_tasks(items), title)
+    return find_task(group_tasks(items, panel_row_xmax(np.asarray(img))), title)
 
 
 def task_signature(task):
@@ -624,19 +660,24 @@ def has_new_task(win, title, fallback_texts, pre_sig):
 def _keyword_fallback(items, img_np, keywords, arect, require_coord=False):
     """在追踪面板区域内按关键词兜底查找绿字行（锚点内容采集失败时）。
 
-    搜索范围：面板左列（rect[0] < ANCHOR_MAX_X，排除居中对话框与
+    搜索范围：面板左列（相对动态内容区左缘的 x 界，排除居中对话框与
     任务变化浮字提示——浮字同文案同为绿色，限 PANEL_MAX_X 仍会
-    被兜底点中，2026-11-08 玄枢轶闻教训）、锚点行下方
-    （容 OCR 纵向抖动；arect 为 None 时不限纵向——标题行被区域 OCR
+    被兜底点中，2026-11-08 玄枢轶闻教训；面板漂移时左列跟随）、锚点行
+    下方（容 OCR 纵向抖动；arect 为 None 时不限纵向——标题行被区域 OCR
     整行漏检、锚点定位失败时用）；不过滤标题行判定（子目标行可能被
     误判为标题行）。返回 (txt, rect) 或 None。
     require_coord：候选行须含地图坐标——五环子目标行「24载的替身
     [1/5]」与链接行同含子目标关键词、同为亮绿带下划线（实测
     2026-10-31），兜底点击必须靠坐标区分，否则点中子目标行。
     """
+    # 左列界相对动态内容区左缘；img_np 为掩码帧时 paste_track 已上探
+    # 覆盖标题条、模板定位仍可用。定位失败回退绝对左列界（原行为）
+    region = track_content_region(img_np)
+    base = (region or TRACK_REGION)[0]
+    lo, hi = base - 10, base + ANCHOR_MAX_X
     cands = []
     for txt, rect, score in items:
-        if score < 0.55 or rect[0] >= ANCHOR_MAX_X:
+        if score < 0.55 or not (lo <= rect[0] < hi):
             continue
         if arect is not None and rect[1] < arect[3] - 30:  # 锚点行下方（容抖动）
             continue
@@ -697,12 +738,25 @@ def track_task(win, title, text=None, green_index=0, retries=4, retry_interval=1
                 return False, "窗口截图失败"
             items, img_np = ocr_follow(img)
 
+        # 面板左列 x 界：相对动态内容区左缘（面板漂移时左列跟随）。
+        # 2026-11-08 实测：面板被拖动到 x≈256 后，绝对 ANCHOR_MAX_X=180
+        # 把真实标题行（rect[0]=270）拒之门外 → 锚点/兜底全空、修罗
+        # 每轮「任务追踪中未找到」死循环。左界 region_l-10 容忍 OCR
+        # 框抖动并排除固定在窗口左侧的浮字提示（面板右移后浮字在
+        # 区域左缘之外）；右界 region_l+ANCHOR_MAX_X 保持浮字/对话框
+        # 劫持防护（浮字提示距面板左列 ≥200px，2026-11-08 教训）。
+        # img_np 为掩码帧（确认轮询 paste_track 产物）时同样可定位
+        # 标题条——paste_track 已上探覆盖标题条（见 TrackGate）
+        region = track_content_region(img_np) or TRACK_REGION
+        col_lo = region[0] - 10
+        col_hi = region[0] + ANCHOR_MAX_X
+
         # 任务锚点行：优先取标题格式行（含方括号短行，_is_title_line），
         # 无标题格式行再回退短行标题文案（兼容无方括号标题）。
         # 修罗实测：「狂风修罗」（无方括号的干扰行）抢先成为锚点后，
         # 内容采集在真实标题「修罗任务[常规玩法]」处中断，内容恒 0 行
         # → 4 次渲染重试空转 ~8s 后放弃整轮。锚点必须落在追踪面板
-        # 标题列（x<ANCHOR_MAX_X）：2026-11-06 玄枢轶闻实测，对话框
+        # 标题列（左列 x 界内）：2026-11-06 玄枢轶闻实测，对话框
         # 仍在场时标题行 OCR 抖动未过严格判定，宽松兜底命中对话框里
         # 含「玄枢轶闻」的故事行（x≈250），内容采集随之落入对话框、
         # 把 NPC 收尾台词当面板绿字点击 (261,260)（正确 (91,268)），
@@ -710,12 +764,12 @@ def track_task(win, title, text=None, green_index=0, retries=4, retry_interval=1
         anchor_idx = None
         for i, (txt, rect, score) in enumerate(items):
             if _is_title_line(txt) and title in txt and score >= 0.55 \
-                    and rect[0] < ANCHOR_MAX_X:
+                    and col_lo <= rect[0] < col_hi:
                 anchor_idx = i
                 break
         if anchor_idx is None:
             for i, (txt, rect, score) in enumerate(items):
-                if title in txt and score >= 0.55 and rect[0] < ANCHOR_MAX_X \
+                if title in txt and score >= 0.55 and col_lo <= rect[0] < col_hi \
                         and len(txt.strip()) <= 20:
                     anchor_idx = i
                     break
@@ -728,7 +782,7 @@ def track_task(win, title, text=None, green_index=0, retries=4, retry_interval=1
             # 劫持锚点（2026-11-08 玄枢轶闻点错教训的锚点侧通道）
             for i, (txt, rect, score) in enumerate(items):
                 if _is_title_line(txt) and title in txt and score >= 0.55 \
-                        and rect[0] < ANCHOR_MAX_X:
+                        and col_lo <= rect[0] < col_hi:
                     anchor_idx = i
                     break
         if anchor_idx is None:
@@ -753,23 +807,24 @@ def track_task(win, title, text=None, green_index=0, retries=4, retry_interval=1
         last_arect = arect
 
         # 内容行：锚点下方、横向交叠、至下一个标题行或纵向超过 150px 为止（描述换行）。
-        # 行首须在面板左列（rect[0] < ANCHOR_MAX_X）：任务变化瞬间游戏在
-        # 面板右侧（x≈200~400）弹同文案的绿色浮字提示，横向交叠过滤
-        # （标题 rect 右缘 161+40=201）拦不住 x≈200 的浮字行；过渡帧面板
-        # 链接下划线/绿字判定失败时浮字行按 y 排序抢先成为点击目标——
-        # 2026-11-08 玄枢轶闻点中浮字 (260,260) 而非链接 (91,268)，任务
-        # 卡死 4 分钟。真实面板内容行（含折行续行）恒从最左列 x≈21~54 起。
-        # 左列外的「标题形态」行（浮字小标题/对话框括号行）不再截断内容
-        # 采集：旧逻辑在此 break 会把其后的真实链接行一并丢掉
+        # 行首须在面板左列（col_lo ≤ rect[0] < col_hi，相对动态区域左缘——
+        # 面板漂移时左列跟随）：任务变化瞬间游戏弹同文案的绿色浮字提示
+        # （距面板左列 ≥200px），横向交叠过滤（标题 rect 右缘 +40）拦不住
+        # 紧邻的浮字行；过渡帧面板链接下划线/绿字判定失败时浮字行按 y
+        # 排序抢先成为点击目标——2026-11-08 玄枢轶闻点中浮字 (260,260)
+        # 而非链接 (91,268)，任务卡死 4 分钟。真实面板内容行（含折行
+        # 续行）恒从区域左缘 x≈+11~54 起。左列外的「标题形态」行（浮字
+        # 小标题/对话框括号行）不再截断内容采集：旧逻辑在此 break 会把
+        # 其后的真实链接行一并丢掉
         content = []
         dropped = []  # 左列外行（浮字/提示/对话框行）：记录并从像素帧抹除
         for txt, rect, score in items[anchor_idx + 1:]:
             if rect[1] - arect[3] > 150:
                 break
-            if rect[0] < ANCHOR_MAX_X and _is_title_line(txt):
+            if col_lo <= rect[0] < col_hi and _is_title_line(txt):
                 break
             if rect[0] < arect[2] + 40 and rect[2] > arect[0] - 40:
-                if rect[0] < ANCHOR_MAX_X:
+                if col_lo <= rect[0] < col_hi:
                     content.append((txt, rect, score))
                 else:
                     dropped.append((txt, rect))

@@ -777,16 +777,17 @@ def _wuhuan_link_picker(items, img_np):
     （实测 3.2%），颜色与下划线都无法区分。
     """
     anchor = None
+    xmax = task_tracker.panel_row_xmax(img_np)
     for txt, rect, score in items:
         if task_tracker._is_title_line(txt) and WUHUAN_TITLE in txt \
-                and score >= 0.55 and rect[0] < task_tracker.PANEL_MAX_X:
+                and score >= 0.55 and rect[0] < xmax:
             anchor = rect
             break
     if anchor is None:
         return task_tracker.PICK_FAIL
     rows = []
     for txt, rect, score in items:
-        if score < 0.55 or rect[0] >= task_tracker.PANEL_MAX_X:
+        if score < 0.55 or rect[0] >= xmax:
             continue
         if rect[1] - anchor[3] > 150:
             continue  # 锚点下方内容范围外（同 track_task 内容采集纵向限制）
@@ -818,7 +819,9 @@ def _wuhuan_text_key(items, img_np):
     检测。链接行未检出时返回空串：follow_task 视作内容不可读，不点击
     也不作变化信号，等待下一轮复读。
     """
-    task = task_tracker.find_task(task_tracker.group_tasks(items), WUHUAN_TITLE)
+    task = task_tracker.find_task(
+        task_tracker.group_tasks(items, task_tracker.panel_row_xmax(img_np)),
+        WUHUAN_TITLE)
     if task is None:
         return ""
     rows = []

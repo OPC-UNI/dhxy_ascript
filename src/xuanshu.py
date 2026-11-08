@@ -757,7 +757,10 @@ def _current_task_sig(win, title):
     if img is None:
         return None
     items, _ = task_tracker.ocr_track(img)
-    task = task_tracker.find_task(task_tracker.group_tasks(items), title)
+    task = task_tracker.find_task(
+        task_tracker.group_tasks(items,
+                                 task_tracker.panel_row_xmax(np.asarray(img))),
+        title)
     if task is None:
         return ""
     return task_tracker.task_signature(task)
@@ -1239,7 +1242,10 @@ def _confirm_task_gone(win, title, fallback_texts=(), first_img=None,
             continue
         gone_region = _task_gone_region(np.asarray(img)) or TASK_GONE_REGION
         items, img_np = game_map.ocr_regions(img, (gone_region,))
-        if task_tracker.find_task(task_tracker.group_tasks(items), title) is not None:
+        if task_tracker.find_task(
+                task_tracker.group_tasks(
+                    items, task_tracker.panel_row_xmax(np.asarray(img))),
+                title) is not None:
             return False  # 任务重新出现：此前为漏读，继续跟踪
         if fallback_texts:
             # 标题行被区域 OCR 漏检时 find_task 找不到任务：用内容链接行
@@ -1498,7 +1504,9 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 time.sleep(FOLLOW_POLL_INTERVAL)
                 continue
             items, img_np = task_tracker.ocr_follow(img)
-        task = task_tracker.find_task(task_tracker.group_tasks(items), title)
+        task = task_tracker.find_task(
+            task_tracker.group_tasks(items, task_tracker.panel_row_xmax(img_np)),
+            title)
         if task is None:
             if _confirm_task_gone(win, title, fallback_keywords,
                 first_img=img, polls=_gone_polls()):
@@ -1654,7 +1662,10 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 items = track_gate.ocr(img)
                 img_np = np.zeros_like(np.asarray(img))
                 track_gate.paste_track(img, img_np)
-                task2 = task_tracker.find_task(task_tracker.group_tasks(items), title)
+                task2 = task_tracker.find_task(
+                    task_tracker.group_tasks(
+                        items, task_tracker.panel_row_xmax(img_np)),
+                    title)
                 if task2 is None:
                     if _confirm_task_gone(win, title, fallback_keywords,
                         first_img=img, polls=_gone_polls()):
@@ -1776,7 +1787,10 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 ok2, info2 = _play_chuyijuebao(win)
                 log(f"[{prefix}] {info2}", "SYS" if ok2 else "WARN")
                 continue
-            task2 = task_tracker.find_task(task_tracker.group_tasks(items), title)
+            task2 = task_tracker.find_task(
+                task_tracker.group_tasks(items,
+                                         task_tracker.panel_row_xmax(img_np)),
+                title)
             if task2 is None:
                 if _confirm_task_gone(win, title, fallback_keywords,
                     first_img=img, polls=_gone_polls()):
