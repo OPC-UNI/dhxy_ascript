@@ -37,7 +37,9 @@ include-package-data = true
 # 文件夹排除列表：这些文件夹及其内容不会被打包
 exclude-dirs = [
     ".venv", "venv", ".idea", ".vscode", "__pycache__",
-    "build", "dist", ".git", ".pytest_cache"
+    "build", "dist", "dist_exe", "logs", "design-system",
+    ".claude", ".cursor", ".diag", ".github",
+    ".git", ".pytest_cache"
 ]
 
 # 文件后缀排除列表：匹配这些后缀的文件不会被打包
