@@ -180,12 +180,15 @@ def _activity_frame_state(frame):
     return None, None
 
 
-def _ensure_activity_closed(win):
+def ensure_activity_closed(win):
     """收起游戏活动侧栏：区域内出现展开态图标则点击一次，轮询确认
     变成收起态。返回 (成功, 描述)。
 
-    未找到图标视为无需操作（场景不可见或已收起）；点击后 2s 内未见
-    收起态保守报失败，不凭推断宣告成功（与热键判定同原则）。
+    调用方：任务启动清屏（run_clear_screen）、锄遗聚宝小游戏点击
+    开始按钮前（xuanshu._play_chuyijuebao，侧栏展开会遮挡开始按钮，
+    2026-11-04）。未找到图标视为无需操作（场景不可见或已收起）；
+    点击后 2s 内未见收起态保守报失败，不凭推断宣告成功（与热键判定
+    同原则）。
     """
     frame = _capture_frame(win)
     if frame is None:
@@ -241,5 +244,5 @@ def run_clear_screen(win):
                                    "屏蔽玩家")
     ok5, info5 = _ensure_hotkey_on(win, "5", "stall_ok", "stall_cancel",
                                    "屏蔽摊位")
-    ok_act, info_act = _ensure_activity_closed(win)
+    ok_act, info_act = ensure_activity_closed(win)
     return ok6 and ok5 and ok_act, f"{info6}；{info5}；{info_act}"

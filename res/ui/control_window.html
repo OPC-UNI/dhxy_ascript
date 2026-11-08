@@ -431,6 +431,50 @@
         /* 设备 ID 点击复制 */
         #env-device-id { cursor: pointer; }
         #env-device-id:hover { color: var(--accent); }
+        /* ---- 统计页：KPI 三卡 + 任务模式明细表（docs/task-stats-design.md） ---- */
+        .stat-kpis { display: flex; gap: 8px; }
+        .stat-card {
+            flex: 1; min-width: 0; background: var(--panel);
+            border: 1px solid var(--border); border-radius: 8px;
+            padding: 10px 12px; display: flex; flex-direction: column; gap: 4px;
+        }
+        .stat-label { font-size: 12px; color: var(--text-dim); }
+        .stat-num {
+            font-family: 'Consolas', '微软雅黑', monospace; font-size: 22px;
+            color: var(--text); transition: color 0.15s;
+        }
+        .stat-sub { font-size: 11px; color: var(--text-dim); font-family: 'Consolas', '微软雅黑', monospace; }
+        .stat-live {
+            display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+            background: var(--progress-tint); border: 1px solid var(--border);
+            border-radius: 8px; padding: 8px 12px; font-size: 12px; color: var(--text);
+        }
+        .stat-live-num { font-family: 'Consolas', '微软雅黑', monospace; color: var(--accent); }
+        .stat-head { display: flex; align-items: center; gap: 8px; }
+        .stat-head .group-title { flex: 1; }
+        .stat-toggle { display: flex; gap: 4px; }
+        .stat-toggle span {
+            padding: 2px 10px; border-radius: 5px; border: 1px solid var(--border2);
+            color: var(--text-dim); font-size: 12px; cursor: pointer; user-select: none;
+            transition: all 0.15s;
+        }
+        .stat-toggle span:hover { color: var(--text); }
+        .stat-toggle span.on { color: var(--accent); border-color: var(--accent); background: var(--progress-tint); }
+        .stat-row { display: flex; align-items: center; gap: 8px; padding: 6px 10px; }
+        .stat-row + .stat-row { border-top: 1px solid var(--border); }
+        .stat-row .mode { flex: 1; min-width: 0; color: var(--text); font-size: 13px; }
+        .stat-row .val {
+            width: 80px; text-align: right; font-family: 'Consolas', '微软雅黑', monospace;
+            font-size: 12px; color: var(--text); flex-shrink: 0;
+        }
+        .stat-row .val.zero { color: var(--text-dim); }
+        .stat-row.head-row .val { color: var(--text-dim); font-family: "微软雅黑"; }
+        .stat-row.head-row .mode { color: var(--text-dim); }
+        .stat-row.current { background: var(--progress-tint); box-shadow: inset 2px 0 0 var(--accent); }
+        .stat-row.current + .stat-row { border-top: 1px solid var(--border); }
+        .stat-empty { color: var(--text-dim); font-size: 12px; text-align: center; padding: 24px 12px; }
+        .stat-foot { display: flex; justify-content: flex-end; }
+        .stat-foot .link-btn.danger { color: var(--danger); }
     </style>
 </head>
 <body class="light">
@@ -460,6 +504,10 @@
             <div class="nav-item" data-page="general">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
                 <span>设 置</span>
+            </div>
+            <div class="nav-item" data-page="stats">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+                <span>统 计</span>
             </div>
             <div class="nav-item" data-page="system">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
@@ -857,6 +905,44 @@
                     <span class="switch-track"></span>
                     <span>自动使用法门（每场战斗第 1 回合先点一次法门坐标）</span>
                 </label>
+            </div>
+        </div>
+        <!-- ============ 统计页（任务统计报表：轮次 / 战斗 / 耗时） ============ -->
+        <div class="page" id="page-stats">
+            <div class="stat-kpis">
+                <div class="stat-card">
+                    <span class="stat-label">累计轮次</span>
+                    <span class="stat-num" id="stat-rounds">0</span>
+                    <span class="stat-sub" id="stat-rounds-today">今日 +0</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-label">累计战斗</span>
+                    <span class="stat-num" id="stat-battles">0</span>
+                    <span class="stat-sub" id="stat-battles-today">今日 +0</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-label">累计耗时</span>
+                    <span class="stat-num" id="stat-dur">0s</span>
+                    <span class="stat-sub" id="stat-dur-today">今日 0s</span>
+                </div>
+            </div>
+            <!-- 本次会话摘要（仅任务运行中出现） -->
+            <div class="stat-live" id="stat-live" style="display:none">
+                <span>本次会话</span>
+                <span class="stat-live-num" id="stat-live-text">-</span>
+            </div>
+            <div class="group-box">
+                <div class="stat-head">
+                    <div class="group-title">按任务模式</div>
+                    <div class="stat-toggle" id="stat-toggle">
+                        <span class="on" data-view="total" onclick="setStatsView('total')">累计</span>
+                        <span data-view="today" onclick="setStatsView('today')">今日</span>
+                    </div>
+                </div>
+                <div class="stat-table" id="stat-table"></div>
+            </div>
+            <div class="stat-foot">
+                <span class="link-btn danger" id="stat-clear" onclick="clearStats()">清空统计</span>
             </div>
         </div>
         <!-- ============ 系统页（环境 / 授权 / 配置方案 / 关于） ============ -->
@@ -1483,6 +1569,7 @@
             p.classList.toggle('active', p.id === 'page-' + name));
         if (name === 'system') refreshEnv();
         if (name === 'dash') { refreshProgress(); refreshRuntimeStatus(); }
+        if (name === 'stats') refreshStats();
     }
 
     /* ================= 运行看板渲染 ================= */
@@ -1671,6 +1758,8 @@
             if (g && typeof g.show === 'boolean') {
                 navGroup.style.display = g.show ? 'flex' : 'none';
             }
+            // 统计页激活时同步刷新（与看板同节拍；仅激活时轮询）
+            if (pageStats.classList.contains('active')) await refreshStats();
         } catch (e) { /* 桥接未就绪时忽略 */ }
     }
 
@@ -1701,6 +1790,132 @@
         if (!collapsed) logBox.scrollTop = logBox.scrollHeight;
     }
 
+    /* ================= 统计页（任务统计报表：轮次/战斗/耗时） ================= */
+    const STATS_MODES = ['五环', '客栈', '修罗', '五倍', '玄枢轶闻', '名望', '仅战斗'];
+    const pageStats = document.getElementById('page-stats');
+    const statToggle = document.getElementById('stat-toggle');
+    const statRounds = document.getElementById('stat-rounds');
+    const statBattles = document.getElementById('stat-battles');
+    const statDur = document.getElementById('stat-dur');
+    const statRoundsToday = document.getElementById('stat-rounds-today');
+    const statBattlesToday = document.getElementById('stat-battles-today');
+    const statDurToday = document.getElementById('stat-dur-today');
+    const statLive = document.getElementById('stat-live');
+    const statLiveText = document.getElementById('stat-live-text');
+    const statTable = document.getElementById('stat-table');
+    const statClear = document.getElementById('stat-clear');
+    let statsData = null;      // get_task_stats 返回（未取到/空为 null）
+    let statsView = 'total';   // 'total' | 'today'
+    let statsClearArmed = false;
+    let statsClearTimer = null;
+
+    function fmtDur(sec) {
+        sec = Math.floor(sec || 0);
+        if (sec <= 0) return '0s';
+        const d = Math.floor(sec / 86400);
+        const h = Math.floor(sec % 86400 / 3600);
+        const m = Math.floor(sec % 3600 / 60);
+        const s = sec % 60;
+        if (d > 0) return d + 'd ' + h + 'h';
+        if (h > 0) return h + 'h ' + m + 'm';
+        if (m > 0) return m + 'm ' + s + 's';
+        return s + 's';
+    }
+
+    // 当前视图数据源：累计 total / 今日（daily 最后一天）
+    function statsTotals() {
+        if (!statsData) return { rounds: 0, battles: 0, seconds: 0, modes: {} };
+        if (statsView === 'today') {
+            const days = Object.keys(statsData.daily || {});
+            return statsData.daily[days[days.length - 1]]
+                || { rounds: 0, battles: 0, seconds: 0, modes: {} };
+        }
+        return statsData.total || { rounds: 0, battles: 0, seconds: 0, modes: {} };
+    }
+
+    function renderStats() {
+        const total = (statsData && statsData.total) || { rounds: 0, battles: 0, seconds: 0, modes: {} };
+        const days = Object.keys((statsData && statsData.daily) || {});
+        const today = (statsData && statsData.daily[days[days.length - 1]])
+            || { rounds: 0, battles: 0, seconds: 0, modes: {} };
+        const hasData = total.rounds > 0 || total.battles > 0 || total.seconds > 0;
+        // KPI 卡：累计 + 今日
+        statRounds.innerText = total.rounds;
+        statBattles.innerText = total.battles;
+        statDur.innerText = fmtDur(total.seconds);
+        statRoundsToday.innerText = '今日 +' + today.rounds;
+        statBattlesToday.innerText = '今日 +' + today.battles;
+        statDurToday.innerText = '今日 ' + fmtDur(today.seconds);
+        // 本次会话摘要（任务运行中展示；数据由任务进程每 2s 落盘）
+        const sess = statsData && statsData.session;
+        if (running && sess && (sess.rounds > 0 || sess.battles > 0 || sess.seconds > 0)) {
+            statLive.style.display = 'flex';
+            statLiveText.innerText = (sess.mode ? esc(sess.mode) + ' · ' : '')
+                + '轮次 +' + sess.rounds + ' · 战斗 +' + sess.battles
+                + ' · 已运行 ' + fmtDur(sess.seconds);
+        } else {
+            statLive.style.display = 'none';
+        }
+        // 明细表（累计/今日切换）
+        const view = statsTotals();
+        const modes = view.modes || {};
+        const rows = ['<div class="stat-row head-row"><span class="mode">模式</span>'
+            + '<span class="val">轮次</span><span class="val">战斗</span><span class="val">耗时</span></div>'];
+        if (!hasData) {
+            statTable.innerHTML = rows.join('')
+                + '<div class="stat-empty">暂无统计数据——启动任务后自动记录</div>';
+            return;
+        }
+        const curMode = (running && statsView === 'total' && sess && sess.mode) ? sess.mode : '';
+        for (const mode of STATS_MODES) {
+            const m = modes[mode] || {};
+            const rounds = (mode === '仅战斗') ? '—' : String(m.rounds || 0);
+            rows.push('<div class="stat-row' + (mode === curMode ? ' current' : '') + '">'
+                + '<span class="mode">' + esc(mode) + '</span>'
+                + '<span class="val' + (!m.rounds && mode !== '仅战斗' ? ' zero' : '') + '">' + rounds + '</span>'
+                + '<span class="val' + (!m.battles ? ' zero' : '') + '">' + (m.battles || 0) + '</span>'
+                + '<span class="val' + (!m.seconds ? ' zero' : '') + '">' + fmtDur(m.seconds) + '</span></div>');
+        }
+        statTable.innerHTML = rows.join('');
+    }
+
+    async function refreshStats() {
+        try {
+            const s = await callPython('get_task_stats');
+            const sig = JSON.stringify(s);
+            if (sig !== JSON.stringify(statsData)) {
+                statsData = s;
+                renderStats();
+            }
+        } catch (e) { /* 桥接未就绪时忽略 */ }
+    }
+
+    function setStatsView(view) {
+        statsView = view;
+        statToggle.querySelectorAll('span').forEach(t =>
+            t.classList.toggle('on', t.dataset.view === view));
+        renderStats();
+    }
+
+    async function clearStats() {
+        if (running) return;  // 运行中禁用（Python 侧同样有守卫）
+        if (!statsClearArmed) {
+            statsClearArmed = true;
+            statClear.innerText = '再点一次确认清空';
+            if (statsClearTimer) clearTimeout(statsClearTimer);
+            statsClearTimer = setTimeout(() => {
+                statsClearArmed = false;
+                statClear.innerText = '清空统计';
+            }, 3000);
+            return;
+        }
+        statsClearArmed = false;
+        if (statsClearTimer) { clearTimeout(statsClearTimer); statsClearTimer = null; }
+        statClear.innerText = '清空统计';
+        const r = await callPython('clear_task_stats');
+        if (r && r.status === 'success') { statsData = null; renderStats(); }
+    }
+
     /* ================= 启动/停止 ================= */
     function update() {
         // 启动/停止按钮文案带老板键提示（boss_hotkey 为 none 时不显示）
@@ -1722,6 +1937,10 @@
         btnSchemeDelete.disabled = running || schemeActive === '默认';
         btnSchemeImport.disabled = running;
         btnSchemeExport.disabled = running;
+        // 统计页清空按钮：运行中禁用（Python 侧同样有守卫）
+        statClear.style.opacity = running ? 0.35 : 1;
+        statClear.style.cursor = running ? 'not-allowed' : 'pointer';
+        statClear.title = running ? '任务运行中不可清空' : '';
         renderDash();
     }
 

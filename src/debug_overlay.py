@@ -31,6 +31,7 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import datetime, timedelta
 
 from .app_utils import log
 
@@ -57,6 +58,25 @@ _config = ""
 _battle = ""
 _progress = ""
 _phase = ""  # 当前阶段（运行看板「阶段」行；各模块在阶段节点写入，战斗线程进出战斗覆写/清空）
+
+# ---- 任务统计（task_stats.json 持久化，2026-11-08 统计页） ----
+# 统计档案与状态文件分家：状态文件会话级、shutdown 删除、含绘制指令；
+# 统计文件是历史档案，跨会话跨天永久保留。唯一写者 = 任务子进程
+# （supervisor 2s 节拍累积 + shutdown 终写），主进程只读——无并发写。
+STATS_FILENAME = "task_stats.json"
+STATS_KEEP_DAYS = 90  # daily 滚动保留天数
+# 统计归属的有效模式（与 control_window.TASK_MODES 一致；任务进程不得
+# 反向 import 控制窗口，故本地维护一份）
+_STATS_MODES = ("五环", "客栈", "修罗", "五倍", "玄枢轶闻", "名望", "仅战斗")
+# 会话统计（任务进程内存，start() 重置）：
+_session_started_at = None   # 会话开始时间戳
+_session_rounds = 0          # 本次会话完成轮次（record_round 同步计）
+_session_battles = 0         # 本次会话战斗场次（tick 增量累计）
+_session_seconds = 0.0       # 本次会话耗时（tick 增量累计）
+_battle_no = 0               # 最近战斗序号（set_battle 记录）
+_last_battle_seen = 0        # 上次 tick 已计入的战斗序号
+_last_tick = None            # 上次统计 tick 时间
+_stats_data = None           # 持久化统计（首次使用懒加载）
 
 # ---- 绘制进程管理 ----
 _helper_proc = None
@@ -101,9 +121,10 @@ def set_config(char, beast):
 
 def set_battle(no):
     """设置战斗场次行（battle.watch_loop 每场战斗进入时更新）。"""
-    global _battle
+    global _battle, _battle_no
     with _lock:
         _battle = f"战斗: 第 {no} 场"
+        _battle_no = int(no or 0)  # 统计用：supervisor 按增量计入战斗场次
 
 
 def set_progress(text):
@@ -183,6 +204,162 @@ def read_runtime_status():
         return json.loads(path.read_text(encoding="utf-8")).get("status")
     except Exception:
         return None
+
+
+# ==================== 任务统计（task_stats.json） ====================
+
+def record_round():
+    """记录一次任务轮次完成（各任务模块每轮完成点调用，与 set_progress
+    同点打点）：直接计入内存统计（会话/当日/累计/当前模式），落盘由
+    supervisor 每 2s 节拍执行。当前模式不是单一有效模式（启动期多模式
+    串「修罗、五倍」）时只计总数不计模式。"""
+    global _session_rounds, _stats_data
+    with _lock:
+        _session_rounds += 1
+        data = _stats_ensure()
+        _ensure_day(data)
+        day = data["daily"][_today_str()]
+        data["total"]["rounds"] += 1
+        day["rounds"] += 1
+        mode = _stats_mode_locked()
+        if mode:
+            entry = data["total"]["modes"].setdefault(mode, _mode_entry())
+            entry["rounds"] += 1
+            day["modes"].setdefault(mode, _mode_entry())["rounds"] += 1
+
+
+def _stats_path():
+    return _config_dir() / STATS_FILENAME
+
+
+def _today_str():
+    return time.strftime("%Y-%m-%d")
+
+
+def _mode_entry():
+    return {"rounds": 0, "battles": 0, "seconds": 0}
+
+
+def _empty_stats():
+    return {"total": {"rounds": 0, "battles": 0, "seconds": 0, "modes": {}},
+            "daily": {}}
+
+
+def _stats_mode_locked():
+    """当前统计归属模式（调用方必须已持有 _lock）：单一有效模式才归属，
+    启动期多模式串「修罗、五倍」/未选择返回 None（只计总数）。"""
+    return _task if _task in _STATS_MODES else None
+
+
+def _ensure_day(data):
+    """确保 daily 有今天的条目（日期随午夜自然切换，任务跨天运行时
+    后续轮次自动记入新一天）。"""
+    day = _today_str()
+    if day not in data["daily"]:
+        data["daily"][day] = {"rounds": 0, "battles": 0, "seconds": 0, "modes": {}}
+
+
+def _stats_load():
+    """加载统计文件；缺失/损坏返回空结构（不清空不报错，前端呈现空态）。"""
+    try:
+        path = _stats_path()
+        if not path.exists():
+            return _empty_stats()
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict) or not isinstance(data.get("total"), dict):
+            return _empty_stats()
+        total = data["total"]
+        total.setdefault("rounds", 0)
+        total.setdefault("battles", 0)
+        total.setdefault("seconds", 0)
+        total.setdefault("modes", {})
+        if not isinstance(data.get("daily"), dict):
+            data["daily"] = {}
+        for day in data["daily"].values():
+            if isinstance(day, dict) and not isinstance(day.get("modes"), dict):
+                day["modes"] = {}
+        return data
+    except Exception:
+        return _empty_stats()
+
+
+def _stats_ensure():
+    """取内存统计结构（懒加载：首次使用才读文件）。调用方必须已持有 _lock。"""
+    global _stats_data
+    if _stats_data is None:
+        _stats_data = _stats_load()
+    return _stats_data
+
+
+def _stats_write(data):
+    """原子写入统计文件并修剪 daily（保留最近 STATS_KEEP_DAYS 天，
+    ISO 日期串字典序即时间序）。"""
+    try:
+        # 保留最近 STATS_KEEP_DAYS 个自然日（含今天）：
+        # 今天 - (KEEP_DAYS - 1) 及之后的键保留
+        cutoff = (datetime.now() - timedelta(days=STATS_KEEP_DAYS - 1)).strftime("%Y-%m-%d")
+        data["daily"] = {k: v for k, v in data["daily"].items() if k >= cutoff}
+        path = _stats_path()
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, path)
+    except Exception:
+        pass  # 统计落盘失败不影响任务（与状态文件同策略）
+
+
+def _stats_tick(now):
+    """统计周期累积（复用 supervisor 2s 节拍）：耗时与战斗增量归当日/
+    累计/当前模式，随后落盘；session 快照一并写入（统计页「本次会话」）。
+    """
+    global _last_tick, _last_battle_seen, _session_seconds, _session_battles
+    with _lock:
+        data = _stats_ensure()
+        elapsed = max(0.0, now - _last_tick) if _last_tick is not None else 0.0
+        _last_tick = now
+        battle_delta = max(0, _battle_no - _last_battle_seen)
+        _last_battle_seen = _battle_no
+        _session_seconds += elapsed
+        _session_battles += battle_delta
+        _ensure_day(data)
+        data["total"]["seconds"] += elapsed
+        data["total"]["battles"] += battle_delta
+        day = data["daily"][_today_str()]
+        day["seconds"] += elapsed
+        day["battles"] += battle_delta
+        mode = _stats_mode_locked()
+        if mode:
+            entry = data["total"]["modes"].setdefault(mode, _mode_entry())
+            entry["seconds"] += elapsed
+            entry["battles"] += battle_delta
+            day["modes"].setdefault(mode, _mode_entry())["seconds"] += elapsed
+            day["modes"].setdefault(mode, _mode_entry())["battles"] += battle_delta
+        data["session"] = {"started_at": _session_started_at or now,
+                           "rounds": _session_rounds,
+                           "battles": _session_battles,
+                           "seconds": _session_seconds,
+                           "mode": mode or ""}
+        _stats_write(data)
+
+
+def read_task_stats():
+    """统计报表数据（主进程控制窗口调用）：累计/各模式/最近 7 天/
+    最近一次会话快照。任务未运行或已停止时文件仍在，照常返回。"""
+    data = _stats_load()
+    days = sorted(data.get("daily", {}).keys())[-7:]
+    return {"total": data.get("total", {}),
+            "daily": {k: data["daily"][k] for k in days},
+            "session": data.get("session")}
+
+
+def clear_task_stats():
+    """清空统计文件（主进程调用，仅任务未运行时；写入方为任务子进程）。"""
+    try:
+        path = _stats_path()
+        if path.exists():
+            path.unlink()
+        return {"status": "success"}
+    except Exception as e:
+        return {"status": "error", "msg": str(e)}
 
 
 def _spawn_helper():
@@ -330,6 +507,8 @@ def _supervise(win):
                           "lines": _build_frame(win) if enabled else [],
                           "status": status,
                           "color": OVERLAY_COLOR, "font": OVERLAY_FONT})
+            # 任务统计（与调试开关无关）：同节拍累积并落盘
+            _stats_tick(time.time())
             with _helper_lock:
                 proc = _helper_proc
             if enabled and (proc is None or proc.poll() is not None):
@@ -348,9 +527,23 @@ def _supervise(win):
 
 
 def start(win):
-    """启动悬浮层监督线程（开关状态实时生效，切换后约 2 秒内更新）。"""
-    global _stopped
+    """启动悬浮层监督线程（开关状态实时生效，切换后约 2 秒内更新）。
+
+    同时重置任务统计会话态（start 由任务进程每个会话调一次；统计
+    档案 task_stats.json 跨会话保留，会话计数归零重计）。
+    """
+    global _stopped, _session_started_at, _session_rounds, _session_battles, \
+        _session_seconds, _battle_no, _last_battle_seen, _last_tick, _stats_data
     _stopped = False
+    with _lock:
+        _session_started_at = time.time()
+        _session_rounds = 0
+        _session_battles = 0
+        _session_seconds = 0.0
+        _battle_no = 0
+        _last_battle_seen = 0
+        _last_tick = None
+        _stats_data = None
     log("[调试] 调试信息悬浮层线程已启动（开关实时生效）", "SYS")
     threading.Thread(target=_supervise, args=(win,), daemon=True,
                      name="debug-overlay").start()
@@ -366,6 +559,11 @@ def shutdown():
     """
     global _helper_proc, _stopped
     _stopped = True
+    # 统计终写：进程退出前把最后窗口期的会话数据落盘（最多丢 2s）
+    try:
+        _stats_tick(time.time())
+    except Exception:
+        pass
     try:
         with _helper_lock:
             proc = _helper_proc

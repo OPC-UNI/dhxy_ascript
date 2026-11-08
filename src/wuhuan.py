@@ -992,6 +992,7 @@ def run_loop(win, cycle_interval=3.0):
         app_utils.task_progress_add(win, WUHUAN_TITLE, done)
         total = max_rounds if max_rounds > 0 else "∞"
         debug_overlay.set_progress(f"{done}/{total}")
+        debug_overlay.record_round()  # 统计页：完成轮次计数
         log(f"[五环] {info}（{done}/{total}）", "SYS")
         if completion_kind == "daily":
             # 补查发现今日五环全部完成：点屏幕中间关闭对话框（防遮挡

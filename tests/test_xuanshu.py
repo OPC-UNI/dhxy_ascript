@@ -181,6 +181,8 @@ def test_play_chuyijuebao_batch_clicks_all_targets(monkeypatch):
     for cx, cy in ((300, 200), (500, 200), (700, 200)):
         _red_dot(f, cx, cy, 15)
     monkeypatch.setattr(xuanshu, "close_scene_panels", lambda *a, **k: None)
+    monkeypatch.setattr(xuanshu.clear_screen, "ensure_activity_closed",
+                        lambda win: (True, "测试：跳过活动侧栏收起"))
     monkeypatch.setattr(xuanshu.game_map, "find_template",
                         _fake_find_template_always_present())
     monkeypatch.setattr(xuanshu, "_capture_qi_region", lambda win: f)
@@ -201,6 +203,8 @@ def test_play_chuyijuebao_single_target_uses_precise(monkeypatch):
     f = _qi_region()
     _red_dot(f, 400, 300, 15)
     monkeypatch.setattr(xuanshu, "close_scene_panels", lambda *a, **k: None)
+    monkeypatch.setattr(xuanshu.clear_screen, "ensure_activity_closed",
+                        lambda win: (True, "测试：跳过活动侧栏收起"))
     monkeypatch.setattr(xuanshu.game_map, "find_template",
                         _fake_find_template_always_present())
     monkeypatch.setattr(xuanshu, "_capture_qi_region", lambda win: f)

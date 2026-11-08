@@ -13,6 +13,8 @@ schemes.json
 # 调试信息悬浮层运行时文件（任务进程与绘制进程间通信）
 debug_overlay_state.json
 debug_overlay_helper_exit.txt
+# 任务统计报表持久化档案（跨会话累计的用户数据，不入库）
+task_stats.json
 # 种族字形库（随挂机自动积累的运行时数据）
 team_race_glyphs*.npz
 # 本地日志文件（开发调试用，log 同时落盘到 logs/）

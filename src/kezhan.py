@@ -2321,6 +2321,7 @@ def run_loop(win, cycle_interval=1.0):
             app_utils.task_progress_add(win, TASK_MODE, done)
             total = max_rounds if max_rounds > 0 else "∞"
             debug_overlay.set_progress(f"{done}/{total}")
+            debug_overlay.record_round()  # 统计页：完成轮次计数
             log(f"[客栈] {info}（{done}/{total}）", "SYS")
             if 0 < max_rounds <= done:
                 return f"已完成 {done} 次客栈任务，达到次数上限 {max_rounds}"

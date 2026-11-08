@@ -936,6 +936,8 @@ class ControlWindow(WebWindow):
         self.expose(self.save_task_modes)
         self.expose(self.save_task_count)
         self.expose(self.get_task_progress)
+        self.expose(self.get_task_stats)
+        self.expose(self.clear_task_stats)
         self.expose(self.save_use_sheyaoxiang)
         self.expose(self.save_threshold)
         self.expose(self.save_battle_action)
@@ -1366,6 +1368,20 @@ class ControlWindow(WebWindow):
         或状态陈旧时返回 None。"""
         from . import debug_overlay  # 延迟导入：与其余验证模块保持一致
         return debug_overlay.read_runtime_status()
+
+    def get_task_stats(self):
+        """任务统计报表数据：直读任务子进程持久化的 task_stats.json
+        （累计/各模式/最近 7 天/最近一次会话快照）。任务未运行或已
+        停止时文件保留，照常返回。"""
+        from . import debug_overlay
+        return debug_overlay.read_task_stats()
+
+    def clear_task_stats(self):
+        """清空任务统计：任务运行中拒绝（子进程正在写文件，防竞态）。"""
+        if self._tm.is_running():
+            return {"status": "error", "msg": "RUNNING"}
+        from . import debug_overlay
+        return debug_overlay.clear_task_stats()
 
     def get_group_state(self):
         """组号侧边栏入口显隐状态（页面 1.5s 轮询，任务未运行也生效）：

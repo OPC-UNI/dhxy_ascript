@@ -31,6 +31,7 @@ from .app_utils import log, human_click, precise_click, rapid_click, move_away, 
 from . import app_utils  # 高性能模式共享设施（固定位置缓存点击）
 from . import map as game_map  # 地图操作（世界地图/小地图/位置识别）
 from . import task_tracker  # 任务追踪面板操作
+from . import clear_screen  # 启动清屏：活动侧栏收起（锄遗聚宝开始前调用）
 from .battle import (is_in_battle, is_in_battle_frame,
                      watch_in_battle as battle_watch_in_battle)  # 战斗状态判定（统一在 battle.py 中实现）
 from . import debug_overlay  # 调试信息悬浮层（任务进度更新）
@@ -993,6 +994,7 @@ def _play_chuyijuebao(win, timeout=CHUYIJUEBAO_TIMEOUT):
 
     开始后再次进入时无开始按钮（任务已在进行），直接进入消除循环。
     若背包或地图面板打开，先关闭（可能遮挡开始按钮与杂气）；
+    点击开始按钮前先收起活动侧栏（展开会遮挡开始按钮，2026-11-04）；
     循环中每 5 秒兜底检查一次。
     点击策略（杂气走到石头即消失，须尽快清光）：
     - 同帧目标 ≥ QI_BATCH_CLICK_MIN 时批量极速连点：一帧捕获全部目标
@@ -1020,6 +1022,10 @@ def _play_chuyijuebao(win, timeout=CHUYIJUEBAO_TIMEOUT):
     close_scene_panels(win, "玄枢轶闻")
 
     if not CHUYIJUEBAO_DEBUG:
+        # 活动侧栏展开会遮挡小游戏开始按钮：点击前先收起
+        # （2026-11-04 校准；未找到图标/已收起为无需操作，失败不阻塞）
+        ok_act, info_act = clear_screen.ensure_activity_closed(win)
+        log(f"[玄枢轶闻] {info_act}", "SYS" if ok_act else "WARN")
         pt = game_map.find_template(win, CHUYIJUEBAO_START_ICON)
         if pt is not None:
             human_click(win, pt[0], pt[1])
@@ -1953,6 +1959,7 @@ def run_loop(win, cycle_interval=3.0):
             app_utils.task_progress_add(win, TASK_TITLE, done)
             total = max_rounds if max_rounds > 0 else "∞"
             debug_overlay.set_progress(f"{done}/{total}")
+            debug_overlay.record_round()  # 统计页：完成轮次计数
             log(f"[玄枢轶闻] {info}（{done}/{total}）", "SYS")
             if 0 < max_rounds <= done:
                 return f"已完成 {done} 次任务，达到次数上限 {max_rounds}"
