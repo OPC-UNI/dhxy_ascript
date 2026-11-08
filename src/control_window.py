@@ -930,6 +930,8 @@ class ControlWindow(WebWindow):
         self._scheme_dialog_busy = False  # 方案导入导出文件对话框在途标记（防连点）
         self._pending_import = None  # 待确认的导入（{"name", "settings"}；同名冲突时挂起）
         self._license_info = license_info or {}  # 授权信息（高级设置-授权信息展示）
+        self._panel_ready = False  # 页面首屏就绪标记（get_init_data 首次回调置位）
+        self._pending_logs = []  # 页面就绪前的日志暂存（首屏加载补投抽屉）
         self.expose(self.get_init_data)
         self.expose(self.save_task_modes)
         self.expose(self.save_task_count)
@@ -1220,7 +1222,14 @@ class ControlWindow(WebWindow):
 
     def get_init_data(self):
         """页面初始化数据：主题、任务模式多选、任务次数、摄妖香开关、
-        各条阈值、战斗动作、修罗/五倍设置与调试信息开关。"""
+        各条阈值、战斗动作、修罗/五倍设置与调试信息开关。
+
+        首次回调即页面首屏就绪：置位后就绪标记并补投启动阶段的暂存日志
+        （授权校验结果等主进程启动消息，页面加载前无法投递）。"""
+        self._panel_ready = True
+        if self._pending_logs:
+            pending, self._pending_logs = self._pending_logs, []
+            self._push_panel_logs(pending)
         return {"theme": load_ui_theme(),
                 "modes": load_selected_modes(),
                 "task_counts": load_task_counts(),
@@ -1521,9 +1530,18 @@ class ControlWindow(WebWindow):
                         hint = "请检查网络后重试"
                     else:
                         hint = "请重启软件重新激活或联系作者续费"
-                    self.add_logs([f"[授权] 校验未通过：{msg}"])
+                    fail_line = f"[授权] 校验未通过：{msg}"
+                    app_utils.log(fail_line, "WARN")
+                    self.add_logs([fail_line])
                     return {"status": "error",
                             "msg": f"授权校验未通过，任务未启动：{msg}（{hint}）"}
+                # 校验通过：授权信息入日志（文件+抽屉，与拦截日志对称）
+                info = self._license_info
+                pass_line = f"[授权] 校验通过：{info.get('status', '未知')}"
+                if info.get("expire"):
+                    pass_line += f"，到期 {info['expire']}"
+                app_utils.log(pass_line, "SYS")
+                self.add_logs([pass_line])
             return self._tm.start()
 
     def _set_license_info(self, info):
@@ -1538,14 +1556,14 @@ class ControlWindow(WebWindow):
                 pass
 
     def unbind_license(self):
-        """高级设置-解绑激活码：清除本地缓存激活码，下次启动重新激活。
+        """高级设置-解绑激活码：清除本地缓存激活码。
 
-        当前会话授权状态不受影响（每次启动均在线验证，不依赖本机缓存
-        之外的会话态）。
+        解绑后下次点击「启动」即被授权门拦截（启动前校验发现无缓存码、
+        旧会话授权数据同步作废）；重启软件弹出激活窗口可输入新卡密。
         """
         _kv_remove("license_cache_no")
         return {"status": "success",
-                "msg": "已解绑本地激活码，重启软件后输入新卡密激活"}
+                "msg": "已解绑本地激活码：后续启动任务将被拦截，重启软件可重新输入卡密激活"}
 
     def stop_task(self):
         """停止按钮：停止任务子进程（升级强杀，保证任务线程全清）。"""
@@ -3374,7 +3392,12 @@ class ControlWindow(WebWindow):
         self._push_panel_logs(lines)
 
     def _push_panel_logs(self, lines):
-        """主面板看板日志抽屉推送（页面未就绪时静默忽略；行数上限由页面截断）。"""
+        """主面板看板日志抽屉推送（页面未就绪时暂存、首屏加载补投；行数上限由页面截断）。"""
+        if not self._panel_ready:
+            self._pending_logs.extend(lines)
+            if len(self._pending_logs) > 500:  # 防御：长期不就绪也不膨胀
+                del self._pending_logs[:len(self._pending_logs) - 500]
+            return
         if self.webview_instance:
             try:
                 self.webview_instance.evaluate_js(

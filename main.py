@@ -78,6 +78,7 @@ from src import debug_overlay  # 调试信息悬浮层（游戏窗口上绘制�
 from src import clear_screen  # 启动清屏（Alt+6 屏蔽玩家 + Alt+5 屏蔽摊位）
 from src import map as game_map  # 地图操作（OCR 引擎预热等）
 from src import env_check  # 启动环境自检（DPI/屏幕/首帧统计，远程机排障）
+from src.license_app_id import LICENSE_APP_ID  # 授权 app：本地 24528 / GitHub 打包烙入 23651
 
 
 def _setup_tray(icon_path, control_win):
@@ -534,6 +535,10 @@ def _silent_license_check(auth_win, attempts=3, retry_delay=2.0):
             cached_key = auth_win.get_cached_key()
             if cached_key:
                 auth_win.activate_key(cached_key)
+            else:
+                # 无缓存码（未激活/已解绑）：清掉上次校验留下的授权数据，
+                # 防解绑后沿用旧会话 license_data 静默通过（2026-11-08 教训）
+                auth_win.license_data = None
             result = auth_win.start_app()
             if result is True:
                 return True, ""
@@ -588,30 +593,38 @@ if __name__ == '__main__':
     # 过期/网络异常）再弹激活窗口（阻塞），激活成功或关闭窗口后才继续。
     # 注意：授权窗口必须独占一次 webview.start()——主程序装配必须在此之后。
     debug_auth = os.environ.get("ASCRIPT_DEBUG_AUTH") == "1"  # 强制弹激活窗口（授权联调用）
-    auth_win = LicenseWindow(app_id="23651")
+    auth_win = LicenseWindow(app_id=LICENSE_APP_ID)
     silent_ok = False
     deny_info = ""  # 静默被拒原因（用于弹窗前提示）
+    startup_logs = []  # 启动阶段授权日志（面板首屏加载后补投抽屉）
     if debug_auth:
         print("[授权] 调试模式：跳过静默校验，直接进入激活窗口")
     else:
         silent_ok, deny_info = _silent_license_check(auth_win)
     if silent_ok:
         info = _license_info(auth_win)
-        print(f"[授权] 校验通过：状态 {info['status']}"
-              + (f"，到期 {info['expire']}" if info["expire"] else ""))
+        line = (f"[授权] 校验通过（app {LICENSE_APP_ID}）：状态 {info['status']}"
+                + (f"，到期 {info['expire']}" if info["expire"] else ""))
+        log(line, "SYS")
+        startup_logs.append(line)
         days_left = _days_left(info["expire"])
         if days_left is not None and 0 <= days_left <= 7:
-            print(f"[授权] 提醒：卡密将在 {days_left} 天后到期，请及时续费")
+            remind = f"[授权] 提醒：卡密将在 {days_left} 天后到期，请及时续费"
+            log(remind, "SYS")
+            startup_logs.append(remind)
     else:
-        log(f"[授权] 未授权或授权已过期，请在弹出的窗口中输入卡密激活（{deny_info}）",
-            "WARN")
+        deny_line = f"[授权] 未授权或授权已过期，请在弹出的窗口中输入卡密激活（{deny_info}）"
+        log(deny_line, "WARN")
+        startup_logs.append(deny_line)
         # 阻塞式激活窗口：窗口内 start_app 校验通过会关闭窗口并置 _return_value=True
         auth_win.show(title="软件授权激活", width=400, height=500)
     if not auth_win._return_value:
-        print("授权未通过，程序退出。")
+        log("授权未通过，程序退出。", "WARN")
         sys.exit(0)
     license_info = _license_info(auth_win)
-    print(f"授权通过（{license_info['status']}），启动主程序...")
+    pass_line = f"[授权] 授权通过（app {LICENSE_APP_ID}，{license_info['status']}），启动主程序"
+    log(pass_line, "SYS")
+    startup_logs.append(pass_line)
 
     # ---- 多开窗口绑定选择（弹框；须在控制窗口创建前独占一次消息循环） ----
     _ensure_window_binding()
@@ -642,6 +655,15 @@ if __name__ == '__main__':
 
     control_win = ControlWindow(tm, license_info=license_info,
                                 license_gate=_license_gate)  # 构造内已接线 tm 的状态/日志回调
+    if startup_logs:
+        control_win.add_logs(startup_logs)  # 页面未就绪前暂存，首屏加载补投抽屉
+    # ---- 清理已销毁的预置窗口（授权窗口/多开绑定选择弹窗）----
+    # pywebview 全局窗口列表只增不减：show(block=True) 返回后窗口已销毁但仍
+    # 留在列表，下一次 webview.start 会把 windows[0]（已销毁窗口）当主窗口
+    # 重建、真正的主窗口被放到子线程创建——实测表现为主窗口启动后自动最小化
+    # （2026-11-08 授权窗口路径首次走通即复现）。主窗口创建前清空即可恢复
+    # 单窗口启动语义（选择弹窗路径同理）。
+    webview.windows.clear()
     # 面板重设计后默认尺寸 720×560（侧边导航 + 运行看板，见 docs/ui-redesign.md）
     control_win.prepare(width=720, height=560)            # 创建唯一窗口（uid='master'）
 

@@ -41,6 +41,18 @@ jobs:
           Set-Content -Path $p -Value $content -Encoding utf8NoBOM
           Write-Host "版本号已烙为: $v"
 
+      - name: 烙授权应用 ID（生产 23651；本地/未烙默认 24528）
+        shell: pwsh
+        run: |
+          # src/license_app_id.py 仓库内默认为 24528（本地开发用，不消耗生产
+          # 卡密）；GitHub 打包前覆写为生产 app 23651，随 exe 烙入分发。
+          # 与版本号烙印同模式：仅改 runner 工作副本，不回写仓库。
+          $content = 'LICENSE_APP_ID = "23651"' + "`n"
+          Set-Content -Path "src/license_app_id.py" -Value $content -Encoding utf8NoBOM
+          $baked = (Get-Content "src/license_app_id.py" -Raw).Trim()
+          if ($baked -notmatch '23651') { Write-Error "授权 app id 烙入失败: $baked"; exit 1 }
+          Write-Host "授权 app id 已烙入: $baked"
+
       - name: 安装依赖（ascript 的依赖声明会传递解析其余运行时库；pip 缓存随 requirements.txt 哈希自动管理）
         shell: pwsh
         run: |
