@@ -15,6 +15,7 @@ import re
 import time
 
 import numpy as np
+from PIL import Image, ImageEnhance
 
 from .app_utils import log, human_click, norm_text
 from . import map as game_map  # OCR 能力复用
@@ -82,6 +83,16 @@ TRACK_CONTENT_BOTTOM_PAD = 330     # 内容区高度：模板底边向下 330px�
 TRACK_CONTENT_RIGHT_PAD = 5        # 右缘防抖余量（用户公式）
 TRACK_MIN_WIDTH = 300              # 内容区最小宽度（标题 OCR 校准）
 TRACK_READ_MIN_WIDTH = 430         # 标题读取最小宽度（同 TRACK_OCR_REGION 校准）
+# 低对比度补偿（2026-11-08 玄枢轶闻实测）：追踪面板半透明，文字压在
+# 明亮背景（金色建筑等）上时白字对比度不足，区域 OCR 的 det 段整行
+# 漏检——任务「玄闻辨真[玄枢轶闻]」第二行（绿色链接「高老先生」所在
+# 行，压在金色拱门上）整行缺失，内容采集只剩首行「根据李玄启提供的
+# 线索，去大」且绿字占比 0.7% < 1%，连续 14 轮「任务内容中未找到
+# 绿色文案」。同一帧面板区 3x 对比度增强后该行以 0.98 置信度整行检出
+# （标题/首行识别不变，实测 2x 放大/灰度自动对比度/白字阈值均不如
+# 3x 对比度稳定），补偿 OCR 约 155ms。仅在正常 OCR 无绿字时调用
+# （失败补偿，不进轮询热路径）。
+TRACK_ENHANCE_CONTRAST = 3.0
 # 追踪面板差分门（性能 2026-10-27 引入；2026-10-28 增加节奏上限）：
 # 2026-10-27 实测门区域 11/11 帧行走中严格稳定（不透明面板）；2026-10-28
 # 实测面板渲染状态可变——半透明/浮字渲染下门区域背景随世界移动
@@ -217,6 +228,30 @@ def ocr_follow(img):
     region = track_content_region(img_np) or TRACK_REGION
     items, _ = game_map.ocr_regions(img, (region, DIALOG_REGION))
     return items, img_np
+
+
+def ocr_track_enhanced(img_np):
+    """低对比度补偿 OCR：面板区对比度增强后重识别，返回全帧坐标 items。
+
+    背景与动机见 TRACK_ENHANCE_CONTRAST。img_np 为整帧 RGB 数组
+    （ocr_follow 同源帧，或 TrackGate.paste_track 掩码帧——面板区
+    像素已贴当前帧）。区域引擎参数不变（'max'/736、无角度分类），
+    只对裁剪做对比度增强；rect 映射回全帧坐标，下游绿字判定仍用
+    原始 img_np 像素（增强帧只影响 OCR 检出，不参与颜色判定）。
+    仅由 track_task 在正常 OCR 无绿字时调用一次（失败补偿）。
+    """
+    region = track_content_region(img_np) or TRACK_REGION
+    h, w = img_np.shape[:2]
+    l, t = max(0, region[0]), max(0, region[1])
+    r, b = min(w, region[2]), min(h, region[3])
+    crop = img_np[t:b, l:r]
+    if crop.size == 0:
+        return []
+    enhanced = ImageEnhance.Contrast(Image.fromarray(crop)).enhance(
+        TRACK_ENHANCE_CONTRAST)
+    items, _ = game_map.ocr_region(enhanced, (0, 0, crop.shape[1], crop.shape[0]))
+    return [(txt, [l + rect[0], t + rect[1], l + rect[2], t + rect[3]], score)
+            for txt, rect, score in items]
 
 
 class TrackGate:
@@ -733,8 +768,17 @@ def track_task(win, title, text=None, green_index=0, retries=4, retry_interval=1
     last_content = []
     last_items = []
     last_arect = None
+    # 低对比度补偿状态：pending_enhanced 为同一帧的增强重识别结果
+    # （(items, img_np)），下一轮直接解析不再截图；enhanced_tried 保证
+    # 每次跟踪只补偿一次（增强帧仍无绿字则回到正常重试/失败）。
+    pending_enhanced = None
+    enhanced_tried = False
     for attempt in range(retries + 1):
-        if attempt == 0 and pre_items is not None:
+        is_enhanced = pending_enhanced is not None
+        if is_enhanced:
+            items, img_np = pending_enhanced
+            pending_enhanced = None
+        elif attempt == 0 and pre_items is not None:
             items, img_np = pre_items
         else:
             img = win.capture(force_activate=False)
@@ -790,6 +834,12 @@ def track_task(win, title, text=None, green_index=0, retries=4, retry_interval=1
                     anchor_idx = i
                     break
         if anchor_idx is None:
+            # 增强帧标题误读/漏检：补偿帧不判失败，回到正常重试（正常
+            # 帧此分支直接返回，不能因一次增强重识别丢掉后续重试机会）
+            if is_enhanced:
+                log(f"[任务追踪] 「{title}」增强重识别未读到标题，回退正常重试", "INFO")
+                time.sleep(retry_interval)
+                continue
             # 标题行被区域 OCR 漏检（修罗实测：彩色徽标前缀致整行缺失）
             # 时，用关键词兜底直接点面板左区的绿字链接行（内容行即
             # 跟踪目标，无锚点纵向约束）——否则跟踪失败整轮重试
@@ -985,11 +1035,32 @@ def track_task(win, title, text=None, green_index=0, retries=4, retry_interval=1
         # 过渡帧重试限 2 次：真无绿字状态快速失败，由外层轮次重试兜底
         if attempt < retries and not content:
             log(f"[任务追踪] 「{title}」内容尚未渲染（第 {attempt + 1} 次），等待后重试", "INFO")
+            if not enhanced_tried:
+                # 低对比度补偿：白字漏检时内容可能整块缺失（见
+                # TRACK_ENHANCE_CONTRAST），同一帧增强重识别一次
+                enhanced_tried = True
+                enh = ocr_track_enhanced(img_np)
+                if enh:
+                    log(f"[任务追踪] 「{title}」低对比度补偿：增强重识别 "
+                        f"{len(enh)} 行，重试内容采集", "INFO")
+                    pending_enhanced = (enh, img_np)
+                    continue
             time.sleep(retry_interval)
             continue
         if content and attempt < 2:
             log(f"[任务追踪] 「{title}」内容可见但无绿字（第 {attempt + 1} 次），"
                 f"可能为过渡帧，等待后重试", "INFO")
+            if not enhanced_tried and attempt < retries:
+                # 低对比度补偿：内容行压在明亮背景上整行漏检时，绿字
+                # 链接行不在 items 中（2026-11-08 玄枢轶闻），增强补读。
+                # attempt<retries：补偿帧由下一轮消费，须留重试槽位
+                enhanced_tried = True
+                enh = ocr_track_enhanced(img_np)
+                if enh:
+                    log(f"[任务追踪] 「{title}」低对比度补偿：增强重识别 "
+                        f"{len(enh)} 行，重试绿字判定", "INFO")
+                    pending_enhanced = (enh, img_np)
+                    continue
             time.sleep(retry_interval)
             continue
         break

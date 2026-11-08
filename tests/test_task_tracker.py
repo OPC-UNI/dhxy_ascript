@@ -197,6 +197,59 @@ def test_track_task_require_coord_clicks_coord_line_underline(monkeypatch):
     assert ok and clicks == [(204, 268)]  # 链接下划线上方 2px
 
 
+def test_track_task_low_contrast_enhanced_fallback(monkeypatch):
+    """正常 OCR 漏行无绿字时，增强重识别补偿把绿字链接行找回。
+
+    2026-11-08 玄枢轶闻实测：面板第二行（绿色链接「高老先生」）压在
+    明亮背景上整行漏检，内容采集只剩首行且绿字 0.7% < 1%，连续 14 轮
+    「任务内容中未找到绿色文案」；同一帧 3x 对比度增强后整行检出
+    （绿字 4.24%、下划线命中）。补偿帧必须走同一套锚点/内容/绿字
+    判定，点击绿字链接下划线上方 2px。
+    """
+    img = np.zeros((831, 1378, 3), dtype=np.uint8)
+    # 第二行绿字（散碎笔画）与下划线：仅增强帧 OCR 检出该行。
+    # 绿字顶须低于首行 OCR 框底（实测首行框底 275、绿字顶 278），
+    # 否则首行框沾绿会被误判为绿字行抢走点击
+    img[276:286, 60:215:4] = (0, 255, 0)
+    img[290, 60:210] = (0, 255, 0)
+    normal = [("玄闻辨真[玄枢轶闻]", [14, 230, 160, 255], 0.99),
+              ("根据李玄启提供的线索，去大", [18, 249, 223, 275], 0.99)]
+    enhanced = normal + [("唐边境找高老先生了解玄石之", [14, 265, 224, 296], 0.98)]
+    clicks = []
+
+    class FakeWin:
+        def capture(self, force_activate=False):
+            return Image.fromarray(img)
+
+    monkeypatch.setattr(task_tracker, "human_click",
+                        lambda win, x, y: clicks.append((x, y)))
+    monkeypatch.setattr(task_tracker, "ocr_follow",
+                        lambda im: (normal, np.asarray(im)))
+    monkeypatch.setattr(task_tracker, "ocr_track_enhanced",
+                        lambda img_np: enhanced)
+    ok, info = task_tracker.track_task(FakeWin(), "玄枢轶闻", retries=4,
+                                       pre_items=(normal, img))
+    assert ok and clicks == [(135, 288)]  # 链接下划线上方 2px
+
+
+def test_ocr_track_enhanced_maps_full_frame_rects(monkeypatch):
+    """补偿 OCR 只增强面板裁剪，rect 映射回全帧坐标（绿字判定同源）。"""
+    img_np = np.zeros((831, 1378, 3), dtype=np.uint8)
+    seen = {}
+
+    def fake_ocr_region(im, region):
+        seen["size"] = im.size
+        seen["region"] = region
+        return [("行", [0, 0, 10, 10], 0.9)], None
+
+    monkeypatch.setattr(game_map, "ocr_region", fake_ocr_region)
+    monkeypatch.setattr(task_tracker, "track_content_region",
+                        lambda *a, **k: (100, 200, 400, 500))
+    items = task_tracker.ocr_track_enhanced(img_np)
+    assert seen["size"] == (300, 300) and seen["region"] == (0, 0, 300, 300)
+    assert items == [("行", [100, 200, 110, 210], 0.9)]
+
+
 def test_keyword_fallback_require_coord_filters_subgoal_line():
     """关键词兜底 + require_coord：子目标行（含关键词但无坐标）不候选。"""
     img = np.zeros((831, 1378, 3), dtype=np.uint8)
