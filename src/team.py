@@ -42,7 +42,7 @@ from PIL import Image
 from ascript.windows.system import R
 from ascript.windows.screen.find_images import FindImages
 
-from .app_utils import log, human_click, human_move, norm_text
+from .app_utils import log, human_click, human_move, norm_text, _UNDER_PYTEST
 from . import map as game_map  # 找图与 OCR 能力复用
 from . import debug_overlay  # 调试信息悬浮层（队伍信息行更新）
 from . import task_tracker  # 对话框区域 OCR（允许失败提示检测）
@@ -633,7 +633,8 @@ def _ensure_menu_open(win):
                     f"（item 阈值 {_TEMPLATE_THRESHOLD} / item2 阈值 {ZUDUI_ITEM2_THRESHOLD}），"
                     f"现场已存 tmp_err_img.png", "WARN")
                 try:
-                    diag.save("tmp_err_img.png")
+                    if not _UNDER_PYTEST:  # 单测合成帧不落盘（同 log 文件跳过原则）
+                        diag.save("tmp_err_img.png")
                 except Exception:
                     pass
         except Exception as e:
@@ -783,7 +784,7 @@ def _recheck_leader_frames(win, first_scores):
         f"阈值 {_TEMPLATE_THRESHOLD}），按无法判定处理", "WARN")
     # 全程不明：存现场帧供人工排查（与组队按钮诊断共用 tmp_err_img.png）
     try:
-        if last_img is not None:
+        if last_img is not None and not _UNDER_PYTEST:  # 单测合成帧不落盘
             last_img.save("tmp_err_img.png")
     except Exception:
         pass
