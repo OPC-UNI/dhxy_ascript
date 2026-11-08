@@ -911,10 +911,14 @@ class ControlWindow(WebWindow):
     TaskManager 回调推送（sync_status / add_logs → 面板看板日志抽屉）。
     """
 
-    def __init__(self, tm, title="啄木鸟", license_info=None):
+    def __init__(self, tm, title="啄木鸟", license_info=None, license_gate=None):
         super().__init__(R.ui("control_window.html"))
         self._tm = tm
         self._title = title
+        # 启动任务前授权校验（main 注入的闭包：在线校验证书到期，返回
+        # {"ok", "msg", "info"}）；启动按钮与老板键共用 start_task 入口
+        self._license_gate = license_gate
+        self._start_lock = threading.Lock()  # 校验+启动整体串行（按钮/老板键并发防双启）
         # 窗口标题附加绑定角色短文案（启动时解析一次；仅角色信息，
         # 保持简短——服务器+角色名，如「啄木鸟 - 一生所爱「长相思」」）
         label = bound_short_label()
@@ -1494,10 +1498,44 @@ class ControlWindow(WebWindow):
         return save_ui_theme(theme)
 
     def start_task(self):
-        """启动按钮：启动任务子进程（先刷新标题角色文案——任务目标
-        窗口解析在绑定丢失后可能已自动选择新窗口）。"""
+        """启动按钮：启动任务子进程。
+
+        先刷新标题角色文案（任务目标窗口解析在绑定丢失后可能已自动选择
+        新窗口）；每次启动前在线校验证书到期状态（续期/换卡无需重启软件，
+        下次启动即生效；过期/无效/网络异常拦截启动并提示）。老板键与按钮
+        共用本入口，锁内校验+启动整体串行，防并发双启。
+        """
         self.refresh_window_title()
-        return self._tm.start()
+        with self._start_lock:
+            if self._tm.is_running():
+                return {"status": "success", "running": True}
+            if self._license_gate is not None:
+                try:
+                    result = self._license_gate() or {}
+                except Exception as e:
+                    result = {"ok": False, "msg": f"授权服务异常：{e}"}
+                self._set_license_info(result.get("info") or {})
+                if not result.get("ok"):
+                    msg = result.get("msg") or "授权校验未通过"
+                    if "无法连接授权服务器" in msg:
+                        hint = "请检查网络后重试"
+                    else:
+                        hint = "请重启软件重新激活或联系作者续费"
+                    self.add_logs([f"[授权] 校验未通过：{msg}"])
+                    return {"status": "error",
+                            "msg": f"授权校验未通过，任务未启动：{msg}（{hint}）"}
+            return self._tm.start()
+
+    def _set_license_info(self, info):
+        """更新授权信息并推送面板（系统页授权信息区 + 侧边栏状态点实时刷新）。"""
+        self._license_info = info or {}
+        if self.webview_instance:
+            try:
+                self.webview_instance.evaluate_js(
+                    "if(window.applyLicense){window.applyLicense(%s);}"
+                    % json.dumps(self._license_info))
+            except Exception:
+                pass
 
     def unbind_license(self):
         """高级设置-解绑激活码：清除本地缓存激活码，下次启动重新激活。

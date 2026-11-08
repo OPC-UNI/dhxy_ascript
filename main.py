@@ -520,6 +520,32 @@ def _license_info(auth_win):
     return info
 
 
+def _silent_license_check(auth_win, attempts=3, retry_delay=2.0):
+    """在线静默校验授权，返回 (ok, deny_info)。
+
+    与启动授权门同款链路（get_app_info → 缓存码 activate_key → start_app）；
+    除启动时外，每次点击「启动」任务前也调用（证书到期/续期无需重启软件，
+    下次启动即生效）。明确拒绝（无缓存/无效/过期）不重试，仅网络异常重试。
+    """
+    deny = "授权未通过"
+    for attempt in range(max(1, attempts)):
+        try:
+            auth_win.get_app_info()
+            cached_key = auth_win.get_cached_key()
+            if cached_key:
+                auth_win.activate_key(cached_key)
+            result = auth_win.start_app()
+            if result is True:
+                return True, ""
+            return False, (result or {}).get("error", "授权未通过")
+        except Exception as e:
+            deny = f"无法连接授权服务器：{e}"
+            print(f"[授权] 在线校验异常（第 {attempt + 1}/{attempts} 次）: {e}")
+            if attempt < attempts - 1:
+                time.sleep(retry_delay)
+    return False, deny
+
+
 def _parse_expire(expire):
     """解析到期时间字符串，返回 datetime.date 或 None（格式未知时保守）。"""
     if not expire:
@@ -568,23 +594,7 @@ if __name__ == '__main__':
     if debug_auth:
         print("[授权] 调试模式：跳过静默校验，直接进入激活窗口")
     else:
-        for attempt in range(3):  # 网络波动重试；明确拒绝（无效/过期）不重试
-            try:
-                auth_win.get_app_info()
-                cached_key = auth_win.get_cached_key()
-                if cached_key:
-                    auth_win.activate_key(cached_key)
-                result = auth_win.start_app()
-                if result is True:
-                    silent_ok = True
-                    break
-                deny_info = (result or {}).get("error", "授权未通过")
-                break
-            except Exception as e:
-                deny_info = f"无法连接授权服务器：{e}"
-                print(f"[授权] 在线校验异常（第 {attempt + 1}/3 次）: {e}")
-                if attempt < 2:
-                    time.sleep(2)
+        silent_ok, deny_info = _silent_license_check(auth_win)
     if silent_ok:
         info = _license_info(auth_win)
         print(f"[授权] 校验通过：状态 {info['status']}"
@@ -620,7 +630,18 @@ if __name__ == '__main__':
     app_utils.set_silent_mode(load_silent_mode())
     log(f"[配置] 静默操作: {'开（消息点击，不占用鼠标）' if app_utils.silent_mode_on() else '关（物理鼠标）'}", "SYS")
     tm = TaskManager(task_start, task_stop)
-    control_win = ControlWindow(tm, license_info=license_info)  # 构造内已接线 tm 的状态/日志回调
+
+    def _license_gate():
+        """启动任务前授权校验（按钮与老板键共用）。
+
+        每次启动都在线校验证书到期状态：续期/换卡无需重启软件，下次启动
+        即生效；过期/无效/网络异常拦截启动。返回面板所需的结构化结果。
+        """
+        ok, deny = _silent_license_check(auth_win, attempts=2, retry_delay=1.0)
+        return {"ok": ok, "msg": deny, "info": _license_info(auth_win)}
+
+    control_win = ControlWindow(tm, license_info=license_info,
+                                license_gate=_license_gate)  # 构造内已接线 tm 的状态/日志回调
     # 面板重设计后默认尺寸 720×560（侧边导航 + 运行看板，见 docs/ui-redesign.md）
     control_win.prepare(width=720, height=560)            # 创建唯一窗口（uid='master'）
 
@@ -660,8 +681,8 @@ if __name__ == '__main__':
             result = tm.stop()
             app_utils.log(f"[老板键] 停止结果={result}", "SYS")
         else:
-            control_win.refresh_window_title()  # 标题角色文案随任务目标窗口刷新（防绑定丢失后显示旧角色）
-            result = tm.start()
+            # 与按钮共用 start_task：内部先在线校验授权（每次启动都校验到期）再启动
+            result = control_win.start_task()
             app_utils.log(f"[老板键] 启动结果={result}", "SYS")
 
     hotkey.register(_toggle_task)
