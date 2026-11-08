@@ -53,13 +53,32 @@ PICK_FAIL = (-1, -1)
 # 面板区右边界实测取 400（面板内容在 x<260，260~400 为空白背景）：
 # 宽 260 的裁剪会确定性误读标题（实测「玄枢轶闻」读成「玄枢轶铁闻」
 # 导致任务被误判消失），宽 300 及以上读对，留 400 余量。
-TRACK_REGION = (0, 200, 400, 600)      # 任务追踪面板
+TRACK_REGION = (0, 200, 400, 600)      # 任务追踪面板（静态兜底；运行时由 track_content_region 动态定位）
 DIALOG_REGION = (400, 270, 980, 600)   # 居中对话框区
 OCR_REGIONS = (TRACK_REGION, DIALOG_REGION)
 # 任务面板读取（read_tasks/get_task）的 OCR 区域：右缘放宽到 430——
 # 与 PANEL_MAX_X 同宽会裁切标题框边缘导致标题误读（实测），
 # group_tasks 仍按 x<PANEL_MAX_X 过滤，区域外行不参与
 TRACK_OCR_REGION = (0, 200, 430, 600)
+# ---- 「任务追踪」面板动态定位（2026-11-08 用户提供标题条模板） ----
+# 面板区域不再写死：先模板定位「任务追踪」标题条（res/img/renwuzhuizong.png，
+# 227x22；实测目标帧 0.981 唯一命中、面板抹除帧 ≤0.575、对话框区 ≤0.513），
+# 内容区由模板矩形推导（用户公式）：left=模板left、right=模板right+5
+# （防抖动）、top=模板bottom、bottom=模板bottom+330px——面板位置漂移时
+# 区域跟随，不再依赖固定坐标。
+# 宽度兜底：用户公式实测宽 ≈231px，落进「裁剪宽<300 会确定性误读标题
+# （玄枢轶闻→玄枢轶铁闻）」的校准危险区，故 right=max(模板right+5,
+# 模板left+300)；read_tasks/get_task 读标题用 430 同款校准（见
+# TRACK_OCR_REGION 注释）。搜索先走左上条带 ROI（面板恒在窗口左上区，
+# 实测标题条 x7-233/y205-227，留 ≥50px 余量）；带区未命中才全帧兜底
+# 且限频（面板漂移保险，同 battle.FULL_CHECK_INTERVAL 限频思路）。
+TRACK_HEADER_ICON = "renwuzhuizong.png"
+TRACK_HEADER_ROI = (0, 140, 500, 320)
+TRACK_HEADER_FULL_INTERVAL = 3.0   # 全帧兜底最小间隔（秒）
+TRACK_CONTENT_BOTTOM_PAD = 330     # 内容区高度：模板底边向下 330px（用户公式）
+TRACK_CONTENT_RIGHT_PAD = 5        # 右缘防抖余量（用户公式）
+TRACK_MIN_WIDTH = 300              # 内容区最小宽度（标题 OCR 校准）
+TRACK_READ_MIN_WIDTH = 430         # 标题读取最小宽度（同 TRACK_OCR_REGION 校准）
 # 追踪面板差分门（性能 2026-10-27 引入；2026-10-28 增加节奏上限）：
 # 2026-10-27 实测门区域 11/11 帧行走中严格稳定（不透明面板）；2026-10-28
 # 实测面板渲染状态可变——半透明/浮字渲染下门区域背景随世界移动
@@ -69,10 +88,116 @@ TRACK_OCR_REGION = (0, 200, 430, 600)
 # 任务变化检测时延 ≤2s，精度由确认轮询（0.2s，同复用语义）保证。
 # 只复用 items——像素级判定（绿字/进度键）的 img_np 一律由调用方贴
 # 当前帧裁剪（TrackGate.paste_track），颜色判定不随复用而陈旧。
-TRACK_GATE_REGION = (0, 200, 200, 400)
+# 门区域随内容区左上角移动（原静态 TRACK_GATE_REGION=(0,200,200,400)
+# 的 200x200 语义不变），面板漂移时门跟随。
+TRACK_GATE_W = 200
+TRACK_GATE_H = 200
 TRACK_GATE_MIN_INTERVAL = 2.0   # 面板 OCR 最小间隔（节奏上限，防世界像素击穿门）
 TRACK_GATE_MAX_SKIP = 5.0       # 门持续命中时的强制全量 OCR 兜底（面板下部/门
                                 # 区域外的变化不漏检，限频模式同 battle.FULL_CHECK_INTERVAL）
+
+_last_full_header_search = 0.0  # 标题条全帧兜底限频时钟
+_last_header_rect = None        # 上轮命中矩形（漂移后优先在其邻域搜索）
+
+
+def _match_header(img_np, region):
+    """在 region 内匹配标题条，返回中心坐标或 None（region 为 None 时全帧）。"""
+    l, t, r, b = (0, 0, img_np.shape[1], img_np.shape[0]) if region is None else region
+    l, t = max(0, l), max(0, t)
+    r, b = min(img_np.shape[1], r), min(img_np.shape[0], b)
+    crop = img_np[t:b, l:r]
+    if not crop.size:
+        return None
+    pt = game_map.match_frame_np(crop[:, :, ::-1], TRACK_HEADER_ICON,
+                                 region=None, fallback=False)
+    if pt is None:
+        return None
+    return int(pt[0]) + l, int(pt[1]) + t
+
+
+def _find_track_header(img_np):
+    """模板定位「任务追踪」标题条矩形 (l,t,r,b)；未命中返回 None。
+
+    img_np 为 RGB 帧（PIL np.asarray 结果）；模板匹配走 BGR，仅对搜索
+    裁剪做通道转换（全帧转换只在限频兜底时发生）。搜索顺序：
+    1. 上轮命中矩形邻域（±60px，面板漂移后连续跟随，不依赖条带）；
+    2. 左上条带（TRACK_HEADER_ROI，面板常规位置）；
+    3. 全帧兜底（限频 TRACK_HEADER_FULL_INTERVAL，大漂移保险）。
+    """
+    global _last_full_header_search, _last_header_rect
+    pt = None
+    if _last_header_rect is not None:
+        pl, pt0, pr, pb = _last_header_rect
+        pt = _match_header(img_np, (pl - 60, pt0 - 60, pr + 60, pb + 60))
+    if pt is None:
+        pt = _match_header(img_np, TRACK_HEADER_ROI)
+    if pt is None:
+        now = time.time()
+        if now - _last_full_header_search >= TRACK_HEADER_FULL_INTERVAL:
+            _last_full_header_search = now
+            pt = _match_header(img_np, None)
+    if pt is None:
+        return None
+    tpl = game_map._load_template(TRACK_HEADER_ICON)
+    if tpl is None:
+        return None
+    h, w = tpl.shape
+    cx, cy = pt
+    rect = (cx - w // 2, cy - h // 2, cx - w // 2 + w, cy - h // 2 + h)
+    _last_header_rect = rect
+    return rect
+
+
+def track_content_region(img_np, min_width=TRACK_MIN_WIDTH):
+    """由标题条模板位置推算任务追踪内容区 (l,t,r,b)（用户公式）。
+
+    left=模板left、right=模板right+5（防抖动）、top=模板bottom、
+    bottom=模板bottom+330px；宽度不足 min_width 时按 min_width 兜底
+    （标题 OCR 校准：宽<300 误读标题）。模板未命中（含 img_np 为
+    None）返回 None，调用方回退静态 TRACK_REGION。
+    """
+    if img_np is None:
+        return None
+    rect = _find_track_header(img_np)
+    if rect is None:
+        return None
+    l, t, r, b = rect
+    right = max(r + TRACK_CONTENT_RIGHT_PAD, l + min_width)
+    bottom = min(img_np.shape[0], b + TRACK_CONTENT_BOTTOM_PAD)
+    return (l, b, right, bottom)
+
+
+def ocr_track(img):
+    """OCR 任务追踪内容区（动态定位；模板未命中回退静态 TRACK_REGION）。
+
+    返回 (items, img_np)——img_np 为整帧 RGB 数组（绿字判定同源，与
+    map.ocr_regions 契约一致）。
+    """
+    img_np = np.asarray(img)
+    region = track_content_region(img_np) or TRACK_REGION
+    items, _ = game_map.ocr_region(img, region)
+    return items, img_np
+
+
+def ocr_track_read(img):
+    """OCR 任务追踪面板（读标题场景：最小宽度按 430 校准放宽）。
+
+    用于 read_tasks/get_task——标题框右缘裁切会误读标题（实测校准），
+    动态区域右缘按 TRACK_READ_MIN_WIDTH 兜底。
+    """
+    img_np = np.asarray(img)
+    region = track_content_region(img_np, min_width=TRACK_READ_MIN_WIDTH) \
+        or TRACK_OCR_REGION
+    items, _ = game_map.ocr_region(img, region)
+    return items, img_np
+
+
+def ocr_follow(img):
+    """follow 轮询双区域 OCR：动态内容区 + 居中对话框区。返回 (items, img_np)。"""
+    img_np = np.asarray(img)
+    region = track_content_region(img_np) or TRACK_REGION
+    items, _ = game_map.ocr_regions(img, (region, DIALOG_REGION))
+    return items, img_np
 
 
 class TrackGate:
@@ -93,6 +218,7 @@ class TrackGate:
         self.items = None       # 上轮面板 OCR 结论
         self.ocr_at = 0.0       # 上轮面板 OCR 时间（兜底限频）
         self.min_interval = min_interval
+        self.region = None      # 上轮内容区（paste_track 贴同一区域）
 
     def ocr(self, img):
         """面板 OCR 三态门：节奏上限 → 像素相等 → 全量 OCR。
@@ -103,22 +229,30 @@ class TrackGate:
         2. 门区域像素与上次 OCR 帧相等且未超 MAX_SKIP：复用（OCR 确定性，
            逐字等价）
         3. 其余：全量面板 OCR（含 MAX_SKIP 兜底强制刷新）
+        面板内容区每帧由标题条模板动态定位（面板漂移时区域与门跟随）；
+        模板未命中回退静态 TRACK_REGION（原行为）。
         """
-        gl, gt, gr, gb = TRACK_GATE_REGION
-        crop = np.asarray(img)[gt:gb, gl:gr]
+        img_np = np.asarray(img)
+        region = track_content_region(img_np)
+        self.region = region  # 与本次 OCR 同区域（未命中为 None → paste 回退静态）
+        l, t, r, b = region or TRACK_REGION
+        gl, gt = l, t
+        gr = min(img_np.shape[1], gl + TRACK_GATE_W)
+        gb = min(img_np.shape[0], gt + TRACK_GATE_H)
+        crop = img_np[gt:gb, gl:gr]
         now = time.time()
         if self.crop is not None and now - self.ocr_at < self.min_interval:
             return self.items
         if (self.crop is not None and (crop == self.crop).all()
                 and now - self.ocr_at < TRACK_GATE_MAX_SKIP):
             return self.items
-        items, _ = game_map.ocr_region(img, TRACK_REGION)
+        items, _ = game_map.ocr_region(img, (l, t, r, b))
         self.crop, self.items, self.ocr_at = crop, items, now
         return items
 
     def paste_track(self, img, img_np):
-        """把当前帧面板区域裁剪贴入掩码帧（像素判定用，不复用陈旧像素）。"""
-        l, t, r, b = TRACK_REGION
+        """把当前帧面板内容区裁剪贴入掩码帧（像素判定用，不复用陈旧像素）。"""
+        l, t, r, b = self.region or TRACK_REGION
         img_np[t:b, l:r] = np.asarray(img)[t:b, l:r]
 
 
@@ -368,7 +502,7 @@ def read_tasks(win):
     img = win.capture(force_activate=False)
     if img is None:
         return []
-    items, _ = game_map.ocr_regions(img, (TRACK_OCR_REGION,))
+    items, _ = ocr_track_read(img)
     return group_tasks(items)
 
 
@@ -408,7 +542,7 @@ def has_task(win, title, fallback_texts=()):
     img = win.capture(force_activate=False)
     if img is None:
         return False
-    items, img_np = game_map.ocr_regions(img, (TRACK_REGION,))
+    items, img_np = ocr_track(img)
     return has_task_in(items, img_np, title, fallback_texts)
 
 
@@ -431,7 +565,7 @@ def get_task(win, title):
     img = win.capture(force_activate=False)
     if img is None:
         return None
-    items, _ = game_map.ocr_regions(img, (TRACK_OCR_REGION,))
+    items, _ = ocr_track_read(img)
     return find_task(group_tasks(items), title)
 
 
@@ -483,7 +617,7 @@ def has_new_task(win, title, fallback_texts, pre_sig):
     img = win.capture(force_activate=False)
     if img is None:
         return False
-    items, img_np = game_map.ocr_regions(img, (TRACK_REGION,))
+    items, img_np = ocr_track(img)
     return has_new_task_in(items, img_np, title, fallback_texts, pre_sig)
 
 
@@ -561,7 +695,7 @@ def track_task(win, title, text=None, green_index=0, retries=4, retry_interval=1
             img = win.capture(force_activate=False)
             if img is None:
                 return False, "窗口截图失败"
-            items, img_np = game_map.ocr_regions(img, OCR_REGIONS)
+            items, img_np = ocr_follow(img)
 
         # 任务锚点行：优先取标题格式行（含方括号短行，_is_title_line），
         # 无标题格式行再回退短行标题文案（兼容无方括号标题）。
@@ -628,7 +762,7 @@ def track_task(win, title, text=None, green_index=0, retries=4, retry_interval=1
         # 左列外的「标题形态」行（浮字小标题/对话框括号行）不再截断内容
         # 采集：旧逻辑在此 break 会把其后的真实链接行一并丢掉
         content = []
-        dropped = []  # 左列外行诊断（浮字/提示/对话框行，仅记录）
+        dropped = []  # 左列外行（浮字/提示/对话框行）：记录并从像素帧抹除
         for txt, rect, score in items[anchor_idx + 1:]:
             if rect[1] - arect[3] > 150:
                 break
@@ -638,10 +772,22 @@ def track_task(win, title, text=None, green_index=0, retries=4, retry_interval=1
                 if rect[0] < ANCHOR_MAX_X:
                     content.append((txt, rect, score))
                 else:
-                    dropped.append(txt)
+                    dropped.append((txt, rect))
         if dropped:
             log(f"[任务追踪] 「{title}」忽略左列外内容行: "
-                + " | ".join(f"「{t}」" for t in dropped), "INFO")
+                + " | ".join(f"「{t}」" for t, _r in dropped), "INFO")
+            # 把左列外行的矩形区域从像素帧抹黑（拷贝防污染调用方帧）：
+            # 浮字与链接行框可横向重叠（浮字 x≈200 起、链接框右缘≈216），
+            # 重叠区内的浮字绿色像素会污染 is_green_text/has_underline/
+            # green_text_center——过渡帧链接下划线未检出时，浮字像素的
+            # ≥8px 连续列段会抢走点击目标（点浮字无效，2026-11-08 教训
+            # 的残留通道）。抹黑后判定只看面板行自身像素：自身绿字弱
+            # 即走「内容可见但无绿字」重试，绝不借浮字像素点击
+            img_np = img_np.copy()
+            for _txt, _rect in dropped:
+                l0, t0, r0, b0 = _rect
+                img_np[t0:b0, l0:r0] = 0
+            last_img_np = img_np  # 失败诊断的绿字占比与判定同口径（抹黑后）
         # 内容行按视觉自上而下排序（OCR 行序不稳定，五环链接行与计数行
         # 实测随机互换，点击目标随之摆动）；排序后首个绿字恒为链接行
         content.sort(key=lambda it: it[1][1])

@@ -217,9 +217,8 @@ TASK_GONE_POLL_INTERVAL = 0.5      # 确认轮询间隔（秒）；两轮证据�
                                    # 的误判余量仍足（返程交接提速，2026-10-24）
 TASK_GONE_GATE_POLL_INTERVAL = 0.2 # 证据已足时等战斗线程确认门的短轮询间隔（秒）：
                                    # 不再 OCR，门开即返回（返程交接省 ~1.7s/轮）
-# 跟踪轮询的 OCR 区域见 task_tracker（TRACK_REGION/DIALOG_REGION/OCR_REGIONS）
-FOLLOW_TRACK_REGION = task_tracker.TRACK_REGION
-FOLLOW_OCR_REGIONS = task_tracker.OCR_REGIONS
+# 跟踪轮询的 OCR 区域见 task_tracker（TRACK_REGION/DIALOG_REGION 静态兜底，
+# 运行时由 task_tracker.ocr_follow 按标题条模板动态定位）
 # 任务消失确认用面板条带（返程链路热路径，2026-11-06 实测标定）：
 # 面板全区 (0,200,400,600) OCR 约 0.9s/轮 ×2 轮是返程延迟大头。
 # 实测面板布局：标题行 y230-254、内容链接行 y250-291（多轮日志点击
@@ -229,7 +228,27 @@ FOLLOW_OCR_REGIONS = task_tracker.OCR_REGIONS
 # 标题+约 9 行内容行，最深实测链接 291 下留约 180px 余量，OCR 降至
 # ~0.6s。兜底行落到条带外的偶发漏判由主循环 has_task 全区域复查兜住
 # （判错任务消失 → 复查发现仍在 → 跳过返程继续跟踪，~2s 自愈）。
+# 静态值为兜底；运行时由 _task_gone_region 按内容区位置动态推导
+# （内容区顶=标题条底≈227：条带 top=内容区顶-18≈210、bottom=+242≈470，
+# 与标定值一致，面板漂移时跟随）。
 TASK_GONE_REGION = (0, 210, 400, 470)
+
+
+def _task_gone_region(img_np):
+    """任务消失确认条带（动态）：内容区上下扩边。
+
+    相对标定 TASK_GONE_REGION=(0,210,400,470) 与内容区顶（标题条底）
+    的偏移：top=内容区顶-18、bottom=内容区顶+242；横向取内容区左右缘
+    （标题/链接行均在区内，右侧收窄同时减少 OCR 面积）。标题条模板
+    未命中返回 None（调用方回退静态 TASK_GONE_REGION）。
+    """
+    region = task_tracker.track_content_region(img_np)
+    if region is None:
+        return None
+    l, t, r, _b = region
+    return (l, max(0, t - 18), r, min(img_np.shape[0], t + 242))
+
+
 # 面板差分门见 task_tracker.TrackGate（共享组件，领取校验循环同用；
 # 门区域/兜底时限为实测校准资产，见 task_tracker.TRACK_GATE_*）
 # 战斗中 extras 对话框 OCR 限频（秒）：战斗动画帧帧不同、差分门失效，
@@ -593,8 +612,7 @@ def navigate_to_task(win):
                 time.sleep(1.5)
                 img2 = win.capture(force_activate=False)
                 if img2 is not None:
-                    items3, img_np3 = game_map.ocr_regions(
-                        img2, (task_tracker.TRACK_REGION,))
+                    items3, img_np3 = task_tracker.ocr_track(img2)
                     if task_tracker.has_task_in(items3, img_np3, TASK_TITLE):
                         return True, "已领取任务", (items3, img_np3)
                 return True, "已领取任务", (items, img_np)  # 复检失败按首帧返回
@@ -738,7 +756,7 @@ def _current_task_sig(win, title):
     img = win.capture(force_activate=False)
     if img is None:
         return None
-    items, _ = game_map.ocr_region(img, task_tracker.TRACK_REGION)
+    items, _ = task_tracker.ocr_track(img)
     task = task_tracker.find_task(task_tracker.group_tasks(items), title)
     if task is None:
         return ""
@@ -1219,7 +1237,8 @@ def _confirm_task_gone(win, title, fallback_texts=(), first_img=None,
             deadline = time.time() + TASK_GONE_CONFIRM_TIMEOUT
             time.sleep(2.0)
             continue
-        items, img_np = game_map.ocr_regions(img, (TASK_GONE_REGION,))
+        gone_region = _task_gone_region(np.asarray(img)) or TASK_GONE_REGION
+        items, img_np = game_map.ocr_regions(img, (gone_region,))
         if task_tracker.find_task(task_tracker.group_tasks(items), title) is not None:
             return False  # 任务重新出现：此前为漏读，继续跟踪
         if fallback_texts:
@@ -1478,7 +1497,7 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
             if img is None:
                 time.sleep(FOLLOW_POLL_INTERVAL)
                 continue
-            items, img_np = game_map.ocr_regions(img, FOLLOW_OCR_REGIONS)
+            items, img_np = task_tracker.ocr_follow(img)
         task = task_tracker.find_task(task_tracker.group_tasks(items), title)
         if task is None:
             if _confirm_task_gone(win, title, fallback_keywords,
@@ -1493,8 +1512,7 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                     try:
                         img2 = win.capture(force_activate=False)
                         if img2 is not None:
-                            items2, _ = game_map.ocr_regions(
-                                img2, (task_tracker.TRACK_REGION,))
+                            items2, _ = task_tracker.ocr_track(img2)
                             dump = " | ".join(f"「{t[0]}」" for t in items2
                                               if t[2] >= 0.55)
                             log(f"[{prefix}] 追踪面板 OCR: {dump or '(无)'}", "WARN")

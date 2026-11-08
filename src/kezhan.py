@@ -531,10 +531,40 @@ AWANG_APPROACH_OFFSET = 60                    # 走近点击：名字标签/模�
                                               # （点在下方角色会站到 NPC 上挡住）
 AWANG_ARRIVE_POLLS = 2                        # 走近寻路结束判定：位置连续不变读数次数（1s 间隔）
 AWANG_ARRIVE_TIMEOUT = 20                     # 走近等待超时（秒；点击远处 NPC 走过去约 10-15s）
-# NPC 名字 OCR 兜底查找的排除区（任务追踪面板；面板内文案如「找阿旺。」不可点）
+# NPC 名字 OCR 兜底查找的排除区（任务追踪面板；面板内文案如「找阿旺。」不可点）。
+# 静态兜底；运行时由 _track_panel_region 按标题条模板动态推导（面板漂移跟随）
 TRACK_PANEL_REGION = (0, 200, 260, 600)
-# 任务追踪面板顶部小区域（标题行；客栈任务恒为面板首个任务，拍虫时快速检查用）
+# 任务追踪面板顶部小区域（标题行；客栈任务恒为面板首个任务，拍虫时快速检查用）。
+# 静态兜底；运行时由 _track_title_region 动态推导（面板漂移跟随）
 TRACK_TITLE_REGION = (0, 200, 260, 330)
+
+
+def _track_panel_region(img_np):
+    """客栈用任务追踪面板区域（动态，跟随标题条模板）。
+
+    与任务追踪主链路同源（task_tracker.track_content_region：标题条
+    模板定位 + 用户公式推导内容区）；模板未命中（含 img_np 为 None，
+    纯文本过滤场景无帧可查）回退静态 TRACK_PANEL_REGION。
+    """
+    if img_np is None:
+        return TRACK_PANEL_REGION
+    return task_tracker.track_content_region(img_np) or TRACK_PANEL_REGION
+
+
+def _track_title_region(img_np):
+    """任务追踪面板顶部小区域（标题行，动态）。
+
+    静态 TRACK_TITLE_REGION=(0,200,260,330) 相对内容区顶（标题条底
+    ≈227）的偏移：top-27、bottom+103。模板未命中（含 img_np 为
+    None）回退静态。
+    """
+    if img_np is None:
+        return TRACK_TITLE_REGION
+    region = task_tracker.track_content_region(img_np)
+    if region is None:
+        return TRACK_TITLE_REGION
+    l, t, r, _b = region
+    return (l, max(0, t - 27), r, min(img_np.shape[0], t + 103))
 _awang_missing_logged = False                 # 模板缺失仅记录一次，避免刷日志
 _order_mismatch_logged = False                # 四象文本词/绿色词簇数不一致仅记录一次
 _dali_last_done = 0.0                         # 上次大理寺寻路完成时间（防重复触发）
@@ -767,7 +797,7 @@ def _find_awang_by_ocr(win):
     if img is None:
         return None
     items, _ = game_map.ocr_image(img)
-    _, pt, pr, pb = TRACK_PANEL_REGION
+    _, pt, pr, pb = _track_panel_region(np.asarray(img))
     for txt, rect, score in items:
         if score < 0.55 or len(txt) > 4 or "阿旺" not in txt:
             continue
@@ -986,7 +1016,7 @@ def _order_green_state(items, img_np):
     关键词，会把对话框的绿字选项误当成封印关键词（实测点到了 (711,391)
     的对话框选项）。
     """
-    pl, pt_, pr, pb = TRACK_PANEL_REGION
+    pl, pt_, pr, pb = _track_panel_region(img_np)
     kw_lines = [(txt, rect) for txt, rect, _ in items
                 if any(kw in norm_text(txt) for kw in GREEN_CLICK_ORDER)
                 and rect[0] < pr and pt_ <= rect[1] <= pb]
@@ -1086,24 +1116,26 @@ def _pick_order_green(items, img_np):
     return l + cx, t + cy
 
 
-def _sancai_panel_lines(items):
+def _sancai_panel_lines(items, img_np=None):
     """三才任务关注的面板行（任务追踪面板区域内，排除居中对话框；
-    领取/跟踪对话框同含关键词，面板外行命中会把对话框选项当链接）。"""
-    pl, pt_, pr, pb = TRACK_PANEL_REGION
+    领取/跟踪对话框同含关键词，面板外行命中会把对话框选项当链接）。
+    区域由标题条模板动态定位（面板漂移跟随）；img_np 为 None 时
+    回退静态区域（纯文本过滤场景）。"""
+    pl, pt_, pr, pb = _track_panel_region(img_np)
     return [(txt, rect, score) for txt, rect, score in items
             if score >= 0.55 and rect[0] < pr and pt_ <= rect[1] <= pb]
 
 
-def _sancai_stage(items):
+def _sancai_stage(items, img_np=None):
     """是否处于三才阵法阶段：面板存在任一顺序关键词。"""
     return any(any(kw in norm_text(txt) for kw in SANCAI_LINK_ORDER)
-               for txt, _, _ in _sancai_panel_lines(items))
+               for txt, _, _ in _sancai_panel_lines(items, img_np))
 
 
-def _sancai_count(items):
+def _sancai_count(items, img_np=None):
     """面板「第N处阵法已加固完成」的最大序数（无则 None）。"""
     best = None
-    for txt, _, _ in _sancai_panel_lines(items):
+    for txt, _, _ in _sancai_panel_lines(items, img_np):
         for m in SANCAI_PROGRESS_RE.finditer(norm_text(txt)):
             n = _SANCAI_ORD.get(m.group(1))
             if n is None and m.group(1).isdigit():
@@ -1124,7 +1156,7 @@ def _sancai_locate_link(items, img_np, kw):
     的字符合并），纵向点击行底上方 2px（行底可点区规则）。关键词被
     OCR 拆行/漏读时返回 None（调用方拒绝行级兜底，等待重试）。
     """
-    for txt, rect, _ in _sancai_panel_lines(items):
+    for txt, rect, _ in _sancai_panel_lines(items, img_np):
         ntxt = norm_text(txt)
         i = ntxt.find(kw)
         if i < 0:
@@ -1180,9 +1212,9 @@ def _sancai_picker(items, img_np):
     封印按序开启）。计数用尽（≥3）返回 None：最后阶段（如回钟馗处
     复命的链接）交回行级选择。
     """
-    n = _sancai_count(items)
+    n = _sancai_count(items, img_np)
     if n is None:
-        if not _sancai_stage(items):
+        if not _sancai_stage(items, img_np):
             return None
         n = 0
     if n >= len(SANCAI_LINK_ORDER):
@@ -1195,10 +1227,10 @@ def _sancai_progress_key(items, img_np):
     """三才任务进度键：已加固计数；阶段内未加固为 0（与点击前基线
     一致，点后 1/2/3 变化即推进），阶段外 None（交由四象/默认文本
     签名驱动）。"""
-    n = _sancai_count(items)
+    n = _sancai_count(items, img_np)
     if n is not None:
         return str(n)
-    return "0" if _sancai_stage(items) else None
+    return "0" if _sancai_stage(items, img_np) else None
 
 
 def _pick_task_green(items, img_np):
@@ -1240,7 +1272,7 @@ def _has_task_fast(win):
     img = win.capture(force_activate=False)
     if img is None:
         return True
-    items, _ = game_map.ocr_region(img, TRACK_TITLE_REGION)
+    items, _ = game_map.ocr_region(img, _track_title_region(np.asarray(img)))
     return task_tracker.find_task(task_tracker.group_tasks(items),
                                   TASK_TITLE) is not None
 
@@ -1406,7 +1438,7 @@ def _baoxiang_done(win):
     img = win.capture(force_activate=False)
     if img is None:
         return False
-    items, _ = game_map.ocr_region(img, task_tracker.TRACK_REGION)
+    items, _ = task_tracker.ocr_track(img)
     task = task_tracker.find_task(task_tracker.group_tasks(items), TASK_TITLE)
     if task is None:
         return True  # 整个客栈任务已消失（宝箱为最后一步）

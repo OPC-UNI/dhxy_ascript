@@ -137,7 +137,9 @@ CLAIM_VERIFY_POLL_INTERVAL = 0.8              # 校验轮询间隔（秒）。�
 TASK_BLOCK_REGION = (0, 225, 400, 310)        # 任务块裁剪区域（面板顶部：标题行 y~230-255
                                               # + 内容链接行 y~260-295，留余量）；2x 放大
                                               # 重识别用（修罗标题徽标漏检 + 插入滑动动画
-                                              # 期间 det 失败——放大帧检出能力更强）
+                                              # 期间 det 失败——放大帧检出能力更强）。
+                                              # 静态兜底；运行时由标题条模板动态推导
+                                              # （见 _task_block_region：内容区顶-2、高 85）
 CLAIM_FOLLOW_RECOVER_WINDOW = 30              # 领取后首次跟踪失败的补偿窗口（秒）：
                                               # 首次点击及其重试实测 9s、慢 OCR 下 ~20s；
                                               # 窗口外的同类失败视为跟踪中期，不补偿
@@ -611,6 +613,19 @@ def _find_claim_option(items, img_np):
     return None
 
 
+def _task_block_region(img_np):
+    """任务块裁剪区域（动态）：内容区顶-2、高 85，横向取内容区左右缘。
+
+    与静态 TASK_BLOCK_REGION=(0,225,400,310) 同标定（内容区顶≈227），
+    面板漂移时跟随；标题条模板未命中返回 None（调用方回退静态）。
+    """
+    region = task_tracker.track_content_region(img_np)
+    if region is None:
+        return None
+    l, t, r, _b = region
+    return (l, max(0, t - 2), r, min(img_np.shape[0], t + 83))
+
+
 def _task_in_tracker_zoom(img):
     """任务块裁剪 2x 放大重识别（面板 OCR 漏检兜底，看打选项同款）。
 
@@ -619,7 +634,8 @@ def _task_in_tracker_zoom(img):
     2x 放大后全帧引擎重识别，检出能力更强。返回是否检出任务。
     """
     try:
-        l, t, r, b = TASK_BLOCK_REGION
+        region = _task_block_region(np.asarray(img)) or TASK_BLOCK_REGION
+        l, t, r, b = region
         crop = img.crop((l, t, r, b)).resize(((r - l) * 2, (b - t) * 2),
                                              Image.LANCZOS)
         items2, _ = game_map.ocr_image(crop)
@@ -1040,7 +1056,7 @@ def _claim_task(win, allow_fill=False):
     pre_sig = None
     img0 = win.capture(force_activate=False)
     if img0 is not None:
-        items0, _ = game_map.ocr_regions(img0, (task_tracker.TRACK_REGION,))
+        items0, _ = task_tracker.ocr_track(img0)
         pre_sig = task_tracker.task_signature_in(items0, TASK_TITLE)
     # 识图领取入口（按钮或灵兽村使者）并点击；点击后对话框未出现
     # （短窗口内选项不可见）判定坐标不对：打开小地图点击领取点坐标
@@ -1206,7 +1222,7 @@ def _claim_task(win, allow_fill=False):
             # 首轮复用（面板绿字点击与对话框处理依赖）
             img2 = win.capture(force_activate=False)
             if img2 is not None:
-                items, img_np = game_map.ocr_regions(img2, task_tracker.OCR_REGIONS)
+                items, img_np = task_tracker.ocr_follow(img2)
                 found_frame = (items, img_np)
                 break
         time.sleep(CLAIM_VERIFY_POLL_INTERVAL)

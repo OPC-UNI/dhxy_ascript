@@ -795,13 +795,14 @@ def _track_state(win):
     """一次追踪面板 OCR 同时判定：任务是否存在 + 是否为锁妖网/奎木狼任务。
 
     续跑路径原为两次 TRACK OCR（has_task ~0.9s + 锁妖网检查 ~0.9s），
-    合并省一半（性能审计 B）。TRACK_OCR_REGION 比 TRACK_REGION 宽 30px，
-    has_task_in 内部按 x<400 过滤，判定语义不变。截图失败按无任务处理。
+    合并省一半（性能审计 B）。区域由标题条模板动态定位（读标题场景，
+    最小宽度 430 校准），has_task_in 内部按 x<400 过滤，判定语义不变。
+    截图失败按无任务处理。
     """
     img = win.capture(force_activate=False)
     if img is None:
         return False, False, False
-    items, img_np = game_map.ocr_regions(img, (task_tracker.TRACK_OCR_REGION,))
+    items, img_np = task_tracker.ocr_track_read(img)
     exists = task_tracker.has_task_in(items, img_np, TASK_TITLE, TASK_FALLBACK_TEXTS)
     return (exists,
             _track_has_suoyaowang(items) if exists else False,
@@ -1304,7 +1305,7 @@ def _claim_task(win, allow_fill=False):
     pre_sig = None
     img0 = win.capture(force_activate=False)
     if img0 is not None:
-        items0, _ = game_map.ocr_regions(img0, (task_tracker.TRACK_REGION,))
+        items0, _ = task_tracker.ocr_track(img0)
         pre_sig = task_tracker.task_signature_in(items0, TASK_TITLE)
     # 识图领取入口（按钮或降魔侍卫）并点击；点击后对话框未出现
     # （短窗口内选项不可见）判定坐标不对：打开小地图点击领取点坐标
