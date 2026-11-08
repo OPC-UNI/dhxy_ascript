@@ -315,6 +315,31 @@ def test_gate_5s_fallback(monkeypatch):
         monkeypatch.setattr(time, "time", time.time)
 
 
+def test_gate_region_shape_change_no_crash(monkeypatch):
+    """门区域随面板拖动变化（贴屏幕底部裁剪变矮）时不得崩溃。
+
+    实测 2026-11-08 修罗：面板拖到底部后门区 (200,200,3) → (136,200,3)，
+    未比形状直接逐像素比较触发 numpy 广播异常，任务线程崩溃。
+    """
+    calls = {"n": 0}
+
+    def fake(img, region=None):
+        calls["n"] += 1
+        return list(FAKE), np.zeros_like(np.asarray(img))
+
+    monkeypatch.setattr(game_map, "ocr_region", fake)
+    regions = [None, (214, 695, 514, 831)]  # 第二帧：模板命中在屏幕底部
+
+    def fake_region(img_np, **kwargs):
+        return regions.pop(0) if regions else (214, 695, 514, 831)
+
+    monkeypatch.setattr(task_tracker, "track_content_region", fake_region)
+    gate = task_tracker.TrackGate(min_interval=0.0)
+    gate.ocr(_make_frame(10))   # 首帧模板未命中 → 静态兜底，门区 200x200
+    gate.ocr(_make_frame(10))   # 次帧门区形状 136x200：视为变化，全量 OCR
+    assert calls["n"] == 2
+
+
 def test_gate_paste_track_fresh_pixels():
     gate = task_tracker.TrackGate()
     f = _make_frame(30)

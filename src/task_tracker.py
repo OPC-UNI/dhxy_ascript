@@ -262,7 +262,11 @@ class TrackGate:
         now = time.time()
         if self.crop is not None and now - self.ocr_at < self.min_interval:
             return self.items
-        if (self.crop is not None and (crop == self.crop).all()
+        # 门区域随标题条动态定位，面板拖动/贴屏幕底部时裁剪高度会变
+        # （实测 (200,200,3) → (136,200,3)）；形状不同直接视为变化做
+        # 全量 OCR——不先比形状会触发 numpy 广播异常（2026-11-08 修罗）
+        if (self.crop is not None and crop.shape == self.crop.shape
+                and (crop == self.crop).all()
                 and now - self.ocr_at < TRACK_GATE_MAX_SKIP):
             return self.items
         items, _ = game_map.ocr_region(img, (l, t, r, b))
