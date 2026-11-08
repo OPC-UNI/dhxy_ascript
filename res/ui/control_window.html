@@ -1040,6 +1040,18 @@
                     <div class="group-hint">与实际流程一致、时序无额外延时，且不改变任务状态：领取=走位到宝象国领取点 → 点击领取入口（领取任务按钮/降魔侍卫）打开对话框 → 选项「除魔卫国，义不容辞」仅定位不点击 → 点拒绝选项「事态严重，我等退散」关闭对话框；回程=定位回城符不点击（回城符模板待提供，缺失时报模板未提供）；巫医=走位到巫医 NPC、定位后点击打开对话框（医治选项由验证流程自行点击，与任务进程中战斗线程点击行为等效）；白龙马模板=按任务流程实际点击候选（找全部候选→逐一真实点击→误点对话框自动关闭→开打对话出现即停止并停留，请手动关闭对话框）。任务运行中不可验证。</div>
                 </div>
                 <div class="group-box">
+                    <div class="group-title">五环链路</div>
+                    <div class="verify-row">
+                        <button id="btn-verify-wuhuan-cloth" class="btn" onclick="verifyWuhuanCloth()">测试进入布店</button>
+                        <span class="verify-result" id="wuhuan-cloth-verify-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="btn-verify-wuhuan-claim" class="btn" onclick="verifyWuhuanClaim()">测试领取五环</button>
+                        <span class="verify-result" id="wuhuan-claim-verify-result"></span>
+                    </div>
+                    <div class="group-hint">与实际流程一致、时序无额外延时，且都不改变任务状态：进入布店=走位到布店门口 → 降落检查 → 点入口 → 点老板 → 点「我想买点东西」打开商店对话框即成功，不购买装备；领取五环=走位到云游大师 → 点领取任务按钮 → 对话面板出现即成功，不点任何选项、不真正领取（领取对话框/活力值不足/今日两次已满任一对话框出现均算面板出现）。成功后对话框停留，请手动关闭。任务运行中不可验证。</div>
+                </div>
+                <div class="group-box">
                     <div class="group-title">队伍</div>
                     <div class="verify-row">
                         <button id="btn-verify-team-check" class="btn" onclick="verifyTeamCheck()">检查队伍信息</button>
@@ -1302,6 +1314,10 @@
     const wubeiWuyiVerifyResultEl = document.getElementById('wubei-wuyi-verify-result');
     const btnVerifyWubeiXj = document.getElementById('btn-verify-wubei-xj');
     const wubeiXjVerifyResultEl = document.getElementById('wubei-xj-verify-result');
+    const btnVerifyWuhuanCloth = document.getElementById('btn-verify-wuhuan-cloth');
+    const wuhuanClothVerifyResultEl = document.getElementById('wuhuan-cloth-verify-result');
+    const btnVerifyWuhuanClaim = document.getElementById('btn-verify-wuhuan-claim');
+    const wuhuanClaimVerifyResultEl = document.getElementById('wuhuan-claim-verify-result');
     const btnVerifyClearScreen = document.getElementById('btn-verify-clear-screen');
     const clearScreenVerifyResultEl = document.getElementById('clear-screen-verify-result');
     const btnVerifyShout = document.getElementById('btn-verify-shout');
@@ -2881,6 +2897,64 @@
         btnVerifyWubeiReturn.disabled = false;
         wubeiReturnVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
         wubeiReturnVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+    };
+
+    // 五环进入布店验证：与五倍验证同模式，结果经 onWuhuanClothVerifyResult 异步回推
+    async function verifyWuhuanCloth() {
+        if (verifying) return;
+        verifying = true;
+        btnVerifyWuhuanCloth.disabled = true;
+        wuhuanClothVerifyResultEl.style.color = 'var(--text)';
+        wuhuanClothVerifyResultEl.innerText = '验证中...';
+        try {
+            const r = await callPython('verify_wuhuan_cloth');
+            if (!r || r.status !== 'success') {
+                wuhuanClothVerifyResultEl.style.color = 'var(--danger)';
+                wuhuanClothVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
+                verifying = false;
+                btnVerifyWuhuanCloth.disabled = false;
+            }
+        } catch (e) {
+            wuhuanClothVerifyResultEl.style.color = 'var(--danger)';
+            wuhuanClothVerifyResultEl.innerText = '验证请求异常';
+            verifying = false;
+            btnVerifyWuhuanCloth.disabled = false;
+        }
+    }
+    window.onWuhuanClothVerifyResult = function (ok, info) {
+        verifying = false;
+        btnVerifyWuhuanCloth.disabled = false;
+        wuhuanClothVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        wuhuanClothVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+    };
+
+    // 五环领取验证：与五倍验证同模式，结果经 onWuhuanClaimVerifyResult 异步回推
+    async function verifyWuhuanClaim() {
+        if (verifying) return;
+        verifying = true;
+        btnVerifyWuhuanClaim.disabled = true;
+        wuhuanClaimVerifyResultEl.style.color = 'var(--text)';
+        wuhuanClaimVerifyResultEl.innerText = '验证中...';
+        try {
+            const r = await callPython('verify_wuhuan_claim');
+            if (!r || r.status !== 'success') {
+                wuhuanClaimVerifyResultEl.style.color = 'var(--danger)';
+                wuhuanClaimVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
+                verifying = false;
+                btnVerifyWuhuanClaim.disabled = false;
+            }
+        } catch (e) {
+            wuhuanClaimVerifyResultEl.style.color = 'var(--danger)';
+            wuhuanClaimVerifyResultEl.innerText = '验证请求异常';
+            verifying = false;
+            btnVerifyWuhuanClaim.disabled = false;
+        }
+    }
+    window.onWuhuanClaimVerifyResult = function (ok, info) {
+        verifying = false;
+        btnVerifyWuhuanClaim.disabled = false;
+        wuhuanClaimVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        wuhuanClaimVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
     // 五倍巫医验证：与修罗巫医验证同模式，结果经 onWubeiWuyiVerifyResult 异步回推

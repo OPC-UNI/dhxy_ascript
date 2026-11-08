@@ -977,6 +977,8 @@ class ControlWindow(WebWindow):
         self.expose(self.verify_wubei_return)
         self.expose(self.verify_wubei_wuyi)
         self.expose(self.verify_wubei_xj)
+        self.expose(self.verify_wuhuan_cloth)
+        self.expose(self.verify_wuhuan_claim)
         self.expose(self.verify_clear_screen)
         self.expose(self.verify_shout)
         self.expose(self.verify_jiguan)
@@ -1975,6 +1977,93 @@ class ControlWindow(WebWindow):
                 ok_js = "true" if ok else "false"
                 self.webview_instance.evaluate_js(
                     f"if(window.onWubeiReturnVerifyResult){{window.onWubeiReturnVerifyResult({ok_js}, {json.dumps(info)});}}")
+            except Exception:
+                pass
+
+    def verify_wuhuan_cloth(self):
+        """诊断页-五环-测试进入布店按钮：与任务购买流程的进店段一致
+        （走位到布店 → 降落检查 → 点入口 → 点老板 → 点「我想买点
+        东西」），商店对话框打开即成功——不购买任何装备。"""
+        if self._tm.is_running():
+            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if self._verifying:
+            return {"status": "error", "msg": "验证进行中，请稍候"}
+        win = game.find_main_window()
+        if win is None:
+            return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
+        if not _game_window_clickable(win):
+            return {"status": "error", "msg": "游戏窗口被其他窗口遮挡，请将游戏窗口置于前台后再验证"}
+        self._verifying = True
+        threading.Thread(target=self._run_wuhuan_cloth_verify, args=(win,),
+                         daemon=True, name="wuhuan-cloth-verify").start()
+        return {"status": "success",
+                "msg": "验证已开始：走位到布店 → 降落检查 → 进店 → 点老板 → 打开商店对话框（不购买）"}
+
+    def _run_wuhuan_cloth_verify(self, win):
+        """进入布店测试线程体：跑真实进店链路（商店对话框打开即成功），结果回推页面与日志窗。"""
+        from . import wuhuan  # 延迟导入：wuhuan 反向导入本模块（避免循环）
+        try:
+            self.add_logs(["[验证] 开始测试进入布店（进店打开商店对话框即成功，不购买）..."])
+            ok, info = wuhuan.verify_cloth_shop_flow(win)
+        except Exception as e:
+            ok, info = False, f"验证异常: {e}"
+        try:
+            self.add_logs([f"[验证] 结果: {info}"])
+        except Exception:
+            pass
+        self._notify_wuhuan_cloth_verify_result(ok, info)
+        self._verifying = False
+
+    def _notify_wuhuan_cloth_verify_result(self, ok, info):
+        """进入布店测试结果回推页面（诊断页-五环链路-测试进入布店行的结果文案）。"""
+        if self.webview_instance:
+            try:
+                ok_js = "true" if ok else "false"
+                self.webview_instance.evaluate_js(
+                    f"if(window.onWuhuanClothVerifyResult){{window.onWuhuanClothVerifyResult({ok_js}, {json.dumps(info)});}}")
+            except Exception:
+                pass
+
+    def verify_wuhuan_claim(self):
+        """诊断页-五环-测试领取五环按钮：与领取流程一致到点击领取任务
+        按钮为止，对话面板出现即成功——不点任何选项、不真正领取。"""
+        if self._tm.is_running():
+            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if self._verifying:
+            return {"status": "error", "msg": "验证进行中，请稍候"}
+        win = game.find_main_window()
+        if win is None:
+            return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
+        if not _game_window_clickable(win):
+            return {"status": "error", "msg": "游戏窗口被其他窗口遮挡，请将游戏窗口置于前台后再验证"}
+        self._verifying = True
+        threading.Thread(target=self._run_wuhuan_claim_verify, args=(win,),
+                         daemon=True, name="wuhuan-claim-verify").start()
+        return {"status": "success",
+                "msg": "验证已开始：走位到云游大师 → 点领取任务按钮 → 对话面板出现即成功（不领取）"}
+
+    def _run_wuhuan_claim_verify(self, win):
+        """领取五环测试线程体：跑真实领取链路到对话面板出现为止，结果回推页面与日志窗。"""
+        from . import wuhuan  # 延迟导入：wuhuan 反向导入本模块（避免循环）
+        try:
+            self.add_logs(["[验证] 开始测试领取五环（对话面板出现即成功，不领取）..."])
+            ok, info = wuhuan.verify_claim_flow(win)
+        except Exception as e:
+            ok, info = False, f"验证异常: {e}"
+        try:
+            self.add_logs([f"[验证] 结果: {info}"])
+        except Exception:
+            pass
+        self._notify_wuhuan_claim_verify_result(ok, info)
+        self._verifying = False
+
+    def _notify_wuhuan_claim_verify_result(self, ok, info):
+        """领取五环测试结果回推页面（诊断页-五环链路-测试领取五环行的结果文案）。"""
+        if self.webview_instance:
+            try:
+                ok_js = "true" if ok else "false"
+                self.webview_instance.evaluate_js(
+                    f"if(window.onWuhuanClaimVerifyResult){{window.onWuhuanClaimVerifyResult({ok_js}, {json.dumps(info)});}}")
             except Exception:
                 pass
 

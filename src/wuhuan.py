@@ -202,8 +202,14 @@ def _wait_near(win, target, timeout, desc, interval):
     return False, f"寻路到{desc}超时（未到达长安 {target[0]},{target[1]} 附近）"
 
 
-def _buy_equipments(win):
-    """进入服装店购买 2 件 2 级装备（项链）。返回 (是否成功, 描述)。"""
+def _enter_cloth_shop(win, tag="[五环]"):
+    """走到布店门口并进入服装店、点老板打开商店对话框。
+
+    与购买流程的进店段一致：小地图点布店位置寻路 → 等待到达布店门口
+    → 降落检查 → 点入口 → 点老板 → 对话框点「我想买点东西」。
+    返回 (是否成功, 描述)；进店最终信号（商店对话框/项链图标）由
+    调用方校验。诊断页「测试进入布店」复用本链路（tag 加验证标记）。
+    """
     # 打开长安小地图点击布店位置寻路（走到服装店门口）
     if not game_map.is_in_map(win, CHANGAN_CITY):
         ok, info = game_map.open_mini_map_city(win, game_map.WORLD_MAP_CHANGAN_ICON, "长安")
@@ -214,7 +220,7 @@ def _buy_equipments(win):
         if not ok:
             return False, info
     human_click(win, CLOTH_SHOP_WALK_POS[0], CLOTH_SHOP_WALK_POS[1])
-    log("[五环] 已点击小地图布店位置，自动寻路中", "SYS")
+    log(f"{tag} 已点击小地图布店位置，自动寻路中", "SYS")
     time.sleep(1.0)  # 等待自动寻路启动
     close_scene_panels(win, "五环")
     # 等待到达布店门口（长安 130,128 附近）后再进入，避免未到位就点击
@@ -222,7 +228,7 @@ def _buy_equipments(win):
                           "布店", 1.0)
     if not ok:
         return False, info
-    log("[五环] 已到达布店门口", "SYS")
+    log(f"{tag} 已到达布店门口", "SYS")
     # 飞行中无法点击进入服装店（空中进店点击无效，用户 2026-11-07 确认）：
     # 进店前先确保降落——开飞行驭器面板识别飞行状态（降落按钮在场=飞行中，
     # 点降落；未飞行空操作），再关面板防遮挡进店点击。仅在任务开始买装备
@@ -230,7 +236,7 @@ def _buy_equipments(win):
     # 降落检查失败不阻断：真飞行中进店点击会失败、由 SHOP_ENTER_TIMEOUT
     # 兜底后整轮重试（下轮再查降落），瞬态检查失败不影响正常进店
     ok, info = zuoqi.ensure_landed(win)
-    log(f"[五环][飞行驭器] 降落检查: {info}", "INFO" if ok else "WARN")
+    log(f"{tag}[飞行驭器] 降落检查: {info}", "INFO" if ok else "WARN")
     zuoqi.close_feixingyuqi_panel(win)
     # 进入服装店：点入口 → 点老板坐标开始对话 → 对话框出现「我想买点东西」
     deadline = time.time() + SHOP_ENTER_TIMEOUT
@@ -238,12 +244,20 @@ def _buy_equipments(win):
         human_click(win, CLOTH_SHOP_ENTER_POS[0], CLOTH_SHOP_ENTER_POS[1])
         time.sleep(1.0)  # 等待进店
         human_click(win, SHOP_OWNER_POS[0], SHOP_OWNER_POS[1])
-        log("[五环] 已点击服装店老板", "SYS")
+        log(f"{tag} 已点击服装店老板", "SYS")
         ok, info = _click_dialog_green_option(win, BUY_DIALOG_OPTION, timeout=4)
         if ok:
             break
     else:
         return False, "进入服装店后未出现购买对话框"
+    return True, "已进入服装店，商店对话框已打开"
+
+
+def _buy_equipments(win):
+    """进入服装店购买 2 件 2 级装备（项链）。返回 (是否成功, 描述)。"""
+    ok, info = _enter_cloth_shop(win)
+    if not ok:
+        return False, info
     time.sleep(0.3)
     # 匹配项链图标：鼠标移动过去后左键点击两次（购买 2 件）
     pt = game_map.find_template(win, FUZHUANGDIAN_XIANGLIAN_ICON)
@@ -258,6 +272,27 @@ def _buy_equipments(win):
     human_click(win, pt[0], pt[1])
     log("[五环] 已点击购买", "SYS")
     return True, f"已购买 {EQUIPMENT_COUNT} 件 2 级装备"
+
+
+def verify_cloth_shop_flow(win):
+    """诊断页-测试进入布店按钮：走真实进店链路，商店对话框打开即成功。
+
+    与任务购买流程的进店段完全一致（走位 → 降落检查 → 点入口 →
+    点老板 → 点「我想买点东西」），到商店对话框打开即停止——不购买
+    任何装备。返回 (是否成功, 描述)。
+    """
+    if is_in_battle(win):
+        return False, "战斗中，无法测试进入布店（请先结束战斗）"
+    ok, info = _enter_cloth_shop(win, tag="[五环][验证]")
+    if not ok:
+        return False, info
+    time.sleep(0.3)
+    # 商店对话框打开信号：项链图标在场（购买流程即据此开始购买）
+    pt = game_map.find_template(win, FUZHUANGDIAN_XIANGLIAN_ICON)
+    if pt is None:
+        return False, "商店对话框中未找到服装店项链（未真正进入商店）"
+    log(f"[五环][验证] 商店对话框已打开，项链图标 ({pt[0]}, {pt[1]})（未购买）", "SYS")
+    return True, f"已进入布店（商店对话框已打开，未购买；项链图标 ({pt[0]}, {pt[1]})）"
 
 
 def _click_green_option_if(win, items, img_np, pred, needle=None):
@@ -381,6 +416,46 @@ def _wait_tracked(win, timeout):
     return False
 
 
+def _walk_to_yunyou_claim_btn(win, tag="[五环]"):
+    """走到云游大师并点击领取任务按钮（打开领取对话框）。
+
+    与领取流程的走位段一致：小地图点云游大师位置寻路 → 等待到达
+    （长安 88,175 附近）→ 等待领取任务按钮出现并点击（按钮随站位
+    渲染位置变化，必须识图定位，不缓存）。返回 (是否成功, 描述)；
+    成功时对话框由调用方轮询处理。诊断页「测试领取五环」复用本链路
+    （tag 加验证标记）。
+    """
+    # 确保在长安：不在则世界地图点长安（打开长安小地图）
+    if not game_map.is_in_map(win, CHANGAN_CITY):
+        ok, info = game_map.open_mini_map_city(win, game_map.WORLD_MAP_CHANGAN_ICON, "长安")
+        if not ok:
+            return False, info
+    # 打开长安小地图并点击云游大师位置寻路
+    if not game_map.is_mini_map_open(win):
+        ok, info = game_map.open_mini_map(win)
+        if not ok:
+            return False, info
+    human_click(win, YUNYOU_MAP_POS[0], YUNYOU_MAP_POS[1])
+    log(f"{tag} 已点击小地图云游大师位置，自动寻路中", "SYS")
+    time.sleep(1.0)  # 等待自动寻路启动
+    close_scene_panels(win, "五环")
+    # 等待到达云游大师附近（长安 88,175 附近）后再点击领取按钮，避免未到位就点击
+    ok, info = _wait_near(win, YUNYOU_TARGET_POS, CLAIM_ARRIVE_TIMEOUT,
+                          "云游大师", 2.0)
+    if not ok:
+        return False, info
+    log(f"{tag} 已到达云游大师附近", "SYS")
+    # 等待领取任务按钮出现并点击
+    if not _wait_template(win, TASK_LINGQU_CHANGAN_ICON, CLAIM_BUTTON_TIMEOUT):
+        return False, "到达后未出现领取任务按钮"
+    pt = game_map.find_template(win, TASK_LINGQU_CHANGAN_ICON)
+    if pt is None:
+        return False, "领取任务按钮出现后又消失，未点击"
+    human_click(win, pt[0], pt[1])
+    log(f"{tag} 已点击领取任务", "SYS")
+    return True, f"已点击领取任务按钮 ({pt[0]}, {pt[1]})"
+
+
 def _claim_task(win):
     """到云游大师领取五环任务。返回 (是否成功, 描述)。"""
     if is_in_battle(win):
@@ -401,35 +476,10 @@ def _claim_task(win):
             # NPC 其它对话
             if _wait_tracked(win, CLAIM_VERIFY_TIMEOUT):
                 return True, "活力值不足已点继续领取，五环任务已领取"
-    # 确保在长安：不在则世界地图点长安（打开长安小地图）
-    if not game_map.is_in_map(win, CHANGAN_CITY):
-        ok, info = game_map.open_mini_map_city(win, game_map.WORLD_MAP_CHANGAN_ICON, "长安")
-        if not ok:
-            return False, info
-    # 打开长安小地图并点击云游大师位置寻路
-    if not game_map.is_mini_map_open(win):
-        ok, info = game_map.open_mini_map(win)
-        if not ok:
-            return False, info
-    human_click(win, YUNYOU_MAP_POS[0], YUNYOU_MAP_POS[1])
-    log("[五环] 已点击小地图云游大师位置，自动寻路中", "SYS")
-    time.sleep(1.0)  # 等待自动寻路启动
-    close_scene_panels(win, "五环")
-    # 等待到达云游大师附近（长安 88,175 附近）后再点击领取按钮，避免未到位就点击
-    ok, info = _wait_near(win, YUNYOU_TARGET_POS, CLAIM_ARRIVE_TIMEOUT,
-                          "云游大师", 2.0)
+    # 走位到云游大师并点击领取任务按钮（打开领取对话框）
+    ok, info = _walk_to_yunyou_claim_btn(win)
     if not ok:
         return False, info
-    log("[五环] 已到达云游大师附近", "SYS")
-    # 等待领取任务按钮出现并点击（按钮随站位渲染位置变化，必须识图
-    # 定位，不缓存）
-    if not _wait_template(win, TASK_LINGQU_CHANGAN_ICON, CLAIM_BUTTON_TIMEOUT):
-        return False, "到达后未出现领取任务按钮"
-    pt = game_map.find_template(win, TASK_LINGQU_CHANGAN_ICON)
-    if pt is None:
-        return False, "领取任务按钮出现后又消失，未点击"
-    human_click(win, pt[0], pt[1])
-    log("[五环] 已点击领取任务", "SYS")
     # 高性能：领取选项坐标已缓存 → 固定等待渲染后直点（免首轮 OCR）；
     # 生效与否由下方任务出现轮询判定并兜底
     if app_utils.high_perf_on():
@@ -531,6 +581,44 @@ def _claim_task(win):
     if not task_tracker.has_task(win, WUHUAN_TITLE):
         return False, "已点击领取选项，但任务追踪中未检测到任务"
     return True, "五环任务已领取"
+
+
+def verify_claim_flow(win):
+    """诊断页-测试领取五环按钮：走到云游大师点领取任务按钮，对话面板
+    出现即成功——不点任何选项、不真正领取。
+
+    与领取流程一致到点击领取任务按钮为止；领取对话框/活力值不足/
+    今日两次已满任一对话框出现均为面板出现证据。对话框停留不关闭
+    （点屏幕中间是否会关领取对话框未实测，任何关闭尝试都可能误触
+    绿色选项完成领取），由用户手动关闭。返回 (是否成功, 描述)。
+    """
+    if is_in_battle(win):
+        return False, "战斗中，无法测试领取（请先结束战斗）"
+    if task_tracker.has_task(win, WUHUAN_TITLE):
+        return False, "任务追踪中已有五环任务，无法测试领取（请先完成当前任务）"
+    ok, info = _walk_to_yunyou_claim_btn(win, tag="[五环][验证]")
+    if not ok:
+        return False, info
+    # 轮询对话面板出现：任一领取链对话框均为面板出现证据（每轮询
+    # 截一帧 + 对话框区域 OCR，复用领取超时参数）
+    deadline = time.time() + CLAIM_DIALOG_TIMEOUT
+    while time.time() < deadline:
+        img = win.capture(force_activate=False)
+        if img is None:
+            time.sleep(0.5)
+            continue
+        items, _img_np = game_map.ocr_region(img, task_tracker.DIALOG_REGION)
+        if _dialog_text_present(items, CLAIM_DIALOG_TEXT):
+            log("[五环][验证] 领取对话框已出现（未领取）", "SYS")
+            return True, "领取对话框已出现（未领取，请手动关闭对话框）"
+        if _dialog_text_present(items, VITALITY_DIALOG_TEXT):
+            log("[五环][验证] 出现活力值不足对话框", "SYS")
+            return True, "出现活力值不足对话框（未领取，请手动关闭对话框）"
+        if _dialog_text_present(items, DAILY_LIMIT_TEXT):
+            log("[五环][验证] 出现今日两次已满对话框", "SYS")
+            return True, "出现今日两次已满对话框（未领取，请手动关闭对话框）"
+        time.sleep(0.5)
+    return False, "点击领取任务按钮后未出现对话面板"
 
 
 def _prepare(win):
