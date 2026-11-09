@@ -208,3 +208,15 @@ def test_kv_read_fresh_reads_disk_not_snapshot(monkeypatch):
     monkeypatch.setattr(KeyValue, "_load_data",
                         lambda: (_ for _ in ()).throw(OSError("disk")))
     assert app_utils.kv_read_fresh("group_detected", False) is False
+
+
+# ---- norm_name_for_cmp：角色名易混字符归一化（2026-11-09） ----
+
+
+def test_norm_name_for_cmp_confusables():
+    """〃/ㄨ/ˉ 家族在游戏字体下同形、OCR 稳定误读，两侧归一后同类。"""
+    assert app_utils.norm_name_for_cmp("〃忆ㄨ嚣魂ˉ") == "q忆x嚣魂i"
+    assert app_utils.norm_name_for_cmp("”忆×嚣魂一") == "q忆x嚣魂i"
+    assert app_utils.norm_name_for_cmp("碧桃娘子") == "碧桃娘子"
+    assert app_utils.norm_name_for_cmp("") == ""
+    assert app_utils.norm_name_for_cmp(None) == ""

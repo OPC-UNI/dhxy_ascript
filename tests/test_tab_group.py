@@ -255,6 +255,13 @@ def test_name_similar_fuzzy():
     assert not tab_group._name_similar("碧桃娘子", "张三")
     assert not tab_group._name_similar("", "碧桃娘子")
     assert not tab_group._name_similar("碧桃娘子", None)
+    # 易混字符归一化（2026-11-09 教训：〃忆ㄨ嚣魂ˉ 被面板 OCR 稳定
+    # 误读成 ”忆×嚣魂一，原始模糊比 0.5 < 0.7 漏配，组号少识别 1 人）
+    assert tab_group._name_similar("〃忆ㄨ嚣魂ˉ", "”忆×嚣魂一")
+    assert tab_group._name_similar("道影”", '道影"')
+    assert not tab_group._name_similar("〃忆ㄨ嚣魂ˉ", "义战天下メ帝")
+    # 归一化只合并同形家族，不降低普通名字区分度
+    assert not tab_group._name_similar("天一", "天1")
 
 
 def _make_rejoin_env(monkeypatch, children, switches):

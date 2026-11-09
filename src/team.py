@@ -42,7 +42,8 @@ from PIL import Image
 from ascript.windows.system import R
 from ascript.windows.screen.find_images import FindImages
 
-from .app_utils import log, human_click, human_move, norm_text, _UNDER_PYTEST
+from .app_utils import (log, human_click, human_move, norm_text, _UNDER_PYTEST,
+                        norm_name_for_cmp)
 from . import map as game_map  # 找图与 OCR 能力复用
 from . import debug_overlay  # 调试信息悬浮层（队伍信息行更新）
 from . import task_tracker  # 对话框区域 OCR（允许失败提示检测）
@@ -1977,13 +1978,16 @@ def _away_identity_match(scan_name, scan_race, key_name, key_race):
     种族任一侧缺失（OCR 漏检）时退化为仅名字模糊匹配（保计时连续，
     不因种族漏检重启 5 分钟）；两侧都有且不同即不是同一人
     （「碧桃娘子 女人」与「碧桃浪子 男人」靠此区分）。
+    名字比对前过易混字符归一化（norm_name_for_cmp）：特殊字符名
+    OCR 逐帧误读有抖动时（〃/ㄨ/ˉ 家族）不拆成两个身份。
     """
     if not scan_name or not key_name:
         return False
     if scan_race is not None and key_race is not None and scan_race != key_race:
         return False
-    return difflib.SequenceMatcher(None, scan_name, key_name).ratio() \
-        >= _AWAY_NAME_RATIO
+    return difflib.SequenceMatcher(
+        None, norm_name_for_cmp(scan_name), norm_name_for_cmp(key_name)
+    ).ratio() >= _AWAY_NAME_RATIO
 
 
 def _track_away(away):

@@ -43,7 +43,7 @@ from ascript.windows.hardware.keyboard import Keyboard
 from ascript.windows.window.Window import WindowCaptureFormat
 
 from .app_utils import (log, human_click, move_away, current_task_mode,
-                        fixed_pos_get, fixed_pos_set)
+                        fixed_pos_get, fixed_pos_set, norm_name_for_cmp)
 from . import app_utils  # 静默操作门控（silent_mode_on/keyboard_ok）
 from .control_window import (load_high_perf,  # 高性能开关：巫医 pass 直点门控
                              load_group_actions,  # 组号成员战斗动作（按账号 ID）
@@ -1056,12 +1056,20 @@ def _tab_char_name(title):
 
 
 def _name_similar(a, b):
-    """角色名模糊比对（Tab 标题名 vs 队伍面板 OCR 昵称，容 OCR 噪声）。"""
+    """角色名模糊比对（Tab 标题名 vs 队伍面板 OCR 昵称，容 OCR 噪声）。
+
+    比对前两侧都过易混字符归一化（norm_name_for_cmp）：特殊字符名
+    （〃ㄨˉ 等）在游戏字体下同形、OCR 稳定误读（2026-11-09
+    「〃忆ㄨ嚣魂ˉ」→「”忆×嚣魂一」致 0.5 < 0.7 漏配成员），
+    归一化后同一类字符不再拖低模糊比。
+    """
     if not a or not b:
         return False
     if a == b:
         return True
-    return difflib.SequenceMatcher(None, a, b).ratio() >= REJOIN_NAME_RATIO
+    return difflib.SequenceMatcher(
+        None, norm_name_for_cmp(a), norm_name_for_cmp(b)
+    ).ratio() >= REJOIN_NAME_RATIO
 
 
 def member_rejoin_pass(win, away_names, force=False):

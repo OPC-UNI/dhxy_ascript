@@ -1329,3 +1329,14 @@ def test_has_pending_apply_uses_item_region(monkeypatch):
     monkeypatch.setattr(team, "_apply_panel_flag", lambda img: None)
     assert team.has_pending_apply(_frame()) is False
     assert calls == [team.ZUDUI_ITEM_REGION]
+
+
+# ---- 暂离身份匹配易混字符归一化（2026-11-09） ----
+
+
+def test_away_identity_match_confusable_names():
+    """特殊字符名 OCR 抖动（〃→”、ㄨ→×、ˉ→一）不拆成两个身份。"""
+    assert team._away_identity_match("”忆×嚣魂一", "男鬼",
+                                     "〃忆ㄨ嚣魂ˉ", "男鬼")
+    assert not team._away_identity_match("”忆×嚣魂一", "男鬼",
+                                         "〃忆ㄨ嚣魂ˉ", "女人")
