@@ -1066,6 +1066,30 @@
                     <span class="group-sub" id="about-version">-</span>
                 </div>
                 <div class="group-row">
+                    <span class="group-label">软件更新</span>
+                    <div class="group-ctrl">
+                        <span class="group-sub" id="update-status">-</span>
+                        <button class="btn-sm" id="btn-update-check" onclick="checkUpdate()">检查更新</button>
+                        <button class="btn-sm" id="btn-update-apply" onclick="startUpdate()" style="display:none">立即更新</button>
+                        <button class="btn-sm" id="btn-update-skip" onclick="skipUpdate()" style="display:none">跳过此版本</button>
+                    </div>
+                </div>
+                <div class="group-row" id="update-progress-row" style="display:none">
+                    <span class="group-label">进度</span>
+                    <div class="group-sub" style="flex:1; min-width:0">
+                        <div style="height:6px; background:var(--panel2); border:1px solid var(--border); border-radius:4px; overflow:hidden">
+                            <div id="update-progress-bar" style="height:100%; width:0%; background:var(--accent); transition:width .2s"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="group-hint" id="update-msg"></div>
+                <pre class="group-hint" id="update-notes" style="display:none; white-space:pre-wrap; max-height:180px; overflow:auto; background:var(--panel2); border:1px solid var(--border); border-radius:6px; padding:8px; margin-top:4px"></pre>
+                <label class="switch-row">
+                    <input type="checkbox" id="update-auto-check">
+                    <span class="switch-track"></span>
+                    <span>自动检查更新（每天一次）</span>
+                </label>
+                <div class="group-row">
                     <span class="group-label">运行日志</span>
                     <span class="group-sub">工程目录 logs\（按日期双写，排查问题直接读文件）</span>
                 </div>
@@ -1481,6 +1505,17 @@
     const licText = document.getElementById('lic-text');
     const appVersionEl = document.getElementById('app-version');
     const aboutVersionEl = document.getElementById('about-version');
+    // 软件更新（系统页「关于」）
+    const updateStatusEl = document.getElementById('update-status');
+    const updateMsgEl = document.getElementById('update-msg');
+    const updateNotesEl = document.getElementById('update-notes');
+    const updateProgressRow = document.getElementById('update-progress-row');
+    const updateProgressBar = document.getElementById('update-progress-bar');
+    const btnUpdateCheck = document.getElementById('btn-update-check');
+    const btnUpdateApply = document.getElementById('btn-update-apply');
+    const btnUpdateSkip = document.getElementById('btn-update-skip');
+    const updateAutoCheck = document.getElementById('update-auto-check');
+    let updateState = { status: 'idle' };
     const logDrawer = document.getElementById('log-drawer');
     const logBox = document.getElementById('dash-log-box');
     const logMeta = document.getElementById('log-meta');
@@ -2594,6 +2629,128 @@
     wuhuanVitalityContinue.addEventListener('change', () => {
         callPython('save_wuhuan_vitality_continue', wuhuanVitalityContinue.checked);
     });
+    updateAutoCheck.addEventListener('change', () => {
+        callPython('set_update_auto_check', updateAutoCheck.checked);
+    });
+
+    /* ================= 软件更新（系统页「关于」） ================= */
+    function formatBytes(n) {
+        if (!n || n <= 0) return '0 B';
+        const units = ['B', 'KB', 'MB', 'GB'];
+        let i = 0, v = n;
+        while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+        return v.toFixed(i === 0 ? 0 : 1) + ' ' + units[i];
+    }
+
+    function renderUpdateState(st) {
+        updateState = st || { status: 'idle' };
+        const status = updateState.status || 'idle';
+        const m = updateState.manifest || {};
+        const skipped = updateState.skipped_version || '';
+        let text = '尚未检查';
+        let showApply = false, showSkip = false, showProgress = false;
+        updateMsgEl.innerText = updateState.error || '';
+        updateNotesEl.style.display = 'none';
+        if (status === 'checking') {
+            text = '正在检查…';
+        } else if (status === 'up_to_date') {
+            text = skipped ? ('已跳过 v' + skipped) : '已是最新版本';
+        } else if (status === 'available') {
+            text = '发现 v' + m.version + '（' + formatBytes(m.total_size) + '）';
+            showApply = true;
+            showSkip = !m.mandatory;
+            updateNotesEl.textContent = m.notes || '';
+            updateNotesEl.style.display = m.notes ? 'block' : 'none';
+            updateMsgEl.innerText = updateState.error
+                || '更新会保留 config.json、配置方案、任务统计与日志；程序将自动重启。';
+        } else if (status === 'downloading' || status === 'preparing') {
+            const p = updateState.progress || {};
+            text = (p.stage === 'extracting' ? '解压中' : '下载中') + ' ' + (p.percent || 0) + '%';
+            showProgress = true;
+        } else if (status === 'stopping') {
+            text = '正在停止任务…';
+            showProgress = true;
+        } else if (status === 'applying') {
+            text = '正在应用更新，程序即将重启…';
+            showProgress = true;
+        } else if (status === 'error') {
+            text = '检查失败';
+        }
+        updateStatusEl.innerText = text;
+        btnUpdateApply.style.display = showApply ? '' : 'none';
+        btnUpdateSkip.style.display = showSkip ? '' : 'none';
+        const busy = ['downloading', 'preparing', 'stopping', 'applying'].includes(status);
+        btnUpdateCheck.style.display = busy ? 'none' : '';
+        btnUpdateCheck.disabled = status === 'checking';
+        updateProgressRow.style.display = showProgress ? 'flex' : 'none';
+        // 侧边栏版本号：有新版本时高亮提示
+        if (status === 'available') {
+            appVersionEl.style.color = 'var(--gold)';
+            appVersionEl.title = '有新版本 v' + m.version;
+        } else {
+            appVersionEl.style.color = '';
+            appVersionEl.title = '';
+        }
+    }
+
+    function renderUpdateProgress(p) {
+        const percent = Math.max(0, Math.min(100, (p && p.percent) || 0));
+        updateProgressRow.style.display = 'flex';
+        updateProgressBar.style.width = percent + '%';
+        const stageText = p && p.stage === 'extracting' ? '解压中' : '下载中';
+        updateStatusEl.innerText = stageText + ' ' + percent + '%';
+    }
+
+    async function checkUpdate() {
+        btnUpdateCheck.disabled = true;
+        updateMsgEl.innerText = '';
+        try {
+            const st = await callPython('check_update');
+            if (st) renderUpdateState(st);
+        } catch (e) {
+            updateMsgEl.innerText = '检查更新失败：' + e;
+        } finally {
+            // 后端在检查期间保持 checking；不要被这里的 finally 提前解禁
+            if ((updateState.status || '') !== 'checking') {
+                btnUpdateCheck.disabled = false;
+            }
+        }
+    }
+
+    // 任务运行中更新：第一次点击进入「确认停止任务」态，3 秒内再点一次
+    // 才真正开始（与解绑/删除方案的二次确认交互一致；不使用 window.confirm，
+    // 避免不同 WebView2 版本对 JS 对话框支持不一致）。
+    let updateStopArm = false;
+    async function startUpdate() {
+        let r = await callPython('start_update', updateStopArm);
+        if (!r) return;
+        if (r.status === 'need_stop') {
+            updateStopArm = true;
+            btnUpdateApply.innerText = '确认停止任务并更新？';
+            updateMsgEl.innerText = r.msg || '任务正在运行，更新会先停止任务并重启程序。';
+            setTimeout(() => {
+                updateStopArm = false;
+                btnUpdateApply.innerText = '立即更新';
+            }, 3000);
+            return;
+        }
+        updateStopArm = false;
+        btnUpdateApply.innerText = '立即更新';
+        if (r.status === 'error') {
+            updateMsgEl.innerText = r.msg || '无法开始更新';
+        }
+    }
+
+    async function skipUpdate() {
+        const r = await callPython('skip_update_version', null);
+        if (r && r.status === 'error') {
+            updateMsgEl.innerText = r.msg || '操作失败';
+        }
+    }
+
+    // 供后端 evaluate_js 回调（页面未就绪时后端静默忽略）
+    window.onUpdateState = renderUpdateState;
+    window.onUpdateProgress = renderUpdateProgress;
 
     /* ================= 全量同步设置到页面 ================= */
     // 初始化与方案切换后共用：主题、任务模式、各开关、巫医间隔、
@@ -2639,6 +2796,20 @@
             const v = 'v' + info.version;
             appVersionEl.innerText = v;
             aboutVersionEl.innerText = v;
+        }
+        if (info.update) {
+            updateAutoCheck.checked = info.update.auto_check !== false;
+            renderUpdateState(info.update);
+        }
+        if (info.update_last_result) {
+            // 上次升级结果（正常升级成功 / 启动回滚）：首屏提示一次
+            const lr = info.update_last_result;
+            if (lr.status === 'success') {
+                updateMsgEl.innerText = '已成功升级到 v' + (lr.to || '');
+            } else {
+                updateMsgEl.innerText = '上次更新失败，已回滚到 v'
+                    + (lr.from || '') + '；详情见 update/update.log';
+            }
         }
         envDeviceIdValue = env.device_id || '-';
         envDeviceIdEl.innerText = envDeviceIdValue;

@@ -8,6 +8,14 @@ on:
   push:
     tags: ["v*"]
 
+env:
+  # 更新清单/更新包的公网根地址。换自定义域名时改仓库 Variable
+  # UPDATE_BASE_URL 即可，客户端常量无需改版。
+  UPDATE_BASE_URL: ${{ vars.UPDATE_BASE_URL || 'https://dhxy-ascript.oss-cn-beijing.aliyuncs.com/zhuomuniao/stable' }}
+  OSS_ENDPOINT: oss-cn-beijing.aliyuncs.com
+  OSS_BUCKET: dhxy-ascript
+  OSS_PREFIX: zhuomuniao/stable
+
 jobs:
   build:
     runs-on: windows-latest
@@ -40,6 +48,23 @@ jobs:
           $content = $content -replace '__version__\s*=\s*"[^"]*"', ('__version__ = "' + $v + '"')
           Set-Content -Path $p -Value $content -Encoding utf8NoBOM
           Write-Host "版本号已烙为: $v"
+
+      - name: 确定本次构建版本号（tag 用 tag；手动构建用代码版本）
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF -like 'refs/tags/*') {
+            $v = $env:GITHUB_REF_NAME -replace '^v', ''
+          } else {
+            $m = [regex]::Match((Get-Content "src/__init__.py" -Raw),
+                                '__version__\s*=\s*"([^"]+)"')
+            if (-not $m.Success) { Write-Error "无法读取 src/__init__.py 版本号"; exit 1 }
+            $v = $m.Groups[1].Value
+          }
+          if (-not ($v -match '^\d+\.\d+\.\d+$')) {
+            Write-Error "版本号格式异常: $v"; exit 1
+          }
+          "APP_VERSION=$v" | Out-File -Encoding utf8NoBOM -Append -FilePath $env:GITHUB_ENV
+          Write-Host "APP_VERSION=$v"
 
       - name: 烙授权应用 ID（生产 23651；本地/未烙默认 24528）
         shell: pwsh
@@ -158,28 +183,47 @@ jobs:
             Measure-Object -Property Length -Sum).Sum
           Write-Host "pylibs total: $([math]::Round($size/1MB, 1)) MB"
 
-      - name: 收集产物（exe + res + pylibs 同目录打包）
+      - name: 组装更新包与完整包（app / pylibs / manual）
         shell: pwsh
         run: |
+          # app    = exe + res（每次发版都变，自动更新必下）
+          # pylibs = numpy/onnxruntime（内容哈希未变则 OSS 复用旧对象）
+          # manual = 完整包（首次安装/救急，不含自动更新清单）
+          $v = $env:APP_VERSION
+          New-Item -ItemType Directory -Force dist_update | Out-Null
+          New-Item -ItemType Directory -Force app_pkg | Out-Null
+          New-Item -ItemType Directory -Force pylibs_pkg | Out-Null
           New-Item -ItemType Directory -Force release_pkg | Out-Null
+
+          Copy-Item dist_exe/zhuomuniao.exe app_pkg/
+          Copy-Item res app_pkg/ -Recurse
+          Copy-Item pylibs pylibs_pkg/ -Recurse
           Copy-Item dist_exe/zhuomuniao.exe release_pkg/
           Copy-Item res release_pkg/ -Recurse
           Copy-Item pylibs release_pkg/ -Recurse
-          Compress-Archive -Path release_pkg/* -DestinationPath zhuomuniao-windows.zip
+
+          # 用确定性打包脚本：固定条目顺序/时间戳/权限，保证 pylibs 内容
+          # 未变时 zip 字节完全一致，内容寻址（同名对象跳过上传/下载）才生效。
+          python scripts/make_zip.py --source app_pkg --output "dist_update/zhuomuniao-app-$v.zip"
+          python scripts/make_zip.py --source pylibs_pkg --output "dist_update/zhuomuniao-pylibs.zip"
+          python scripts/make_zip.py --source release_pkg --output "dist_update/zhuomuniao-windows-$v.zip"
+
+          Get-ChildItem dist_update | Format-Table Name, Length
 
       - name: 上传构建产物（Actions 页面下载）
         uses: actions/upload-artifact@v4
         with:
           name: zhuomuniao-windows-${{ github.ref_name }}
-          path: zhuomuniao-windows.zip
+          path: dist_update/*.zip
 
-      - name: 生成变更说明（上一 tag 至今的提交列表）
+      - name: 生成变更说明（上一 tag 至今的提交列表；changelog/<tag>.md 可覆盖）
         if: startsWith(github.ref, 'refs/tags/')
         shell: pwsh
         run: |
           # GitHub 自动生成 notes 只列 PR；本仓库直推无 PR，只会显示
           # 「Full Changelog」对比链接。改为从 git log 生成提交列表
           # 作 release 正文，附完整对比链接。
+          # 若存在 changelog/vX.Y.Z.md，则以其内容为面向用户的更新日志。
           $prev = git describe --tags --abbrev=0 HEAD~1 2>$null
           if (-not $prev) {
             $range = "HEAD"
@@ -188,16 +232,90 @@ jobs:
             $range = "$prev..HEAD"
             $link = "https://github.com/$env:GITHUB_REPOSITORY/compare/$prev...$env:GITHUB_REF_NAME"
           }
-          $body = "## 变更（$env:GITHUB_REF_NAME）`n"
-          $body += (git log --pretty=format:"- %s" $range | Out-String)
-          $body += "`n完整对比: $link`n"
+          $curated = "changelog/$env:GITHUB_REF_NAME.md"
+          if (Test-Path $curated) {
+            $body = Get-Content $curated -Raw
+            Write-Host "使用人工更新日志: $curated"
+            $body += "`n完整对比: $link`n"
+          } else {
+            $body = "## 变更（$env:GITHUB_REF_NAME）`n"
+            $body += (git log --pretty=format:"- %s" $range | Out-String)
+            $body += "`n完整对比: $link`n"
+          }
           $body | Out-File -Encoding utf8NoBOM -FilePath release_notes.md
           Write-Host "--- 生成的变更说明 ---"
           Write-Host $body
 
-      - name: 发布到 GitHub Release（仅打 tag 时）
+      - name: 生成并校验 update.json（仅打 tag）
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $v = $env:APP_VERSION
+          $minSupported = "0.0.0"
+          if (Test-Path "release/update_policy.json") {
+            $policy = Get-Content "release/update_policy.json" -Raw | ConvertFrom-Json
+            if ($policy.min_supported_version) { $minSupported = $policy.min_supported_version }
+          }
+          $releaseUrl = "https://github.com/$env:GITHUB_REPOSITORY/releases/tag/$env:GITHUB_REF_NAME"
+          python scripts/make_update_manifest.py generate `
+            --version $v `
+            --base-url $env:UPDATE_BASE_URL `
+            --app-zip "dist_update/zhuomuniao-app-$v.zip" `
+            --pylibs-zip "dist_update/zhuomuniao-pylibs.zip" `
+            --notes-file release_notes.md `
+            --release-url $releaseUrl `
+            --min-supported $minSupported `
+            --out dist_update/update.json
+          python scripts/make_update_manifest.py validate dist_update/update.json `
+            --app-zip "dist_update/zhuomuniao-app-$v.zip" `
+            --pylibs-zip "dist_update/zhuomuniao-pylibs.zip"
+
+      - name: 上传到阿里云 OSS（仅打 tag；清单最后上传）
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          OSS_ACCESS_KEY_ID: ${{ secrets.OSS_ACCESS_KEY_ID }}
+          OSS_ACCESS_KEY_SECRET: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
+        run: |
+          if (-not $env:OSS_ACCESS_KEY_ID -or -not $env:OSS_ACCESS_KEY_SECRET) {
+            Write-Error "缺少 OSS_ACCESS_KEY_ID / OSS_ACCESS_KEY_SECRET（GitHub Secrets）"
+            exit 1
+          }
+          pip install oss2
+          $v = $env:APP_VERSION
+          python scripts/upload_release.py `
+            --endpoint $env:OSS_ENDPOINT `
+            --bucket $env:OSS_BUCKET `
+            --prefix $env:OSS_PREFIX `
+            --manifest dist_update/update.json `
+            --app-zip "dist_update/zhuomuniao-app-$v.zip" `
+            --pylibs-zip "dist_update/zhuomuniao-pylibs.zip" `
+            --manual-zip "dist_update/zhuomuniao-windows-$v.zip"
+
+      - name: 验证公网清单可读（仅打 tag）
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          # 公共读策略未配置时这里会失败：提前暴露，避免用户下载 403。
+          $url = $env:UPDATE_BASE_URL.TrimEnd('/') + "/update.json?ts=" + [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+          try {
+            $r = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 30
+            if ($r.StatusCode -ne 200) { throw "HTTP $($r.StatusCode)" }
+            $data = $r.Content | ConvertFrom-Json
+            if ($data.version -ne $env:APP_VERSION) {
+              throw "清单版本 $($data.version) 与本次 $env:APP_VERSION 不一致（可能是 CDN 缓存）"
+            }
+            Write-Host "公网清单验证通过：v$($data.version)"
+          } catch {
+            Write-Error "更新清单无法公网访问：$url`n请检查 OSS bucket 公共读策略（zhuomuniao/* 允许匿名 GetObject）与对象权限。`n$_"
+            exit 1
+          }
+
+      - name: 发布到 GitHub Release（仅打 tag，内部留档）
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: zhuomuniao-windows.zip
+          files: |
+            dist_update/zhuomuniao-windows-*.zip
+            dist_update/update.json
           body_path: release_notes.md

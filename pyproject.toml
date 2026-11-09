@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dhxy2"
-version = "2.9.6"
+version = "2.10.0"
 description = "Ascript Project Template"
 readme = "README.md"
 requires-python = ">=3.9"

@@ -22,6 +22,12 @@ logs/
 dist_exe/
 # 外挂重型依赖（CI 构建生成：numpy/onnxruntime 不编译进 exe，随包分发）
 pylibs/
+# 自动更新运行时目录（staging / backup / pending / last_result）与本地发布产物
+update/
+dist_update/
+app_pkg/
+pylibs_pkg/
+release_pkg/
 tmp_err_img.png
 tmp_team_err.png
 

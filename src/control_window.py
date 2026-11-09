@@ -25,6 +25,7 @@ ControlWindow 基于 WebWindow（pywebview），页面为 res/ui/control_window.
 （window.callPython → call_internal 通道），否则注入会被跳过。
 """
 import json
+import os
 import re
 import threading
 import time
@@ -39,6 +40,8 @@ from . import game  # 游戏窗口查找（修罗回程验证用；game 不反�
 from . import app_utils  # KeyValue 合并读写（kv_save_merged/kv_remove_merged）
 from . import schemes  # 配置方案（多套设置快照切换 + 导入导出）
 from . import hotkey  # 老板键（启动/停止按钮文案展示热键名）
+from . import updater  # 软件自动更新（清单/下载/覆盖升级）
+from . import update_config  # 更新渠道与节流常量
 from . import __version__  # 版本号唯一来源（src/__init__.py，面板关于/侧边栏展示）
 
 # ---- 任务模式（UI 多选项，KeyValue 持久化，记住上次选择） ----
@@ -147,6 +150,57 @@ def save_debug_overlay(on):
     """保存调试信息悬浮开关，返回操作结果。"""
     _kv_save(_DEBUG_OVERLAY_KEY, bool(on))
     return {"status": "success"}
+
+
+# ---- 软件更新（系统页「关于」；config.json 持久化，覆盖升级保留） ----
+_UPDATE_AUTO_CHECK_KEY = "update_auto_check"
+_UPDATE_LAST_CHECK_KEY = "update_last_check_ts"
+_UPDATE_SKIPPED_KEY = "update_skipped_version"
+_UPDATE_FEED_KEY = "update_feed_url"
+
+
+def load_update_auto_check():
+    """读取自动检查更新开关（首次默认开启）。"""
+    return bool(KeyValue.get(_UPDATE_AUTO_CHECK_KEY, True))
+
+
+def save_update_auto_check(on):
+    """保存自动检查更新开关，返回操作结果。"""
+    _kv_save(_UPDATE_AUTO_CHECK_KEY, bool(on))
+    return {"status": "success"}
+
+
+def load_update_last_check():
+    """上次成功检查时间戳（秒），用于 24 小时节流。"""
+    try:
+        return float(KeyValue.get(_UPDATE_LAST_CHECK_KEY, 0) or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def save_update_last_check(ts):
+    _kv_save(_UPDATE_LAST_CHECK_KEY, float(ts))
+
+
+def load_update_skipped_version():
+    """用户选择跳过的版本（空串 = 未跳过）。"""
+    return str(KeyValue.get(_UPDATE_SKIPPED_KEY, "") or "")
+
+
+def save_update_skipped_version(version):
+    _kv_save(_UPDATE_SKIPPED_KEY, str(version or ""))
+
+
+def load_update_feed_url():
+    """config.json 覆盖清单地址（测试/应急；默认空）。"""
+    return str(KeyValue.get(_UPDATE_FEED_KEY, "") or "")
+
+
+def _as_bool(value):
+    """桥接参数归一化：兼容 true/false 布尔与 "true"/"false" 字符串。"""
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return bool(value)
 
 
 # ---- 任务次数设置（每个任务模式独立，步进 1，下限 0；部分模式有上限） ----
@@ -932,6 +986,18 @@ class ControlWindow(WebWindow):
         self._license_info = license_info or {}  # 授权信息（高级设置-授权信息展示）
         self._panel_ready = False  # 页面首屏就绪标记（get_init_data 首次回调置位）
         self._pending_logs = []  # 页面就绪前的日志暂存（首屏加载补投抽屉）
+        # 软件更新状态（后台检查/手动检查/下载/应用共用；页面经
+        # get_init_data 或 onUpdateState 回调恢复）
+        self._update_state = {"status": "idle", "current": __version__,
+                              "progress": None, "error": "",
+                              "manifest": None}
+        self._update_lock = threading.RLock()
+        self._update_apply_started = False  # 更新助手已拉起（防重复启动）
+        self._update_last_result = None  # 上次升级结果（首屏展示一次）
+        try:
+            self._update_last_result = updater.read_last_result()
+        except Exception:
+            self._update_last_result = None
         self.expose(self.get_init_data)
         self.expose(self.save_task_modes)
         self.expose(self.save_task_count)
@@ -1022,6 +1088,12 @@ class ControlWindow(WebWindow):
         self.expose(self.scheme_import)
         self.expose(self.scheme_import_confirm)
         self.expose(self.get_runtime_status)
+        # 软件更新（系统页「关于」）
+        self.expose(self.check_update)
+        self.expose(self.get_update_state)
+        self.expose(self.start_update)
+        self.expose(self.skip_update_version)
+        self.expose(self.set_update_auto_check)
         # 任务状态/日志回流接线：TaskManager → 主窗口状态 + 日志窗口
         self._tm.set_callbacks(on_status=self.sync_status, on_log=self.add_logs)
 
@@ -1222,6 +1294,213 @@ class ControlWindow(WebWindow):
             except Exception:
                 pass
 
+    # ==================== 软件更新（系统页「关于」） ====================
+
+    def _set_update_state(self, **changes):
+        """更新状态并异步推回页面；页面未就绪时由 get_init_data 兜底。"""
+        with self._update_lock:
+            self._update_state.update(changes)
+        state = self.get_update_state()
+        self._push_js(
+            "if(window.onUpdateState){window.onUpdateState(%s);}"
+            % json.dumps(state, ensure_ascii=False))
+        return state
+
+    def get_update_state(self):
+        """当前更新状态 + 配置项（页面初始化/刷新恢复用）。"""
+        with self._update_lock:
+            state = dict(self._update_state)
+        state.update({
+            "current": __version__,
+            "auto_check": load_update_auto_check(),
+            "skipped_version": load_update_skipped_version(),
+            "last_check": load_update_last_check(),
+        })
+        return state
+
+    def schedule_update_check(self):
+        """启动后延迟自动检查（24h 节流；主进程 prepare 后调用一次）。"""
+        if not load_update_auto_check():
+            return
+        if time.time() - load_update_last_check() < update_config.AUTO_CHECK_INTERVAL:
+            return
+        threading.Thread(target=self._auto_update_worker, daemon=True,
+                         name="update-check").start()
+
+    def _auto_update_worker(self):
+        time.sleep(update_config.STARTUP_CHECK_DELAY)
+        if not load_update_auto_check():
+            return
+        # 用户可能在 8 秒内手动检查过：节流命中则不再请求
+        if time.time() - load_update_last_check() < update_config.AUTO_CHECK_INTERVAL:
+            return
+        if not self._begin_update_check():
+            return
+        self._check_update_worker(False)
+
+    def check_update(self):
+        """手动检查更新（系统页按钮）：后台线程执行，结果经 onUpdateState 回推。"""
+        if not self._begin_update_check():
+            return self.get_update_state()
+        threading.Thread(target=self._check_update_worker, args=(True,),
+                         daemon=True, name="update-check-manual").start()
+        return {"status": "checking"}
+
+    def _begin_update_check(self):
+        """占用检查状态；已有检查/下载在进行时返回 False。"""
+        with self._update_lock:
+            if self._update_state.get("status") in (
+                    "checking", "downloading", "preparing",
+                    "stopping", "applying"):
+                return False
+            self._update_state.update(status="checking", error="",
+                                      progress=None)
+        self._set_update_state()
+        return True
+
+    def _check_update_worker(self, manual):
+        try:
+            self._check_update_core(manual=manual)
+        except Exception as e:
+            app_utils.log(f"[更新] 检查异常：{e}", "WARN")
+            self._set_update_state(status="error", error=str(e),
+                                   progress=None)
+
+    def _check_update_core(self, manual):
+        result = updater.check_for_update(
+            __version__, feed_url=load_update_feed_url() or None)
+        if result.get("status") == "error":
+            err = result.get("error") or "检查更新失败"
+            if manual:
+                app_utils.log(f"[更新] 检查失败：{err}", "WARN")
+            return self._set_update_state(status="error", error=err,
+                                          progress=None)
+        save_update_last_check(time.time())
+        manifest = result.get("manifest") or {}
+        if result.get("status") == "up_to_date":
+            if manual:
+                app_utils.log("[更新] 已是最新版本", "SYS")
+            return self._set_update_state(status="up_to_date", manifest=None,
+                                          error="", progress=None)
+        skipped = load_update_skipped_version()
+        if (not manual and skipped
+                and skipped == str(manifest.get("version") or "")):
+            return self._set_update_state(status="up_to_date", manifest=None,
+                                          error="", progress=None,
+                                          skipped_version=skipped)
+        app_utils.log(
+            "[更新] 发现新版本 v%s（当前 v%s）"
+            % (manifest.get("version"), __version__), "SYS")
+        return self._set_update_state(status="available", manifest=manifest,
+                                      error="", progress=None)
+
+    def start_update(self, confirm_stop=False):
+        """下载并应用更新。任务运行中需页面二次确认（confirm_stop=True）。"""
+        confirm_stop = _as_bool(confirm_stop)
+        if self._update_apply_started:
+            return {"status": "busy", "msg": "更新助手已启动，程序即将重启"}
+        state = self.get_update_state()
+        if state.get("status") in ("downloading", "preparing", "stopping",
+                                   "applying"):
+            return {"status": "busy", "msg": "更新正在进行中"}
+        manifest = state.get("manifest") or {}
+        if state.get("status") != "available" or not manifest:
+            return {"status": "error", "msg": "当前没有可用的更新"}
+        if not updater.is_frozen():
+            return {"status": "error", "msg": "源码运行不支持自动更新"}
+        if self._tm.is_running() and not confirm_stop:
+            return {"status": "need_stop",
+                    "msg": "任务正在运行。更新会先停止任务并重启程序，是否继续？"}
+        self._set_update_state(status="downloading", error="", progress={
+            "stage": "downloading", "percent": 0, "done": 0, "total": 0})
+        threading.Thread(target=self._update_worker, args=(manifest,),
+                         daemon=True, name="update-apply").start()
+        return {"status": "started"}
+
+    def _on_update_progress(self, payload):
+        """下载/解压进度回调（updater 在工作线程调用）。"""
+        stage = str(payload.get("stage") or "")
+        status = "downloading" if stage == "downloading" else "preparing"
+        with self._update_lock:
+            self._update_state["status"] = status
+            self._update_state["progress"] = payload
+        self._push_js(
+            "if(window.onUpdateProgress){window.onUpdateProgress(%s);}"
+            % json.dumps(payload, ensure_ascii=False))
+
+    def _update_worker(self, manifest):
+        """后台执行：下载/解压 → 停任务 → 启动更新助手 → 退出主进程。"""
+        try:
+            pending = updater.prepare_update(
+                manifest,
+                updater.install_root(),
+                current_version=__version__,
+                cwd=os.getcwd(),
+                progress_cb=self._on_update_progress,
+            )
+            self._set_update_state(
+                status="stopping",
+                progress={"stage": "stopping", "percent": 100})
+            if self._tm.is_running():
+                result = self._tm.stop()
+                if self._tm.is_running():
+                    raise updater.UpdateError(
+                        "任务停止失败，更新已取消：%r" % (result,))
+            try:
+                from . import debug_overlay
+                debug_overlay.shutdown()
+            except Exception:
+                pass
+            self._set_update_state(
+                status="applying",
+                progress={"stage": "applying", "percent": 100})
+            updater.launch_apply_helper(pending["pending_path"])
+            self._update_apply_started = True
+            app_utils.log("[更新] 更新助手已启动，程序即将重启", "SYS")
+            # Runtime.stop 正常会退出 GUI 循环；极端情况下 15 秒后强退，
+            # 保证更新助手能等到主进程结束（它只等 60 秒）。
+            threading.Thread(target=self._force_exit_after, args=(15,),
+                             daemon=True, name="update-force-exit").start()
+            from ascript.windows.system import Runtime
+            Runtime.stop()
+        except Exception as e:
+            app_utils.log(f"[更新] 更新失败：{e}", "WARN")
+            # 保留 available 状态与 manifest：错误多为下载/停止任务失败，
+            # 用户修好网络/任务后可再次点「立即更新」，不必重新检查。
+            self._set_update_state(status="available", error=str(e),
+                                   progress=None)
+
+    def _force_exit_after(self, seconds):
+        time.sleep(seconds)
+        app_utils.log("[更新] 主进程未在时限内退出，强制结束以便继续更新",
+                      "WARN")
+        os._exit(0)
+
+    def skip_update_version(self, version=None):
+        """跳过指定版本（强制更新不可跳过）。"""
+        state = self.get_update_state()
+        manifest = state.get("manifest") or {}
+        if manifest.get("mandatory"):
+            return {"status": "error", "msg": "该版本为强制更新，不能跳过"}
+        target = str(version or manifest.get("version") or "")
+        if not target:
+            return {"status": "error", "msg": "没有可跳过的版本"}
+        save_update_skipped_version(target)
+        app_utils.log(f"[更新] 已跳过版本 v{target}", "SYS")
+        return self._set_update_state(status="up_to_date", manifest=None,
+                                      skipped_version=target,
+                                      error="", progress=None)
+
+    def set_update_auto_check(self, on):
+        """自动检查更新开关；开启时若已过 24h 立即补一次检查。"""
+        on = _as_bool(on)
+        result = save_update_auto_check(on)
+        if on and (time.time() - load_update_last_check()
+                   >= update_config.AUTO_CHECK_INTERVAL):
+            threading.Thread(target=self._auto_update_worker, daemon=True,
+                             name="update-check").start()
+        return result
+
     def get_init_data(self):
         """页面初始化数据：主题、任务模式多选、任务次数、摄妖香开关、
         各条阈值、战斗动作、修罗/五倍设置与调试信息开关。
@@ -1232,6 +1511,13 @@ class ControlWindow(WebWindow):
         if self._pending_logs:
             pending, self._pending_logs = self._pending_logs, []
             self._push_panel_logs(pending)
+        last_result = self._update_last_result
+        self._update_last_result = None
+        if last_result:
+            try:
+                updater.clear_last_result()
+            except Exception:
+                pass
         return {"theme": load_ui_theme(),
                 "modes": load_selected_modes(),
                 "task_counts": load_task_counts(),
@@ -1270,7 +1556,9 @@ class ControlWindow(WebWindow):
                 "env": self.get_env_info(),
                 "version": __version__,
                 "schemes": schemes.list_schemes(),
-                "boss_hotkey": hotkey.load_hotkey()}
+                "boss_hotkey": hotkey.load_hotkey(),
+                "update": self.get_update_state(),
+                "update_last_result": last_result}
 
     def save_battle_action(self, target, value):
         """战斗设置变更：保存人物/召唤兽默认战斗动作。"""

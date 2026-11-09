@@ -33,6 +33,27 @@ import traceback
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if os.path.isdir(os.path.join(_HERE, "src")):
     sys.path.insert(0, _HERE)
+
+# ---- 自动更新助手入口（必须在导入 ascript/webview 等重依赖之前）----
+# 更新助手是当前 exe 复制到 %TEMP% 的副本，以 --apply-update 启动：
+# 只依赖标准库，快速进入「等主进程退出 → 覆盖 → 重启」流程。
+# 放在 __main__ 守卫内：spawn 任务子进程重导入本模块（__mp_main__）时不执行。
+if __name__ == '__main__' and "--apply-update" in sys.argv:
+    from src.updater import apply_update_entry
+    sys.exit(apply_update_entry(sys.argv))
+
+# ---- 启动恢复：处理断电/强杀导致的中断更新（只在主进程执行）----
+_UPDATE_RECOVERY = None
+if __name__ == '__main__':
+    try:
+        from src import updater as _updater_boot
+        from src import __version__ as _boot_version
+        _UPDATE_RECOVERY = _updater_boot.recover_if_needed(_boot_version)
+        if _UPDATE_RECOVERY:
+            print("[更新] 启动恢复：%s" % (_UPDATE_RECOVERY,))
+    except Exception:
+        pass
+
 # ---- 外挂重型依赖引导（pylibs）----
 # numpy/onnxruntime C 编译量巨大，打包时用 --nofollow-import-to 排除出 exe，
 # 以 exe 同目录 pylibs/ 随包分发；冻结模式下插入 sys.path 供运行时导入。
@@ -597,6 +618,11 @@ if __name__ == '__main__':
     silent_ok = False
     deny_info = ""  # 静默被拒原因（用于弹窗前提示）
     startup_logs = []  # 启动阶段授权日志（面板首屏加载后补投抽屉）
+    if _UPDATE_RECOVERY:
+        # 中断更新恢复结果（正常升级成功走 last_result，不在这里）
+        _line = f"[更新] 启动恢复：{_UPDATE_RECOVERY}"
+        log(_line, "SYS" if _UPDATE_RECOVERY.get("status") == "completed" else "WARN")
+        startup_logs.append(_line)
     if debug_auth:
         print("[授权] 调试模式：跳过静默校验，直接进入激活窗口")
     else:
@@ -666,6 +692,10 @@ if __name__ == '__main__':
     webview.windows.clear()
     # 面板重设计后默认尺寸 720×560（侧边导航 + 运行看板，见 docs/ui-redesign.md）
     control_win.prepare(width=720, height=560)            # 创建唯一窗口（uid='master'）
+
+    # 自动检查更新：后台线程、启动 8 秒后执行；24 小时节流，
+    # 不阻塞启动，也不抢占 OCR 预热。手动检查在系统页「关于」。
+    control_win.schedule_update_check()
 
     # OCR 引擎预热（主进程，后台线程）：高级设置的验证/测试按钮在主进程
     # 跑 OCR，首次调用冷启动加载 det/cls/rec 模型实测阻塞约 30s

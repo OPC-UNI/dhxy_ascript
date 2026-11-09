@@ -1,0 +1,17 @@
+{
+  "Version": "1",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": [
+        "*"
+      ],
+      "Action": [
+        "oss:GetObject"
+      ],
+      "Resource": [
+        "acs:oss:*:*:dhxy-ascript/zhuomuniao/*"
+      ]
+    }
+  ]
+}
