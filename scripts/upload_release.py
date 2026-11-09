@@ -2,8 +2,13 @@
 # -*- coding: utf-8 -*-
 """把更新资产上传到阿里云 OSS（GitHub Actions 发布步骤调用）。
 
-上传顺序：app zip → pylibs zip（内容寻址，已存在则跳过）→ 完整包 →
+上传顺序：app zip → pylibs zip（内容寻址，已存在则跳过）→
 最后 update.json。清单最后写入，保证「看到清单时资产已就绪」。
+
+manual 完整包**不上传 OSS**：仅首个带自动更新的版本（v2.10.0）需要
+一份手工安装包（线上已留存 manual/zhuomuniao-windows-latest.zip，
+新用户装它后走面板升级）；后续版本用户面板内升级即可，省存储成本。
+版本命名 zip 仍由 GitHub Release 归档（workflow 附产物）。
 
 用法：
 
@@ -15,8 +20,14 @@
       --prefix zhuomuniao/stable \
       --manifest dist_update/update.json \
       --app-zip dist_update/zhuomuniao-app-2.10.0.zip \
-      --pylibs-zip dist_update/zhuomuniao-pylibs-1a2b3c4d.zip \
-      --manual-zip dist_update/zhuomuniao-windows-2.10.0.zip
+      --pylibs-zip dist_update/zhuomuniao-pylibs-1a2b3c4d.zip
+
+只修正线上清单（如更新日志文案错误）时用 --manifest-only，不动任何 zip：
+
+    python scripts/upload_release.py \
+      --endpoint ... --bucket ... --prefix ... \
+      --manifest dist_update/update.json \
+      --manifest-only
 
 依赖：`pip install oss2`（仅 CI/发布机需要，不进运行依赖）。
 """
@@ -74,13 +85,20 @@ def main(argv=None):
     parser.add_argument("--bucket", required=True)
     parser.add_argument("--prefix", default="zhuomuniao/stable")
     parser.add_argument("--manifest", required=True)
-    parser.add_argument("--app-zip", required=True)
-    parser.add_argument("--pylibs-zip", required=True)
-    parser.add_argument("--manual-zip", required=True)
+    parser.add_argument("--app-zip", default="")
+    parser.add_argument("--pylibs-zip", default="")
     parser.add_argument("--access-key-id", default="")
     parser.add_argument("--access-key-secret", default="")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--manifest-only", action="store_true",
+                        help="只上传 update.json（修正清单文案用，zip 不动）")
     args = parser.parse_args(argv)
+
+    if not args.manifest_only:
+        for name in ("app_zip", "pylibs_zip"):
+            if not getattr(args, name):
+                raise SystemExit("缺少 --%s（或使用 --manifest-only）"
+                                 % name.replace("_", "-"))
 
     manifest_path = pathlib.Path(args.manifest)
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -93,8 +111,6 @@ def main(argv=None):
     app_key = "%s/app/zhuomuniao-app-%s.zip" % (prefix, version)
     pylibs_key = "%s/pylibs/zhuomuniao-pylibs-%s.zip" % (
         prefix, parts["pylibs"]["sha256"][:8])
-    manual_key = "%s/manual/zhuomuniao-windows-%s.zip" % (prefix, version)
-    manual_latest_key = "%s/manual/zhuomuniao-windows-latest.zip" % prefix
     manifest_key = "%s/update.json" % prefix
 
     if args.dry_run:
@@ -103,6 +119,19 @@ def main(argv=None):
         _, bucket = _bucket(args)
     immutable = "public, max-age=31536000, immutable"
     no_cache = "no-cache, max-age=60"
+
+    endpoint_host = args.endpoint
+    for scheme in ("https://", "http://"):
+        if endpoint_host.startswith(scheme):
+            endpoint_host = endpoint_host[len(scheme):]
+    endpoint_host = endpoint_host.strip("/")
+    base = "https://%s.%s/%s" % (args.bucket, endpoint_host, prefix)
+
+    if args.manifest_only:
+        _put(bucket, manifest_key, manifest_path,
+             "application/json", no_cache, args.dry_run)
+        print("清单已更新：%s/update.json（v%s）" % (base, version))
+        return 0
 
     _put(bucket, app_key, args.app_zip,
          "application/zip", immutable, args.dry_run)
@@ -117,22 +146,10 @@ def main(argv=None):
         _put(bucket, pylibs_key, args.pylibs_zip,
              "application/zip", immutable, args.dry_run)
 
-    _put(bucket, manual_key, args.manual_zip,
-         "application/zip", immutable, args.dry_run)
-    # 稳定别名：首次安装/救急链接不随版本变化；内容每次覆盖，禁止长缓存。
-    _put(bucket, manual_latest_key, args.manual_zip,
-         "application/zip", no_cache, args.dry_run)
-
     # 清单最后上传：此时所有 zip 已就绪。
     _put(bucket, manifest_key, manifest_path,
          "application/json", no_cache, args.dry_run)
 
-    endpoint_host = args.endpoint
-    for scheme in ("https://", "http://"):
-        if endpoint_host.startswith(scheme):
-            endpoint_host = endpoint_host[len(scheme):]
-    endpoint_host = endpoint_host.strip("/")
-    base = "https://%s.%s/%s" % (args.bucket, endpoint_host, prefix)
     print("发布完成：%s/update.json（v%s）" % (base, version))
     return 0
 

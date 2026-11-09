@@ -4,9 +4,11 @@
 对象布局（公共读前缀 zhuomuniao/stable/）：
 
     update.json
-    app/zhuomuniao-app-<version>.zip          # exe + res
-    pylibs/zhuomuniao-pylibs-<sha8>.zip      # numpy/onnxruntime，内容寻址
-    manual/zhuomuniao-windows-<version>.zip  # 完整包（首次安装/救急）
+    app/zhuomuniao-app-<version>.zip        # exe + res
+    pylibs/zhuomuniao-pylibs-<sha8>.zip     # numpy/onnxruntime，内容寻址
+    manual/zhuomuniao-windows-latest.zip    # 完整包仅首个带自动更新的版本
+                                            # （v2.10.0）上传一次，之后发版
+                                            # 不再覆盖（新用户装它后走面板升级）
 
 改托管只需改 UPDATE_BASE_URL 或设置环境变量 ZMN_UPDATE_FEED；
 config.json 的 update_feed_url 可临时覆盖（测试/应急）。

@@ -175,6 +175,33 @@
         .group-ctrl { display: flex; align-items: center; gap: 6px; }
         .group-label { color: var(--text); font-size: 13px; font-family: "微软雅黑"; flex: 1; min-width: 0; white-space: nowrap; }
         .group-hint { color: var(--text-dim); font-size: 11px; font-family: "微软雅黑"; line-height: 1.5; }
+        /* 更新日志（markdown 渲染区）：文本先转义再套标签，样式跟随主题变量 */
+        .update-notes {
+            max-height: 180px; overflow: auto; background: var(--panel2);
+            border: 1px solid var(--border); border-radius: 6px;
+            padding: 8px 10px; margin-top: 4px;
+            color: var(--text); font-size: 12px; font-family: "微软雅黑";
+            line-height: 1.55; word-break: break-word;
+        }
+        .update-notes h1, .update-notes h2, .update-notes h3 {
+            margin: 4px 0; color: var(--text); line-height: 1.4;
+        }
+        .update-notes h1 { font-size: 14px; }
+        .update-notes h2 { font-size: 13px; }
+        .update-notes h3 { font-size: 12px; }
+        .update-notes p { margin: 4px 0; }
+        .update-notes ul, .update-notes ol { margin: 4px 0; padding-left: 18px; }
+        .update-notes li { margin: 2px 0; }
+        .update-notes a { color: var(--accent); }
+        .update-notes code {
+            background: var(--panel); border: 1px solid var(--border);
+            border-radius: 3px; padding: 0 3px;
+            font-family: Consolas, monospace; font-size: 11px;
+        }
+        .update-notes blockquote {
+            margin: 4px 0; padding: 2px 8px;
+            border-left: 3px solid var(--gold); color: var(--text-dim);
+        }
         .group-sub { color: var(--text-dim); font-size: 12px; font-family: "微软雅黑"; }
         /* 提示横幅（任务锁定/授权临期/异常） */
         .banner {
@@ -1083,7 +1110,7 @@
                     </div>
                 </div>
                 <div class="group-hint" id="update-msg"></div>
-                <pre class="group-hint" id="update-notes" style="display:none; white-space:pre-wrap; max-height:180px; overflow:auto; background:var(--panel2); border:1px solid var(--border); border-radius:6px; padding:8px; margin-top:4px"></pre>
+                <div class="update-notes" id="update-notes" style="display:none"></div>
                 <label class="switch-row">
                     <input type="checkbox" id="update-auto-check">
                     <span class="switch-track"></span>
@@ -2642,6 +2669,61 @@
         return v.toFixed(i === 0 ? 0 : 1) + ' ' + units[i];
     }
 
+    // 更新日志极简 Markdown 渲染：行级结构用原文判定，行内文本先整体
+    // HTML 转义（日志来自远端清单，绝不能原样注入 innerHTML）再对受控
+    // 语法做转换。链接只渲染 http(s) 目标，点击时拦截并交由后端用系统
+    // 浏览器打开。
+    function renderMarkdown(md) {
+        if (!md) return '';
+        const esc = (t) => String(t)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        const inline = (t) => esc(t)
+            .replace(/`([^`]+)`/g, '<code>$1</code>')
+            .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+            .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
+                '<a href="$2" rel="noopener">$1</a>');
+        const out = [];
+        let list = null;   // null | 'ul' | 'ol'
+        let para = [];
+        const flushPara = () => {
+            if (para.length) { out.push('<p>' + para.join('<br>') + '</p>'); para = []; }
+        };
+        const closeList = () => { if (list) { out.push('</' + list + '>'); list = null; } };
+        for (const raw of String(md).split(/\r?\n/)) {
+            const line = raw.trim();
+            const h = line.match(/^(#{1,6})\s+(.*)$/);
+            if (h) {
+                flushPara(); closeList();
+                out.push('<h' + h[1].length + '>' + inline(h[2]) + '</h' + h[1].length + '>');
+                continue;
+            }
+            if (line.startsWith('>')) {
+                flushPara(); closeList();
+                out.push('<blockquote>' + inline(line.replace(/^>\s?/, '')) + '</blockquote>');
+                continue;
+            }
+            const ul = line.match(/^[-*+]\s+(.*)$/);
+            if (ul) {
+                flushPara();
+                if (list !== 'ul') { closeList(); out.push('<ul>'); list = 'ul'; }
+                out.push('<li>' + inline(ul[1]) + '</li>');
+                continue;
+            }
+            const ol = line.match(/^\d+[.)]\s+(.*)$/);
+            if (ol) {
+                flushPara();
+                if (list !== 'ol') { closeList(); out.push('<ol>'); list = 'ol'; }
+                out.push('<li>' + inline(ol[1]) + '</li>');
+                continue;
+            }
+            if (!line) { flushPara(); closeList(); continue; }
+            para.push(inline(line));
+        }
+        flushPara(); closeList();
+        return out.join('\n');
+    }
+
     function renderUpdateState(st) {
         updateState = st || { status: 'idle' };
         const status = updateState.status || 'idle';
@@ -2659,7 +2741,7 @@
             text = '发现 v' + m.version + '（' + formatBytes(m.total_size) + '）';
             showApply = true;
             showSkip = !m.mandatory;
-            updateNotesEl.textContent = m.notes || '';
+            updateNotesEl.innerHTML = renderMarkdown(m.notes || '');
             updateNotesEl.style.display = m.notes ? 'block' : 'none';
             updateMsgEl.innerText = updateState.error
                 || '更新会保留 config.json、配置方案、任务统计与日志；程序将自动重启。';
@@ -2751,6 +2833,15 @@
     // 供后端 evaluate_js 回调（页面未就绪时后端静默忽略）
     window.onUpdateState = renderUpdateState;
     window.onUpdateProgress = renderUpdateProgress;
+
+    // 更新日志链接：拦截导航（webview 内点击会跳离面板），交给系统浏览器
+    updateNotesEl.addEventListener('click', (ev) => {
+        const a = ev.target && ev.target.closest ? ev.target.closest('a') : null;
+        if (!a) return;
+        ev.preventDefault();
+        const href = a.getAttribute('href') || '';
+        if (/^https?:\/\//.test(href)) callPython('open_external', href);
+    });
 
     /* ================= 全量同步设置到页面 ================= */
     // 初始化与方案切换后共用：主题、任务模式、各开关、巫医间隔、

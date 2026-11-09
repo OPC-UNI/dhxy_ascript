@@ -29,6 +29,7 @@ import os
 import re
 import threading
 import time
+import webbrowser
 import webview
 from pathlib import Path
 from ascript.windows.hardware.keyboard import Keyboard
@@ -1094,6 +1095,7 @@ class ControlWindow(WebWindow):
         self.expose(self.start_update)
         self.expose(self.skip_update_version)
         self.expose(self.set_update_auto_check)
+        self.expose(self.open_external)
         # 任务状态/日志回流接线：TaskManager → 主窗口状态 + 日志窗口
         self._tm.set_callbacks(on_status=self.sync_status, on_log=self.add_logs)
 
@@ -1475,6 +1477,20 @@ class ControlWindow(WebWindow):
         app_utils.log("[更新] 主进程未在时限内退出，强制结束以便继续更新",
                       "WARN")
         os._exit(0)
+
+    def open_external(self, url):
+        """更新日志里的链接：仅放行 http(s)，用系统默认浏览器打开。
+
+        链接文本来自远端清单（renderMarkdown 已限制 https?:// 并转义），
+        这里再校验一次协议，拒绝 javascript: 等危险协议。
+        """
+        url = str(url or "").strip()
+        if url.startswith(("https://", "http://")):
+            try:
+                webbrowser.open(url)
+            except Exception as e:
+                app_utils.log(f"[更新] 打开链接失败：{e}", "WARN")
+        return {"status": "success"}
 
     def skip_update_version(self, version=None):
         """跳过指定版本（强制更新不可跳过）。"""

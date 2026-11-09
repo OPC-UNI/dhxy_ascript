@@ -122,11 +122,16 @@ bucket: dhxy-ascript（私有）
   写入权限：仅 CI 使用的 RAM 子账号，限该前缀 PutObject/GetObject
 
 zhuomuniao/stable/update.json                          # 始终指向最新版
-zhuomuniao/stable/app/zhuomuniao-app-2.10.0.zip        # 版本命名，不可变
+zhuomuniao/stable/app/zhuomuniao-app-<version>.zip     # 版本命名，不可变
 zhuomuniao/stable/pylibs/zhuomuniao-pylibs-<sha8>.zip  # 内容寻址，未变则复用
-zhuomuniao/stable/manual/zhuomuniao-windows-2.10.0.zip # 完整包（版本副本）
-zhuomuniao/stable/manual/zhuomuniao-windows-latest.zip # 完整包稳定别名（每次覆盖，no-cache）
+zhuomuniao/stable/manual/zhuomuniao-windows-latest.zip # 完整包：仅首个带自动更新的
+                                                       # 版本（v2.10.0）上传一次
 ```
+
+manual 完整包**只在 v2.10.0 上传一次，之后发版不再上传/覆盖 OSS**：新用户
+装 v2.10.0 后走面板升级即可（该版本已带 updater），省存储与流量成本。
+版本命名的 `zhuomuniao-windows-<version>.zip` 仍每次发版生成，由 GitHub
+Release 归档（workflow 附产物）。
 
 当前客户端清单地址（编译期常量 `src/update_config.py`）：
 
@@ -199,7 +204,7 @@ CI 步骤换成 `coscli cp`。两者只需要实现其中一套，另一套留�
   "min_supported_version": "2.0.0",
   "published_at": "2026-11-09T13:00:00Z",
   "release_url": "https://github.com/OPC-UNI/dhxy_ascript/releases/tag/v2.10.0",
-  "notes": "## v2.10.0\n- 新增软件自动更新\n- 修复 ...\n\n完整对比：...",
+  "notes": "## v2.10.0\n- 新增软件自动更新\n- 修复 ...",
   "parts": [
     {
       "name": "app",
@@ -227,7 +232,7 @@ CI 步骤换成 `coscli cp`。两者只需要实现其中一套，另一套留�
 | `version` | 目标版本，必须匹配 `^\d+\.\d+\.\d+$`，且必须与 tag 一致 |
 | `min_supported_version` | 低于此版本的客户端**强制更新且不可跳过**；默认 `0.0.0` |
 | `published_at` | ISO8601 UTC，仅展示/排查 |
-| `notes` | 更新日志正文（纯文本/简单 Markdown），客户端按纯文本展示 |
+| `notes` | 更新日志正文（简单 Markdown：标题/列表/加粗/行内代码/引用/链接），客户端转义后渲染 |
 | `release_url` | 可选，内部 Release 页；客户端只做「查看详情」链接 |
 | `parts[].name` | `app` / `pylibs`；未知 name 忽略或拒绝 |
 | `parts[].url` | HTTPS 绝对地址；可选 `mirror_urls` 数组做备用源 |
@@ -256,7 +261,11 @@ CI 步骤换成 `coscli cp`。两者只需要实现其中一套，另一套留�
 
 - 可选覆盖：仓库存在 `changelog/vX.Y.Z.md` 时，用其内容作为 `notes`。这样既保留
   「提交即日志」的零维护，又允许发版时写面向用户的说明。
-- `notes` 同时写入 `update.json` 和内部 Release 正文；客户端展示 `notes`。
+- CI 产物分两份：`update_notes.md`（写入 `update.json` 的 `notes`，面板展示，
+  **不含**「完整对比」等外部链接）与 `release_notes.md`（GitHub Release 正文，
+  末尾附完整对比链接）。两者共用同一份基础内容。
+- 客户端展示 `notes`：面板内极简 Markdown 渲染（标题/列表/加粗/行内代码/
+  引用/链接），先整体 HTML 转义再套标签，链接点击经后端用系统浏览器打开。
 - 对用户隐藏纯内部提交（如 `docs:` / `chore:`）可作为后续脚本增强，不在 v1 范围。
 
 ---
@@ -271,13 +280,14 @@ CI 步骤换成 `coscli cp`。两者只需要实现其中一套，另一套留�
    - `pylibs_pkg/`：`pylibs/` → `zhuomuniao-pylibs-<sha8>.zip`
    - `release_pkg/`：三者合并 → `zhuomuniao-windows-<version>.zip`（手动安装包）
 3. `Get-FileHash -Algorithm SHA256` 计算各 zip 哈希与大小。
-4. 生成更新日志（现有步骤前移，供清单使用）。
+4. 生成更新日志两份（现有步骤前移）：`update_notes.md` 供清单使用（无外部链接），
+   `release_notes.md` 供 GitHub Release 正文（附完整对比链接）。
 5. 调 `python scripts/make_update_manifest.py generate ...` 生成 `update.json`。
 6. `python scripts/make_update_manifest.py validate ...` 自检。
 7. 上传 OSS/COS（仅 tag）：
    - `app zip` → `stable/app/`；
    - `pylibs zip` → 先 HEAD，不存在才上传；
-   - `manual zip` → `stable/manual/`；
+   - `manual zip` **不上传 OSS**（v2.10.0 已一次性留存，后续版本无需覆盖）；
    - `update.json` → `stable/update.json`（最后）。
 8. 保留现有 GitHub Release 与 Actions artifact（内部留档/手动下载），打 tag 时附
    `zhuomuniao-windows-<version>.zip` 与 `update.json`。

@@ -188,7 +188,8 @@ jobs:
         run: |
           # app    = exe + res（每次发版都变，自动更新必下）
           # pylibs = numpy/onnxruntime（内容哈希未变则 OSS 复用旧对象）
-          # manual = 完整包（首次安装/救急，不含自动更新清单）
+          # manual = 完整包（GitHub Release 归档；不上传 OSS——仅首个带
+          #          自动更新的版本需要一份手工安装包，OSS 已留存）
           $v = $env:APP_VERSION
           New-Item -ItemType Directory -Force dist_update | Out-Null
           New-Item -ItemType Directory -Force app_pkg | Out-Null
@@ -221,9 +222,11 @@ jobs:
         shell: pwsh
         run: |
           # GitHub 自动生成 notes 只列 PR；本仓库直推无 PR，只会显示
-          # 「Full Changelog」对比链接。改为从 git log 生成提交列表
-          # 作 release 正文，附完整对比链接。
+          # 「Full Changelog」对比链接。改为从 git log 生成提交列表。
           # 若存在 changelog/vX.Y.Z.md，则以其内容为面向用户的更新日志。
+          # 产物分两份：
+          #   update_notes.md  → update.json 更新日志（面板展示，纯净无链接）
+          #   release_notes.md → GitHub Release 正文（末尾附完整对比链接）
           $prev = git describe --tags --abbrev=0 HEAD~1 2>$null
           if (-not $prev) {
             $range = "HEAD"
@@ -234,17 +237,17 @@ jobs:
           }
           $curated = "changelog/$env:GITHUB_REF_NAME.md"
           if (Test-Path $curated) {
-            $body = Get-Content $curated -Raw
+            $notes = Get-Content $curated -Raw
             Write-Host "使用人工更新日志: $curated"
-            $body += "`n完整对比: $link`n"
           } else {
-            $body = "## 变更（$env:GITHUB_REF_NAME）`n"
-            $body += (git log --pretty=format:"- %s" $range | Out-String)
-            $body += "`n完整对比: $link`n"
+            $notes = "## 变更（$env:GITHUB_REF_NAME）`n"
+            $notes += (git log --pretty=format:"- %s" $range | Out-String)
           }
-          $body | Out-File -Encoding utf8NoBOM -FilePath release_notes.md
-          Write-Host "--- 生成的变更说明 ---"
-          Write-Host $body
+          $notes = $notes.TrimEnd()
+          $notes | Out-File -Encoding utf8NoBOM -FilePath update_notes.md
+          ($notes + "`n`n完整对比: $link`n") | Out-File -Encoding utf8NoBOM -FilePath release_notes.md
+          Write-Host "--- 生成的更新日志（update.json） ---"
+          Write-Host $notes
 
       - name: 生成并校验 update.json（仅打 tag）
         if: startsWith(github.ref, 'refs/tags/')
@@ -262,7 +265,7 @@ jobs:
             --base-url $env:UPDATE_BASE_URL `
             --app-zip "dist_update/zhuomuniao-app-$v.zip" `
             --pylibs-zip "dist_update/zhuomuniao-pylibs.zip" `
-            --notes-file release_notes.md `
+            --notes-file update_notes.md `
             --release-url $releaseUrl `
             --min-supported $minSupported `
             --out dist_update/update.json
@@ -289,8 +292,7 @@ jobs:
             --prefix $env:OSS_PREFIX `
             --manifest dist_update/update.json `
             --app-zip "dist_update/zhuomuniao-app-$v.zip" `
-            --pylibs-zip "dist_update/zhuomuniao-pylibs.zip" `
-            --manual-zip "dist_update/zhuomuniao-windows-$v.zip"
+            --pylibs-zip "dist_update/zhuomuniao-pylibs.zip"
 
       - name: 验证公网清单可读（仅打 tag）
         if: startsWith(github.ref, 'refs/tags/')
