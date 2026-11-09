@@ -16,7 +16,7 @@ manual 完整包**不上传 OSS**：仅首个带自动更新的版本（v2.10.0�
     set OSS_ACCESS_KEY_SECRET=...
     python scripts/upload_release.py \
       --endpoint oss-cn-beijing.aliyuncs.com \
-      --bucket dhxy-ascript \
+      --bucket dhxy-ascript-new \
       --prefix zhuomuniao/stable \
       --manifest dist_update/update.json \
       --app-zip dist_update/zhuomuniao-app-2.10.0.zip \

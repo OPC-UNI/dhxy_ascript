@@ -10,7 +10,7 @@
         "oss:GetObject"
       ],
       "Resource": [
-        "acs:oss:*:*:dhxy-ascript/zhuomuniao/*"
+        "acs:oss:*:*:dhxy-ascript-new/zhuomuniao/*"
       ]
     }
   ]

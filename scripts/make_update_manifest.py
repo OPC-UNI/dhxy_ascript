@@ -6,7 +6,7 @@
 
     python scripts/make_update_manifest.py generate \
       --version 2.10.0 \
-      --base-url https://dhxy-ascript.oss-cn-beijing.aliyuncs.com/zhuomuniao/stable \
+      --base-url https://dhxy-ascript-new.oss-cn-beijing.aliyuncs.com/zhuomuniao/stable \
       --app-zip dist_update/zhuomuniao-app-2.10.0.zip \
       --pylibs-zip dist_update/zhuomuniao-pylibs-1a2b3c4d.zip \
       --notes-file release_notes.md \

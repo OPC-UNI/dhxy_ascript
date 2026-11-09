@@ -11,9 +11,9 @@ on:
 env:
   # 更新清单/更新包的公网根地址。换自定义域名时改仓库 Variable
   # UPDATE_BASE_URL 即可，客户端常量无需改版。
-  UPDATE_BASE_URL: ${{ vars.UPDATE_BASE_URL || 'https://dhxy-ascript.oss-cn-beijing.aliyuncs.com/zhuomuniao/stable' }}
+  UPDATE_BASE_URL: ${{ vars.UPDATE_BASE_URL || 'https://dhxy-ascript-new.oss-cn-beijing.aliyuncs.com/zhuomuniao/stable' }}
   OSS_ENDPOINT: oss-cn-beijing.aliyuncs.com
-  OSS_BUCKET: dhxy-ascript
+  OSS_BUCKET: dhxy-ascript-new
   OSS_PREFIX: zhuomuniao/stable
 
 jobs:

@@ -5,10 +5,11 @@
       "Effect": "Allow",
       "Action": [
         "oss:PutObject",
-        "oss:GetObject"
+        "oss:GetObject",
+        "oss:HeadObject"
       ],
       "Resource": [
-        "acs:oss:*:*:dhxy-ascript/zhuomuniao/*"
+        "acs:oss:*:*:dhxy-ascript-new/zhuomuniao/*"
       ]
     }
   ]

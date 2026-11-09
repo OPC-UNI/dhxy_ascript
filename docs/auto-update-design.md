@@ -113,10 +113,10 @@
 
 ### 4.2 对象存储布局
 
-已确定使用阿里云 OSS `dhxy-ascript`（`cn-beijing`）：
+已确定使用阿里云 OSS `dhxy-ascript-new`（`cn-beijing`）：
 
 ```
-bucket: dhxy-ascript（私有）
+bucket: dhxy-ascript-new（私有）
   endpoint: oss-cn-beijing.aliyuncs.com
   公共读前缀：zhuomuniao/stable/*
   写入权限：仅 CI 使用的 RAM 子账号，限该前缀 PutObject/GetObject
@@ -136,7 +136,7 @@ Release 归档（workflow 附产物）。
 当前客户端清单地址（编译期常量 `src/update_config.py`）：
 
 ```
-https://dhxy-ascript.oss-cn-beijing.aliyuncs.com/zhuomuniao/stable/update.json
+https://dhxy-ascript-new.oss-cn-beijing.aliyuncs.com/zhuomuniao/stable/update.json
 ```
 
 后续若绑定稳定域名（如 `update.example.com`），改 DNS/回源并把仓库 Variable
@@ -152,7 +152,7 @@ https://dhxy-ascript.oss-cn-beijing.aliyuncs.com/zhuomuniao/stable/update.json
       "Effect": "Allow",
       "Principal": ["*"],
       "Action": ["oss:GetObject"],
-      "Resource": ["acs:oss:*:*:dhxy-ascript/zhuomuniao/*"]
+      "Resource": ["acs:oss:*:*:dhxy-ascript-new/zhuomuniao/*"]
     }
   ]
 }
@@ -675,7 +675,7 @@ available → downloading → preparing（解压）→ stopping → applying →
 
 ## 15. 已确认决策（2026-11-09）
 
-1. **托管**：阿里云 OSS `dhxy-ascript`，endpoint `oss-cn-beijing.aliyuncs.com`，
+1. **托管**：阿里云 OSS `dhxy-ascript-new`，endpoint `oss-cn-beijing.aliyuncs.com`，
    前缀 `zhuomuniao/stable/`。暂不绑定自定义域名；后续可加 DNS 并用
    `UPDATE_BASE_URL` / `update_feed_url` 覆盖。
 2. **首发版本**：v2.10.0。该版本仍需用户手动覆盖安装一次（bootstrap），

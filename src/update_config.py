@@ -1,6 +1,6 @@
 """自动更新编译期配置（发布地址 / 渠道 / 超时）。
 
-发布托管：阿里云 OSS `dhxy-ascript`（cn-beijing）。
+发布托管：阿里云 OSS `dhxy-ascript-new`（cn-beijing）。
 对象布局（公共读前缀 zhuomuniao/stable/）：
 
     update.json
@@ -19,7 +19,7 @@ CHANNEL = "stable"
 
 # 稳定域名优先；当前直接用 OSS 默认域名，后续可换自定义域名而不改代码。
 UPDATE_BASE_URL = (
-    "https://dhxy-ascript.oss-cn-beijing.aliyuncs.com/zhuomuniao/stable"
+    "https://dhxy-ascript-new.oss-cn-beijing.aliyuncs.com/zhuomuniao/stable"
 )
 UPDATE_FEED_URL = UPDATE_BASE_URL + "/update.json"
 
