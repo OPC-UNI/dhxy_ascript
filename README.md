@@ -71,6 +71,7 @@
 
 - **新功能上线须同步更新本 README 的功能列表**（完成后从「规划」表移入）
 - **版本号唯一来源 `src/__init__.py` 的 `__version__`**（面板侧边栏与「系统页-关于」自动读取展示）；**发版只需打 `v*` tag（如 v2.0.0）**——CI 构建时自动把 tag 版本号烙进代码，exe 显示版本 = tag 版本，无需手动改；`src/__init__.py` 保持开发态版本（本地运行展示用），`pyproject.toml` 的 version 仅打包元数据，建议发版时顺手同步
+- **架构与任务分支**：`docs/architecture.md`（进程/线程/模块分层、各任务完整分支图、`follow_task` 状态机、战斗/队伍/组号子系统、感知与输入通道）
 - 日志双写 `logs/` 目录（日期文件），排查问题直接读日志文件
 - 排查任务问题先用面板「高级设置」里的验证按钮逐链路验证
 - **独立 exe 打包**：GitHub Actions 自动构建（`.github/workflows/build-exe.yml`），手动触发或打 `v*` tag 自动构建并发布 Release；产物为 zip（exe + res + pylibs 同目录，解压即用）。numpy/onnxruntime 不编译进 exe（2 核 runner 编译超时），以 pylibs 目录随包分发，main.py 冻结分支自动挂载。本地构建配方见 Nuitka onefile（需 ziglang 提供编译器）
