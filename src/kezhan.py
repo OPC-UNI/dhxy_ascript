@@ -32,9 +32,9 @@ kezhan_yinlv.png 出现 → 记住五编钟位置 → 点开始演奏 → 按序
 破除封印小游戏（灵兔封印：对话「看来这就是那困住灵兔的封印了」→
 选项「消耗灵气，破除封印」→ 窗口标题 kezhan_pochufengyin.png 出现 →
 点「开始」→ 按钮变为「点击」（过程中还会变成其他外观，坐标不变仍须点）
-→ progress 不在场时每 300ms 连点「点击」直到 progress 出现、在场时等其
-消失再连点 → 标题消失即任务完成；target 中心 x 按 435~992 十等分区间
-限频打日志供标定）；
+→ progress 不在场时每 300ms 连点「点击」直到出现、出现后停手 1s 再按
+500ms 连点保持其在场（停手会消失）、消失回到 300ms 依次轮转 → 标题
+消失即任务完成；target 中心 x 按 435~992 十等分区间限频打日志供标定）；
 提交物品/无跟踪两类特殊任务后续单独处理。
 """
 import re
@@ -549,8 +549,9 @@ _yinlv_last_check = 0.0             # 上次 extras 窗口检测时间（限频�
 _yinlv_armed_at = 0.0               # 音律入口选项点击时间；>0 且未超时=检测开启
 # ---- 破除封印小游戏（灵兔封印：点对话框选项「消耗灵气，破除封印」后出现）----
 # 流程（用户 2026-11-09）：点「开始」→ 按钮变为「点击」→ progress 不在场时
-# 每 300ms 连点「点击」直到 progress 出现 → progress 在场时每 300ms 检查、
-# 消失后继续连点 → 标题「破除封印」消失即任务完成，全部操作停止。
+# 每 300ms 连点「点击」直到 progress 出现 → progress 出现后先停手 1s，再按
+# 500ms 连点保持其在场（不可停手——停手 progress 会消失）→ progress 消失
+# 回到 300ms 连点，依次轮转 → 标题「破除封印」消失即任务完成，全部停止。
 # 所有模板均在 POCHU_REGION 条带内（用户提供）；target 中心 x 恒在
 # 435~992（游标摆动范围），按十等分打印所属区间日志（后续标定用）。
 POCHU_ENTRY_OPTION = "消耗灵气，破除封印"           # 入口对话框选项（点击后小游戏窗口出现）
@@ -558,10 +559,12 @@ POCHU_TITLE_ICON = "kezhan_pochufengyin.png"        # 窗口标题「破除封�
 POCHU_START_ICON = "kezhan_pochufengyin_kaishi.png"  # 「开始」按钮（点击后同位置变为「点击」）
 POCHU_CLICK_ICON = "kezhan_pochufengyin_dianji.png"  # 「点击」按钮（过程中会变成其他外观，坐标不变仍须点）
 POCHU_TARGET_ICON = "kezhan_pochufengyin_target.png"  # 游标/目标标记（计算中心 x）
-POCHU_PROGRESS_ICON = "kezhan_pochufengyin_progress.png"  # 进度条（在场=破除进行中）
+POCHU_PROGRESS_ICON = "kezhan_pochufengyin_progress.png"  # 进度条（在场=破除进行中，须连点维持）
 POCHU_REGION = (314, 458, 1058, 645)   # 全部模板搜索条带（用户提供，覆盖小游戏窗口区）
 POCHU_THRESHOLD = 0.8                  # 模板匹配阈值（待真机校准）
-POCHU_CLICK_INTERVAL = 0.3             # 点击/检查节奏（用户指定 300ms）
+POCHU_CLICK_INTERVAL = 0.3             # progress 不在场时的连点节奏（用户指定 300ms）
+POCHU_HOLD_DELAY = 1.0                 # progress 出现后停手等待时长（秒，用户指定 1s）
+POCHU_HOLD_CLICK_INTERVAL = 0.5        # progress 在场保持节奏（用户指定 500ms 连点维持在场）
 POCHU_ARM_TIMEOUT = 120                # 入口选项点击后检测窗口的最长时限（秒）
 POCHU_CHECK_INTERVAL = 1.0             # extras 链窗口检测限频（秒，条带匹配 ~10ms）
 POCHU_END_WINDOW = 2.0                 # 标题连续消失确认窗口（秒；结束确认防抖，不得缩短）
@@ -1511,12 +1514,16 @@ def _play_pochufengyin(win):
 
     1. 等「开始」按钮出现并点击（按钮随后同位置变为「点击」）
     2. 点击循环（用户 2026-11-09 节奏，每 300ms 一帧一判定、同帧复用
-       性能规则 1）：progress 在场 → 不点击等其消失；progress 不在场 →
-       连点「点击」直到 progress 出现。**按钮在过程中会变成其他外观
-       （用户确认）但坐标不变，任何状态下都要点**——按钮位置首次由
-       模板命中建立缓存、命中时刷新，模板不命中仍按缓存坐标续点。
-       每轮同时匹配 target 计算中心 x 十等分区间并限频打印日志
-       （后续标定用）
+       性能规则 1）：
+       - progress 不在场 → 每 300ms 连点「点击」直到出现
+       - progress 出现 → 先停手 POCHU_HOLD_DELAY（1s），再按
+         POCHU_HOLD_CLICK_INTERVAL（500ms）连点保持其在场（停手
+         progress 会消失，不能停）
+       - progress 再次消失 → 回到 300ms 连点，依次轮转
+       **按钮在过程中会变成其他外观（用户确认）但坐标不变，任何状态
+       下都要点**——按钮位置首次由模板命中建立缓存、命中时刷新，模板
+       不命中仍按缓存坐标续点。每轮同时匹配 target 计算中心 x 十等分
+       区间并限频打印日志（后续标定用）
     3. 标题「破除封印」连续消失 POCHU_END_WINDOW 秒即任务完成
     4. 战斗打断立即退出（标题消失确认期内盲点会点到战斗界面）
     """
@@ -1529,6 +1536,8 @@ def _play_pochufengyin(win):
     deadline = time.time() + POCHU_TIMEOUT
     started = False
     btn_pt = None                 # 「开始/点击」按钮位置（同位置，命中刷新、未命中缓存续点）
+    hold_until = None             # progress 出现后的停手截止时刻（None=未进入保持阶段）
+    last_click = 0.0              # 上次点击时刻（300ms/500ms 节奏基准）
     last_seen = time.time()       # 标题最近命中时间（消失确认窗口起点）
     last_seg_log = 0.0
     clicks = 0
@@ -1563,12 +1572,26 @@ def _play_pochufengyin(win):
                 log(f"[客栈] 破除封印：已点击「开始」@({pt[0]},{pt[1]})", "SYS")
             _pace(t0)
             continue
-        # 已开始：progress 在场 → 等其消失；不在场 → 点「点击」
-        if game_map.match_frame_np(bgr, POCHU_PROGRESS_ICON,
-                                   threshold=POCHU_THRESHOLD,
-                                   region=POCHU_REGION, fallback=False) is not None:
-            _pace(t0)
-            continue
+        # 已开始（用户 2026-11-09 修正节奏，依次轮转）：
+        # - progress 不在场：每 300ms 连点直到出现
+        # - progress 出现：先停手 1s，再按 500ms 连点保持其在场
+        #   （停手 progress 会消失，不能停）
+        # - progress 再次消失：回到 300ms 连点
+        progress = game_map.match_frame_np(bgr, POCHU_PROGRESS_ICON,
+                                           threshold=POCHU_THRESHOLD,
+                                           region=POCHU_REGION,
+                                           fallback=False) is not None
+        now = time.time()
+        if progress:
+            if hold_until is None:
+                hold_until = now + POCHU_HOLD_DELAY  # 出现即停手 1s
+        else:
+            hold_until = None
+        if hold_until is not None:
+            due = now >= hold_until \
+                and now - last_click >= POCHU_HOLD_CLICK_INTERVAL
+        else:
+            due = now - last_click >= POCHU_CLICK_INTERVAL
         pt = game_map.match_frame_np(bgr, POCHU_CLICK_ICON,
                                      threshold=POCHU_THRESHOLD,
                                      region=POCHU_REGION, fallback=False)
@@ -1576,9 +1599,10 @@ def _play_pochufengyin(win):
             btn_pt = pt  # 命中刷新按钮位置（防窗口漂移）
         # 按钮在过程中会变成其他外观但坐标不变（用户 2026-11-09 确认），
         # 模板不命中时仍按缓存坐标续点——任何状态下都点
-        if btn_pt is not None:
+        if due and btn_pt is not None:
             human_click(win, btn_pt[0], btn_pt[1])
             clicks += 1
+            last_click = now
         # target 中心 x 十等分区间日志（限频；用户 2026-11-09：先打印，
         # 后续标定用）
         now = time.time()
