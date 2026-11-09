@@ -422,6 +422,17 @@ def verify_dialog_detect(win):
                                        region=DIALOG_FRAME_BAND)
     t_match = time.time() - t0
     hit = score >= DIALOG_FRAME_THRESHOLD
+    # 客栈奇遇横幅模板（标准对话框之外的补充门，供真机标定；导入/匹配
+    # 失败不影响本诊断）
+    qiyu_score = None
+    t_qiyu = 0.0
+    try:
+        from . import kezhan  # 函数内导入避免 dialog_common↔kezhan 循环
+        t0 = time.time()
+        qiyu_score = kezhan._qiyu_frame_score(frame)
+        t_qiyu = time.time() - t0
+    except Exception:
+        pass
     t0 = time.time()
     items, _ = game_map.ocr_region(img, task_tracker.DIALOG_REGION)
     t_ocr = time.time() - t0
@@ -429,7 +440,16 @@ def verify_dialog_detect(win):
     log(f"[诊断] 对话框模板: 分数 {score:.3f}（阈值 {DIALOG_FRAME_THRESHOLD}）"
         f"{' 命中' if hit else ' 未命中'} @ ({pt[0]},{pt[1]})，"
         f"匹配耗时 {t_match * 1000:.0f}ms", "SYS")
+    if qiyu_score is not None:
+        qiyu_hit = qiyu_score >= kezhan.QIYU_FRAME_THRESHOLD
+        log(f"[诊断] 客栈奇遇模板: 分数 {qiyu_score:.3f}"
+            f"（阈值 {kezhan.QIYU_FRAME_THRESHOLD}）"
+            f"{' 命中' if qiyu_hit else ' 未命中'}，"
+            f"匹配耗时 {t_qiyu * 1000:.0f}ms", "SYS")
     log(f"[诊断] 对话区 OCR: 耗时 {t_ocr * 1000:.0f}ms，"
         f"文案 {lines or '(无)'}", "SYS")
-    return True, (f"模板分数 {score:.3f}（{'命中' if hit else '未命中'}），"
-                  f"匹配 {t_match * 1000:.0f}ms / OCR {t_ocr * 1000:.0f}ms")
+    desc = (f"模板分数 {score:.3f}（{'命中' if hit else '未命中'}），"
+            f"匹配 {t_match * 1000:.0f}ms / OCR {t_ocr * 1000:.0f}ms")
+    if qiyu_score is not None:
+        desc += f"；奇遇模板 {qiyu_score:.3f}"
+    return True, desc

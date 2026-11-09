@@ -1297,7 +1297,8 @@ def _confirm_task_gone(win, title, fallback_texts=(), first_img=None,
     return True  # 确认窗口内始终未见任务：视为完成
 
 
-def _confirm_guard_dialog(win, img, extra_dialog_handler, tpl_gate=True):
+def _confirm_guard_dialog(win, img, extra_dialog_handler, tpl_gate=True,
+                          extra_gate=None):
     """确认轮询跳出前的对话框复核（负面条件检查）。
 
     确认轮询只 OCR 追踪面板（快速路径），但跳出后要点击任务绿字——
@@ -1311,8 +1312,9 @@ def _confirm_guard_dialog(win, img, extra_dialog_handler, tpl_gate=True):
     """
     if extra_dialog_handler is None:
         return False
-    if tpl_gate and dialog_ocr_skip(img):
-        return False  # 高性能+模板未命中：无对话框，跳过 OCR 与 extras
+    if tpl_gate and dialog_ocr_skip(img) \
+            and not (extra_gate is not None and extra_gate(img)):
+        return False  # 高性能+标准模板未命中且无补充门：无对话框，跳过 OCR 与 extras
     try:
         items_d, _ = game_map.ocr_region(img, task_tracker.DIALOG_REGION)
         return bool(extra_dialog_handler(win, items_d, np.asarray(img)))
@@ -1320,7 +1322,8 @@ def _confirm_guard_dialog(win, img, extra_dialog_handler, tpl_gate=True):
         return False
 
 
-def _task_gone_dialog_guard(win, extra_dialog_handler, tpl_gate=True):
+def _task_gone_dialog_guard(win, extra_dialog_handler, tpl_gate=True,
+                            extra_gate=None):
     """任务消失确认后的对话框复核（任务消失时奇遇弹窗可能仍在）。
 
     任务从追踪面板消失后，奇遇弹窗可能还开着（如客栈开箱奇遇的结局
@@ -1337,10 +1340,12 @@ def _task_gone_dialog_guard(win, extra_dialog_handler, tpl_gate=True):
         img = win.capture(force_activate=False)
         if img is None or is_in_battle_frame(img):
             return False
-        if tpl_gate and dialog_ocr_skip(img):
-            return False  # 高性能+模板未命中：无对话框，跳过 OCR 与
-                          # extras（返程链路省截窗后的 OCR ~0.4~2s，
-                          # 2026-11-06 开打 2x 放大重识别白耗教训）
+        if tpl_gate and dialog_ocr_skip(img) \
+                and not (extra_gate is not None and extra_gate(img)):
+            return False  # 高性能+标准模板未命中且无补充门：无对话框，
+                          # 跳过 OCR 与 extras（返程链路省截窗后的
+                          # OCR ~0.4~2s，2026-11-06 开打 2x 放大重识别
+                          # 白耗教训）
         items_d, _ = game_map.ocr_region(img, task_tracker.DIALOG_REGION)
         return bool(extra_dialog_handler(win, items_d, np.asarray(img)))
     except Exception:
@@ -1371,6 +1376,7 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 pre_click_handler=None, require_coord=False,
                 post_track_handler=None, signature_ratio=0.8,
                 task_gone_polls=None, dialog_tpl_gate=True,
+                dialog_extra_gate=None,
                 chuyijuebao_check=True, battle_extras_tpl_gate=False):
     """循环跟踪任务直到完成（prefix 供其他任务复用，如五环）。
 
@@ -1432,8 +1438,12 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
     模板即跳过，实测匹配 ~9ms vs OCR 470~930ms）。标准对话框
     （巫医/修罗/客栈/五倍领取与开打等）均命中；无标准边框的例外
     面板（客栈奇遇、给予面板、队伍面板、申请加入面板）依赖 OCR 的
-    调用方须传 False（如客栈）——给予/队伍面板本身走模板检测不受影响。
+    调用方须传 False 或提供 dialog_extra_gate（如客栈用奇遇横幅模板
+    补门）——给予/队伍面板本身走模板检测不受影响。
     普通模式（高性能关）门控不生效，行为与旧版一致。
+    dialog_extra_gate：补充对话框在场判定回调 (img) → bool。标准模板
+    未命中时再调用，命中则仍做对话区 OCR（两者任一在场即放行，如客栈
+    奇遇无标准边框但有自己的标题横幅模板）。
     chuyijuebao_check：等待期间是否检测锄遗聚宝小游戏（玄枢轶闻专属，
     每个轮询一次全帧模板匹配 ~30ms）。不出现该小游戏的任务（修罗等）
     传 False 省去轮询开销；默认 True 保持玄枢轶闻原行为。
@@ -1520,7 +1530,8 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
             if _confirm_task_gone(win, title, fallback_keywords,
                 first_img=img, polls=_gone_polls()):
                 if _task_gone_dialog_guard(win, extra_dialog_handler,
-                    tpl_gate=dialog_tpl_gate):
+                    tpl_gate=dialog_tpl_gate,
+                    extra_gate=dialog_extra_gate):
                     continue  # 弹窗仍在：先处理，下一轮再确认任务消失
                 if not task_seen:
                     # 诊断：转储追踪面板 OCR 行——宽松匹配（领取校验
@@ -1648,7 +1659,9 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 if extra_dialog_handler is not None \
                         and now - last_battle_extras_at >= BATTLE_EXTRAS_INTERVAL:
                     last_battle_extras_at = now
-                    if battle_extras_tpl_gate and dialog_ocr_skip(img):
+                    if battle_extras_tpl_gate and dialog_ocr_skip(img) \
+                            and not (dialog_extra_gate is not None
+                                     and dialog_extra_gate(img)):
                         extra_dialog_handler(win, [],
                                              np.zeros_like(np.asarray(img)))
                         continue
@@ -1679,7 +1692,8 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                     if _confirm_task_gone(win, title, fallback_keywords,
                         first_img=img, polls=_gone_polls()):
                         if _task_gone_dialog_guard(win, extra_dialog_handler,
-                            tpl_gate=dialog_tpl_gate):
+                            tpl_gate=dialog_tpl_gate,
+                            extra_gate=dialog_extra_gate):
                             changed_once = False
                             continue
                         if not task_seen:
@@ -1710,7 +1724,8 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                         # 交给 extras 处理，命中则回退正常轮询，避免对着
                         # 打开中的对话框点任务绿字
                         if _confirm_guard_dialog(win, img, extra_dialog_handler,
-                            tpl_gate=dialog_tpl_gate):
+                            tpl_gate=dialog_tpl_gate,
+                            extra_gate=dialog_extra_gate):
                             changed_once = False
                             continue
                         log(f"[{prefix}] 变化确认: 任务签名「{sig}」→「{sig2}」", "INFO")
@@ -1721,7 +1736,8 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                     continue
                 if key_changed and key == changed_key:
                     if _confirm_guard_dialog(win, img, extra_dialog_handler,
-                        tpl_gate=dialog_tpl_gate):
+                        tpl_gate=dialog_tpl_gate,
+                        extra_gate=dialog_extra_gate):
                         changed_once = False
                         continue
                     log(f"[{prefix}] 变化确认: 进度键「{baseline_key}」→「{key}」", "INFO")
@@ -1742,7 +1758,8 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 if _confirm_task_gone(win, title, fallback_keywords,
                     first_img=img, polls=_gone_polls()):
                     if _task_gone_dialog_guard(win, extra_dialog_handler,
-                        tpl_gate=dialog_tpl_gate):
+                        tpl_gate=dialog_tpl_gate,
+                        extra_gate=dialog_extra_gate):
                         changed_once = False
                         continue
                     if not task_seen:
@@ -1760,7 +1777,9 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 # 区域逐轮 OCR（对话随时可能出现，移动世界像素持续变化、
                 # 差分门不适用）
                 track_items = track_gate.ocr(img)
-                if dialog_tpl_gate and dialog_ocr_skip(img):
+                if dialog_tpl_gate and dialog_ocr_skip(img) \
+                        and not (dialog_extra_gate is not None
+                                 and dialog_extra_gate(img)):
                     # 高性能+模板未命中：跳过对话区 OCR（无对话框空烧
                     # 实测 470~930ms/轮询；模板匹配仅 ~9ms）。对话框
                     # 出现时模板必命中，开打/选项处理不受影响
@@ -1805,7 +1824,8 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 if _confirm_task_gone(win, title, fallback_keywords,
                     first_img=img, polls=_gone_polls()):
                     if _task_gone_dialog_guard(win, extra_dialog_handler,
-                        tpl_gate=dialog_tpl_gate):
+                        tpl_gate=dialog_tpl_gate,
+                        extra_gate=dialog_extra_gate):
                         changed_once = False
                         continue
                     if not task_seen:

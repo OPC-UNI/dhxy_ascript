@@ -50,6 +50,156 @@ def test_handle_qiyu_dialog_no_key_match(monkeypatch):
     assert clicks == []
 
 
+# 2026-11-09 用户截图实测 OCR 行（区域 400,270,980,600）：
+# 横幅 (619,287,770,350)、副标题 (630,353,782,375) 缩进但非选项、
+# 叙述行左对齐 x≈466-472（末行底缘 464）、选项「我知道了……」(653,507)
+QIYU_REAL_ITEMS = [
+    ("客栈奇遇", (619, 287, 770, 350), 1.00),
+    ("概率获得奖励加成！", (630, 353, 782, 375), 1.00),
+    ("你推开银票，厉声质问。围观人群被你正气所慑，纷纷支持。大使为",
+     (467, 392, 921, 411), 0.99),
+    ("息事宁人，被迫退钱并给了你一笔额外补偿。", (466, 411, 764, 432), 1.00),
+    ("(恭喜少侠获得额外收益)", (472, 437, 672, 464), 0.95),
+    ("我知道了……", (653, 507, 748, 529), 0.93),
+]
+
+
+def test_handle_qiyu_dialog_template_anchor_clicks_first_option(monkeypatch):
+    """未收录文案的新奇遇：模板锚点通用定位点第一个缩进选项（不点副标题）。"""
+    clicks = []
+    monkeypatch.setattr(kezhan, "human_click",
+                        lambda win, x, y, **k: clicks.append((x, y)))
+    monkeypatch.setattr(kezhan, "move_away", lambda win: None)
+    monkeypatch.setattr(kezhan, "log", lambda *a, **k: None)
+    assert kezhan._handle_qiyu_dialog(
+        object(), QIYU_REAL_ITEMS, None,
+        banner_pt=(697, 332), banner_h=29) is True
+    assert clicks == [((653 + 748) // 2, (507 + 529) // 2)]
+
+
+def test_handle_qiyu_dialog_template_anchor_picks_first_of_multi(monkeypatch):
+    """多选项：模板锚点路径按阅读序取第一个选项。"""
+    clicks = []
+    monkeypatch.setattr(kezhan, "human_click",
+                        lambda win, x, y, **k: clicks.append((x, y)))
+    monkeypatch.setattr(kezhan, "move_away", lambda win: None)
+    monkeypatch.setattr(kezhan, "log", lambda *a, **k: None)
+    items = [
+        ("客栈奇遇", (619, 287, 770, 350), 1.00),
+        ("师傅传你一套口诀，问你如何运功", (462, 388, 900, 417), 1.00),
+        ("立即运功，镇压凶气", (641, 470, 761, 494), 1.00),
+        ("不为所动，催劲强压", (641, 494, 761, 518), 1.00),
+    ]
+    assert kezhan._handle_qiyu_dialog(
+        object(), items, None, banner_pt=(697, 332), banner_h=29) is True
+    assert clicks == [((641 + 761) // 2, (470 + 494) // 2)]
+
+
+def test_clear_qiyu_popup_clicks_until_gone(monkeypatch):
+    """残留弹窗：模板命中→点选项，下一帧模板消失→返回已处理。"""
+    calls = []
+    scores = [(0.9, (697, 332), 29), (0.2, None, 0)]
+    monkeypatch.setattr(
+        kezhan, "_qiyu_match",
+        lambda f: scores.pop(0) if scores else (0.2, None, 0))
+    monkeypatch.setattr(kezhan.game_map, "ocr_regions",
+                        lambda img, regions: ([], None))
+    monkeypatch.setattr(kezhan, "_handle_qiyu_dialog",
+                        lambda *a, **k: calls.append(1) or True)
+    monkeypatch.setattr(kezhan.time, "sleep", lambda s: None)
+
+    class W:
+        def capture(self, **k):
+            return object()
+
+    assert kezhan._clear_qiyu_popup(W()) is True
+    assert len(calls) == 1
+
+
+def test_clear_qiyu_popup_no_popup(monkeypatch):
+    """无奇遇弹窗：不点击、返回未处理。"""
+    called = []
+    monkeypatch.setattr(kezhan, "_qiyu_match", lambda f: (0.1, None, 0))
+    monkeypatch.setattr(kezhan, "_handle_qiyu_dialog",
+                        lambda *a, **k: called.append(1) or True)
+
+    class W:
+        def capture(self, **k):
+            return object()
+
+    assert kezhan._clear_qiyu_popup(W()) is False
+    assert called == []
+
+
+# ---- 对话框模板门控（2026-11-09）----
+def test_qiyu_frame_band_covers_real_banner_rect():
+    """奇遇横幅实测位置（2026-10-31 截图 OCR「客栈奇遇」@619,287-768,351）
+    必须落在搜索条带内，否则真机永远不命中。"""
+    l, t, r, b = kezhan.QIYU_FRAME_BAND
+    assert l <= 619 and t <= 287 and 768 <= r and 351 <= b
+
+
+def test_qiyu_present_detects_banner_and_rejects_noise(monkeypatch):
+    import cv2
+    import numpy as np
+    from pathlib import Path
+    monkeypatch.setattr(kezhan, "log", lambda *a, **k: None)
+    tpl = cv2.imdecode(np.fromfile(
+        str(Path(__file__).resolve().parent.parent / "res/img"
+            / kezhan.QIYU_FRAME_ICON), dtype=np.uint8), cv2.IMREAD_COLOR)
+    rng = np.random.default_rng(12345)
+    frame = rng.integers(0, 256, (831, 1378, 3), dtype=np.uint8)
+    assert kezhan._qiyu_present(frame) is False       # 噪声帧不误命中
+    f = frame.copy()
+    h, w = tpl.shape[:2]
+    f[287:287 + h, 619:619 + w] = tpl                  # 贴实测横幅位置
+    assert kezhan._qiyu_present(f) is True
+
+
+def test_handle_dialog_options_gated_off(monkeypatch):
+    """标准/奇遇模板都未命中：两表与奇遇逻辑都不执行（防盲点）。"""
+    called = []
+    monkeypatch.setattr(kezhan, "_qiyu_match", lambda f: (0.1, None, 0))
+    monkeypatch.setattr(kezhan, "dialog_frame_score", lambda f: 0.1)
+    monkeypatch.setattr(kezhan, "_handle_qiyu_dialog",
+                        lambda *a: called.append("qiyu") or True)
+    monkeypatch.setattr(kezhan, "_handle_quiz_options",
+                        lambda *a: called.append("quiz") or True)
+    monkeypatch.setattr(kezhan, "_click_green_option_fuzzy",
+                        lambda *a: called.append("opt") or True)
+    monkeypatch.setattr(kezhan, "_click_screen_center",
+                        lambda *a, **k: called.append("skip"))
+    assert kezhan._handle_dialog_options(object(), [], None,
+                                         frame=object()) is False
+    assert called == []
+
+
+def test_handle_dialog_options_qiyu_gate(monkeypatch):
+    """奇遇模板命中：进奇遇逻辑（标准模板未命中也不跑两表）。"""
+    monkeypatch.setattr(kezhan, "_qiyu_match", lambda f: (0.9, (697, 332), 29))
+    monkeypatch.setattr(kezhan, "dialog_frame_score", lambda f: 0.1)
+    monkeypatch.setattr(kezhan, "_handle_qiyu_dialog",
+                        lambda *a, **k: True)
+    assert kezhan._handle_dialog_options(object(), [], None,
+                                         frame=object()) is True
+
+
+def test_handle_dialog_options_standard_gate(monkeypatch):
+    """标准对话框模板命中：奇遇不触发，两表正常判定。"""
+    end_norm = kezhan.norm_text(kezhan.KEZHAN_END_TEXT)
+    monkeypatch.setattr(kezhan, "_qiyu_match", lambda f: (0.1, None, 0))
+    monkeypatch.setattr(kezhan, "dialog_frame_score", lambda f: 0.9)
+    monkeypatch.setattr(kezhan, "_handle_qiyu_dialog",
+                        lambda *a, **k: True)
+    monkeypatch.setattr(kezhan, "_handle_quiz_options", lambda *a: False)
+    monkeypatch.setattr(kezhan, "_dialog_text_present",
+                        lambda items, dtxt: dtxt != end_norm)
+    monkeypatch.setattr(kezhan, "_click_green_option_fuzzy", lambda *a: True)
+    monkeypatch.setattr(kezhan, "_arm_yinlv_check", lambda opt: None)
+    assert kezhan._handle_dialog_options(object(), [], None,
+                                         frame=object()) is True
+
+
 # ---- 三才锁阴阵任务（循法固阵）----
 # 初始布局 OCR 行与下划线位置取自用户 2026-11-02 截图实测
 SANCAI_INITIAL_ITEMS = [

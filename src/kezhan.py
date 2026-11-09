@@ -53,7 +53,8 @@ from .dialog_common import (_click_green_option_once, _dialog_text_present,
                             _click_screen_center, _fuzzy_contains,
                             DAILY_LIMIT_TEXT, DAILY_LIMIT_INFO,
                             DIALOG_LOSE_TEXTS, green_option_center,
-                            _option_target_center, clear_blocking_dialog)
+                            _option_target_center, clear_blocking_dialog,
+                            dialog_frame_score, DIALOG_FRAME_THRESHOLD)
 
 # 任务追踪面板中的任务标题
 TASK_MODE = "客栈"       # 控制面板任务模式名（任务次数配置键）
@@ -345,15 +346,22 @@ DIALOG_SKIP_TEXTS = {""
     # 用 NPC 名行+台词的拼接键（_dialog_text_present 会对全行拼接做
     # 匹配）唯一锁定本屏；其他 NPC 的裸「少侠……」空屏同法追加。
     "婉儿姑娘少侠": 1,
-    # 「少侠……」空屏（空等归人送食材时婉儿姑娘的停顿屏，实测无选项，
-    # 点 1 次屏幕中间即推进；漏推进由下一轮询自愈）。
-    # 不能只配「少侠」：norm_text 去标点后「少侠……」只剩「少侠」，模糊
-    # 匹配会命中所有含「少侠」的对话框（掌柜「少侠有什么事吗」等）。
-    # 用 NPC 名行+台词的拼接键（_dialog_text_present 会对全行拼接做
-    # 匹配）唯一锁定本屏；其他 NPC 的裸「少侠……」空屏同法追加。
-    "婉儿姑娘少侠": 1,
 }
+# ---- 对话框模板门控（2026-11-09） ----
+# 「客栈奇遇」标题横幅（用户裁剪 168x29）：奇遇对话框无标准边框，用独立
+# 模板补门——命中才进奇遇逻辑；DIALOG_OPTION_MAP / DIALOG_SKIP_TEXTS
+# 两表只在标准对话框模板（dialog_frame.png）命中时判定；两者都未命中
+# 不处理对话（防纯文本误判：2026-11-08 答题中误入奇遇逻辑连点「白虎」
+# 25 次；同时堵住跳过表盲点屏幕中间）。阈值 0.8：标准对话框/队伍面板
+# 帧实测 ≤0.293，余量充足；真机奇遇帧用诊断页「测试对话框识别」校准
+# （该诊断同时输出本模板分数）。
+QIYU_FRAME_ICON = "kezhan_qiyu.png"
+QIYU_FRAME_BAND = (350, 200, 1030, 650)   # 居中对话框条带（同 DIALOG_FRAME_BAND）
+QIYU_FRAME_THRESHOLD = 0.8
 # ---- 奇遇对话框（多选项恒点第一个；选项文案随奇遇变化不映射固定文案） ----
+# 本表为「可选」文案锚点：已收录的场景命中问题行后精确定位第一个选项；
+# 未收录的新奇遇由模板锚点通用定位兜底（横幅下缘→最后一条左对齐叙述行
+# →其后第一条缩进行），因此不再需要逐条枚举新奇遇文案。
 QIYU_DIALOG_TEXTS = ["阴风骤起",   # 第一幕：妖僧现身（三选项 护太师/破阵/远退）
                      "耳旁有异响",  # 第二幕：硬抗咒光后（两选项 退开/刺向源头）
                      "伤势过重",   # 结局幕：远退后摔伤（单选项「我知道了」）
@@ -638,10 +646,12 @@ def _zhanggui_scan(win):
 def _find_zhanggui(win):
     """查找掌柜模板；未找到时依次兜底重试（返回 (x, y) 或 None）：
 
-    1. 对话框遮挡清理：模板命中（对话框在场）时点屏幕中间推进关闭
-       后重试——掌柜可能被奇遇弹窗/NPC 对话挡住，找不到不一定是
-       站位问题（2026-11-07 用户反馈）
-    2. 点击兜底点 (530,593) 后重试（用户实测有效；点位在对话框区域
+    1. 奇遇弹窗清理：横幅模板命中时点第一个选项推进关闭后重试
+       （奇遇弹窗无标准边框，clear_blocking_dialog 检测不到）
+    2. 标准对话框遮挡清理：模板命中（对话框在场）时点屏幕中间推进
+       关闭后重试——掌柜可能被 NPC 对话挡住，找不到不一定是站位问题
+       （2026-11-07 用户反馈）
+    3. 点击兜底点 (530,593) 后重试（用户实测有效；点位在对话框区域
        之下，即使有对话框打开，点击也不会落在选项上）
 
     原 Alt+6 画面刷新重试已移除（启动清屏已处理屏蔽，无需重复按键）。
@@ -653,7 +663,13 @@ def _find_zhanggui(win):
     pt = _zhanggui_scan(win)
     if pt is not None:
         return pt
-    # 对话框遮挡：有对话框（模板命中）时点屏幕中间推进关闭后重试
+    # 奇遇弹窗遮挡：点第一个选项推进关闭后重试
+    if _clear_qiyu_popup(win):
+        pt = _zhanggui_scan(win)
+        if pt is not None:
+            log("[客栈] 关闭奇遇弹窗后已找到掌柜", "SYS")
+            return pt
+    # 标准对话框遮挡：有对话框（模板命中）时点屏幕中间推进关闭后重试
     had, _ = clear_blocking_dialog(win, "客栈")
     if had:
         pt = _zhanggui_scan(win)
@@ -699,6 +715,9 @@ def _go_to_inn(win):
     if is_in_battle(win):
         return False, "战斗中，跳过本轮寻路"
 
+    # 残留奇遇弹窗会遮挡地图点击/快送判定：寻路前先清理（奇遇无标准
+    # 边框，clear_blocking_dialog 检测不到）
+    _clear_qiyu_popup(win)
     close_scene_panels(win, "客栈")
     # 世界地图 → 点击洛阳城，打开洛阳小地图
     ok, info = game_map.open_mini_map_city(win, game_map.WORLD_MAP_LUOYANG_ICON,
@@ -758,6 +777,11 @@ def _ensure_zhanggui(win):
 
     返回 (掌柜坐标, 描述)；未找到返回 (None, 描述)。
     """
+    # 领取前先清理残留奇遇弹窗（任务完成与弹窗同帧/守卫检查后弹窗才
+    # 渲染的竞态；残留会遮挡掌柜模板与地图点击，且无标准边框——
+    # clear_blocking_dialog 检测不到）
+    if _clear_qiyu_popup(win):
+        log("[客栈] 已清理残留奇遇弹窗", "SYS")
     for attempt in range(1, NAV_MAX_ATTEMPTS + 1):
         if _at_inn(win):
             pt = _find_zhanggui(win)
@@ -1668,7 +1692,8 @@ def _handle_follow_extras(win, items, img_np):
                 log("[客栈] 已重新点击任务绿字推进", "SYS")
                 return True
             log(f"[客栈] 「你输了/平局」对话中任务绿字点击失败: {info3}", "WARN")
-    return _handle_dialog_options(win, items, img_np)
+    # bgr 为本轮询共享帧（_kj_frame 按 items 缓存）：模板门控零额外截图
+    return _handle_dialog_options(win, items, img_np, frame=bgr)
 
 
 def _give_item_for_npc(win):
@@ -2017,45 +2042,109 @@ def _handle_quiz_options(win, items, img_np):
     return False
 
 
-def _handle_qiyu_dialog(win, items, img_np):
-    """奇遇对话框：多个选项时恒点第一个（选项文案随奇遇变化，不能
-    映射固定文案——实测三选项「以身作障，护太师周全/舍人破阵，
-    断祸乱之根/抽身远退，明哲保身」）。
+QIYU_OPTION_INDENT = 100       # 选项相对叙述行左缘的最小缩进（实测 126~190px）
+QIYU_OPTION_MIN_SCORE = 0.55   # 选项行 OCR 最低置信度（区域快引擎统一门槛）
+QIYU_OPTION_MAX_GAP = 200      # 文案锚点路径：选项须在问题行下方 200px 内
+QIYU_CLEAR_WAIT = 0.8          # 残留弹窗清理：点击选项后等待推进/关闭
 
-    定位问题行后，点击其下方第一条选项行（阅读序）。注意：奇遇
-    选项为浅色文字非绿色（实测 BGR ≈190,191,205，is_green_text
-    会全部排除），点文本矩形中心；加 200px 距离上限防误点远处
-    NPC 名。
+
+def _click_qiyu_first_option(win, cands, path):
+    """候选选项按阅读序取第一个点击（多选项恒点第一个）。"""
+    cands.sort(key=lambda c: (c[0][1], c[0][0]))  # 阅读序
+    rect, txt = cands[0]
+    cx, cy = (rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2
+    human_click(win, cx, cy)
+    log(f"[客栈] 奇遇对话框（{path}）：已点击第一个选项「{txt}」@({cx},{cy})", "SYS")
+    move_away(win)
+    return True
+
+
+def _handle_qiyu_dialog(win, items, img_np, banner_pt=None, banner_h=0):
+    """奇遇对话框：多选项恒点第一个（选项文案随奇遇变化，不映射固定文案）。
+
+    两条定位路径：
+    1. 文案锚点：QIYU_DIALOG_TEXTS 命中问题行（已知奇遇的可选精确定位）；
+    2. 模板锚点（banner_pt=横幅匹配中心，banner_h=模板高）：通用定位——
+       横幅下方、最后一条左对齐叙述行之后的第一条缩进行。奇遇选项为
+       居中浅色文字（非绿字，is_green_text 会全部排除），叙述行左对齐、
+       选项相对叙述左缘缩进 ≥100px（2026-11-09 用户截图实测：叙述
+       x≈466-472、叙述末行 y≈464、选项「我知道了……」x=653 缩进 +187）。
+       新奇遇无需再补 QIYU_DIALOG_TEXTS。
+
     返回是否已处理。
     """
+    # 路径 1：文案锚点（已知奇遇；命中问题行后取其下方第一条缩进行）
+    qrect = None
     for qtxt in QIYU_DIALOG_TEXTS:
-        qrect = None
         for txt, rect, _ in items:
             if rect[0] >= task_tracker.PANEL_MAX_X \
                     and norm_text(qtxt) in norm_text(txt):
                 qrect = rect  # 只认对话框区域（追踪面板同文案不触发）
                 break
-        if qrect is None:
-            continue
+        if qrect is not None:
+            break
+    if qrect is not None:
         cands = []
         for txt, rect, score in items:
-            if score < 0.55 or rect[0] < task_tracker.PANEL_MAX_X:
+            if score < QIYU_OPTION_MIN_SCORE \
+                    or rect[0] < task_tracker.PANEL_MAX_X:
                 continue  # 只认对话框区域
-            if rect[1] <= qrect[3] or rect[1] - qrect[3] > 200:
+            if rect[1] <= qrect[3] or rect[1] - qrect[3] > QIYU_OPTION_MAX_GAP:
                 continue  # 问题行下方 200px 内
-            if rect[0] - qrect[0] < 100:
-                continue  # 故事/注释行左对齐排除（选项缩进实测 126-181px）
+            if rect[0] - qrect[0] < QIYU_OPTION_INDENT:
+                continue  # 故事/注释行左对齐排除
             cands.append((rect, txt))
-        cands.sort(key=lambda c: (c[0][1], c[0][0]))  # 阅读序取第一个
-        if not cands:
-            return False
-        rect, txt = cands[0]
-        cx, cy = (rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2
-        human_click(win, cx, cy)
-        log(f"[客栈] 奇遇对话框：已点击第一个选项「{txt}」@({cx},{cy})", "SYS")
-        move_away(win)
-        return True
-    return False
+        if cands:
+            return _click_qiyu_first_option(win, cands, "文案锚点")
+        # 锚点命中但选项未定位：落到模板锚点通用路径重试
+    if banner_pt is None:
+        return False  # 无模板锚点（截图失败/直接调用）：不盲点
+    # 路径 2：模板锚点通用定位（无需维护奇遇文案表）
+    top = banner_pt[1] + banner_h // 2  # 横幅下缘以下
+    rows = [(rect, txt) for txt, rect, score in items
+            if score >= QIYU_OPTION_MIN_SCORE
+            and rect[0] >= task_tracker.PANEL_MAX_X and rect[1] > top]
+    if not rows:
+        return False
+    left_x = min(rect[0] for rect, _ in rows)
+    left_rows = [rect for rect, _ in rows
+                 if rect[0] - left_x < QIYU_OPTION_INDENT]
+    if not left_rows:
+        return False  # 无叙述行锚点：不盲点，等下一轮询/人工处理
+    anchor_y = max(rect[3] for rect in left_rows)  # 最后一条左对齐叙述行底缘
+    cands = [(rect, txt) for rect, txt in rows
+             if rect[0] - left_x >= QIYU_OPTION_INDENT
+             and rect[1] >= anchor_y]
+    if not cands:
+        return False
+    return _click_qiyu_first_option(win, cands, "模板锚点")
+
+
+def _clear_qiyu_popup(win, max_rounds=3):
+    """清理残留奇遇弹窗：横幅模板命中则点第一个选项推进（最多 max_rounds 屏）。
+
+    任务追踪消失后奇遇弹窗仍可能残留（任务完成与弹窗出现同帧，或
+    follow 的 _task_gone_dialog_guard 检查后弹窗才渲染的竞态）。守卫
+    已兜底大部分场景；领取前/寻路前再清一次，防残留遮挡掌柜模板与
+    地图点击。奇遇弹窗无标准边框，clear_blocking_dialog（标准模板+
+    点屏幕中间）检测不到，必须走奇遇逻辑点选项。返回是否检测到并处理。
+    """
+    detected = False
+    for _ in range(max_rounds):
+        img = win.capture(force_activate=False)
+        if img is None:
+            return detected
+        score, pt, h = _qiyu_match(img)
+        if score < QIYU_FRAME_THRESHOLD:
+            return detected
+        detected = True
+        items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
+        if not _handle_qiyu_dialog(win, items, img_np,
+                                   banner_pt=pt, banner_h=h):
+            log("[客栈] 残留奇遇弹窗检测到但选项未定位，停止清理", "WARN")
+            return detected  # 选项未定位：不盲点（下一轮/人工）
+        time.sleep(QIYU_CLEAR_WAIT)
+    return detected
 
 
 def _arm_yinlv_check(opt):
@@ -2072,10 +2161,71 @@ def _arm_yinlv_check(opt):
             f"（{YINLV_ARM_TIMEOUT}s 内有效）", "SYS")
 
 
-def _handle_dialog_options(win, items, img_np):
+def _qiyu_match(frame):
+    """奇遇横幅匹配：返回 (分数, 匹配中心, 模板高)；模板缺失返回 (0,None,0)。
+
+    接受 PIL 或 BGR 帧（条带内匹配）。中心/模板高供奇遇选项的模板锚点
+    通用定位（横幅下缘以下开始找叙述行与选项）。
+    """
+    if not isinstance(frame, np.ndarray):
+        frame = cv2.cvtColor(np.asarray(frame), cv2.COLOR_RGB2BGR)
+    score, pt = game_map.best_match_np(frame, QIYU_FRAME_ICON,
+                                       region=QIYU_FRAME_BAND)
+    tpl = game_map._load_template(QIYU_FRAME_ICON)
+    return score, pt, (0 if tpl is None else tpl.shape[0])
+
+
+def _qiyu_frame_score(frame):
+    """奇遇标题横幅模板全局最高分（接受 PIL 或 BGR 帧，条带内匹配）。"""
+    return _qiyu_match(frame)[0]
+
+
+_qi_hit_state = False   # 上一轮询奇遇模板命中状态（上升沿日志用）
+_qi_log_at = 0.0
+_qi_warn_at = 0.0       # 奇遇「命中但未处理」告警限频
+
+
+def _qiyu_present(frame):
+    """奇遇对话框在场：标题横幅模板命中（follow 层 dialog_extra_gate 用）。
+
+    奇遇对话框无标准边框，靠本模板在标准模板未命中时补门放行对话区
+    OCR。命中上升沿打一次日志便于标定/排查（2s 下限去重）。
+    """
+    global _qi_hit_state, _qi_log_at
+    if frame is None:
+        return False
+    score = _qiyu_frame_score(frame)
+    hit = score >= QIYU_FRAME_THRESHOLD
+    now = time.time()
+    if hit and not _qi_hit_state and now - _qi_log_at >= 2.0:
+        _qi_log_at = now
+        log(f"[客栈] 奇遇模板命中（分数 {score:.3f}），对话区 OCR 放行", "INFO")
+    _qi_hit_state = hit
+    return hit
+
+
+def _warn_qiyu_unmatched(items):
+    """奇遇模板命中但未处理：限频输出现场文案，排查选项几何是否变化
+    （10s 下限防刷屏）。"""
+    global _qi_warn_at
+    now = time.time()
+    if now - _qi_warn_at < 10.0:
+        return
+    _qi_warn_at = now
+    lines = [t for t, r, s in items
+             if r[0] >= task_tracker.PANEL_MAX_X and s >= 0.55][:6]
+    log(f"[客栈] 奇遇模板命中但未处理（文案锚点/选项未定位），"
+        f"对话区文案: {lines or '(无)'}", "WARN")
+
+
+def _handle_dialog_options(win, items, img_np, frame=None):
     """处理任务对话：奇遇对话框（多选项点第一个）优先，其次
     DIALOG_OPTION_MAP 绿字选项，再按 DIALOG_SKIP_TEXTS 连点屏幕
     中间跳过（同 xuanshu 的处理顺序）。
+
+    模板门控（frame 给定时）：奇遇横幅命中 → 奇遇逻辑；标准对话框
+    命中 → 答题/两表；都未命中 → 不处理（防纯文本误判与盲点屏幕
+    中间）。frame 不可用（截图失败）退回纯文本判定，保持旧行为。
 
     领取对话链与跟踪期间（follow_task 的附加对话处理回调）均使用，
     返回是否已处理。
@@ -2087,8 +2237,22 @@ def _handle_dialog_options(win, items, img_np):
              if r[0] >= task_tracker.PANEL_MAX_X],
             norm_text(KEZHAN_END_TEXT)):
         raise DailyLimitError("客栈任务已结束（我这里已经没有你可以做的事情了，明天再来找我）")
-    if _handle_qiyu_dialog(win, items, img_np):
-        return True
+    # 对话模板门控：奇遇横幅 / 标准对话框任一在场才处理对话
+    qiyu_pt = qiyu_h = None
+    if frame is not None:
+        qiyu_score, qiyu_pt, qiyu_h = _qiyu_match(frame)
+        qiyu_hit = qiyu_score >= QIYU_FRAME_THRESHOLD
+        std_hit = dialog_frame_score(frame) >= DIALOG_FRAME_THRESHOLD
+    else:
+        qiyu_hit = std_hit = True  # 无帧：退回纯文本判定（fail-open）
+    if qiyu_hit:
+        if _handle_qiyu_dialog(win, items, img_np,
+                               banner_pt=qiyu_pt, banner_h=qiyu_h or 0):
+            return True
+        if frame is not None:
+            _warn_qiyu_unmatched(items)  # 选项未定位：输出现场文案排查几何
+    if not std_hit:
+        return False
     if _handle_quiz_options(win, items, img_np):
         return True
     # 选项/跳过匹配只认对话框区域行（x≥PANEL_MAX_X）：任务追踪面板
@@ -2225,7 +2389,7 @@ def _claim_task(win, pt):
         # 接取选项优先；未出现时处理任务对话（两屏顺序不定，逐屏推进）
         handled = _click_green_option_once(win, items, img_np, DIALOG_OPTION_LINGQU, prefix="客栈")
         if not handled:
-            _handle_dialog_options(win, items, img_np)
+            _handle_dialog_options(win, items, img_np, frame=img)
         polls += 1
         if handled or polls % 4 == 0:
             # 点击后立即校验；未点击时限频校验（防空转）
@@ -2244,10 +2408,12 @@ def _follow_kezhan(win):
                            green_order=GREEN_CLICK_ORDER,
                            progress_key=_order_progress_key,
                            green_picker=_pick_task_green,
-                           # 对话框模板门控关闭：客栈奇遇对话框无标准边框
-                           # （多选项恒点第一个，靠 OCR 文案检测），高性能
-                           # 门控会漏掉奇遇处理；其余面板（给予=模板）不受影响
-                           dialog_tpl_gate=False)
+                           # 模板门控：标准对话框模板或奇遇横幅模板任一命中
+                           # 才做对话区 OCR（奇遇无标准边框，用 kezhan_qiyu.png
+                           # 补门——两模板都未命中即跳过 OCR，高配模式省
+                           # 470~930ms/轮询）。给予面板走独立模板检测不受影响
+                           dialog_tpl_gate=True,
+                           dialog_extra_gate=_qiyu_present)
     return ("done", info) if ok else ("fail", info)
 
 
