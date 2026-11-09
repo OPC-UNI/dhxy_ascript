@@ -39,8 +39,9 @@
 对话框选项实测（2026-10-08）：选项与故事文本、拒绝选项同框渲染，
 「除魔卫国，义不容辞」单行完整文案首轮命中（0.89，绿色像素判定把
 非绿色故事文本排除）；匹配仍按 完整文案 → 尾部「义不容辞」→「不容辞」
-兜底 三级尝试以防换行渲染。对话框点屏幕中间不关闭，须点选项退出——
-验证模式点拒绝选项「事态严重，我等退散」关闭且不领取（实测绿色）。
+兜底 三级尝试以防换行渲染。对话框点屏幕中间也会关闭（2026-11-09 用户
+确认；旧注释「点中间不关闭」结论有误）；验证模式用拒绝选项「事态严重，
+我等退散」关闭且不领取（实测绿色，不依赖点击位置）。
 追踪面板标题实测为「xxxx[除魔任务]」（OCR 常读作「降魔任务」，
 见 TASK_TITLE 注释：用两种读法的公共尾部「魔任务」匹配）。
 """
@@ -79,6 +80,7 @@ from .control_window import (load_task_counts,  # 任务次数上限
                              load_wubei_tab_group)  # 五倍设置：组号专用开关
 from .dialog_common import (SCREEN_CENTER_POS, green_option_center,
                             _dialog_text_present,
+                            dialog_frame_score, DIALOG_FRAME_THRESHOLD,
                             _click_screen_center)  # 对话框共享组件（屏幕中间点击/选项中心/文案检测）
 from .xuanshu import follow_task  # 任务跟踪（绿字点击寻路/战斗跳过/附加对话处理）
 from . import tab_group  # 组号模式（一窗口多 Tab）：初始化/队员 pass/抑制标志
@@ -154,8 +156,9 @@ FULL_TEAM_DIALOG_TEXT = "前途凶险，还是请阁下组满5人队伍再来吧
                                                                    # （游戏要求组满 5 人）
 CLAIM_OPTION_TAIL = "义不容辞"                      # 选项换行渲染时的尾部匹配串
 DECLINE_DIALOG_OPTION = "事态严重，我等退散"          # 领取对话框拒绝选项（实测绿色）：
-                                                   # 该对话框点屏幕中间不关闭，验证模式
-                                                   # 点拒绝选项关闭（不领取）
+                                                   # 对话框点屏幕中间也会关闭（2026-11-09
+                                                   # 用户确认）；验证模式用拒绝选项关闭
+                                                   # （不领取），不依赖点击位置
 CLAIM_ARRIVE_TIMEOUT = 90                          # 寻路到领取点的超时
 CLAIM_BUTTON_TIMEOUT = 20                          # 到达后等待领取入口出现的超时
 ENTRY_FIRST_WAIT = 7.5                             # 入口首轮等待：位置近判定可能误判
@@ -926,8 +929,9 @@ def _click_claim_option(win, items, img_np):
 def _find_decline_option(items, img_np):
     """在 OCR 结果中查找领取对话框的拒绝选项「事态严重，我等退散」。
 
-    实测该对话框点屏幕中间不关闭（与修罗领取对话框不同），验证模式
-    用拒绝选项关闭且不领取。返回 (cx, cy, txt) 或 None。
+    对话框点屏幕中间也会关闭（2026-11-09 用户确认，旧结论有误）；
+    验证模式仍用拒绝选项关闭且不领取，不依赖点击位置。
+    返回 (cx, cy, txt) 或 None。
     """
     needles = (re.sub(r"[^\w]", "", DECLINE_DIALOG_OPTION),  # 完整文案（单行渲染时）
                norm_text("退散"))                            # 尾部兜底
@@ -944,7 +948,8 @@ def _find_decline_option(items, img_np):
 
 def _close_dialog_without_claim(win, items, img_np):
     """验证模式关闭领取对话框且不领取：优先点拒绝选项「事态严重，我等
-    退散」（实测屏幕中间点击关不掉），拒绝选项未识别时兜底点屏幕中间。
+    退散」（点屏幕中间也可关闭，用户 2026-11-09 确认；点选项不依赖
+    点击位置），拒绝选项未识别时兜底点屏幕中间。
     """
     found = _find_decline_option(items, img_np)
     if found is not None:
@@ -954,6 +959,47 @@ def _close_dialog_without_claim(win, items, img_np):
         return
     human_click(win, SCREEN_CENTER_POS[0], SCREEN_CENTER_POS[1])
     log("[五倍][验证] 已点击屏幕中间关闭对话框（未领取）", "SYS")
+
+
+def _dismiss_claim_dialog_after_claim(win, timeout=2.0):
+    """领取成功后清理领取 NPC 的收尾对话框（五倍）。
+
+    五倍领取成功后常有对话框滞留屏幕中央（2026-11-08 日志：领取后
+    0-1s 内对话框模板即命中），期间 follow 轮询每 0.5s 对话区 OCR、
+    战斗线程巫医检查（战后 15s 窗口 2s 节奏）再 OCR 一遍、看打兜底
+    每 5s 一次 2x 放大 OCR（故事行门控误触发）——与修罗领取后 10s
+    CPU 峰值同款（2026-11-09 py-spy 实测修罗）。点屏幕中间一次即可
+    关闭（2026-11-09 用户确认；旧注释「点中间不关闭」结论有误）。
+
+    队伍不足提示（FULL_TEAM_DIALOG_TEXT）的正常处理在 _claim_task
+    校验循环内（点中间 + 按开关补人/返回失败）；本函数只在领取成功
+    返回后执行，不会抢在它前面。极端晚弹时同样点中间关闭并告警，
+    任务已领取故不再进入补人循环。
+
+    返回是否点击过。
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        img = win.capture(force_activate=False)
+        if img is None:
+            time.sleep(0.5)
+            continue
+        if is_in_battle_frame(img):
+            time.sleep(0.5)
+            continue
+        if dialog_frame_score(img) < DIALOG_FRAME_THRESHOLD:
+            time.sleep(0.5)
+            continue
+        items, _ = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
+        human_click(win, SCREEN_CENTER_POS[0], SCREEN_CENTER_POS[1])
+        move_away(win)
+        if _dialog_text_present(items, FULL_TEAM_DIALOG_TEXT):
+            log("[五倍] 领取成功后出现队伍人数不足提示（异常时序），"
+                "已点击屏幕中间关闭（任务已领取，不补人）", "WARN")
+        else:
+            log("[五倍] 已点击屏幕中间取消领取后收尾对话框", "SYS")
+        return True
+    return False
 
 
 def _open_claim_map(win, pos=None):
@@ -2055,6 +2101,8 @@ def _follow_to_done(win, first_items=None):
     跳过截图+OCR 立即点击追踪绿字。
     返回 (是否成功, 描述)。
     """
+    # chuyijuebao_check=False：锄遗聚宝是玄枢轶闻专属小游戏，五倍流程
+    # 不会出现——逐轮询全帧模板匹配（~30ms/0.5s）纯白耗（2026-11-09）
     ok, info = follow_task(win, TASK_TITLE, prefix="五倍",
                            extra_dialog_handler=_handle_follow_extras,
                            fallback_keywords=TASK_FALLBACK_TEXTS,
@@ -2064,6 +2112,7 @@ def _follow_to_done(win, first_items=None):
                            pre_click_handler=_handle_pre_click,
                            post_track_handler=_maybe_tab_bars_pass,
                            task_gone_polls=_hpg_gone_polls,
+                           chuyijuebao_check=False,
                            battle_extras_tpl_gate=True)
     return ok, info
 
@@ -2532,9 +2581,9 @@ def verify_claim_flow(win):
             human_move(win.rect.left + cx, win.rect.top + cy)
             log(f"[五倍][验证] 已移动鼠标到绿色选项「{txt}」({cx}, {cy})，"
                 f"已定位到（不点击，验证时序与真实流程一致）", "SYS")
-            # 4. 关闭对话框（不领取）：该对话框点屏幕中间不关闭，点拒绝
-            #    选项「事态严重，我等退散」关闭（实测；拒绝未识别时兜底
-            #    点屏幕中间）
+            # 4. 关闭对话框（不领取）：点拒绝选项「事态严重，我等退散」
+            #    关闭（点屏幕中间也可关闭，用户 2026-11-09 确认；拒绝
+            #    未识别时兜底点屏幕中间）
             _close_dialog_without_claim(win, items, img_np)
             return True, f"验证通过：{src2} ({pt2[0]}, {pt2[1]})，选项「{txt}」({cx}, {cy})"
         time.sleep(0.3)
@@ -2852,6 +2901,10 @@ def run_loop(win, cycle_interval=1.0):
                 _reset_xianxingjing_state()  # 新任务：显形镜状态机复位
                 _reset_huangpaoguai_state()  # 新任务：黄袍怪状态机复位
                 _fight_via_kanda = False  # 新一轮开始：重置「看打！」进入战斗标记
+                # 领取成功后清理 NPC 收尾对话框（否则滞留屏幕 10s+，
+                # follow 对话区 OCR + 战斗线程巫医检查 + 看打 2x 兜底
+                # 三重空烧，与修罗同款；2026-11-09 py-spy 实测）
+                _dismiss_claim_dialog_after_claim(win)
                 # 自动巫医：每 N 轮领取后无条件前往宝象国巫医 NPC 医治，
                 # 血蓝正常也照常（失败仅记日志，不阻断后续寻路）
                 if auto_wuyi and round_no % wuyi_interval == 0:
