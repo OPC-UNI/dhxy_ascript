@@ -15,6 +15,12 @@ import pathlib
 import sys
 import zipfile
 
+# GitHub Actions 的 Windows Python 默认 stdout 是 cp1252，中文 print 会
+# UnicodeEncodeError 导致步骤失败（2026-11-09 v2.10.0 构建实测）。
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 # ZIP 允许的最早时间（1980-01-01），避免读取文件 mtime
 _FIXED_DATE = (1980, 1, 1, 0, 0, 0)
 
