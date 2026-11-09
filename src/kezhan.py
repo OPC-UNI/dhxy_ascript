@@ -29,6 +29,12 @@
 kezhan_yinlv.png 出现 → 记住五编钟位置 → 点开始演奏 → 按序点击
 5 1 4 5 1 1 5 5 1 5 4 3 2 3 5（15 次；首个 3.4s、间隔 1.45s，
 用户 2026-11-03 实测节奏）→ 横幅消失结束）；
+破除封印小游戏（灵兔封印：对话「看来这就是那困住灵兔的封印了」→
+选项「消耗灵气，破除封印」→ 窗口标题 kezhan_pochufengyin.png 出现 →
+点「开始」→ 按钮变为「点击」（过程中还会变成其他外观，坐标不变仍须点）
+→ progress 不在场时每 300ms 连点「点击」直到 progress 出现、在场时等其
+消失再连点 → 标题消失即任务完成；target 中心 x 按 435~992 十等分区间
+限频打日志供标定）；
 提交物品/无跟踪两类特殊任务后续单独处理。
 """
 import re
@@ -274,6 +280,7 @@ DIALOG_SKIP_TEXTS = {""
     "老夫手中这封密信关系重大，须即刻面呈太上老君。此事非比寻常，还望少":2,
     "贫道观少侠龙行虎步，眉间隐现祥瑞之气一一莫非是要求问仕途姻缘？不瞒":4,
     "洛阳首富贾大财为给独女生辰宴添彩，特地重金聘了位西域厨神。可那道招":1,
+    "阁下这张嘴，倒是比你的琴技更胜一筹。":1,
     "此物辛辣之气冲鼻，确是西域厨子爱的烈味。":1,
     "少侠真乃神速！小女自幼畏寒，西域厨子说这道菜以极热配极寒，可调和体":1,
     "少侠可是来取信的？":4,
@@ -540,6 +547,30 @@ YINLV_END_MISSES = 3                # 窗口横幅连续未命中次数即判结
                                     # 防抖窗口，防单帧误判结束）
 _yinlv_last_check = 0.0             # 上次 extras 窗口检测时间（限频）
 _yinlv_armed_at = 0.0               # 音律入口选项点击时间；>0 且未超时=检测开启
+# ---- 破除封印小游戏（灵兔封印：点对话框选项「消耗灵气，破除封印」后出现）----
+# 流程（用户 2026-11-09）：点「开始」→ 按钮变为「点击」→ progress 不在场时
+# 每 300ms 连点「点击」直到 progress 出现 → progress 在场时每 300ms 检查、
+# 消失后继续连点 → 标题「破除封印」消失即任务完成，全部操作停止。
+# 所有模板均在 POCHU_REGION 条带内（用户提供）；target 中心 x 恒在
+# 435~992（游标摆动范围），按十等分打印所属区间日志（后续标定用）。
+POCHU_ENTRY_OPTION = "消耗灵气，破除封印"           # 入口对话框选项（点击后小游戏窗口出现）
+POCHU_TITLE_ICON = "kezhan_pochufengyin.png"        # 窗口标题「破除封印」（消失=任务完成）
+POCHU_START_ICON = "kezhan_pochufengyin_kaishi.png"  # 「开始」按钮（点击后同位置变为「点击」）
+POCHU_CLICK_ICON = "kezhan_pochufengyin_dianji.png"  # 「点击」按钮（过程中会变成其他外观，坐标不变仍须点）
+POCHU_TARGET_ICON = "kezhan_pochufengyin_target.png"  # 游标/目标标记（计算中心 x）
+POCHU_PROGRESS_ICON = "kezhan_pochufengyin_progress.png"  # 进度条（在场=破除进行中）
+POCHU_REGION = (314, 458, 1058, 645)   # 全部模板搜索条带（用户提供，覆盖小游戏窗口区）
+POCHU_THRESHOLD = 0.8                  # 模板匹配阈值（待真机校准）
+POCHU_CLICK_INTERVAL = 0.3             # 点击/检查节奏（用户指定 300ms）
+POCHU_ARM_TIMEOUT = 120                # 入口选项点击后检测窗口的最长时限（秒）
+POCHU_CHECK_INTERVAL = 1.0             # extras 链窗口检测限频（秒，条带匹配 ~10ms）
+POCHU_END_WINDOW = 2.0                 # 标题连续消失确认窗口（秒；结束确认防抖，不得缩短）
+POCHU_TIMEOUT = 180                    # 小游戏总超时（秒）
+POCHU_TARGET_X_RANGE = (435, 992)      # target 中心 x 范围（游标摆动范围，用户提供）
+POCHU_TARGET_SEGMENTS = 10             # x 范围十等分（区间日志用）
+POCHU_TARGET_LOG_INTERVAL = 1.0        # target 区间日志限频（秒，300ms 节奏下防刷屏）
+_pochu_armed_at = 0.0                  # 破除封印入口选项点击时间；>0 且未超时=检测开启
+_pochu_last_check = 0.0                # 上次 extras 窗口检测时间（限频）
 CLAIM_CHAIN_TIMEOUT = 30             # 整条领取对话链（含接取与任务对话）的总超时（秒）
 # ---- 特殊任务步骤：前往洛阳城大理寺墙外（追踪文案出现时手动寻路） ----
 DALI_TRACK_TEXT = "前往洛阳城大理寺墙外附近"   # 任务追踪文案（出现即需手动寻路）
@@ -1465,6 +1496,106 @@ def _play_yinlv(win):
     return True, f"音律小游戏超时结束（{YINLV_END_TIMEOUT}s）"
 
 
+def _pochu_segment(x):
+    """target 中心 x 所属十等分区间序号（0~9，用户 2026-11-09：435~992
+    分十等分）；范围外返回 -1（疑似误匹配）。"""
+    if x < POCHU_TARGET_X_RANGE[0] or x > POCHU_TARGET_X_RANGE[1]:
+        return -1
+    seg_w = (POCHU_TARGET_X_RANGE[1] - POCHU_TARGET_X_RANGE[0]) / POCHU_TARGET_SEGMENTS
+    return min(POCHU_TARGET_SEGMENTS - 1,
+               int((x - POCHU_TARGET_X_RANGE[0]) / seg_w))
+
+
+def _play_pochufengyin(win):
+    """破除封印小游戏完整流程（阻塞执行到标题消失）。返回 (是否完成, 描述)。
+
+    1. 等「开始」按钮出现并点击（按钮随后同位置变为「点击」）
+    2. 点击循环（用户 2026-11-09 节奏，每 300ms 一帧一判定、同帧复用
+       性能规则 1）：progress 在场 → 不点击等其消失；progress 不在场 →
+       连点「点击」直到 progress 出现。**按钮在过程中会变成其他外观
+       （用户确认）但坐标不变，任何状态下都要点**——按钮位置首次由
+       模板命中建立缓存、命中时刷新，模板不命中仍按缓存坐标续点。
+       每轮同时匹配 target 计算中心 x 十等分区间并限频打印日志
+       （后续标定用）
+    3. 标题「破除封印」连续消失 POCHU_END_WINDOW 秒即任务完成
+    4. 战斗打断立即退出（标题消失确认期内盲点会点到战斗界面）
+    """
+    def _pace(tick_start):
+        """补齐 300ms 节奏（截图/匹配/点击耗时计入间隔，不累积漂移）。"""
+        rem = POCHU_CLICK_INTERVAL - (time.time() - tick_start)
+        if rem > 0:
+            time.sleep(rem)
+
+    deadline = time.time() + POCHU_TIMEOUT
+    started = False
+    btn_pt = None                 # 「开始/点击」按钮位置（同位置，命中刷新、未命中缓存续点）
+    last_seen = time.time()       # 标题最近命中时间（消失确认窗口起点）
+    last_seg_log = 0.0
+    clicks = 0
+    while time.time() < deadline:
+        t0 = time.time()
+        img = win.capture(force_activate=False)
+        if img is None:
+            time.sleep(0.1)
+            continue
+        bgr = cv2.cvtColor(np.asarray(img)[:, :, :3], cv2.COLOR_RGB2BGR)
+        if is_in_battle_frame(bgr):
+            return False, "战斗开始，破除封印中断"
+        title = game_map.match_frame_np(bgr, POCHU_TITLE_ICON,
+                                        threshold=POCHU_THRESHOLD,
+                                        region=POCHU_REGION, fallback=False)
+        if title is None:
+            # 标题消失 = 封印破除（任务完成）。连续消失满 POCHU_END_WINDOW
+            # 秒才确认结束（结束确认 2 秒窗口防单帧误判，不得缩短）
+            if time.time() - last_seen >= POCHU_END_WINDOW:
+                return True, f"破除封印完成（窗口消失，共点击 {clicks} 次）"
+            _pace(t0)
+            continue
+        last_seen = time.time()
+        if not started:
+            pt = game_map.match_frame_np(bgr, POCHU_START_ICON,
+                                         threshold=POCHU_THRESHOLD,
+                                         region=POCHU_REGION, fallback=False)
+            if pt is not None:
+                human_click(win, pt[0], pt[1])
+                btn_pt = pt
+                started = True
+                log(f"[客栈] 破除封印：已点击「开始」@({pt[0]},{pt[1]})", "SYS")
+            _pace(t0)
+            continue
+        # 已开始：progress 在场 → 等其消失；不在场 → 点「点击」
+        if game_map.match_frame_np(bgr, POCHU_PROGRESS_ICON,
+                                   threshold=POCHU_THRESHOLD,
+                                   region=POCHU_REGION, fallback=False) is not None:
+            _pace(t0)
+            continue
+        pt = game_map.match_frame_np(bgr, POCHU_CLICK_ICON,
+                                     threshold=POCHU_THRESHOLD,
+                                     region=POCHU_REGION, fallback=False)
+        if pt is not None:
+            btn_pt = pt  # 命中刷新按钮位置（防窗口漂移）
+        # 按钮在过程中会变成其他外观但坐标不变（用户 2026-11-09 确认），
+        # 模板不命中时仍按缓存坐标续点——任何状态下都点
+        if btn_pt is not None:
+            human_click(win, btn_pt[0], btn_pt[1])
+            clicks += 1
+        # target 中心 x 十等分区间日志（限频；用户 2026-11-09：先打印，
+        # 后续标定用）
+        now = time.time()
+        if now - last_seg_log >= POCHU_TARGET_LOG_INTERVAL:
+            tpt = game_map.match_frame_np(bgr, POCHU_TARGET_ICON,
+                                          threshold=POCHU_THRESHOLD,
+                                          region=POCHU_REGION, fallback=False)
+            if tpt is not None:
+                last_seg_log = now
+                seg = _pochu_segment(tpt[0])
+                log(f"[客栈] 破除封印：target @({tpt[0]},{tpt[1]})，"
+                    f"x 十等分区间 = {seg}"
+                    + ("" if seg >= 0 else "（超出 435~992，疑似误匹配）"), "INFO")
+        _pace(t0)
+    return False, f"破除封印超时（{POCHU_TIMEOUT}s，共点击 {clicks} 次）"
+
+
 def _match_baoxiang(img):
     """神秘宝箱双模板比分数匹配。
 
@@ -1635,6 +1766,27 @@ def _handle_follow_extras(win, items, img_np):
                     # 小游戏结束 → 关闭检测（任务未进小游戏/处理失败的
                     # 情况保持 armed，窗口仍在时下轮询重试）
                     _yinlv_armed_at = 0.0
+                log(f"[客栈] {info}", "SYS" if ok else "WARN")
+                return True
+        # 破除封印小游戏（灵兔封印）：入口选项「消耗灵气，破除封印」点击后
+        # （armed 门控）检测窗口标题；出现即完整处理（阻塞到标题消失）。
+        # 检测限频 POCHU_CHECK_INTERVAL（条带内匹配 ~10ms，热路径低开销）
+        global _pochu_last_check, _pochu_armed_at
+        p_armed = _pochu_armed_at > 0 \
+            and time.time() - _pochu_armed_at <= POCHU_ARM_TIMEOUT
+        if p_armed and bgr is not None \
+                and time.time() - _pochu_last_check >= POCHU_CHECK_INTERVAL:
+            _pochu_last_check = time.time()
+            score, wpt = game_map.best_match_np(bgr, POCHU_TITLE_ICON,
+                                                region=POCHU_REGION)
+            if wpt is not None and score >= POCHU_THRESHOLD:
+                log(f"[客栈] 检测到破除封印窗口 @({wpt[0]},{wpt[1]})"
+                    f"（匹配度 {score:.2f}）", "SYS")
+                ok, info = _play_pochufengyin(win)
+                if ok:
+                    # 小游戏完成 → 关闭检测（处理失败保持 armed，窗口
+                    # 仍在时下轮询重试）
+                    _pochu_armed_at = 0.0
                 log(f"[客栈] {info}", "SYS" if ok else "WARN")
                 return True
         if _task_needs_dali_walk(task) \
@@ -2161,6 +2313,26 @@ def _arm_yinlv_check(opt):
             f"（{YINLV_ARM_TIMEOUT}s 内有效）", "SYS")
 
 
+def _arm_pochu_check(opt):
+    """破除封印入口选项被点击 → 开启小游戏窗口检测（armed 门控）。
+
+    只有「消耗灵气，破除封印」被实际点击后才检测 kezhan_pochufengyin.png
+    标题，其他任务阶段不跑这个模板匹配（无开销、无误配）。重复点击
+    入口选项会刷新时限；窗口处理完成或超时后检测自动关闭。
+    """
+    global _pochu_armed_at
+    if opt == POCHU_ENTRY_OPTION:
+        _pochu_armed_at = time.time()
+        log(f"[客栈] 已点击破除封印入口选项，开启小游戏窗口检测"
+            f"（{POCHU_ARM_TIMEOUT}s 内有效）", "SYS")
+
+
+def _arm_minigames(opt):
+    """对话框选项被点击 → 开启对应小游戏窗口检测（音律/破除封印）。"""
+    _arm_yinlv_check(opt)
+    _arm_pochu_check(opt)
+
+
 def _qiyu_match(frame):
     """奇遇横幅匹配：返回 (分数, 匹配中心, 模板高)；模板缺失返回 (0,None,0)。
 
@@ -2265,7 +2437,7 @@ def _handle_dialog_options(win, items, img_np, frame=None):
             continue
         if _click_green_option_fuzzy(win, items, img_np, opt):
             log(f"[客栈] 检测到任务对话，已点击绿色选项「{opt}」", "SYS")
-            _arm_yinlv_check(opt)
+            _arm_minigames(opt)
             return True
         # 选项 OCR 漏检重试：跟踪轮询的帧复用机制会让漏检帧的 OCR
         # 结果持续复用（静止对话框帧不重 OCR），直接绿字块兜底只能
@@ -2281,7 +2453,7 @@ def _handle_dialog_options(win, items, img_np, frame=None):
             if _click_green_option_fuzzy(win, items2, img_np2, opt):
                 log(f"[客栈] 检测到任务对话，已点击绿色选项「{opt}」"
                     f"（重 OCR 补识）", "SYS")
-                _arm_yinlv_check(opt)
+                _arm_minigames(opt)
                 return True
             # 重 OCR 仍漏：对话框区 2x 放大重识别一次（答题选项字小或
             # 渲染特殊，区域快引擎原尺寸漏检——2026-11-01 子曰第一题
@@ -2298,18 +2470,18 @@ def _handle_dialog_options(win, items, img_np, frame=None):
             if _click_green_option_fuzzy(win, mapped, img_np2, opt):
                 log(f"[客栈] 检测到任务对话，已点击绿色选项「{opt}」"
                     f"（2x 放大补识）", "SYS")
-                _arm_yinlv_check(opt)
+                _arm_minigames(opt)
                 return True
         # 选项 OCR 不可识别（如单字「哎」）：按问题行下方绿字块点击
         if _click_green_option_fallback(win, items, img_np, dtxt):
             log("[客栈] 检测到任务对话（选项 OCR 不可识别，绿字块兜底点击）", "SYS")
-            _arm_yinlv_check(opt)
+            _arm_minigames(opt)
             return True
         # 纯标点选项（如省略号「……」）：OCR 不识别、点阵单点 ~2x2px
         # 绿字块过滤也漏——按绿色像素行聚类点击点阵中心
         if _click_green_dots_below(win, items, img_np, dtxt):
             log("[客栈] 检测到任务对话（省略号点阵选项，点阵兜底点击）", "SYS")
-            _arm_yinlv_check(opt)
+            _arm_minigames(opt)
             return True
     for dtxt, clicks in DIALOG_SKIP_TEXTS.items():
         if _dialog_text_present(norm_items, norm_text(dtxt)):

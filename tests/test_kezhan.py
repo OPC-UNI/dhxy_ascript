@@ -330,3 +330,18 @@ def test_order_progress_key_sancai_priority():
              ("第一处阵法已加固完成", (22, 249, 198, 275), 1.0),
              ("镇煞阵法、定魂阵法三处三才", (21, 265, 216, 290), 1.0)]
     assert kezhan._order_progress_key(items, None) == "1"
+
+
+# ---- 破除封印小游戏：target 中心 x 十等分区间（435~992，用户 2026-11-09）----
+def test_pochu_segment_boundaries():
+    """区间边界：435 起每 55.7px 一等分，共 10 份（0~9）。"""
+    assert kezhan._pochu_segment(435) == 0
+    assert kezhan._pochu_segment(436) == 0
+    assert kezhan._pochu_segment(490) == 0
+    assert kezhan._pochu_segment(491) == 1          # 435+55.7=490.7 → 491 进入第 2 份
+    assert kezhan._pochu_segment(546) == 1
+    assert kezhan._pochu_segment(934) == 8          # 435+8*55.7=880.6 ~ 936.3
+    assert kezhan._pochu_segment(991) == 9
+    assert kezhan._pochu_segment(992) == 9          # 上边界含
+    assert kezhan._pochu_segment(434) == -1         # 范围外 = 疑似误匹配
+    assert kezhan._pochu_segment(993) == -1
