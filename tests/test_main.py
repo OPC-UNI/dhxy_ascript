@@ -26,16 +26,26 @@ def _patch_log(monkeypatch):
 
 
 def _patch_battle_only_env(monkeypatch, tab):
-    """仅战斗路径依赖打桩：登录 Tab、悬浮层、战斗线程、驻留 sleep。"""
+    """仅战斗路径依赖打桩：登录 Tab、悬浮层、战斗线程、驻留 sleep。
+
+    main.time 就是全局 time 模块，替换 sleep 后 lambda 内不能再调
+    time.sleep（会递归到自身——驻留循环一旦真的执行到 sleep 即
+    RecursionError；旧实现靠战斗线程先于 is_alive() 退出的竞态才
+    通过，CI 慢机必现）。先捕获真实 sleep 再替换。
+    禁用自动归队：驻留循环体命中时跳过 is_in_battle/maybe_rejoin
+    （win 为 object 桩，循环一旦执行会 AttributeError）。
+    """
     entered = threading.Event()
+    real_sleep = time.sleep
     monkeypatch.setattr(main.game, "read_login_tab", lambda win: tab)
     monkeypatch.setattr(main.debug_overlay, "start", lambda win: None)
     monkeypatch.setattr(main.debug_overlay, "shutdown", lambda: None)
     monkeypatch.setattr(main.debug_overlay, "set_phase", lambda text: None)
     monkeypatch.setattr(main.debug_overlay, "set_name", lambda text: None)
     monkeypatch.setattr(main.battle, "watch_loop", lambda win: entered.set())
+    monkeypatch.setattr(main, "load_battle_only_auto_rejoin", lambda: False)
     # 驻留轮询 sleep 缩短（patch 的是 time 模块本身，勿动 threading 内部）
-    monkeypatch.setattr(main.time, "sleep", lambda s: time.sleep(0.01))
+    monkeypatch.setattr(main.time, "sleep", lambda s: real_sleep(0.01))
     return entered
 
 
