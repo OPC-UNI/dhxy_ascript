@@ -1371,7 +1371,7 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 pre_click_handler=None, require_coord=False,
                 post_track_handler=None, signature_ratio=0.8,
                 task_gone_polls=None, dialog_tpl_gate=True,
-                battle_extras_tpl_gate=False):
+                chuyijuebao_check=True, battle_extras_tpl_gate=False):
     """循环跟踪任务直到完成（prefix 供其他任务复用，如五环）。
 
     每轮：点击任务当前第一个绿色文案 → 等待任务信息变化（内容更新）
@@ -1434,6 +1434,9 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
     面板（客栈奇遇、给予面板、队伍面板、申请加入面板）依赖 OCR 的
     调用方须传 False（如客栈）——给予/队伍面板本身走模板检测不受影响。
     普通模式（高性能关）门控不生效，行为与旧版一致。
+    chuyijuebao_check：等待期间是否检测锄遗聚宝小游戏（玄枢轶闻专属，
+    每个轮询一次全帧模板匹配 ~30ms）。不出现该小游戏的任务（修罗等）
+    传 False 省去轮询开销；默认 True 保持玄枢轶闻原行为。
     battle_extras_tpl_gate：战斗中 extras 通道（每 BATTLE_EXTRAS_INTERVAL
     一次对话框区域 OCR）加模板预检——战斗 UI 无标准对话框边框时跳过
     OCR（战斗帧模板分实测 0.52~0.63 < 0.79，2026-11-07），但保留
@@ -1789,7 +1792,8 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 log(f"[{prefix}] {info2}", "SYS" if ok2 else "WARN")
                 continue
             # 锄遗聚宝优先：出现则完整处理（复用本帧模板匹配，不重复截窗）
-            if game_map.find_template_in(img, CHUYIJUEBAO_ICON) is not None:
+            if chuyijuebao_check \
+                    and game_map.find_template_in(img, CHUYIJUEBAO_ICON) is not None:
                 ok2, info2 = _play_chuyijuebao(win)
                 log(f"[{prefix}] {info2}", "SYS" if ok2 else "WARN")
                 continue

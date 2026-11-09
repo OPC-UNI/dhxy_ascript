@@ -70,6 +70,7 @@ from . import tab_group  # 组号模式（一窗口多 Tab）：初始化/队员
 from .dialog_common import (_dialog_text_present, _norm_dialog_present,
                             _click_green_option_once,
                             SCREEN_CENTER_POS,
+                            dialog_frame_score, DIALOG_FRAME_THRESHOLD,
                             green_option_center)  # 对话框共享组件
 
 # 任务模式与追踪面板标题（2026-10-08 日志+截图实测确认）
@@ -240,9 +241,10 @@ def _near_wuyi_spot(pos):
                                   WUYI_NEAR_TOLERANCE)
 
 
-def _dismiss_block_dialog_on_frame(win, img):
-    """单帧检测「阻止它为非作歹」对话框并点击屏幕中间取消（仅巫医回合）。
+def _dismiss_block_dialog_on_frame(win, img, tag="[修罗][巫医]"):
+    """单帧检测「阻止它为非作歹」对话框并点击屏幕中间取消。
 
+    巫医回合（遮挡 NPC）与领取后正常回合（收尾对话常驻屏幕）共用。
     命中即点击一次并返回 True；未命中/战斗帧返回 False。重复点击防重
     由调用方控制（连续点屏幕中间会误点游戏世界引起走位）。
     """
@@ -253,8 +255,7 @@ def _dismiss_block_dialog_on_frame(win, img):
         return False
     human_click(win, SCREEN_CENTER_POS[0], SCREEN_CENTER_POS[1])
     move_away(win)
-    log("[修罗][巫医] 检测到「阻止它为非作歹」对话框遮挡 NPC，"
-        "已点击屏幕中间取消", "SYS")
+    log(f"{tag} 检测到「阻止它为非作歹」对话框，已点击屏幕中间取消", "SYS")
     return True
 
 
@@ -272,6 +273,38 @@ def _dismiss_wuyi_block_dialog(win):
             time.sleep(0.5)
             continue
         if _dismiss_block_dialog_on_frame(win, img):
+            return True
+        time.sleep(0.5)
+    return False
+
+
+def _dismiss_block_dialog_after_claim(win, timeout=2.0):
+    """领取成功后取消 NPC 收尾对话「…阻止它为非作歹」（正常回合）。
+
+    正常回合原先不取消该对话框：领取确认后它持续挂在屏幕中央（实测
+    12s+ 仍在，人物走远才自动关闭），期间 follow 轮询每 0.5s 对它做
+    对话区 OCR、战斗线程巫医检查（战后 15s 窗口 2s 节奏）再 OCR 一遍、
+    看打兜底每 5s 一次 2x 放大 OCR（故事行门控触发、静默失败）——
+    领取完成后约 10s 的 CPU 峰值主要来自这里（2026-11-09 py-spy 实测）。
+    巫医回合由 _dismiss_wuyi_block_dialog 处理，本函数只覆盖正常回合。
+
+    窗口 2s（实测该对话在领取确认后 ~1s 内出现；巫医链路同窗口 1s 内
+    命中），每轮先对话框模板门（~9ms）：模板未命中即无对话，跳过 OCR。
+    文案命中才点屏幕中间（防点空误触世界走位）。返回是否已取消。
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        img = win.capture(force_activate=False)
+        if img is None:
+            time.sleep(0.5)
+            continue
+        if is_in_battle_frame(img):
+            time.sleep(0.5)
+            continue
+        if dialog_frame_score(img) < DIALOG_FRAME_THRESHOLD:
+            time.sleep(0.5)
+            continue
+        if _dismiss_block_dialog_on_frame(win, img, tag="[修罗]"):
             return True
         time.sleep(0.5)
     return False
@@ -1215,8 +1248,17 @@ def _claim_task(win, allow_fill=False):
         # 面板 OCR 漏检：任务块裁剪 2x 放大重识别（首轮截帧必然早于
         # 渲染完成——任务实测 ~1s 后才出现——跳过免白耗）。置于弹窗
         # 处理之后：弹窗阻塞期任务不可能进面板，放大 OCR 白耗会拖慢
-        # 弹窗响应
-        if polls >= 2 and _task_in_tracker_zoom(img):
+        # 弹窗响应。
+        # 门控（2026-11-09）：面板区已读到任务文案（标题或链接兜底行）
+        # 时不放大——能走到这里说明 has_new_task_in 未确认，即旧任务
+        # 签名未变化（残留面板）或标题漏检；前者 2x 只会把旧任务再读
+        # 一遍、甚至绕过签名变化保护误确认，后者由跟随流程自愈，均无
+        # 收益。只有面板 OCR 完全漏检（标题与链接行都没读到）才需要
+        # 2x 补读——该路径依赖全帧引擎 'min'/736 放大，单次成本高
+        if polls >= 2 \
+                and not task_tracker.has_task_in(
+                    items, img_np, TASK_TITLE, TASK_FALLBACK_TEXTS) \
+                and _task_in_tracker_zoom(img):
             log("[修罗] 任务块 2x 重识别检出任务", "SYS")
             # 重截一帧补全双区域 OCR：found_frame 需完整帧供 follow
             # 首轮复用（面板绿字点击与对话框处理依赖）
@@ -1402,11 +1444,14 @@ def _follow_to_done(win, first_items=None):
     返回 (是否成功, 描述)。
     """
     t0 = time.time()
+    # chuyijuebao_check=False：锄遗聚宝是玄枢轶闻专属小游戏，修罗流程
+    # 不会出现——逐轮询全帧模板匹配（~30ms/0.5s）纯白耗（2026-11-09）
     ok, info = follow_task(win, TASK_TITLE, prefix="修罗",
                            extra_dialog_handler=_handle_fight_dialog,
                            fallback_keywords=TASK_FALLBACK_TEXTS,
                            first_items=first_items,
                            post_track_handler=_maybe_tab_bars_pass,
+                           chuyijuebao_check=False,
                            battle_extras_tpl_gate=True)
     if not ok and first_items is not None \
             and "任务内容中未找到绿色文案" in info \
@@ -1419,6 +1464,7 @@ def _follow_to_done(win, first_items=None):
                                extra_dialog_handler=_handle_fight_dialog,
                                fallback_keywords=TASK_FALLBACK_TEXTS,
                                post_track_handler=_maybe_tab_bars_pass,
+                               chuyijuebao_check=False,
                                battle_extras_tpl_gate=True)
     return ok, info
 
@@ -2155,11 +2201,17 @@ def run_loop(win, cycle_interval=1.0):
             # 期望流程（2026-10-31）：领取完成 → 取消「阻止它为非作歹」
             # 对话框（若有）→ 去巫医 → 识别模板 → 点击 → 全部医治；
             # 对话框可能在走近巫医时才弹出，到达窗口另有兜底
-            if auto_wuyi and round_no % wuyi_interval == 0:
+            wuyi_round = auto_wuyi and round_no % wuyi_interval == 0
+            if wuyi_round:
                 debug_overlay.set_phase("自动巫医")  # 看板阶段
                 _dismiss_wuyi_block_dialog(win)
                 ok2, info2 = _auto_wuyi(win)
                 log(f"[修罗][巫医] {info2}", "SYS" if ok2 else "WARN")
+            else:
+                # 正常回合同样取消该对话框：否则它挂在屏幕中央 10s+，
+                # follow 对话区 OCR + 战斗线程巫医检查 + 看打 2x 兜底
+                # 三重空烧（2026-11-09 py-spy 实测领取后 CPU 峰值来源）
+                _dismiss_block_dialog_after_claim(win)
         # 2~4. 寻路 / 对话开打 / 战斗：由任务跟踪统一驱动
         #     （寻路点击绿字自动进行，对话开打走附加对话处理，
         #      战斗由战斗监控线程自动操作、跟踪中自动跳过）；
