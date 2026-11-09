@@ -332,16 +332,34 @@ def test_order_progress_key_sancai_priority():
     assert kezhan._order_progress_key(items, None) == "1"
 
 
-# ---- 破除封印小游戏：target 中心 x 十等分区间（435~992，用户 2026-11-09）----
-def test_pochu_segment_boundaries():
-    """区间边界：435 起每 55.7px 一等分，共 10 份（0~9）。"""
-    assert kezhan._pochu_segment(435) == 0
-    assert kezhan._pochu_segment(436) == 0
-    assert kezhan._pochu_segment(490) == 0
-    assert kezhan._pochu_segment(491) == 1          # 435+55.7=490.7 → 491 进入第 2 份
-    assert kezhan._pochu_segment(546) == 1
-    assert kezhan._pochu_segment(934) == 8          # 435+8*55.7=880.6 ~ 936.3
-    assert kezhan._pochu_segment(991) == 9
-    assert kezhan._pochu_segment(992) == 9          # 上边界含
-    assert kezhan._pochu_segment(434) == -1         # 范围外 = 疑似误匹配
-    assert kezhan._pochu_segment(993) == -1
+# ---- 破除封印小游戏闭环：刻度映射与填充边缘测量（7.png 标定 2026-11-09）----
+def test_pochu_tick_mapping():
+    """窗口 x → 1~10 刻度：435→0、992→10，中点 713.5→5。"""
+    assert kezhan._pochu_tick(435) == 0.0
+    assert kezhan._pochu_tick(992) == 10.0
+    assert abs(kezhan._pochu_tick(713.5) - 5.0) < 1e-9
+    assert abs(kezhan._pochu_tick(492) - 1.023) < 0.01   # 7.png 实测填充边缘
+    assert abs(kezhan._pochu_tick(908) - 8.49) < 0.01    # 7.png 实测目标带中心
+
+
+def test_pochu_fill_edge_finds_right_edge():
+    """合成帧：条带内画金填充段（x433~600），右边缘应≈600；
+    目标带括号（白金色 H36 S61）不干扰连通段。"""
+    import cv2
+    import numpy as np
+    frame = np.zeros((828, 1376, 3), np.uint8)          # 暗背景
+    l, t, r, b = kezhan.POCHU_BAR_REGION
+    y0, y1 = kezhan.POCHU_BAR_Y
+    # 填充：BGR 金色（HSV H≈21 S≈133 V≈176）→ BGR (84,131,176)
+    frame[y0:y1, 433:601] = (84, 131, 176)
+    # 目标带括号：白金色 (164,208,215)（H36 S61 V215），位置 x879~881/934~936
+    frame[y0 - 2:y1 + 2, 879:882] = (164, 208, 215)
+    frame[y0 - 2:y1 + 2, 934:937] = (164, 208, 215)
+    assert kezhan._pochu_fill_edge(frame) == 600
+    # 无填充 → None
+    assert kezhan._pochu_fill_edge(np.zeros_like(frame)) is None
+    # 填充与括号间隔断开（缺口>POCHU_FILL_GAP）：连通段仍止于填充右缘
+    frame2 = np.zeros((828, 1376, 3), np.uint8)
+    frame2[y0:y1, 433:600] = (84, 131, 176)
+    frame2[y0 - 2:y1 + 2, 700:703] = (164, 208, 215)
+    assert kezhan._pochu_fill_edge(frame2) == 599
