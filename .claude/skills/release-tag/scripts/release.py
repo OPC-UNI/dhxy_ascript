@@ -5,9 +5,10 @@
 用法（在仓库根运行，Windows 用 python 调用）：
     python .claude/skills/release-tag/scripts/release.py check <X.Y.Z>
     python .claude/skills/release-tag/scripts/release.py bump  <X.Y.Z>
+    python .claude/skills/release-tag/scripts/release.py precommit
     python .claude/skills/release-tag/scripts/release.py test
 
-封装发版流程中确定性、易错的机械步骤；判断性步骤（提交信息撰写、
+封装发版/提交流程中确定性、易错的机械步骤；判断性步骤（提交信息撰写、
 git commit/push/tag）仍由执行者按 SKILL.md 手动完成：
 
   check  发版前核对：版本格式 → tag 序列递增且未占用 → 双文件版本同步
@@ -17,7 +18,10 @@ git commit/push/tag）仍由执行者按 SKILL.md 手动完成：
   bump   原子更新 src/__init__.py 与 pyproject.toml 两处版本号：
          校验同 check 且要求目标版本严格高于当前；字节级正则替换
          （不动换行符与其余内容）；第二处写入失败时回滚第一处
-  test   全量测试 python -m pytest -q，退出码透传（未全绿不得发版）
+  precommit  仅提交推送（不打 tag、不 bump）的提交前核对：列出 git add -A
+         将提交的全部改动 + 未跟踪运行时数据警告（同 check 的清单部分，
+         不做版本/tag 校验）
+  test   全量测试 python -m pytest -q，退出码透传（未全绿不得发版/提交）
 
 版本参数可带可不带 v 前缀（tag 名仍以用户请求原文为准，脚本只校验数字）。
 仓库根按当前工作目录经 git rev-parse 解析（脚本路径所在仓库无关紧要）。
@@ -130,6 +134,24 @@ def _suspect(rel_path):
     return any(part in rel_path for part in RUNTIME_SUSPECT_PARTS)
 
 
+def _list_changes():
+    """列出 git add -A 将提交的全部改动 + 未跟踪运行时数据警告。"""
+    lines = [l for l in _git("status", "--porcelain").splitlines() if l.strip()]
+    if not lines:
+        print("通过：工作区干净，无待提交改动")
+        return
+    print(f"通过：工作区有 {len(lines)} 项改动（git add -A 将全部提交）：")
+    for l in lines:
+        print(f"  {l}")
+    untracked = [l[3:].strip() for l in lines if l.startswith("??")]
+    if untracked:
+        print(f"注意：未跟踪文件 {len(untracked)} 个将被一并提交，"
+              f"逐个确认是否该进 .gitignore：")
+        for f in untracked:
+            warn = "  ← 疑似运行时数据，先确认 gitignore" if _suspect(f) else ""
+            print(f"  ?? {f}{warn}")
+
+
 def do_check(args):
     ver, cur = _validate(args.version, "check")
     vstr = ".".join(map(str, ver))
@@ -140,21 +162,14 @@ def do_check(args):
         print(f"注意：两处版本号已是 {vstr}（bump 已完成或无需 bump）")
     else:
         print(f"通过：双文件版本同步（当前 {'.'.join(map(str, cur))}）")
-    lines = [l for l in _git("status", "--porcelain").splitlines() if l.strip()]
-    if not lines:
-        print("通过：工作区干净，无待提交改动")
-    else:
-        print(f"通过：工作区有 {len(lines)} 项改动（git add -A 将全部提交）：")
-        for l in lines:
-            print(f"  {l}")
-        untracked = [l[3:].strip() for l in lines if l.startswith("??")]
-        if untracked:
-            print(f"注意：未跟踪文件 {len(untracked)} 个将被一并提交，"
-                  f"逐个确认是否该进 .gitignore：")
-            for f in untracked:
-                warn = "  ← 疑似运行时数据，先确认 gitignore" if _suspect(f) else ""
-                print(f"  ?? {f}{warn}")
+    _list_changes()
     print("通过：发版前核对完成（下一步 bump）")
+
+
+def do_precommit(_args):
+    """仅提交推送（不打 tag、不 bump）的提交前核对。"""
+    _list_changes()
+    print("通过：提交前核对完成（仅提交推送：不 bump 版本、不打 tag）")
 
 
 def do_bump(args):
@@ -194,9 +209,11 @@ def main(argv=None):
     sub = parser.add_subparsers(dest="cmd", required=True)
     for name, fn, help_ in (("check", do_check, "发版前核对（校验+改动清单）"),
                             ("bump", do_bump, "原子更新两处版本号"),
+                            ("precommit", do_precommit,
+                             "仅提交推送的提交前核对（改动清单）"),
                             ("test", do_test, "全量测试 pytest -q")):
         p = sub.add_parser(name, help=help_)
-        if name != "test":
+        if name in ("check", "bump"):
             p.add_argument("version", help="目标版本号（vX.Y.Z 或 X.Y.Z）")
         p.set_defaults(fn=fn)
     args = parser.parse_args(argv)
