@@ -92,6 +92,12 @@ TRACK_READ_MIN_WIDTH = 430         # 标题读取最小宽度（同 TRACK_OCR_RE
 # （标题/首行识别不变，实测 2x 放大/灰度自动对比度/白字阈值均不如
 # 3x 对比度稳定），补偿 OCR 约 155ms。仅在正常 OCR 无绿字时调用
 # （失败补偿，不进轮询热路径）。
+# 2026-11-09 补充：3x 增强会扭曲标题字形（「玄枢轶闻」确定性误读成
+# 「玄枢铁闻」），锚点判定 title in txt 失败、增强结果被整体丢弃，
+# 任务每轮空转——ocr_track_enhanced 增加 title_rect 参数，标题条贴回
+# 原帧像素（正常 OCR 已读对标题，贴回后增强帧标题同样读对，实测
+# 0.94），内容区仍增强（标题条与内容行 OCR 框纵向重叠约 8px，实测
+# 不影响内容行检出且「线素」误读一并消除）。
 TRACK_ENHANCE_CONTRAST = 3.0
 # 追踪面板差分门（性能 2026-10-27 引入；2026-10-28 增加节奏上限）：
 # 2026-10-27 实测门区域 11/11 帧行走中严格稳定（不透明面板）；2026-10-28
@@ -230,7 +236,7 @@ def ocr_follow(img):
     return items, img_np
 
 
-def ocr_track_enhanced(img_np):
+def ocr_track_enhanced(img_np, title_rect=None):
     """低对比度补偿 OCR：面板区对比度增强后重识别，返回全帧坐标 items。
 
     背景与动机见 TRACK_ENHANCE_CONTRAST。img_np 为整帧 RGB 数组
@@ -239,6 +245,13 @@ def ocr_track_enhanced(img_np):
     只对裁剪做对比度增强；rect 映射回全帧坐标，下游绿字判定仍用
     原始 img_np 像素（增强帧只影响 OCR 检出，不参与颜色判定）。
     仅由 track_task 在正常 OCR 无绿字时调用一次（失败补偿）。
+
+    title_rect：正常 OCR 读出的锚点标题矩形（同帧全帧坐标）。3x
+    对比度增强会扭曲标题字形——实测「玄枢轶闻」被确定性误读成
+    「玄枢铁闻」，锚点判定 title in txt 失败、增强结果整体被丢弃
+    （2026-11-09 玄枢轶闻第 8/9 轮空转）。标题条像素改贴原帧裁剪
+    （正常 OCR 已读出该标题，原像素重识别必然读对；内容区仍增强），
+    None 时整体增强（旧行为）。
     """
     region = track_content_region(img_np) or TRACK_REGION
     h, w = img_np.shape[:2]
@@ -249,6 +262,16 @@ def ocr_track_enhanced(img_np):
         return []
     enhanced = ImageEnhance.Contrast(Image.fromarray(crop)).enhance(
         TRACK_ENHANCE_CONTRAST)
+    if title_rect is not None:
+        tl, tt, tr, tb = title_rect
+        cl = max(0, tl - l)
+        ct = max(0, tt - t)
+        cr = min(crop.shape[1], tr - l)
+        cb = min(crop.shape[0], tb - t)
+        if cl < cr and ct < cb:
+            enh_np = np.array(enhanced)
+            enh_np[ct:cb, cl:cr] = crop[ct:cb, cl:cr]
+            enhanced = Image.fromarray(enh_np)
     items, _ = game_map.ocr_region(enhanced, (0, 0, crop.shape[1], crop.shape[0]))
     return [(txt, [l + rect[0], t + rect[1], l + rect[2], t + rect[3]], score)
             for txt, rect, score in items]
@@ -1037,9 +1060,11 @@ def track_task(win, title, text=None, green_index=0, retries=4, retry_interval=1
             log(f"[任务追踪] 「{title}」内容尚未渲染（第 {attempt + 1} 次），等待后重试", "INFO")
             if not enhanced_tried:
                 # 低对比度补偿：白字漏检时内容可能整块缺失（见
-                # TRACK_ENHANCE_CONTRAST），同一帧增强重识别一次
+                # TRACK_ENHANCE_CONTRAST），同一帧增强重识别一次。
+                # title_rect 传锚点矩形：增强会扭曲标题字形致锚点
+                # 判定失败，标题条须贴回原帧（2026-11-09 轶→铁教训）
                 enhanced_tried = True
-                enh = ocr_track_enhanced(img_np)
+                enh = ocr_track_enhanced(img_np, title_rect=arect)
                 if enh:
                     log(f"[任务追踪] 「{title}」低对比度补偿：增强重识别 "
                         f"{len(enh)} 行，重试内容采集", "INFO")
@@ -1053,9 +1078,10 @@ def track_task(win, title, text=None, green_index=0, retries=4, retry_interval=1
             if not enhanced_tried and attempt < retries:
                 # 低对比度补偿：内容行压在明亮背景上整行漏检时，绿字
                 # 链接行不在 items 中（2026-11-08 玄枢轶闻），增强补读。
-                # attempt<retries：补偿帧由下一轮消费，须留重试槽位
+                # attempt<retries：补偿帧由下一轮消费，须留重试槽位。
+                # title_rect 传锚点矩形（增强扭曲标题字形，2026-11-09）
                 enhanced_tried = True
-                enh = ocr_track_enhanced(img_np)
+                enh = ocr_track_enhanced(img_np, title_rect=arect)
                 if enh:
                     log(f"[任务追踪] 「{title}」低对比度补偿：增强重识别 "
                         f"{len(enh)} 行，重试绿字判定", "INFO")

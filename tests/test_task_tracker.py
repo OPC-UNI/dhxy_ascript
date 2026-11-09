@@ -225,11 +225,19 @@ def test_track_task_low_contrast_enhanced_fallback(monkeypatch):
                         lambda win, x, y: clicks.append((x, y)))
     monkeypatch.setattr(task_tracker, "ocr_follow",
                         lambda im: (normal, np.asarray(im)))
-    monkeypatch.setattr(task_tracker, "ocr_track_enhanced",
-                        lambda img_np: enhanced)
+    passed = {}
+
+    def fake_enhanced(img_np, title_rect=None):
+        # 2026-11-09：增强会扭曲标题字形（轶→铁），锚点矩形必须透传
+        # 供 ocr_track_enhanced 贴回标题条原帧像素
+        passed["title_rect"] = title_rect
+        return enhanced
+
+    monkeypatch.setattr(task_tracker, "ocr_track_enhanced", fake_enhanced)
     ok, info = task_tracker.track_task(FakeWin(), "玄枢轶闻", retries=4,
                                        pre_items=(normal, img))
     assert ok and clicks == [(135, 288)]  # 链接下划线上方 2px
+    assert passed.get("title_rect") == [14, 230, 160, 255]
 
 
 def test_ocr_track_enhanced_maps_full_frame_rects(monkeypatch):
@@ -248,6 +256,38 @@ def test_ocr_track_enhanced_maps_full_frame_rects(monkeypatch):
     items = task_tracker.ocr_track_enhanced(img_np)
     assert seen["size"] == (300, 300) and seen["region"] == (0, 0, 300, 300)
     assert items == [("行", [100, 200, 110, 210], 0.9)]
+
+
+def test_ocr_track_enhanced_title_strip_paste_back(monkeypatch):
+    """title_rect 给定：标题条贴回原帧像素，其余区域仍为增强像素。
+
+    2026-11-09 玄枢轶闻：3x 增强把「玄枢轶闻」确定性误读成「玄枢铁闻」，
+    锚点判定失败、增强结果被整体丢弃；标题条须保持原帧像素。
+    """
+    img_np = np.zeros((831, 1378, 3), dtype=np.uint8)
+    img_np[:, :, 0] = 40  # 均匀低对比度底色，增强后必然变色
+    seen = {}
+
+    def fake_ocr_region(im, region):
+        arr = np.asarray(im)
+        crop = img_np[200:500, 100:400]
+        seen["title_strip_original"] = bool(
+            (arr[31:56, 10:66] == crop[31:56, 10:66]).all())
+        seen["content_enhanced"] = bool((arr[100:150, 10:66]
+                                         != crop[100:150, 10:66]).any())
+        return [("行", [0, 0, 10, 10], 0.9)], None
+
+    monkeypatch.setattr(game_map, "ocr_region", fake_ocr_region)
+    monkeypatch.setattr(task_tracker, "track_content_region",
+                        lambda *a, **k: (100, 200, 400, 500))
+    # 标题锚点矩形（全帧坐标），映射到裁剪 (10,31)-(70,56)
+    task_tracker.ocr_track_enhanced(img_np, title_rect=[110, 231, 170, 256])
+    assert seen["title_strip_original"]
+    assert seen["content_enhanced"]
+    # 不传 title_rect：整体增强（旧行为）
+    seen.clear()
+    task_tracker.ocr_track_enhanced(img_np)
+    assert not seen.get("title_strip_original")
 
 
 def test_keyword_fallback_require_coord_filters_subgoal_line():
