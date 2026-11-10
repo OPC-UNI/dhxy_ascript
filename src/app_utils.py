@@ -299,6 +299,35 @@ def rapid_click(win, x: int, y: int, press: float = 0.02):
         _mouse_call(Mouse.mouse_up, button="primary")
 
 
+def rapid_click_burst(win, x, y, times=1, press=0.02, interval=0.0):
+    """原地高频连点：一次定位，连点 times 次（冲刺连点小游戏热路径）。
+
+    与 rapid_click 的区别：整批点击持一次全局输入锁、只移动一次，
+    静默模式一整批只做一次窗口/坐标换算并逐击投递按下/抬起消息（无
+    3×50ms 填充延迟，约 20ms/击），物理模式同理只移动一次后逐击
+    按下/抬起。供「每秒需连点十余次」的小游戏使用（蛟魔探秘钓鱼：
+    单击仅推进 ~0.1 刻度，逐击走 rapid_click 静默通道实测 ~150ms/击，
+    倒计时内推不到目标带）。press 为每击按压时长（秒）。
+    """
+    n = max(1, int(times))
+    if _SILENT_CLICK:
+        from . import silent_click  # 延迟导入防循环（见 _silent_click）
+        return silent_click.send_silent_click_burst(
+            win, x=x, y=y, times=n, press=press, interval=interval)
+    with _INPUT_LOCK:
+        sx = win.rect.left + int(x)
+        sy = win.rect.top + int(y)
+        _mouse_call(Mouse.mouse_move, sx, sy, move_duration=0.0)
+        for _ in range(n):
+            _mouse_call(Mouse.mouse_down, button="primary")
+            if press > 0:
+                time.sleep(press)
+            _mouse_call(Mouse.mouse_up, button="primary")
+            if interval > 0:
+                time.sleep(interval)
+    return n
+
+
 class MouseHold:
     """长按鼠标按键：按下后保持，直到 stop() 抬起。
 
@@ -588,6 +617,20 @@ def _char_state_set(key, ckey, value):
         kv_update_merged(key, lambda data: {**(data or {}), ckey: value})
     except Exception as e:
         log(f"[状态] {key} 持久化失败: {e}", "WARN")
+
+
+def char_state_get(key, win, default=None):
+    """读取角色维度状态（key 为状态用途键，内部按 char_key(win) 键控）。
+
+    供任务模块持久化不随轮次变化、跨重启有效的角色属性（如名望种族
+    判定缓存）。损坏数据按未记录处理。
+    """
+    return _char_state_get(key, char_key(win), default)
+
+
+def char_state_set(key, win, value):
+    """写入角色维度状态（合并写，防跨进程整文件覆写）。"""
+    _char_state_set(key, char_key(win), value)
 
 
 # ---- 摄妖香 1 小时有效期管理（实际有效期 1 小时；按 57 分钟续用，

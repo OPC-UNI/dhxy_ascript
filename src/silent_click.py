@@ -212,6 +212,40 @@ def send_silent_click(win, x=None, y=None, button="primary"):
             "msg_results": results}
 
 
+def send_silent_click_burst(win, x=None, y=None, times=1, press=0.02,
+                            interval=0.0):
+    """原地快速连点（冲刺连点小游戏）：一次定位，连点 times 次。
+
+    与 send_silent_click 的区别：整批点击只投一次 WM_MOUSEMOVE，
+    逐击之间无 3×50ms 填充延迟（SendMessage 同步投递，游戏逐条处理），
+    供「每秒需连点十余次」的小游戏使用（蛟魔探秘钓鱼：单击仅推进
+    ~0.1 刻度，三档节奏到不了目标带，2026-11-10 真机实测）。每击按压
+    press 秒（默认 20ms，与 rapid_click 一致）。整批持一次全局输入锁，
+    结束追加一次移开消息防悬停残留（同单点路径）。返回投递描述 dict；
+    窗口/客户区获取失败返回 None。
+    """
+    resolved = _resolve_point(win, x, y)
+    if resolved is None:
+        return None
+    target, cx, cy, sx, sy, cw, ch = resolved
+    lp = (cy << 16) | (cx & 0xFFFF)
+    away_lp = ((ch - 20) << 16) | 20
+    n = max(1, int(times))
+    with app_utils._INPUT_LOCK:
+        user32.SendMessageW(target, WM_MOUSEMOVE, 0, lp)
+        for _ in range(n):
+            user32.SendMessageW(target, WM_LBUTTONDOWN, MK_LBUTTON, lp)
+            if press > 0:
+                time.sleep(press)
+            user32.SendMessageW(target, WM_LBUTTONUP, 0, lp)
+            if interval > 0:
+                time.sleep(interval)
+        user32.SendMessageW(target, WM_MOUSEMOVE, 0, away_lp)
+    return {"hwnd": target, "class": win_class(target), "button": "primary",
+            "client": (cw, ch), "point": (cx, cy),
+            "screen_point": (sx, sy), "times": n}
+
+
 def begin_silent_hold(win, x=None, y=None, button="primary"):
     """投递长按按下序列（WM_MOUSEMOVE→WM_LBUTTONDOWN），保持按下状态。
 

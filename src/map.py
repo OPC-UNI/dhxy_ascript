@@ -379,6 +379,18 @@ def _load_template(icon):
     return tpl
 
 
+def template_size(icon):
+    """模板像素尺寸 (宽, 高)；模板缺失/解码失败返回 None。
+
+    供按模板匹配框（rect=中心±半宽高）推导搜索条带/OCR 区域使用
+    （如名望种族判定：标题牌右侧 120px 条带）。
+    """
+    tpl = _load_template(icon)
+    if tpl is None:
+        return None
+    return int(tpl.shape[1]), int(tpl.shape[0])
+
+
 def match_frame_np(img_np, icon, threshold=0.8, region=None, fallback=True):
     """在 BGR numpy 帧上做模板匹配，返回首个 (x, y) 中心或 None。
 

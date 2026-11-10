@@ -136,6 +136,34 @@ def test_precise_click_silent_mode_repeats(monkeypatch):
     assert calls == [(10, 20), (10, 20)]
 
 
+def test_rapid_click_burst_physical_single_move(fake_mouse, monkeypatch):
+    """冲刺连点（物理通道）：整批只移动一次，逐击按下/抬起。"""
+    monkeypatch.setattr(app_utils, "_SILENT_CLICK", False)
+    app_utils.rapid_click_burst(_FakeWin(), 30, 40, times=3, press=0)
+    assert fake_mouse.calls == [
+        ("mouse_move", 708, 108),
+        ("mouse_down", "primary"), ("mouse_up", "primary"),
+        ("mouse_down", "primary"), ("mouse_up", "primary"),
+        ("mouse_down", "primary"), ("mouse_up", "primary"),
+    ]
+
+
+def test_rapid_click_burst_silent_delegates(monkeypatch):
+    """冲刺连点（静默通道）：整批一次投递，不逐击走 send_silent_click
+    （后者每击 3×50ms 填充延迟，倒计时内推不到目标带）。"""
+    monkeypatch.setattr(app_utils, "_SILENT_CLICK", True)
+    calls = []
+    monkeypatch.setattr(
+        "src.silent_click.send_silent_click_burst",
+        lambda w, x=None, y=None, times=1, press=0.02, interval=0.0:
+            calls.append((x, y, times, press)))
+    monkeypatch.setattr("src.silent_click.send_silent_click",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("不应逐击投递")))
+    app_utils.rapid_click_burst(_FakeWin(), 10, 20, times=5, press=0.03)
+    assert calls == [(10, 20, 5, 0.03)]
+
+
 def test_human_move_and_move_away_silent_mode_noop(monkeypatch):
     monkeypatch.setattr(app_utils, "_SILENT_CLICK", True)
     fake_mouse = _FakeMouse()

@@ -151,6 +151,26 @@ def test_send_silent_click_custom_point(monkeypatch):
     assert fake.msgs[0][3] == (155 << 16) | 10
 
 
+def test_send_silent_click_burst_sequence(monkeypatch):
+    """批量连点：一次移动 + 连续 按下/抬起 × times + 一次移开。
+
+    冲刺连点小游戏走该序列（整批只定位一次、逐击无 50ms 填充延迟）。
+    """
+    fake = _FakeUser32(client=(1366, 768))
+    monkeypatch.setattr(silent_click, "user32", fake)
+    monkeypatch.setattr(silent_click.game, "list_tab_windows", lambda w: [])
+    info = silent_click.send_silent_click_burst(
+        _FakeWin(0x123), x=100, y=200, times=3, press=0, interval=0)
+    assert info["times"] == 3
+    assert info["point"] == (10, 155)
+    assert [m[1] for m in fake.msgs] == (
+        [WM_MOUSEMOVE] + [WM_LBUTTONDOWN, WM_LBUTTONUP] * 3 + [WM_MOUSEMOVE])
+    assert [m[2] for m in fake.msgs] == [0] + [MK_LBUTTON, 0] * 3 + [0]
+    lp = (155 << 16) | 10
+    assert [m[3] for m in fake.msgs] == [lp] * 7 + [((768 - 20) << 16) | 20]
+    assert all(m[0] == 0x123 for m in fake.msgs)
+
+
 def test_send_silent_click_right_button_sequence(monkeypatch):
     fake = _FakeUser32(client=(1366, 768))
     monkeypatch.setattr(silent_click, "user32", fake)

@@ -88,6 +88,7 @@ from src import game  # 游戏窗口操作
 from src import bag  # 背包操作
 from src import battle  # 战斗自动化（战斗监控与人物/召唤兽操作）
 from src import xuanshu  # 玄枢轶闻任务自动化
+from src import mingwang  # 名望任务自动化（第一阶段：魔族领取入口）
 from src import task_tracker  # 任务追踪面板操作（启动时判断是否已有跟踪中的任务）
 from src import wuhuan  # 五环任务自动化
 from src import kezhan  # 客栈任务自动化
@@ -204,8 +205,8 @@ def _sheyaoxiang_idle_fallback(win):
 def _run_task_mode(win, mode):
     """执行单个任务模式的主循环（原 task_start 内按模式分支的收拢）。
 
-    返回该模式循环的结束原因描述；「名望」为面板占位模式，暂无自动化
-    实现，跳过并记日志（多任务场景下不阻塞后续任务）。
+    返回该模式循环的结束原因描述；「名望」当前仅实现第一阶段（种族
+    判定 + 魔族领取入口 + 打开山河名望面板），后续领取/跟踪流程待补充。
     """
     if mode == "玄枢轶闻":
         # 任务前置：退出队伍（队长解散/队员离开），单人状态执行。
@@ -226,7 +227,9 @@ def _run_task_mode(win, mode):
         return xiuluo.run_loop(win)
     if mode == "五倍":
         return wubei.run_loop(win)
-    # 名望等其余模式：暂无自动化实现
+    if mode == "名望":
+        return mingwang.run_loop(win)
+    # 其余模式：暂无自动化实现
     log(f"[任务] {mode} 暂无自动化实现，跳过", "WARN")
     return f"{mode} 暂无自动化实现，跳过"
 

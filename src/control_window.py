@@ -1055,6 +1055,8 @@ class ControlWindow(WebWindow):
         self.expose(self.verify_wuhuan_cloth)
         self.expose(self.verify_wuhuan_claim)
         self.expose(self.verify_kezhan_awang)
+        self.expose(self.verify_mingwang_claim)
+        self.expose(self.verify_mingwang_claim_task)
         self.expose(self.verify_clear_screen)
         self.expose(self.verify_shout)
         self.expose(self.verify_jiguan)
@@ -2485,6 +2487,99 @@ class ControlWindow(WebWindow):
                 ok_js = "true" if ok else "false"
                 self.webview_instance.evaluate_js(
                     f"if(window.onKezhanAwangVerifyResult){{window.onKezhanAwangVerifyResult({ok_js}, {json.dumps(info)});}}")
+            except Exception:
+                pass
+
+    def verify_mingwang_claim(self):
+        """诊断页-名望-测试名望领取按钮：与任务第一阶段链路一致（种族
+        判定 → 前往大唐边境领取点 → 点击逆天魔 → 对话框选「开始山河
+        名望」→ 点击山河名望入口打开任务领取面板），到打开面板为止，
+        不在面板内领取任务。仙族/其他种族判定后结束并提示待补充。
+        """
+        if self._tm.is_running():
+            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if self._verifying:
+            return {"status": "error", "msg": "验证进行中，请稍候"}
+        win = game.find_main_window()
+        if win is None:
+            return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
+        if not _game_window_clickable(win):
+            return {"status": "error", "msg": "游戏窗口被其他窗口遮挡，请将游戏窗口置于前台后再验证"}
+        self._verifying = True
+        threading.Thread(target=self._run_mingwang_claim_verify, args=(win,),
+                         daemon=True, name="mingwang-claim-verify").start()
+        return {"status": "success",
+                "msg": "验证已开始：种族判定 → 前往大唐边境领取点 → 点击逆天魔 → 选择开启山河名望志 → 打开面板"}
+
+    def _run_mingwang_claim_verify(self, win):
+        """名望领取验证线程体：跑第一阶段领取入口链路，结果回推页面与日志窗。"""
+        from . import mingwang  # 延迟导入：mingwang 反向导入本模块（避免循环）
+        try:
+            self.add_logs(["[验证] 开始验证名望领取（种族判定 → 领取点 → 逆天魔 → 开启山河名望志 → 打开面板）..."])
+            ok, info = mingwang.verify_claim_flow(win)
+        except Exception as e:
+            ok, info = False, f"验证异常: {e}"
+        try:
+            self.add_logs([f"[验证] 结果: {info}"])
+        except Exception:
+            pass
+        self._notify_mingwang_claim_verify_result(ok, info)
+        self._verifying = False
+
+    def _notify_mingwang_claim_verify_result(self, ok, info):
+        """名望领取验证结果回推页面（诊断页-名望链路行的结果文案）。"""
+        if self.webview_instance:
+            try:
+                ok_js = "true" if ok else "false"
+                self.webview_instance.evaluate_js(
+                    f"if(window.onMingwangClaimVerifyResult){{window.onMingwangClaimVerifyResult({ok_js}, {json.dumps(info)});}}")
+            except Exception:
+                pass
+
+    def verify_mingwang_claim_task(self):
+        """诊断页-名望-测试领取名望任务按钮：面板已打开则直接扫描任务栏
+        识别并点击接取；未打开则先走第一阶段链路（种族判定 → 领取点 →
+        打开面板）再领取。已实现高级任务「蛟魔复仇」「沙海迷踪」，按
+        级别优先级 + 卡片顺序选第一个可用的。
+        """
+        if self._tm.is_running():
+            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if self._verifying:
+            return {"status": "error", "msg": "验证进行中，请稍候"}
+        win = game.find_main_window()
+        if win is None:
+            return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
+        if not _game_window_clickable(win):
+            return {"status": "error", "msg": "游戏窗口被其他窗口遮挡，请将游戏窗口置于前台后再验证"}
+        self._verifying = True
+        threading.Thread(target=self._run_mingwang_claim_task_verify,
+                         args=(win,), daemon=True,
+                         name="mingwang-claim-task-verify").start()
+        return {"status": "success",
+                "msg": "验证已开始：扫描山河名望任务栏 → 识别已实现任务（蛟魔复仇/沙海迷踪）→ 点击接取 → 跟踪至完成"}
+
+    def _run_mingwang_claim_task_verify(self, win):
+        """名望任务领取验证线程体：真实点击接取，结果回推页面与日志窗。"""
+        from . import mingwang  # 延迟导入：mingwang 反向导入本模块（避免循环）
+        try:
+            self.add_logs(["[验证] 开始测试领取名望任务（识别任务栏 → 已实现任务（蛟魔复仇/沙海迷踪）→ 点击接取 → 跟踪至完成）..."])
+            ok, info = mingwang.verify_claim_task_flow(win)
+        except Exception as e:
+            ok, info = False, f"验证异常: {e}"
+        try:
+            self.add_logs([f"[验证] 结果: {info}"])
+        except Exception:
+            pass
+        self._notify_mingwang_claim_task_verify_result(ok, info)
+        self._verifying = False
+
+    def _notify_mingwang_claim_task_verify_result(self, ok, info):
+        """名望任务领取验证结果回推页面（诊断页-名望链路第二行）。"""
+        if self.webview_instance:
+            try:
+                ok_js = "true" if ok else "false"
+                self.webview_instance.evaluate_js(
+                    f"if(window.onMingwangClaimTaskVerifyResult){{window.onMingwangClaimTaskVerifyResult({ok_js}, {json.dumps(info)});}}")
             except Exception:
                 pass
 

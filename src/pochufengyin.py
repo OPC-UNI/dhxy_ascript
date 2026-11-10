@@ -11,9 +11,12 @@
 弹窗出现 → 识别目标高亮区间 [L,R,C]（target 模板定位，目标带 ≈1 刻度宽）
 → 点「开始」（按钮同位置变为流程按钮）→ 每轮询一帧测量填充右边缘 P
 （HSV 金掩码 + 从左连通段）→ P<L 推进（点击模式按 C 三档连点 / 长按
-模式按住不放）。点击模式 L≤P≤R 停手保持、P>R 过头永久停手；长按模式
-进入区间后继续按住（游戏锁定游标，松手会回退脱钩），仅 P>R 时松开让其
-回落。按钮变「保持」或倒计时 ≤3s 完全停手等结算 → 标题消失即任务结束。
+模式按住不放 / 冲刺连点模式按在线估算的每击推进量连点并持续维持）。
+点击模式 L≤P≤R 停手保持、P>R 过头永久停手；长按模式进入区间后继续按住
+（游戏锁定游标，松手会回退脱钩），仅 P>R 时松开让其回落；冲刺模式不按
+倒计时停手（填充条自动回退，须维持到窗口结束），P 低于维持点即补点。
+按钮变「保持」或倒计时 ≤3s（冲刺模式除外）完全停手等结算 → 标题消失
+即任务结束。
 全部测量在 POCHU_REGION/进度条带内，坐标映射 1~10 刻度（x 435~992，
 7.png 实测刻度线间距 55.7px 吻合）。
 """
@@ -23,7 +26,7 @@ import time
 import cv2
 import numpy as np
 
-from .app_utils import log, human_click, MouseHold
+from .app_utils import log, human_click, rapid_click_burst, MouseHold
 from . import map as game_map
 from .battle import is_in_battle_frame
 
@@ -66,6 +69,45 @@ POCHU_TIER_FAR = 0.175
 POCHU_TICK_PACE = 0.15                 # 点击模式测量节拍（每轮询一帧）
 POCHU_HOLD_TICK_PACE = 0.08            # 长按模式测量节拍（填充推进快，需更密
                                        # 采样以在进入区间时及时松手防过头）
+# ---- 冲刺连点模式（mash=True，蛟魔探秘钓鱼 2026-11-10 真机实测）----
+# 该小游戏两个真机特性（用户 2026-11-10 反馈 + 日志实测）：
+# 1) 单击推进小（慢点 10 击 P≈1.06），三档节奏 ~3 击/秒 到不了目标带；
+# 2) 填充条会**自动回退**（停手即从带内掉回 L 以下，倒计时 3s 停手
+#    必失败），且连点后填充条有追帧延迟（14 连点瞬间仍测到 0.05、
+#    约 1s 后才升到 3.23）——按滞后值补点会过量。
+# 冲刺模式用 rapid_click_burst 按「每击推进量」在线估算冲进带内，
+# 每次冲刺后等填充条停稳（不再上升）才决策，停稳后维持在 L 附近：
+# P 低于维持点即补点，一直点着维持到窗口标题消失（不按倒计时停手）。
+POCHU_MASH_RATIO0 = 0.25          # 初始每击推进量估计（刻度；偏大保守防过头）
+POCHU_MASH_RATIO_SAFETY = 1.15    # 估算保守系数：按每击多推进 15% 计算，宁可少点
+POCHU_MASH_RATIO_MIN = 0.01       # 每击推进量有效区间（异常观测丢弃）
+POCHU_MASH_RATIO_MAX = 1.0
+POCHU_MASH_AIM = 0.45             # 冲刺目标点 = L + 0.45（目标带内、右侧留余量防过头）
+POCHU_MASH_DEADBAND = 0.08        # 冲刺死区：P ≥ 目标点-死区 不冲刺（防微抖连点）
+POCHU_MASH_RISE_EPS = 0.04        # 冲刺后每轮上升超过该值 = 追帧未停稳，不决策
+POCHU_MASH_STABLE_POLLS = 2       # 连续「不再上升」轮数确认停稳（防动画中间帧误判）
+# 维持泵（2026-11-10 第三轮实机标定：停在 L 下方 ~0.2 格进不了带）。
+# 实测填充条位置与「持续点击率」正相关（~4.5 击/秒稳定在 3.8 格，
+# 3 击/秒只到 1~2 格），停手约 1s 即快速回退（3.99→2.84）。维持段改
+# **点击率伺服**：保持一个持续点击率，按位置误差每 POCHU_MASH_RATE_EVAL
+# 秒调整速率，逼近右缘完全停泵防追帧滞后冲过。
+POCHU_MASH_ZONE_OFFSET = 0.32     # 目标带修正（用户 2026-11-10 试调：识别值偏小 +0.32；
+                                  # 仅 mash 生效，破除封印/长按标定不受影响）
+POCHU_MASH_HOLD_ENTER = 0.60      # 进入维持泵：P ≥ L-0.60 即切换（实测停在 L-0.2，门槛须更宽）
+POCHU_MASH_TOP_MARGIN = 0.30      # 维持上限：P ≥ R-0.30 停泵（防追帧滞后冲过右缘）
+POCHU_MASH_RATE0 = 5.5            # 维持泵初始点击率（击/秒；实测 4.5/s 稳定在 L-0.2）
+POCHU_MASH_RATE_MIN = 2.0
+POCHU_MASH_RATE_MAX = 14.0
+POCHU_MASH_RATE_EVAL = 0.8        # 速率自适应评估间隔（秒）
+POCHU_MASH_RATE_GAIN = 1.2        # 每 1 刻度误差调整的击/秒（实测斜率 ~0.84 格/击/秒）
+POCHU_MASH_ERR_DEADBAND = 0.12    # 位置误差死区（刻度）
+POCHU_MASH_CNT_GONE_POLLS = 3     # 倒计时连续消失轮数 → 已结算，停手
+POCHU_MASH_CREDIT_MAX = 3.0       # 补点积分上限（防暂停后爆发）
+POCHU_MASH_HOLD_MAX = 6           # 单轮点击上限
+POCHU_MASH_MAX_BURST = 90         # 单次冲刺点击上限（限制测量间隔）
+POCHU_MASH_MIN_CLICKS = 5         # 判定「点击未推进」所需最少点击数
+POCHU_MASH_PRESS = 0.02           # 冲刺点击按压时长（rapid_click 默认）
+POCHU_MASH_PRESS_MAX = 0.05       # 连续未推进时加压上限（防漏注册）
 POCHU_ARM_TIMEOUT = 120                # 入口选项点击后检测窗口的最长时限（秒）
 POCHU_CHECK_INTERVAL = 1.0             # extras 链窗口检测限频（秒，条带匹配 ~10ms）
 POCHU_END_WINDOW = 2.0                 # 标题连续消失确认窗口（秒；结束确认防抖，不得缩短）
@@ -148,7 +190,7 @@ def _pochu_countdown(img_pil, cache, force=False):
 
 
 def play_pochufengyin(win, title_icon, prefix="客栈", label="破除封印",
-                      hold=False, action_icon=None):
+                      hold=False, action_icon=None, mash=False):
     """进度条对准小游戏闭环控制（阻塞执行到标题消失）。返回 (是否完成, 描述)。
 
     流程（用户 2026-11-09 完整描述 + 7.png 实测标定）：
@@ -174,7 +216,16 @@ def play_pochufengyin(win, title_icon, prefix="客栈", label="破除封印",
     不同任务日志可区分）。hold=True 为长按模式（钓鱼：开始后按钮为
     action_icon=xuanshu_diaoyu_changan.png，按住才推进；游标进入目标
     区间后游戏会锁定，须保持按住到窗口结束，松手会回退脱钩）；
-    hold=False 为点击模式（破除封印）。
+    hold=False 为点击模式（破除封印）。mash=True 为冲刺连点模式（仅
+    hold=False 生效；蛟魔探秘钓鱼）：该游戏单次点击推进小、三档节奏
+    到不了目标带（真机实测 7s 内只到 P≈2），且填充条有追帧延迟、
+    停手后会**自动回退**。改为 rapid_click_burst 按「每击推进量」
+    在线估算连点冲进带内（目标带按 POCHU_MASH_ZONE_OFFSET 修正，
+    2026-11-10 用户试调识别值偏小 +0.32），每次冲刺后等填充条停稳
+    再决策（防按滞后值过量）；进带后切换「维持泵」点击率伺服——保持一个持续点击率
+    （填充条位置与点击率正相关，停手约 1s 即快速回退），按位置误差
+    每 POCHU_MASH_RATE_EVAL 秒调节速率，逼近右缘完全停泵；不按
+    倒计时停手、维持到窗口标题消失。
     """
     def _pace(tick_start):
         """补齐测量节拍（截图/匹配/点击耗时计入间隔，不累积漂移）。"""
@@ -183,6 +234,7 @@ def play_pochufengyin(win, title_icon, prefix="客栈", label="破除封印",
         if rem > 0:
             time.sleep(rem)
 
+    mash = bool(mash) and not hold   # 冲刺连点仅点击模式可用
     act_icon = action_icon or POCHU_CLICK_ICON
     act_name = "长按" if hold else "点击"
     deadline = time.time() + POCHU_TIMEOUT
@@ -206,6 +258,19 @@ def play_pochufengyin(win, title_icon, prefix="客栈", label="破除封印",
     hold_p0 = None                # 本次按下时的 P（长按不动告警）
     hold_t0 = 0.0
     hold_stall_logged = False
+    mash_ratio = None             # 冲刺模式：在线估算每击推进量（刻度/击）
+    mash_press = POCHU_MASH_PRESS  # 冲刺点击按压时长（漏注册时加压）
+    mash_mark = None              # 冲刺模式：(clicks, p) 稳定锚点
+    mash_stall = 0                # 连续「点击未推进」冲刺次数
+    mash_waiting = False          # 冲刺后等待填充条追帧停稳（停稳前不决策）
+    mash_prev_p = 0.0             # 上轮 P（判定填充条是否仍在上升）
+    mash_stable_cnt = 0           # 连续「不再上升」轮数（停稳确认）
+    cnt_none_polls = 0            # 倒计时消失连续轮数（结算画面判定，mash 停手用）
+    mash_hold = False             # 已接近目标带 → 维持泵模式（禁止长空窗）
+    mash_rate = POCHU_MASH_RATE0  # 维持泵点击率（击/秒，伺服调节）
+    mash_credit = 0.0             # 点击率积分器（不足 1 击的余量）
+    mash_rate_t = 0.0             # 上次速率自适应时间
+    mash_prev_t = 0.0             # 上轮时间（积分器用时基）
     log(f"[{prefix}] {label}弹窗出现 {time.strftime('%H:%M:%S')}，进入闭环控制", "SYS")
 
     def _release_hold():
@@ -285,6 +350,11 @@ def play_pochufengyin(win, title_icon, prefix="客栈", label="破除封印",
                 cnt = _pochu_countdown(img, cnt_cache, force=force_ocr)
                 if cnt is not None:
                     last_cnt = cnt
+                    cnt_none_polls = 0
+                elif mash and last_cnt is not None:
+                    # 倒计时曾读到、随后连续消失 = 小游戏已结算（结果画面），
+                    # 冲刺模式据此停手，防在结算画面继续空点
+                    cnt_none_polls += 1
                 btn = _pochu_ocr_gated(img, POCHU_BTN_REGION, btn_cache,
                                        force=force_ocr)
             lx, rx, cx = _pochu_zone(bgr)
@@ -307,25 +377,36 @@ def play_pochufengyin(win, title_icon, prefix="客栈", label="破除封印",
                         "WARN")
             else:
                 L, R, C = pochu_tick(lx), pochu_tick(rx), pochu_tick(cx)
+                if mash and POCHU_MASH_ZONE_OFFSET:
+                    # 冲刺模式目标带修正：识别值整体偏小（用户实测试调）
+                    L += POCHU_MASH_ZONE_OFFSET
+                    R += POCHU_MASH_ZONE_OFFSET
+                    C += POCHU_MASH_ZONE_OFFSET
                 if zone is None or abs(zone[2] - C) > 0.15:
                     zone = (L, R, C)
                     log(f"[{prefix}] {label}：目标带 L={L:.1f} R={R:.1f} C={C:.1f}"
                         f"（已{act_name} {clicks} 次）", "SYS")
             px = pochu_fill_edge(bgr)
             p = 0.0 if px is None else pochu_tick(px)
-            if hold:
-                last_p = p  # 长按模式每轮记录最新 P（结束描述/命中判定用）
+            if hold or mash:
+                # 长按/冲刺模式每轮记录最新 P（结束描述/命中判定用）
+                last_p = p
             # 完全停手判定（优先；terminal 一旦建立不再恢复）
             if terminal is None:
                 if btn and "保持" in btn:
                     terminal = f"按钮变为「{btn}」"
-                elif cnt is not None and cnt <= POCHU_CNT_STOP:
+                elif not mash and cnt is not None and cnt <= POCHU_CNT_STOP:
+                    # 冲刺模式不禁点：该游戏填充条会持续回退，提前停手
+                    # 等于让游标掉出目标带（用户 2026-11-10 实测教训），
+                    # 维持到窗口标题消失为止
                     terminal = f"倒计时 {cnt}s≤{POCHU_CNT_STOP}s"
                 elif p > R + (POCHU_HOLD_OVER_MARGIN if hold else 0.0):
                     over_cnt += 1
-                    if over_cnt >= 2 and not hold:
+                    if over_cnt >= 2 and not hold and not mash:
                         # 点击模式：过头永久停手。长按模式不设永久终态
-                        # （松开回落、回到 L 以下再次按住，见下方 hold 分支）
+                        # （松开回落、回到 L 以下再次按住）；冲刺模式也不设
+                        # 永久终态——维持泵在 P≥R-余量 已自动停泵，追帧
+                        # 滞后造成的瞬时越界应等回落，停死会丢失维持
                         terminal = f"过头 P={p:.2f}>R={R:.2f}"
                 else:
                     over_cnt = 0
@@ -379,6 +460,113 @@ def play_pochufengyin(win, title_icon, prefix="客栈", label="破除封印",
                     log(f"[{prefix}] {label}：已长按 {POCHU_HOLD_STALL:.0f}s P 未移动"
                         f"（P={p:.2f}），释放重按并检查按钮坐标/长按通道", "WARN")
                     _release_hold()
+            elif terminal is None and mash:
+                # 冲刺连点（蛟魔探秘钓鱼）两段式：
+                # 1) 接近段（P < L-0.45）：按在线估算的每击推进量连点冲刺，
+                #    每次冲刺后等填充条追帧停稳再决策（防按滞后值过量）
+                # 2) 维持段：「维持泵」点击率伺服——保持一个持续点击率
+                #    （实测位置与点击率正相关，停手 ~1s 即回退），按位置
+                #    误差每 0.8s 调节速率，逼近右缘完全停泵；一直维持到
+                #    窗口标题消失（不按倒计时停手）
+                if p >= L - POCHU_MASH_HOLD_ENTER and not mash_hold:
+                    mash_hold = True
+                    mash_credit = 0.0
+                    mash_rate_t = now
+                    mash_prev_t = now
+                if mash_hold:
+                    mash_waiting = False
+                    aim = (L + R) / 2.0
+                    top = R - POCHU_MASH_TOP_MARGIN
+                    dt = max(0.0, now - mash_prev_t)
+                    mash_prev_t = now
+                    n = 0
+                    if p >= top or cnt_none_polls >= POCHU_MASH_CNT_GONE_POLLS:
+                        # 逼近右缘：完全停泵（追帧滞后仍可能继续上升）；
+                        # 倒计时消失多轮 = 已结算，停手防结果画面空点
+                        mash_credit = 0.0
+                    else:
+                        mash_credit = min(mash_credit + mash_rate * dt,
+                                          POCHU_MASH_CREDIT_MAX)
+                        n = int(mash_credit)
+                        if n:
+                            mash_credit -= n
+                            n = min(n, POCHU_MASH_HOLD_MAX)
+                    # 点击率伺服：按位置误差调整速率（误差 1 刻度 ≈ 1.2 击/秒）
+                    if now - mash_rate_t >= POCHU_MASH_RATE_EVAL:
+                        mash_rate_t = now
+                        err = aim - p
+                        if abs(err) > POCHU_MASH_ERR_DEADBAND:
+                            mash_rate = max(
+                                POCHU_MASH_RATE_MIN,
+                                min(POCHU_MASH_RATE_MAX,
+                                    mash_rate + POCHU_MASH_RATE_GAIN * err))
+                    if n > 0:
+                        dpt = game_map.match_frame_np(
+                            bgr, act_icon, threshold=POCHU_THRESHOLD,
+                            region=POCHU_REGION, fallback=False)
+                        if dpt is not None:
+                            btn_pt = dpt  # 命中刷新按钮位置（防窗口漂移）
+                        if btn_pt is not None:
+                            rapid_click_burst(win, btn_pt[0], btn_pt[1], n,
+                                              press=mash_press)
+                            clicks += n
+                            last_click = now
+                if not mash_hold and mash_waiting:
+                    if p > mash_prev_p + POCHU_MASH_RISE_EPS:
+                        # 填充条仍在上升（追帧/点击队列处理中）：不决策，
+                        # 按滞后值补点会过量冲刺
+                        mash_prev_p = p
+                        mash_stable_cnt = 0
+                    else:
+                        mash_stable_cnt += 1
+                    if mash_waiting and mash_stable_cnt >= POCHU_MASH_STABLE_POLLS:
+                        # 连续多轮不再上升 = 停稳：用停稳值更新每击推进量
+                        mash_stable_cnt = 0
+                        if mash_mark is not None:
+                            dc = clicks - mash_mark[0]
+                            dp = p - mash_mark[1]
+                            if dc >= 1 and dp > 0.03:
+                                obs = dp / dc
+                                if POCHU_MASH_RATIO_MIN <= obs \
+                                        <= POCHU_MASH_RATIO_MAX:
+                                    mash_ratio = obs if mash_ratio is None \
+                                        else mash_ratio * 0.4 + obs * 0.6
+                                mash_stall = 0
+                            elif dc >= POCHU_MASH_MIN_CLICKS and dp <= 0.02:
+                                mash_stall += 1
+                                if mash_stall == 2:
+                                    mash_press = min(POCHU_MASH_PRESS_MAX,
+                                                     mash_press + 0.015)
+                                    log(f"[{prefix}] {label}：连点 {dc} 次"
+                                        f" P 未推进（P={p:.2f}），按压时长增至"
+                                        f" {mash_press:.3f}s（检查点击漏注册）",
+                                        "WARN")
+                        mash_mark = (clicks, p)
+                        mash_waiting = False
+                if not mash_hold and not mash_waiting:
+                    ratio = mash_ratio or POCHU_MASH_RATIO0
+                    goal = L + POCHU_MASH_AIM
+                    n = 0
+                    if p < goal - POCHU_MASH_DEADBAND:
+                        n = int((goal - p) / (ratio * POCHU_MASH_RATIO_SAFETY))
+                        n = max(1, min(n, POCHU_MASH_MAX_BURST))
+                    if n > 0:
+                        dpt = game_map.match_frame_np(
+                            bgr, act_icon, threshold=POCHU_THRESHOLD,
+                            region=POCHU_REGION, fallback=False)
+                        if dpt is not None:
+                            btn_pt = dpt  # 命中刷新按钮位置（防窗口漂移）
+                        if btn_pt is not None:
+                            # 整批一次定位/一把锁，逐击按下抬起（静默通道
+                            # ~20ms/击；逐击 rapid_click 静默 ~150ms/击，
+                            # 倒计时内推不到目标带）
+                            mash_mark = (clicks, p)
+                            mash_prev_p = p
+                            rapid_click_burst(win, btn_pt[0], btn_pt[1], n,
+                                              press=mash_press)
+                            clicks += n
+                            last_click = now
+                            mash_waiting = True
             elif terminal is None and p < L:
                 # 点击决策：P<L 才点（节奏按 C 三档）
                 if C < 4.0:

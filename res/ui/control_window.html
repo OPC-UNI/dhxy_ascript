@@ -792,7 +792,7 @@
                 <div class="task-card-main">
                     <span class="task-order"></span>
                     <span class="task-name">名望</span>
-                    <span class="badge">规划中</span>
+                    <span class="badge">第一阶段</span>
                     <div class="task-count">
                         <button class="th-btn" onclick="count('名望', -1)">−</button>
                         <span class="th-val" id="cnt-名望">5</span>
@@ -820,7 +820,7 @@
                 </div>
                 <div class="task-zone-empty" id="task-available-empty" style="display:none">全部任务已选择</div>
             </div>
-            <div class="group-hint">点击「待选任务」卡片加入已选（按加入顺序排列）；「已选任务」按顺序依次执行，拖动「≡」手柄或点 ↑↓ 调整顺序，点卡片移回待选。「仅战斗」与其它任务互斥：选中后仅运行战斗监控（自动战斗/补血蓝/巫医，不做任务操作；仅保留自动归队——死亡落轮回司自动点归队，开关默认开启），持续运行至手动停止。「名望」暂无自动化实现，选中后自动跳过。全部完成后自动结束。</div>
+            <div class="group-hint">点击「待选任务」卡片加入已选（按加入顺序排列）；「已选任务」按顺序依次执行，拖动「≡」手柄或点 ↑↓ 调整顺序，点卡片移回待选。「仅战斗」与其它任务互斥：选中后仅运行战斗监控（自动战斗/补血蓝/巫医，不做任务操作；仅保留自动归队——死亡落轮回司自动点归队，开关默认开启），持续运行至手动停止。「名望」当前为第一阶段：启动时追踪已有「山河名望」任务则跳过领取直接续跑跟踪；否则种族判定（人物属性面板）→ 魔族前往大唐边境 → 点击逆天魔 → 对话选「开启山河名望志」→ 打开山河名望面板 → 按 高级>中级>初级 优先级 + 卡片顺序领取已实现任务（蛟魔复仇/沙海迷踪/蛟魔探秘）→ 关闭领取对话框 → 复用 follow_task 跟踪至任务完成（任务对话按 DIALOG_OPTION_MAP 处理；沙海迷踪入口确认后识别「开始」按钮点击进入战斗，战斗结束即完成；蛟魔探秘入口确认后识别钓鱼窗口标题，复用 pochufengyin 点击冲刺连点闭环（mash：连点冲刺+维持泵点击率伺服（位置与持续点击率正相关，停手约 1 秒即回退），不按倒计时停手））→ 回去领取下一轮，直到次数上限（仙族与其它任务执行流程待补充）。全部完成后自动结束。</div>
         </div>
         <!-- ============ 组号页（队伍成员检查 + 按账号战斗动作设置） ============ -->
         <div class="page" id="page-group">
@@ -1199,6 +1199,18 @@
                     <div class="group-hint">与实际流程一致、时序无额外延时：找阿旺=走位到大理寺墙外 → 定位阿旺（模板/OCR 名字兜底，未找到按 Alt+C 降落重试）→ 点击左侧走近 → 等寻路结束重新定位 → 点击交互点；大理寺墙外未找到时兜底走洛阳城阿旺出现点重找一轮。点击阿旺会真实推进任务对话（与任务流程同行为），对话框停留请手动关闭。任务运行中不可验证。</div>
                 </div>
                 <div class="group-box">
+                    <div class="group-title">名望链路</div>
+                    <div class="verify-row">
+                        <button id="btn-verify-mingwang-claim" class="btn" onclick="verifyMingwangClaim()">测试名望领取</button>
+                        <span class="verify-result" id="mingwang-claim-verify-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="btn-verify-mingwang-claim-task" class="btn" onclick="verifyMingwangClaimTask()">测试领取名望任务</button>
+                        <span class="verify-result" id="mingwang-claim-task-verify-result"></span>
+                    </div>
+                    <div class="group-hint">第一阶段链路（与任务流程一致、时序无额外延时）：点击 (1230,95) 开人物属性面板 → 识别种族（标题牌右侧 120px 条带，日志打印 OCR 文案与条带）→ 关面板 → 魔族前往大唐边境领取点（世界地图/小地图 985,384）→ 点击逆天魔 → 对话框选「开启山河名望志」→ 点击山河名望入口打开任务领取面板后停止（不在面板内领取任务）。当前仅实现魔族；仙族会在种族判定后提示待补充。测试领取名望任务=面板已打开则直接扫描任务栏（锚点下方 6 卡：3 列×2 行，190×154），按 高级>中级>初级 + 卡片顺序选第一个已实现任务（蛟魔复仇/沙海迷踪/蛟魔探秘）并点击其接取按钮（真实领取；面板未打开时先走完整第一阶段链路），日志打印 6 卡级别/标题与匹配分数；领取后对话框模板门控命中即点屏幕中间关闭，残留山河名望面板右键标题牌关闭，任务追踪出现「山河名望」→ 复用 follow_task 跟踪至任务完成（任务对话按 DIALOG_OPTION_MAP 处理，如「黑水河深，不如蛟魔之心。」→「逆天魔大将派我前来」；沙海迷踪=「少侠准备好清理地图了吗？」→「我已经准备好了」后识别「开始」按钮 mingwang_chenjiuditu_kaishi 点击进入战斗，战斗结束即完成；蛟魔探秘=「老头子我最喜欢的，就是在这里钓鱼了~」→「请将鱼竿借我一用！」后识别窗口标题 mingwang_diaochushuizhongguaiwu，复用 pochufengyin 点击冲刺连点闭环（mash：连点冲刺+维持泵点击率伺服（位置与持续点击率正相关，停手约 1 秒即回退），不按倒计时停手））。任务运行中不可验证。</div>
+                </div>
+                <div class="group-box">
                     <div class="group-title">队伍</div>
                     <div class="verify-row">
                         <button id="btn-verify-team-check" class="btn" onclick="verifyTeamCheck()">检查队伍信息</button>
@@ -1469,6 +1481,10 @@
     const wuhuanClaimVerifyResultEl = document.getElementById('wuhuan-claim-verify-result');
     const btnVerifyKezhanAwang = document.getElementById('btn-verify-kezhan-awang');
     const kezhanAwangVerifyResultEl = document.getElementById('kezhan-awang-verify-result');
+    const btnVerifyMingwangClaim = document.getElementById('btn-verify-mingwang-claim');
+    const mingwangClaimVerifyResultEl = document.getElementById('mingwang-claim-verify-result');
+    const btnVerifyMingwangClaimTask = document.getElementById('btn-verify-mingwang-claim-task');
+    const mingwangClaimTaskVerifyResultEl = document.getElementById('mingwang-claim-task-verify-result');
     const btnVerifyClearScreen = document.getElementById('btn-verify-clear-screen');
     const clearScreenVerifyResultEl = document.getElementById('clear-screen-verify-result');
     const btnVerifyShout = document.getElementById('btn-verify-shout');
@@ -3492,6 +3508,66 @@
         btnVerifyKezhanAwang.disabled = false;
         kezhanAwangVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
         kezhanAwangVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+    };
+
+    // 名望领取验证：与五环领取验证同模式，结果经 onMingwangClaimVerifyResult 异步回推
+    async function verifyMingwangClaim() {
+        if (verifying) return;
+        verifying = true;
+        btnVerifyMingwangClaim.disabled = true;
+        mingwangClaimVerifyResultEl.style.color = 'var(--text)';
+        mingwangClaimVerifyResultEl.innerText = '验证中...';
+        try {
+            const r = await callPython('verify_mingwang_claim');
+            if (!r || r.status !== 'success') {
+                mingwangClaimVerifyResultEl.style.color = 'var(--danger)';
+                mingwangClaimVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
+                verifying = false;
+                btnVerifyMingwangClaim.disabled = false;
+            }
+            // 成功：等待 Python 侧 onMingwangClaimVerifyResult 回推最终结果
+        } catch (e) {
+            mingwangClaimVerifyResultEl.style.color = 'var(--danger)';
+            mingwangClaimVerifyResultEl.innerText = '验证请求异常';
+            verifying = false;
+            btnVerifyMingwangClaim.disabled = false;
+        }
+    }
+    window.onMingwangClaimVerifyResult = function (ok, info) {
+        verifying = false;
+        btnVerifyMingwangClaim.disabled = false;
+        mingwangClaimVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        mingwangClaimVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+    };
+
+    // 名望任务领取验证（扫描任务栏 → 领取蛟魔复仇），结果经 onMingwangClaimTaskVerifyResult 回推
+    async function verifyMingwangClaimTask() {
+        if (verifying) return;
+        verifying = true;
+        btnVerifyMingwangClaimTask.disabled = true;
+        mingwangClaimTaskVerifyResultEl.style.color = 'var(--text)';
+        mingwangClaimTaskVerifyResultEl.innerText = '验证中...';
+        try {
+            const r = await callPython('verify_mingwang_claim_task');
+            if (!r || r.status !== 'success') {
+                mingwangClaimTaskVerifyResultEl.style.color = 'var(--danger)';
+                mingwangClaimTaskVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
+                verifying = false;
+                btnVerifyMingwangClaimTask.disabled = false;
+            }
+            // 成功：等待 Python 侧 onMingwangClaimTaskVerifyResult 回推最终结果
+        } catch (e) {
+            mingwangClaimTaskVerifyResultEl.style.color = 'var(--danger)';
+            mingwangClaimTaskVerifyResultEl.innerText = '验证请求异常';
+            verifying = false;
+            btnVerifyMingwangClaimTask.disabled = false;
+        }
+    }
+    window.onMingwangClaimTaskVerifyResult = function (ok, info) {
+        verifying = false;
+        btnVerifyMingwangClaimTask.disabled = false;
+        mingwangClaimTaskVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        mingwangClaimTaskVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
     // 五倍巫医验证：与修罗巫医验证同模式，结果经 onWubeiWuyiVerifyResult 异步回推

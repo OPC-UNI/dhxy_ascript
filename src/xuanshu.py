@@ -1464,7 +1464,7 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 task_gone_polls=None, dialog_tpl_gate=True,
                 dialog_extra_gate=None,
                 chuyijuebao_check=True, battle_extras_tpl_gate=False,
-                story_dialog_dismiss=True):
+                story_dialog_dismiss=True, story_known_texts=None):
     """循环跟踪任务直到完成（prefix 供其他任务复用，如五环）。
 
     每轮：点击任务当前第一个绿色文案 → 等待任务信息变化（内容更新）
@@ -1550,13 +1550,19 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
     （2026-11-10 实测，见 dialog_common.StoryDialogDismisser）。
     自行实现了等价兜底（含任务专属抑制窗口，如五环给与面板预期）
     的调用方传 False。
+    story_known_texts：剧情对话兜底的「已知对话表」（默认玄枢轶闻
+    DIALOG_OPTION_MAP）。复用本引擎的任务（名望）传自己的选项表——
+    否则本任务的带选项对话不在已知表内、选项未渲染时会被误判为
+    无选项剧情对话点屏关闭（2026-11-10）。
     返回 (是否完成, 描述)。
     """
     deadline = time.time() + timeout
     # 无选项剧情对话点屏推进兜底（2026-11-10，见 dialog_common.
     # StoryDialogDismisser）。已知对话表用 DIALOG_OPTION_MAP：其对话的
     # 绿字选项未渲染时只等待，不当剧情对话点屏（防误关/误推进）
-    story_gate = StoryDialogDismisser(known_texts=DIALOG_OPTION_MAP) \
+    known_texts = DIALOG_OPTION_MAP if story_known_texts is None \
+        else story_known_texts
+    story_gate = StoryDialogDismisser(known_texts=known_texts) \
         if story_dialog_dismiss else None
     battle_since = None  # 战斗中等待起点：战斗时间不计入跟踪超时（2026-11-06
                          # 实测黄袍怪多杀单轮任务内含 4~5 场战斗约 4 分钟，吃满
