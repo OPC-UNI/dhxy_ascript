@@ -15,7 +15,7 @@
      已在大唐边境 → 打开小地图点击 (985,384)；不在 → 世界地图点击
      「大唐边境」（shijie_datangbianjing.png）打开该地图小地图 →
      点击 (985,384) → 等待寻路完成。
-   - 仙族：天宫 (185,122) 附近，NPC 武尊神。
+   - 仙族：天宫 (190,122) 附近，NPC 武尊神。
      已在天宫 → 打开小地图点击 (821,358)；不在 → 世界地图点击
      「天宫」（shijie_tiangong.png，用户素材 图1）打开该地图小地图 →
      点击 (821,358) → 等待寻路完成。
@@ -30,8 +30,17 @@
    推导 6 张任务卡（3 列 × 2 行、190×154、列距 201/行距 161）→ 逐卡
    OCR 级别（高级/中级/初级）与标题 → 按优先级 高级 > 中级 > 初级
    + 卡片顺序领取已实现任务（魔族：蛟魔复仇/沙海迷踪/蛟魔探秘；仙族：
-   五庄封印）：在命中卡内匹配接取按钮 mingwang_shanhemingwang_jiequ.png
-   点击领取，确认信号=接取按钮消失或任务进入追踪面板。
+   五庄封印；两族通用：沙都修罗）：在命中卡内匹配接取按钮
+   mingwang_shanhemingwang_jiequ.png 点击领取，确认信号=接取按钮消失
+   或任务进入追踪面板。
+   沙都修罗（高级，2026-11-10 用户流程）：跟踪面板文案包含「根据三张
+   蟠桃园残像所示位置」时触发搜索链——不在蟠桃园则经世界地图点
+   shijie_pantaoyuan.png 打开蟠桃园小地图 → 依次在小地图点 (739,588)
+   →(126,32)、(623,476)→(66,87)、(541,428)→(27,112)、(552,310)
+   →(33,171)，每点到达后先查 NPC 本体模板 mingwang_shaduxiuluo
+   （阈值 0.79，命中直接点模板中心），未命中再 OCR 世界区域找
+   「沙都修罗」文案（必须排除任务追踪面板同名文案）→ 找到点击
+   文案上方 40px；四点均未找到限频重试。
    五庄封印（仙族，2026-11-10 用户规则）：追踪面板出现「火藏之位」
    「木藏之位」两个绿字链接，先点火藏之位；到达目的地（位置连续
    稳定，复用五倍显形镜的坐标稳定判定）后打开背包任务储物格（与
@@ -51,6 +60,10 @@
    沙海迷踪：入口对话「少侠准备好清理地图了吗？」→「我已经准备好了」
    后，armed 窗口内识别「开始」按钮 mingwang_chenjiuditu_kaishi 点击
    进入战斗，战斗结束即任务完成（无需其它操作）。
+   净化水晶丛林：入口对话「糟糕，水晶丛林竟真被混沌缠上了，得赶快
+   净化这些混沌！」→「马上净化水晶丛林上的混沌。」后，armed 窗口内
+   识别「开始」按钮 mingwang_qingxishuijing_kaishi 点击进入战斗，
+   战斗结束即任务完成（同沙海迷踪）。
    蛟魔探秘：入口对话「老头子我最喜欢的，就是在这里钓鱼了~」→
    「请将鱼竿借我一用！」后，armed 窗口内识别窗口标题
    mingwang_diaochushuizhongguaiwu 并复用共享闭环
@@ -123,14 +136,15 @@ RACE_CACHE_KEY = "mingwang_race"
 # 魔族（2026-11-10 实机标定）：大唐边境 (477,180) 附近 NPC 逆天魔——已在
 # 该地图 → 打开小地图点击 (985,384)；不在 → 世界地图点击「大唐边境」
 # 标签 shijie_datangbianjing.png → 小地图点击 (985,384)。
-# 仙族（2026-11-10 用户标定）：天宫 **(185,122) 附近才可领取** NPC 武尊神
+# 仙族（2026-11-10 用户标定）：天宫 **(190,122) 附近才可领取** NPC 武尊神
 # ——已在天宫 → 打开小地图点击 (821,358)；不在 → 世界地图点击「天宫」
 # 标签 shijie_tiangong.png（用户素材 图1，61×29）→ 小地图点击 (821,358)。
 # **两族都必须坐标到达领取点才能点 NPC**（用户 2026-11-10 明确：魔族也
 # 必须在大唐边境 477,180 附近）；远处 NPC 模板可见但点击不生效（仙族
 # 实机 166,136 连点 12 次无对话）——不使用「位置稳定+看到 NPC」兜底。
 CLAIM_POS_TOLERANCE = 7               # 到达容差（寻路落点附近即可）
-CLAIM_NPC_THRESHOLD = 0.75             # NPC 匹配阈值（NPC 待机动画抖动，留余量）
+CLAIM_NPC_THRESHOLD = 0.75             # NPC 默认匹配阈值（NPC 待机动画抖动，留余量；
+                                       # 种族可用 npc_threshold 覆盖，如仙族 0.7）
 CLAIM_NPC_BAND = (200, 120, 1180, 750)  # NPC 搜索条带（世界区域，排除 HUD/追踪面板）
 CLAIM_NPC_FULL_INTERVAL = 3.0          # 条带未命中时的全帧兜底最小间隔（秒）
 CLAIM_POINTS = {
@@ -145,10 +159,14 @@ CLAIM_POINTS = {
     },
     "仙族": {
         "map": "天宫",
-        "target": (185, 122),
+        "target": (190, 122),
         "mini_click": (821, 358),
         "world_icon": "shijie_tiangong.png",        # 世界地图标签（用户 图1，61×29）
         "npc_icon": "mingwang_wuzunshen.png",       # NPC 武尊神（用户 图2，36×58）
+        # 第二造型模板（用户 图3，44×67）：武尊神可能以不同朝向/姿态出现，
+        # **两个模板任一命中即可**（取最高分），阈值都由 npc_threshold 指定。
+        "npc_icon2": "mingwang_wuzunshen2.png",
+        "npc_threshold": 0.7,                      # 武尊神双模板阈值（用户 2026-11-10 指定）
         "npc_name": "武尊神",
         # 图2 是 36×58 的小体型角色模板，实测与同造型玩家角色 0.9888
         # 互匹配（2026-11-10 天宫实机）：只允许世界区域条带内搜索，
@@ -170,6 +188,11 @@ ARRIVE_TIMEOUT = 90                    # 等待寻路完成的超时（秒）
 NPC_CLICK_RETRY_INTERVAL = 4.0         # 点击 NPC 后未出现对话/入口时的重试间隔（秒）
 OPTION_CLICK_RETRY_INTERVAL = 3.0      # 同一选项点击后的最短重试间隔（防连点）
 CLAIM_ENTRY_TIMEOUT = 45               # 整条领取入口链（NPC→选项→入口）超时（秒）
+# 到达领取点后 NPC 模板可能被标准对话框遮挡（2026-11-10 实机：武尊神
+# 最佳匹配仅 0.360，实为对话挡屏）：未找到 NPC 时检查对话框模板，命中
+# 则先点已知对话选项、否则点屏幕中间推进（用户 2026-11-10 规则）；
+# 1s 冷却防连点（多屏对话逐屏推进）。
+CLAIM_DIALOG_ADVANCE_INTERVAL = 1.0
 
 # ---- 山河名望任务栏（2026-11-10 实机标定，大唐边境面板打开时截图标定） ----
 # 任务栏锚点 = 面板顶部「接取」图标（今日已完成行左侧，用户素材 22.png）
@@ -199,11 +222,16 @@ LEVEL_OCR_ALIASES = str.maketrans({"級": "级"})  # OCR 常把「级」读成�
 # 级别为 None = 不限定级别（按标题匹配任意级别卡片）。
 # 仙族「五庄封印」为高级卡片（2026-11-10 用户实机确认）；执行逻辑见
 # 五庄封印状态机（追踪双链接 / 坐标稳定到达 / 任务储物格用唤风符）。
+# 沙都修罗（高级，2026-11-10 用户流程）：追踪文案含「根据三张蟠桃园
+# 残像所示位置」时按四个路点在蟠桃园搜索 NPC 并点击（见下方沙都修罗
+# 执行状态机常量）；其余阶段由通用跟踪 + 战斗线程托管。
 CLAIM_TASKS = (
     {"title": "蛟魔复仇", "level": "高级"},
     {"title": "沙海迷踪", "level": "高级"},
     {"title": "蛟魔探秘", "level": "高级"},
+    {"title": "净化水晶", "level": "高级"},
     {"title": "五庄封印", "level": "高级"},
+    {"title": "沙都修罗", "level": "高级"},
 )
 # ---- 任务执行对话（类似 xuanshu.DIALOG_OPTION_MAP：对话框文案 → 绿色选项）----
 # 逐条按游戏原文维护（用户 2026-11-10 提供）；文案匹配走 _dialog_text_present
@@ -220,7 +248,10 @@ DIALOG_OPTION_MAP = {
     "也许世人早已经忘记了我们，这可是一件好事。":"逆天魔派我过来帮忙。",
     "幽幽的缝隙，混杂着混沌气息的黑水从里面缓缓溢出。":"尝试清理",
     "老头子我最喜欢的，就是在这里钓鱼了~":"请将鱼竿借我一用！",
-    "这该怎么办呢，好担心":"是武尊神遣我过来帮忙的。"
+    "这该怎么办呢，好担心":"是武尊神遣我过来帮忙的。",
+    "大事不妙！蟠桃园内大量的蟠桃树遭":"是武尊神遣我过来帮忙的。",
+    "那个又唠叨又烦人的破龙王，天庭将这么重要的东海元石托付给他，居":"是武尊神遣我过来帮忙的。",
+    "糟糕，水晶丛林竟真被混沌缠上了，得赶快净化这些混沌！":"马上净化水晶丛林上的混沌。"
 }
 # ---- 点击屏幕中间推进的对话（同玄枢轶闻/客栈的跳过对话表机制）----
 # 键 = 对话框文案（_dialog_text_present 模糊匹配：逐行 + 全文拼接，抗
@@ -307,6 +338,20 @@ SHAHAI_START_THRESHOLD = 0.8   # 开始按钮匹配阈值（静态 UI，实测�
 SHAHAI_ARM_TIMEOUT = 20.0      # 点击入口选项后检测「开始」按钮的时限（秒）
 _shahai_armed_at = 0.0         # 入口选项点击时间；>0 且未超时=检测开启
 
+# ---- 净化水晶丛林（混沌）执行入口 ----
+# 入口对话「糟糕，水晶丛林竟真被混沌缠上了，得赶快净化这些混沌！」
+# →「马上净化水晶丛林上的混沌。」（在 DIALOG_OPTION_MAP 中）：点击选项
+# 后识别「开始」按钮 mingwang_qingxishuijing_kaishi.png（用户 图4，
+# 118×24）并点击，无需其它操作，等待进入战斗，战斗结束即任务完成
+# （用户 2026-11-10 规则，同沙海迷踪模子）。模板与沙海「开始」按钮为
+# 同款（互匹配 0.87~0.91），但 armed 窗口由各自入口对话触发、互斥。
+QINGXI_DIALOG_TEXT = "糟糕，水晶丛林竟真被混沌缠上了，得赶快净化这些混沌！"
+QINGXI_ARM_OPTION = "马上净化水晶丛林上的混沌。"
+QINGXI_START_ICON = "mingwang_qingxishuijing_kaishi.png"
+QINGXI_START_THRESHOLD = 0.8   # 开始按钮匹配阈值（静态 UI；非目标探针帧 ≤0.70）
+QINGXI_ARM_TIMEOUT = 20.0      # 点击入口选项后检测「开始」按钮的时限（秒）
+_qingxi_armed_at = 0.0         # 入口选项点击时间；>0 且未超时=检测开启
+
 # ---- 蛟魔探秘（钓鱼小游戏，与破除封印共用 pochufengyin 闭环）----
 # 入口选项「请将鱼竿借我一用！」点击后 armed 检测窗口标题
 # mingwang_diaochushuizhongguaiwu.png（用户素材 25.png，277x24）；窗口
@@ -323,6 +368,57 @@ MINGWANG_DIAOYU_ARM_TIMEOUT = _pochu_minigame.POCHU_ARM_TIMEOUT      # armed 时
 MINGWANG_DIAOYU_CHECK_INTERVAL = _pochu_minigame.POCHU_CHECK_INTERVAL  # 检测限频（秒）
 _mingwang_diaoyu_armed_at = 0.0   # 入口选项点击时间；>0 且未超时=检测开启
 _mingwang_diaoyu_last_check = 0.0 # 上次窗口检测时间（限频）
+
+# ---- 沙都修罗（高级）：追踪文案触发 → 蟠桃园四路点找 NPC → 点名字上方 ----
+# 用户 2026-11-10 流程：跟踪面板内容包含「根据三张蟠桃园残像所示位置」时：
+# 1. 不在蟠桃园 → 打开世界地图点「蟠桃园」标签 shijie_pantaoyuan.png
+#    （用户 图1，72×28）打开蟠桃园小地图；
+# 2. 小地图点击 (739,588) → 自动寻路到 蟠桃园[126,32] 附近 →
+#    **先查 NPC 本体模板 mingwang_shaduxiuluo（阈值 0.79，命中直接点
+#    模板中心）**，未命中再 OCR「沙都修罗」；未找到依次：
+#    (623,476)→[66,87]、(541,428)→[27,112]、(552,310)→[33,171]；
+# 3. OCR 找到后点击「沙都修罗」文案**上方 40px**（游戏 NPC 名字渲染在
+#    角色下方，名字上方即角色本体，用户标定）。
+# **OCR 必须排除任务追踪面板里的同名文案**（用户明确）：追踪面板在
+# x<400（task_tracker.PANEL_MAX_X），世界区条带从 x=400 起。
+# 四路点均未找到 → 限频重试整条搜索链（NPC 可能在移动）；点击成功后
+# 冷却一段时间让对话/战斗接管，防同一次寻路重复点击 NPC。
+SHADU_KEYWORD = "根据三张蟠桃园残像所示位置"
+SHADU_KEYWORD_SHORT = "蟠桃园残像"      # OCR 漏读前缀/尾字时的兜底触发词
+SHADU_MAP = "蟠桃园"
+SHADU_WORLD_ICON = "shijie_pantaoyuan.png"  # 世界地图「蟠桃园」标签（用户 图1，72×28）
+# 模板校准（2026-11-10 实机世界地图帧，logs/_world_map_probe.png）：目标帧
+# 0.9999 @(430,239)；天宫/主城帧 ≤0.28——0.8 阈值（map.find_template 默认）
+# 干净分开。
+SHADU_NPC_TEXT = "沙都修罗"
+# NPC 名 OCR 别名（游戏字体下「罗/羅」偶发繁体输出；用户文案为简体原文）
+SHADU_NPC_TEXTS = ("沙都修罗", "沙都修羅")
+# NPC 本体模板（用户 图2，62×30）：**先模板后 OCR**——扫描时模板命中
+# 直接点击匹配中心；未命中才 OCR「沙都修罗」文案并按文案上方 40px 点击
+# （用户 2026-11-10 规则，阈值 0.79 用户指定）。非目标帧交叉验证：现有
+# 实机探针帧最高 0.52，0.79 阈值有约 0.27 余量；真实 NPC 帧待实机确认。
+SHADU_NPC_ICON = "mingwang_shaduxiuluo.png"
+SHADU_NPC_THRESHOLD = 0.75
+SHADU_NPC_CLICK_OFFSET = 40            # 点击点 = 文案框中心正上方 40px
+SHADU_NPC_BAND = (400, 100, 1200, 760)  # 世界区域 OCR 条带（x<400=追踪面板，排除）
+SHADU_OCR_MIN_SCORE = 0.55             # OCR 行置信度下限（同各任务模块）
+SHADU_WAYPOINTS = (                    # (小地图点击点, 目标地图坐标)
+    ((739, 588), (126, 32)),
+    ((623, 476), (66, 87)),
+    ((541, 428), (27, 112)),
+    ((552, 310), (33, 171)),
+)
+SHADU_POS_TOLERANCE = 10               # 到达搜索点容差（附近即可）
+SHADU_ARRIVE_TIMEOUT = 30              # 单个搜索点寻路超时（秒）
+SHADU_STUCK_POLLS = 8                  # 位置连续不变轮询数 → 寻路停滞（约 12s）
+SHADU_NPC_SCAN_TIMEOUT = 5.0           # 到达后等待 NPC 文案出现的时限（秒）
+SHADU_NPC_SCAN_INTERVAL = 0.4          # NPC 扫描间隔（秒）
+SHADU_RETRY_AFTER = 5.0                # 四路点全失败后的重试间隔（秒）
+SHADU_CLICK_COOLDOWN = 20.0            # 点击 NPC 后冷却（对话/战斗接管，防重复点）
+SHADU_ABSENT_RESET = 5                 # 触发词连续缺失轮询数 → 状态复位
+_shadu_next_try_at = 0.0               # 下次允许执行搜索链的时间（全链失败限频）
+_shadu_click_until = 0.0               # 点击 NPC 后的冷却截止时间
+_shadu_absent = 0                      # 触发词连续缺失轮询数
 
 
 def _bgr_frame(img):
@@ -560,28 +656,53 @@ def _at_claim_point(pos, claim):
             and abs(y - ty) <= CLAIM_POS_TOLERANCE)
 
 
+def _claim_npc_icons(claim):
+    """领取 NPC 模板列表（主模板 + 可选的第二造型模板）。"""
+    icons = [claim["npc_icon"]]
+    second = claim.get("npc_icon2")
+    if second:
+        icons.append(second)
+    return icons
+
+
+def _claim_npc_threshold(claim):
+    """领取 NPC 匹配阈值（种族配置优先，默认 CLAIM_NPC_THRESHOLD）。"""
+    return claim.get("npc_threshold", CLAIM_NPC_THRESHOLD)
+
+
 def _match_npc(bgr, claim, full_check_at):
     """单帧查找领取 NPC：条带优先，全帧兜底限频（按种族开关）。
 
-    返回 (点 或 None, 最佳分数, 更新后的全帧兜底时间戳)。世界区域
-    条带未命中时按 CLAIM_NPC_FULL_INTERVAL 限频做全帧兜底（布局漂移
-    保险，非目标场景不每轮付全帧成本）；claim["npc_full_fallback"]
-    为 False 的种族（仙族：NPC 模板与同造型玩家互匹配）不做全帧兜底，
-    防点到画面边缘的玩家角色。
+    支持多模板（npc_icon + npc_icon2）：逐模板取最高分，**任一模板
+    达到阈值即可**（武尊神两种造型，用户 2026-11-10）。返回
+    (点 或 None, 最佳分数, 更新后的全帧兜底时间戳)。世界区域条带未
+    命中时按 CLAIM_NPC_FULL_INTERVAL 限频做全帧兜底（布局漂移保险，
+    非目标场景不每轮付全帧成本）；claim["npc_full_fallback"] 为 False
+    的种族（仙族：NPC 模板与同造型玩家互匹配）不做全帧兜底，防点到
+    画面边缘的玩家角色。
     """
-    score, pt = game_map.best_match_np(bgr, claim["npc_icon"],
-                                       region=CLAIM_NPC_BAND)
-    if score >= CLAIM_NPC_THRESHOLD:
+    threshold = _claim_npc_threshold(claim)
+    icons = _claim_npc_icons(claim)
+    score, pt = 0.0, None
+    for icon in icons:
+        score2, pt2 = game_map.best_match_np(bgr, icon,
+                                             region=CLAIM_NPC_BAND)
+        if score2 > score:
+            score, pt = score2, pt2
+    if score >= threshold:
         return pt, score, full_check_at
     if not claim.get("npc_full_fallback", True):
         return None, score, full_check_at
     now = time.time()
     if now - full_check_at < CLAIM_NPC_FULL_INTERVAL:
         return None, score, full_check_at
-    score2, pt2 = game_map.best_match_np(bgr, claim["npc_icon"])
-    if score2 >= CLAIM_NPC_THRESHOLD:
-        return pt2, score2, now
-    return None, max(score, score2), now
+    for icon in icons:
+        score2, pt2 = game_map.best_match_np(bgr, icon)
+        if score2 > score:
+            score, pt = score2, pt2
+    if score >= threshold:
+        return pt, score, now
+    return None, score, now
 
 
 def wait_arrive(win, claim, timeout=ARRIVE_TIMEOUT):
@@ -696,6 +817,8 @@ def _claim_and_open_panel(win, claim):
 
     每轮询只截一帧（战斗判定/入口匹配/对话区 OCR/NPC 匹配同帧）；
     对话框区域直接 OCR，不使用对话框模板门控（用户要求）。
+    未找到 NPC 时检查标准对话框（模板分）：命中则先点已知对话选项、
+    否则点屏幕中间推进（对话框会遮挡 NPC 模板，实测匹配仅 0.360）。
     返回 (是否成功, 描述)。
     """
     deadline = time.time() + CLAIM_ENTRY_TIMEOUT
@@ -704,6 +827,7 @@ def _claim_and_open_panel(win, claim):
     last_score = 0.0
     full_check_at = 0.0
     npc_logged_at = 0.0
+    dialog_advance_at = 0.0
     map_name = claim["map"]
     npc_name = claim["npc_name"]
     while time.time() < deadline:
@@ -765,10 +889,23 @@ def _claim_and_open_panel(win, claim):
                 npc_click_at = now
                 log(f"[名望] 已点击{npc_name} @({pt[0]},{pt[1]})"
                     f"（匹配 {score:.3f}）", "SYS")
+            elif now - dialog_advance_at >= CLAIM_DIALOG_ADVANCE_INTERVAL \
+                    and dialog_frame_score(bgr) >= DIALOG_FRAME_THRESHOLD:
+                # 未找到 NPC 且标准对话框在场：对话框遮挡 NPC 模板（实测
+                # 0.360）。已知对话选项优先（选项对话点屏不会关闭），
+                # 否则点屏幕中间推进；1s 冷却，逐屏推进多屏对话。
+                dialog_advance_at = now
+                if _click_known_dialog_option(win, items, img_np):
+                    log(f"[名望] 未找到{npc_name}，检测到对话框，"
+                        f"已点击已知对话选项", "SYS")
+                else:
+                    log(f"[名望] 未找到{npc_name}（最佳匹配 {last_score:.3f}），"
+                        f"检测到对话框，点击屏幕中间推进", "SYS")
+                    _click_screen_center(win, times=1, prefix="名望")
             elif now - npc_logged_at >= 10.0:
                 npc_logged_at = now
                 log(f"[名望] 画面中未找到{npc_name}（最佳匹配 {last_score:.3f}，"
-                    f"阈值 {CLAIM_NPC_THRESHOLD}），继续等待", "INFO")
+                    f"阈值 {_claim_npc_threshold(claim)}），继续等待", "INFO")
         time.sleep(0.4)
     return False, (f"领取入口链超时（{CLAIM_ENTRY_TIMEOUT}s，{npc_name}最佳匹配 "
                    f"{last_score:.3f}）")
@@ -959,7 +1096,8 @@ def _task_list_desc():
 def claim_panel_task(win):
     """在山河名望任务栏中识别并领取第一个可用的已实现任务。
 
-    已实现：高级「蛟魔复仇」「沙海迷踪」（CLAIM_TASKS）。流程：扫描
+    已实现：高级「蛟魔复仇」「沙海迷踪」「蛟魔探秘」「五庄封印」
+    「沙都修罗」（CLAIM_TASKS）。流程：扫描
     6 卡（级别+标题）→ 按 高级>中级>初级 + 卡片顺序选定目标（未找到
     时 1s 后复扫一次，防 OCR 瞬态）→ 在该卡内匹配接取按钮并点击 →
     确认（按钮消失/任务进追踪面板）。
@@ -1066,6 +1204,31 @@ def _arm_shahai_start():
     _shahai_armed_at = time.time()
 
 
+def _click_armed_start(win, armed_at, icon, threshold, timeout, label):
+    """armed 窗口内检测「开始」按钮，出现即点击（进入战斗）。
+
+    共用实现（沙海迷踪 / 净化水晶丛林）：窗口超时自动关闭（战斗由
+    follow_task 等待）；未 armed / 限频路径零成本。返回
+    (是否已点击, 更新后的 armed 时间戳)。
+    """
+    if armed_at <= 0:
+        return False, armed_at
+    if time.time() - armed_at > timeout:
+        log(f"[名望] {label}「开始」按钮检测窗口超时（未出现），"
+            f"由任务追踪变化兜底", "WARN")
+        return False, 0.0
+    img = win.capture(force_activate=False)
+    if img is None:
+        return False, armed_at
+    score, pt = game_map.best_match_np(_bgr_frame(img), icon)
+    if score < threshold:
+        return False, armed_at
+    human_click(win, pt[0], pt[1])
+    log(f"[名望] {label}：已点击「开始」@({pt[0]},{pt[1]})"
+        f"（匹配 {score:.3f}），等待进入战斗", "SYS")
+    return True, 0.0
+
+
 def _maybe_click_shahai_start(win):
     """armed 窗口内检测沙海迷踪「开始」按钮，出现即点击（进入战斗）。
 
@@ -1075,24 +1238,31 @@ def _maybe_click_shahai_start(win):
     返回是否已点击。
     """
     global _shahai_armed_at
-    if _shahai_armed_at <= 0:
-        return False
-    if time.time() - _shahai_armed_at > SHAHAI_ARM_TIMEOUT:
-        _shahai_armed_at = 0.0
-        log("[名望] 沙海迷踪「开始」按钮检测窗口超时（未出现），"
-            "由任务追踪变化兜底", "WARN")
-        return False
-    img = win.capture(force_activate=False)
-    if img is None:
-        return False
-    score, pt = game_map.best_match_np(_bgr_frame(img), SHAHAI_START_ICON)
-    if score < SHAHAI_START_THRESHOLD:
-        return False
-    human_click(win, pt[0], pt[1])
-    _shahai_armed_at = 0.0
-    log(f"[名望] 沙海迷踪：已点击「开始」@({pt[0]},{pt[1]})"
-        f"（匹配 {score:.3f}），等待进入战斗", "SYS")
-    return True
+    clicked, _shahai_armed_at = _click_armed_start(
+        win, _shahai_armed_at, SHAHAI_START_ICON, SHAHAI_START_THRESHOLD,
+        SHAHAI_ARM_TIMEOUT, "沙海迷踪")
+    return clicked
+
+
+def _arm_qingxi_start():
+    """arm 净化水晶丛林「开始」按钮检测窗口（入口选项点击成功后调用）。"""
+    global _qingxi_armed_at
+    _qingxi_armed_at = time.time()
+
+
+def _maybe_click_qingxi_start(win):
+    """armed 窗口内检测净化水晶丛林「开始」按钮，出现即点击（进入战斗）。
+
+    用户 2026-11-10 规则：入口对话选「马上净化水晶丛林上的混沌。」后
+    识别 mingwang_qingxishuijing_kaishi 并点击，无需其它操作，等待进入
+    战斗，战斗结束即任务完成（同沙海迷踪）。窗口超时自动关闭。
+    返回是否已点击。
+    """
+    global _qingxi_armed_at
+    clicked, _qingxi_armed_at = _click_armed_start(
+        win, _qingxi_armed_at, QINGXI_START_ICON, QINGXI_START_THRESHOLD,
+        QINGXI_ARM_TIMEOUT, "净化水晶丛林")
+    return clicked
 
 
 def _arm_mingwang_diaoyu_check(opt):
@@ -1144,6 +1314,189 @@ def _mingwang_diaoyu_window_check(win):
         _mingwang_diaoyu_armed_at = 0.0
     log(f"[名望] {info}", "SYS" if ok else "WARN")
     return True
+
+
+# ---- 沙都修罗执行（追踪文案触发 → 蟠桃园四路点找 NPC → 点名字上方）----
+def _reset_shadu_state():
+    """沙都修罗搜索状态复位（触发词消失/新任务防残留）。"""
+    global _shadu_next_try_at, _shadu_click_until, _shadu_absent
+    _shadu_next_try_at = 0.0
+    _shadu_click_until = 0.0
+    _shadu_absent = 0
+
+
+def _shadu_trigger(sig):
+    """追踪面板文案是否触发沙都修罗搜索（精确 + 短词模糊兜底）。
+
+    短词「蟠桃园残像」模糊阈值 0.8：5 字中 1 字 OCR 误读（如
+    「残像」→「残相」）即 4/5=0.8，须能触发；无关追踪文案不含
+    「蟠桃园残…」形态，误触发风险低。
+    """
+    if SHADU_KEYWORD in sig or SHADU_KEYWORD_SHORT in sig:
+        return True
+    return _fuzzy_contains(sig, SHADU_KEYWORD_SHORT, threshold=0.8)
+
+
+def _shadu_npc_point(items):
+    """从世界区 OCR 行定位「沙都修罗」，返回文案上方点击点或 None。
+
+    排除追踪面板同名文案（x < SHADU_NPC_BAND[0]）——用户 2026-11-10
+    明确「注意不是任务追踪中的文案」。点击点取文案框中心正上方
+    SHADU_NPC_CLICK_OFFSET 像素（游戏 NPC 名字渲染在角色下方，名字
+    上方即角色本体，用户标定）。
+    """
+    for txt, rect, score in items:
+        if score < SHADU_OCR_MIN_SCORE:
+            continue
+        if rect[0] < SHADU_NPC_BAND[0]:
+            continue
+        text = norm_text(txt)
+        if not any(name in text for name in SHADU_NPC_TEXTS) \
+                and not _fuzzy_contains(text, SHADU_NPC_TEXT, threshold=0.85):
+            continue
+        x = (rect[0] + rect[2]) // 2
+        y = rect[1] - SHADU_NPC_CLICK_OFFSET
+        if y <= 0:
+            continue
+        return int(x), int(y)
+    return None
+
+
+def _shadu_wait_arrive(win, target, timeout=SHADU_ARRIVE_TIMEOUT):
+    """等待寻路到达搜索点（坐标进入容差）。每轮只截一帧并复用战斗判定。"""
+    deadline = time.time() + timeout
+    last = None
+    unchanged = 0
+    while time.time() < deadline:
+        img = win.capture(force_activate=False)
+        if img is None:
+            time.sleep(1.0)
+            continue
+        if is_in_battle_frame(_bgr_frame(img)):
+            return False, "战斗中，暂停搜索"
+        pos = game_map.read_map_position(win, img=img)
+        if pos is not None:
+            if (pos[0].strip() == SHADU_MAP
+                    and abs(pos[1] - target[0]) <= SHADU_POS_TOLERANCE
+                    and abs(pos[2] - target[1]) <= SHADU_POS_TOLERANCE):
+                return True, f"已到达{SHADU_MAP}[{target[0]},{target[1]}]附近"
+            if pos == last:
+                unchanged += 1
+            else:
+                unchanged = 0
+            last = pos
+            if unchanged >= SHADU_STUCK_POLLS:
+                return False, (f"位置无变化（{pos[0]}[{pos[1]},{pos[2]}]），"
+                               f"寻路停滞")
+        time.sleep(1.5)
+    return False, f"等待到达超时（{timeout}s）"
+
+
+def _shadu_scan_npc(win, timeout=SHADU_NPC_SCAN_TIMEOUT):
+    """到达搜索点后限时扫描「沙都修罗」NPC，返回 (点击点或 None, 描述)。
+
+    用户 2026-11-10 规则：**先查 NPC 本体模板** mingwang_shaduxiuluo
+    （阈值 0.79），命中直接点匹配中心；模板未命中才 OCR「沙都修罗」
+    文案（排除任务追踪面板同名文案）并点文案上方 40px。每轮询只截一帧，
+    模板匹配吃 BGR、OCR 吃 PIL 帧。
+    """
+    deadline = time.time() + timeout
+    lines = []
+    score = 0.0
+    while time.time() < deadline:
+        img = win.capture(force_activate=False)
+        if img is None:
+            time.sleep(SHADU_NPC_SCAN_INTERVAL)
+            continue
+        score, tpt = game_map.best_match_np(_bgr_frame(img), SHADU_NPC_ICON,
+                                            region=SHADU_NPC_BAND)
+        if score >= SHADU_NPC_THRESHOLD:
+            return (int(tpt[0]), int(tpt[1])), \
+                f"模板命中「{SHADU_NPC_TEXT}」（匹配 {score:.3f}）"
+        items, _ = game_map.ocr_region(img, SHADU_NPC_BAND)
+        pt = _shadu_npc_point(items)
+        if pt is not None:
+            return pt, f"文案找到「{SHADU_NPC_TEXT}」"
+        lines = [norm_text(t) for t, _r, s in items
+                 if s >= SHADU_OCR_MIN_SCORE]
+        time.sleep(SHADU_NPC_SCAN_INTERVAL)
+    return None, (f"模板/文案均未找到「{SHADU_NPC_TEXT}」"
+                  f"（模板最佳 {score:.3f}，OCR 行 {lines[:8] or '(无)'}）")
+
+
+def _shadu_search_npc(win):
+    """按用户标定的四个路点依次寻找并点击沙都修罗，返回 (是否已点击, 描述)。"""
+    close_scene_panels(win, "名望")
+    pos = game_map.read_map_position(win)
+    if pos is None or pos[0].strip() != SHADU_MAP:
+        loc = "识别失败" if pos is None else f"{pos[0]}[{pos[1]},{pos[2]}]"
+        ok, info = game_map.open_mini_map_city(win, SHADU_WORLD_ICON, SHADU_MAP)
+        if not ok:
+            return False, f"前往{SHADU_MAP}失败（当前 {loc}）：{info}"
+        log(f"[名望] 沙都修罗：不在{SHADU_MAP}（{loc}），已打开"
+            f"{SHADU_MAP}小地图", "SYS")
+    for idx, (mini_click, target) in enumerate(SHADU_WAYPOINTS, 1):
+        if not game_map.is_mini_map_open(win):
+            ok, info = game_map.open_mini_map(win)
+            if not ok:
+                return False, f"打开小地图失败：{info}"
+        human_click(win, mini_click[0], mini_click[1])
+        log(f"[名望] 沙都修罗：点击第 {idx}/{len(SHADU_WAYPOINTS)} 个搜索点 "
+            f"{mini_click}，前往{SHADU_MAP}[{target[0]},{target[1]}]", "SYS")
+        time.sleep(1.0)  # 等自动寻路启动
+        close_scene_panels(win, "名望")
+        arrived, ainfo = _shadu_wait_arrive(win, target)
+        if "战斗中" in ainfo:
+            return False, ainfo
+        pt, ninfo = _shadu_scan_npc(win)
+        if pt is None:
+            log(f"[名望] 沙都修罗：第 {idx} 个搜索点{ainfo}，{ninfo}，"
+                f"继续下一个", "INFO" if arrived else "WARN")
+            continue
+        human_click(win, pt[0], pt[1])
+        return True, (f"已点击{SHADU_NPC_TEXT}上方 @({pt[0]},{pt[1]})"
+                      f"（第 {idx} 个搜索点，{ainfo}，{ninfo}）")
+    return False, (f"{len(SHADU_WAYPOINTS)} 个搜索点均未找到"
+                   f"「{SHADU_NPC_TEXT}」")
+
+
+def _handle_shadu_xiuluo(win, items, img_np):
+    """沙都修罗搜索状态机（follow extras 通道，每轮询一次）。
+
+    追踪面板文案含「根据三张蟠桃园残像所示位置」（或短词「蟠桃园残像」）
+    时执行搜索链：不在蟠桃园先经世界地图进入 → 四个路点依次寻路 +
+    世界区域 OCR 找 NPC（排除追踪面板同名文案）→ 找到点名字上方 40px。
+    全链失败限频重试；点击成功后冷却让对话/战斗接管，防重复点 NPC；
+    对话框在场时暂停搜索（先由对话表/剧情兜底推进，防误点 NPC）。
+    触发词连续缺失 SHADU_ABSENT_RESET 轮询复位状态。
+    返回是否已处理（点击了 NPC）。
+    """
+    global _shadu_next_try_at, _shadu_click_until, _shadu_absent
+    sig = _seal_sig(items)
+    if not _shadu_trigger(sig):
+        _shadu_absent += 1
+        if _shadu_absent >= SHADU_ABSENT_RESET:
+            _reset_shadu_state()
+        return False
+    _shadu_absent = 0
+    now = time.time()
+    if now < _shadu_next_try_at or now < _shadu_click_until:
+        return False
+    # 对话框在场先让对话处理（选项表/剧情兜底推进后再搜索，防对话期间
+    # 走到 NPC 处误点）。此检查仅在冷却结束后的搜索尝试时执行（≤1 次/5s），
+    # 不在每轮询热路径上。
+    img = win.capture(force_activate=False)
+    if img is not None and dialog_frame_score(_bgr_frame(img)) \
+            >= DIALOG_FRAME_THRESHOLD:
+        return False
+    ok, info = _shadu_search_npc(win)
+    if ok:
+        _shadu_click_until = time.time() + SHADU_CLICK_COOLDOWN
+        log(f"[名望] 沙都修罗：{info}", "SYS")
+        return True
+    _shadu_next_try_at = time.time() + SHADU_RETRY_AFTER
+    log(f"[名望] 沙都修罗：{info}，{SHADU_RETRY_AFTER:.0f}s 后重试", "WARN")
+    return False
 
 
 # ---- 五庄封印执行（追踪双链接 → 坐标稳定到达 → 任务储物格用唤风符）----
@@ -1672,7 +2025,7 @@ def _handle_wuzhuang_seal(win, items, img_np):
 
 
 def _click_known_dialog_option(win, items, img_np):
-    """DIALOG_OPTION_MAP 命中 → 点对应绿字（含沙海/钓鱼 arm 副作用）。
+    """DIALOG_OPTION_MAP 命中 → 点对应绿字（含沙海/净化/钓鱼 arm 副作用）。
 
     供 follow 的 extras 通道与领取后对话框处理共用（领取后「这该
     怎么办呢，好担心」→「是武尊神遣我过来帮忙的。」须点选项，点屏幕
@@ -1689,6 +2042,8 @@ def _click_known_dialog_option(win, items, img_np):
                 log(f"[名望] 对话「{dtxt}」→ 已点击「{opt}」", "SYS")
                 if dtxt == SHAHAI_DIALOG_TEXT:
                     _arm_shahai_start()
+                if dtxt == QINGXI_DIALOG_TEXT:
+                    _arm_qingxi_start()
                 _arm_mingwang_diaoyu_check(opt)
                 return True
     return False
@@ -1699,16 +2054,22 @@ def _handle_dialog_options(win, items, img_np):
 
     类似 xuanshu 内层轮询的 DIALOG_OPTION_MAP 处理，交由共享 follow_task
     的 extras 通道调用（优先级高于引擎内置表与剧情对话兜底）。
-    沙海迷踪入口选项点击成功后 arm「开始」按钮检测窗口；蛟魔探秘钓鱼
-    入口选项点击成功后 arm 小游戏窗口检测（与玄枢钓鱼同款闭环）。
+    沙海迷踪/净化水晶丛林入口选项点击成功后 arm 各自「开始」按钮检测
+    窗口；蛟魔探秘钓鱼入口选项点击成功后 arm 小游戏窗口检测（与玄枢
+    钓鱼同款闭环）。
     表值支持候选选项元组：按顺序逐个尝试，点到哪个算哪个。
     五庄封印执行状态机（追踪双链接/坐标稳定到达/任务储物格用唤风符）
-    在最前面处理；其余任务无「五庄」追踪文案时零操作。
+    与沙都修罗搜索状态机（追踪文案触发 → 蟠桃园四路点找 NPC）在最前面
+    处理；其余任务无对应追踪文案时零操作。
     返回是否已处理。
     """
     if _handle_wuzhuang_seal(win, items, img_np):
         return True
+    if _handle_shadu_xiuluo(win, items, img_np):
+        return True
     if _maybe_click_shahai_start(win):
+        return True
+    if _maybe_click_qingxi_start(win):
         return True
     if _mingwang_diaoyu_window_check(win):
         return True
@@ -1897,7 +2258,7 @@ def verify_claim_task_flow(win):
     领取后继续：关闭领取对话框（对话框门控 + 点屏幕中间）→ 校验任务
     追踪「山河名望」→ follow_task 跟踪至任务完成（含任务对话表）。
     领取目标：按 CLAIM_TASKS 当前种族可用的已实现任务（高级优先，
-    魔族「蛟魔复仇」/仙族「五庄封印」等）。
+    魔族「蛟魔复仇」/仙族「五庄封印」/两族「沙都修罗」等）。
     返回 (是否成功, 描述)；成功=follow_task 跟踪至任务完成。
     """
     if is_in_battle(win):
@@ -1961,7 +2322,7 @@ def run_loop(win, cycle_interval=3.0):
 
     结束条件（满足其一即返回结束原因，同玄枢轶闻）：
     1. 完成任务次数达到设置的次数上限（通用设置-任务次数）
-    2. 任务栏不存在当前已实现的任务（如「蛟魔复仇」「五庄封印」）
+    2. 任务栏不存在当前已实现的任务（如「蛟魔复仇」「五庄封印」「沙都修罗」）
     3. 种族不在已实现领取点内（当前实现魔族/仙族）
 
     启动时追踪面板已有「山河名望」→ 跳过种族判定与领取，直接续跑跟踪

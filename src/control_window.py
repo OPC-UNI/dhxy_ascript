@@ -2539,8 +2539,8 @@ class ControlWindow(WebWindow):
     def verify_mingwang_claim_task(self):
         """诊断页-名望-测试领取名望任务按钮：面板已打开则直接扫描任务栏
         识别并点击接取；未打开则先走第一阶段链路（种族判定 → 领取点 →
-        打开面板）再领取。已实现高级任务「蛟魔复仇」「沙海迷踪」，按
-        级别优先级 + 卡片顺序选第一个可用的。
+        打开面板）再领取。已实现高级任务「蛟魔复仇」「沙海迷踪」
+        「沙都修罗」等，按级别优先级 + 卡片顺序选第一个可用的。
         """
         if self._tm.is_running():
             return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
@@ -2556,13 +2556,13 @@ class ControlWindow(WebWindow):
                          args=(win,), daemon=True,
                          name="mingwang-claim-task-verify").start()
         return {"status": "success",
-                "msg": "验证已开始：扫描山河名望任务栏 → 识别已实现任务（蛟魔复仇/沙海迷踪）→ 点击接取 → 跟踪至完成"}
+                "msg": "验证已开始：扫描山河名望任务栏 → 识别已实现任务（蛟魔复仇/沙海迷踪/沙都修罗等）→ 点击接取 → 跟踪至完成"}
 
     def _run_mingwang_claim_task_verify(self, win):
         """名望任务领取验证线程体：真实点击接取，结果回推页面与日志窗。"""
         from . import mingwang  # 延迟导入：mingwang 反向导入本模块（避免循环）
         try:
-            self.add_logs(["[验证] 开始测试领取名望任务（识别任务栏 → 已实现任务（蛟魔复仇/沙海迷踪）→ 点击接取 → 跟踪至完成）..."])
+            self.add_logs(["[验证] 开始测试领取名望任务（识别任务栏 → 已实现任务（蛟魔复仇/沙海迷踪/沙都修罗等）→ 点击接取 → 跟踪至完成）..."])
             ok, info = mingwang.verify_claim_task_flow(win)
         except Exception as e:
             ok, info = False, f"验证异常: {e}"

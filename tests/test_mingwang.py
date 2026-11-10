@@ -27,9 +27,16 @@ TEMPLATES = (
     (mingwang.CLAIM_POINTS["魔族"]["world_icon"], 0.8),
     (mingwang.CLAIM_POINTS["仙族"]["world_icon"], 0.8),
     (mingwang.CLAIM_POINTS["魔族"]["npc_icon"], mingwang.CLAIM_NPC_THRESHOLD),
-    (mingwang.CLAIM_POINTS["仙族"]["npc_icon"], mingwang.CLAIM_NPC_THRESHOLD),
+    (mingwang.CLAIM_POINTS["仙族"]["npc_icon"],
+     mingwang.CLAIM_POINTS["仙族"]["npc_threshold"]),
+    (mingwang.CLAIM_POINTS["仙族"]["npc_icon2"],
+     mingwang.CLAIM_POINTS["仙族"]["npc_threshold"]),
     (mingwang.CLAIM_SHANHE_ICON, mingwang.CLAIM_SHANHE_THRESHOLD),
     (mingwang.SEAL_ITEM_ICON, mingwang.SEAL_ITEM_THRESHOLD),
+    (mingwang.SHADU_WORLD_ICON, 0.8),  # 世界地图标签（open_mini_map_city 默认 0.8）
+    (mingwang.SHADU_NPC_ICON, mingwang.SHADU_NPC_THRESHOLD),
+    (mingwang.SHAHAI_START_ICON, mingwang.SHAHAI_START_THRESHOLD),
+    (mingwang.QINGXI_START_ICON, mingwang.QINGXI_START_THRESHOLD),
 )
 
 MOZU_ITEMS = [
@@ -138,8 +145,14 @@ def test_claim_points_config():
         assert len(claim["mini_click"]) == 2
         assert game_map.template_size(claim["world_icon"]) is not None, race
         assert game_map.template_size(claim["npc_icon"]) is not None, race
+        if claim.get("npc_icon2"):
+            assert game_map.template_size(claim["npc_icon2"]) is not None, race
     assert mingwang.CLAIM_POINTS["仙族"]["map"] == "天宫"
-    assert mingwang.CLAIM_POINTS["仙族"]["target"] == (185, 122)
+    assert mingwang.CLAIM_POINTS["仙族"]["target"] == (190, 122)
+    # 武尊神双造型模板阈值（用户实机校准 0.7）；魔族沿用默认
+    assert mingwang.CLAIM_POINTS["仙族"]["npc_threshold"] == 0.7
+    assert mingwang._claim_npc_threshold(mingwang.CLAIM_POINTS["魔族"]) \
+        == mingwang.CLAIM_NPC_THRESHOLD
     # 小地图点击位置为用户实机微调值（2026-11-10：800→794→821,358）
     assert mingwang.CLAIM_POINTS["仙族"]["mini_click"] == (821, 358)
     # 两族都必须坐标到达领取点（NPC 模板可见不算到达）
@@ -166,14 +179,14 @@ def test_at_claim_point():
     assert not mingwang._at_claim_point(("大唐边境", 460, 180), mozu)
     assert not mingwang._at_claim_point(("长安", 477, 180), mozu)
     assert not mingwang._at_claim_point(None, mozu)
-    # 仙族：天宫 185,122（±7 容差）
-    assert mingwang._at_claim_point(("天宫", 185, 120), xian)  # 2px 差在容差内
-    assert mingwang._at_claim_point(("天宫", 180, 129), xian)  # dx5 dy7
-    assert not mingwang._at_claim_point(("天宫", 180, 130), xian)  # dy8
+    # 仙族：天宫 190,122（±7 容差）
+    assert mingwang._at_claim_point(("天宫", 190, 120), xian)  # 2px 差在容差内
+    assert mingwang._at_claim_point(("天宫", 185, 129), xian)  # dx5 dy7
+    assert not mingwang._at_claim_point(("天宫", 190, 130), xian)  # dy8
     assert not mingwang._at_claim_point(("天宫", 170, 120), xian)
     # 同坐标不同地图不互认
     assert not mingwang._at_claim_point(("大唐边境", 477, 180), xian)
-    assert not mingwang._at_claim_point(("天宫", 185, 120), mozu)
+    assert not mingwang._at_claim_point(("天宫", 190, 120), mozu)
 
 
 def test_find_attr_rect_skips_button_area():
@@ -198,6 +211,19 @@ def test_match_npc_band_and_full_fallback():
         pt, score, _full = mingwang._match_npc(_noise_bgr(seed=7),
                                                claim, 0.0)
         assert pt is None and score < mingwang.CLAIM_NPC_THRESHOLD, race
+
+
+def test_match_npc_second_template():
+    """武尊神第二造型模板：两个模板任一命中即可（阈值 0.79）。"""
+    claim = mingwang.CLAIM_POINTS["仙族"]
+    assert mingwang._claim_npc_icons(claim) == [
+        claim["npc_icon"], claim["npc_icon2"]]
+    frame = _paste_bgr(claim["npc_icon2"], x=450, y=300)
+    pt, score, _full = mingwang._match_npc(frame, claim, 0.0)
+    assert pt is not None and score >= claim["npc_threshold"]
+    frame2 = _paste_bgr(claim["npc_icon"], x=450, y=300)
+    pt2, score2, _full = mingwang._match_npc(frame2, claim, 0.0)
+    assert pt2 is not None and score2 >= claim["npc_threshold"]
 
 
 def test_match_npc_xianzu_no_full_frame_fallback():
@@ -780,6 +806,49 @@ def test_shahai_start_not_clicked_when_not_armed(monkeypatch):
     assert mingwang._maybe_click_shahai_start(object()) is False
 
 
+# ---- 净化水晶丛林：入口对话选项 → armed 检测「开始」按钮 → 战斗 ----
+def test_qingxi_option_arms_start_check(monkeypatch):
+    """点击「马上净化水晶丛林上的混沌。」后 arm「开始」按钮检测窗口。"""
+    monkeypatch.setattr(mingwang, "_qingxi_armed_at", 0.0)
+    monkeypatch.setattr(mingwang, "_click_green_option_once",
+                        lambda *a, **k: True)
+    items = [(mingwang.QINGXI_DIALOG_TEXT, [500, 300, 800, 330], 0.95)]
+    assert mingwang._handle_dialog_options(object(), items, None) is True
+    assert mingwang._qingxi_armed_at > 0
+
+
+def test_qingxi_start_clicked_when_armed(monkeypatch):
+    """armed 窗口内出现「开始」按钮 → 点击并解除 armed。"""
+    monkeypatch.setattr(mingwang, "_qingxi_armed_at", time.time())
+    tpl = cv2.imread(R.img(mingwang.QINGXI_START_ICON), cv2.IMREAD_COLOR)
+    th, tw = tpl.shape[:2]
+    frame = _noise_bgr(seed=20261119)
+    frame[300:300 + th, 600:600 + tw] = tpl
+    win = _FakeWin([_pil(frame)])
+    clicks = []
+    monkeypatch.setattr(mingwang, "human_click",
+                        lambda w, x, y, button="primary":
+                        clicks.append((x, y, button)))
+    ok = mingwang._maybe_click_qingxi_start(win)
+    assert ok and clicks == [(600 + tw // 2, 300 + th // 2, "primary")]
+    assert mingwang._qingxi_armed_at == 0.0
+
+
+def test_qingxi_start_arm_timeout(monkeypatch):
+    """armed 窗口超时 → 不再检测/点击，窗口关闭。"""
+    monkeypatch.setattr(mingwang, "_qingxi_armed_at", time.time() - 999)
+    ok = mingwang._maybe_click_qingxi_start(object())
+    assert not ok and mingwang._qingxi_armed_at == 0.0
+
+
+def test_qingxi_start_not_clicked_when_not_armed(monkeypatch):
+    monkeypatch.setattr(mingwang, "_qingxi_armed_at", 0.0)
+    monkeypatch.setattr(mingwang, "human_click",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("未 arm 不应点击")))
+    assert mingwang._maybe_click_qingxi_start(object()) is False
+
+
 def test_handle_dialog_options_second_candidate(monkeypatch):
     """候选选项：第一个不存在时尝试第二个（如 <山河名望>）。"""
     monkeypatch.setattr(mingwang, "_shahai_armed_at", 0.0)
@@ -835,6 +904,204 @@ def test_pick_card_wuzhuang_seal_high_level():
             "level": "初级", "title": "五庄封印"}]
     _card, task = mingwang._pick_card(low)
     assert task is None
+
+
+def test_pick_card_shadu_xiuluo_high_level():
+    """「沙都修罗」为高级已实现任务（2026-11-10 用户规则：通用跟踪即可）。"""
+    cards = [{"row": 0, "col": 0, "rect": (0, 0, 190, 154),
+              "level": "高级", "title": "沙都修罗"}]
+    _card, task = mingwang._pick_card(cards)
+    assert task["title"] == "沙都修罗" and task["level"] == "高级"
+    low = [{"row": 0, "col": 0, "rect": (0, 0, 190, 154),
+            "level": "中级", "title": "沙都修罗"}]
+    _card, task = mingwang._pick_card(low)
+    assert task is None
+
+
+def test_claim_panel_task_claims_shadu(monkeypatch):
+    """沙都修罗与其它高级卡同优先：按卡片顺序领取（通用跟踪任务）。"""
+    _patch_cards_with(monkeypatch, {
+        (0, 0): [("高級", [399, 298, 422, 338], 0.9),
+                 ("沙都修罗", [458, 307, 537, 333], 1.0),
+                 ("接取", [462, 409, 514, 437], 1.0)],
+    })
+    clicks = []
+    monkeypatch.setattr(mingwang, "human_click",
+                        lambda w, x, y, button="primary":
+                        clicks.append((x, y, button)))
+    win = _FakeWin([
+        _pil(_live_frame(True)),
+        _pil(_live_frame(True, skip_buttons=((487, 423),))),
+    ])
+    status, info = mingwang.claim_panel_task(win)
+    assert status == "claimed" and "沙都修罗" in info
+    assert clicks == [(487, 423, "primary")]
+
+
+# ---- 沙都修罗（高级）：追踪文案触发 → 蟠桃园四路点找 NPC → 点名字上方 ----
+def test_shadu_trigger_phrases():
+    """触发词：完整文案/短词精确命中；短词 1 字 OCR 误读仍触发。"""
+    assert mingwang._shadu_trigger(
+        "山河名望日常沙都修罗根据三张蟠桃园残像所示位置")
+    assert mingwang._shadu_trigger("蟠桃园残像")
+    assert mingwang._shadu_trigger("根据三张蟠桃园残相所示位置")
+    assert not mingwang._shadu_trigger("日常五庄封印山河名望")
+
+
+def test_shadu_npc_point_skips_tracking_panel():
+    """追踪面板同名文案（x<400）排除；点击点=文案中心正上方 40px。"""
+    items = [("沙都修罗", [120, 300, 200, 320], 1.0),   # 追踪面板同名文案
+             ("沙都修罗", [600, 300, 660, 320], 1.0)]
+    assert mingwang._shadu_npc_point(items) == (630, 260)
+    assert mingwang._shadu_npc_point(items[:1]) is None
+    # 低置信度行不参与
+    assert mingwang._shadu_npc_point(
+        [("沙都修罗", [600, 300, 660, 320], 0.4)]) is None
+
+
+def test_shadu_scan_npc_prefers_template(monkeypatch):
+    """先查 NPC 本体模板：命中直接返回模板中心，不再 OCR 文案。"""
+    tpl = cv2.imread(R.img(mingwang.SHADU_NPC_ICON), cv2.IMREAD_COLOR)
+    th, tw = tpl.shape[:2]
+    frame = _noise_bgr(seed=20261116)
+    frame[300:300 + th, 600:600 + tw] = tpl
+    monkeypatch.setattr(mingwang.time, "sleep", lambda s: None)
+    monkeypatch.setattr(mingwang.game_map, "ocr_region",
+                        lambda img, region: (_ for _ in ()).throw(
+                            AssertionError("模板命中不应 OCR")))
+    pt, info = mingwang._shadu_scan_npc(_FakeWin([_pil(frame)]))
+    assert pt == (600 + tw // 2, 300 + th // 2)
+    assert "模板" in info
+
+
+def test_shadu_scan_npc_falls_back_to_ocr(monkeypatch):
+    """模板未命中 → OCR 文案并返回文案上方 40px。"""
+    frame = _noise_bgr(seed=20261117)
+    monkeypatch.setattr(mingwang.time, "sleep", lambda s: None)
+    monkeypatch.setattr(
+        mingwang.game_map, "ocr_region",
+        lambda img, region: ([("沙都修罗", [600, 300, 660, 320], 0.99)], None))
+    pt, info = mingwang._shadu_scan_npc(_FakeWin([_pil(frame)]))
+    assert pt == (630, 260)
+    assert "文案" in info
+
+
+def _patch_shadu_search(monkeypatch, calls, pos=("蟠桃园", 300, 300)):
+    monkeypatch.setattr(mingwang, "close_scene_panels",
+                        lambda w, p="", quiet=False: None)
+    monkeypatch.setattr(mingwang.game_map, "read_map_position",
+                        lambda w, img=None: pos)
+    monkeypatch.setattr(mingwang.game_map, "is_mini_map_open", lambda w: False)
+    monkeypatch.setattr(mingwang.game_map, "open_mini_map",
+                        lambda w: (True, "小地图已打开"))
+    monkeypatch.setattr(mingwang, "human_click",
+                        lambda w, x, y, button="primary": calls.append((x, y)))
+    monkeypatch.setattr(mingwang.time, "sleep", lambda s: None)
+    monkeypatch.setattr(mingwang, "_shadu_wait_arrive",
+                        lambda w, t: (True, "已到达"))
+
+
+def test_shadu_search_clicks_npc_at_first_waypoint(monkeypatch):
+    """已在蟠桃园：点第一个搜索点，到达后扫描到 NPC 即点击。"""
+    calls = []
+    _patch_shadu_search(monkeypatch, calls)
+    monkeypatch.setattr(mingwang, "_shadu_scan_npc",
+                        lambda w: ((640, 280), "找到「沙都修罗」"))
+    ok, info = mingwang._shadu_search_npc(object())
+    assert ok and "第 1 个搜索点" in info
+    assert calls == [(739, 588), (640, 280)]
+
+
+def test_shadu_search_falls_back_through_waypoints(monkeypatch):
+    """前三个点未找到 → 依次走到第四个点找到并点击。"""
+    calls = []
+    _patch_shadu_search(monkeypatch, calls)
+    scans = iter([None, None, None, (600, 200)])
+
+    def fake_scan(w):
+        pt = next(scans)
+        return pt, ("找到" if pt else "未找到")
+    monkeypatch.setattr(mingwang, "_shadu_scan_npc", fake_scan)
+    ok, info = mingwang._shadu_search_npc(object())
+    assert ok and "第 4 个搜索点" in info
+    assert calls == [(739, 588), (623, 476), (541, 428), (552, 310),
+                     (600, 200)]
+
+
+def test_shadu_search_enters_map_via_world_icon(monkeypatch):
+    """不在蟠桃园 → 世界地图点「蟠桃园」标签打开小地图。"""
+    calls = []
+    entered = []
+    _patch_shadu_search(monkeypatch, calls, pos=("天宫", 185, 122))
+    monkeypatch.setattr(mingwang.game_map, "is_mini_map_open", lambda w: True)
+    monkeypatch.setattr(
+        mingwang.game_map, "open_mini_map_city",
+        lambda w, icon, label: entered.append((icon, label)) or (True, "ok"))
+    monkeypatch.setattr(mingwang, "_shadu_scan_npc",
+                        lambda w: ((600, 200), "找到"))
+    ok, info = mingwang._shadu_search_npc(object())
+    assert ok
+    assert entered == [(mingwang.SHADU_WORLD_ICON, mingwang.SHADU_MAP)]
+
+
+def _shadu_win():
+    return _FakeWin([_pil(_noise_bgr(seed=20261115))])
+
+
+def test_shadu_handler_click_and_cooldown(monkeypatch):
+    """触发词命中 → 执行搜索并点击；冷却期内不重复执行。"""
+    monkeypatch.setattr(mingwang, "_shadu_next_try_at", 0.0)
+    monkeypatch.setattr(mingwang, "_shadu_click_until", 0.0)
+    monkeypatch.setattr(mingwang, "_shadu_absent", 0)
+    monkeypatch.setattr(mingwang, "dialog_frame_score", lambda img: 0.1)
+    runs = []
+    monkeypatch.setattr(mingwang, "_shadu_search_npc",
+                        lambda w: runs.append(1) or (True, "已点击沙都修罗上方"))
+    items = [("根据三张蟠桃园残像所示位置", [100, 300, 300, 320], 0.95)]
+    win = _shadu_win()
+    assert mingwang._handle_shadu_xiuluo(win, items, None) is True
+    assert runs == [1]
+    assert mingwang._handle_shadu_xiuluo(win, items, None) is False
+    assert runs == [1]  # 点击冷却，不重复搜索
+
+
+def test_shadu_handler_dialog_blocks_search(monkeypatch):
+    """对话框在场 → 暂停搜索（先由对话表/剧情兜底推进）。"""
+    monkeypatch.setattr(mingwang, "_shadu_next_try_at", 0.0)
+    monkeypatch.setattr(mingwang, "_shadu_click_until", 0.0)
+    monkeypatch.setattr(mingwang, "_shadu_absent", 0)
+    monkeypatch.setattr(mingwang, "dialog_frame_score", lambda img: 0.99)
+    monkeypatch.setattr(mingwang, "_shadu_search_npc",
+                        lambda w: (_ for _ in ()).throw(
+                            AssertionError("对话框在场不应搜索")))
+    items = [("蟠桃园残像", [100, 300, 300, 320], 0.95)]
+    assert mingwang._handle_shadu_xiuluo(_shadu_win(), items, None) is False
+
+
+def test_shadu_handler_failure_limited_retry(monkeypatch):
+    """四路点全失败 → 按 SHADU_RETRY_AFTER 限频，不每轮询重跑。"""
+    monkeypatch.setattr(mingwang, "_shadu_next_try_at", 0.0)
+    monkeypatch.setattr(mingwang, "_shadu_click_until", 0.0)
+    monkeypatch.setattr(mingwang, "_shadu_absent", 0)
+    monkeypatch.setattr(mingwang, "dialog_frame_score", lambda img: 0.1)
+    runs = []
+    monkeypatch.setattr(mingwang, "_shadu_search_npc",
+                        lambda w: runs.append(1) or (False, "四点均未找到"))
+    items = [("蟠桃园残像", [100, 300, 300, 320], 0.95)]
+    win = _shadu_win()
+    assert mingwang._handle_shadu_xiuluo(win, items, None) is False
+    assert mingwang._handle_shadu_xiuluo(win, items, None) is False
+    assert runs == [1]
+
+
+def test_shadu_handler_resets_when_keyword_gone(monkeypatch):
+    """触发词连续缺失 → 状态复位（点击冷却清除）。"""
+    monkeypatch.setattr(mingwang, "_shadu_click_until", time.time() + 999)
+    monkeypatch.setattr(mingwang, "_shadu_absent", 0)
+    items = [("日常五庄封印山河名望", [100, 300, 300, 320], 0.95)]
+    for _ in range(mingwang.SHADU_ABSENT_RESET):
+        assert mingwang._handle_shadu_xiuluo(object(), items, None) is False
+    assert mingwang._shadu_click_until == 0.0
 
 
 def test_mingwang_diaoyu_option_arms_check(monkeypatch):
@@ -1212,3 +1479,40 @@ def test_wait_arrive_at_claim_point(monkeypatch):
     monkeypatch.setattr(mingwang.time, "sleep", lambda s: None)
     ok, info = mingwang.wait_arrive(win, claim, timeout=1.0)
     assert ok and "已到达领取点附近" in info
+
+
+# ---- 领取入口 NPC 搜索：对话框遮挡 NPC 模板时点屏推进（2026-11-10 实机）----
+def _patch_claim_entry(monkeypatch, dialog_score):
+    win = _FakeWin([_pil(_noise_bgr(seed=20261118))])
+    monkeypatch.setattr(mingwang, "CLAIM_ENTRY_TIMEOUT", 0.05)
+    monkeypatch.setattr(mingwang, "is_in_battle_frame", lambda bgr: False)
+    monkeypatch.setattr(mingwang, "_match_npc",
+                        lambda bgr, c, full: (None, 0.36, full))
+    monkeypatch.setattr(mingwang, "dialog_frame_score",
+                        lambda img: dialog_score)
+    monkeypatch.setattr(mingwang.game_map, "ocr_region",
+                        lambda img, region=None: ([], np.asarray(img)))
+    monkeypatch.setattr(mingwang, "_click_claim_option", lambda *a, **k: False)
+    known = []
+    monkeypatch.setattr(mingwang, "_click_known_dialog_option",
+                        lambda *a, **k: known.append(1) or False)
+    centers = []
+    monkeypatch.setattr(mingwang, "_click_screen_center",
+                        lambda w, times=1, prefix="": centers.append(times))
+    monkeypatch.setattr(mingwang.time, "sleep", lambda s: None)
+    return win, centers, known
+
+
+def test_claim_entry_advances_dialog_when_npc_missing(monkeypatch):
+    """NPC 未找到且对话框在场 → 点屏幕中间推进（不再干等）。"""
+    win, centers, known = _patch_claim_entry(monkeypatch, 0.99)
+    ok, _info = mingwang._claim_and_open_panel(
+        win, mingwang.CLAIM_POINTS["仙族"])
+    assert not ok and known == [1] and centers == [1]
+
+
+def test_claim_entry_no_dialog_no_click(monkeypatch):
+    """对话框不在场 → 不点屏（世界点击可能误开新对话）。"""
+    win, centers, _known = _patch_claim_entry(monkeypatch, 0.1)
+    mingwang._claim_and_open_panel(win, mingwang.CLAIM_POINTS["仙族"])
+    assert centers == []
