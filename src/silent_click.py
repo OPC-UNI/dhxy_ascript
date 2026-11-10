@@ -149,23 +149,14 @@ def click_target(win):
     return hwnd
 
 
-def send_silent_click(win, x=None, y=None, button="primary"):
-    """向游戏窗口投递一次静默点击（不移动鼠标、不激活窗口）。
+def _resolve_point(win, x=None, y=None):
+    """静默点击/长按的目标与坐标换算。
 
-    x/y 为点击坐标（human_click 同空间：win.rect 左上角为原点，
-    即主窗口矩形相对坐标），None 时取目标窗口客户区中心（游戏画面
-    中心）。button 与 human_click 同款命名：'primary' 左键 /
-    'secondary' 右键。内部换算为目标窗口客户区坐标后投递，全程持
-    全局输入锁与物理鼠标点击互斥；按下/抬起后追加一条 WM_MOUSEMOVE
-    把游戏内部光标移到客户区左下角中性区（等效物理模式 move_away，
-    防悬停高亮残留污染后续对话框绿字判定）。返回投递描述 dict
-    （目标句柄/类名/点击点/各消息返回值）供日志打印；窗口或客户区
-    获取失败返回 None。
+    x/y 为 human_click 同空间（win.rect 左上角为原点）；None 取目标
+    窗口客户区中心。返回 (target, cx, cy, sx, sy, client_w, client_h)：
+    cx/cy 为目标窗口客户区坐标，sx/sy 为屏幕坐标；窗口/客户区获取
+    失败返回 None。
     """
-    msg = _BUTTON_MESSAGES.get(button)
-    if msg is None:
-        raise ValueError(f"不支持的按键类型: {button!r}（primary/secondary）")
-    down, up, mk = msg
     target = click_target(win)
     if not target:
         return None
@@ -186,14 +177,91 @@ def send_silent_click(win, x=None, y=None, button="primary"):
         base_y = wr.top if wr is not None else tr.top
         sx, sy = base_x + int(x), base_y + int(y)
         cx, cy = sx - tr.left, sy - tr.top
-    results = _post_mouse_click(target, cx, cy, down, up, mk,
-                                cl.right, cl.bottom)
+    return target, cx, cy, sx, sy, cl.right, cl.bottom
+
+
+def send_silent_click(win, x=None, y=None, button="primary"):
+    """向游戏窗口投递一次静默点击（不移动鼠标、不激活窗口）。
+
+    x/y 为点击坐标（human_click 同空间：win.rect 左上角为原点，
+    即主窗口矩形相对坐标），None 时取目标窗口客户区中心（游戏画面
+    中心）。button 与 human_click 同款命名：'primary' 左键 /
+    'secondary' 右键。内部换算为目标窗口客户区坐标后投递，全程持
+    全局输入锁与物理鼠标点击互斥；按下/抬起后追加一条 WM_MOUSEMOVE
+    把游戏内部光标移到客户区左下角中性区（等效物理模式 move_away，
+    防悬停高亮残留污染后续对话框绿字判定）。返回投递描述 dict
+    （目标句柄/类名/点击点/各消息返回值）供日志打印；窗口或客户区
+    获取失败返回 None。
+    """
+    msg = _BUTTON_MESSAGES.get(button)
+    if msg is None:
+        raise ValueError(f"不支持的按键类型: {button!r}（primary/secondary）")
+    down, up, mk = msg
+    resolved = _resolve_point(win, x, y)
+    if resolved is None:
+        return None
+    target, cx, cy, sx, sy, cw, ch = resolved
+    results = _post_mouse_click(target, cx, cy, down, up, mk, cw, ch)
     return {"hwnd": target, "class": win_class(target),
             "button": button,
-            "client": (cl.right, cl.bottom),
+            "client": (cw, ch),
             "point": (cx, cy),
             "screen_point": (sx, sy),
             "msg_results": results}
+
+
+def begin_silent_hold(win, x=None, y=None, button="primary"):
+    """投递长按按下序列（WM_MOUSEMOVE→WM_LBUTTONDOWN），保持按下状态。
+
+    与 send_silent_click 不同，抬起由 end_silent_hold 延后投递——期间
+    游戏内部按键状态保持按下（真实长按，钓鱼小游戏「长按」按钮）。
+    本函数不持输入锁：调用方（app_utils.MouseHold）持锁跨越整个
+    长按周期，防其他线程的点击/移出消息破坏按下状态。窗口/客户区
+    获取失败返回 None。
+    """
+    msg = _BUTTON_MESSAGES.get(button)
+    if msg is None:
+        raise ValueError(f"不支持的按键类型: {button!r}（primary/secondary）")
+    down, _up, mk = msg
+    resolved = _resolve_point(win, x, y)
+    if resolved is None:
+        return None
+    target, cx, cy, sx, sy, cw, ch = resolved
+    lp = (cy << 16) | (cx & 0xFFFF)
+    # WM_MOUSEMOVE 先投：部分客户端据此更新内部光标位置，缺它可能
+    # 忽略后续按下（与 _post_mouse_click 同序）
+    r_move = user32.SendMessageW(target, WM_MOUSEMOVE, 0, lp)
+    time.sleep(0.05)
+    r_down = user32.SendMessageW(target, down, mk, lp)
+    return {"hwnd": target, "class": win_class(target),
+            "button": button,
+            "client": (cw, ch),
+            "point": (cx, cy),
+            "screen_point": (sx, sy),
+            "lp": lp,
+            "msg_results": (r_move, r_down)}
+
+
+def end_silent_hold(info):
+    """投递长按抬起序列（WM_LBUTTONUP→WM_MOUSEMOVE 移出中性区）。
+
+    info 为 begin_silent_hold 的返回值（None 时无操作）；末尾移出
+    与 send_silent_click 同理，防悬停高亮残留。返回消息返回值元组。
+    """
+    if not info:
+        return ()
+    msg = _BUTTON_MESSAGES.get(info.get("button", "primary"))
+    if msg is None:
+        return ()
+    _down, up, _mk = msg
+    target = info["hwnd"]
+    lp = info["lp"]
+    cw, ch = info["client"]
+    away_lp = ((ch - 20) << 16) | 20
+    r_up = user32.SendMessageW(target, up, 0, lp)
+    time.sleep(0.05)
+    r_away = user32.SendMessageW(target, WM_MOUSEMOVE, 0, away_lp)
+    return (r_up, r_away)
 
 
 def _post_mouse_click(target, cx, cy, down, up, mk, client_w, client_h):

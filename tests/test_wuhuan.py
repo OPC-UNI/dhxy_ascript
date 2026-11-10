@@ -158,9 +158,12 @@ def test_link_picker_tail_only_read_clicks_underline():
 
 def _buy_env(monkeypatch, land_ok=True):
     """搭 _buy_equipments 桩环境（地图/寻路/店内交互全 mock），
-    返回 (事件列表, 点击列表)。"""
+    返回 (事件列表, 点击列表)。商店面板在点「我想买点东西」前不渲染
+    （find_template 返回 None），模拟真实时序——面板未开时进店点击必须
+    照常发生（_enter_cloth_shop 的「面板已开直接成功」短路不得提前触发）。"""
     events = []
     clicks = []
+    state = {"shop_open": False}
     monkeypatch.setattr(wuhuan.game_map, "is_in_map", lambda win, name: True)
     monkeypatch.setattr(wuhuan.game_map, "is_mini_map_open", lambda win: True)
     monkeypatch.setattr(wuhuan, "close_scene_panels", lambda win, prefix: None)
@@ -175,12 +178,17 @@ def _buy_env(monkeypatch, land_ok=True):
                         or (True, "飞行驭器面板已关闭"))
     monkeypatch.setattr(wuhuan, "human_click",
                         lambda win, x, y: clicks.append((x, y)))
-    monkeypatch.setattr(wuhuan, "_click_dialog_green_option",
-                        lambda win, option, timeout=4: (True, "已点击"))
+
+    def _click_option(win, option, timeout=4):
+        state["shop_open"] = True  # 点击选项后商店面板开始渲染
+        return True, "已点击"
+
+    monkeypatch.setattr(wuhuan, "_click_dialog_green_option", _click_option)
     finds = {wuhuan.FUZHUANGDIAN_XIANGLIAN_ICON: (100, 100),
              wuhuan.GOUMAI_ICON: (200, 200)}
     monkeypatch.setattr(wuhuan.game_map, "find_template",
-                        lambda win, icon, threshold=None: finds.get(icon))
+                        lambda win, icon, threshold=None:
+                        finds.get(icon) if state["shop_open"] else None)
     monkeypatch.setattr(wuhuan, "precise_click", lambda *a, **k: None)
     monkeypatch.setattr(wuhuan, "log", lambda msg, level="INFO": None)
     monkeypatch.setattr(wuhuan.time, "sleep", lambda s: None)
@@ -205,3 +213,132 @@ def test_buy_equipments_enter_proceeds_when_land_check_fails(monkeypatch):
     assert ok
     assert events == ["arrived", "landed", "closed"]
     assert wuhuan.CLOTH_SHOP_ENTER_POS in clicks
+
+
+def test_buy_equipments_waits_shop_panel_render(monkeypatch):
+    """点「我想买点东西」后面板渲染有延迟：轮询等项链图标出现才判定，
+    不得单次匹配即判「商店中未找到服装店项链」（2026-11-10 时序竞态
+    实测：点后 0.3s 单次匹配未命中使整个准备阶段失败，随后同一状态
+    项链模板匹配 0.9999）。"""
+    events, clicks = _buy_env(monkeypatch, land_ok=True)
+    base_find = wuhuan.game_map.find_template
+    calls = {"n": 0}
+
+    def _slow_render(win, icon, threshold=None):
+        if icon == wuhuan.FUZHUANGDIAN_XIANGLIAN_ICON:
+            calls["n"] += 1
+            if calls["n"] <= 3:
+                return None  # 前几次轮询面板尚未渲染完成
+        return base_find(win, icon, threshold)
+
+    monkeypatch.setattr(wuhuan.game_map, "find_template", _slow_render)
+    ok, desc = wuhuan._buy_equipments(None)
+    assert ok
+    assert calls["n"] > 3  # 确实轮询等待了面板渲染
+    assert wuhuan.SHOP_OWNER_POS in clicks
+
+
+# ---- 无选项剧情对话点屏推进（2026-11-10：NPC 剧情台词常驻屏幕命中
+#      对话框模板门（实测 0.9886），对话区每 0.5s 全量 OCR 成为 CPU
+#      大头，与修罗 NPC 收尾对话 2026-11-09 同款） ----
+
+_STORY_ITEMS = _make([
+    ("我被人骗了", 435, 395, 510, 416),
+    ("有人骗走了我的20万两银子", 556, 395, 878, 415),
+    ("哥哥以后你一定要小心这种人啊", 436, 412, 644, 433),
+])
+_BLANK_FRAME = np.zeros((831, 1378, 3), np.uint8)
+
+
+def _story_env(monkeypatch, score=0.99, green=False):
+    """搭 _dismiss_story_dialog 桩环境，返回点屏次数列表。
+
+    共享实现 StoryDialogDismisser 在 dialog_common 中取模板分与点屏，
+    桩打在 dialog_common 上；实例状态（streak/last_click）逐用例重置。
+    """
+    from src import dialog_common
+    clicks = []
+    monkeypatch.setattr(dialog_common, "dialog_frame_score", lambda img: score)
+    monkeypatch.setattr(wuhuan.task_tracker, "is_green_text",
+                        lambda img, rect: green)
+    monkeypatch.setattr(dialog_common, "_click_screen_center",
+                        lambda win, times=1, prefix="": clicks.append(times))
+    monkeypatch.setattr(dialog_common, "log", lambda msg, level="INFO": None)
+    wuhuan._story_dismisser.streak = 0
+    wuhuan._story_dismisser.last_click_at = 0.0
+    wuhuan._give_expected_until = 0.0
+    return clicks
+
+
+def test_story_dialog_dismiss_after_two_polls(monkeypatch):
+    """连续 2 轮询命中无选项剧情对话才点屏（单帧可能是渲染过渡）。"""
+    clicks = _story_env(monkeypatch)
+    assert wuhuan._dismiss_story_dialog(None, _STORY_ITEMS, _BLANK_FRAME) is False
+    assert wuhuan._dismiss_story_dialog(None, _STORY_ITEMS, _BLANK_FRAME) is True
+    assert clicks == [1]
+
+
+def test_story_dialog_no_click_without_dialog_frame(monkeypatch):
+    """无标准对话框边框（如商店面板实测 0.653 < 0.79）不点屏——
+    世界点击会误触走位。"""
+    clicks = _story_env(monkeypatch, score=0.65)
+    for _ in range(3):
+        assert wuhuan._dismiss_story_dialog(
+            None, _STORY_ITEMS, _BLANK_FRAME) is False
+    assert clicks == []
+
+
+def test_story_dialog_no_click_with_green_option(monkeypatch):
+    """对话区有绿字选项（提交装备/巫医等）不是剧情对话，不点屏。"""
+    clicks = _story_env(monkeypatch, green=True)
+    for _ in range(3):
+        assert wuhuan._dismiss_story_dialog(
+            None, _STORY_ITEMS, _BLANK_FRAME) is False
+    assert clicks == []
+
+
+def test_story_dialog_no_click_during_give_window(monkeypatch):
+    """给与面板预期窗口内不点屏（选项已点、等给与面板时推进 NPC
+    对话有打断给与流程的风险）。"""
+    import time as _time
+    clicks = _story_env(monkeypatch)
+    wuhuan._give_expected_until = _time.time() + 10
+    for _ in range(3):
+        assert wuhuan._dismiss_story_dialog(
+            None, _STORY_ITEMS, _BLANK_FRAME) is False
+    assert clicks == []
+
+
+def test_story_dialog_panel_items_ignored(monkeypatch):
+    """追踪面板文字（x < DIALOG_REGION 左界）不参与判定：面板有绿字
+    链接，注入后仍应正常点屏。"""
+    clicks = _story_env(monkeypatch)
+    items = _make([("五环[五环]", 14, 233, 100, 253),
+                   ("去找大唐边境(193,144)惯骗[3/5]", 20, 249, 260, 276)]) \
+        + _STORY_ITEMS
+    assert wuhuan._dismiss_story_dialog(None, items, _BLANK_FRAME) is False
+    assert wuhuan._dismiss_story_dialog(None, items, _BLANK_FRAME) is True
+    assert clicks == [1]
+
+
+def test_submit_dialog_falls_back_to_story_dismiss(monkeypatch):
+    """提交对话文案未命中且无绿字 → 走剧情对话推进（此前直接 return
+    False，剧情台词永远无人处理）。"""
+    _story_env(monkeypatch)
+    monkeypatch.setattr(wuhuan.game_map, "find_template",
+                        lambda win, icon, threshold=None: None)
+    assert wuhuan._handle_submit_dialog(None, _STORY_ITEMS, _BLANK_FRAME) is False
+    assert wuhuan._handle_submit_dialog(None, _STORY_ITEMS, _BLANK_FRAME) is True
+
+
+def test_submit_dialog_option_not_rendered_no_story_dismiss(monkeypatch):
+    """提交对话文案命中但绿字选项尚未渲染：等下一轮，不得误判为剧情
+    对话点屏关闭（会打断提交装备流程）。"""
+    clicks = _story_env(monkeypatch)  # green=False → 选项点击必失败
+    monkeypatch.setattr(wuhuan.game_map, "find_template",
+                        lambda win, icon, threshold=None: None)
+    items = _make([("我在这里练级，打了好久都打不过夜叉和猪怪。",
+                    435, 395, 878, 433)]) + _STORY_ITEMS
+    for _ in range(3):
+        assert wuhuan._handle_submit_dialog(None, items, _BLANK_FRAME) is False
+    assert clicks == []

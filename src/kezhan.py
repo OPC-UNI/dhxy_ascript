@@ -50,6 +50,7 @@ from .app_utils import log, human_click, move_away, norm_text
 from . import app_utils  # 高性能模式共享设施（固定位置缓存点击）
 from . import bag  # 物品栏开关
 from . import map as game_map  # 地图操作（世界地图/小地图/位置识别）
+from . import pochufengyin as _pochu_minigame  # 破除封印/钓鱼共用小游戏（闭环实现）
 from . import task_tracker  # 任务追踪面板操作
 from .battle import is_in_battle, is_in_battle_frame  # 战斗状态判定（统一在 battle.py 中实现）
 from . import debug_overlay  # 调试信息悬浮层（任务进度更新）
@@ -549,51 +550,17 @@ YINLV_END_MISSES = 3                # 窗口横幅连续未命中次数即判结
 _yinlv_last_check = 0.0             # 上次 extras 窗口检测时间（限频）
 _yinlv_armed_at = 0.0               # 音律入口选项点击时间；>0 且未超时=检测开启
 # ---- 破除封印小游戏（灵兔封印：点对话框选项「消耗灵气，破除封印」后出现）----
-# 闭环控制（用户 2026-11-09 完整描述 + 7.png 实测标定）：
-# 弹窗出现 → 识别目标高亮区间 [L,R,C]（target 模板定位，目标带 ≈1 刻度宽）
-# → 点「开始」（按钮同位置变为「点击」）→ 每轮询一帧测量填充右边缘 P
-# （HSV 金掩码 + 从左连通段）→ P<L 点击（节奏按 C 三档）、L≤P≤R 停手
-# 保持、P>R 过头永久停手 → 按钮变「保持」或倒计时 ≤3s 完全停手等结算
-# → 标题消失即任务结束。全部测量在 POCHU_REGION/进度条带内，坐标
-# 映射 1~10 刻度（x 435~992，7.png 实测刻度线间距 55.7px 吻合）。
+# 闭环控制实现与全部测量区域已抽到共享模块 pochufengyin（玄枢「钓鱼」
+# 复用同款窗口，仅标题模板不同）；此处保留入口/窗口检测参数与调用包装。
 POCHU_ENTRY_OPTION = "消耗灵气，破除封印"           # 入口对话框选项（点击后小游戏窗口出现）
 POCHU_TITLE_ICON = "kezhan_pochufengyin.png"        # 窗口标题「破除封印」（消失=任务完成）
-POCHU_START_ICON = "kezhan_pochufengyin_kaishi.png"  # 「开始」按钮（点击后同位置变为「点击」）
-POCHU_CLICK_ICON = "kezhan_pochufengyin_dianji.png"  # 「点击」按钮（过程中会变成其他外观，坐标不变仍须点）
-POCHU_TARGET_ICON = "kezhan_pochufengyin_target.png"  # 目标高亮区间标记（模板定位 C）
-POCHU_REGION = (314, 458, 1058, 645)   # 弹窗模板搜索条带（用户提供，覆盖小游戏窗口区）
-POCHU_THRESHOLD = 0.8                  # 模板匹配阈值（标题 0.999/点击 0.998/目标 0.985 实测）
-# ---- 进度条测量（7.png 实测标定）----
-POCHU_SCALE_X0 = 435                   # 1 刻度窗口 x（进度条左端）
-POCHU_SCALE_X1 = 992                   # 10 刻度窗口 x（进度条右端）
-POCHU_SCALE_W = POCHU_SCALE_X1 - POCHU_SCALE_X0  # 一满刻度宽（557px，刻度线间距实测 55.7）
-POCHU_BAR_REGION = (430, 528, 1000, 562)  # 进度条搜索带（目标带/填充测量用）
-POCHU_BAR_Y = (536, 554)               # 进度条本体 y 带（填充行；刻度线在其上方 511~527）
-POCHU_FILL_MIN_COL = 2                 # 列内填充像素下限（18px 高带内实测 ~10px/列）
-POCHU_FILL_GAP = 8                     # 连续缺填充列数即视为填充段结束
-POCHU_ZONE_HALF = 29                   # 目标带半宽（模板 58px≈1 刻度；实测括号 879~937 吻合）
-# 填充金掩码（HSV，实测）：填充体 H21 S133 V176、前缘亮标 H26 S96 V202；
-# 目标带括号为白金色 H36 S61 V215（H>32 排除）、暗内部 V≤125（V 门排除）
-POCHU_FILL_H = (15, 32)
-POCHU_FILL_S = 95
-POCHU_FILL_V = 120
-# ---- 倒计时与按钮文字（OCR，差分门 + 限频）----
-POCHU_CNT_REGION = (600, 545, 770, 598)   # 「施法倒计时：N秒」区域（7.png 实测）
-POCHU_BTN_REGION = (915, 565, 1010, 635)  # 按钮文字区域（点击/保持）
-POCHU_CNT_STOP = 3                     # 倒计时 ≤3 秒完全停手
-POCHU_OCR_REFRESH = 2.0                # 倒计时/按钮 OCR 强制重检间隔（差分门兜底）
-POCHU_STALL_CLICKS = 4                 # P 连续不动点击数 → 告警按钮坐标
-POCHU_STATE_LOG_INTERVAL = 1.0         # 状态日志限频（秒）
-# 点击节奏三档（用户 spec）：C<4 近目标易过头（400~500ms，每点等位置更新）；
-# 4≤C≤7 中距离（250~300ms）；C>7 远距离时间紧（150~200ms 快速推进）
-POCHU_TIER_NEAR = 0.45
-POCHU_TIER_MID = 0.275
-POCHU_TIER_FAR = 0.175
-POCHU_TICK_PACE = 0.15                 # 闭环测量节拍（每轮询一帧）
-POCHU_ARM_TIMEOUT = 120                # 入口选项点击后检测窗口的最长时限（秒）
-POCHU_CHECK_INTERVAL = 1.0             # extras 链窗口检测限频（秒，条带匹配 ~10ms）
-POCHU_END_WINDOW = 2.0                 # 标题连续消失确认窗口（秒；结束确认防抖，不得缩短）
-POCHU_TIMEOUT = 180                    # 小游戏总超时（秒）
+POCHU_REGION = _pochu_minigame.POCHU_REGION
+POCHU_THRESHOLD = _pochu_minigame.POCHU_THRESHOLD
+POCHU_ARM_TIMEOUT = _pochu_minigame.POCHU_ARM_TIMEOUT
+POCHU_CHECK_INTERVAL = _pochu_minigame.POCHU_CHECK_INTERVAL
+# 测试/诊断引用的测量常量（单一来源在共享模块）
+POCHU_BAR_REGION = _pochu_minigame.POCHU_BAR_REGION
+POCHU_BAR_Y = _pochu_minigame.POCHU_BAR_Y
 _pochu_armed_at = 0.0                  # 破除封印入口选项点击时间；>0 且未超时=检测开启
 _pochu_last_check = 0.0                # 上次 extras 窗口检测时间（限频）
 CLAIM_CHAIN_TIMEOUT = 30             # 整条领取对话链（含接取与任务对话）的总超时（秒）
@@ -1083,6 +1050,17 @@ def _walk_to_biwu(win):
     return _check_awang(win)
 
 
+def verify_find_awang(win):
+    """诊断页-客栈-找阿旺按钮：走真实找阿旺链路（走位到大理寺墙外 →
+    定位阿旺（模板 awang.png / OCR 名字兜底）→ 走近 → 点击交互点打开
+    对话；大理寺墙外未找到时兜底走洛阳城阿旺出现点重找一轮），与任务
+    流程 _walk_to_dali 完全一致。返回 (是否成功, 描述)。
+    """
+    if is_in_battle(win):
+        return False, "战斗中，无法测试找阿旺（请先结束战斗）"
+    return _walk_to_dali(win)
+
+
 def _task_needs_dali_walk(task):
     """判断任务追踪文案是否要求前往大理寺墙外（模糊匹配，跨行兼容）。"""
     return (task is not None
@@ -1521,246 +1499,16 @@ def _play_yinlv(win):
     return True, f"音律小游戏超时结束（{YINLV_END_TIMEOUT}s）"
 
 
-def _pochu_tick(x):
-    """窗口 x → 1~10 刻度（0=进度条左端 435，10=右端 992）。"""
-    return (x - POCHU_SCALE_X0) / POCHU_SCALE_W * 10.0
-
-
-def _pochu_fill_edge(bgr):
-    """进度条金色填充右边缘窗口 x（HSV 金掩码 + 从左起连通段）。
-
-    填充体/前缘实测 HSV 见 POCHU_FILL_H/S/V；目标带括号（H>32）与暗
-    内部（V≤125）被掩码排除，连通段从条左端起算不受其干扰。无填充
-    （未开始/掩码漏检）返回 None（调用方按刻度 0 处理）。
-    """
-    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
-    h_ch, s_ch, v_ch = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
-    l, _t, r, _b = POCHU_BAR_REGION
-    fill = (h_ch >= POCHU_FILL_H[0]) & (h_ch <= POCHU_FILL_H[1]) \
-        & (s_ch > POCHU_FILL_S) & (v_ch > POCHU_FILL_V)
-    colcnt = fill[POCHU_BAR_Y[0]:POCHU_BAR_Y[1], l:r].sum(axis=0)
-    have = colcnt >= POCHU_FILL_MIN_COL
-    idx = np.flatnonzero(have)
-    if idx.size == 0:
-        return None
-    start = int(idx[0])
-    pend = start
-    gap = 0
-    for i in range(start, have.size):
-        if have[i]:
-            gap = 0
-            pend = i
-        else:
-            gap += 1
-            if gap >= POCHU_FILL_GAP:
-                break
-    return l + pend
-
-
-def _pochu_zone(bgr):
-    """目标高亮区间：target 模板定位中心 C，L/R=C±POCHU_ZONE_HALF
-    （目标带 ≈1 刻度宽，7.png 实测括号 879~937 与模板 ±29 吻合）。
-    返回 (L, R, C) 窗口 x 或 (None, None, None)。"""
-    c = game_map.match_frame_np(bgr, POCHU_TARGET_ICON,
-                                threshold=POCHU_THRESHOLD,
-                                region=POCHU_BAR_REGION, fallback=False)
-    if c is None:
-        return None, None, None
-    return c[0] - POCHU_ZONE_HALF, c[0] + POCHU_ZONE_HALF, c[0]
-
-
-_POCHU_CNT_RE = re.compile(r"(\d{1,2})\s*秒")
-
-
-def _pochu_ocr_gated(img_pil, region, cache, force=False):
-    """区域 OCR 差分门：区域像素无变化（且非强制）直接返回缓存文本
-    （性能规则 5：OCR 前置像素差分预过滤）；变化才 OCR。识别失败
-    返回 None（未知状态，调用方不动作）。"""
-    crop = np.asarray(img_pil.crop(region))
-    if not force and cache["crop"] is not None \
-            and np.array_equal(cache["crop"], crop):
-        return cache["text"]
-    cache["crop"] = crop.copy()
-    items, _ = game_map.ocr_regions(img_pil, (region,))
-    txt = "".join(t for t, _r, s in items if s >= 0.55)
-    cache["text"] = txt or None
-    return cache["text"]
-
-
-def _pochu_countdown(img_pil, cache, force=False):
-    """倒计时秒数（差分门 OCR「施法倒计时：N秒」）；解析失败返回 None。"""
-    txt = _pochu_ocr_gated(img_pil, POCHU_CNT_REGION, cache, force=force)
-    if not txt:
-        return None
-    m = _POCHU_CNT_RE.search(txt)
-    return int(m.group(1)) if m else None
+# 小游戏闭环实现见共享模块 pochufengyin（玄枢「钓鱼」复用同款窗口，
+# 仅标题模板不同）；本模块保留旧函数名别名，供既有测试/诊断引用。
+_pochu_tick = _pochu_minigame.pochu_tick
+_pochu_fill_edge = _pochu_minigame.pochu_fill_edge
 
 
 def _play_pochufengyin(win):
-    """破除封印小游戏闭环控制（阻塞执行到标题消失）。返回 (是否完成, 描述)。
-
-    流程（用户 2026-11-09 完整描述 + 7.png 实测标定）：
-    1. 弹窗出现（记录时间）→ 识别目标高亮区间 [L,R,C]
-    2. 点「开始」→ 按钮同位置变为「点击」（过程中会变其他外观，坐标
-       不变仍须点；变「保持」则完全停手）
-    3. 闭环（每 POCHU_TICK_PACE 一帧一判定，同帧复用性能规则 1）：
-       测量填充右边缘 P（HSV 金掩码+连通段）与目标带 [L,R,C]（模板）
-       → P<L 按 C 三档节奏点击（C<4 慢点防过头、4~7 中速、>7 快速）、
-       L≤P≤R 停手保持（P 回落到 L 以下自动恢复点击）、P>R 连续 2 轮
-       确认过头后永久停手 → 按钮变「保持」或倒计时 ≤3s 完全停手等结算
-    4. 标题连续消失 POCHU_END_WINDOW 秒即任务结束（输出最终 P 与是否命中）
-    5. 战斗打断立即退出；异常：目标带检测失败 0.5s 重试（不点击）、
-       P 连续不动告警按钮坐标
-    """
-    def _pace(tick_start):
-        """补齐测量节拍（截图/匹配/点击耗时计入间隔，不累积漂移）。"""
-        rem = POCHU_TICK_PACE - (time.time() - tick_start)
-        if rem > 0:
-            time.sleep(rem)
-
-    deadline = time.time() + POCHU_TIMEOUT
-    started = False
-    btn_pt = None                 # 「开始/点击」按钮位置（同位置，命中刷新、未命中缓存续点）
-    last_seen = time.time()       # 标题最近命中时间（消失确认窗口起点）
-    last_click = 0.0
-    last_p = None                 # 上次点击时测量的 P（刻度；停顿告警用）
-    stall_clicks = 0
-    over_cnt = 0                  # P>R 连续轮数（过头确认防抖）
-    terminal = None               # 完全停手原因（按钮保持/倒计时/过头）
-    cnt_cache = {"crop": None, "text": None}
-    btn_cache = {"crop": None, "text": None}
-    last_ocr = 0.0
-    last_log = 0.0
-    clicks = 0
-    zone = None                   # 最近一次 (L, R, C) 刻度
-    log(f"[客栈] 破除封印弹窗出现 {time.strftime('%H:%M:%S')}，进入闭环控制", "SYS")
-
-    while time.time() < deadline:
-        t0 = time.time()
-        img = win.capture(force_activate=False)
-        if img is None:
-            time.sleep(0.1)
-            continue
-        bgr = cv2.cvtColor(np.asarray(img)[:, :, :3], cv2.COLOR_RGB2BGR)
-        if is_in_battle_frame(bgr):
-            return False, "战斗开始，破除封印中断"
-        title = game_map.match_frame_np(bgr, POCHU_TITLE_ICON,
-                                        threshold=POCHU_THRESHOLD,
-                                        region=POCHU_REGION, fallback=False)
-        if title is None:
-            # 标题消失 = 封印破除（任务结束）。连续消失满 POCHU_END_WINDOW
-            # 秒才确认结束（结束确认 2 秒窗口防单帧误判，不得缩短）
-            if time.time() - last_seen >= POCHU_END_WINDOW:
-                ok = terminal is not None and "保持" in terminal
-                if zone is not None and last_p is not None:
-                    ok = ok or zone[0] - 0.3 <= last_p <= zone[1] + 0.3
-                state = f"P={last_p:.2f}" if last_p is not None else "P=未知"
-                if zone is not None:
-                    state += f" 区间[{zone[0]:.1f},{zone[1]:.1f}]"
-                return True, (f"破除封印结束（{state}，点击 {clicks} 次，"
-                              f"{'命中区间' if ok else '未确认命中'}）")
-            _pace(t0)
-            continue
-        last_seen = time.time()
-        now = time.time()
-        if not started:
-            # 「开始」出现则点击；若按钮已是「点击」态（手动已开/续接
-            # 场景），直接进入闭环不点
-            kpt = game_map.match_frame_np(bgr, POCHU_START_ICON,
-                                          threshold=POCHU_THRESHOLD,
-                                          region=POCHU_REGION, fallback=False)
-            dpt = game_map.match_frame_np(bgr, POCHU_CLICK_ICON,
-                                          threshold=POCHU_THRESHOLD,
-                                          region=POCHU_REGION, fallback=False)
-            if kpt is not None:
-                human_click(win, kpt[0], kpt[1])
-                btn_pt = kpt
-                started = True
-                log(f"[客栈] 破除封印：已点击「开始」@({kpt[0]},{kpt[1]})", "SYS")
-            elif dpt is not None:
-                btn_pt = dpt
-                started = True
-                log(f"[客栈] 破除封印：按钮已是「点击」态 @({dpt[0]},{dpt[1]})，"
-                    f"直接进入闭环", "SYS")
-            _pace(t0)
-            continue
-        # ---- 已开始：闭环决策（同帧测量）----
-        force_ocr = now - last_ocr >= POCHU_OCR_REFRESH
-        if force_ocr:
-            last_ocr = now
-        cnt = _pochu_countdown(img, cnt_cache, force=force_ocr)
-        btn = _pochu_ocr_gated(img, POCHU_BTN_REGION, btn_cache, force=force_ocr)
-        lx, rx, cx = _pochu_zone(bgr)
-        if cx is None:
-            # 目标带检测失败：0.5s 重试（不点击——无区间无法决策）
-            if now - last_log >= POCHU_STATE_LOG_INTERVAL:
-                last_log = now
-                log("[客栈] 破除封印：目标带未识别，0.5s 后重试", "WARN")
-            _pace(t0)
-            continue
-        L, R, C = _pochu_tick(lx), _pochu_tick(rx), _pochu_tick(cx)
-        if zone is None or abs(zone[2] - C) > 0.15:
-            zone = (L, R, C)
-            log(f"[客栈] 破除封印：目标带 L={L:.1f} R={R:.1f} C={C:.1f}"
-                f"（已点击 {clicks} 次）", "SYS")
-        px = _pochu_fill_edge(bgr)
-        p = 0.0 if px is None else _pochu_tick(px)
-        # 完全停手判定（优先；terminal 一旦建立不再恢复）
-        if terminal is None:
-            if btn and "保持" in btn:
-                terminal = f"按钮变为「{btn}」"
-            elif cnt is not None and cnt <= POCHU_CNT_STOP:
-                terminal = f"倒计时 {cnt}s≤{POCHU_CNT_STOP}s"
-            elif p > R:
-                over_cnt += 1
-                if over_cnt >= 2:
-                    terminal = f"过头 P={p:.2f}>R={R:.2f}"
-            else:
-                over_cnt = 0
-            if terminal is not None:
-                log(f"[客栈] 破除封印：{terminal}，完全停手等待结算", "SYS")
-        # 点击决策：P<L 才点（节奏按 C 三档）
-        if terminal is None and p < L:
-            if C < 4.0:
-                interval = POCHU_TIER_NEAR
-            elif C <= 7.0:
-                interval = POCHU_TIER_MID
-            else:
-                interval = POCHU_TIER_FAR
-            if now - last_click >= interval:
-                dpt = game_map.match_frame_np(bgr, POCHU_CLICK_ICON,
-                                              threshold=POCHU_THRESHOLD,
-                                              region=POCHU_REGION,
-                                              fallback=False)
-                if dpt is not None:
-                    btn_pt = dpt  # 命中刷新按钮位置（防窗口漂移）
-                # 按钮在过程中会变成其他外观但坐标不变（用户 2026-11-09
-                # 确认），模板不命中时仍按缓存坐标续点
-                if btn_pt is not None:
-                    human_click(win, btn_pt[0], btn_pt[1])
-                    clicks += 1
-                    last_click = now
-                    # P 不动告警：点击没生效检查按钮坐标
-                    if last_p is not None and abs(p - last_p) < 0.05:
-                        stall_clicks += 1
-                        if stall_clicks == POCHU_STALL_CLICKS:
-                            log(f"[客栈] 破除封印：已点击 {POCHU_STALL_CLICKS} 次 P 未移动"
-                                f"（P={p:.2f}），检查按钮坐标/点击是否生效", "WARN")
-                    else:
-                        stall_clicks = 0
-                    last_p = p
-        if now - last_log >= POCHU_STATE_LOG_INTERVAL:
-            last_log = now
-            if terminal is not None:
-                st = terminal
-            elif p < L:
-                st = f"点击推进中 P={p:.2f}"
-            else:
-                st = f"保持区间内 P={p:.2f}"
-            log(f"[客栈] 破除封印：{st} 区间[{L:.1f},{R:.1f}] C={C:.1f}"
-                f" 点击{clicks}次", "INFO")
-        _pace(t0)
-    return False, f"破除封印超时（{POCHU_TIMEOUT}s，点击 {clicks} 次，P={last_p}）"
+    """破除封印小游戏闭环（共享实现在 pochufengyin）。返回 (是否完成, 描述)。"""
+    return _pochu_minigame.play_pochufengyin(win, POCHU_TITLE_ICON,
+                                             prefix="客栈", label="破除封印")
 
 
 def _match_baoxiang(img):

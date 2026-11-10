@@ -299,6 +299,81 @@ def rapid_click(win, x: int, y: int, press: float = 0.02):
         _mouse_call(Mouse.mouse_up, button="primary")
 
 
+class MouseHold:
+    """长按鼠标按键：按下后保持，直到 stop() 抬起。
+
+    钓鱼小游戏「长按」按钮使用——按住期间进度持续推进、松开即停。
+    整个长按周期持有全局输入锁，防止战斗/任务线程移动物理鼠标或插入
+    点击破坏按下状态（真实长按的语义就是按住不动）。start/stop 必须
+    在同一线程（_INPUT_LOCK 为 RLock，线程归属），调用方必须 try/finally
+    保证 stop（异常/战斗打断时释放，否则鼠标卡在按下状态）。
+
+    静默模式：投递 WM_LBUTTONDOWN 后延后 WM_LBUTTONUP（游戏内部按键
+    状态保持按下），不需要物理光标；物理模式：Mouse.mouse_down/up。
+    窗口/客户区获取失败时 start 返回 False（本次未按下，下轮重试）。
+    """
+
+    def __init__(self, win, x, y, button="primary"):
+        self.win = win
+        self.x = int(x)
+        self.y = int(y)
+        self.button = button
+        self._silent = _SILENT_CLICK
+        self._active = False
+        self._info = None
+
+    @property
+    def active(self):
+        """当前是否处于按下状态。"""
+        return self._active
+
+    def start(self):
+        """按下按键；成功返回 True（输入锁保持到 stop）。"""
+        if self._active:
+            return True
+        if self._silent:
+            from . import silent_click  # 延迟导入防循环（见 _silent_click）
+            _INPUT_LOCK.acquire()
+            try:
+                info = silent_click.begin_silent_hold(
+                    self.win, self.x, self.y, button=self.button)
+            except BaseException:
+                _INPUT_LOCK.release()
+                raise
+            if info is None:
+                _INPUT_LOCK.release()
+                return False
+            self._info = info
+        else:
+            _INPUT_LOCK.acquire()
+            try:
+                sx = self.win.rect.left + self.x
+                sy = self.win.rect.top + self.y
+                _mouse_call(Mouse.mouse_move, sx, sy,
+                            move_duration=random.uniform(0.04, 0.09))
+                _mouse_call(Mouse.mouse_down, button=self.button)
+            except BaseException:
+                _INPUT_LOCK.release()
+                raise
+        self._active = True
+        return True
+
+    def stop(self):
+        """抬起按键并释放输入锁（未按下时无操作）。"""
+        if not self._active:
+            return
+        try:
+            if self._silent:
+                from . import silent_click
+                silent_click.end_silent_hold(self._info)
+            else:
+                _mouse_call(Mouse.mouse_up, button=self.button)
+        finally:
+            self._active = False
+            self._info = None
+            _INPUT_LOCK.release()
+
+
 def move_away(win):
     """点击对话框选项后把鼠标移走（窗口左下角中性区域）。
 

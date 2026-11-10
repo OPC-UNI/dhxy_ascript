@@ -608,6 +608,24 @@ def task_count(win):
     return len(read_tasks(win))
 
 
+# ---- 任务标题匹配的 OCR 形近字归一（2026-11-10 玄枢轶闻实测） ----
+# 区域引擎缩放后小号彩色字形会把「轶」读成「铁」：任务标题
+# 「玄闻辨真[玄枢轶闻]」被确定性读成「玄闻辨真[玄枢铁闻]」，has_task_in
+# / find_task 全部失配——领取成功后校验判「未检测到任务」、主循环
+# has_task 判无任务，反复重新领取并误点对话框选项（实测 3 分钟 10 轮）。
+# 误读随裁剪几何变化（同一帧宽 430×高 330 读对、宽 300 或高 200 读错，
+# 与文字颜色无关），靠固定裁剪切区无法根治（既有 260/300px 宽度校准
+# 只覆盖了当时那组几何），故在标题匹配处统一归一。
+# 匹配串与 OCR 文本双侧归一后再比较：真实含「铁」的文案（如铁扇公主）
+# 直接搜同样可命中，不改写日志/展示文本，不影响绿字/选项等其它匹配。
+_TITLE_OCR_CONFUSIONS = str.maketrans({"铁": "轶"})
+
+
+def title_key(text):
+    """标题匹配键：形近字归一（见 _TITLE_OCR_CONFUSIONS）。"""
+    return text.translate(_TITLE_OCR_CONFUSIONS)
+
+
 def has_task_in(items, img_np, title, fallback_texts=()):
     """在 OCR 结果中判断追踪面板是否存在指定任务（判定规则见 has_task）。
 
@@ -616,15 +634,19 @@ def has_task_in(items, img_np, title, fallback_texts=()):
     has_task 误报失败——用内容链接行「前往…消灭修罗」兜底，该行
     区域 OCR 检测稳定且仅在任务存在时出现；允许绿色（链接行本身
     是绿色，标题判定才排除绿色）。
+
+    标题/兜底串比较走 title_key 形近字归一（轶↔铁，见上）。
     """
     xmax = panel_row_xmax(img_np)
+    tkey = title_key(title)
     for txt, rect, score in items:
-        if title in txt and score >= 0.55 and rect[0] < xmax:
+        if tkey in title_key(txt) and score >= 0.55 and rect[0] < xmax:
             if not is_green_text(img_np, rect):
                 return True
     for ft in fallback_texts:
+        fkey = title_key(ft)
         for txt, rect, score in items:
-            if ft in txt and score >= 0.55 and rect[0] < xmax:
+            if fkey in title_key(txt) and score >= 0.55 and rect[0] < xmax:
                 return True
     return False
 
@@ -645,12 +667,17 @@ def has_task(win, title, fallback_texts=()):
 
 
 def find_task(tasks, title):
-    """在任务列表中查找指定任务（标题优先，其次拼接后的内容）。"""
+    """在任务列表中查找指定任务（标题优先，其次拼接后的内容）。
+
+    比较走 title_key 形近字归一（轶↔铁）：标题行被区域引擎读成
+    「玄枢铁闻」时仍能命中（2026-11-10 玄枢轶闻实测）。
+    """
+    tkey = title_key(title)
     for t in tasks:
-        if title in t["title"]:
+        if tkey in title_key(t["title"]):
             return t
     for t in tasks:
-        if title in t["text"]:
+        if tkey in title_key(t["text"]):
             return t
     return None
 
@@ -833,14 +860,15 @@ def track_task(win, title, text=None, green_index=0, retries=4, retry_interval=1
         # 把 NPC 收尾台词当面板绿字点击 (261,260)（正确 (91,268)），
         # 点击无效任务卡死至人工重启——居中对话框文案不得抢锚点
         anchor_idx = None
+        tkey = title_key(title)  # 标题形近字归一（轶↔铁，见 title_key）
         for i, (txt, rect, score) in enumerate(items):
-            if _is_title_line(txt) and title in txt and score >= 0.55 \
+            if _is_title_line(txt) and tkey in title_key(txt) and score >= 0.55 \
                     and col_lo <= rect[0] < col_hi:
                 anchor_idx = i
                 break
         if anchor_idx is None:
             for i, (txt, rect, score) in enumerate(items):
-                if title in txt and score >= 0.55 and col_lo <= rect[0] < col_hi \
+                if tkey in title_key(txt) and score >= 0.55 and col_lo <= rect[0] < col_hi \
                         and len(txt.strip()) <= 20:
                     anchor_idx = i
                     break
@@ -852,7 +880,7 @@ def track_task(win, title, text=None, green_index=0, retries=4, retry_interval=1
             # （如「【玄枢轶闻】」，x≥200）同为标题形态，不限列即
             # 劫持锚点（2026-11-08 玄枢轶闻点错教训的锚点侧通道）
             for i, (txt, rect, score) in enumerate(items):
-                if _is_title_line(txt) and title in txt and score >= 0.55 \
+                if _is_title_line(txt) and tkey in title_key(txt) and score >= 0.55 \
                         and col_lo <= rect[0] < col_hi:
                     anchor_idx = i
                     break

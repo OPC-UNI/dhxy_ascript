@@ -38,6 +38,32 @@ def test_group_tasks_count_fragment_not_title():
     assert len(tasks) == 0 or tasks[0]["title"] != "1/51]"
 
 
+# ---- 标题形近字归一（轶↔铁，2026-11-10 玄枢轶闻领取校验实测） ----
+
+def test_title_ocr_confusion_matches_xuanshu_task():
+    """标题行被区域引擎读成「玄枢铁闻」时任务仍判定存在。
+
+    2026-11-10 实测：「玄闻辨真[玄枢轶闻]」随裁剪几何被确定性读成
+    「玄闻辨真[玄枢铁闻]」，has_task_in/find_task 全部失配——领取
+    成功后校验判「未检测到任务」、主循环反复重新领取。
+    """
+    img = np.zeros((400, 400, 3), dtype=np.uint8)  # 全零帧：非绿字
+    items = [_item("·玄闻辨真[玄枢铁闻]", x=14),
+             _item("根据李玄启提供的线索，去长", x=16, y=250)]
+    assert task_tracker.has_task_in(items, img, "玄枢轶闻")
+    tasks = task_tracker.group_tasks(items)
+    assert task_tracker.find_task(tasks, "玄枢轶闻") is tasks[0]
+
+
+def test_title_ocr_confusion_no_false_positive():
+    """归一不放大匹配：其它任务/无关文案仍不命中。"""
+    img = np.zeros((400, 400, 3), dtype=np.uint8)
+    items = [_item("五环[五环]"), _item("去找大唐境内(358, 21)惯骗[1/5]", y=280)]
+    assert not task_tracker.has_task_in(items, img, "玄枢轶闻")
+    tasks = task_tracker.group_tasks(items)
+    assert task_tracker.find_task(tasks, "玄枢轶闻") is None
+
+
 def test_task_signature_stable_and_ordered():
     task = {"title": "五环[五环]",
             "lines": [("去找大唐境内(358, 21)惯骗[1/5]", None, None)],

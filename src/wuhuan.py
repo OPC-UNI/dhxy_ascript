@@ -8,7 +8,8 @@
    → 到达门口先确保降落（飞行中无法点击进店：开飞行驭器面板识别飞行
      状态、飞行中自动点降落，检查失败不阻断）→ 进入服装店 →
      点老板（牛记布店固定坐标 643,463）→ 对话框点「我想买点东西」
-   → 匹配项链图标后鼠标移过去左键点击两次 → 点购买（购买 2 件 2 级装备）
+   → 轮询等待商店面板打开（项链图标出现）→ 匹配项链图标后鼠标移过去
+     左键点击两次 → 点购买（购买 2 件 2 级装备）
 2. 任务循环（次数按通用设置-任务次数）：
    - 到云游大师：长安小地图点击 (408,362) 寻路 → 等待到达长安 88,175 附近
      → 点击领取任务按钮 → 对话框点绿色选项「我可以帮助这些人」→ 任务出现在追踪面板
@@ -34,12 +35,14 @@ from .battle import is_in_battle, is_in_battle_frame  # 战斗状态判定（统
 from . import debug_overlay  # 调试信息悬浮层（任务进度更新）
 from .control_window import (load_task_counts,                # 任务次数上限（通用设置）
                              load_wuhuan_vitality_continue)   # 活力不足继续任务开关（五环设置）
-from .xuanshu import follow_task, _click_dialog_green_option  # 复用玄枢轶闻的任务跟踪/对话框逻辑
+from .xuanshu import (follow_task, _click_dialog_green_option,
+                      DIALOG_OPTION_MAP)  # 复用玄枢轶闻的任务跟踪/对话框逻辑
 from . import zuoqi  # 飞行驭器（进服装店前降落检查：飞行中无法点击进店）
 from .dialog_common import (_dialog_text_present,
                             _click_screen_center,
                             close_scene_panels,
-                            green_option_center)  # 对话框共享组件
+                            green_option_center,
+                            StoryDialogDismisser)  # 对话框共享组件
 
 # 任务追踪面板中的任务标题
 WUHUAN_TITLE = "五环"
@@ -96,6 +99,20 @@ INTRO_DIALOG_TEXT = "快去帮助他吧"
 # 误判（实测 2026-10-13 08:46:36 面板空 2~3s 被误判完成计 1 次，
 # 任务实际仍在），未见恭喜对话框的消失不计完成（run_loop 据此过滤）
 _congrats_seen_this_follow = False
+# ---- 无选项剧情对话点屏推进（2026-11-10 CPU 高峰实测） ----
+# 五环途中的 NPC 剧情台词（如「我被人骗了…20万两银子…」）是标准对话框、
+# 无绿字选项；wuhuan 的 follow 传 skip_texts={} 禁用了通用点屏推进（防
+# 误触提交对话的绿字选项），此类对话无人处理 → 常驻屏幕，对话区模板门
+# 每轮命中、每 0.5s 全量区域 OCR（一次 100-170ms，占任务线程 20-35%
+# wall，与修罗 NPC 收尾对话 2026-11-09 同款）。兜底点屏幕中间推进/关闭
+# （共享实现 dialog_common.StoryDialogDismisser）。follow 侧的通用兜底
+# 传 story_dialog_dismiss=False 关闭、改用本实例：只有这里能挂「给与
+# 面板预期窗口内不点」的任务专属抑制。
+_give_expected_until = 0.0   # 给与面板预期截止（此窗口内不做剧情对话点屏，
+                             # 防把手持给与流程的 NPC 对话误推进关闭）
+_story_dismisser = StoryDialogDismisser(
+    known_texts=DIALOG_OPTION_MAP,  # 已知选项对话：选项未渲染时只等待
+    allow_dismiss=lambda: time.time() >= _give_expected_until)
 GIVE_ICON = "give_title.png"          # 给与面板标志（横幅「给与」静态标题区，32x114）
 GIVE_BTN_ICON = "give_btn.png"                      # 给与按钮（28.png，OCR 读作「给子」）
 XIANGLIAN_ICON = "fuzhuangdian_xianglian.png"       # 项链（与商店/给与面板行格式相同，实测给与面板匹配 1.0）
@@ -126,7 +143,15 @@ WUHUAN_SIG_RATIO = 0.9
 
 # ---- 时序参数（秒） ----
 CLOTH_SHOP_ARRIVE_TIMEOUT = 90  # 寻路到布店门口的超时
-SHOP_ENTER_TIMEOUT = 15         # 进入服装店的超时（到达门口后）
+# 进入服装店的超时（到达门口后）。每轮迭代含 点入口1s + 对话框选项最长4s
+# + 商店面板最长 SHOP_OPEN_TIMEOUT，单次重试最坏约 11s——15s 只够一轮，
+# 面板渲染慢未命中时来不及重试（2026-11-10 误判教训），放宽到 30s
+SHOP_ENTER_TIMEOUT = 30
+# 点「我想买点东西」后等待商店面板渲染打开的轮询超时：实测点击到面板
+# 完整渲染有数百毫秒到数秒延迟，固定 0.3s sleep 后单次匹配会在面板渲染
+# 前判定「未找到服装店项链」并使整个准备阶段失败（2026-11-10 实测：
+# 失败后同一状态截图项链模板匹配 0.9999、购买按钮 1.0000，纯时序竞态）
+SHOP_OPEN_TIMEOUT = 6.0
 CLAIM_ARRIVE_TIMEOUT = 90       # 寻路到云游大师附近的超时
 CLAIM_BUTTON_TIMEOUT = 20       # 到达后等待领取任务按钮出现的超时
 CLAIM_DIALOG_TIMEOUT = 15       # 领取对话框处理超时
@@ -202,13 +227,32 @@ def _wait_near(win, target, timeout, desc, interval):
     return False, f"寻路到{desc}超时（未到达长安 {target[0]},{target[1]} 附近）"
 
 
+def _wait_shop_open(win, timeout=SHOP_OPEN_TIMEOUT):
+    """轮询等待服装店商品面板出现（项链图标可见即视为已打开）。
+
+    点「我想买点东西」到面板渲染完成有数百毫秒到数秒延迟，固定短
+    sleep 后单次模板匹配会误判「未找到项链」（性能规则 7：固定 sleep
+    等状态切换 → 改为轮询目标状态的直接信号）。timeout=0 时只查当前
+    帧一次（复用已确认场景的快速断言）。返回 (是否打开, 项链坐标或 None)。
+    """
+    deadline = time.time() + timeout
+    while True:
+        pt = game_map.find_template(win, FUZHUANGDIAN_XIANGLIAN_ICON)
+        if pt is not None:
+            return True, pt
+        if time.time() >= deadline:
+            return False, None
+        time.sleep(0.4)
+
+
 def _enter_cloth_shop(win, tag="[五环]"):
     """走到布店门口并进入服装店、点老板打开商店对话框。
 
     与购买流程的进店段一致：小地图点布店位置寻路 → 等待到达布店门口
-    → 降落检查 → 点入口 → 点老板 → 对话框点「我想买点东西」。
-    返回 (是否成功, 描述)；进店最终信号（商店对话框/项链图标）由
-    调用方校验。诊断页「测试进入布店」复用本链路（tag 加验证标记）。
+    → 降落检查 → 点入口 → 点老板 → 对话框点「我想买点东西」→ 轮询
+    确认商店面板打开（项链图标可见）才返回成功——选项点击成功不代表
+    面板已渲染，未打开则继续重试进店（2026-11-10 时序竞态教训）。
+    诊断页「测试进入布店」复用本链路（tag 加验证标记）。
     """
     # 打开长安小地图点击布店位置寻路（走到服装店门口）
     if not game_map.is_in_map(win, CHANGAN_CITY):
@@ -238,19 +282,29 @@ def _enter_cloth_shop(win, tag="[五环]"):
     ok, info = zuoqi.ensure_landed(win)
     log(f"{tag}[飞行驭器] 降落检查: {info}", "INFO" if ok else "WARN")
     zuoqi.close_feixingyuqi_panel(win)
-    # 进入服装店：点入口 → 点老板坐标开始对话 → 对话框出现「我想买点东西」
+    # 进入服装店：点入口 → 点老板坐标开始对话 → 对话框点「我想买点东西」
+    # → 轮询确认商店面板打开。面板已开（上次流程遗留/渲染慢于本检查）时
+    # 直接成功返回——入口/老板坐标都落在商店面板内部，已开面板继续盲点
+    # 会把点击打进面板商品格
     deadline = time.time() + SHOP_ENTER_TIMEOUT
     while time.time() < deadline:
+        ok, _pt = _wait_shop_open(win, timeout=0.0)
+        if ok:
+            log(f"{tag} 商店面板已打开", "SYS")
+            return True, "已进入服装店，商店对话框已打开"
         human_click(win, CLOTH_SHOP_ENTER_POS[0], CLOTH_SHOP_ENTER_POS[1])
         time.sleep(1.0)  # 等待进店
         human_click(win, SHOP_OWNER_POS[0], SHOP_OWNER_POS[1])
         log(f"{tag} 已点击服装店老板", "SYS")
         ok, info = _click_dialog_green_option(win, BUY_DIALOG_OPTION, timeout=4)
+        if not ok:
+            continue
+        # 选项点击成功 ≠ 面板已渲染：轮询等项链图标出现再判定进店成功
+        ok, _pt = _wait_shop_open(win)
         if ok:
-            break
-    else:
-        return False, "进入服装店后未出现购买对话框"
-    return True, "已进入服装店，商店对话框已打开"
+            return True, "已进入服装店，商店对话框已打开"
+        log(f"{tag} 已点击「{BUY_DIALOG_OPTION}」但商店面板 {SHOP_OPEN_TIMEOUT:.0f}s 内未出现，重试进店", "WARN")
+    return False, "进入服装店后未出现购买对话框"
 
 
 def _buy_equipments(win):
@@ -258,10 +312,10 @@ def _buy_equipments(win):
     ok, info = _enter_cloth_shop(win)
     if not ok:
         return False, info
-    time.sleep(0.3)
-    # 匹配项链图标：鼠标移动过去后左键点击两次（购买 2 件）
-    pt = game_map.find_template(win, FUZHUANGDIAN_XIANGLIAN_ICON)
-    if pt is None:
+    # 进店成功时面板已确认打开（_enter_cloth_shop 内轮询确认）；此处再取
+    # 一次项链位置直接用于点击（单帧快速断言，非单次判定的成败依据）
+    ok, pt = _wait_shop_open(win, timeout=0.0)
+    if not ok:
         return False, "商店中未找到服装店项链"
     precise_click(win, pt[0], pt[1], times=EQUIPMENT_COUNT, interval=0.4)  # 0.4s 间隔避免被识别为双击
     log(f"[五环] 已点击项链 {EQUIPMENT_COUNT} 次", "SYS")
@@ -286,10 +340,10 @@ def verify_cloth_shop_flow(win):
     ok, info = _enter_cloth_shop(win, tag="[五环][验证]")
     if not ok:
         return False, info
-    time.sleep(0.3)
-    # 商店对话框打开信号：项链图标在场（购买流程即据此开始购买）
-    pt = game_map.find_template(win, FUZHUANGDIAN_XIANGLIAN_ICON)
-    if pt is None:
+    # 商店对话框打开信号：项链图标在场（进店链路已轮询确认，此处取位置
+    # 仅用于验证日志）
+    ok, pt = _wait_shop_open(win, timeout=0.0)
+    if not ok:
         return False, "商店对话框中未找到服装店项链（未真正进入商店）"
     log(f"[五环][验证] 商店对话框已打开，项链图标 ({pt[0]}, {pt[1]})（未购买）", "SYS")
     return True, f"已进入布店（商店对话框已打开，未购买；项链图标 ({pt[0]}, {pt[1]})）"
@@ -645,6 +699,15 @@ def _prepare(win):
     return _buy_equipments(win)
 
 
+def _dismiss_story_dialog(win, items, img_np):
+    """无绿字选项的剧情对话点屏推进（守卫见 StoryDialogDismisser）。
+
+    本实例额外带「给与面板预期窗口内不点」抑制（allow_dismiss），
+    见 _give_expected_until。返回是否已点击。
+    """
+    return _story_dismisser.try_dismiss(win, items, img_np, prefix="五环")
+
+
 def _handle_submit_dialog(win, items, img_np):
     """处理五环提交装备流程（follow_task 的附加对话处理回调）。
 
@@ -654,6 +717,8 @@ def _handle_submit_dialog(win, items, img_np):
     阶段二：给与面板打开 → 检索项链（含储物格切换）→ 点击选中 → 点给与按钮完成。
     给与面板打开时优先走阶段二（跨轮询续接）；
     全部储物格切换后仍未找到 → 抛 MissingEquipment 终止任务。
+    兜底：无绿字选项的标准对话框（NPC 剧情台词）点屏幕中间推进/关闭
+    （见 _dismiss_story_dialog）——不处理会常驻屏幕持续触发对话区 OCR。
     返回是否已处理。
     """
     # 完成标记优先：每日五环全部完成出现恭喜对话框 → 抛异常结束任务循环。
@@ -686,20 +751,25 @@ def _handle_submit_dialog(win, items, img_np):
     if game_map.find_template(win, GIVE_ICON) is not None:
         return _do_give(win)
     # 阶段一：对话出现 → 点绿色选项
-    if not _dialog_text_present(items, SUBMIT_DIALOG_TEXT):
-        return False
-    if not _click_green_option(win, items, img_np, SUBMIT_DIALOG_OPTION):
-        return False  # 绿色选项尚未渲染，下次轮询再试
-    log("[五环] 检测到提交装备对话，已点击「刚好我这里有，送你啦」", "SYS")
-    # 等待给与面板出现
-    if not _wait_template(win, GIVE_ICON, GIVE_PANEL_TIMEOUT):
-        log("[五环] 给与面板未出现", "WARN")
-        return True
-    return _do_give(win)
+    if _dialog_text_present(items, SUBMIT_DIALOG_TEXT):
+        if not _click_green_option(win, items, img_np, SUBMIT_DIALOG_OPTION):
+            return False  # 绿色选项尚未渲染，下次轮询再试
+        log("[五环] 检测到提交装备对话，已点击「刚好我这里有，送你啦」", "SYS")
+        global _give_expected_until
+        _give_expected_until = time.time() + GIVE_PANEL_TIMEOUT + 5
+        # 等待给与面板出现
+        if not _wait_template(win, GIVE_ICON, GIVE_PANEL_TIMEOUT):
+            log("[五环] 给与面板未出现", "WARN")
+            return True
+        return _do_give(win)
+    # 兜底：无绿字选项的剧情对话（NPC 台词）→ 点屏幕中间推进/关闭。
+    # 不处理会常驻屏幕，对话区模板门每轮命中、每 0.5s 全量 OCR
+    return _dismiss_story_dialog(win, items, img_np)
 
 
 def _do_give(win):
     """给与面板已打开：检索项链 → 点击选中 → 点击给与按钮完成给与。"""
+    global _give_expected_until
     item, desc = bag.find_item_with_slots(win, XIANGLIAN_ICON, "项链")
     if item is None:
         log(f"[五环] {desc}", "WARN")
@@ -712,6 +782,7 @@ def _do_give(win):
         log("[五环] 未找到给与按钮，等待下次轮询重试", "WARN")
         return True  # 面板仍在，下次轮询从阶段二继续
     human_click(win, pt[0], pt[1])
+    _give_expected_until = 0.0  # 给与完成：剧情对话点屏推进恢复正常
     log("[五环] 已点击给与按钮，装备给与完成", "SYS")
     return True
 
@@ -944,7 +1015,9 @@ def run_loop(win, cycle_interval=3.0):
                                    ignore_empty_key=True,
                                    skip_texts={},
                                    require_coord=True,
-                                   signature_ratio=WUHUAN_SIG_RATIO)
+                                   signature_ratio=WUHUAN_SIG_RATIO,
+                                   story_dialog_dismiss=False)  # 剧情对话点屏
+                                   # 走 _handle_submit_dialog 内实例（带给与窗口抑制）
         except MissingEquipment as e:
             log(f"[五环] {MISSING_EQUIPMENT_INFO}（{e}），结束任务", "SYS")
             return f"{MISSING_EQUIPMENT_INFO}，结束五环任务（已完成 {done} 次）"

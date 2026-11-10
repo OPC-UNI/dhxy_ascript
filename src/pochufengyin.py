@@ -1,0 +1,428 @@
+"""进度条对准小游戏（破除封印 / 钓鱼）闭环控制。
+
+同一款小游戏窗口被多个任务复用：客栈「破除封印」（灵兔封印）与玄枢
+「钓鱼」共用完全相同的窗口布局、开始按钮、目标高亮带与进度条区域，
+仅标题模板与推进方式不同——破除封印为「点击」（连点推进），钓鱼为
+「长按」（按住持续推进，长按按钮模板 xuanshu_diaoyu_changan.png）。
+实现与标定同源（2026-11-09 用户完整描述 + 7.png 实测），调用方只传
+标题模板、按钮模板、推进方式与日志前缀/名称。
+
+流程：
+弹窗出现 → 识别目标高亮区间 [L,R,C]（target 模板定位，目标带 ≈1 刻度宽）
+→ 点「开始」（按钮同位置变为流程按钮）→ 每轮询一帧测量填充右边缘 P
+（HSV 金掩码 + 从左连通段）→ P<L 推进（点击模式按 C 三档连点 / 长按
+模式按住不放）。点击模式 L≤P≤R 停手保持、P>R 过头永久停手；长按模式
+进入区间后继续按住（游戏锁定游标，松手会回退脱钩），仅 P>R 时松开让其
+回落。按钮变「保持」或倒计时 ≤3s 完全停手等结算 → 标题消失即任务结束。
+全部测量在 POCHU_REGION/进度条带内，坐标映射 1~10 刻度（x 435~992，
+7.png 实测刻度线间距 55.7px 吻合）。
+"""
+import re
+import time
+
+import cv2
+import numpy as np
+
+from .app_utils import log, human_click, MouseHold
+from . import map as game_map
+from .battle import is_in_battle_frame
+
+# ---- 窗口按钮与模板（区域范围与客栈破除封印完全一致）----
+POCHU_START_ICON = "kezhan_pochufengyin_kaishi.png"  # 「开始」按钮（点击后同位置变为流程按钮）
+POCHU_CLICK_ICON = "kezhan_pochufengyin_dianji.png"  # 点击模式「点击」按钮（过程中会变外观，坐标不变仍须点）
+POCHU_TARGET_ICON = "kezhan_pochufengyin_target.png"  # 目标高亮区间标记（模板定位 C）
+POCHU_REGION = (314, 458, 1058, 645)   # 弹窗模板搜索条带（用户提供，覆盖小游戏窗口区）
+POCHU_THRESHOLD = 0.8                  # 模板匹配阈值（标题 0.999/点击 0.998/目标 0.985 实测）
+# ---- 进度条测量（7.png 实测标定）----
+POCHU_SCALE_X0 = 435                   # 1 刻度窗口 x（进度条左端）
+POCHU_SCALE_X1 = 992                   # 10 刻度窗口 x（进度条右端）
+POCHU_SCALE_W = POCHU_SCALE_X1 - POCHU_SCALE_X0  # 一满刻度宽（557px，刻度线间距实测 55.7）
+POCHU_BAR_REGION = (430, 528, 1000, 562)  # 进度条搜索带（目标带/填充测量用）
+POCHU_BAR_Y = (536, 554)               # 进度条本体 y 带（填充行；刻度线在其上方 511~527）
+POCHU_FILL_MIN_COL = 2                 # 列内填充像素下限（18px 高带内实测 ~10px/列）
+POCHU_FILL_GAP = 8                     # 连续缺填充列数即视为填充段结束
+POCHU_ZONE_HALF = 29                   # 目标带半宽（模板 58px≈1 刻度；实测括号 879~937 吻合）
+# 填充金掩码（HSV，实测）：填充体 H21 S133 V176、前缘亮标 H26 S96 V202；
+# 目标带括号为白金色 H36 S61 V215（H>32 排除）、暗内部 V≤125（V 门排除）
+POCHU_FILL_H = (15, 32)
+POCHU_FILL_S = 95
+POCHU_FILL_V = 120
+# ---- 倒计时与按钮文字（OCR，差分门 + 限频）----
+POCHU_CNT_REGION = (600, 545, 770, 598)   # 「施法倒计时：N秒」区域（7.png 实测）
+POCHU_BTN_REGION = (915, 565, 1010, 635)  # 按钮文字区域（点击/保持/长按）
+POCHU_CNT_STOP = 3                     # 倒计时 ≤3 秒完全停手
+POCHU_OCR_REFRESH = 2.0                # 倒计时/按钮 OCR 强制重检间隔（差分门兜底）
+POCHU_STALL_CLICKS = 4                 # 点击模式：P 连续不动点击数 → 告警按钮坐标
+POCHU_HOLD_STALL = 2.0                 # 长按模式：按住 P 不动达该时长（秒）→ 告警一次
+POCHU_HOLD_OVER_MARGIN = 1.0           # 长按模式「冲过右缘」判定余量（刻度）：
+                                       # 游标锁定在区间右缘时测量噪声可轻微过 R，
+                                       # 余量外（R+1）才松开回落，防误松手
+POCHU_STATE_LOG_INTERVAL = 1.0         # 状态日志限频（秒）
+# 点击节奏三档（用户 spec）：C<4 近目标易过头（400~500ms，每点等位置更新）；
+# 4≤C≤7 中距离（250~300ms）；C>7 远距离时间紧（150~200ms 快速推进）
+POCHU_TIER_NEAR = 0.45
+POCHU_TIER_MID = 0.275
+POCHU_TIER_FAR = 0.175
+POCHU_TICK_PACE = 0.15                 # 点击模式测量节拍（每轮询一帧）
+POCHU_HOLD_TICK_PACE = 0.08            # 长按模式测量节拍（填充推进快，需更密
+                                       # 采样以在进入区间时及时松手防过头）
+POCHU_ARM_TIMEOUT = 120                # 入口选项点击后检测窗口的最长时限（秒）
+POCHU_CHECK_INTERVAL = 1.0             # extras 链窗口检测限频（秒，条带匹配 ~10ms）
+POCHU_END_WINDOW = 2.0                 # 标题连续消失确认窗口（秒；结束确认防抖，不得缩短）
+POCHU_TIMEOUT = 180                    # 小游戏总超时（秒）
+
+
+def pochu_tick(x):
+    """窗口 x → 1~10 刻度（0=进度条左端 435，10=右端 992）。"""
+    return (x - POCHU_SCALE_X0) / POCHU_SCALE_W * 10.0
+
+
+def pochu_fill_edge(bgr):
+    """进度条金色填充右边缘窗口 x（HSV 金掩码 + 从左起连通段）。
+
+    填充体/前缘实测 HSV 见 POCHU_FILL_H/S/V；目标带括号（H>32）与暗
+    内部（V≤125）被掩码排除，连通段从条左端起算不受其干扰。无填充
+    （未开始/掩码漏检）返回 None（调用方按刻度 0 处理）。
+    """
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    h_ch, s_ch, v_ch = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
+    l, _t, r, _b = POCHU_BAR_REGION
+    fill = (h_ch >= POCHU_FILL_H[0]) & (h_ch <= POCHU_FILL_H[1]) \
+        & (s_ch > POCHU_FILL_S) & (v_ch > POCHU_FILL_V)
+    colcnt = fill[POCHU_BAR_Y[0]:POCHU_BAR_Y[1], l:r].sum(axis=0)
+    have = colcnt >= POCHU_FILL_MIN_COL
+    idx = np.flatnonzero(have)
+    if idx.size == 0:
+        return None
+    start = int(idx[0])
+    pend = start
+    gap = 0
+    for i in range(start, have.size):
+        if have[i]:
+            gap = 0
+            pend = i
+        else:
+            gap += 1
+            if gap >= POCHU_FILL_GAP:
+                break
+    return l + pend
+
+
+def _pochu_zone(bgr):
+    """目标高亮区间：target 模板定位中心 C，L/R=C±POCHU_ZONE_HALF
+    （目标带 ≈1 刻度宽，7.png 实测括号 879~937 与模板 ±29 吻合）。
+    返回 (L, R, C) 窗口 x 或 (None, None, None)。"""
+    c = game_map.match_frame_np(bgr, POCHU_TARGET_ICON,
+                                threshold=POCHU_THRESHOLD,
+                                region=POCHU_BAR_REGION, fallback=False)
+    if c is None:
+        return None, None, None
+    return c[0] - POCHU_ZONE_HALF, c[0] + POCHU_ZONE_HALF, c[0]
+
+
+_POCHU_CNT_RE = re.compile(r"(\d{1,2})\s*秒")
+
+
+def _pochu_ocr_gated(img_pil, region, cache, force=False):
+    """区域 OCR 差分门：区域像素无变化（且非强制）直接返回缓存文本
+    （性能规则 5：OCR 前置像素差分预过滤）；变化才 OCR。识别失败
+    返回 None（未知状态，调用方不动作）。"""
+    crop = np.asarray(img_pil.crop(region))
+    if not force and cache["crop"] is not None \
+            and np.array_equal(cache["crop"], crop):
+        return cache["text"]
+    cache["crop"] = crop.copy()
+    items, _ = game_map.ocr_regions(img_pil, (region,))
+    txt = "".join(t for t, _r, s in items if s >= 0.55)
+    cache["text"] = txt or None
+    return cache["text"]
+
+
+def _pochu_countdown(img_pil, cache, force=False):
+    """倒计时秒数（差分门 OCR「施法倒计时：N秒」）；解析失败返回 None。"""
+    txt = _pochu_ocr_gated(img_pil, POCHU_CNT_REGION, cache, force=force)
+    if not txt:
+        return None
+    m = _POCHU_CNT_RE.search(txt)
+    return int(m.group(1)) if m else None
+
+
+def play_pochufengyin(win, title_icon, prefix="客栈", label="破除封印",
+                      hold=False, action_icon=None):
+    """进度条对准小游戏闭环控制（阻塞执行到标题消失）。返回 (是否完成, 描述)。
+
+    流程（用户 2026-11-09 完整描述 + 7.png 实测标定）：
+    1. 弹窗出现（记录时间）→ 识别目标高亮区间 [L,R,C]
+    2. 点「开始」→ 按钮同位置变为流程按钮（点击模式「点击」/长按模式
+       「长按」，过程中会变其他外观，坐标不变仍须操作；变「保持」则
+       完全停手）
+    3. 闭环（每 POCHU_TICK_PACE 一帧一判定，同帧复用性能规则 1）：
+       测量填充右边缘 P（HSV 金掩码+连通段）与目标带 [L,R,C]（模板）
+       → P<L 推进：点击模式按 C 三档节奏连点、长按模式按住不放。
+       点击模式：L≤P≤R 停手保持、P>R 连续 2 轮确认过头后永久停手。
+       长按模式：进入区间后继续按住（游戏锁定游标，松手会回退脱钩），
+       仅 P>R 连续 2 轮时松开让其回落、回到 L 以下自动再按住。
+       按钮变「保持」或倒计时 ≤3s 完全停手等结算（长按期间跳过 OCR，
+       以标题消失为准）
+    4. 标题连续消失 POCHU_END_WINDOW 秒即任务结束（输出最终 P 与是否命中）
+    5. 战斗打断立即退出；异常：目标带检测失败沿用缓存区间继续决策、
+       长按模式区间左侧按住无进度 POCHU_HOLD_STALL 秒告警并释放重按
+       （down 消息漏消费自愈；区间内不动视为游戏锁定，不释放）
+
+    title_icon：窗口标题模板（各任务不同，如 kezhan_pochufengyin.png /
+    xuanshu_diaoyu.png）；prefix/label：日志前缀与小游戏名（同款窗口
+    不同任务日志可区分）。hold=True 为长按模式（钓鱼：开始后按钮为
+    action_icon=xuanshu_diaoyu_changan.png，按住才推进；游标进入目标
+    区间后游戏会锁定，须保持按住到窗口结束，松手会回退脱钩）；
+    hold=False 为点击模式（破除封印）。
+    """
+    def _pace(tick_start):
+        """补齐测量节拍（截图/匹配/点击耗时计入间隔，不累积漂移）。"""
+        pace = POCHU_HOLD_TICK_PACE if hold else POCHU_TICK_PACE
+        rem = pace - (time.time() - tick_start)
+        if rem > 0:
+            time.sleep(rem)
+
+    act_icon = action_icon or POCHU_CLICK_ICON
+    act_name = "长按" if hold else "点击"
+    deadline = time.time() + POCHU_TIMEOUT
+    started = False
+    btn_pt = None                 # 「开始/流程按钮」位置（同位置，命中刷新、未命中缓存续按）
+    last_seen = time.time()       # 标题最近命中时间（消失确认窗口起点）
+    last_click = 0.0
+    last_p = None                 # 最近推进时测量的 P（刻度；停顿告警用）
+    stall_clicks = 0
+    over_cnt = 0                  # P>R 连续轮数（过头确认防抖）
+    terminal = None               # 完全停手原因（按钮保持/倒计时/过头）
+    cnt_cache = {"crop": None, "text": None}
+    btn_cache = {"crop": None, "text": None}
+    last_ocr = 0.0
+    last_log = 0.0
+    last_zone_warn = 0.0          # 目标带暂未识别（沿用缓存区间）告警限频
+    last_cnt = None               # 最近一次读到的倒计时（结束描述用）
+    clicks = 0                    # 推进动作次数（点击次数/长按按下次数）
+    zone = None                   # 最近一次 (L, R, C) 刻度（缓存，遮挡时沿用）
+    holder = None                 # 长按模式当前按住的鼠标（None=未按住）
+    hold_p0 = None                # 本次按下时的 P（长按不动告警）
+    hold_t0 = 0.0
+    hold_stall_logged = False
+    log(f"[{prefix}] {label}弹窗出现 {time.strftime('%H:%M:%S')}，进入闭环控制", "SYS")
+
+    def _release_hold():
+        """释放长按（窗口结束/战斗打断/异常统一出口；未按住无操作）。"""
+        nonlocal holder
+        if holder is not None:
+            holder.stop()
+            holder = None
+
+    try:
+        while time.time() < deadline:
+            t0 = time.time()
+            img = win.capture(force_activate=False)
+            if img is None:
+                time.sleep(0.1)
+                continue
+            bgr = cv2.cvtColor(np.asarray(img)[:, :, :3], cv2.COLOR_RGB2BGR)
+            if is_in_battle_frame(bgr):
+                return False, f"战斗开始，{label}中断"
+            title = game_map.match_frame_np(bgr, title_icon,
+                                            threshold=POCHU_THRESHOLD,
+                                            region=POCHU_REGION, fallback=False)
+            if title is None:
+                # 标题消失 = 小游戏结束。连续消失满 POCHU_END_WINDOW
+                # 秒才确认结束（结束确认 2 秒窗口防单帧误判，不得缩短）
+                if time.time() - last_seen >= POCHU_END_WINDOW:
+                    ok = terminal is not None and "保持" in terminal
+                    if zone is not None and last_p is not None:
+                        # 点击模式保留 ±0.3 容差（按下的量化跳变）；
+                        # 长按模式连续测量，按精确区间判定命中
+                        tol = 0.0 if hold else 0.3
+                        ok = ok or zone[0] - tol <= last_p <= zone[1] + tol
+                    state = f"P={last_p:.2f}" if last_p is not None else "P=未知"
+                    if zone is not None:
+                        state += f" 区间[{zone[0]:.1f},{zone[1]:.1f}]"
+                    if last_cnt is not None:
+                        state += f" 倒计时={last_cnt}s"
+                    return True, (f"{label}结束（{state}，{act_name} {clicks} 次，"
+                                  f"{'命中区间' if ok else '未确认命中'}）")
+                _pace(t0)
+                continue
+            last_seen = time.time()
+            now = time.time()
+            if not started:
+                # 「开始」出现则点击；若按钮已是流程按钮态（手动已开/续接
+                # 场景），直接进入闭环不点
+                kpt = game_map.match_frame_np(bgr, POCHU_START_ICON,
+                                              threshold=POCHU_THRESHOLD,
+                                              region=POCHU_REGION, fallback=False)
+                dpt = game_map.match_frame_np(bgr, act_icon,
+                                              threshold=POCHU_THRESHOLD,
+                                              region=POCHU_REGION, fallback=False)
+                if kpt is not None:
+                    human_click(win, kpt[0], kpt[1])
+                    btn_pt = kpt
+                    started = True
+                    log(f"[{prefix}] {label}：已点击「开始」@({kpt[0]},{kpt[1]})", "SYS")
+                elif dpt is not None:
+                    btn_pt = dpt
+                    started = True
+                    log(f"[{prefix}] {label}：按钮已是「{act_name}」态 "
+                        f"@({dpt[0]},{dpt[1]})，直接进入闭环", "SYS")
+                _pace(t0)
+                continue
+            # ---- 已开始：闭环决策（同帧测量）----
+            if hold and holder is not None:
+                # 长按期间跳过区域 OCR：单次 100~200ms 阻塞会拖慢填充
+                # 位置采样（实测填充 ~3.7 刻度/秒）；游标控制优先，倒计时/
+                # 保持文字由松开后的轮询与标题消失兜底（长按中不显示
+                # 倒计时，避免日志里显示按下前的陈旧值）
+                cnt = btn = None
+                last_cnt = None
+            else:
+                force_ocr = now - last_ocr >= POCHU_OCR_REFRESH
+                if force_ocr:
+                    last_ocr = now
+                cnt = _pochu_countdown(img, cnt_cache, force=force_ocr)
+                if cnt is not None:
+                    last_cnt = cnt
+                btn = _pochu_ocr_gated(img, POCHU_BTN_REGION, btn_cache,
+                                       force=force_ocr)
+            lx, rx, cx = _pochu_zone(bgr)
+            if cx is None:
+                if zone is None:
+                    # 从未识别到目标带：0.5s 重试（无区间无法决策）
+                    if now - last_log >= POCHU_STATE_LOG_INTERVAL:
+                        last_log = now
+                        log(f"[{prefix}] {label}：目标带未识别，0.5s 后重试", "WARN")
+                    _pace(t0)
+                    continue
+                # 填充前缘接近/遮住目标括号时模板匹配会掉到阈值下
+                # （2026-11-10 实测：长按推进至带前必现）——沿用上次
+                # 识别到的区间继续决策，否则永远等不到释放时机
+                L, R, C = zone
+                if now - last_zone_warn >= POCHU_STATE_LOG_INTERVAL:
+                    last_zone_warn = now
+                    log(f"[{prefix}] {label}：目标带暂未识别（可能被填充前缘"
+                        f"遮挡），沿用上次区间 L={L:.1f} R={R:.1f} C={C:.1f}",
+                        "WARN")
+            else:
+                L, R, C = pochu_tick(lx), pochu_tick(rx), pochu_tick(cx)
+                if zone is None or abs(zone[2] - C) > 0.15:
+                    zone = (L, R, C)
+                    log(f"[{prefix}] {label}：目标带 L={L:.1f} R={R:.1f} C={C:.1f}"
+                        f"（已{act_name} {clicks} 次）", "SYS")
+            px = pochu_fill_edge(bgr)
+            p = 0.0 if px is None else pochu_tick(px)
+            if hold:
+                last_p = p  # 长按模式每轮记录最新 P（结束描述/命中判定用）
+            # 完全停手判定（优先；terminal 一旦建立不再恢复）
+            if terminal is None:
+                if btn and "保持" in btn:
+                    terminal = f"按钮变为「{btn}」"
+                elif cnt is not None and cnt <= POCHU_CNT_STOP:
+                    terminal = f"倒计时 {cnt}s≤{POCHU_CNT_STOP}s"
+                elif p > R + (POCHU_HOLD_OVER_MARGIN if hold else 0.0):
+                    over_cnt += 1
+                    if over_cnt >= 2 and not hold:
+                        # 点击模式：过头永久停手。长按模式不设永久终态
+                        # （松开回落、回到 L 以下再次按住，见下方 hold 分支）
+                        terminal = f"过头 P={p:.2f}>R={R:.2f}"
+                else:
+                    over_cnt = 0
+                if terminal is not None:
+                    log(f"[{prefix}] {label}：{terminal}，完全停手等待结算", "SYS")
+            if hold:
+                # 长按模式（钓鱼，2026-11-10 用户实测）：按住不放，游戏
+                # 会把游标推进到目标区间并锁定；松手即自动回退、鱼脱钩。
+                # 因此进入区间后必须保持按住直到窗口结束，不做 P≥L 释放。
+                # 唯一例外：P>R 连续 2 轮（未锁定、冲过右缘）——松开让其
+                # 回落，回落到 L 以下会再次按住（终态不永久锁死）。
+                if holder is not None and over_cnt >= 2:
+                    _release_hold()
+                    over_cnt = 0
+                    log(f"[{prefix}] {label}：P={p:.2f}>R+余量"
+                        f"={R + POCHU_HOLD_OVER_MARGIN:.2f} 冲过目标带，"
+                        f"释放长按让其回落（回到 L 以下再按住）", "WARN")
+                if terminal is None and p < L and holder is None:
+                    dpt = game_map.match_frame_np(bgr, act_icon,
+                                                  threshold=POCHU_THRESHOLD,
+                                                  region=POCHU_REGION,
+                                                  fallback=False)
+                    if dpt is not None:
+                        btn_pt = dpt  # 命中刷新按钮位置（防窗口漂移）
+                    # 按下后按钮外观会变（用户 2026-11-10 确认），模板
+                    # 不命中时仍按缓存坐标按下/续按
+                    if btn_pt is not None:
+                        h = MouseHold(win, btn_pt[0], btn_pt[1])
+                        if h.start():
+                            holder = h
+                            clicks += 1
+                            hold_p0 = p
+                            hold_t0 = now
+                            hold_stall_logged = False
+                            log(f"[{prefix}] {label}：按住「{act_name}」"
+                                f"@({btn_pt[0]},{btn_pt[1]}) P={p:.2f}<L={L:.1f}，"
+                                f"持续推进", "SYS")
+                        elif now - last_log >= POCHU_STATE_LOG_INTERVAL:
+                            last_log = now
+                            log(f"[{prefix}] {label}：长按按下失败（窗口坐标"
+                                f"不可用），下轮重试", "WARN")
+                elif holder is not None and not hold_stall_logged \
+                        and hold_p0 is not None \
+                        and now - hold_t0 >= POCHU_HOLD_STALL \
+                        and abs(p - hold_p0) < 0.05 and p < L - 0.2:
+                    # 仍在区间左侧却按住无进度：坐标/静默长按通道可能未
+                    # 生效 → 释放后下一轮重按一次（down 消息漏消费自愈）。
+                    # p 已进区间时不动：那是游戏把游标锁定在目标带的正常
+                    # 现象，不能按「无进度」处理（否则松手回退脱钩）。
+                    hold_stall_logged = True
+                    log(f"[{prefix}] {label}：已长按 {POCHU_HOLD_STALL:.0f}s P 未移动"
+                        f"（P={p:.2f}），释放重按并检查按钮坐标/长按通道", "WARN")
+                    _release_hold()
+            elif terminal is None and p < L:
+                # 点击决策：P<L 才点（节奏按 C 三档）
+                if C < 4.0:
+                    interval = POCHU_TIER_NEAR
+                elif C <= 7.0:
+                    interval = POCHU_TIER_MID
+                else:
+                    interval = POCHU_TIER_FAR
+                if now - last_click >= interval:
+                    dpt = game_map.match_frame_np(bgr, act_icon,
+                                                  threshold=POCHU_THRESHOLD,
+                                                  region=POCHU_REGION,
+                                                  fallback=False)
+                    if dpt is not None:
+                        btn_pt = dpt  # 命中刷新按钮位置（防窗口漂移）
+                    # 按钮在过程中会变成其他外观但坐标不变（用户 2026-11-09
+                    # 确认），模板不命中时仍按缓存坐标续点
+                    if btn_pt is not None:
+                        human_click(win, btn_pt[0], btn_pt[1])
+                        clicks += 1
+                        last_click = now
+                        # P 不动告警：点击没生效检查按钮坐标
+                        if last_p is not None and abs(p - last_p) < 0.05:
+                            stall_clicks += 1
+                            if stall_clicks == POCHU_STALL_CLICKS:
+                                log(f"[{prefix}] {label}：已点击 {POCHU_STALL_CLICKS} 次"
+                                    f" P 未移动（P={p:.2f}），检查按钮坐标/点击是否生效",
+                                    "WARN")
+                        else:
+                            stall_clicks = 0
+                        last_p = p
+            if now - last_log >= POCHU_STATE_LOG_INTERVAL:
+                last_log = now
+                if terminal is not None:
+                    st = terminal
+                elif p < L:
+                    st = f"{act_name}推进中 P={p:.2f}"
+                else:
+                    st = f"保持区间内 P={p:.2f}"
+                extra = f" 倒计时={last_cnt}s" if last_cnt is not None else ""
+                log(f"[{prefix}] {label}：{st} 区间[{L:.1f},{R:.1f}] C={C:.1f}"
+                    f" {act_name}{clicks}次{extra}", "INFO")
+            _pace(t0)
+    finally:
+        # 标题消失/战斗打断/异常退出统一抬起按键，防鼠标卡在按下状态
+        _release_hold()
+    return False, f"{label}超时（{POCHU_TIMEOUT}s，{act_name} {clicks} 次，P={last_p}）"

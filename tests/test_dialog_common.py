@@ -32,3 +32,72 @@ def test_dialog_text_present_joined_line():
 def test_norm_dialog_present_ignores_punct():
     items = [_item("我可要走了；你，留步！")]
     assert dialog_common._norm_dialog_present(items, "我可要走了你留步")
+
+
+# ---- StoryDialogDismisser：无选项剧情对话点屏推进（2026-11-10 实测
+#      剧情台词常驻屏幕命中对话门，对话区每 0.5s 全量 OCR 空烧） ----
+
+_STORY = [_item("我被人骗了", 435, 395),
+          _item("有人骗走了我的20万两银子", 556, 395)]
+
+
+def _dismiss_env(monkeypatch, score=0.99, green=False, known=()):
+    import numpy as np
+    clicks = []
+    monkeypatch.setattr(dialog_common, "dialog_frame_score", lambda img: score)
+    monkeypatch.setattr(dialog_common.task_tracker, "is_green_text",
+                        lambda img, rect: green)
+    monkeypatch.setattr(dialog_common, "_click_screen_center",
+                        lambda win, times=1, prefix="": clicks.append(times))
+    monkeypatch.setattr(dialog_common, "log", lambda msg, level="INFO": None)
+    gate = dialog_common.StoryDialogDismisser(known_texts=known)
+    return gate, clicks, np.zeros((831, 1378, 3), np.uint8)
+
+
+def test_story_dismiss_two_polls_then_click(monkeypatch):
+    gate, clicks, frame = _dismiss_env(monkeypatch)
+    assert gate.try_dismiss(None, _STORY, frame, prefix="测试") is False
+    assert gate.try_dismiss(None, _STORY, frame, prefix="测试") is True
+    assert clicks == [1]
+
+
+def test_story_dismiss_requires_dialog_frame(monkeypatch):
+    """无标准对话框边框（商店面板实测 0.653 < 0.79）不点——世界点击
+    会误触走位。"""
+    gate, clicks, frame = _dismiss_env(monkeypatch, score=0.65)
+    for _ in range(3):
+        assert gate.try_dismiss(None, _STORY, frame) is False
+    assert clicks == []
+
+
+def test_story_dismiss_skips_green_option(monkeypatch):
+    """对话区有绿字选项（有待点的对话）不点屏。"""
+    gate, clicks, frame = _dismiss_env(monkeypatch, green=True)
+    for _ in range(3):
+        assert gate.try_dismiss(None, _STORY, frame) is False
+    assert clicks == []
+
+
+def test_story_dismiss_skips_known_text(monkeypatch):
+    """已知对话文案（选项未渲染时）只等待，不当剧情对话点屏。"""
+    gate, clicks, frame = _dismiss_env(monkeypatch, known=("有人骗走了我的",))
+    for _ in range(3):
+        assert gate.try_dismiss(None, _STORY, frame) is False
+    assert clicks == []
+
+
+def test_story_dismiss_allow_dismiss_veto(monkeypatch):
+    """allow_dismiss 回调整体抑制（如五环给与面板预期窗口）。"""
+    import numpy as np
+    clicks = []
+    monkeypatch.setattr(dialog_common, "dialog_frame_score", lambda img: 0.99)
+    monkeypatch.setattr(dialog_common.task_tracker, "is_green_text",
+                        lambda img, rect: False)
+    monkeypatch.setattr(dialog_common, "_click_screen_center",
+                        lambda win, times=1, prefix="": clicks.append(times))
+    monkeypatch.setattr(dialog_common, "log", lambda msg, level="INFO": None)
+    gate = dialog_common.StoryDialogDismisser(allow_dismiss=lambda: False)
+    frame = np.zeros((831, 1378, 3), np.uint8)
+    for _ in range(3):
+        assert gate.try_dismiss(None, _STORY, frame) is False
+    assert clicks == []

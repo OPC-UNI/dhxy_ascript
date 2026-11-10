@@ -1191,6 +1191,14 @@
                     <div class="group-hint">与实际流程一致、时序无额外延时，且都不改变任务状态：进入布店=走位到布店门口 → 降落检查 → 点入口 → 点老板 → 点「我想买点东西」打开商店对话框即成功，不购买装备；领取五环=走位到云游大师 → 点领取任务按钮 → 对话面板出现即成功，不点任何选项、不真正领取（领取对话框/活力值不足/今日两次已满任一对话框出现均算面板出现）。成功后对话框停留，请手动关闭。任务运行中不可验证。</div>
                 </div>
                 <div class="group-box">
+                    <div class="group-title">客栈链路</div>
+                    <div class="verify-row">
+                        <button id="btn-verify-kezhan-awang" class="btn" onclick="verifyKezhanAwang()">找阿旺</button>
+                        <span class="verify-result" id="kezhan-awang-verify-result"></span>
+                    </div>
+                    <div class="group-hint">与实际流程一致、时序无额外延时：找阿旺=走位到大理寺墙外 → 定位阿旺（模板/OCR 名字兜底，未找到按 Alt+C 降落重试）→ 点击左侧走近 → 等寻路结束重新定位 → 点击交互点；大理寺墙外未找到时兜底走洛阳城阿旺出现点重找一轮。点击阿旺会真实推进任务对话（与任务流程同行为），对话框停留请手动关闭。任务运行中不可验证。</div>
+                </div>
+                <div class="group-box">
                     <div class="group-title">队伍</div>
                     <div class="verify-row">
                         <button id="btn-verify-team-check" class="btn" onclick="verifyTeamCheck()">检查队伍信息</button>
@@ -1459,6 +1467,8 @@
     const wuhuanClothVerifyResultEl = document.getElementById('wuhuan-cloth-verify-result');
     const btnVerifyWuhuanClaim = document.getElementById('btn-verify-wuhuan-claim');
     const wuhuanClaimVerifyResultEl = document.getElementById('wuhuan-claim-verify-result');
+    const btnVerifyKezhanAwang = document.getElementById('btn-verify-kezhan-awang');
+    const kezhanAwangVerifyResultEl = document.getElementById('kezhan-awang-verify-result');
     const btnVerifyClearScreen = document.getElementById('btn-verify-clear-screen');
     const clearScreenVerifyResultEl = document.getElementById('clear-screen-verify-result');
     const btnVerifyShout = document.getElementById('btn-verify-shout');
@@ -3452,6 +3462,36 @@
         btnVerifyWuhuanClaim.disabled = false;
         wuhuanClaimVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
         wuhuanClaimVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+    };
+
+    // 客栈找阿旺验证：与五倍验证同模式，结果经 onKezhanAwangVerifyResult 异步回推
+    async function verifyKezhanAwang() {
+        if (verifying) return;
+        verifying = true;
+        btnVerifyKezhanAwang.disabled = true;
+        kezhanAwangVerifyResultEl.style.color = 'var(--text)';
+        kezhanAwangVerifyResultEl.innerText = '验证中...';
+        try {
+            const r = await callPython('verify_kezhan_awang');
+            if (!r || r.status !== 'success') {
+                kezhanAwangVerifyResultEl.style.color = 'var(--danger)';
+                kezhanAwangVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
+                verifying = false;
+                btnVerifyKezhanAwang.disabled = false;
+            }
+            // 成功：等待 Python 侧 onKezhanAwangVerifyResult 回推最终结果
+        } catch (e) {
+            kezhanAwangVerifyResultEl.style.color = 'var(--danger)';
+            kezhanAwangVerifyResultEl.innerText = '验证请求异常';
+            verifying = false;
+            btnVerifyKezhanAwang.disabled = false;
+        }
+    }
+    window.onKezhanAwangVerifyResult = function (ok, info) {
+        verifying = false;
+        btnVerifyKezhanAwang.disabled = false;
+        kezhanAwangVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        kezhanAwangVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
     // 五倍巫医验证：与修罗巫医验证同模式，结果经 onWubeiWuyiVerifyResult 异步回推

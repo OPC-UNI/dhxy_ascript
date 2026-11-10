@@ -405,6 +405,71 @@ def clear_blocking_dialog(win, prefix="", max_clicks=3):
     return True, True
 
 
+class StoryDialogDismisser:
+    """无绿字选项的标准对话框（NPC 剧情台词）点屏幕中间推进/关闭。
+
+    背景（2026-11-10 实测）：剧情台词框是标准对话框（模板分 0.9886），
+    无绿字选项、不在任何跳过/选项表里 → 无人处理、常驻屏幕，follow
+    轮询对话区模板门每轮命中、每 0.5s 全量区域 OCR（~100-170ms/次，
+    占任务线程 20-35% wall）；与修罗 NPC 收尾对话同因（2026-11-09
+    修）。点屏推进后对话关闭、模板门未命中，OCR 归零。
+
+    守卫（顺序，任一不满足即不动画面）：
+    ① allow_dismiss 回调（可选）整体抑制——如「给与面板预期窗口内
+       不推进 NPC 对话」的任务专属规则；
+    ② 对话区有可读文本（items 来自对话区 OCR；渲染过渡帧无文字不点）；
+    ③ 已知对话文案（known_texts）命中即跳过——有待点选项/待推进文案
+       的对话交调用方处理，选项未渲染时只等待，不当剧情对话点屏；
+    ④ 对话框模板在场（img_np 为区域 OCR 掩码帧，特征块在 DIALOG_REGION
+       内时掩码帧与整帧同分，实测 0.9886）——战斗 UI/背包/商店等无标准
+       边框（商店面板实测 0.653 < 0.79）不误点世界；
+    ⑤ 对话区任何行都无绿字（带选项的对话不点）；
+    ⑥ 连续 2 轮询命中（单帧可能是渲染过渡），点击间隔 ≥1s（多屏对话
+       逐页推进，防连点）。
+    一个任务阶段一个实例（状态随实例重置，不跨任务泄漏）。
+    """
+
+    def __init__(self, known_texts=(), allow_dismiss=None):
+        self.known_texts = tuple(known_texts)
+        self.allow_dismiss = allow_dismiss
+        self.streak = 0
+        self.last_click_at = 0.0
+
+    def try_dismiss(self, win, items, img_np, prefix=""):
+        """满足全部守卫时点屏幕中间一次，返回是否已点击。"""
+        if self.allow_dismiss is not None and not self.allow_dismiss():
+            self.streak = 0
+            return False
+        dl, dt = task_tracker.DIALOG_REGION[0], task_tracker.DIALOG_REGION[1]
+        region_items = [it for it in items
+                        if it[2] >= 0.55 and it[1][0] >= dl and it[1][1] >= dt]
+        if not region_items:
+            self.streak = 0
+            return False
+        if any(_dialog_text_present(region_items, t)
+               for t in self.known_texts):
+            self.streak = 0
+            return False
+        if dialog_frame_score(img_np) < DIALOG_FRAME_THRESHOLD:
+            self.streak = 0
+            return False
+        if any(task_tracker.is_green_text(img_np, it[1]) for it in region_items):
+            self.streak = 0  # 有绿字选项：不是无选项剧情对话
+            return False
+        self.streak += 1
+        if self.streak < 2:
+            return False
+        now = time.time()
+        if now - self.last_click_at < 1.0:
+            return False
+        self.last_click_at = now
+        self.streak = 0
+        txt = region_items[0][0][:20]
+        log(f"[{prefix}] 检测到无选项剧情对话「{txt}」，点击屏幕中间推进", "SYS")
+        _click_screen_center(win, times=1, prefix=prefix)
+        return True
+
+
 def verify_dialog_detect(win):
     """诊断-测试对话框识别：单帧模板判定对话框在场 + 对话区 OCR 计时。
 

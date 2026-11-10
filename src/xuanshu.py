@@ -3,7 +3,11 @@
 流程：
 1. 任务追踪中已有 [玄枢轶闻] 任务 → 循环跟踪任务直到完成
    （点击绿色带下划线文案，等待任务信息变化后继续点击；
-   期间处理对话框绿色选项与锄遗聚宝小游戏）
+   期间处理对话框绿色选项与锄遗聚宝小游戏；钓鱼小游戏——对话
+   「不知道这里有没有那条锦鲤鱼」→ 选项「先钓一下再说！」→ 窗口标题
+   xuanshu_diaoyu.png 出现，闭环处理与客栈破除封印完全一致（共享
+   pochufengyin 模块；仅标题模板与推进方式不同——钓鱼开始后按钮为
+   「长按」，须按住不放才能推进，破除封印为「点击」连点））
 2. 没有任务时，寻路到任务位置（洛阳城 93,125）并领取任务：
    - 位置识别失败一律当不在目标坐标（不按 Alt+C 重试），直接寻路
    - 已在任务位置 5px 内 → 跳过寻路
@@ -30,6 +34,7 @@ from ascript.windows.window.Window import WindowCaptureFormat
 from .app_utils import log, human_click, precise_click, rapid_click, move_away, norm_text
 from . import app_utils  # 高性能模式共享设施（固定位置缓存点击）
 from . import map as game_map  # 地图操作（世界地图/小地图/位置识别）
+from . import pochufengyin as _pochu_minigame  # 破除封印/钓鱼共用小游戏（闭环实现）
 from . import task_tracker  # 任务追踪面板操作
 from . import clear_screen  # 启动清屏：活动侧栏收起（锄遗聚宝开始前调用）
 from .battle import (is_in_battle, is_in_battle_frame,
@@ -77,7 +82,8 @@ _jiantianpan_last_done = 0.0                      # 上次流程执行时间戳
 from .dialog_common import (DAILY_LIMIT_TEXT, DAILY_LIMIT_INFO,
                             DIALOG_LOSE_TEXTS, DIALOG_SKIP_CLICKS,
                             SCREEN_CENTER_POS,
-                            dialog_ocr_skip, clear_blocking_dialog)
+                            dialog_ocr_skip, clear_blocking_dialog,
+                            StoryDialogDismisser)
 # 每日任务次数已满的对话文案（出现即结束任务循环）
 # 需要点击屏幕中间跳过的对话框文案 → 点击次数（出现则连点屏幕中间推进
 # 对话，同 kezhan.DIALOG_SKIP_TEXTS）；不同文案要推进的屏数不同，次数
@@ -201,6 +207,20 @@ QI_CLICK_DEBOUNCE = 2.0  # 同一位置重复点击的最短间隔（秒）
 QI_BATCH_CLICK_MIN = 3     # 触发批量连点的同帧目标数下限
 QI_RAPID_PRESS = 0.02      # 批量连点每击按压时长（秒，20ms 保守折中；
                            # 出现点击未注册时调回 0.05）
+# ---- 钓鱼小游戏（玄枢轶闻专属：对话框「不知道这里有没有那条锦鲤鱼」→
+# 选项「先钓一下再说！」点击后出现）----
+# 与客栈破除封印同一款进度条对准小游戏：闭环实现、开始按钮、目标高亮带、
+# 进度条测量区域完全共用（pochufengyin 共享模块），仅窗口标题模板与
+# 推进方式不同（用户 2026-11-10 提供）：钓鱼开始后按钮变为「长按」
+# （xuanshu_diaoyu_changan.png），须按住不放才能推进进度；破除封印为
+# 「点击」连点推进。
+DIAOYU_ENTRY_OPTION = "先钓一下再说！"          # 入口对话框选项（点击后小游戏窗口出现）
+DIAOYU_TITLE_ICON = "xuanshu_diaoyu.png"        # 窗口标题「钓鱼」（消失=任务完成）
+DIAOYU_HOLD_ICON = "xuanshu_diaoyu_changan.png"  # 「长按」按钮（开始后出现；按住推进进度）
+DIAOYU_ARM_TIMEOUT = _pochu_minigame.POCHU_ARM_TIMEOUT      # 入口选项点击后检测窗口时限（秒）
+DIAOYU_CHECK_INTERVAL = _pochu_minigame.POCHU_CHECK_INTERVAL  # 窗口检测限频（秒）
+_diaoyu_armed_at = 0.0        # 钓鱼入口选项点击时间；>0 且未超时=检测开启
+_diaoyu_last_check = 0.0      # 上次窗口检测时间（限频）
 # 循环跟踪任务参数
 FOLLOW_TIMEOUT = 300                # 跟踪任务总超时（秒）
 FOLLOW_POLL_INTERVAL = 0.5          # 任务信息变化轮询间隔（秒）；配合帧复用，
@@ -417,8 +437,23 @@ from .dialog_common import (_click_green_option_once as _dc_click_green_option_o
                             close_scene_panels)
 
 
+# 领取链路绝不点击的选项行：「放弃本次玄枢轶闻任务」与「领取玄枢轶闻」
+# 「玄枢轶闻」互为子串——搜「领取玄枢轶闻」时 0.8 模糊匹配会命中
+# 「玄枢轶闻」（ratio 恰 0.8）和含「玄枢轶闻」的放弃行；搜「玄枢轶闻」
+# 时子串直配也会命中放弃行（2026-11-10 日志实测 3 次误点放弃选项）。
+# 放弃选项被打中可能丢掉已领取任务（哪怕还要二次确认），从候选行
+# 直接剔除、任何路径都不点；代价仅是目标为放弃选项时本轮不推进。
+_DIALOG_OPTION_EXCLUDE = ("放弃",)
+
+
 def _click_green_option_once(win, items, img_np, text, prefix="玄枢轶闻"):
-    """前缀包装（共享实现在 dialog_common；默认玄枢轶闻前缀）。"""
+    """前缀包装（共享实现在 dialog_common；默认玄枢轶闻前缀）。
+
+    过滤危险兄弟选项（见 _DIALOG_OPTION_EXCLUDE）：放弃类选项与
+    领取类选项互为子串，模糊/子串匹配会误点，一律不参与候选。
+    """
+    items = [it for it in items
+             if not any(x in it[0] for x in _DIALOG_OPTION_EXCLUDE)]
     return _dc_click_green_option_once(win, items, img_np, text, prefix)
 
 
@@ -1174,6 +1209,57 @@ def _play_chuyijuebao(win, timeout=CHUYIJUEBAO_TIMEOUT):
                    f"单帧最多 {max_clusters_seen} 个）")
 
 
+def _arm_diaoyu_check(opt):
+    """钓鱼入口选项被点击 → 开启小游戏窗口检测（armed 门控）。
+
+    只有「先钓一下再说！」被实际点击后才检测 xuanshu_diaoyu.png 标题，
+    其他任务阶段不跑这个模板匹配（无开销、无误配）。重复点击入口选项
+    会刷新时限；窗口处理完成或超时后检测自动关闭。
+    """
+    global _diaoyu_armed_at
+    if opt == DIAOYU_ENTRY_OPTION:
+        _diaoyu_armed_at = time.time()
+        log(f"[玄枢轶闻] 已点击钓鱼入口选项，开启小游戏窗口检测"
+            f"（{DIAOYU_ARM_TIMEOUT}s 内有效）", "SYS")
+
+
+def _diaoyu_window_check(win, img, prefix="玄枢轶闻"):
+    """检测并执行钓鱼小游戏（armed 门控 + 限频），返回是否已处理。
+
+    入口选项「先钓一下再说！」被点击后（_arm_diaoyu_check）才在
+    POCHU_REGION 内匹配窗口标题 xuanshu_diaoyu.png（搜索条带/阈值与
+    客栈破除封印完全一致）；窗口出现即阻塞执行完整闭环（共享实现
+    pochufengyin.play_pochufengyin，长按模式：开始后按钮为「长按」，
+    按住才推进），标题消失（结束）或战斗打断后返回。检测限频
+    DIAOYU_CHECK_INTERVAL（条带匹配 ~10ms）；未 armed/限频未到/
+    未命中均返回 False，热路径零成本。
+    """
+    global _diaoyu_last_check, _diaoyu_armed_at
+    if _diaoyu_armed_at <= 0 \
+            or time.time() - _diaoyu_armed_at > DIAOYU_ARM_TIMEOUT:
+        return False
+    now = time.time()
+    if now - _diaoyu_last_check < DIAOYU_CHECK_INTERVAL:
+        return False
+    _diaoyu_last_check = now
+    bgr = cv2.cvtColor(np.asarray(img)[:, :, :3], cv2.COLOR_RGB2BGR)
+    score, wpt = game_map.best_match_np(bgr, DIAOYU_TITLE_ICON,
+                                        region=_pochu_minigame.POCHU_REGION)
+    if wpt is None or score < _pochu_minigame.POCHU_THRESHOLD:
+        return False
+    log(f"[{prefix}] 检测到钓鱼窗口 @({wpt[0]},{wpt[1]})"
+        f"（匹配度 {score:.2f}）", "SYS")
+    ok, info = _pochu_minigame.play_pochufengyin(
+        win, DIAOYU_TITLE_ICON, prefix=prefix, label="钓鱼",
+        hold=True, action_icon=DIAOYU_HOLD_ICON)
+    if ok:
+        # 小游戏完成 → 关闭检测（处理失败保持 armed，窗口仍在时
+        # 下轮询重试）
+        _diaoyu_armed_at = 0.0
+    log(f"[{prefix}] {info}", "SYS" if ok else "WARN")
+    return True
+
+
 def _signatures_similar(a, b, ratio=0.8):
     """任务签名相似判定：OCR 抖动的细微差异视为同一任务状态。
 
@@ -1377,7 +1463,8 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 post_track_handler=None, signature_ratio=0.8,
                 task_gone_polls=None, dialog_tpl_gate=True,
                 dialog_extra_gate=None,
-                chuyijuebao_check=True, battle_extras_tpl_gate=False):
+                chuyijuebao_check=True, battle_extras_tpl_gate=False,
+                story_dialog_dismiss=True):
     """循环跟踪任务直到完成（prefix 供其他任务复用，如五环）。
 
     每轮：点击任务当前第一个绿色文案 → 等待任务信息变化（内容更新）
@@ -1447,6 +1534,8 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
     chuyijuebao_check：等待期间是否检测锄遗聚宝小游戏（玄枢轶闻专属，
     每个轮询一次全帧模板匹配 ~30ms）。不出现该小游戏的任务（修罗等）
     传 False 省去轮询开销；默认 True 保持玄枢轶闻原行为。
+    钓鱼小游戏（玄枢轶闻专属）无需开关：入口选项「先钓一下再说！」被
+    点击后才 armed 检测窗口标题，其他任务阶段零开销。
     battle_extras_tpl_gate：战斗中 extras 通道（每 BATTLE_EXTRAS_INTERVAL
     一次对话框区域 OCR）加模板预检——战斗 UI 无标准对话框边框时跳过
     OCR（战斗帧模板分实测 0.52~0.63 < 0.79，2026-11-07），但保留
@@ -1455,9 +1544,20 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
     默认 False 保持原行为。真对话框在场时模板命中、OCR 照跑，行为
     不变。仅当调用方确认其战斗中对话为标准边框时传 True（战斗中
     可能出现无边框面板对话的调用方勿开）。
+    story_dialog_dismiss：内层轮询兜底——无绿字选项且不在任何已知
+    对话表里的标准对话框（NPC 剧情台词）点屏幕中间推进/关闭。不处理
+    时它常驻屏幕，对话门每轮命中、对话区每 0.5s 全量 OCR 空烧
+    （2026-11-10 实测，见 dialog_common.StoryDialogDismisser）。
+    自行实现了等价兜底（含任务专属抑制窗口，如五环给与面板预期）
+    的调用方传 False。
     返回 (是否完成, 描述)。
     """
     deadline = time.time() + timeout
+    # 无选项剧情对话点屏推进兜底（2026-11-10，见 dialog_common.
+    # StoryDialogDismisser）。已知对话表用 DIALOG_OPTION_MAP：其对话的
+    # 绿字选项未渲染时只等待，不当剧情对话点屏（防误关/误推进）
+    story_gate = StoryDialogDismisser(known_texts=DIALOG_OPTION_MAP) \
+        if story_dialog_dismiss else None
     battle_since = None  # 战斗中等待起点：战斗时间不计入跟踪超时（2026-11-06
                          # 实测黄袍怪多杀单轮任务内含 4~5 场战斗约 4 分钟，吃满
                          # 300s 超时后 follow 死于战斗中途，主循环丢失任务完成
@@ -1804,6 +1904,12 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 # 若继续用陈旧帧跳出点击任务绿字会误点打开中的对话框）
                 changed_once = False
                 continue
+            # 钓鱼小游戏（玄枢轶闻专属）：入口选项「先钓一下再说！」点击
+            # 后（armed 门控）检测窗口标题 xuanshu_diaoyu.png；窗口出现
+            # 即完整执行闭环（与客栈破除封印同一实现；钓鱼为长按模式，
+            # 开始后按钮为「长按」，按住才推进）
+            if _diaoyu_window_check(win, img, prefix):
+                continue
             # 封印机关破解：提示对话框出现则完整处理（点击关闭 → 降落 →
             # 按序点机关，任务追踪变化即停）
             if _dialog_text_present(items, JIGUAN_DIALOG_TEXT):
@@ -1880,12 +1986,14 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 if _dialog_text_present(items, dtxt):
                     if _click_green_option_once(win, items, img_np, opt):
                         handled = True
+                        _arm_diaoyu_check(opt)  # 钓鱼入口点击 → 开启窗口检测
                         break
                     # 选项未被 OCR 识别（如单字选项）：按序号点击兜底
                     idx = DIALOG_OPTION_INDEX_MAP.get(dtxt)
                     if idx and _click_dialog_option_by_index(win, items, img_np,
                                                              dtxt, idx):
                         handled = True
+                        _arm_diaoyu_check(opt)  # 同上（序号兜底路径）
                         break
             if not handled and any(_dialog_text_present(items, t)
                                    for t in DIALOG_LOSE_TEXTS):
@@ -1917,7 +2025,12 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 for opt in DIALOG_OPTIONS:
                     if _click_green_option_once(win, items, img_np, opt, prefix=prefix):
                         debug_overlay.set_phase("任务对话")  # 看板阶段
+                        handled = True
                         break
+            # 无选项剧情对话兜底：点屏幕中间推进/关闭（不处理会常驻屏幕，
+            # 对话门每轮命中、对话区 OCR 每 0.5s 空烧，2026-11-10 实测）
+            if not handled and story_gate is not None:
+                story_gate.try_dismiss(win, items, img_np, prefix=prefix)
         else:
             return False, f"第 {rounds} 轮跟踪后任务信息无变化（超时）"
     return False, f"跟踪任务超时（{timeout}s）"

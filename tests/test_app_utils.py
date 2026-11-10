@@ -29,6 +29,16 @@ class _FakeMouse:
         if self.exc is not None:
             raise self.exc
 
+    def mouse_down(self, button="primary"):
+        self.calls.append(("mouse_down", button))
+        if self.exc is not None:
+            raise self.exc
+
+    def mouse_up(self, button="primary"):
+        self.calls.append(("mouse_up", button))
+        if self.exc is not None:
+            raise self.exc
+
 
 class _FakeWin:
     """human_click 坐标换算所需的最小窗口替身。"""
@@ -133,6 +143,83 @@ def test_human_move_and_move_away_silent_mode_noop(monkeypatch):
     app_utils.human_move(123, 456)
     app_utils.move_away(_FakeWin())
     assert fake_mouse.calls == []
+
+
+# ---- 长按（钓鱼小游戏「长按」按钮：按住保持、松开抬起） ----
+
+
+def test_mouse_hold_physical_press_release(monkeypatch, fake_mouse):
+    monkeypatch.setattr(app_utils, "_SILENT_CLICK", False)
+    hold = app_utils.MouseHold(_FakeWin(), 100, 200)
+    assert hold.start() is True
+    assert hold.active
+    assert app_utils._INPUT_LOCK._is_owned()  # 长按期间持输入锁防交错
+    hold.stop()
+    assert not hold.active
+    assert not app_utils._INPUT_LOCK._is_owned()
+    assert fake_mouse.calls == [("mouse_move", 778, 268),
+                                ("mouse_down", "primary"),
+                                ("mouse_up", "primary")]
+
+
+def test_mouse_hold_silent_channel(monkeypatch):
+    monkeypatch.setattr(app_utils, "_SILENT_CLICK", True)
+    calls = []
+    monkeypatch.setattr("src.silent_click.begin_silent_hold",
+                        lambda w, x=None, y=None, button="primary":
+                        calls.append(("begin", x, y, button))
+                        or {"button": button})
+    monkeypatch.setattr("src.silent_click.end_silent_hold",
+                        lambda info: calls.append(("end", info["button"])))
+    hold = app_utils.MouseHold(_FakeWin(), 10, 20)
+    assert hold.start() is True
+    assert hold.active
+    assert app_utils._INPUT_LOCK._is_owned()
+    hold.stop()
+    assert not hold.active
+    assert not app_utils._INPUT_LOCK._is_owned()
+    assert calls == [("begin", 10, 20, "primary"), ("end", "primary")]
+
+
+def test_mouse_hold_start_failure_releases_lock(monkeypatch):
+    """静默长按按下失败（窗口坐标不可用）：不保持状态且不泄漏输入锁。"""
+    monkeypatch.setattr(app_utils, "_SILENT_CLICK", True)
+    monkeypatch.setattr("src.silent_click.begin_silent_hold",
+                        lambda *a, **k: None)
+    hold = app_utils.MouseHold(_FakeWin(), 10, 20)
+    assert hold.start() is False
+    assert not hold.active
+    assert not app_utils._INPUT_LOCK._is_owned()
+
+
+def test_mouse_hold_stop_error_still_releases_lock(monkeypatch):
+    """抬起投递异常：finally 仍释放输入锁（防后续点击全部饿死）。"""
+    monkeypatch.setattr(app_utils, "_SILENT_CLICK", True)
+    monkeypatch.setattr("src.silent_click.begin_silent_hold",
+                        lambda *a, **k: {"button": "primary"})
+
+    def _boom(info):
+        raise RuntimeError("抬起投递失败")
+
+    monkeypatch.setattr("src.silent_click.end_silent_hold", _boom)
+    hold = app_utils.MouseHold(_FakeWin(), 10, 20)
+    assert hold.start() is True
+    with pytest.raises(RuntimeError):
+        hold.stop()
+    assert not hold.active
+    assert not app_utils._INPUT_LOCK._is_owned()
+
+
+def test_mouse_hold_physical_start_failsafe_releases_lock(monkeypatch,
+                                                         fake_mouse):
+    """物理长按按下遇 fail-safe：转 UserAbort 且不泄漏输入锁。"""
+    monkeypatch.setattr(app_utils, "_SILENT_CLICK", False)
+    fake_mouse.exc = FailSafeException("fail-safe")
+    hold = app_utils.MouseHold(_FakeWin(), 10, 20)
+    with pytest.raises(app_utils.UserAbort):
+        hold.start()
+    assert not hold.active
+    assert not app_utils._INPUT_LOCK._is_owned()
 
 
 def test_keyboard_ok_not_silent_always_true(monkeypatch):

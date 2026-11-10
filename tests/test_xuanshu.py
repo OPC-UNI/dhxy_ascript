@@ -1,5 +1,9 @@
-"""xuanshu.py：任务签名相似判定（follow 轮询防抖核心）与
-任务消失弹窗守卫（2026-10-31 客栈奇遇弹窗遗留教训）。"""
+"""xuanshu.py：任务签名相似判定（follow 轮询防抖核心）、
+任务消失弹窗守卫（2026-10-31 客栈奇遇弹窗遗留教训）与
+钓鱼小游戏接入（2026-11-10，复用客栈破除封印闭环）。"""
+import time
+from pathlib import Path
+
 from PIL import Image
 
 from src import xuanshu
@@ -215,3 +219,99 @@ def test_play_chuyijuebao_single_target_uses_precise(monkeypatch):
     ok, info = xuanshu._play_chuyijuebao(object(), timeout=1.5)
     assert not ok
     assert clicks == ["precise"]  # 仅 1 击（后续轮次被 2s 防抖拦住）
+
+
+# ---- 钓鱼小游戏（2026-11-10：与客栈破除封印同款窗口，仅标题模板不同）----
+def test_diaoyu_template_exists():
+    """标题/长按按钮模板必须真实存在于 res/img（禁止引用不存在的模板）。"""
+    base = Path(__file__).resolve().parent.parent / "res/img"
+    assert (base / xuanshu.DIAOYU_TITLE_ICON).is_file()
+    assert (base / xuanshu.DIAOYU_HOLD_ICON).is_file()
+
+
+def test_diaoyu_arm_only_entry_option():
+    """只有入口选项「先钓一下再说！」被点击才开启窗口检测。"""
+    xuanshu._diaoyu_armed_at = 0.0
+    xuanshu._arm_diaoyu_check("别的选项")
+    assert xuanshu._diaoyu_armed_at == 0.0
+    xuanshu._arm_diaoyu_check(xuanshu.DIAOYU_ENTRY_OPTION)
+    assert xuanshu._diaoyu_armed_at > 0.0
+
+
+def test_diaoyu_window_check_unarmed_no_match(monkeypatch):
+    """未 armed：不跑模板匹配（热路径零成本）。"""
+    calls = []
+    monkeypatch.setattr(xuanshu.game_map, "best_match_np",
+                        lambda *a, **k: calls.append(1) or (0.0, None))
+    xuanshu._diaoyu_armed_at = 0.0
+    img = Image.new("RGB", (1378, 831))
+    assert xuanshu._diaoyu_window_check(object(), img) is False
+    assert calls == []
+
+
+def test_diaoyu_window_check_detects_and_plays(monkeypatch):
+    """armed 且标题命中 → 以钓鱼标题/标签调用共享闭环，成功后关闭检测。"""
+    import numpy as np
+    xuanshu._diaoyu_armed_at = time.time()
+    xuanshu._diaoyu_last_check = 0.0
+    seen = {}
+
+    monkeypatch.setattr(xuanshu.game_map, "best_match_np",
+                        lambda bgr, icon, region=None: (0.99, (600, 500)))
+
+    def _play(win, icon, prefix="客栈", label="破除封印",
+              hold=False, action_icon=None):
+        seen.update(icon=icon, prefix=prefix, label=label, hold=hold,
+                    action_icon=action_icon,
+                    region=xuanshu._pochu_minigame.POCHU_REGION)
+        return True, "钓鱼结束"
+
+    monkeypatch.setattr(xuanshu._pochu_minigame, "play_pochufengyin", _play)
+    img = np.zeros((831, 1378, 3), dtype=np.uint8)
+    assert xuanshu._diaoyu_window_check(object(), img, prefix="玄枢轶闻") is True
+    assert seen["icon"] == "xuanshu_diaoyu.png"
+    assert seen["prefix"] == "玄枢轶闻"
+    assert seen["label"] == "钓鱼"
+    # 长按模式 + 长按按钮模板（钓鱼与破除封印的唯一推进方式差异）
+    assert seen["hold"] is True
+    assert seen["action_icon"] == "xuanshu_diaoyu_changan.png"
+    # 区域与客栈破除封印完全一致（用户要求）
+    assert seen["region"] == (314, 458, 1058, 645)
+    assert xuanshu._diaoyu_armed_at == 0.0  # 成功后关闭检测
+
+
+def test_diaoyu_window_check_keeps_armed_on_failure(monkeypatch):
+    """闭环失败（如战斗打断）保持 armed，窗口仍在时下轮询重试。"""
+    import numpy as np
+    xuanshu._diaoyu_armed_at = time.time()
+    xuanshu._diaoyu_last_check = 0.0
+    monkeypatch.setattr(xuanshu.game_map, "best_match_np",
+                        lambda bgr, icon, region=None: (0.99, (600, 500)))
+    monkeypatch.setattr(xuanshu._pochu_minigame, "play_pochufengyin",
+                        lambda *a, **k: (False, "战斗开始，钓鱼中断"))
+    img = np.zeros((831, 1378, 3), dtype=np.uint8)
+    assert xuanshu._diaoyu_window_check(object(), img) is True
+    assert xuanshu._diaoyu_armed_at > 0.0
+
+
+# ---- 领取链路危险选项过滤（2026-11-10 玄枢轶闻实测） ----
+
+def test_click_green_option_filters_abandon(monkeypatch):
+    """放弃类选项永不参与候选。
+
+    「放弃本次玄枢轶闻任务」与「领取玄枢轶闻」「玄枢轶闻」互为子串：
+    搜「领取玄枢轶闻」时 0.8 模糊匹配命中「玄枢轶闻」与放弃行，搜
+    「玄枢轶闻」时子串直配命中放弃行（2026-11-10 日志实测 3 次误点，
+    放弃会丢掉已领取任务）。包装层先剔除放弃行再交给共享实现。
+    """
+    seen = {}
+    monkeypatch.setattr(
+        xuanshu, "_dc_click_green_option_once",
+        lambda win, items, img_np, text, prefix: seen.update(
+            items=items, text=text, prefix=prefix) or True)
+    items = [("放弃本次玄枢轶闻任务", [500, 450, 640, 470], 0.99),
+             ("玄枢轶闻", [450, 420, 530, 440], 0.99)]
+    assert xuanshu._click_green_option_once(None, items, None, "领取玄枢轶闻")
+    assert [t for t, _, _ in seen["items"]] == ["玄枢轶闻"]
+    assert seen["text"] == "领取玄枢轶闻"
+    assert seen["prefix"] == "玄枢轶闻"

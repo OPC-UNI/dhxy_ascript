@@ -363,3 +363,45 @@ def test_pochu_fill_edge_finds_right_edge():
     frame2[y0:y1, 433:600] = (84, 131, 176)
     frame2[y0 - 2:y1 + 2, 700:703] = (164, 208, 215)
     assert kezhan._pochu_fill_edge(frame2) == 599
+
+
+def test_play_pochufengyin_delegates_shared_module(monkeypatch):
+    """破除封印闭环调用共享模块，标题模板/日志前缀与名称由客栈传入。"""
+    seen = {}
+
+    def _play(win, icon, prefix="客栈", label="破除封印"):
+        seen.update(icon=icon, prefix=prefix, label=label)
+        return True, "破除封印结束"
+
+    monkeypatch.setattr(kezhan._pochu_minigame, "play_pochufengyin", _play)
+    assert kezhan._play_pochufengyin(object()) == (True, "破除封印结束")
+    assert seen == {"icon": "kezhan_pochufengyin.png",
+                    "prefix": "客栈", "label": "破除封印"}
+
+
+# ---- 诊断页找阿旺验证（2026-11-10）----
+def test_verify_find_awang_battle_short_circuit(monkeypatch):
+    """战斗中：直接失败返回，不触发寻路。"""
+    called = []
+    monkeypatch.setattr(kezhan, "is_in_battle", lambda w: True)
+    monkeypatch.setattr(kezhan, "_walk_to_dali",
+                        lambda w: called.append(1) or (True, "x"))
+
+    class W:
+        pass
+
+    ok, info = kezhan.verify_find_awang(W())
+    assert ok is False and "战斗中" in info and called == []
+
+
+def test_verify_find_awang_delegates_to_walk_to_dali(monkeypatch):
+    """非战斗：走真实 _walk_to_dali 链路，结果原样透传。"""
+    monkeypatch.setattr(kezhan, "is_in_battle", lambda w: False)
+    monkeypatch.setattr(kezhan, "_walk_to_dali",
+                        lambda w: (True, "已点击阿旺"))
+
+    class W:
+        pass
+
+    ok, info = kezhan.verify_find_awang(W())
+    assert ok is True and info == "已点击阿旺"
