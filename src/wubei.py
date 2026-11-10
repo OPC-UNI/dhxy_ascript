@@ -961,7 +961,13 @@ def _close_dialog_without_claim(win, items, img_np):
     log("[五倍][验证] 已点击屏幕中间关闭对话框（未领取）", "SYS")
 
 
-def _dismiss_claim_dialog_after_claim(win, timeout=2.0):
+# 本次领取确认帧的对话框模板分（_claim_task 写入、run_loop 消费）：
+# ≥ DIALOG_FRAME_THRESHOLD 说明收尾对话框已在确认帧内，可直接同帧取消；
+# 每次 _claim_task 入口复位，避免失败轮次沿用上一轮分数。
+_claim_confirm_dlg_score = None
+
+
+def _dismiss_claim_dialog_after_claim(win, score=None, timeout=2.0):
     """领取成功后清理领取 NPC 的收尾对话框（五倍）。
 
     五倍领取成功后常有对话框滞留屏幕中央（2026-11-08 日志：领取后
@@ -976,14 +982,29 @@ def _dismiss_claim_dialog_after_claim(win, timeout=2.0):
     返回后执行，不会抢在它前面。极端晚弹时同样点中间关闭并告警，
     任务已领取故不再进入补人循环。
 
-    返回是否点击过。
+    score：领取校验确认帧的对话框模板分（全帧）。≥ 阈值说明收尾
+    对话框已在确认帧内（队伍不足提示被校验循环先行排除，不会带着
+    它走到这里）——直接复用它取消，免一次截图+模板门+对话区 OCR
+    （0.8~1.2s，与修罗同款）；未达标回落窗口轮询。返回是否点击过。
     """
+    # 观测（[领取计时]，2026-11-10 临时埋点）：取消耗时与轮询数，
+    # 数据收集完成后删除
+    t0 = time.time()
+    if score is not None and score >= DIALOG_FRAME_THRESHOLD:
+        human_click(win, SCREEN_CENTER_POS[0], SCREEN_CENTER_POS[1])
+        move_away(win)
+        log("[五倍] 已点击屏幕中间取消领取后收尾对话框", "SYS")
+        log(f"[五倍][领取计时] 收尾对话框取消 @+{time.time() - t0:.2f}s"
+            f"（确认帧复用）", "INFO")
+        return True
+    polls = 0
     deadline = time.time() + timeout
     while time.time() < deadline:
         img = win.capture(force_activate=False)
         if img is None:
             time.sleep(0.5)
             continue
+        polls += 1
         if is_in_battle_frame(img):
             time.sleep(0.5)
             continue
@@ -998,7 +1019,11 @@ def _dismiss_claim_dialog_after_claim(win, timeout=2.0):
                 "已点击屏幕中间关闭（任务已领取，不补人）", "WARN")
         else:
             log("[五倍] 已点击屏幕中间取消领取后收尾对话框", "SYS")
+        log(f"[五倍][领取计时] 收尾对话框取消 @+{time.time() - t0:.2f}s"
+            f"（轮询 {polls}）", "INFO")
         return True
+    log(f"[五倍][领取计时] {timeout:.1f}s 窗口内未见收尾对话框（轮询 {polls}）",
+        "INFO")
     return False
 
 
@@ -1324,6 +1349,53 @@ def _click_entry_ensuring_dialog(win, log_tag="[五倍]", hover_before_click=Fal
     return True, f"已点击{src2}", src2, pt2, seen_frame
 
 
+def _probe_task_block(win):
+    """观测探针（2026-11-10 临时埋点，与修罗同款）：新截帧仅 OCR 任务块
+    判定任务是否已渲染，返回 (是否命中, 探针耗时)。
+
+    用于测量任务面板渲染时刻（相对选项点击），决定固定校验间隔能否
+    改成「探到即提前校验」。任务块=标题行+内容链接行（~400x85），
+    小块 OCR 本地实测 50~160ms（任务进程内因 OCR 线程争用约 2~3 倍）。
+    数据收集完成后连同 [领取计时] 埋点一起删除。
+    """
+    t0 = time.time()
+    img = win.capture(force_activate=False)
+    if img is None:
+        return False, time.time() - t0
+    img_np = np.asarray(img)
+    region = task_tracker.task_block_region(img_np,
+                                            fallback=(0, 225, 400, 310))
+    items, _ = game_map.ocr_region(img, region)
+    hit = task_tracker.has_task_in(items, img_np, TASK_TITLE,
+                                   TASK_FALLBACK_TEXTS)
+    return hit, time.time() - t0
+
+
+def _claim_verify_wait(win, pre_sig, t_opt, polls):
+    """校验轮询等待：先跑任务块探针，命中即跳过等待（自适应）。
+
+    2026-11-10 五倍实测 7/7 轮第 1 次探针即命中（@1.35~1.82s，探针
+    耗时 0.11~0.23s）：任务面板在首轮全量 OCR 结束时就已渲染，原固定
+    1.0s 等待纯属空等（确认帧被拖到 2.15~2.75s 才截取）。命中即立即
+    进入下一轮全量校验（预计省 ~0.85s/轮）；未命中照常补足 1.0s 间隔
+    （wall 与旧版一致）。旧任务残留面板（pre_sig 非空）时跳过探针——
+    旧任务会让探针恒命中。
+
+    [领取计时] 日志与探针本身为 2026-11-10 临时埋点，验证后删除。
+    """
+    if pre_sig is not None:
+        time.sleep(1.0)
+        return
+    t0 = time.time()
+    hit, probe_dt = _probe_task_block(win)
+    log(f"[五倍][领取计时] 任务块探针{'命中（立即校验）' if hit else '未命中'}"
+        f" @选项点击后 {time.time() - t_opt:.2f}s"
+        f"（第 {polls} 轮校验后，探针耗时 {probe_dt:.2f}s）", "INFO")
+    if hit:
+        return  # 任务已渲染：不等待，下一轮直接全量校验
+    time.sleep(max(0.0, 1.0 - (time.time() - t0)))
+
+
 def _claim_task(win, allow_fill=False):
     """在领取点附近领取五倍任务（前提：已走到领取点附近）。
 
@@ -1342,6 +1414,8 @@ def _claim_task(win, allow_fill=False):
     2. 校验循环内确认新任务渲染即返回（领取前有旧任务遗留面板时须
        签名变化才确认，不再重复一次 has_task 全量检查）
     """
+    global _claim_confirm_dlg_score
+    _claim_confirm_dlg_score = None  # 本轮确认帧模板分复位（run_loop 消费）
     if is_in_battle(win):
         return False, "战斗中，跳过本轮领取", None
     # 领取前面板签名：旧任务未完成遗留面板时（如显形镜 AB 两点未
@@ -1364,16 +1438,22 @@ def _claim_task(win, allow_fill=False):
     # 与 0.3s 后重截重 OCR 再点等价）；未点中再走短窗轮询兜底。
     # 完整文案与「不容辞」兜底在同一帧先后尝试（OCR 把选项拆成
     # 两行时完整串永远匹配不上——修罗实测教训）
+    # 观测（[领取计时]，2026-11-10 临时埋点）：选项点击时刻，用于度量任务
+    # 渲染延迟与确认帧是否已含收尾对话框；数据收集完成后移除
+    t_opt = None
     used_cached = False
     if seen is None:
         # 高性能：入口点击后未 OCR（缓存直点路径）→ 按缓存坐标点
         # 选项，生效与否由下方「任务进追踪」校验循环判定并补点兜底
+        t_opt = time.time()
         used_cached = app_utils.high_perf_click(win, f"option_{CLAIM_DIALOG_OPTION}",
                                                 "领取选项", prefix="[五倍] ")
         claimed = used_cached
     else:
         items, img_np = seen
         claimed = _click_claim_option(win, items, img_np)
+        if claimed:
+            t_opt = time.time()
     deadline = time.time() + CLAIM_DIALOG_TIMEOUT
     while not claimed and time.time() < deadline:
         img = win.capture(force_activate=False)
@@ -1382,6 +1462,8 @@ def _claim_task(win, allow_fill=False):
             continue
         items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
         claimed = _click_claim_option(win, items, img_np)
+        if claimed:
+            t_opt = time.time()
         time.sleep(0.3)
     if not claimed:
         return False, "领取对话框处理失败", None
@@ -1394,6 +1476,13 @@ def _claim_task(win, allow_fill=False):
     deadline = time.time() + (CLAIM_VERIFY_WAIT_STALE if pre_sig is not None
                               else CLAIM_VERIFY_WAIT)
     found_frame = None
+    if t_opt is None:
+        t_opt = time.time()  # 未点中选项的兜底路径：以校验起点计时
+    t_confirm = None            # 观测：确认帧截帧时刻（任务渲染延迟度量）
+    confirm_polls = 0
+    confirm_dlg_score = None    # 观测：确认帧对话框模板分（同帧取消可行性）
+    claim_option_still = False  # 观测：确认帧里领取选项是否仍在（模板分来源判别）
+    polls = 0
     track_gate = task_tracker.TrackGate(min_interval=0.0)  # 面板差分门（领取校验短窗口
         # 关键检测，不限频——同修罗 _claim_task，防「未出现」结论被
         # 复用 2s 拖慢领取（2026-10-28）
@@ -1402,6 +1491,8 @@ def _claim_task(win, allow_fill=False):
         if img is None:
             time.sleep(1.0)
             continue
+        polls += 1
+        t_cap = time.time()  # 观测：本帧截取时刻
         # 面板差分门 + 对话框逐轮 OCR：任务进追踪必然改变面板核心像素
         # （门必开），队伍满员提示与缓存补点在对话框区域不受门影响
         track_items = track_gate.ocr(img)
@@ -1425,11 +1516,29 @@ def _claim_task(win, allow_fill=False):
         if task_tracker.has_new_task_in(items, img_np, TASK_TITLE,
                                         TASK_FALLBACK_TEXTS, pre_sig):
             found_frame = (items, img_np)
+            t_confirm = t_cap
+            confirm_polls = polls
+            # 全帧模板分：确认帧里是否已有收尾对话框（同帧取消可行性）。
+            # 领取选项文案仍在说明领取对话框尚未关闭（模板分来自它）——
+            # 不启用同帧取消，交窗口轮询等收尾对话框出现
+            confirm_dlg_score = dialog_frame_score(img)
+            claim_option_still = _dialog_text_present(items, CLAIM_DIALOG_OPTION)
+            _claim_confirm_dlg_score = None if claim_option_still \
+                else confirm_dlg_score  # 供 run_loop 同帧取消
             break
         if used_cached and _find_claim_option(items, img_np) is not None:
             _click_claim_option(win, items, img_np)  # 识别补点并刷新缓存
-        time.sleep(1.0)
+        _claim_verify_wait(win, pre_sig, t_opt, polls)
     if found_frame is not None:
+        # 观测（[领取计时]，临时埋点）：确认帧截帧延迟 = 任务渲染延迟上界；
+        # 模板分≥阈值说明收尾对话框已在确认帧内（同帧取消可省重截+OCR）。
+        # 数据收集完成后删除
+        if t_confirm is not None:
+            log(f"[五倍][领取计时] 确认帧 @选项点击后 {t_confirm - t_opt:.2f}s"
+                f"（轮询 {confirm_polls}，确认总耗时 {time.time() - t_opt:.2f}s，"
+                f"确认帧对话框模板分={confirm_dlg_score:.3f}，"
+                f"确认帧含领取选项={'是' if claim_option_still else '否'}）",
+                "INFO")
         return True, "五倍任务已领取", found_frame
     # 未检索到：小地图重走领取点坐标后再次检索（修罗同款，用户
     # 2026-10-09 确认：重走可能触发任务渲染，不直接判失败）。
@@ -2903,8 +3012,10 @@ def run_loop(win, cycle_interval=1.0):
                 _fight_via_kanda = False  # 新一轮开始：重置「看打！」进入战斗标记
                 # 领取成功后清理 NPC 收尾对话框（否则滞留屏幕 10s+，
                 # follow 对话区 OCR + 战斗线程巫医检查 + 看打 2x 兜底
-                # 三重空烧，与修罗同款；2026-11-09 py-spy 实测）
-                _dismiss_claim_dialog_after_claim(win)
+                # 三重空烧，与修罗同款；2026-11-09 py-spy 实测）。
+                # 确认帧模板分达标时同帧直接取消（与修罗同款优化）
+                _dismiss_claim_dialog_after_claim(
+                    win, score=_claim_confirm_dlg_score)
                 # 自动巫医：每 N 轮领取后无条件前往宝象国巫医 NPC 医治，
                 # 血蓝正常也照常（失败仅记日志，不阻断后续寻路）
                 if auto_wuyi and round_no % wuyi_interval == 0:

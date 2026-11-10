@@ -41,6 +41,7 @@ def world(monkeypatch):
     logs = []
     monkeypatch.setattr(xiuluo, "time", clock)
     monkeypatch.setattr(xiuluo, "is_in_battle_frame", lambda img: False)
+    monkeypatch.setattr(xiuluo, "dialog_frame_score", lambda img: 0.99)
     monkeypatch.setattr(xiuluo, "human_click",
                         lambda win, x, y, **k: clicks.append((x, y)))
     monkeypatch.setattr(xiuluo, "move_away", lambda win: None)
@@ -124,6 +125,46 @@ def test_dismiss_wuyi_block_dialog_not_found(world):
     assert xiuluo._dismiss_wuyi_block_dialog(_FakeWin()) is False
     assert world["clicks"] == []
     assert world["clock"].t >= 3.0
+
+
+def test_dismiss_wuyi_block_dialog_uses_claim_frame(world):
+    # 领取确认帧已含对话框（2026-11-10 实测 3/3 轮）：直接点掉，
+    # 不截图、不 OCR、不空等窗口
+    items = [("阻止它为非作歹", (400, 300, 500, 330), 0.9)]
+    assert xiuluo._dismiss_wuyi_block_dialog(_FakeWin(), items=items) is True
+    assert world["clicks"] == [(CENTER[0], CENTER[1])]
+    assert world["ocr_calls"] == 0
+    assert world["clock"].t == 0.0
+
+
+def test_dismiss_after_claim_uses_claim_frame(world):
+    # 正常回合同款：确认帧命中即取消，免一次截图+模板门+对话区 OCR
+    items = [("阻止它为非作歹", (400, 300, 500, 330), 0.9)]
+    assert xiuluo._dismiss_block_dialog_after_claim(
+        _FakeWin(), items=items) is True
+    assert world["clicks"] == [(CENTER[0], CENTER[1])]
+    assert world["ocr_calls"] == 0
+    assert world["clock"].t == 0.0
+
+
+def test_dismiss_after_claim_falls_back_to_window(world):
+    # 确认帧不含（对话框晚到/未渲染）：回落窗口轮询，OCR 命中即取消
+    world["ocr_ret"] = [("阻止它为非作歹", (400, 300, 500, 330), 0.9)]
+    items = [("修罗任务", (0, 220, 200, 250), 0.9)]
+    assert xiuluo._dismiss_block_dialog_after_claim(
+        _FakeWin(), items=items) is True
+    assert world["clicks"] == [(CENTER[0], CENTER[1])]
+    assert world["ocr_calls"] == 1
+
+
+def test_dismiss_after_claim_absent_times_out(world):
+    # 窗口内始终未见：不点击，等满 2s 放行（follow 有剧情对话兜底）
+    world["ocr_ret"] = []
+    assert xiuluo._dismiss_block_dialog_after_claim(
+        _FakeWin(), items=[]) is False
+    assert world["clicks"] == []
+    assert world["clock"].t >= 2.0
+    assert any("未见阻止对话" in msg for msg, _ in world["logs"])
 
 
 # ---- 巫医链超时路径：战斗线程已点击时不重复兜底点击（2026-11-04） ----

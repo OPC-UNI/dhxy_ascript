@@ -241,6 +241,22 @@ def _near_wuyi_spot(pos):
                                   WUYI_NEAR_TOLERANCE)
 
 
+def _dismiss_block_dialog_on_items(win, items, tag="[修罗][巫医]"):
+    """已 OCR 行上命中「阻止它为非作歹」即点击屏幕中间取消（免重截+重 OCR）。
+
+    领取校验的确认帧已含该对话框（2026-11-10 实测 3/3 轮）：直接复用其
+    OCR 结果取消，省一次截图+模板门+对话区 OCR（实测 0.8~1.2s）。命中
+    即点击一次并返回 True；未命中返回 False。重复点击防重由调用方控制
+    （连续点屏幕中间会误点游戏世界引起走位）。
+    """
+    if not _dialog_text_present(items, WUYI_BLOCK_DIALOG_TEXT):
+        return False
+    human_click(win, SCREEN_CENTER_POS[0], SCREEN_CENTER_POS[1])
+    move_away(win)
+    log(f"{tag} 检测到「阻止它为非作歹」对话框，已点击屏幕中间取消", "SYS")
+    return True
+
+
 def _dismiss_block_dialog_on_frame(win, img, tag="[修罗][巫医]"):
     """单帧检测「阻止它为非作歹」对话框并点击屏幕中间取消。
 
@@ -251,21 +267,20 @@ def _dismiss_block_dialog_on_frame(win, img, tag="[修罗][巫医]"):
     if is_in_battle_frame(img):
         return False
     items, _ = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
-    if not _dialog_text_present(items, WUYI_BLOCK_DIALOG_TEXT):
-        return False
-    human_click(win, SCREEN_CENTER_POS[0], SCREEN_CENTER_POS[1])
-    move_away(win)
-    log(f"{tag} 检测到「阻止它为非作歹」对话框，已点击屏幕中间取消", "SYS")
-    return True
+    return _dismiss_block_dialog_on_items(win, items, tag=tag)
 
 
-def _dismiss_wuyi_block_dialog(win):
+def _dismiss_wuyi_block_dialog(win, items=None):
     """领取任务完成后取消「阻止它为非作歹」对话框（期望流程 2026-10-31）。
 
     领取完成 → 取消对话框 → 去巫医 → 识别模板 → 点击 → 全部医治。
     窗口内出现即取消一次；未出现直接去巫医（对话框可能走近巫医时
     才弹出，由 _find_wuyi_npc 到达窗口兜底）。返回是否已取消。
+    items：领取校验确认帧的 OCR 行——已含该对话框（实测 3/3 轮）时
+    直接取消（免一次截图+OCR）；未命中回落窗口轮询。
     """
+    if items is not None and _dismiss_block_dialog_on_items(win, items):
+        return True
     deadline = time.time() + WUYI_BLOCK_TIMEOUT
     while time.time() < deadline:
         img = win.capture(force_activate=False)
@@ -278,7 +293,7 @@ def _dismiss_wuyi_block_dialog(win):
     return False
 
 
-def _dismiss_block_dialog_after_claim(win, timeout=2.0):
+def _dismiss_block_dialog_after_claim(win, items=None, timeout=2.0):
     """领取成功后取消 NPC 收尾对话「…阻止它为非作歹」（正常回合）。
 
     正常回合原先不取消该对话框：领取确认后它持续挂在屏幕中央（实测
@@ -288,16 +303,28 @@ def _dismiss_block_dialog_after_claim(win, timeout=2.0):
     领取完成后约 10s 的 CPU 峰值主要来自这里（2026-11-09 py-spy 实测）。
     巫医回合由 _dismiss_wuyi_block_dialog 处理，本函数只覆盖正常回合。
 
-    窗口 2s（实测该对话在领取确认后 ~1s 内出现；巫医链路同窗口 1s 内
-    命中），每轮先对话框模板门（~9ms）：模板未命中即无对话，跳过 OCR。
+    items：领取校验确认帧的 OCR 行——实测 3/3 轮已含该对话框
+    （2026-11-10），直接复用取消（免一次截图+模板门+对话区 OCR
+    0.8~1.2s）；未命中回落窗口轮询。窗口 2s（对话在领取确认后 ~1s 内
+    出现），每轮先对话框模板门（~9ms）：模板未命中即无对话，跳过 OCR。
     文案命中才点屏幕中间（防点空误触世界走位）。返回是否已取消。
     """
+    # 观测（[领取计时]，2026-11-10 临时埋点）：取消耗时与轮询数，
+    # 验证同帧取消效果后连同 _claim_task 内埋点一起删除
+    t0 = time.time()
+    if items is not None and _dismiss_block_dialog_on_items(win, items,
+                                                            tag="[修罗]"):
+        log(f"[修罗][领取计时] 阻止对话取消 @+{time.time() - t0:.2f}s"
+            f"（确认帧复用）", "INFO")
+        return True
+    polls = 0
     deadline = time.time() + timeout
     while time.time() < deadline:
         img = win.capture(force_activate=False)
         if img is None:
             time.sleep(0.5)
             continue
+        polls += 1
         if is_in_battle_frame(img):
             time.sleep(0.5)
             continue
@@ -305,8 +332,12 @@ def _dismiss_block_dialog_after_claim(win, timeout=2.0):
             time.sleep(0.5)
             continue
         if _dismiss_block_dialog_on_frame(win, img, tag="[修罗]"):
+            log(f"[修罗][领取计时] 阻止对话取消 @+{time.time() - t0:.2f}s"
+                f"（轮询 {polls}）", "INFO")
             return True
         time.sleep(0.5)
+    log(f"[修罗][领取计时] {timeout:.1f}s 窗口内未见阻止对话（轮询 {polls}）",
+        "INFO")
     return False
 
 
@@ -651,12 +682,9 @@ def _task_block_region(img_np):
 
     与静态 TASK_BLOCK_REGION=(0,225,400,310) 同标定（内容区顶≈227），
     面板漂移时跟随；标题条模板未命中返回 None（调用方回退静态）。
+    实现下沉到 task_tracker.task_block_region（五倍领取探针共用）。
     """
-    region = task_tracker.track_content_region(img_np)
-    if region is None:
-        return None
-    l, t, r, _b = region
-    return (l, max(0, t - 2), r, min(img_np.shape[0], t + 83))
+    return task_tracker.task_block_region(img_np)
 
 
 def _task_in_tracker_zoom(img):
@@ -680,6 +708,50 @@ def _task_in_tracker_zoom(img):
     except Exception:
         pass
     return False
+
+
+def _probe_task_block(win):
+    """观测探针（2026-11-10 临时埋点）：新截帧仅 OCR 任务块判定任务是否
+    已渲染，返回 (是否命中, 探针耗时)。
+
+    用于测量任务面板渲染时刻（相对选项点击），决定固定校验间隔能否
+    改成「探到即提前校验」。小块 OCR 本地实测 50~160ms（任务进程内
+    因 OCR 线程争用约 2~3 倍）。数据收集完成后连同 [领取计时] 埋点删除。
+    """
+    t0 = time.time()
+    img = win.capture(force_activate=False)
+    if img is None:
+        return False, time.time() - t0
+    img_np = np.asarray(img)
+    region = _task_block_region(img_np) or TASK_BLOCK_REGION
+    items, _ = game_map.ocr_region(img, region)
+    hit = task_tracker.has_task_in(items, img_np, TASK_TITLE,
+                                   TASK_FALLBACK_TEXTS)
+    return hit, time.time() - t0
+
+
+def _claim_verify_wait(win, pre_sig, t_opt, polls):
+    """校验轮询等待：先跑任务块探针，命中即跳过等待（自适应）。
+
+    五倍同款链路实测（2026-11-10，7/7 轮第 1 次探针即命中，确认段
+    省 ~0.82s/轮）；修罗确认帧截取时刻（1.96~2.89s）与五倍同构。
+    命中即立即进入下一轮全量校验；未命中照常补足
+    CLAIM_VERIFY_POLL_INTERVAL（wall 与旧版一致）。旧任务残留面板
+    （pre_sig 非空）时跳过探针——旧任务会让探针恒命中。
+
+    [领取计时] 日志与探针本身为 2026-11-10 临时埋点，验证后删除。
+    """
+    if pre_sig is not None:
+        time.sleep(CLAIM_VERIFY_POLL_INTERVAL)
+        return
+    t0 = time.time()
+    hit, probe_dt = _probe_task_block(win)
+    log(f"[修罗][领取计时] 任务块探针{'命中（立即校验）' if hit else '未命中'}"
+        f" @选项点击后 {time.time() - t_opt:.2f}s"
+        f"（第 {polls} 轮校验后，探针耗时 {probe_dt:.2f}s）", "INFO")
+    if hit:
+        return  # 任务已渲染：不等待，下一轮直接全量校验
+    time.sleep(max(0.0, CLAIM_VERIFY_POLL_INTERVAL - (time.time() - t0)))
 
 
 def _team_dialog_zoom(win, img):
@@ -1104,10 +1176,14 @@ def _claim_task(win, allow_fill=False):
     # OCR 把选项拆成两行时完整串永远匹配不上（实测主循环空转 15s
     # 后才进兜底点中），合并后首帧可读即点中。has_task（追踪区 OCR
     # ~0.9s）限频到每 4 轮——对话框出现前任务不可能已进追踪
+    # 观测（[领取计时]，2026-11-10 临时埋点）：选项点击时刻，用于度量任务
+    # 渲染延迟与确认帧是否已含「阻止它为非作歹」；数据收集完成后移除
+    t_opt = None
     # 高性能：入口点击后未 OCR（seen 为 None）→ 按缓存坐标直点，
     # 生效与否由「任务进追踪」校验循环判定并识别补点兜底
     used_cached = False
     if seen is None:
+        t_opt = time.time()
         used_cached = app_utils.high_perf_click(win, "claim_option",
                                                 "领取选项", prefix="[修罗] ")
     if not used_cached:
@@ -1115,6 +1191,8 @@ def _claim_task(win, allow_fill=False):
         if seen is not None:
             items, img_np = seen
             claimed = _click_claim_option(win, items, img_np)
+            if claimed:
+                t_opt = time.time()
         polls = 0
         deadline = time.time() + CLAIM_DIALOG_TIMEOUT
         while not claimed and time.time() < deadline:
@@ -1139,6 +1217,8 @@ def _claim_task(win, allow_fill=False):
                     return False, "队伍已补齐（监控循环判定），下轮重试领取", None
                 return False, "队伍数量小于 3，无法领取（已关闭提示对话框）", None
             claimed = _click_claim_option(win, items, img_np)
+            if claimed:
+                t_opt = time.time()  # 观测：识别路径点击生效时刻
             polls += 1
             if not claimed and polls % 4 == 0 \
                     and task_tracker.has_task(win, TASK_TITLE, TASK_FALLBACK_TEXTS):
@@ -1158,6 +1238,13 @@ def _claim_task(win, allow_fill=False):
     polls = 0
     reclick_poll = 0  # 识别补点发生的轮询序（补点后队伍对话框需再覆盖一轮）
     option_seen = False  # 校验期是否曾见领取选项（区分未渲染与点击已生效）
+    if t_opt is None:
+        t_opt = time.time()  # 未点中选项的兜底路径（has_task 判定）：以校验起点计时
+    t_confirm = None       # 观测：确认帧截帧时刻（相对 t_opt 度量渲染延迟）
+    confirm_polls = 0
+    confirm_dialog_ocr = False  # 观测：确认帧是否做了对话区 OCR
+    confirm_block = False       # 观测：确认帧是否已读到「阻止它为非作歹」
+    block_first_at = None       # 观测：校验期首次读到该对话框的时刻
     track_gate = task_tracker.TrackGate(min_interval=0.0)  # 面板差分门（领取校验为
         # 短窗口关键检测，不限频：任务渲染后须下一轮即检出，限频会把
         # 「未出现」结论复用 2s、被 2x 重识别兜底捡走（实测每次领取
@@ -1168,6 +1255,7 @@ def _claim_task(win, allow_fill=False):
             time.sleep(1.0)
             continue
         polls += 1
+        t_cap = time.time()  # 观测：本帧截取时刻（任务渲染延迟度量）
         # 面板单区域 OCR（0.9s）为主节奏：任务进追踪是确认主信号。
         # 对话框区域检查（队伍确认/警告、完成次数、缓存点击识别补点）
         # 仅在必要轮询执行：前 2 轮（队伍对话框出现在选项点击后
@@ -1191,12 +1279,20 @@ def _claim_task(win, allow_fill=False):
             items = track_items
             img_np = np.zeros_like(np.asarray(img))
             track_gate.paste_track(img, img_np)
+        # 观测：「阻止它为非作歹」首次出现时刻（仅对话区有 OCR 的轮询可查）
+        if need_dialog and block_first_at is None \
+                and _dialog_text_present(items, WUYI_BLOCK_DIALOG_TEXT):
+            block_first_at = time.time()
         if task_tracker.has_new_task_in(items, img_np, TASK_TITLE,
                                         TASK_FALLBACK_TEXTS, pre_sig):
             found_frame = (items, img_np)
+            t_confirm = t_cap
+            confirm_polls = polls
+            confirm_dialog_ocr = need_dialog
+            confirm_block = need_dialog and block_first_at is not None
             break
         if not need_dialog:
-            time.sleep(CLAIM_VERIFY_POLL_INTERVAL)
+            _claim_verify_wait(win, pre_sig, t_opt, polls)
             continue
         # 完成次数对话框（限对话框区域行）同帧解析，零额外截图
         if count is None:
@@ -1264,11 +1360,31 @@ def _claim_task(win, allow_fill=False):
             # 首轮复用（面板绿字点击与对话框处理依赖）
             img2 = win.capture(force_activate=False)
             if img2 is not None:
+                t_cap2 = time.time()  # 观测：2x 路径确认帧截取时刻
                 items, img_np = task_tracker.ocr_follow(img2)
                 found_frame = (items, img_np)
+                if block_first_at is None \
+                        and _dialog_text_present(items, WUYI_BLOCK_DIALOG_TEXT):
+                    block_first_at = time.time()
+                t_confirm = t_cap2
+                confirm_polls = polls
+                confirm_dialog_ocr = True  # ocr_follow 为双区域 OCR
+                confirm_block = block_first_at is not None
                 break
-        time.sleep(CLAIM_VERIFY_POLL_INTERVAL)
+        _claim_verify_wait(win, pre_sig, t_opt, polls)
     if found_frame is not None:
+        # 观测（[领取计时]，临时埋点）：确认帧截帧延迟 = 任务渲染延迟上界；
+        # 「确认帧含阻止对话」= 同帧取消优化可行；首见时刻用于判断能否在
+        # 校验期提前取消。数据收集完成后删除
+        if t_confirm is not None:
+            block_txt = "未查" if not confirm_dialog_ocr \
+                else ("是" if confirm_block else "否")
+            first_txt = f"{block_first_at - t_opt:+.2f}s" \
+                if block_first_at is not None else "未见解"
+            log(f"[修罗][领取计时] 确认帧 @选项点击后 {t_confirm - t_opt:.2f}s"
+                f"（轮询 {confirm_polls}，确认总耗时 {time.time() - t_opt:.2f}s，"
+                f"确认帧含阻止对话={block_txt}，阻止对话首见={first_txt}）",
+                "INFO")
         tail = f"（{CLAIM_COUNT_TEXT}：{count}）" if count is not None else ""
         return True, f"修罗任务已领取{tail}", found_frame
     # 未检索到：小地图重走领取点坐标后再次检索（用户 2026-10-09
@@ -2202,16 +2318,19 @@ def run_loop(win, cycle_interval=1.0):
             # 对话框（若有）→ 去巫医 → 识别模板 → 点击 → 全部医治；
             # 对话框可能在走近巫医时才弹出，到达窗口另有兜底
             wuyi_round = auto_wuyi and round_no % wuyi_interval == 0
+            # 领取校验确认帧的 OCR 行（取帧失败路径为 None）：实测已含该
+            # 对话框（2026-11-10 3/3 轮），直接复用取消免一次截图+OCR
+            claim_dialog_items = claim_items[0] if claim_items else None
             if wuyi_round:
                 debug_overlay.set_phase("自动巫医")  # 看板阶段
-                _dismiss_wuyi_block_dialog(win)
+                _dismiss_wuyi_block_dialog(win, items=claim_dialog_items)
                 ok2, info2 = _auto_wuyi(win)
                 log(f"[修罗][巫医] {info2}", "SYS" if ok2 else "WARN")
             else:
                 # 正常回合同样取消该对话框：否则它挂在屏幕中央 10s+，
                 # follow 对话区 OCR + 战斗线程巫医检查 + 看打 2x 兜底
                 # 三重空烧（2026-11-09 py-spy 实测领取后 CPU 峰值来源）
-                _dismiss_block_dialog_after_claim(win)
+                _dismiss_block_dialog_after_claim(win, items=claim_dialog_items)
         # 2~4. 寻路 / 对话开打 / 战斗：由任务跟踪统一驱动
         #     （寻路点击绿字自动进行，对话开打走附加对话处理，
         #      战斗由战斗监控线程自动操作、跟踪中自动跳过）；

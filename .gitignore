@@ -38,3 +38,6 @@ capture_diag_*.log
 capture_diag_*.bmp
 # 锄遗聚宝超时诊断标注帧（打包版远程排查用）
 qi_debug/
+
+# 本地使用手册（HTML+图文素材，不入库）
+使用手册/

@@ -187,6 +187,20 @@ def track_content_region(img_np, min_width=TRACK_MIN_WIDTH):
     return (l, b, right, bottom)
 
 
+def task_block_region(img_np, fallback=None):
+    """任务块裁剪区域（动态）：内容区顶-2、高 85，横向取内容区左右缘。
+
+    与修罗静态 TASK_BLOCK_REGION=(0,225,400,310) 同标定（内容区顶≈227），
+    面板漂移时跟随；标题条模板未命中返回 fallback（调用方回退静态区域）。
+    任务块 = 标题行 + 内容链接行，供领取校验小区域探针/2x 重识别用。
+    """
+    region = track_content_region(img_np)
+    if region is None:
+        return fallback
+    l, t, r, _b = region
+    return (l, max(0, t - 2), r, min(img_np.shape[0], t + 83))
+
+
 def panel_row_xmax(img_np):
     """面板行行首 x 上限：max(绝对 PANEL_MAX_X, 动态区域左缘+160)。
 
