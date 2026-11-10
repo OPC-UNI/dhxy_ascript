@@ -19,6 +19,8 @@ ControlWindow 基于 WebWindow（pywebview），页面为 res/ui/control_window.
 - 关闭（X）：取消关闭并隐藏到托盘（_on_closing），任务继续运行；
   真正退出须先 close_window() 放行（_real_close），否则窗口永不销毁
 - 调试信息开关：控制游戏窗口悬浮层（任务侧读取）与「诊断」导航显隐；
+  「显示与调试」卡片发行版默认隐藏（诊断入口随之不展示），在「系统页-
+  关于」连点版本号 6 次解锁；开关为全局设置（config.json），不进配置方案；
   日志统一展示在面板内「运行日志」抽屉（独立吸附日志窗已于 2026-11 移除）
 
 注意：页面不要自行声明 callPython 函数，使用框架注入的桥接
@@ -59,6 +61,9 @@ ENV_ADAPT_RES = (1378, 831)      # 坐标标定的窗口分辨率（实测布局
 _USE_SHEYAOXIANG_KEY = "use_sheyaoxiang"
 # 调试信息悬浮显示（UI 开关，KeyValue 持久化；游戏窗口上绘制任务/配置/进度）
 _DEBUG_OVERLAY_KEY = "debug_overlay"
+# 「显示与调试」卡片解锁标记（发行版默认隐藏该卡片与诊断入口；在「系统页-
+# 关于」连点版本号 6 次解锁。全局设置，KeyValue 持久化，不进配置方案）
+_DEBUG_UI_KEY = "debug_ui_unlocked"
 # UI 主题（浅色/深色，KeyValue 持久化；首次默认浅色）
 _UI_THEME_KEY = "ui_theme"
 UI_THEMES = ("dark", "light")
@@ -150,6 +155,21 @@ def load_debug_overlay():
 def save_debug_overlay(on):
     """保存调试信息悬浮开关，返回操作结果。"""
     _kv_save(_DEBUG_OVERLAY_KEY, bool(on))
+    return {"status": "success"}
+
+
+def load_debug_ui_unlocked():
+    """读取「显示与调试」卡片解锁标记（首次默认关闭）。
+
+    发行版默认不展示该卡片（也就没有调试信息开关与诊断入口）；
+    在「系统页-关于」连点版本号 6 次解锁。全局设置，不随配置方案切换。
+    """
+    return bool(KeyValue.get(_DEBUG_UI_KEY, False))
+
+
+def save_debug_ui_unlocked(on):
+    """保存「显示与调试」卡片解锁标记（全局，不进配置方案）。"""
+    _kv_save(_DEBUG_UI_KEY, bool(on))
     return {"status": "success"}
 
 
@@ -1037,6 +1057,7 @@ class ControlWindow(WebWindow):
         self.expose(self.save_wubei_tab_group)
         self.expose(self.save_xiuluo_shout_switch)
         self.expose(self.save_debug_overlay)
+        self.expose(self.save_debug_ui_unlocked)
         self.expose(self.save_auto_famen)
         self.expose(self.save_ui_theme)
         self.expose(self.start_task)
@@ -1571,6 +1592,7 @@ class ControlWindow(WebWindow):
                 "battle_only_auto_rejoin": load_battle_only_auto_rejoin(),
                 "auto_famen": load_auto_famen(),
                 "debug_overlay": load_debug_overlay(),
+                "debug_ui_unlocked": load_debug_ui_unlocked(),
                 "license": self._license_info,
                 "env": self.get_env_info(),
                 "version": __version__,
@@ -1824,6 +1846,11 @@ class ControlWindow(WebWindow):
         """调试信息开关变更：保存开关状态（悬浮层由任务侧读取、
         诊断导航显隐由页面侧同步）。"""
         return save_debug_overlay(on)
+
+    def save_debug_ui_unlocked(self, on):
+        """「显示与调试」卡片解锁（关于页连点版本号 6 次）：保存
+        解锁标记，解锁后下次启动直接展示该卡片。"""
+        return save_debug_ui_unlocked(on)
 
     def save_ui_theme(self, theme):
         """主题切换：保存浅色/深色选择。"""

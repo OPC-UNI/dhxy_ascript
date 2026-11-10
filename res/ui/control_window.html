@@ -1019,14 +1019,16 @@
                 </div>
                 <div class="group-hint" id="license-msg"></div>
             </div>
-            <div class="group-box">
+            <!-- 显示与调试：发行版默认隐藏（诊断入口随之不展示），
+                 在「关于」连点版本号 6 次解锁显示；开关为全局设置 -->
+            <div class="group-box" id="debug-card" style="display:none">
                 <div class="group-title">显示与调试</div>
                 <label class="switch-row">
                     <input type="checkbox" id="debug-overlay">
                     <span class="switch-track"></span>
                     <span>调试信息（游戏窗口悬浮任务信息 + 显示「诊断」页）</span>
                 </label>
-                <div class="group-hint">开启后左侧导航出现「诊断」页，供验证各链路识别是否正常；任务运行中切换数秒生效。</div>
+                <div class="group-hint">开启后左侧导航出现「诊断」页，供验证各链路识别是否正常；任务运行中切换数秒生效。本开关为全局设置（config.json），不随配置方案切换。</div>
             </div>
             <!-- 配置方案：多套设置快照管理（一键切换在顶栏下拉）。
                  当前方案行实时显示操作对象；重命名/删除按钮文案带方案名 -->
@@ -1417,6 +1419,7 @@
     const taskLockBanner = document.getElementById('task-lock-banner');
     const useSyx = document.getElementById('use-syx');
     const debugOverlay = document.getElementById('debug-overlay');
+    const debugCard = document.getElementById('debug-card');  // 「显示与调试」卡片（默认隐藏，连点版本号解锁）
     const devTools = document.getElementById('nav-diag');  // 调试信息开关控制「诊断」导航显隐
     const xiuluoHezi = document.getElementById('xiuluo-hezi');
     const xiuluoCheckTeam = document.getElementById('xiuluo-check-team');
@@ -2616,6 +2619,28 @@
         callPython('save_debug_overlay', debugOverlay.checked);
     });
 
+    // 「显示与调试」卡片：发行版默认隐藏（诊断入口随之不展示）。需要时
+    // 在「系统页-关于」连点版本号 6 次解锁（相邻点击间隔 ≤2s）；解锁
+    // 标记全局持久化（config.json，不随配置方案切换）。
+    let versionClickCount = 0;
+    let versionClickTimer = null;
+    const DEBUG_CARD_CLICKS = 6;
+    function revealDebugCard() {
+        debugCard.style.display = '';
+    }
+    aboutVersionEl.addEventListener('click', () => {
+        if (debugCard.style.display !== 'none') return;  // 已解锁
+        versionClickCount += 1;
+        if (versionClickTimer) clearTimeout(versionClickTimer);
+        versionClickTimer = setTimeout(() => { versionClickCount = 0; }, 2000);
+        if (versionClickCount >= DEBUG_CARD_CLICKS) {
+            versionClickCount = 0;
+            clearTimeout(versionClickTimer);
+            revealDebugCard();
+            callPython('save_debug_ui_unlocked', true);
+        }
+    });
+
     xiuluoHezi.addEventListener('change', () => {
         callPython('save_xiuluo_hezi', xiuluoHezi.checked);
     });
@@ -2884,6 +2909,9 @@
         }
         useSyx.checked = !!info.use_sheyaoxiang;
         debugOverlay.checked = !!info.debug_overlay;
+        // 「显示与调试」卡片：已解锁或调试信息已开时展示（升级用户
+        // config.json 只有 debug_overlay=true，卡片须一并出现才能关闭）
+        if (info.debug_ui_unlocked || info.debug_overlay) revealDebugCard();
         applyDevTools();  // 调试信息开关：控制「诊断」导航入口显隐
         xiuluoHezi.checked = !!info.xiuluo_hezi;
         xiuluoCheckTeam.checked = !!info.xiuluo_check_team;

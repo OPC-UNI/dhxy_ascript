@@ -166,3 +166,37 @@ def test_load_group_actions_filters_bad_entries(monkeypatch):
         }})
     result = control_window.load_group_actions()
     assert result == {"12345": {"char": "攻击", "beast": "防御"}}
+
+
+# ---- 调试相关全局设置不进配置方案（2026-11-10 用户要求） ----
+
+
+def test_settings_spec_excludes_debug_overlay():
+    """调试信息开关放 config.json、不随方案走：切换方案不得改变
+    「诊断」导航与悬浮层显隐，方案白名单不得包含该键。"""
+    from src import schemes
+    from src.control_window import _DEBUG_OVERLAY_KEY
+    assert _DEBUG_OVERLAY_KEY not in schemes._settings_spec()
+
+
+def test_snapshot_excludes_debug_globals(monkeypatch):
+    """方案快照（切换/保存时写回）同样不得携带调试全局键，
+    否则旧方案里残留的 debug_overlay 会随快照再次混入。"""
+    from src import schemes
+    from src.control_window import _DEBUG_OVERLAY_KEY, _DEBUG_UI_KEY
+    _patch_kv_empty(monkeypatch)
+    snap = schemes._snapshot_current()
+    assert _DEBUG_OVERLAY_KEY not in snap
+    assert _DEBUG_UI_KEY not in snap
+
+
+def test_debug_ui_unlock_save_load(monkeypatch):
+    """「显示与调试」卡片解锁标记：默认关闭、保存后读回开启
+    （全局键，写入 config.json）。"""
+    from src import control_window
+    store = _patch_kv_store(monkeypatch)
+    assert control_window.load_debug_ui_unlocked() is False
+    r = control_window.save_debug_ui_unlocked(True)
+    assert r == {"status": "success"}
+    assert store[control_window._DEBUG_UI_KEY] is True
+    assert control_window.load_debug_ui_unlocked() is True

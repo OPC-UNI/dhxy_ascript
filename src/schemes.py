@@ -1,8 +1,11 @@
 """配置方案管理：多套设置一键切换 + 导入导出。
 
-方案 = 用户设置键的完整快照，白名单为 control_window 全部 load/save
-设置键（30 键）。运行时状态（任务进度、摄妖香时间戳、清屏标记、
-窗口绑定、授权缓存）与派生缓存（high_perf_cache）不进方案，全局共享。
+方案 = 用户设置键的完整快照，白名单为 control_window 的设置 load/save
+键。运行时状态（任务进度、摄妖香时间戳、清屏标记、窗口绑定、授权缓存）、
+派生缓存（high_perf_cache）与调试相关全局设置（调试信息开关
+debug_overlay、「显示与调试」卡片解锁标记 debug_ui_unlocked）不进方案，
+全局共享——切换方案不得改变诊断入口/悬浮层显隐（用户 2026-11-10 要求
+调试开关放 config.json、不随方案走）。
 
 存储：与 config.json 同目录的 schemes.json——
     {"active": "默认", "默认": {设置键: 值}, ...}
@@ -95,11 +98,13 @@ def _get_data():
 
 
 # ---- 设置键表与默认值 ----
-# 覆盖 control_window 全部设置键；默认值与各 load_* 函数首次默认相同：
+# 覆盖 control_window 设置键；默认值与各 load_* 函数首次默认相同：
 # 选中五环、次数 TASK_COUNT_DEFAULTS、摄妖香开、阈值 50、
 # 战斗 人物技能3-5/召唤兽攻击、修罗 5 人+男人男鬼、盒子/喊话
 # 关、检查队伍/自动归队开、五环活力继续开、高性能开、补血蓝开、
-# 清屏开、巫医开+间隔 5、法门关、悬浮关、主题浅色。
+# 清屏开、巫医开+间隔 5、法门关、主题浅色。
+# 调试信息开关（debug_overlay）与「显示与调试」解锁标记为全局设置，
+# 刻意不在表内：方案应用/快照都不碰，切换方案不再改变诊断入口显隐。
 def _settings_spec():
     """返回 {设置键: 默认值}（惰性取 control_window 常量）。"""
     cw = _control_window()
@@ -136,7 +141,6 @@ def _settings_spec():
         cw._CLEAR_SCREEN_KEY: True,
         cw._SILENT_MODE_KEY: True,
         cw._AUTO_FAMEN_KEY: False,
-        cw._DEBUG_OVERLAY_KEY: False,
         cw._UI_THEME_KEY: "light",
     }
 
@@ -185,7 +189,6 @@ def _snapshot_current():
         cw._CLEAR_SCREEN_KEY: cw.load_clear_screen(),
         cw._SILENT_MODE_KEY: cw.load_silent_mode(),
         cw._AUTO_FAMEN_KEY: cw.load_auto_famen(),
-        cw._DEBUG_OVERLAY_KEY: cw.load_debug_overlay(),
         cw._UI_THEME_KEY: cw.load_ui_theme(),
     }
 
