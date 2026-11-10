@@ -243,3 +243,66 @@ def test_xj_quota_frozen_while_dialog_progress(monkeypatch):
     assert wubei._xj_warned is False
     assert wubei._xj_quota_exhausted_at == 0.0
     assert not any("A、B 两处" in m for m in logs)
+
+
+def test_xj_dialog_present_short_keyword():
+    """长句 OCR 截断时短关键词兜底命中白龙马对话框（2026-11-10 两轮漏判）。"""
+    truncated = [("一阵光芒闪过，白龙马出现", (400, 300, 900, 340), 0.9)]
+    assert wubei._xj_dialog_present(truncated) is True
+    unrelated = [("阴都大帝：尔等何人", (400, 300, 900, 340), 0.9)]
+    assert wubei._xj_dialog_present(unrelated) is False
+
+
+def test_xj_quota_full_skips_walk_back(monkeypatch):
+    """第 2 次用镜失败后配额已满：不再点寻路链接白走一趟，直接进入
+    卡死替换计时（2026-11-10 22:38 实测回 A 白走 20s 还拖后替换）。"""
+    logs = []
+    walks = []
+    monkeypatch.setattr(wubei, "battle_watch_in_battle", lambda: False)
+    monkeypatch.setattr(wubei, "_xj_pos", lambda win, items: ("平顶山", 212, 131))
+    monkeypatch.setattr(wubei, "log",
+                        lambda msg, level="INFO": logs.append(msg))
+    monkeypatch.setattr(wubei, "_click_xianxingjing_walk",
+                        lambda win, items, img_np, side="b":
+                        walks.append(side) or True)
+    monkeypatch.setattr(wubei, "_xj_phase", 1)
+    monkeypatch.setattr(wubei, "_xj_use_count", 2)
+    monkeypatch.setattr(wubei, "_xj_grace_start",
+                        wubei.time.time() - wubei.XIANXINGJING_GRACE - 0.1)
+    monkeypatch.setattr(wubei, "_xj_walk_side", "b")
+    monkeypatch.setattr(wubei, "_xj_warned", False)
+    monkeypatch.setattr(wubei, "_xj_quota_exhausted_at", 0.0)
+    monkeypatch.setattr(wubei, "_xj_dismissed_at", 0.0)
+    monkeypatch.setattr(wubei, "_xj_btn_clicked_at", 0.0)
+    monkeypatch.setattr(wubei, "_xj_missing", 0)
+    monkeypatch.setattr(wubei, "_xj_diag_at", wubei.time.time())
+    items = [("前往平顶山处使用显形镜查探", (40, 260, 200, 280), 0.99)]
+    img = np.zeros((831, 1378, 3), dtype=np.uint8)
+    assert wubei._handle_xianxingjing_track(object(), items, img) is False
+    assert walks == []  # 不再点链接走位
+    assert wubei._xj_warned is True
+    assert wubei._xj_quota_exhausted_at > 0
+    assert any("A、B 两处" in m for m in logs)
+
+
+def test_xj_use_log_includes_side(monkeypatch):
+    """用镜日志带侧别（A/B）：日志看不出第几处在哪侧排查困难（2026-11-10）。"""
+    logs = []
+    monkeypatch.setattr(wubei, "battle_watch_in_battle", lambda: False)
+    monkeypatch.setattr(wubei, "_xj_pos", lambda win, items: ("平顶山", 212, 131))
+    monkeypatch.setattr(wubei, "log",
+                        lambda msg, level="INFO": logs.append(msg))
+    monkeypatch.setattr(wubei, "_click_xianxingjing_use",
+                        lambda win, items, img_np: True)
+    monkeypatch.setattr(wubei, "_xj_phase", 0)
+    monkeypatch.setattr(wubei, "_xj_stable", 3)
+    monkeypatch.setattr(wubei, "_xj_last_pos", ("平顶山", 212, 131))
+    monkeypatch.setattr(wubei, "_xj_use_count", 0)
+    monkeypatch.setattr(wubei, "_xj_need_move", False)
+    monkeypatch.setattr(wubei, "_xj_move_stuck", 0)
+    monkeypatch.setattr(wubei, "_xj_walk_side", None)
+    monkeypatch.setattr(wubei, "_xj_missing", 0)
+    items = [("前往平顶山处使用显形镜查探", (40, 260, 200, 280), 0.99)]
+    img = np.zeros((831, 1378, 3), dtype=np.uint8)
+    assert wubei._handle_xianxingjing_track(object(), items, img) is True
+    assert any("用镜" in m and "A 侧" in m for m in logs)

@@ -193,6 +193,12 @@ FIGHT_DIALOG_OPTIONS = ["看打！", "证明实力", "消灭它","奎星归位"]
 # ---- 显形镜查探（宝象迷情[降魔任务]；追踪链接「前往火云壁、火云
 #      戈壁处使用显形镜查探」换行渲染，A=火云壁 B=火云戈壁） ----
 XIANXINGJING_DIALOG_TEXT = "一阵光芒闪过，白龙马出现在眼前，竟开口说起话来。"
+# 短关键词兜底（2026-11-10）：长句 24 字在区域 OCR 截断/拆行/个别字
+# 误读时过不了 0.85 模糊阈值——实测 22:18、22:38 两轮 B 处对话框明明
+# 已出现（模板分 0.989），处理器却未命中文案，被剧情对话兜底点掉后
+# 误判「本处未触发」→ A/B 配额耗尽 → 替换任务。命中任一短关键词即
+# 视为白龙马对话框在场（关键词取句中稳定短语）。
+XIANXINGJING_DIALOG_KEYWORDS = ("白龙马出现在眼前", "一阵光芒闪过")
 XIANXINGJING_TASK_ICON = "wubei_bailongma_task.png"  # 白龙马任务按钮（用户提供素材）
 # 流程（用户实测）：白龙马对话框出现 → 对话框文字遮挡任务按钮模板，
 # 先连点屏幕中间两次关闭文字 → 再识别点击模板开始对话；后续开打
@@ -237,6 +243,8 @@ _xj_walk_from = None    # 寻路链接点击时的位置（验证移动起点）
 _xj_move_stuck = 0      # 点寻路链接后位置连续不变轮询数（翻侧重试判据）
 _xj_walk_side = None    # 上次寻路点击的链接侧 "a"/"b"（None=尚未点过；下次点另一侧）
 _xj_dialog_clicked_at = 0.0  # 白龙马对话框屏幕中间连点时间（冷却防连点）
+_xj_diag_at = 0.0            # 宽限内「对话框在场但文案不匹配」诊断日志时间
+                             # （每次宽限最多一条，2026-11-10 临时诊断）
 _xj_dismissed_at = 0.0       # 对话框关闭时间（此后窗口内找模板点击）
 # ---- 白龙马任务按钮点击失败 → 替换任务（用户 2026-10-17 决策）：
 # 关闭遮挡文字的点地点击会让人物走动，走远后点任务按钮无效（模板
@@ -328,7 +336,8 @@ def _reset_xianxingjing_state():
     global _xj_phase, _xj_stable, _xj_last_pos, _xj_use_count, \
         _xj_grace_start, _xj_warned, _xj_missing, _xj_need_move, _xj_walk_from, \
         _xj_move_stuck, _xj_walk_side, \
-        _xj_dialog_clicked_at, _xj_dismissed_at, _xj_quota_exhausted_at
+        _xj_dialog_clicked_at, _xj_dismissed_at, _xj_quota_exhausted_at, \
+        _xj_diag_at
     global _xj_btn_clicked_at, _xj_btn_missing, _xj_btn_candidates, _xj_btn_idx, \
         _xj_need_replace, _xj_block_clicked_at
     _xj_phase = 0
@@ -345,6 +354,7 @@ def _reset_xianxingjing_state():
     _xj_dialog_clicked_at = 0.0
     _xj_dismissed_at = 0.0
     _xj_quota_exhausted_at = 0.0
+    _xj_diag_at = 0.0
     _xj_btn_clicked_at = 0.0
     _xj_btn_missing = 0
     _xj_btn_candidates = []
@@ -1829,6 +1839,38 @@ def _find_xj_block_option(items, img_np, option):
     return None, None
 
 
+def _xj_dialog_present(items):
+    """白龙马对话框文案判定：长句模糊匹配 + 短关键词兜底。
+
+    长句 24 字对区域 OCR 截断/拆行/个别字误读很脆（2026-11-10 实测
+    22:18、22:38 两轮 B 处对话框处理器未命中），短关键词命中同样视为
+    对话框在场。
+    """
+    if _dialog_text_present(items, XIANXINGJING_DIALOG_TEXT):
+        return True
+    return any(_dialog_text_present(items, kw)
+               for kw in XIANXINGJING_DIALOG_KEYWORDS)
+
+
+def _xj_quota_stuck():
+    """显形镜 A/B 配额耗尽：告警一次并计时，超时抛 ReplaceTaskError。
+
+    调用方须先确认没有进度流程在进行（白龙马对话框/找按钮窗口/模板
+    判定窗/开打对话），否则替换可能在任务推进中误触发。
+    """
+    global _xj_warned, _xj_quota_exhausted_at, _xj_need_replace
+    if not _xj_warned:
+        _xj_warned = True
+        _xj_quota_exhausted_at = time.time()
+        log("[五倍] 显形镜：A、B 两处均未触发白龙马对话框，等待卡死超时后替换任务", "WARN")
+    # 配额耗尽后无收敛路径（任务无法推进）：卡死超时后重新领取替换
+    # 任务，与按钮失败恢复路径对齐（原逻辑静默空转，每 5 分钟白走
+    # 一轮永不完成）
+    if time.time() - _xj_quota_exhausted_at > XIANXINGJING_QUOTA_STUCK_TIMEOUT:
+        _xj_need_replace = True
+        raise ReplaceTaskError("显形镜 A、B 两处用镜均未触发白龙马对话框")
+
+
 def _handle_xianxingjing(win, items, img_np):
     """显形镜查探：白龙马对话框出现时先点屏幕中间关闭遮挡文字
     （对话框文字挡住任务按钮模板），随后窗口内识别点击模板开始对话；
@@ -1854,7 +1896,7 @@ def _handle_xianxingjing(win, items, img_np):
     if battle_watch_in_battle():
         _xj_btn_clicked_at = 0.0  # 战斗中：判定窗冻结，战斗流程接管
         return False
-    if _dialog_text_present(items, XIANXINGJING_DIALOG_TEXT):
+    if _xj_dialog_present(items):
         # 白龙马对话框：点屏幕中间关闭遮挡文字（3s 冷却防连点；
         # 点地点击可能让人物走动——走远后模板点击无效，由失败
         # 替换路径兜底）。对话框出现即任务在推进：取消卡死超时
@@ -1986,7 +2028,7 @@ def _handle_xianxingjing_track(win, items, img_np):
     global _xj_phase, _xj_stable, _xj_last_pos, _xj_use_count, \
         _xj_grace_start, _xj_warned, _xj_missing, _xj_need_move, _xj_walk_from, \
         _xj_move_stuck, _xj_walk_side, \
-        _xj_quota_exhausted_at, _xj_need_replace
+        _xj_quota_exhausted_at, _xj_need_replace, _xj_diag_at
     if battle_watch_in_battle():
         return False  # 战斗中：面板隐藏不可点链接（防宽限过期后战斗期空点）
     sig = "".join(norm_text(t) for t, r, s in items
@@ -2009,13 +2051,32 @@ def _handle_xianxingjing_track(win, items, img_np):
     # 继续，不再走 A→B 回退（用户 2026-10-21 决策）。
     # 位置无关，跳过位置读取（区域 OCR ~150ms/轮询）
     if _xj_phase == 1:
-        if _dialog_text_present(items, XIANXINGJING_DIALOG_TEXT) \
+        if _xj_dialog_present(items) \
                 or _xj_fight_dialog_open(items) \
                 or _xj_dismissed_at > 0 \
                 or _xj_btn_clicked_at > 0:
             _xj_grace_start = now
             return False
+        # 诊断（2026-11-10 临时）：宽限内出现标准对话框但白龙马文案不
+        # 匹配——记录对话区 OCR 行与当前位置，供定性（OCR 漏读 vs 走位
+        # 不对）。每个宽限窗口最多一条（复用 GRACE 做限频）
+        if now - _xj_diag_at >= XIANXINGJING_GRACE \
+                and dialog_frame_score(img_np) >= DIALOG_FRAME_THRESHOLD:
+            _xj_diag_at = now
+            pos_diag = _xj_pos(win, items)
+            dump = " | ".join(t for t, r, s in items
+                              if s >= 0.55
+                              and r[0] >= task_tracker.PANEL_MAX_X)
+            log(f"[五倍] 显形镜：宽限内对话框在场但未匹配白龙马文案"
+                f"（当前位置 {pos_diag}，对话区 OCR: {dump or '(无)'}）",
+                "WARN")
         if now - _xj_grace_start < XIANXINGJING_GRACE:
+            return False
+        # 配额已满（A、B 各用过一次仍失败）：再走位已无意义——到达后
+        # phase 0 也只会进入替换路径，白走 ~20s 还拖后替换（2026-11-10
+        # 22:38 实测）→ 直接进入卡死替换计时，不点寻路链接
+        if _xj_use_count >= XIANXINGJING_USE_MAX:
+            _xj_quota_stuck()
             return False
         # 宽限已过未出对话框：本处失败 → 点寻路链接去另一处（A/B 同
         # 文案不同坐标；偶现只识别到第二个链接时由 _xj_walk_point 按
@@ -2089,20 +2150,13 @@ def _handle_xianxingjing_track(win, items, img_np):
         if _xj_fight_dialog_open(items) or _xj_dismissed_at > 0 \
                 or _xj_btn_clicked_at > 0:
             return False
-        if not _xj_warned:
-            _xj_warned = True
-            _xj_quota_exhausted_at = time.time()
-            log("[五倍] 显形镜：A、B 两处均未触发白龙马对话框，等待卡死超时后替换任务", "WARN")
-        # 配额耗尽后无收敛路径（任务无法推进）：卡死超时后重新领取
-        # 替换任务，与按钮失败恢复路径对齐（原逻辑静默空转，
-        # 每 5 分钟白走一轮永不完成）
-        if time.time() - _xj_quota_exhausted_at > XIANXINGJING_QUOTA_STUCK_TIMEOUT:
-            _xj_need_replace = True
-            raise ReplaceTaskError("显形镜 A、B 两处用镜均未触发白龙马对话框")
+        _xj_quota_stuck()
         return False
     # 已到达（位置连续稳定）：点追踪面板「显形镜」文案用镜
+    cur_side = _xj_walk_side or "a"  # 默认落点 A（追踪绿字寻路）
     log(f"[五倍] 显形镜：已到达（位置稳定），点击追踪文案用镜"
-        f"（第 {_xj_use_count + 1}/{XIANXINGJING_USE_MAX} 处）", "SYS")
+        f"（第 {_xj_use_count + 1}/{XIANXINGJING_USE_MAX} 处，"
+        f"{'A' if cur_side == 'a' else 'B'} 侧）", "SYS")
     if _click_xianxingjing_use(win, items, img_np):
         _xj_use_count += 1
         _xj_phase = 1
