@@ -127,3 +127,52 @@ def test_match_template_region_offsets_coords(monkeypatch):
     r2 = bag._match_template(_W2(), bag.BAG_ICON,
                              region=game_map.TRAY_BTN_REGION)
     assert r2.x >= 1000 and r2.y >= 750  # 仍只命中带内，不命中带外
+
+
+# ---- 任务储物格通用入口（各任务模块共用，2026-11-10）----
+class _TaskBoxWin:
+    def capture(self, force_activate=False):
+        from PIL import Image
+        import numpy as np
+        return Image.fromarray(np.zeros((831, 1378, 3), dtype=np.uint8))
+
+
+def _patch_task_box(monkeypatch, state):
+    monkeypatch.setattr(bag, "is_bag_open", lambda w: True)
+    monkeypatch.setattr(bag, "find_bag_box", lambda w: (500, 300))
+    monkeypatch.setattr(bag.time, "sleep", lambda s: None)
+
+    def fake_match(frame, icon, region=None):
+        if state.get("opened"):
+            return ((0.99, (1, 1)) if icon == bag.BOX_TASK_SELECTED_ICON
+                    else (0.1, (0, 0)))
+        return ((0.1, (0, 0)) if icon == bag.BOX_TASK_SELECTED_ICON
+                else (0.99, (800, 400)))
+
+    monkeypatch.setattr(bag.game_map, "best_match_np", fake_match)
+
+
+def test_open_task_box_already_open_no_click(monkeypatch):
+    """选中态分数更高 → 任务储物格已打开，不点击。"""
+    _patch_task_box(monkeypatch, {"opened": True})
+    monkeypatch.setattr(bag, "human_click",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("已打开不应点击")))
+    ok, info = bag.open_task_box(_TaskBoxWin(), prefix="名望")
+    assert ok and "已在背包中打开" in info
+
+
+def test_open_task_box_clicks_unselected_button(monkeypatch):
+    """未选中态命中 → 点击任务储物格按钮，随后检测到选中态。"""
+    state = {"opened": False}
+    _patch_task_box(monkeypatch, state)
+    clicks = []
+
+    def fake_click(w, x, y, button="primary"):
+        clicks.append((x, y, button))
+        state["opened"] = True
+
+    monkeypatch.setattr(bag, "human_click", fake_click)
+    ok, info = bag.open_task_box(_TaskBoxWin(), prefix="名望")
+    assert ok and "已在背包中打开" in info
+    assert clicks == [(800, 400, "primary")]

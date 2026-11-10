@@ -80,6 +80,12 @@ Auxiliary waits, swipes, and helper functions do not need heavyweight preconditi
 - Do not rely on `sys.argv` or `argparse`.
 - Put main script logic at top level or in functions called from top level.
 
+## Task Module Isolation（任务模块隔离，2026-11-10 用户规则）
+
+- 任务模块 `xiuluo.py` / `wubei.py` / `mingwang.py` / `kezhan.py`（以及以后新增的任何任务模块）之间**禁止相互 import 或调用**；一个任务的实现不得作为另一个任务的依赖。
+- 通用能力下沉到工具模块并在那里扩展：背包/任务储物格 → `bag.py`；地图/坐标 → `map.py`；任务追踪面板 → `task_tracker.py`；对话框/绿字选项 → `dialog_common.py`；输入/全局锁 → `app_utils.py`。
+- 本规则作用于本次及以后新增逻辑（既有 `xuanshu.follow_task` 跨任务共享跟踪引擎的调用保持现状，不视为任务间引用；新增共享能力一律进工具模块，不得再复制到任务模块间互引）。
+
 ## Selector Rules
 
 - Prefer stable, semantic ids such as `com.example:id/btn_login`.

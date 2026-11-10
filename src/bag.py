@@ -1,6 +1,8 @@
 """背包相关操作：打开背包、物品检测与点击。"""
 import time
 
+import cv2
+import numpy as np
 from ascript.windows.hardware.keyboard import Keyboard
 from ascript.windows.system import R
 from ascript.windows.screen.find_images import FindImages
@@ -27,6 +29,19 @@ BOX_ONE_CLOSE_ICON = "box_one_close.png"
 # 储物格切换的纵向偏移：以 box_one_close 为基准向下 35px 递增，
 # 共 4 个储物格（再往下第 5 个位置已经是任务栏）
 SLOT_OFFSETS = [0, 35, 70, 105]
+
+# ---- 任务储物格（任务道具专用格，与普通储物格切换不同）----
+# 各任务模块共用：打开背包 → 打开任务储物格 → 在格内找任务道具。
+# 修罗回城符、五倍回城符、名望唤风符均在此格（用户 2026-11-10 确认）。
+BOX_TASK_ICON = "box_task.png"                    # 任务储物格按钮（未选中态，点击打开）
+BOX_TASK_SELECTED_ICON = "box_task_selected.png"  # 已打开（选中态，无需再点击）
+TASK_BOX_THRESHOLD = 0.8         # 按钮双模板判定阈值
+TASK_BOX_TIMEOUT = 10            # 等待任务储物格打开的超时（秒）
+TASK_BOX_POLL_INTERVAL = 0.5     # 轮询间隔（打开动画约 0.4s）
+# 按钮相对 bag_box 面板标志中心的偏移与搜索条带（面板可拖动但内部
+# 布局固定，修罗两位置实测 +349/+305、+353/+305，取均值；条带留 55px）
+TASK_BOX_OFFSET = (351, 305)
+TASK_BOX_BAND_MARGIN = 55
 
 
 class _RegionMatch:
@@ -135,6 +150,66 @@ def find_item_in_bag(win, icon_name, threshold=0.8):
 def find_box_one_close(win):
     """查找背包储物格切换按钮 box_one_close，返回首个匹配或 None。"""
     return _match_template(win, BOX_ONE_CLOSE_ICON)
+
+
+def open_task_box(win, prefix=""):
+    """打开背包并确保任务储物格已打开。返回 (是否成功, 描述)。
+
+    通用能力（各任务模块共用，避免任务模块互引）：打开背包 → 检查
+    box_task_selected（选中态）：存在说明任务储物格已打开，无需点击；
+    否则点击 box_task 打开。两模板是同一按钮的两种状态、互相弱匹配，
+    双模板比分数判定（各自达标且更高者胜，防误判/误关）。每轮询只截
+    一帧，双模板共用一帧；以 bag_box 为锚点限定搜索条带（面板可拖动，
+    内部偏移恒定；带区全未命中才全帧兜底）。
+    prefix：日志前缀（如「名望」；空则用「背包」）。
+    """
+    tag = f"[{prefix}] " if prefix else "[背包] "
+    if not is_bag_open(win):
+        ok, info = open_bag(win)
+        if not ok:
+            return False, f"打开背包失败: {info}"
+    else:
+        log(f"{tag}背包已打开，跳过开包", "INFO")
+    region = None
+    anchor = find_bag_box(win)
+    if anchor is not None:
+        bx, by = anchor
+        region = (bx + TASK_BOX_OFFSET[0] - TASK_BOX_BAND_MARGIN,
+                  by + TASK_BOX_OFFSET[1] - TASK_BOX_BAND_MARGIN,
+                  bx + TASK_BOX_OFFSET[0] + TASK_BOX_BAND_MARGIN,
+                  by + TASK_BOX_OFFSET[1] + TASK_BOX_BAND_MARGIN)
+    deadline = time.time() + TASK_BOX_TIMEOUT
+    clicked = False
+    while time.time() < deadline:
+        img = win.capture(force_activate=False)
+        if img is None:
+            time.sleep(TASK_BOX_POLL_INTERVAL)
+            continue
+        frame = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
+        sel_score, _ = game_map.best_match_np(frame, BOX_TASK_SELECTED_ICON,
+                                              region=region)
+        task_score, task_pt = game_map.best_match_np(frame, BOX_TASK_ICON,
+                                                     region=region)
+        if sel_score < TASK_BOX_THRESHOLD \
+                and task_score < TASK_BOX_THRESHOLD and region is not None:
+            # 带区全未命中：全帧兜底（限频——仅带区未命中时触发）
+            sel_score, _ = game_map.best_match_np(frame,
+                                                  BOX_TASK_SELECTED_ICON)
+            task_score, task_pt = game_map.best_match_np(frame,
+                                                         BOX_TASK_ICON)
+        if sel_score >= TASK_BOX_THRESHOLD and sel_score > task_score:
+            return True, "任务储物格已在背包中打开"
+        if task_score >= TASK_BOX_THRESHOLD:
+            if not clicked:
+                human_click(win, task_pt[0], task_pt[1])
+                log(f"{tag}已点击任务储物格按钮，等待打开...", "SYS")
+                clicked = True
+            time.sleep(TASK_BOX_POLL_INTERVAL)
+            continue
+        time.sleep(TASK_BOX_POLL_INTERVAL)
+    if clicked:
+        return False, "已点击任务储物格按钮，但未检测到选中态（打开失败）"
+    return False, "背包中未找到任务储物格按钮"
 
 
 def find_item_with_slots(win, icon_name, label, threshold=0.8):

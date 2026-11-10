@@ -1,4 +1,4 @@
-"""名望任务自动化（山河名望）——第一阶段：魔族领取入口 + 面板领取。
+"""名望任务自动化（山河名望）——第一阶段：魔族/仙族领取入口 + 面板领取。
 
 流程（用户 2026-11-10 需求，先实现领取入口，后续流程再补充）：
 1. 种族判定（按角色**每天**缓存一次：同一天内跨轮次/跨启动复用，
@@ -6,30 +6,48 @@
    (1230,95) 打开人物属性面板（用户标定）→
    匹配竖排标题牌 renwushuxing.png → OCR 标题牌右侧 120px 内的种族
    名称区：出现「男魔角色/女魔角色」等魔族角色列表文案 → 魔族；
-   出现「女仙角色」等仙族角色列表文案 → 仙族。其他种族（人/鬼/龙/
-   神巫）暂不识别（后续 TODO）。识别后关闭面板（右键标题牌 → 再点
-   按钮 → Esc 三级兜底）。
-2. 魔族领取点：大唐边境 (477,180) 附近，NPC 逆天魔。
-   - 已在大唐边境 → 打开小地图点击 (985,384)
-   - 不在 → 世界地图点击「大唐边境」（shijie_datangbianjing.png）
-     打开该地图小地图 → 点击 (985,384) → 等待寻路完成
-   - 到达判定：坐标进入 (477,180) 容差内；或坐标稳定且已看到逆天魔
-3. 到达后点击 NPC（mingwang_nitianmo.png）→ 对话框【不使用对话框
-   模板门控，直接区域 OCR】点击绿色选项「开启山河名望志」→ 等待并点击
-   山河名望入口（mingwang_shanhemingwang.png）打开任务领取面板。
+   出现「女仙角色/精灵仙/霓裳仙」或角色名「武尊神/云中君/玄剑娥」
+   （仙族部分角色名不含「仙」）→ 仙族。其他种族（人/鬼/龙/神巫）
+   暂不识别（后续 TODO）。识别后关闭面板（右键标题牌 → 再点按钮 →
+   Esc 三级兜底）。
+2. 领取点（种族配置化，见 CLAIM_POINTS）：
+   - 魔族：大唐边境 (477,180) 附近，NPC 逆天魔。
+     已在大唐边境 → 打开小地图点击 (985,384)；不在 → 世界地图点击
+     「大唐边境」（shijie_datangbianjing.png）打开该地图小地图 →
+     点击 (985,384) → 等待寻路完成。
+   - 仙族：天宫 (185,122) 附近，NPC 武尊神。
+     已在天宫 → 打开小地图点击 (821,358)；不在 → 世界地图点击
+     「天宫」（shijie_tiangong.png，用户素材 图1）打开该地图小地图 →
+     点击 (821,358) → 等待寻路完成。
+   - 到达判定：**必须**坐标进入目标坐标容差内（两族一致；NPC 模板
+     可见不算到达——远处点击不生效，2026-11-10 仙族实机教训）
+3. 到达后点击 NPC（魔族 mingwang_nitianmo.png / 仙族
+   mingwang_wuzunshen.png）→ 对话框【不使用对话框模板门控，直接区域
+   OCR】点击绿色选项「开启山河名望志」→ 等待并点击山河名望入口
+   （mingwang_shanhemingwang.png）打开任务领取面板。
 4. 面板领取（2026-11-10 实机标定）：任务栏锚点
    mingwang_shanhemingwang_maodian.png（面板顶部图标）→ 锚点左下角
    推导 6 张任务卡（3 列 × 2 行、190×154、列距 201/行距 161）→ 逐卡
    OCR 级别（高级/中级/初级）与标题 → 按优先级 高级 > 中级 > 初级
-   + 卡片顺序领取已实现任务（蛟魔复仇/沙海迷踪/蛟魔探秘）：在命中卡内
-   匹配接取按钮 mingwang_shanhemingwang_jiequ.png 点击领取，确认信号=
-   接取按钮消失或任务进入追踪面板。
+   + 卡片顺序领取已实现任务（魔族：蛟魔复仇/沙海迷踪/蛟魔探秘；仙族：
+   五庄封印）：在命中卡内匹配接取按钮 mingwang_shanhemingwang_jiequ.png
+   点击领取，确认信号=接取按钮消失或任务进入追踪面板。
+   五庄封印（仙族，2026-11-10 用户规则）：追踪面板出现「火藏之位」
+   「木藏之位」两个绿字链接，先点火藏之位；到达目的地（位置连续
+   稳定，复用五倍显形镜的坐标稳定判定）后打开背包任务储物格（与
+   修罗回城符同格）右键使用唤风符（mingwang_huanfengfu）。用符后
+   当前链接由亮绿变红（可能立刻、也可能战斗结束后变红）或坐标
+   离开五庄观即该点完成，改点木藏之位重复；两个点都完成后只等任务
+   整体从追踪面板消失（follow 判定完成；不做战斗判定，战斗由
+   battle 线程托管）。
 5. 领取后（用户 2026-11-10 规则）：接取后出现对话框——对话框模板
    门控命中则点屏幕中间关闭；任务追踪出现「山河名望」→ 复用
    xuanshu.follow_task 跟踪到任务完成（每轮点击追踪绿字推进）。
    任务执行对话按 DIALOG_OPTION_MAP 处理（对话框文案 → 绿色选项，
    可配置多个候选选项按顺序尝试），如「黑水河深，不如蛟魔之心。」→
-   「逆天魔大将派我前来」/「<山河名望>」。
+   「逆天魔大将派我前来」/「<山河名望>」；无绿字选项的多屏剧情台词
+   按 DIALOG_SKIP_TEXTS 处理（文案 → 连点屏幕中间次数，同玄枢轶闻
+   skip_texts；未收录的由剧情兜底 1 次/秒推进）。
    沙海迷踪：入口对话「少侠准备好清理地图了吗？」→「我已经准备好了」
    后，armed 窗口内识别「开始」按钮 mingwang_chenjiuditu_kaishi 点击
    进入战斗，战斗结束即任务完成（无需其它操作）。
@@ -53,11 +71,13 @@ from .app_utils import log, human_click, norm_text
 from . import app_utils  # 静默模式判定（Esc 兜底按键通道）
 from . import map as game_map  # 地图操作（世界地图/小地图/位置识别）
 from . import task_tracker  # 任务追踪面板（对话框区域常量）
+from . import bag  # 背包操作（五庄封印任务储物格用唤风符）
 from . import pochufengyin as _pochu_minigame  # 破除封印/钓鱼共用小游戏（闭环实现）
 from .battle import is_in_battle, is_in_battle_frame  # 战斗判定（单帧复用）
 from . import debug_overlay  # 调试信息悬浮层（任务阶段更新）
 from .control_window import load_task_counts  # 任务次数上限（通用设置）
 from .dialog_common import (_click_green_option_once,  # 绿色选项点击（共享实现）
+                            _click_screen_center,      # 点击屏幕中间推进对话
                             _dialog_text_present,      # 对话框文案模糊匹配
                             _fuzzy_contains,           # 任务标题模糊匹配
                             clear_blocking_dialog,     # 对话框门控 + 点屏幕中间关闭
@@ -82,36 +102,70 @@ RACE_STRIP_WIDTH = 120                 # 标题牌右侧种族名称区宽度（
 RACE_STRIP_Y_PAD = 20                  # 条带上下扩边（角色列表可能高于标题牌）
 RACE_OCR_MIN_SCORE = 0.55              # 区域 OCR 行置信度下限（同各任务模块）
 RACE_MAX_ATTEMPTS = 2                  # 种族判定失败（面板/OCR 瞬态）重试次数
-# 种族关键词（文案内出现即计一票）：魔族角色列表含「男魔角色/女魔角色/
-# 逆天魔/混天魔/绝影魔」等；仙族列表含「女仙角色/精灵仙/霓裳仙」等。
+# 种族关键词（文案内出现任一词即计一票）：魔族角色列表含「男魔角色/女魔
+# 角色/逆天魔/混天魔/绝影魔」等；仙族列表含「女仙角色/精灵仙/霓裳仙」等。
 # 条带内同时出现两族字样（OCR 噪声/界面混排）视为无法判定。
 # 2026-11-10 实机：条带 OCR 实际读到的是角色自身信息（如「逆天魔魔」+
-# 等级/气血），角色名即图3/图4 列表中的一项。仙族角色名有不含「仙」的
-# （云中君/武尊神/玄剑娥等），补仙族时须改为角色名单匹配（图17/18）。
-RACE_KEYWORDS = {"魔族": "魔", "仙族": "仙"}
+# 等级/气血），角色名即图3/图4 列表中的一项。仙族部分角色名不含「仙」
+# （武尊神/云中君/玄剑娥），**必须按角色名单补关键词**，否则仙族账号
+# 读不出种族（2026-11-10 用户新增仙族时确认）。
+RACE_KEYWORDS = {
+    "魔族": ("魔",),
+    "仙族": ("仙", "武尊神", "云中君", "玄剑娥"),
+}
 # 种族判定缓存（角色维度持久化，**每天一次**）：同一天内跨轮次/跨启动
 # 复用、不再重复打开人物属性面板（2026-11-10 用户反馈：完成一轮后返回
 # 领取前又重判种族）；角色可能转种族，跨天自动重判（用户 2026-11-10
 # 规则）。诊断页重判成功会覆盖当天缓存，可作手动刷新。
 RACE_CACHE_KEY = "mingwang_race"
-# 种族 → 领取点（当前仅实现魔族；仙族为天宫(190,121) NPC 武尊神，待补充）
-CLAIM_LOCATIONS = {"魔族": "大唐边境(477,180) 逆天魔"}
 
-# ---- 魔族领取点（大唐边境） ----
-CLAIM_MAP = "大唐边境"
-CLAIM_TARGET_POS = (477, 180)          # 领取点附近坐标（用户标定）
-CLAIM_POS_TOLERANCE = 10               # 到达容差（寻路落点附近即可）
-CLAIM_MAP_CLICK_POS = (985, 384)       # 大唐边境小地图上的领取点点击位置
-CLAIM_WORLD_ICON = "shijie_datangbianjing.png"  # 世界地图「大唐边境」标签（19.png）
-CLAIM_NPC_ICON = "mingwang_nitianmo.png"        # NPC 逆天魔（用户素材 20.png）
+# ---- 领取点（种族 → 地图 / NPC 配置） ----
+# 魔族（2026-11-10 实机标定）：大唐边境 (477,180) 附近 NPC 逆天魔——已在
+# 该地图 → 打开小地图点击 (985,384)；不在 → 世界地图点击「大唐边境」
+# 标签 shijie_datangbianjing.png → 小地图点击 (985,384)。
+# 仙族（2026-11-10 用户标定）：天宫 **(185,122) 附近才可领取** NPC 武尊神
+# ——已在天宫 → 打开小地图点击 (821,358)；不在 → 世界地图点击「天宫」
+# 标签 shijie_tiangong.png（用户素材 图1，61×29）→ 小地图点击 (821,358)。
+# **两族都必须坐标到达领取点才能点 NPC**（用户 2026-11-10 明确：魔族也
+# 必须在大唐边境 477,180 附近）；远处 NPC 模板可见但点击不生效（仙族
+# 实机 166,136 连点 12 次无对话）——不使用「位置稳定+看到 NPC」兜底。
+CLAIM_POS_TOLERANCE = 7               # 到达容差（寻路落点附近即可）
 CLAIM_NPC_THRESHOLD = 0.75             # NPC 匹配阈值（NPC 待机动画抖动，留余量）
 CLAIM_NPC_BAND = (200, 120, 1180, 750)  # NPC 搜索条带（世界区域，排除 HUD/追踪面板）
 CLAIM_NPC_FULL_INTERVAL = 3.0          # 条带未命中时的全帧兜底最小间隔（秒）
+CLAIM_POINTS = {
+    "魔族": {
+        "map": "大唐边境",
+        "target": (477, 180),
+        "mini_click": (985, 384),
+        "world_icon": "shijie_datangbianjing.png",  # 世界地图标签（19.png）
+        "npc_icon": "mingwang_nitianmo.png",        # NPC 逆天魔（20.png，43×44）
+        "npc_name": "逆天魔",
+        "npc_full_fallback": True,
+    },
+    "仙族": {
+        "map": "天宫",
+        "target": (185, 122),
+        "mini_click": (821, 358),
+        "world_icon": "shijie_tiangong.png",        # 世界地图标签（用户 图1，61×29）
+        "npc_icon": "mingwang_wuzunshen.png",       # NPC 武尊神（用户 图2，36×58）
+        "npc_name": "武尊神",
+        # 图2 是 36×58 的小体型角色模板，实测与同造型玩家角色 0.9888
+        # 互匹配（2026-11-10 天宫实机）：只允许世界区域条带内搜索，
+        # 不做全帧兜底——HUD/画面边缘的玩家会被误点（NPC 到达后必在
+        # 条带内，兜底无收益）。
+        "npc_full_fallback": False,
+    },
+}
+# 种族 → 领取点描述（日志/诊断文案）
+CLAIM_LOCATIONS = {
+    race: f"{c['map']}({c['target'][0]},{c['target'][1]}) {c['npc_name']}"
+    for race, c in CLAIM_POINTS.items()
+}
 CLAIM_DIALOG_OPTION = "开启山河名望志"    # 领取对话框绿色选项（2026-11-10 实机日志 OCR 原文）
 CLAIM_SHANHE_ICON = "mingwang_shanhemingwang.png"  # 山河名望入口（21.png，43x154）
 CLAIM_SHANHE_THRESHOLD = 0.8           # 入口竖牌匹配阈值（静态 UI）
 ARRIVE_TIMEOUT = 90                    # 等待寻路完成的超时（秒）
-ARRIVE_STABLE_POLLS = 2                # 坐标连续不变的轮询次数（NPC 兜底到达）
 # 领取入口对话链参数
 NPC_CLICK_RETRY_INTERVAL = 4.0         # 点击 NPC 后未出现对话/入口时的重试间隔（秒）
 OPTION_CLICK_RETRY_INTERVAL = 3.0      # 同一选项点击后的最短重试间隔（防连点）
@@ -142,10 +196,14 @@ LEVEL_PRIORITY = ("高级", "中级", "初级")
 LEVEL_OCR_ALIASES = str.maketrans({"級": "级"})  # OCR 常把「级」读成繁体「級」
 # 已实现识别/领取+执行流程的任务（标题/级别）。任务栏领取时按级别
 # 优先级（高级>中级>初级）再按卡片顺序选第一个可用的已实现任务。
+# 级别为 None = 不限定级别（按标题匹配任意级别卡片）。
+# 仙族「五庄封印」为高级卡片（2026-11-10 用户实机确认）；执行逻辑见
+# 五庄封印状态机（追踪双链接 / 坐标稳定到达 / 任务储物格用唤风符）。
 CLAIM_TASKS = (
     {"title": "蛟魔复仇", "level": "高级"},
     {"title": "沙海迷踪", "level": "高级"},
     {"title": "蛟魔探秘", "level": "高级"},
+    {"title": "五庄封印", "level": "高级"},
 )
 # ---- 任务执行对话（类似 xuanshu.DIALOG_OPTION_MAP：对话框文案 → 绿色选项）----
 # 逐条按游戏原文维护（用户 2026-11-10 提供）；文案匹配走 _dialog_text_present
@@ -161,9 +219,83 @@ DIALOG_OPTION_MAP = {
     "嗯？你是何人？":"请问你是，沙蛇一族的吗？",
     "也许世人早已经忘记了我们，这可是一件好事。":"逆天魔派我过来帮忙。",
     "幽幽的缝隙，混杂着混沌气息的黑水从里面缓缓溢出。":"尝试清理",
-    "老头子我最喜欢的，就是在这里钓鱼了~":"请将鱼竿借我一用！"
+    "老头子我最喜欢的，就是在这里钓鱼了~":"请将鱼竿借我一用！",
+    "这该怎么办呢，好担心":"是武尊神遣我过来帮忙的。"
+}
+# ---- 点击屏幕中间推进的对话（同玄枢轶闻/客栈的跳过对话表机制）----
+# 键 = 对话框文案（_dialog_text_present 模糊匹配：逐行 + 全文拼接，抗
+# OCR 误读/换行拆分；用有辨识度的短句即可），值 = 命中后一次连点屏幕
+# 中间的次数（多屏剧情台词无需枚举后续屏文案，漏推进由下一轮询 OCR
+# 自愈）。仅用于**无绿字选项**的 NPC 剧情台词：带选项对话必须先命中
+# DIALOG_OPTION_MAP（follow 内层顺序：选项表 → 跳过表 → 通用选项 →
+# 剧情兜底），本表不会抢点选项对话。未收录的未知剧情对话仍由
+# StoryDialogDismisser 兜底（1 次/秒慢速推进），本表用于加速已知多屏
+# 对话（2026-11-10 用户要求与玄枢轶闻对齐）。
+# 2026-11-10 实机（仙族五庄封印·五庄观 NPC 明月）：风暴封印线索。
+DIALOG_SKIP_TEXTS = {
+    "我倒是担心风暴的封印": 1,
 }
 FOLLOW_TIMEOUT = 300        # 跟踪任务总超时（秒；战斗等待时间不计入，同 xuanshu）
+
+# ---- 五庄封印（仙族）执行：追踪双链接 → 到达 → 任务储物格用唤风符 ----
+# 用户 2026-11-10 流程：追踪面板出现「火藏之位」「木藏之位」两个绿字链接，
+# 先点火藏之位 → 寻路到达 → 打开背包任务储物格（与修罗回城符同一格）→
+# 右键使用唤风符（mingwang_huanfengfu）。用符后当前链接**由亮绿变红**
+# （可能立刻、也可能战斗结束后变红）或坐标离开五庄观 = 该点完成，改点
+# 木藏之位重复；两个点都完成后只等任务整体消失（follow 判定）。到达判定
+# 复用五倍显形镜的「位置连续稳定」逻辑（XIANXINGJING_ARRIVE_POLLS=3）。
+SEAL_TASK_KEYWORD = "五庄"              # 追踪面板任务名关键词（五庄封印）
+SEAL_MAP = "五庄观"                     # 任务地图（离开即视为本点完成）
+SEAL_LINKS = ("火藏之位", "木藏之位")    # 依次完成的封印点链接（日志/展示用）
+# 链接匹配关键词（含 OCR 形近字别名）：木藏常被 OCR 读成「水藏/未藏」
+# （2026-11-10 实机两次识别分别为「木藏」「水藏」）；按顺序取首个命中。
+SEAL_LINK_KEYWORDS = (("火藏",), ("木藏", "水藏", "未藏"))
+SEAL_ARRIVE_POLLS = 3                   # 位置连续稳定轮询数判定到达（同显形镜）
+SEAL_POS_TOLERANCE = 3                  # 坐标稳定容差（像素，同显形镜）
+SEAL_MOVE_DELTA = 5                     # 判定寻路已启动的位移阈值（同显形镜）
+SEAL_MOVE_STUCK_MAX = 4                 # 点链接后位置连续不变轮询数 → 重点链接
+SEAL_USE_GRACE = 3.0                    # 用符后等待链接变红/传送的宽限（秒）
+SEAL_USE_RETRY_AFTER = 15.0             # 链接仍未变红时的用符重试间隔（秒）
+SEAL_USE_RETRY_MAX = 2                  # 每个封印点最多重试用符次数
+# 到达后对话框自动推进（用户 2026-11-10 实测：到达封印点后屏幕中间出现
+# 无绿字选项的对话框，story 兜底因「已知对话表」抑制不点、用符等待被
+# 阻塞 65s，须人工点屏才继续）：到达/切换链接遇对话框时，若对话区连续
+# SEAL_DIALOG_ADVANCE_POLLS 次无绿字选项，主动点屏幕中间推进（≈2s，
+# 留足选项渲染时间；有绿字选项时由选项表处理，不点屏）。
+SEAL_DIALOG_ADVANCE_POLLS = 4           # 无绿字选项连续轮询数（约 2s）
+SEAL_DIALOG_ADVANCE_INTERVAL = 1.0      # 点屏推进最小间隔（秒）
+# 用符后残留背包清理：对话框遮挡 bag_box 时 close_bag 会误报「背包未
+# 打开」而实际仍开着（用户 2026-11-10 实测）；等对话框消失后按帧检测
+# bag_box 再关，限频重试。
+SEAL_BAG_CLOSE_INTERVAL = 2.0           # 残留背包检测/关闭最小间隔（秒）
+SEAL_ITEM_ICON = "mingwang_huanfengfu.png"  # 唤风符（用户素材 图31，46×47）
+SEAL_ITEM_LABEL = "唤风符"
+SEAL_ITEM_THRESHOLD = 0.8               # 物品图标匹配阈值（静态图标）
+SEAL_ITEM_FIND_TIMEOUT = 10.0           # 任务储物格中查找唤风符的时限（秒）
+# 状态机（对齐五倍显形镜）：0=等到达；1=已用符等结果。
+# 不做战斗判定——战斗由 follow_task/battle 线程托管；战斗结束后任务
+# 若已从追踪面板消失，follow 直接判定完成（用户 2026-11-10 规则）。
+_seal_phase = 0
+_seal_link_idx = 0          # 当前目标链接下标（0=火藏 1=木藏）
+_seal_stable = 0            # 位置连续稳定轮询数
+_seal_last_pos = None       # 上次位置
+_seal_need_move = False     # 点链接后须位置先变化才允许用符
+_seal_walk_from = None      # 点链接时的位置（移动验证起点）
+_seal_move_stuck = 0        # 点链接后位置连续不变轮询数
+_seal_use_at = 0.0          # 上次用符时间（宽限窗口起点）
+_seal_use_retries = 0       # 当前封印点用符重试次数
+_seal_missing = 0           # 追踪文案不含五庄的连续轮询数（≥5 复位）
+_seal_both_warned = False   # 两处完成/任务消失仅告警一次
+_seal_dlg_streak = 0        # 到达后无绿字选项对话框连续轮询数
+_seal_dlg_click_at = 0.0    # 上次点屏推进时间（冷却）
+_seal_bag_close_at = 0.0    # 上次残留背包检测时间（限频）
+# extras 链共享帧缓存（同五倍显形镜的 extras 帧复用做法）：follow 每轮询调一次
+# extras，本处理器按 id(items) 共享一帧，位置 OCR/对话框模板检测免重复截窗
+_SEAL_POS_UNSET = object()
+_seal_frame_key = None
+_seal_frame_rgb = None
+_seal_frame_bgr = None
+_seal_frame_pos = _SEAL_POS_UNSET
 
 # ---- 沙海迷踪（高级任务）执行入口 ----
 # 入口对话选项「少侠准备好清理地图了吗？」→「我已经准备好了」（在
@@ -315,7 +447,8 @@ def _race_strip_rect(rect, img_size):
 def _race_from_items(items, min_score=RACE_OCR_MIN_SCORE):
     """按 OCR 文案判定种族，返回 (种族或 None, 票数字典, 有效文案行)。
 
-    魔族/仙族任一关键词出现即计一票；取票多者。两边同票（含 0 票）
+    每行文案命中该族任一关键词即计一票（仙族含角色名 武尊神/云中君/
+    玄剑娥——这些名字不含「仙」字）；取票多者。两边同票（含 0 票）
     视为无法判定。其他种族不在此表内（后续 TODO）。
     """
     counts = {race: 0 for race in RACE_KEYWORDS}
@@ -327,8 +460,8 @@ def _race_from_items(items, min_score=RACE_OCR_MIN_SCORE):
         if not text:
             continue
         lines.append(text)
-        for race, kw in RACE_KEYWORDS.items():
-            if kw in text:
+        for race, keywords in RACE_KEYWORDS.items():
+            if any(kw in text for kw in keywords):
                 counts[race] += 1
     best = max(counts, key=counts.get)
     top = counts[best]
@@ -413,42 +546,50 @@ def detect_race(win):
     return race, desc
 
 
-def _at_claim_point(pos):
-    """是否已在大唐边境领取点 (477,180) 附近（地名精确匹配）。"""
+def _at_claim_point(pos, claim):
+    """是否已在领取点附近（地名精确匹配 + 目标坐标容差）。
+
+    claim：CLAIM_POINTS 中的种族领取点配置。
+    """
     if pos is None:
         return False
     name, x, y = pos
-    return (name.strip() == CLAIM_MAP
-            and abs(x - CLAIM_TARGET_POS[0]) <= CLAIM_POS_TOLERANCE
-            and abs(y - CLAIM_TARGET_POS[1]) <= CLAIM_POS_TOLERANCE)
+    tx, ty = claim["target"]
+    return (name.strip() == claim["map"]
+            and abs(x - tx) <= CLAIM_POS_TOLERANCE
+            and abs(y - ty) <= CLAIM_POS_TOLERANCE)
 
 
-def _match_npc(bgr, full_check_at):
-    """单帧查找逆天魔：条带优先，全帧兜底限频。
+def _match_npc(bgr, claim, full_check_at):
+    """单帧查找领取 NPC：条带优先，全帧兜底限频（按种族开关）。
 
     返回 (点 或 None, 最佳分数, 更新后的全帧兜底时间戳)。世界区域
     条带未命中时按 CLAIM_NPC_FULL_INTERVAL 限频做全帧兜底（布局漂移
-    保险，非目标场景不每轮付全帧成本）。
+    保险，非目标场景不每轮付全帧成本）；claim["npc_full_fallback"]
+    为 False 的种族（仙族：NPC 模板与同造型玩家互匹配）不做全帧兜底，
+    防点到画面边缘的玩家角色。
     """
-    score, pt = game_map.best_match_np(bgr, CLAIM_NPC_ICON,
+    score, pt = game_map.best_match_np(bgr, claim["npc_icon"],
                                        region=CLAIM_NPC_BAND)
     if score >= CLAIM_NPC_THRESHOLD:
         return pt, score, full_check_at
+    if not claim.get("npc_full_fallback", True):
+        return None, score, full_check_at
     now = time.time()
     if now - full_check_at < CLAIM_NPC_FULL_INTERVAL:
         return None, score, full_check_at
-    score2, pt2 = game_map.best_match_np(bgr, CLAIM_NPC_ICON)
+    score2, pt2 = game_map.best_match_np(bgr, claim["npc_icon"])
     if score2 >= CLAIM_NPC_THRESHOLD:
         return pt2, score2, now
     return None, max(score, score2), now
 
 
-def wait_arrive(win, timeout=ARRIVE_TIMEOUT):
-    """等待寻路完成（大唐边境 477,180 附近）。
+def wait_arrive(win, claim, timeout=ARRIVE_TIMEOUT):
+    """等待寻路完成（种族领取点目标坐标附近）。
 
-    到达判定：坐标进入容差；或坐标连续稳定且已看到逆天魔（寻路落点
-    略有偏差但 NPC 可见时的兜底）。位置 20 秒无变化且未见 NPC 提前
-    失败。每轮询只截一帧，战斗判定/坐标识别/NPC 匹配同帧复用。
+    到达判定：坐标进入容差；或坐标连续稳定且已看到领取 NPC（寻路
+    落点略有偏差但 NPC 可见时的兜底）。位置 20 秒无变化且未见 NPC
+    提前失败。每轮询只截一帧，战斗判定/坐标识别/NPC 匹配同帧复用。
     返回 (是否完成, 描述)。
     """
     deadline = time.time() + timeout
@@ -457,6 +598,7 @@ def wait_arrive(win, timeout=ARRIVE_TIMEOUT):
     polls = 0
     last_score = 0.0
     full_check_at = 0.0
+    npc_name = claim["npc_name"]
     while time.time() < deadline:
         polls += 1
         img = win.capture(force_activate=False)
@@ -469,31 +611,32 @@ def wait_arrive(win, timeout=ARRIVE_TIMEOUT):
             time.sleep(2.0)
             continue
         pos = game_map.read_map_position(win, img=img)
-        if _at_claim_point(pos):
+        if _at_claim_point(pos, claim):
             return True, (f"已到达领取点附近 "
-                          f"{CLAIM_MAP}[{CLAIM_TARGET_POS[0]},{CLAIM_TARGET_POS[1]}]")
-        npc_pt, last_score, full_check_at = _match_npc(bgr, full_check_at)
+                          f"{claim['map']}[{claim['target'][0]},{claim['target'][1]}]")
+        npc_pt, last_score, full_check_at = _match_npc(bgr, claim,
+                                                       full_check_at)
         if pos is not None and pos == last:
             unchanged += 1
         else:
             unchanged = 0
         last = pos
-        if npc_pt is not None and unchanged >= ARRIVE_STABLE_POLLS:
-            return True, "位置稳定且已看到逆天魔，视为到达领取点"
         if unchanged >= 10:
-            return False, "位置 20 秒无变化且未出现逆天魔，寻路无响应"
+            return False, (f"位置 20 秒无变化且未到达领取点"
+                           f"[{claim['target'][0]},{claim['target'][1]}]，"
+                           f"寻路无响应（{npc_name}匹配 {last_score:.3f}）")
         if polls % 5 == 0:
             log(f"[名望] 寻路等待中... 当前位置: {pos or '识别失败'}"
-                f"，逆天魔最佳匹配 {last_score:.3f}", "INFO")
+                f"，{npc_name}最佳匹配 {last_score:.3f}", "INFO")
         time.sleep(2.0)
     return False, f"等待寻路完成超时（{timeout}s）"
 
 
-def navigate_to_claim_point(win):
-    """寻路到魔族领取点（大唐边境 477,180 附近）。
+def navigate_to_claim_point(win, claim):
+    """寻路到种族领取点（目标坐标附近）。
 
-    已在大唐边境 → 打开小地图点击 (985,384)；不在 → 世界地图点击
-    「大唐边境」打开该地图小地图再点击。到达后返回成功。
+    已在领取地图 → 打开小地图点击 mini_click；不在 → 世界地图点击
+    种族地图标签打开该地图小地图再点击。到达后返回成功。
     返回 (是否成功, 描述)。
     """
     if is_in_battle(win):
@@ -501,6 +644,7 @@ def navigate_to_claim_point(win):
     # 场景前置：清理残留地图/物品栏（在人物属性面板关闭之后调用）
     close_scene_panels(win, "名望")
 
+    map_name = claim["map"]
     pos = game_map.read_map_position(win)
     if pos is None:
         loc = "识别失败"
@@ -508,29 +652,30 @@ def navigate_to_claim_point(win):
     else:
         loc = f"{pos[0]}[{pos[1]},{pos[2]}]"
 
-    if _at_claim_point(pos):
+    if _at_claim_point(pos, claim):
         log(f"[名望] 已在领取点附近（{loc}），跳过寻路", "SYS")
         return True, f"已在领取点附近（{loc}）"
 
-    if pos is not None and pos[0].strip() == CLAIM_MAP:
+    if pos is not None and pos[0].strip() == map_name:
         ok, info = game_map.open_mini_map(win)
         if not ok:
             return False, info
-        log(f"[名望] 在{CLAIM_MAP}（{loc}），已打开小地图", "SYS")
+        log(f"[名望] 在{map_name}（{loc}），已打开小地图", "SYS")
     else:
-        ok, info = game_map.open_mini_map_city(win, CLAIM_WORLD_ICON,
-                                               CLAIM_MAP)
+        ok, info = game_map.open_mini_map_city(win, claim["world_icon"],
+                                               map_name)
         if not ok:
             return False, info
-        log(f"[名望] 不在{CLAIM_MAP}（{loc}），经世界地图前往", "SYS")
+        log(f"[名望] 不在{map_name}（{loc}），经世界地图前往", "SYS")
 
-    human_click(win, CLAIM_MAP_CLICK_POS[0], CLAIM_MAP_CLICK_POS[1])
-    log(f"[名望] 已点击小地图领取点 {CLAIM_MAP_CLICK_POS}，自动寻路中", "SYS")
+    mini_click = claim["mini_click"]
+    human_click(win, mini_click[0], mini_click[1])
+    log(f"[名望] 已点击小地图领取点 {mini_click}，自动寻路中", "SYS")
     time.sleep(1.0)  # 等待自动寻路启动
     # 清理仍打开的小地图/世界地图/物品栏（同玄枢轶闻领取流程）
     close_scene_panels(win, "名望")
 
-    ok, info = wait_arrive(win)
+    ok, info = wait_arrive(win, claim)
     if ok:
         log(f"[名望] {info}", "SYS")
     return ok, info
@@ -546,7 +691,7 @@ def _click_claim_option(win, items, img_np):
                                     CLAIM_DIALOG_OPTION, prefix="名望")
 
 
-def _claim_and_open_panel(win):
+def _claim_and_open_panel(win, claim):
     """领取入口链：点击 NPC → 绿色选项 → 点击山河名望入口。
 
     每轮询只截一帧（战斗判定/入口匹配/对话区 OCR/NPC 匹配同帧）；
@@ -559,6 +704,8 @@ def _claim_and_open_panel(win):
     last_score = 0.0
     full_check_at = 0.0
     npc_logged_at = 0.0
+    map_name = claim["map"]
+    npc_name = claim["npc_name"]
     while time.time() < deadline:
         img = win.capture(force_activate=False)
         if img is None:
@@ -595,27 +742,35 @@ def _claim_and_open_panel(win):
         #    误关对话（选项未选中）——等入口出现或按间隔重点选项即可
         if option_click_at == 0.0 \
                 and now - npc_click_at >= NPC_CLICK_RETRY_INTERVAL:
-            pt, score, full_check_at = _match_npc(bgr, full_check_at)
+            pt, score, full_check_at = _match_npc(bgr, claim, full_check_at)
             last_score = score
             if pt is not None:
-                # 场景锚点：位置须为大唐边境（坐标读不出时不阻断——
-                # NPC 模板本身即场景锚点，位置 OCR 偶发失败常见）
+                # 场景锚点：位置须为领取地图（坐标读不出时不阻断——
+                # NPC 模板本身即场景锚点，位置 OCR 偶发失败常见）。
+                # 严格到达的种族（仙族）还须在领取点容差内：远处 NPC
+                # 模板可见但点击不生效（2026-11-10 实机教训）。
                 pos = game_map.read_map_position(win, img=img)
-                if pos is not None and pos[0].strip() != CLAIM_MAP:
-                    log(f"[名望] 场景异常：当前 {pos[0]}，不在{CLAIM_MAP}，"
+                if pos is not None and pos[0].strip() != map_name:
+                    log(f"[名望] 场景异常：当前 {pos[0]}，不在{map_name}，"
+                        f"不点击 NPC", "WARN")
+                    time.sleep(1.0)
+                    continue
+                if pos is not None and not _at_claim_point(pos, claim):
+                    log(f"[名望] 未到达领取点（当前 {pos[0]}[{pos[1]},{pos[2]}]，"
+                        f"目标 {claim['target'][0]},{claim['target'][1]}），"
                         f"不点击 NPC", "WARN")
                     time.sleep(1.0)
                     continue
                 human_click(win, pt[0], pt[1])
                 npc_click_at = now
-                log(f"[名望] 已点击逆天魔 @({pt[0]},{pt[1]})"
+                log(f"[名望] 已点击{npc_name} @({pt[0]},{pt[1]})"
                     f"（匹配 {score:.3f}）", "SYS")
             elif now - npc_logged_at >= 10.0:
                 npc_logged_at = now
-                log(f"[名望] 画面中未找到逆天魔（最佳匹配 {last_score:.3f}，"
+                log(f"[名望] 画面中未找到{npc_name}（最佳匹配 {last_score:.3f}，"
                     f"阈值 {CLAIM_NPC_THRESHOLD}），继续等待", "INFO")
         time.sleep(0.4)
-    return False, (f"领取入口链超时（{CLAIM_ENTRY_TIMEOUT}s，逆天魔最佳匹配 "
+    return False, (f"领取入口链超时（{CLAIM_ENTRY_TIMEOUT}s，{npc_name}最佳匹配 "
                    f"{last_score:.3f}）")
 
 
@@ -835,6 +990,7 @@ def claim_panel_task(win):
                              f"当前卡片: {summary or '(无)'}")
 
     title, level = task["title"], task["level"]
+    level_desc = level or "不限级别"
     card = target["rect"]
     bgr = _bgr_frame(img)
     region = (card[0] - 4, card[1] - 4, card[2] + 4, card[3] + 4)
@@ -843,34 +999,47 @@ def claim_panel_task(win):
         return "fail", (f"「{title}」卡片内未找到接取按钮"
                         f"（最佳匹配 {score:.3f}，阈值 {PANEL_JIEQU_THRESHOLD}）")
     human_click(win, pt[0], pt[1])
-    log(f"[名望] 已点击{level}任务「{title}」的接取按钮 @({pt[0]},{pt[1]})"
+    log(f"[名望] 已点击{level_desc}任务「{title}」的接取按钮 @({pt[0]},{pt[1]})"
         f"（匹配 {score:.3f}）", "SYS")
     ok, vinfo = _verify_claim(win, title, card)
     if ok:
-        return "claimed", f"已领取{level}任务「{title}」（{vinfo}）"
-    return "claimed", (f"已点击{level}任务「{title}」的接取按钮，未检测到"
+        return "claimed", f"已领取{level_desc}任务「{title}」（{vinfo}）"
+    return "claimed", (f"已点击{level_desc}任务「{title}」的接取按钮，未检测到"
                        f"确认信号（{vinfo}）——按已领取处理，不重复点击")
 
 
 def _dismiss_claim_dialog(win, timeout=CLAIM_DIALOG_TIMEOUT):
-    """领取后对话框：对话框模板门控命中 → 点屏幕中间关闭（可多屏）。
+    """领取后对话框：先点已知选项，无选项才点屏幕中间关闭（可多屏）。
 
-    用户 2026-11-10 规则：接取后出现的对话框用对话框门控判定、点屏幕
-    中间取消显示。复用 dialog_common.clear_blocking_dialog（模板命中才
-    点击，点后复检模板消失，最多 3 屏）。
+    用户 2026-11-10 规则：接取后出现的对话框用对话框门控判定；带
+    绿字选项的对话（如五庄封印「这该怎么办呢，好担心」→「是武尊神
+    遣我过来帮忙的。」）必须点选项——点屏幕中间不会关闭选项对话。
+    无选项台词复用 dialog_common.clear_blocking_dialog（模板命中才点，
+    点后复检模板消失，最多 3 屏）。
     返回 (是否检测并处理, 描述)。
     """
     deadline = time.time() + timeout
+    handled = False
     while time.time() < deadline:
         img = win.capture(force_activate=False)
         if img is None:
             time.sleep(0.5)
             continue
         if dialog_frame_score(img) >= DIALOG_FRAME_THRESHOLD:
+            items, img_np = game_map.ocr_region(img,
+                                                task_tracker.DIALOG_REGION)
+            if _click_known_dialog_option(win, items, img_np):
+                handled = True
+                time.sleep(0.5)  # 让下一屏渲染后再判定
+                continue
             had, _clicked = clear_blocking_dialog(win, "名望")
             if had:
                 return True, "领取对话框已通过对话框门控点屏幕中间关闭"
+        elif handled:
+            return True, "领取后对话选项已处理，对话框已关闭"
         time.sleep(0.5)
+    if handled:
+        return True, "领取后对话选项已处理（对话框可能仍有多屏）"
     return False, "未检测到领取对话框（可能已自动关闭）"
 
 
@@ -977,20 +1146,539 @@ def _mingwang_diaoyu_window_check(win):
     return True
 
 
-def _handle_dialog_options(win, items, img_np):
-    """名望任务对话表（extra_dialog_handler）：文案命中 → 点对应绿字。
+# ---- 五庄封印执行（追踪双链接 → 坐标稳定到达 → 任务储物格用唤风符）----
+def _reset_seal_state():
+    """五庄封印状态机复位（新任务领取成功/跨任务防残留）。"""
+    global _seal_phase, _seal_link_idx, _seal_stable, _seal_last_pos, \
+        _seal_need_move, _seal_walk_from, _seal_move_stuck, _seal_use_at, \
+        _seal_use_retries, _seal_missing, _seal_both_warned, \
+        _seal_dlg_streak, _seal_dlg_click_at, _seal_bag_close_at
+    _seal_phase = 0
+    _seal_link_idx = 0
+    _seal_stable = 0
+    _seal_last_pos = None
+    _seal_need_move = False
+    _seal_walk_from = None
+    _seal_move_stuck = 0
+    _seal_use_at = 0.0
+    _seal_use_retries = 0
+    _seal_missing = 0
+    _seal_both_warned = False
+    _seal_dlg_streak = 0
+    _seal_dlg_click_at = 0.0
+    _seal_bag_close_at = 0.0
 
-    类似 xuanshu 内层轮询的 DIALOG_OPTION_MAP 处理，交由共享 follow_task
-    的 extras 通道调用（优先级高于引擎内置表与剧情对话兜底）。
-    沙海迷踪入口选项点击成功后 arm「开始」按钮检测窗口；蛟魔探秘钓鱼
-    入口选项点击成功后 arm 小游戏窗口检测（与玄枢钓鱼同款闭环）。
-    表值支持候选选项元组：按顺序逐个尝试，点到哪个算哪个。
+
+def _seal_frame(win, items):
+    """extras 链共享帧（按 id(items) 缓存），返回 (RGB, BGR) numpy 帧。
+
+    同五倍显形镜的 extras 帧复用：follow 每轮询调一次 extras，本处理器需要整帧
+    读取地图坐标/对话框模板（OCR 掩码帧无位置区），按 items 对象 id
+    缓存避免同轮询重复截窗（性能规则 1：每轮询只截一帧）。
+    """
+    global _seal_frame_key, _seal_frame_rgb, _seal_frame_bgr, _seal_frame_pos
+    key = id(items)
+    if _seal_frame_key != key:
+        img = win.capture(force_activate=False)
+        _seal_frame_key = key
+        _seal_frame_pos = _SEAL_POS_UNSET
+        if img is None:
+            _seal_frame_rgb = _seal_frame_bgr = None
+        else:
+            _seal_frame_rgb = np.asarray(img)[:, :, :3]
+            _seal_frame_bgr = cv2.cvtColor(_seal_frame_rgb,
+                                           cv2.COLOR_RGB2BGR)
+    return _seal_frame_rgb, _seal_frame_bgr
+
+
+def _seal_pos(win, items):
+    """当前轮询共享帧上的位置读取（结果按帧缓存，None 也缓存）。"""
+    global _seal_frame_pos
+    rgb, _ = _seal_frame(win, items)
+    if _seal_frame_pos is not _SEAL_POS_UNSET:
+        return _seal_frame_pos
+    _seal_frame_pos = (None if rgb is None
+                       else game_map.read_map_position(win, img=rgb))
+    return _seal_frame_pos
+
+
+def _seal_sig(items):
+    """追踪面板文案签名（只取面板左列，排除对话框/浮字；抗 OCR 拆行）。"""
+    return "".join(norm_text(t) for t, r, s in items
+                   if s >= 0.55 and r[0] < task_tracker.PANEL_MAX_X)
+
+
+def _seal_underline_point(img_np, rect, x):
+    """在 OCR 行框底附近找距近似 x 最近的亮绿下划线段，返回点击点。
+
+    追踪面板一行内可能有多个绿色链接（火藏之位/木藏之位/唤风符），
+    整行绿字中心会点错；下划线段是链接专属标记，按文本内字符位置
+    按比例映射到框内 x，再取最近的下划线中心（同 task_tracker.
+    green_text_center 的下划线规则：行框底 -10~+8px、亮绿 ≥8px 连续段、
+    点击下划线上方 2px）。
+    """
+    l, t, r, b = rect
+    y0 = max(0, b - 10)
+    y1 = min(img_np.shape[0], b + 9)
+    x0 = max(0, l - 2)
+    x1 = min(img_np.shape[1], r + 60)
+    if y1 <= y0 or x1 <= x0:
+        return None
+    mask = task_tracker.green_mask(img_np[y0:y1, x0:x1],
+                                   task_tracker.GREEN_BRIGHT_MIN)
+    best = None
+    for yy in range(mask.shape[0]):
+        cols = np.where(mask[yy])[0]
+        if cols.size < 8:
+            continue
+        runs = []
+        start = prev = int(cols[0])
+        for c in cols[1:]:
+            c = int(c)
+            if c - prev <= 2:
+                prev = c
+            else:
+                runs.append((start, prev))
+                start = prev = c
+        runs.append((start, prev))
+        for a, bb in runs:
+            if bb - a + 1 < 8:
+                continue
+            cx = x0 + (a + bb) // 2
+            dist = abs(cx - x)
+            if best is None or dist < best[0]:
+                best = (dist, (cx, y0 + yy - 2))
+    return None if best is None else best[1]
+
+
+def _seal_link_keywords(link_idx):
+    """当前链接的可匹配关键词（含 OCR 形近字别名）。"""
+    idx = min(link_idx, len(SEAL_LINK_KEYWORDS) - 1)
+    return SEAL_LINK_KEYWORDS[idx]
+
+
+def _seal_link_point(items, img_np, keyword):
+    """定位追踪面板含 keyword 的绿字链接，返回点击点或 None。
+
+    keyword 可为字符串或关键词元组（OCR 形近字别名，如 木藏/水藏）；
+    文本内字符位置按比例映射（中文等宽渲染，误差 <1 字宽），再由
+    _seal_underline_point 在下划线带内吸附到实际链接段。关键词可
+    ＜链接全名（如「木藏」——「木藏之位」常被 OCR 拆到两行）。
+    """
+    keywords = (keyword,) if isinstance(keyword, str) else tuple(keyword)
+    for txt, rect, score in items:
+        if score < 0.55:
+            continue
+        kw = next((k for k in keywords if k in txt), None)
+        if kw is None:
+            continue
+        n = max(1, len(txt))
+        idx = txt.find(kw)
+        frac = (idx + len(kw) / 2.0) / n
+        x = rect[0] + (rect[2] - rect[0]) * frac
+        pt = _seal_underline_point(img_np, rect, x)
+        if pt is not None:
+            return pt
+        return int(x), rect[3] - 2
+    return None
+
+
+def _seal_link_color(items, img_np, keyword):
+    """判定追踪面板链接当前颜色：'red'（已完成）/ 'green' / None。
+
+    用户 2026-11-10 实测：封印点用符后链接由亮绿变红（可能立刻、也
+    可能战斗结束后变红），红=该点完成，须去点下一个链接；任务整体
+    消失才是完成。游戏链接颜色为纯色（亮绿 (0,255,0) / 红 (255,0,0)），
+    按文本内字符位置比例定位关键词区域，统计红/绿像素主导色。
+    keyword 支持字符串或关键词元组（木藏/水藏 等 OCR 形近字）。
+    """
+    keywords = (keyword,) if isinstance(keyword, str) else tuple(keyword)
+    for txt, rect, score in items:
+        if score < 0.55:
+            continue
+        kw = next((k for k in keywords if k in txt), None)
+        if kw is None:
+            continue
+        n = max(1, len(txt))
+        idx = txt.find(kw)
+        w = rect[2] - rect[0]
+        pad = w / n * 0.5  # 半字宽余量（覆盖字形边缘，不侵入相邻链接）
+        x0 = rect[0] + w * idx / n - pad
+        x1 = rect[0] + w * (idx + len(kw)) / n + pad
+        y0 = max(0, rect[1])
+        y1 = min(img_np.shape[0], rect[3] + 8)  # 含下划线带
+        l, r = max(0, int(x0)), min(img_np.shape[1], int(x1))
+        if r <= l or y1 <= y0:
+            continue
+        region = img_np[y0:y1, l:r].astype(int)
+        if region.size == 0:
+            continue
+        red = int(((region[:, :, 0] >= 150)
+                   & (region[:, :, 0] - region[:, :, 1] >= 40)
+                   & (region[:, :, 0] - region[:, :, 2] >= 40)).sum())
+        green = int(((region[:, :, 1] >= 150)
+                     & (region[:, :, 1] - region[:, :, 0] >= 40)
+                     & (region[:, :, 1] - region[:, :, 2] >= 40)).sum())
+        if red >= 8 and red > green:
+            return "red"
+        if green >= 8 and green > red:
+            return "green"
+        return None
+    return None
+
+
+def _seal_green_picker(items, img_np):
+    """track_task green_picker：五庄封印按当前目标链接（火→木）定位。
+
+    当前目标关键词未读出时退回任一封印链接，避免行级默认点击误点
+    同一行里的「唤风符」绿字链接。非五庄任务/无封印链接返回 None，
+    保持 track_task 原有行级选择行为。
+    """
+    idx = min(_seal_link_idx, len(SEAL_LINKS) - 1)
+    pt = _seal_link_point(items, img_np, _seal_link_keywords(idx))
+    if pt is not None:
+        return pt
+    for i in range(len(SEAL_LINKS)):
+        pt = _seal_link_point(items, img_np, _seal_link_keywords(i))
+        if pt is not None:
+            return pt
+    return None
+
+
+def _click_seal_link(win, items, img_np, link_idx=None):
+    """点击指定（默认当前）封印链接；未识别到返回 False（下轮询重试）。"""
+    idx = min(_seal_link_idx if link_idx is None else link_idx,
+              len(SEAL_LINKS) - 1)
+    pt = _seal_link_point(items, img_np, _seal_link_keywords(idx))
+    if pt is None:
+        for i in range(len(SEAL_LINKS)):  # 目标未读出：退回任一封印链接
+            pt = _seal_link_point(items, img_np, _seal_link_keywords(i))
+            if pt is not None:
+                break
+    if pt is None:
+        return False
+    human_click(win, pt[0], pt[1])
+    log(f"[名望] 五庄封印：已点击「{SEAL_LINKS[idx]}」追踪链接 "
+        f"@({pt[0]},{pt[1]})", "SYS")
+    return True
+
+
+def _find_huanfengfu(win, timeout=SEAL_ITEM_FIND_TIMEOUT):
+    """在已打开的任务储物格中查找唤风符，返回 (pt 或 None, 描述)。"""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        img = win.capture(force_activate=False)
+        if img is None:
+            time.sleep(0.4)
+            continue
+        pt = game_map.match_frame_np(_bgr_frame(img), SEAL_ITEM_ICON,
+                                     threshold=SEAL_ITEM_THRESHOLD)
+        if pt is not None:
+            return pt, f"已在任务储物格中找到{SEAL_ITEM_LABEL}"
+        time.sleep(0.4)
+    return None, f"任务储物格中未找到{SEAL_ITEM_LABEL}"
+
+
+def _close_bag_quiet(win):
+    """尽力关闭背包（失败仅日志，不阻断流程）。"""
+    try:
+        ok, info = bag.close_bag(win)
+        if ok:
+            log(f"[名望] {info}", "INFO")
+        else:
+            log(f"[名望] 背包关闭失败: {info}", "WARN")
+    except Exception as e:  # 关闭异常不影响用符结果判定
+        log(f"[名望] 背包关闭异常: {e}", "WARN")
+
+
+def _use_huanfengfu(win):
+    """打开任务储物格并右键使用唤风符，返回 (是否成功, 描述)。
+
+    用户 2026-11-10 流程：打开背包 → 任务储物格（与修罗回城符同格，
+    通用能力在 bag.open_task_box，不引用其他任务模块）→ 识别唤风符
+    图标 → 右键使用。整段持背包锁（与其他背包流程互斥，防点击交错）。
+    使用前若标准对话框在场则跳过（对话框遮住背包/右键落到对话上）。
+    """
+    img = win.capture(force_activate=False)
+    if img is not None and dialog_frame_score(_bgr_frame(img)) \
+            >= DIALOG_FRAME_THRESHOLD:
+        return False, "对话框在场，暂不使用唤风符"
+    with app_utils._BAG_LOCK:
+        ok, info = bag.open_task_box(win, prefix="名望")
+        if not ok:
+            return False, info
+        pt, finfo = _find_huanfengfu(win)
+        if pt is None:
+            _close_bag_quiet(win)
+            return False, finfo
+        if not bag.is_bag_open(win):
+            return False, "右键唤风符前背包已被关闭，未使用"
+        human_click(win, pt[0], pt[1], button="secondary")
+        log(f"[名望] 已右键使用{SEAL_ITEM_LABEL} @({pt[0]},{pt[1]})", "SYS")
+        time.sleep(1.0)  # 等待使用生效（传送/战斗/任务完成）
+        _close_bag_quiet(win)
+    return True, f"已使用{SEAL_ITEM_LABEL}"
+
+
+def _seal_maybe_advance_dialog(win, items, img_np):
+    """到达/切换链接时对话框无绿字选项 → 限次点屏幕中间推进。
+
+    背景（2026-11-10 实机）：到达封印点后屏幕中间出现无选项对话，
+    story 兜底因「已知对话表」抑制不点、用符等待被阻塞 65s，须人工
+    点屏才继续。有绿字选项时不动（交给选项表）；连续 4 轮询（~2s）
+    无绿字才点一次，多屏对话逐页推进（点击后计数清零）。
+    """
+    global _seal_dlg_streak, _seal_dlg_click_at
+    dl, dt = task_tracker.DIALOG_REGION[0], task_tracker.DIALOG_REGION[1]
+    region_items = [it for it in items
+                    if it[2] >= 0.55 and it[1][0] >= dl and it[1][1] >= dt]
+    if not region_items:
+        _seal_dlg_streak = 0
+        return False
+    if any(task_tracker.is_green_text(img_np, it[1]) for it in region_items):
+        _seal_dlg_streak = 0  # 有绿字选项：交给选项表处理，不点屏
+        return False
+    _seal_dlg_streak += 1
+    now = time.time()
+    if _seal_dlg_streak < SEAL_DIALOG_ADVANCE_POLLS \
+            or now - _seal_dlg_click_at < SEAL_DIALOG_ADVANCE_INTERVAL:
+        return False
+    _seal_dlg_streak = 0
+    _seal_dlg_click_at = now
+    log("[名望] 五庄封印：对话无绿字选项，点击屏幕中间推进", "SYS")
+    _click_screen_center(win, times=1, prefix="名望")
+    return True
+
+
+def _seal_dialog_blocking(win, items, img_np):
+    """对话框在场判定（共享帧模板门）；命中时顺带尝试无选项自动推进。"""
+    _rgb, bgr = _seal_frame(win, items)
+    if bgr is None or dialog_frame_score(bgr) < DIALOG_FRAME_THRESHOLD:
+        return False
+    _seal_maybe_advance_dialog(win, items, img_np)
+    return True
+
+
+def _seal_close_bag_if_open(win, items):
+    """用符后残留背包清理：共享帧命中 bag_box 即关闭（限频重试）。
+
+    对话框遮挡 bag_box 时 close_bag 会误报「背包未打开」而实际仍开着
+    （用户 2026-11-10 实测）；等对话框消失后本函数按帧检测到再关
+    （跟随轮询，限频 2s）。
+    """
+    global _seal_bag_close_at
+    now = time.time()
+    if now - _seal_bag_close_at < SEAL_BAG_CLOSE_INTERVAL:
+        return
+    _rgb, bgr = _seal_frame(win, items)
+    if bgr is None:
+        return
+    if game_map.match_frame_np(bgr, bag.BAG_BOX_ICON, threshold=0.8,
+                               fallback=False) is None:
+        return
+    _seal_bag_close_at = now
+    log("[名望] 五庄封印：检测到残留背包，尝试关闭", "INFO")
+    _close_bag_quiet(win)
+
+
+def _seal_advance_if_done(win, items, img_np):
+    """当前链接已变红（上一点完成/启动续跑）→ 自动前进并点下一个链接。
+
+    返回是否已处理（点击了下一个链接）。下一个链接也已是红色时只等
+    任务整体消失；对话框在场时先让对话处理（点链接会被对话框吞掉）。
+    """
+    global _seal_phase, _seal_link_idx, _seal_stable, _seal_last_pos, \
+        _seal_need_move, _seal_walk_from, _seal_move_stuck, _seal_use_retries
+    link = SEAL_LINKS[_seal_link_idx]
+    if _seal_link_color(items, img_np,
+                        _seal_link_keywords(_seal_link_idx)) != "red":
+        return False
+    next_idx = _seal_link_idx + 1
+    if next_idx >= len(SEAL_LINKS):
+        return False  # 最后一个点已完成：等任务消失
+    if _seal_link_color(items, img_np, _seal_link_keywords(next_idx)) == "red":
+        return False  # 下一个点也已完成：等任务消失
+    pos = _seal_pos(win, items)
+    if pos is None:
+        return False
+    if _seal_dialog_blocking(win, items, img_np):
+        return False
+    if not _click_seal_link(win, items, img_np, link_idx=next_idx):
+        return False
+    _seal_link_idx = next_idx
+    _seal_phase = 0
+    _seal_stable = 0
+    _seal_last_pos = None
+    _seal_need_move = True
+    _seal_walk_from = pos
+    _seal_move_stuck = 0
+    _seal_use_retries = 0
+    log(f"[名望] 五庄封印：{link}已变红（此点已完成），改点"
+        f"「{SEAL_LINKS[next_idx]}」", "SYS")
+    return True
+
+
+def _seal_wait_arrival(win, items, img_np, now):
+    """phase 0：等寻路到达（位置连续稳定）→ 用唤风符。
+
+    到达判定同五倍显形镜：连续 SEAL_ARRIVE_POLLS 次坐标差 ≤3 即到达；
+    点链接后须位置先变化（寻路启动）才允许用符，位置连续不变达上限
+    则重新点当前链接。到达（且在五庄观）后打开任务储物格用符。
+    启动续跑/上一点已完成时当前链接已是红色 → 先自动前进到下一个。
+    """
+    global _seal_stable, _seal_last_pos, _seal_need_move, _seal_walk_from, \
+        _seal_move_stuck, _seal_phase, _seal_use_at
+    if _seal_advance_if_done(win, items, img_np):
+        return True
+    pos = _seal_pos(win, items)
+    if pos is None:
+        return False
+    if _seal_last_pos is not None \
+            and abs(pos[1] - _seal_last_pos[1]) <= SEAL_POS_TOLERANCE \
+            and abs(pos[2] - _seal_last_pos[2]) <= SEAL_POS_TOLERANCE:
+        _seal_stable += 1
+    else:
+        _seal_stable = 1
+    _seal_last_pos = pos
+    if _seal_need_move:
+        if _seal_walk_from is not None and (
+                abs(pos[1] - _seal_walk_from[1]) > SEAL_MOVE_DELTA
+                or abs(pos[2] - _seal_walk_from[2]) > SEAL_MOVE_DELTA):
+            _seal_need_move = False
+            _seal_stable = 0
+            _seal_move_stuck = 0
+        else:
+            _seal_move_stuck += 1
+            if _seal_move_stuck >= SEAL_MOVE_STUCK_MAX:
+                _seal_move_stuck = 0
+                if _click_seal_link(win, items, img_np):
+                    log("[名望] 五庄封印：寻路未启动，已重新点击当前链接",
+                        "WARN")
+                    _seal_walk_from = pos
+            return False
+    if _seal_stable < SEAL_ARRIVE_POLLS:
+        return False
+    if pos[0].strip() != SEAL_MAP:
+        return False  # 跨图寻路中，尚未回到五庄观
+    # 对话框在场时不操作背包；无绿字选项的对话由本状态机点屏推进
+    if _seal_dialog_blocking(win, items, img_np):
+        return False
+    ok, info = _use_huanfengfu(win)
+    if not ok:
+        _seal_stable = 0
+        log(f"[名望] 五庄封印：{info}，稍后重试", "WARN")
+        return False
+    _seal_phase = 1
+    _seal_use_at = time.time()
+    log(f"[名望] 五庄封印：已在{SEAL_LINKS[_seal_link_idx]}附近使用"
+        f"唤风符，等待任务完成", "SYS")
+    return True
+
+
+def _seal_check_outcome(win, items, img_np, now):
+    """phase 1：用符后等当前封印点完成（链接变红）→ 点下一个链接。
+
+    用户 2026-11-10 规则：用符后当前链接由亮绿变红（可能立刻、也可能
+    战斗结束后变红）代表该点完成，必须改点下一个（火藏→木藏）；
+    坐标离开五庄观同样视为本点完成（用符传送/失败），一并切换。
+    只在任务整体从追踪面板消失后由 follow 判定完成——本函数在最后
+    一个链接变红后仅等待，不做完成判定、不做战斗判定。战斗期间追踪
+    面板不可见（seal_present=False），本函数不会运行。
+    """
+    global _seal_phase, _seal_link_idx, _seal_stable, _seal_last_pos, \
+        _seal_need_move, _seal_walk_from, _seal_move_stuck, \
+        _seal_use_retries, _seal_both_warned, _seal_use_at
+    if now - _seal_use_at < SEAL_USE_GRACE:
+        return False
+    link = SEAL_LINKS[_seal_link_idx]
+    state = _seal_link_color(items, img_np,
+                             _seal_link_keywords(_seal_link_idx))
+    pos = _seal_pos(win, items)
+    if pos is None:
+        return False  # 位置不可读（加载/过渡）：等下一轮询
+    reason = ""
+    if state == "red":
+        reason = "链接已变红"
+    elif pos[0].strip() != SEAL_MAP:
+        reason = f"坐标离开{SEAL_MAP}（{pos[0]}）"
+    if not reason:
+        # 本点仍未完成（链接仍绿/未识别且仍在五庄观）：限次重试用符
+        if now - _seal_use_at >= SEAL_USE_RETRY_AFTER \
+                and _seal_use_retries < SEAL_USE_RETRY_MAX:
+            _seal_use_retries += 1
+            ok, info = _use_huanfengfu(win)
+            log(f"[名望] 五庄封印：{link}未变红，重试用符"
+                f"（{info}，{_seal_use_retries}/{SEAL_USE_RETRY_MAX}）",
+                "WARN")
+            if ok:
+                _seal_use_at = now
+            return ok
+        return False
+    if _seal_link_idx + 1 >= len(SEAL_LINKS):
+        if not _seal_both_warned:
+            _seal_both_warned = True
+            log(f"[名望] 五庄封印：{link}{reason}，两个封印点均已完成，"
+                f"等待任务从追踪面板消失", "SYS")
+        return False
+    # 本点已完成：对话框在场时先让对话处理（点链接会被对话框吞掉；
+    # 无绿字选项的对话由状态机点屏推进）
+    if _seal_dialog_blocking(win, items, img_np):
+        return False
+    next_idx = _seal_link_idx + 1
+    if not _click_seal_link(win, items, img_np, link_idx=next_idx):
+        return False
+    _seal_link_idx = next_idx
+    _seal_phase = 0
+    _seal_stable = 0
+    _seal_last_pos = None
+    _seal_need_move = True
+    _seal_walk_from = pos
+    _seal_move_stuck = 0
+    _seal_use_retries = 0
+    log(f"[名望] 五庄封印：{link}{reason}，改点"
+        f"「{SEAL_LINKS[_seal_link_idx]}」", "SYS")
+    return True
+
+
+def _handle_wuzhuang_seal(win, items, img_np):
+    """五庄封印执行状态机（follow extras 通道，每轮询一次）。
+
+    返回是否已处理（点击链接/使用唤风符）。非五庄任务/等待阶段返回
+    False，不影响既有对话处理。状态机同五倍显形镜：0=等到达（坐标
+    稳定）→ 用符；1=已用符等结果。不做战斗判定：战斗由 follow_task
+    跳过、battle 线程托管；战斗结束任务消失即完成（用户 2026-11-10）。
+    """
+    global _seal_missing, _seal_phase
+    if _seal_phase == 1:
+        # 用符后对话框可能遮挡背包导致关闭失败：残留背包限频补关
+        # （放在 tracker 文案判定之前——背包遮挡追踪面板时也要能关）
+        _seal_close_bag_if_open(win, items)
+    seal_present = SEAL_TASK_KEYWORD in _seal_sig(items)
+    if seal_present:
+        _seal_missing = 0
+    elif _seal_phase == 0:
+        # 非五庄任务（或任务已完成）：连续多轮无五庄任务才清残留状态
+        _seal_missing += 1
+        if _seal_missing >= 5:
+            _reset_seal_state()
+        return False
+    if not seal_present:
+        # 战斗中/加载过渡期追踪面板不可见：本帧不推进（等任务文本回来）
+        return False
+    now = time.time()
+    if _seal_phase == 1:
+        return _seal_check_outcome(win, items, img_np, now)
+    return _seal_wait_arrival(win, items, img_np, now)
+
+
+def _click_known_dialog_option(win, items, img_np):
+    """DIALOG_OPTION_MAP 命中 → 点对应绿字（含沙海/钓鱼 arm 副作用）。
+
+    供 follow 的 extras 通道与领取后对话框处理共用（领取后「这该
+    怎么办呢，好担心」→「是武尊神遣我过来帮忙的。」须点选项，点屏幕
+    中间不会关闭选项对话）。表值支持候选选项元组：按顺序逐个尝试。
     返回是否已处理。
     """
-    if _maybe_click_shahai_start(win):
-        return True
-    if _mingwang_diaoyu_window_check(win):
-        return True
     for dtxt, opts in DIALOG_OPTION_MAP.items():
         if not _dialog_text_present(items, dtxt):
             continue
@@ -1006,18 +1694,52 @@ def _handle_dialog_options(win, items, img_np):
     return False
 
 
+def _handle_dialog_options(win, items, img_np):
+    """名望任务对话表（extra_dialog_handler）：文案命中 → 点对应绿字。
+
+    类似 xuanshu 内层轮询的 DIALOG_OPTION_MAP 处理，交由共享 follow_task
+    的 extras 通道调用（优先级高于引擎内置表与剧情对话兜底）。
+    沙海迷踪入口选项点击成功后 arm「开始」按钮检测窗口；蛟魔探秘钓鱼
+    入口选项点击成功后 arm 小游戏窗口检测（与玄枢钓鱼同款闭环）。
+    表值支持候选选项元组：按顺序逐个尝试，点到哪个算哪个。
+    五庄封印执行状态机（追踪双链接/坐标稳定到达/任务储物格用唤风符）
+    在最前面处理；其余任务无「五庄」追踪文案时零操作。
+    返回是否已处理。
+    """
+    if _handle_wuzhuang_seal(win, items, img_np):
+        return True
+    if _maybe_click_shahai_start(win):
+        return True
+    if _mingwang_diaoyu_window_check(win):
+        return True
+    return _click_known_dialog_option(win, items, img_np)
+
+
 def _follow_task(win, timeout=FOLLOW_TIMEOUT):
     """跟踪「山河名望」任务直到完成（复用 xuanshu.follow_task 引擎）。
 
-    extra_dialog_handler 处理本模块任务对话表；skip_texts={} 禁用玄枢
-    轶闻的跳过表；chuyijuebao_check=False 关闭锄遗聚宝模板检测（玄枢
-    专属）；story_known_texts 传本模块对话表——否则本任务的带选项对话
-    不在已知表内，选项未渲染时会被剧情兜底误点屏幕中间关闭。
+    extra_dialog_handler 处理本模块任务对话表；skip_texts 传本模块
+    DIALOG_SKIP_TEXTS（无选项多屏剧情台词命中即连点屏幕中间推进，
+    同玄枢轶闻；不再是空表禁用）；chuyijuebao_check=False 关闭锄遗
+    聚宝模板检测（玄枢专属）；story_known_texts 传本模块对话表——
+    否则本任务的带选项对话不在已知表内，选项未渲染时会被剧情兜底
+    误点屏幕中间关闭；green_picker 让五庄封印按当前目标链接
+    （火藏之位→木藏之位）精确点击，其他任务无封印链接时自动退回
+    引擎默认行级选择。
     返回 (是否完成, 描述)。
     """
+    global _seal_phase
+    if _seal_phase == 1 and time.time() - _seal_use_at > 60.0:
+        # 上次跟踪超时后任务仍在：状态机可能卡在等结果，重新开始封印
+        # 流程（新任务领取已在 _post_claim_flow 复位；战斗时长不在此
+        # 判定——follow 每次调用独立，超时重入时已过战斗）
+        log("[名望] 五庄封印：上次跟踪中断后任务仍在，重新开始封印流程",
+            "WARN")
+        _reset_seal_state()
     return follow_task(win, TASK_TITLE, prefix="名望", timeout=timeout,
                        extra_dialog_handler=_handle_dialog_options,
-                       skip_texts={},
+                       green_picker=_seal_green_picker,
+                       skip_texts=DIALOG_SKIP_TEXTS,
                        chuyijuebao_check=False,
                        story_known_texts=DIALOG_OPTION_MAP)
 
@@ -1082,37 +1804,45 @@ def _post_claim_flow(win):
     """领取后链路：关闭领取对话框 → 关残留面板 → 跟踪至任务完成。
 
     任务已点击领取，跟踪失败返回 False 由主循环下一轮走续跑分支处理
-    （不重走领取链重复接取）。返回 (是否完成, 描述)。
+    （不重走领取链重复接取）。新任务领取成功即复位五庄封印状态机，
+    防上一轮（火藏/木藏）状态残留。返回 (是否完成, 描述)。
     """
+    _reset_seal_state()
     dismissed, dinfo = _dismiss_claim_dialog(win)
     log(f"[名望] {dinfo}", "SYS" if dismissed else "INFO")
     ok, info = _resume_tracking(win)
     return ok, f"{dinfo}；{info}"
 
 
-def _open_claim_panel(win):
+def _open_claim_panel(win, race):
     """前往领取点并打开山河名望任务面板（第一阶段入口链）。
 
     面板已打开时直接返回（重试/诊断时不重复走 NPC 对话链）。
+    race：已判定的种族（决定领取点配置）。
     返回 (是否成功, 描述)。
     """
     if is_in_battle(win):
         return False, "战斗中，跳过本轮（等待战斗结束）"
+    claim = CLAIM_POINTS.get(race)
+    if claim is None:
+        return False, f"{race}领取流程待补充（当前仅实现 {'、'.join(CLAIM_POINTS)}）"
     img = win.capture(force_activate=False)
     if img is not None and _find_panel_anchor(_bgr_frame(img)) is not None:
         return True, "山河名望面板已打开"
     debug_overlay.set_phase("前往领取点")
-    ok, info = navigate_to_claim_point(win)
+    ok, info = navigate_to_claim_point(win, claim)
     if not ok:
         return False, info
     debug_overlay.set_phase("领取任务")
-    return _claim_and_open_panel(win)
+    return _claim_and_open_panel(win, claim)
 
 
-def run_cycle(win):
+def run_cycle(win, race=None):
     """执行一轮名望：已有任务则续跑跟踪至完成；否则领取后跟踪至完成。
 
     种族判定在 run_loop 中需要领取时才执行（种族不随轮次变化）。
+    race：已判定种族；任务已从追踪面板消失但种族未判定时本轮跳过
+    领取（下一轮 run_loop 会重判，不猜测领取点）。
     返回 (状态, 描述)；状态：done 任务完成 / not_found 无目标任务 /
     fail 本轮失败。
     """
@@ -1121,7 +1851,9 @@ def run_cycle(win):
         log("[名望] 追踪面板已有「山河名望」任务，跳过领取直接续跑跟踪", "SYS")
         ok, info = _resume_tracking(win)
         return ("done", info) if ok else ("fail", info)
-    ok, info = _open_claim_panel(win)
+    if race is None:
+        return "fail", "种族未判定，跳过本轮领取（下一轮重判）"
+    ok, info = _open_claim_panel(win, race)
     if not ok:
         return "fail", info
     debug_overlay.set_phase("领取名望任务")
@@ -1138,11 +1870,12 @@ def run_cycle(win):
 
 def verify_claim_flow(win):
     """诊断页-名望领取验证：走完整第一阶段链路（与任务流程一致，
-    无额外延时）——种族判定 → 前往大唐边境领取点 → 点击逆天魔 →
-    点绿色选项「开启山河名望志」→ 点击山河名望入口打开任务领取面板。
+    无额外延时）——种族判定 → 前往该种族领取点（魔族大唐边境/仙族
+    天宫）→ 点击 NPC → 点绿色选项「开启山河名望志」→ 点击山河名望
+    入口打开任务领取面板。
 
-    不领取面板内任务（面板领取见 verify_claim_task_flow）；仙族/其他
-    种族在判定后直接返回待补充。返回 (是否成功, 描述)。
+    不领取面板内任务（面板领取见 verify_claim_task_flow）；其他种族
+    在判定后返回待补充。返回 (是否成功, 描述)。
     """
     if is_in_battle(win):
         return False, "战斗中，跳过本次验证"
@@ -1151,9 +1884,10 @@ def verify_claim_flow(win):
         return False, info
     _save_cached_race(win, race)  # 诊断结果同步写入角色种族缓存
     log(f"[名望] 验证种族判定: {info}", "SYS")
-    if race not in CLAIM_LOCATIONS:
-        return False, f"{race}领取流程待补充（当前仅实现魔族）"
-    return _open_claim_panel(win)
+    if race not in CLAIM_POINTS:
+        return False, (f"{race}领取流程待补充"
+                       f"（当前仅实现 {'、'.join(CLAIM_POINTS)}）")
+    return _open_claim_panel(win, race)
 
 
 def verify_claim_task_flow(win):
@@ -1162,7 +1896,8 @@ def verify_claim_task_flow(win):
 
     领取后继续：关闭领取对话框（对话框门控 + 点屏幕中间）→ 校验任务
     追踪「山河名望」→ follow_task 跟踪至任务完成（含任务对话表）。
-    领取目标：高级任务「蛟魔复仇」。
+    领取目标：按 CLAIM_TASKS 当前种族可用的已实现任务（高级优先，
+    魔族「蛟魔复仇」/仙族「五庄封印」等）。
     返回 (是否成功, 描述)；成功=follow_task 跟踪至任务完成。
     """
     if is_in_battle(win):
@@ -1176,9 +1911,10 @@ def verify_claim_task_flow(win):
             return False, info
         _save_cached_race(win, race)  # 诊断结果同步写入角色种族缓存
         log(f"[名望] 验证种族判定: {info}", "SYS")
-        if race not in CLAIM_LOCATIONS:
-            return False, f"{race}领取流程待补充（当前仅实现魔族）"
-        ok, info = _open_claim_panel(win)
+        if race not in CLAIM_POINTS:
+            return False, (f"{race}领取流程待补充"
+                           f"（当前仅实现 {'、'.join(CLAIM_POINTS)}）")
+        ok, info = _open_claim_panel(win, race)
         if not ok:
             return False, info
     status, info = claim_panel_task(win)
@@ -1225,8 +1961,8 @@ def run_loop(win, cycle_interval=3.0):
 
     结束条件（满足其一即返回结束原因，同玄枢轶闻）：
     1. 完成任务次数达到设置的次数上限（通用设置-任务次数）
-    2. 任务栏不存在当前已实现的任务（如「蛟魔复仇」）
-    3. 种族为仙族/其他（当前仅实现魔族）
+    2. 任务栏不存在当前已实现的任务（如「蛟魔复仇」「五庄封印」）
+    3. 种族不在已实现领取点内（当前实现魔族/仙族）
 
     启动时追踪面板已有「山河名望」→ 跳过种族判定与领取，直接续跑跟踪
     （对齐玄枢轶闻 run_cycle 的已有任务分支）。种族判定按角色持久缓存：
@@ -1259,12 +1995,12 @@ def run_loop(win, cycle_interval=3.0):
                     return f"名望领取失败：{info}"
                 _save_cached_race(win, race)
                 log(f"[名望] {info}", "SYS")
-            if race not in CLAIM_LOCATIONS:
-                msg = (f"{race}领取流程待补充（当前仅实现魔族："
-                       f"{CLAIM_LOCATIONS['魔族']}；仙族后续补充）")
+            if race not in CLAIM_POINTS:
+                msg = (f"{race}领取流程待补充（当前仅实现："
+                       f"{'、'.join(f'{r} {d}' for r, d in CLAIM_LOCATIONS.items())}）")
                 log(f"[名望] {msg}", "WARN")
                 return msg
-        status, info = run_cycle(win)
+        status, info = run_cycle(win, race)
         if status == "done":
             done += 1
             app_utils.task_progress_add(win, TASK_MODE, done)
