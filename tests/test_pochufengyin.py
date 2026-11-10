@@ -319,3 +319,65 @@ def test_mash_ignored_in_hold_mode(monkeypatch):
         hold=True, action_icon="action", mash=True)
     assert ok
     assert _Hold.events and _Hold.events[0][0] == "start"
+
+
+# ---- 长按运输 + 点按维持（hold_catch；开采石头 2026-11-10 用户技巧）----
+def _install_catch(monkeypatch, *, p_values, title_frames):
+    """开采石头仿真：脚本化填充位置 + 伪时钟（维持泵积分器可测）。
+
+    记录 rapid_click_burst 点按批次 [(捕获轮次, 次数)]；目标带同 _install
+    （C≈8.49、L≈7.97、R≈9.01）；CATCH_MIN_GAP 置 0 便于脚本轮询驱动
+    重点运输。
+    """
+    win = _install(monkeypatch, p_values=p_values, title_frames=title_frames)
+    clicks = []
+    monkeypatch.setattr(pochufengyin, "rapid_click_burst",
+                        lambda w, x, y, times=1, press=0.02:
+                        clicks.append((win.n, times)))
+    monkeypatch.setattr(pochufengyin, "time", _FakeClock())
+    monkeypatch.setattr(pochufengyin, "POCHU_CATCH_MIN_GAP", 0.0)
+    return win, clicks
+
+
+def test_hold_catch_transport_release_then_pump(monkeypatch):
+    """长按推过带上缘（R+0.2）松手 → 回落至 C 切换点按维持 → 命中区间。"""
+    _Hold.events = []
+    win, clicks = _install_catch(
+        monkeypatch,
+        p_values=[0.0, 8.0, 9.5, 9.0, 8.3] + [8.3] * 15,
+        title_frames=20)
+    ok, info = pochufengyin.play_pochufengyin(
+        win, "title", prefix="名望", label="开采石头",
+        hold=True, action_icon="action", hold_catch=True)
+    assert ok and "命中区间" in info
+    assert [e[0] for e in _Hold.events] == ["start", "stop"]
+    assert _Hold.events[0] == ("start", 2, 950, 600)
+    assert _Hold.events[1] == ("stop", 4)      # P=9.5 ≥ R+0.2 松手等回落
+    assert clicks and clicks[0][0] >= 6        # 回落至 C 之后才开始点按
+
+
+def test_hold_catch_repress_when_falls_below_band(monkeypatch):
+    """回落越过带下（伺服未接管）→ 重新长按运输（限次），再回落捕捉。"""
+    _Hold.events = []
+    win, clicks = _install_catch(
+        monkeypatch,
+        p_values=[0.0, 9.5, 7.0, 9.5, 8.3] + [8.3] * 12,
+        title_frames=17)
+    ok, info = pochufengyin.play_pochufengyin(
+        win, "title", prefix="名望", label="开采石头",
+        hold=True, action_icon="action", hold_catch=True)
+    assert ok and "命中区间" in info
+    assert [e[0] for e in _Hold.events] == ["start", "stop", "start", "stop"]
+    assert clicks
+
+
+def test_hold_catch_releases_on_window_end(monkeypatch):
+    """窗口在长按运输中断（标题消失）→ finally 必须抬手，不卡按下状态。"""
+    _Hold.events = []
+    win, _clicks = _install_catch(
+        monkeypatch, p_values=[0.0, 8.0, 8.2], title_frames=4)
+    ok, info = pochufengyin.play_pochufengyin(
+        win, "title", prefix="名望", label="开采石头",
+        hold=True, action_icon="action", hold_catch=True)
+    assert ok
+    assert [e[0] for e in _Hold.events] == ["start", "stop"]

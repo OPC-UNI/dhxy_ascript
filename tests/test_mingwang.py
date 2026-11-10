@@ -33,6 +33,8 @@ TEMPLATES = (
      mingwang.CLAIM_POINTS["仙族"]["npc_threshold"]),
     (mingwang.CLAIM_SHANHE_ICON, mingwang.CLAIM_SHANHE_THRESHOLD),
     (mingwang.SEAL_ITEM_ICON, mingwang.SEAL_ITEM_THRESHOLD),
+    (mingwang.PICK_ITEM_ICON, mingwang.PICK_ITEM_THRESHOLD),
+    (mingwang.PICK_MINING_TITLE_ICON, mingwang._pochu_minigame.POCHU_THRESHOLD),
     (mingwang.SHADU_WORLD_ICON, 0.8),  # 世界地图标签（open_mini_map_city 默认 0.8）
     (mingwang.SHADU_NPC_ICON, mingwang.SHADU_NPC_THRESHOLD),
     (mingwang.SHAHAI_START_ICON, mingwang.SHAHAI_START_THRESHOLD),
@@ -172,12 +174,14 @@ def test_race_strip_rect():
 def test_at_claim_point():
     mozu = mingwang.CLAIM_POINTS["魔族"]
     xian = mingwang.CLAIM_POINTS["仙族"]
-    assert mingwang._at_claim_point(("大唐边境", 477, 180), mozu)
-    assert mingwang._at_claim_point(("大唐边境", 470, 187), mozu)  # ±7 内
-    assert not mingwang._at_claim_point(("大唐边境", 470, 189), mozu)  # y 超 7
-    assert not mingwang._at_claim_point(("大唐边境", 469, 187), mozu)  # x 超 7
-    assert not mingwang._at_claim_point(("大唐边境", 460, 180), mozu)
-    assert not mingwang._at_claim_point(("长安", 477, 180), mozu)
+    # 坐标按领取点配置动态取值（用户会按实机标定微调，测试不写死）
+    mx, my = mozu["target"]
+    assert mingwang._at_claim_point(("大唐边境", mx, my), mozu)
+    assert mingwang._at_claim_point(("大唐边境", mx - 7, my + 7), mozu)  # ±7 内
+    assert not mingwang._at_claim_point(("大唐边境", mx - 7, my + 9), mozu)  # y 超 7
+    assert not mingwang._at_claim_point(("大唐边境", mx - 9, my + 7), mozu)  # x 超 7
+    assert not mingwang._at_claim_point(("大唐边境", mx - 18, my), mozu)
+    assert not mingwang._at_claim_point(("长安", mx, my), mozu)
     assert not mingwang._at_claim_point(None, mozu)
     # 仙族：天宫 190,122（±7 容差）
     assert mingwang._at_claim_point(("天宫", 190, 120), xian)  # 2px 差在容差内
@@ -185,7 +189,7 @@ def test_at_claim_point():
     assert not mingwang._at_claim_point(("天宫", 190, 130), xian)  # dy8
     assert not mingwang._at_claim_point(("天宫", 170, 120), xian)
     # 同坐标不同地图不互认
-    assert not mingwang._at_claim_point(("大唐边境", 477, 180), xian)
+    assert not mingwang._at_claim_point(("大唐边境", mx, my), xian)
     assert not mingwang._at_claim_point(("天宫", 190, 120), mozu)
 
 
@@ -1375,8 +1379,9 @@ def test_use_huanfengfu_clicks_item(monkeypatch):
     monkeypatch.setattr(mingwang.bag, "open_task_box",
                         lambda w, prefix="": called.append(prefix)
                         or (True, "任务储物格已打开"))
-    monkeypatch.setattr(mingwang, "_find_huanfengfu",
-                        lambda w: ((600, 300), "已找到唤风符"))
+    monkeypatch.setattr(mingwang, "_find_task_item",
+                        lambda w, icon, label, threshold=0.8, timeout=10.0:
+                        ((600, 300), f"已找到{label}"))
     monkeypatch.setattr(mingwang.bag, "is_bag_open", lambda w: True)
     clicks = []
     monkeypatch.setattr(mingwang, "human_click",
@@ -1516,3 +1521,261 @@ def test_claim_entry_no_dialog_no_click(monkeypatch):
     win, centers, _known = _patch_claim_entry(monkeypatch, 0.1)
     mingwang._claim_and_open_panel(win, mingwang.CLAIM_POINTS["仙族"])
     assert centers == []
+
+
+# ---- 灵力镐：追踪「前往大唐边境，使用灵力镐」→ 点蕴灵石头 → 到达 → 用镐（2026-11-10）----
+def _pick_frame():
+    """合成帧：实机追踪文案两行 + 两处链接下划线（灵力镐 / 蕴灵石头）。
+
+    2026-11-10 实机截图：行1「前往大唐边境，使用 灵力镐」（灵力镐 为
+    物品说明链接）、行2「，用合适的力道开凿 蕴灵石头」（蕴灵石头 为
+    导航链接）、行3「(412,45)。」。两者都是亮绿带下划线——必须只点
+    蕴灵石头（点灵力镐会开物品说明，用户反馈点错）。
+    """
+    frame = np.zeros((831, 1378, 3), dtype=np.uint8)
+    frame[246:264, 10:200] = (30, 200, 30)      # 行1 绿字
+    frame[266:268, 150:200] = (0, 255, 0)       # 灵力镐下划线（错误目标）
+    frame[268:286, 10:230] = (30, 200, 30)      # 行2 绿字
+    frame[288:290, 140:210] = (0, 255, 0)       # 蕴灵石头下划线（正确目标）
+    return frame
+
+
+PICK_ITEMS = [
+    ("前往大唐边境，使用", [10, 246, 145, 264], 0.95),
+    ("灵力镐", [150, 246, 200, 264], 0.92),
+    ("，用合适的力道开凿", [10, 268, 135, 286], 0.95),
+    ("蕴灵石头", [140, 268, 210, 286], 0.93),
+    ("(412,45)。", [10, 290, 90, 306], 0.90),
+]
+
+
+def test_lingligao_trigger_keywords():
+    assert mingwang._pick_trigger("山河名望 前往大唐边境，使用灵力镐")
+    assert mingwang._pick_trigger("前往大唐边境，使用灵力稿")  # OCR 形近
+    assert not mingwang._pick_trigger("火藏之位 木藏之位")
+    assert not mingwang._pick_trigger("")
+
+
+def test_lingligao_link_point_targets_stone_not_pickaxe():
+    """只点「蕴灵石头」下划线，绝不点「灵力镐」下划线（物品说明）。"""
+    pt = mingwang._pick_link_point(PICK_ITEMS, _pick_frame())
+    assert pt is not None
+    x, y = pt
+    assert 140 <= x <= 210 and y == 286          # 蕴灵石头下划线上方 2px
+    assert not (150 <= x <= 200 and y == 264)    # 不是灵力镐下划线
+
+
+def test_lingligao_link_point_stone_missing_no_fallback():
+    """蕴灵石头未读出 → 返回 None（不退而点灵力镐/前往文案）。"""
+    items = [("前往大唐边境，使用", [10, 246, 145, 264], 0.95),
+             ("灵力镐", [150, 246, 200, 264], 0.92)]
+    assert mingwang._pick_link_point(items, _pick_frame()) is None
+
+
+def test_lingligao_link_point_short_keyword():
+    """OCR 截断为「蕴灵」短词时仍能定位（形近/截断兜底）。"""
+    items = [("用合适的力道开凿 蕴灵", [10, 268, 210, 286], 0.92)]
+    pt = mingwang._pick_link_point(items, _pick_frame())
+    assert pt is not None and 140 <= pt[0] <= 210
+
+
+def test_lingligao_link_point_excludes_dialog():
+    """居中对话框同名文案（x≥panel_row_xmax）不参与链接定位。"""
+    frame = _pick_frame()
+    frame[268:290, 420:560] = (0, 255, 0)
+    items = [("蕴灵石头", [420, 268, 560, 286], 0.95)]
+    assert mingwang._pick_link_point(items, frame) is None
+
+
+def test_mingwang_green_picker_falls_through():
+    """非封印/非灵力镐任务：green_picker 返回 None 交给引擎行级选择。"""
+    frame = _pick_frame()
+    items = [("去找大唐边境(12,34)惯骗", [10, 246, 200, 264], 0.9)]
+    assert mingwang._mingwang_green_picker(items, frame) is None
+
+
+def test_lingligao_green_picker_refuses_fallback():
+    """触发词在但蕴灵石头未读出 → 返回 PICK_FAIL，禁止引擎兜底点灵力镐。"""
+    frame = _pick_frame()
+    assert mingwang._pick_green_picker(PICK_ITEMS, frame) is not None
+    items = [("前往大唐边境，使用", [10, 246, 145, 264], 0.95),
+             ("灵力镐", [150, 246, 200, 264], 0.92)]
+    assert mingwang._pick_green_picker(items, frame) \
+        == mingwang.task_tracker.PICK_FAIL
+    # 非灵力镐任务不受影响：回退引擎行级选择
+    other = [("去找大唐边境(12,34)惯骗", [10, 246, 200, 264], 0.9)]
+    assert mingwang._pick_green_picker(other, frame) is None
+
+
+def _patch_pick_sm(monkeypatch):
+    """灵力镐状态机替换：位置可变、用镐/点链接记录、背包/对话框关闭。"""
+    state = {"pos": ("大唐边境", 477, 180), "use": 0, "click": 0}
+    monkeypatch.setattr(mingwang, "_seal_sig",
+                        lambda items: "山河名望 前往大唐边境，使用灵力镐")
+    monkeypatch.setattr(mingwang, "_seal_pos",
+                        lambda win, items: state["pos"])
+    monkeypatch.setattr(mingwang, "_seal_dialog_blocking",
+                        lambda win, items, img: False)
+    monkeypatch.setattr(mingwang, "_bag_box_on_frame",
+                        lambda win, items: False)
+
+    def _use(win):
+        state["use"] += 1
+        return True, "已使用灵力镐"
+
+    def _click(win, items, img):
+        state["click"] += 1
+        mingwang._pick_link_at = 0.0
+        return True
+
+    monkeypatch.setattr(mingwang, "_use_lingligao", _use)
+    monkeypatch.setattr(mingwang, "_click_pick_link", _click)
+    return state
+
+
+def test_lingligao_use_after_arrival(monkeypatch):
+    """有位移（寻路启动）+ 位置稳定 + 目标地图 → 到达后用镐一次。"""
+    state = _patch_pick_sm(monkeypatch)
+    mingwang._reset_pick_state()
+    frame = _pick_frame()
+    mingwang._handle_lingligao(object(), [], frame)
+    state["pos"] = ("大唐边境", 500, 220)          # 位移：寻路启动
+    mingwang._handle_lingligao(object(), [], frame)
+    state["pos"] = ("大唐边境", 640, 360)
+    for _ in range(3):
+        mingwang._handle_lingligao(object(), [], frame)
+    assert state["use"] == 1 and mingwang._pick_phase == 1
+
+
+def test_lingligao_no_use_when_stationary_at_start(monkeypatch):
+    """静止在领取点（同图大唐边境）→ 先用镐会打空：不得用镐，转而重点链接。"""
+    state = _patch_pick_sm(monkeypatch)
+    mingwang._reset_pick_state()
+    frame = _pick_frame()
+    for _ in range(6):
+        mingwang._handle_lingligao(object(), [], frame)
+    assert state["use"] == 0
+    assert state["click"] == 1          # 4 轮询无位移 → 重点链接
+    assert mingwang._pick_need_move is True
+
+
+def test_lingligao_forced_use_after_stuck_cycles(monkeypatch):
+    """连续多次重点仍无位移（已在目的地）→ 放行用镐。"""
+    state = _patch_pick_sm(monkeypatch)
+    mingwang._reset_pick_state()
+    frame = _pick_frame()
+    for _ in range(20):                  # 3 个重点周期（12 轮询）后放行
+        mingwang._handle_lingligao(object(), [], frame)
+    assert mingwang._pick_need_move is False
+    assert state["use"] == 1
+
+
+def test_lingligao_reclick_when_wrong_map(monkeypatch):
+    """原地静止但不在目标地图 → 到间隔后重点链接重新寻路。"""
+    state = _patch_pick_sm(monkeypatch)
+    mingwang._reset_pick_state()
+    frame = _pick_frame()
+    state["pos"] = ("长安", 300, 300)
+    for _ in range(4):
+        mingwang._handle_lingligao(object(), [], frame)
+    assert state["use"] == 0
+    mingwang._pick_link_at = time.time() - mingwang.PICK_LINK_RETRY_AFTER - 1
+    mingwang._handle_lingligao(object(), [], frame)
+    assert state["click"] == 1 and state["use"] == 0
+
+
+def test_lingligao_reset_when_trigger_gone(monkeypatch):
+    """触发词消失（任务推进完成）→ 连续缺失后状态复位。"""
+    state = _patch_pick_sm(monkeypatch)
+    mingwang._reset_pick_state()
+    frame = _pick_frame()
+    mingwang._handle_lingligao(object(), [], frame)
+    state["pos"] = ("大唐边境", 500, 220)
+    mingwang._handle_lingligao(object(), [], frame)
+    state["pos"] = ("大唐边境", 760, 410)
+    for _ in range(3):
+        mingwang._handle_lingligao(object(), [], frame)
+    assert mingwang._pick_phase == 1
+    monkeypatch.setattr(mingwang, "_seal_sig",
+                        lambda items: "山河名望 前往大唐边境")
+    for _ in range(mingwang.PICK_ABSENT_RESET):
+        mingwang._handle_lingligao(object(), [], frame)
+    assert mingwang._pick_phase == 0 and mingwang._pick_need_move is True
+
+
+# ---- 用镐后「开采石头」小游戏（kaicaishitou 模板 → 破除封印同款点击闭环）----
+def test_pick_mining_template_calibration():
+    """标题模板贴入合成帧（POCHU_REGION 内）可命中；噪声帧低于阈值。"""
+    frame = _paste_bgr(mingwang.PICK_MINING_TITLE_ICON, x=600, y=480)
+    score, pt = game_map.best_match_np(frame, mingwang.PICK_MINING_TITLE_ICON,
+                                       region=mingwang._pochu_minigame.POCHU_REGION)
+    assert score >= mingwang._pochu_minigame.POCHU_THRESHOLD
+    noise = _noise_bgr(seed=77)
+    s2, p2 = game_map.best_match_np(noise, mingwang.PICK_MINING_TITLE_ICON)
+    assert s2 < mingwang._pochu_minigame.POCHU_THRESHOLD
+
+
+def _patch_mining_check(monkeypatch, title_score):
+    mingwang._reset_pick_state()
+    win = _FakeWin([_pil(_noise_bgr(seed=55))])
+    monkeypatch.setattr(mingwang, "is_in_battle", lambda w: False)
+    monkeypatch.setattr(mingwang.game_map, "best_match_np",
+                        lambda frame, icon, region=None, **k:
+                        (title_score, (600, 500)) if icon
+                        == mingwang.PICK_MINING_TITLE_ICON
+                        else (0.0, None))
+    calls = []
+
+    def _play(win_, icon, prefix="名望", label="", **kw):
+        calls.append((icon, label, kw))
+        return True, "开采石头结束"
+
+    monkeypatch.setattr(mingwang._pochu_minigame, "play_pochufengyin", _play)
+    monkeypatch.setattr(mingwang.time, "sleep", lambda s: None)
+    return win, calls
+
+
+def test_pick_mining_window_plays_hold_mode(monkeypatch):
+    """armed + 标题命中 → 长按运输+点按维持（hold/hold_catch + 长按按钮）。"""
+    win, calls = _patch_mining_check(monkeypatch, 0.95)
+    mingwang._arm_pick_mining_check()
+    handled = mingwang._pick_mining_window_check(win)
+    assert handled is True
+    assert len(calls) == 1
+    icon, label, kw = calls[0]
+    assert icon == mingwang.PICK_MINING_TITLE_ICON and label == "开采石头"
+    assert kw.get("hold") is True          # 开采石头是长按不是点击
+    assert kw.get("hold_catch") is True    # 长按推过带上缘后点按维持
+    assert kw.get("action_icon") == mingwang.PICK_MINING_HOLD_ICON
+    assert mingwang._pick_mining_armed_at == 0.0   # 成功后解除 armed
+
+
+def test_pick_mining_window_not_armed(monkeypatch):
+    """未 armed（未用镐）→ 检测零成本直接返回 False。"""
+    win, calls = _patch_mining_check(monkeypatch, 0.95)
+    assert mingwang._pick_mining_window_check(win) is False
+    assert calls == []
+
+
+def test_pick_mining_window_title_absent(monkeypatch):
+    """armed 但标题未命中 → 不执行小游戏。"""
+    win, calls = _patch_mining_check(monkeypatch, 0.2)
+    mingwang._arm_pick_mining_check()
+    assert mingwang._pick_mining_window_check(win) is False
+    assert calls == []
+    assert mingwang._pick_mining_armed_at > 0     # 保持 armed 继续检测
+
+
+def test_pick_mining_armed_on_use(monkeypatch):
+    """到达用镐成功 → 自动 armed（进入小游戏窗口检测窗口）。"""
+    state = _patch_pick_sm(monkeypatch)
+    mingwang._reset_pick_state()
+    frame = _pick_frame()
+    mingwang._handle_lingligao(object(), [], frame)
+    state["pos"] = ("大唐边境", 500, 220)
+    mingwang._handle_lingligao(object(), [], frame)
+    state["pos"] = ("大唐边境", 640, 360)
+    for _ in range(3):
+        mingwang._handle_lingligao(object(), [], frame)
+    assert state["use"] == 1
+    assert mingwang._pick_mining_armed_at > 0

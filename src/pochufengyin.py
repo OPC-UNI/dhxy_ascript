@@ -4,6 +4,9 @@
 「钓鱼」共用完全相同的窗口布局、开始按钮、目标高亮带与进度条区域，
 仅标题模板与推进方式不同——破除封印为「点击」（连点推进），钓鱼为
 「长按」（按住持续推进，长按按钮模板 xuanshu_diaoyu_changan.png）。
+长按模式细分两种：钓鱼为**锁定持握**（hold=True，进带后游戏锁定，
+须按住到窗口结束）；开采石头为**定时释放**（hold=True +
+hold_catch=True，长按推过带上缘→松手回落→回 C 后点按维持）。
 实现与标定同源（2026-11-09 用户完整描述 + 7.png 实测），调用方只传
 标题模板、按钮模板、推进方式与日志前缀/名称。
 
@@ -112,6 +115,18 @@ POCHU_ARM_TIMEOUT = 120                # 入口选项点击后检测窗口的最
 POCHU_CHECK_INTERVAL = 1.0             # extras 链窗口检测限频（秒，条带匹配 ~10ms）
 POCHU_END_WINDOW = 2.0                 # 标题连续消失确认窗口（秒；结束确认防抖，不得缩短）
 POCHU_TIMEOUT = 180                    # 小游戏总超时（秒）
+# ---- 长按运输 + 点按维持模式（hold_catch；开采石头 2026-11-10）----
+# 该小游戏与钓鱼不同：长按推进极快（真机实测 ~2.4 刻度/秒），目标带
+# 仅 ~1 刻度宽且进带不锁定；松手后填充整体回落（日志：P 4.17→7.36
+# 释放后回退到带下判失败）。用户 2026-11-10 技巧：**先长按把填充推过
+# 目标带上缘，松手让它回落，回到 C（带中心）后改为「点按」维持**——
+# 点按复用冲刺模式的维持泵（点击率伺服：填充位置与点击率正相关、停手
+# 即回退），把填充保持在 [L,R] 内直到窗口结束；掉出带下则重新长按
+# 运输（限次）。不清空既有长按（钓鱼锁定）与点击/冲刺模式语义。
+POCHU_CATCH_ABOVE = 0.20        # 长按越过 R 该值后松手（回落起点保证在带上）
+POCHU_CATCH_REPRESS_MARGIN = 0.40  # 维持泵仍落出 L 下方该值 → 重新长按运输
+POCHU_CATCH_MIN_GAP = 0.25      # 松手后重新按住的最小间隔（秒）
+POCHU_CATCH_MAX_PRESS = 4       # 最多长按运输次数
 
 
 def pochu_tick(x):
@@ -190,7 +205,8 @@ def _pochu_countdown(img_pil, cache, force=False):
 
 
 def play_pochufengyin(win, title_icon, prefix="客栈", label="破除封印",
-                      hold=False, action_icon=None, mash=False):
+                      hold=False, action_icon=None, mash=False,
+                      hold_catch=False):
     """进度条对准小游戏闭环控制（阻塞执行到标题消失）。返回 (是否完成, 描述)。
 
     流程（用户 2026-11-09 完整描述 + 7.png 实测标定）：
@@ -226,6 +242,13 @@ def play_pochufengyin(win, title_icon, prefix="客栈", label="破除封印",
     （填充条位置与点击率正相关，停手约 1s 即快速回退），按位置误差
     每 POCHU_MASH_RATE_EVAL 秒调节速率，逼近右缘完全停泵；不按
     倒计时停手、维持到窗口标题消失。
+    hold_catch=True 为「长按运输 + 点按维持」模式（开采石头，须配合
+    hold=True；2026-11-10 用户技巧）：该游戏长按推进 ~2.4 刻度/秒、
+    目标带仅 ~1 刻度宽且进带不锁定，钓鱼式「按住到窗口结束」必然冲过
+    目标带、松手回退判失败。改为：长按把填充推过带上缘（P≥R+0.2）→
+    松手让填充整体回落 → 回到 C（带中心）即切换维持泵，用点按把填充
+    保持在 [L,R] 内直到窗口结束；掉出带下重新长按运输（限次）。见
+    POCHU_CATCH_* 常量。
     """
     def _pace(tick_start):
         """补齐测量节拍（截图/匹配/点击耗时计入间隔，不累积漂移）。"""
@@ -235,6 +258,7 @@ def play_pochufengyin(win, title_icon, prefix="客栈", label="破除封印",
             time.sleep(rem)
 
     mash = bool(mash) and not hold   # 冲刺连点仅点击模式可用
+    hold_catch = bool(hold_catch) and hold  # 长按运输+点按维持仅长按模式可用
     act_icon = action_icon or POCHU_CLICK_ICON
     act_name = "长按" if hold else "点击"
     deadline = time.time() + POCHU_TIMEOUT
@@ -271,6 +295,9 @@ def play_pochufengyin(win, title_icon, prefix="客栈", label="破除封印",
     mash_credit = 0.0             # 点击率积分器（不足 1 击的余量）
     mash_rate_t = 0.0             # 上次速率自适应时间
     mash_prev_t = 0.0             # 上轮时间（积分器用时基）
+    press_cnt = 0                 # 长按运输模式：按住次数（限次防失控）
+    last_release = 0.0            # 长按运输模式：上次松手时间（重点间隔）
+    catch_pump = False            # 长按运输模式：已切点按维持泵
     log(f"[{prefix}] {label}弹窗出现 {time.strftime('%H:%M:%S')}，进入闭环控制", "SYS")
 
     def _release_hold():
@@ -279,6 +306,54 @@ def play_pochufengyin(win, title_icon, prefix="客栈", label="破除封印",
         if holder is not None:
             holder.stop()
             holder = None
+
+    def _maintain_pump(now, p, bgr, L, R):
+        """维持泵：点按把填充保持在目标带内（mash 维持段 / hold_catch 共用）。
+
+        点击率伺服（蛟魔探秘钓鱼 2026-11-10 实机标定）：填充位置与持续
+        点击率正相关、停手即回退，按位置误差每 POCHU_MASH_RATE_EVAL 秒
+        调整速率，逼近右缘（R-余量）完全停泵；倒计时消失多轮=已结算，
+        停手防结果画面空点。状态均为 play_pochufengyin 的局部变量。
+        """
+        nonlocal mash_waiting, mash_credit, mash_prev_t, mash_rate, \
+            mash_rate_t, clicks, last_click, btn_pt
+        mash_waiting = False
+        aim = (L + R) / 2.0
+        top = R - POCHU_MASH_TOP_MARGIN
+        dt = max(0.0, now - mash_prev_t)
+        mash_prev_t = now
+        n = 0
+        if p >= top or cnt_none_polls >= POCHU_MASH_CNT_GONE_POLLS:
+            # 逼近右缘：完全停泵（追帧滞后仍可能继续上升）；
+            # 倒计时消失多轮 = 已结算，停手防结果画面空点
+            mash_credit = 0.0
+        else:
+            mash_credit = min(mash_credit + mash_rate * dt,
+                              POCHU_MASH_CREDIT_MAX)
+            n = int(mash_credit)
+            if n:
+                mash_credit -= n
+                n = min(n, POCHU_MASH_HOLD_MAX)
+        # 点击率伺服：按位置误差调整速率（误差 1 刻度 ≈ 1.2 击/秒）
+        if now - mash_rate_t >= POCHU_MASH_RATE_EVAL:
+            mash_rate_t = now
+            err = aim - p
+            if abs(err) > POCHU_MASH_ERR_DEADBAND:
+                mash_rate = max(
+                    POCHU_MASH_RATE_MIN,
+                    min(POCHU_MASH_RATE_MAX,
+                        mash_rate + POCHU_MASH_RATE_GAIN * err))
+        if n > 0:
+            dpt = game_map.match_frame_np(
+                bgr, act_icon, threshold=POCHU_THRESHOLD,
+                region=POCHU_REGION, fallback=False)
+            if dpt is not None:
+                btn_pt = dpt  # 命中刷新按钮位置（防窗口漂移）
+            if btn_pt is not None:
+                rapid_click_burst(win, btn_pt[0], btn_pt[1], n,
+                                  press=mash_press)
+                clicks += n
+                last_click = now
 
     try:
         while time.time() < deadline:
@@ -412,7 +487,77 @@ def play_pochufengyin(win, title_icon, prefix="客栈", label="破除封印",
                     over_cnt = 0
                 if terminal is not None:
                     log(f"[{prefix}] {label}：{terminal}，完全停手等待结算", "SYS")
-            if hold:
+            if hold and hold_catch:
+                # 长按运输 + 点按维持（开采石头，用户 2026-11-10 技巧）：
+                # 1) 运输：长按把填充推过目标带上缘（P≥R+POCHU_CATCH_ABOVE）
+                # 2) 松手：填充整体回落（该游戏松手即回退）
+                # 3) 捕捉：回落到 C（带中心）切换维持泵，点按保持在 [L,R]
+                # 4) 兜底：维持泵仍落出带下 → 重新长按运输（限次）
+                if catch_pump:
+                    _maintain_pump(now, p, bgr, L, R)
+                    if p < L - POCHU_CATCH_REPRESS_MARGIN \
+                            and press_cnt < POCHU_CATCH_MAX_PRESS \
+                            and now - last_release >= POCHU_CATCH_MIN_GAP \
+                            and holder is None:
+                        catch_pump = False
+                        log(f"[{prefix}] {label}：P={p:.2f} 掉出带下"
+                            f"（L-{POCHU_CATCH_REPRESS_MARGIN:.2f}），"
+                            f"重新长按运输", "WARN")
+                elif holder is not None:
+                    if p >= R + POCHU_CATCH_ABOVE:
+                        _release_hold()
+                        last_release = now
+                        log(f"[{prefix}] {label}：P={p:.2f} 已越过目标带上缘"
+                            f"（R+{POCHU_CATCH_ABOVE:.2f}），松手等回落"
+                            f"至 C={C:.2f} 后点按维持", "SYS")
+                    elif not hold_stall_logged and hold_p0 is not None \
+                            and now - hold_t0 >= POCHU_HOLD_STALL \
+                            and abs(p - hold_p0) < 0.05 and p < L - 0.2:
+                        # 按住无进度（长按通道可能未生效）：释放后重按自愈
+                        hold_stall_logged = True
+                        log(f"[{prefix}] {label}：已长按 {POCHU_HOLD_STALL:.0f}s"
+                            f" P 未移动（P={p:.2f}），释放重按并检查长按通道",
+                            "WARN")
+                        _release_hold()
+                        last_release = now
+                elif terminal is None:
+                    if p < L - POCHU_CATCH_REPRESS_MARGIN:
+                        # 尚未开始/回落途中已低于带下：长按运输
+                        if press_cnt < POCHU_CATCH_MAX_PRESS \
+                                and now - last_release >= POCHU_CATCH_MIN_GAP:
+                            dpt = game_map.match_frame_np(
+                                bgr, act_icon, threshold=POCHU_THRESHOLD,
+                                region=POCHU_REGION, fallback=False)
+                            if dpt is not None:
+                                btn_pt = dpt  # 命中刷新按钮位置（防漂移）
+                            # 按下后按钮外观会变，模板不命中时仍按缓存坐标按
+                            if btn_pt is not None:
+                                h = MouseHold(win, btn_pt[0], btn_pt[1])
+                                if h.start():
+                                    holder = h
+                                    press_cnt += 1
+                                    clicks += 1
+                                    hold_p0 = p
+                                    hold_t0 = now
+                                    hold_stall_logged = False
+                                    log(f"[{prefix}] {label}：按住「{act_name}」"
+                                        f"@({btn_pt[0]},{btn_pt[1]}) P={p:.2f}，"
+                                        f"第 {press_cnt}/{POCHU_CATCH_MAX_PRESS}"
+                                        f" 次长按运输", "SYS")
+                                elif now - last_log >= POCHU_STATE_LOG_INTERVAL:
+                                    last_log = now
+                                    log(f"[{prefix}] {label}：长按按下失败"
+                                        f"（窗口坐标不可用），下轮重试", "WARN")
+                    elif p <= C:
+                        # 回落到带中心 C：切入点按维持泵
+                        catch_pump = True
+                        mash_credit = 0.0
+                        mash_rate_t = now
+                        mash_prev_t = now
+                        log(f"[{prefix}] {label}：已回落至 C={C:.2f}"
+                            f"（区间[{L:.1f},{R:.1f}]），切换点按维持",
+                            "SYS")
+            elif hold:
                 # 长按模式（钓鱼，2026-11-10 用户实测）：按住不放，游戏
                 # 会把游标推进到目标区间并锁定；松手即自动回退、鱼脱钩。
                 # 因此进入区间后必须保持按住直到窗口结束，不做 P≥L 释放。
@@ -474,43 +619,7 @@ def play_pochufengyin(win, title_icon, prefix="客栈", label="破除封印",
                     mash_rate_t = now
                     mash_prev_t = now
                 if mash_hold:
-                    mash_waiting = False
-                    aim = (L + R) / 2.0
-                    top = R - POCHU_MASH_TOP_MARGIN
-                    dt = max(0.0, now - mash_prev_t)
-                    mash_prev_t = now
-                    n = 0
-                    if p >= top or cnt_none_polls >= POCHU_MASH_CNT_GONE_POLLS:
-                        # 逼近右缘：完全停泵（追帧滞后仍可能继续上升）；
-                        # 倒计时消失多轮 = 已结算，停手防结果画面空点
-                        mash_credit = 0.0
-                    else:
-                        mash_credit = min(mash_credit + mash_rate * dt,
-                                          POCHU_MASH_CREDIT_MAX)
-                        n = int(mash_credit)
-                        if n:
-                            mash_credit -= n
-                            n = min(n, POCHU_MASH_HOLD_MAX)
-                    # 点击率伺服：按位置误差调整速率（误差 1 刻度 ≈ 1.2 击/秒）
-                    if now - mash_rate_t >= POCHU_MASH_RATE_EVAL:
-                        mash_rate_t = now
-                        err = aim - p
-                        if abs(err) > POCHU_MASH_ERR_DEADBAND:
-                            mash_rate = max(
-                                POCHU_MASH_RATE_MIN,
-                                min(POCHU_MASH_RATE_MAX,
-                                    mash_rate + POCHU_MASH_RATE_GAIN * err))
-                    if n > 0:
-                        dpt = game_map.match_frame_np(
-                            bgr, act_icon, threshold=POCHU_THRESHOLD,
-                            region=POCHU_REGION, fallback=False)
-                        if dpt is not None:
-                            btn_pt = dpt  # 命中刷新按钮位置（防窗口漂移）
-                        if btn_pt is not None:
-                            rapid_click_burst(win, btn_pt[0], btn_pt[1], n,
-                                              press=mash_press)
-                            clicks += n
-                            last_click = now
+                    _maintain_pump(now, p, bgr, L, R)
                 if not mash_hold and mash_waiting:
                     if p > mash_prev_p + POCHU_MASH_RISE_EPS:
                         # 填充条仍在上升（追帧/点击队列处理中）：不决策，

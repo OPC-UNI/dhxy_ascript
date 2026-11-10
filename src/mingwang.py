@@ -21,9 +21,12 @@
      点击 (821,358) → 等待寻路完成。
    - 到达判定：**必须**坐标进入目标坐标容差内（两族一致；NPC 模板
      可见不算到达——远处点击不生效，2026-11-10 仙族实机教训）
-3. 到达后点击 NPC（魔族 mingwang_nitianmo.png / 仙族
-   mingwang_wuzunshen.png）→ 对话框【不使用对话框模板门控，直接区域
-   OCR】点击绿色选项「开启山河名望志」→ 等待并点击山河名望入口
+3. 到达坐标后先按 Alt+4 完全清屏（隐藏界面元素防遮挡；静默/物理
+   模式都执行，2026-11-10 用户规则）再点击 NPC（魔族
+   mingwang_nitianmo.png / mingwang_nitianmo2.png 双模板任一命中；
+   仙族 mingwang_wuzunshen.png / mingwang_wuzunshen2.png 同机制）→
+   对话框【不使用对话框模板门控，直接区域 OCR】点击绿色选项
+   「开启山河名望志」→ 等待并点击山河名望入口
    （mingwang_shanhemingwang.png）打开任务领取面板。
 4. 面板领取（2026-11-10 实机标定）：任务栏锚点
    mingwang_shanhemingwang_maodian.png（面板顶部图标）→ 锚点左下角
@@ -49,6 +52,16 @@
    离开五庄观即该点完成，改点木藏之位重复；两个点都完成后只等任务
    整体从追踪面板消失（follow 判定完成；不做战斗判定，战斗由
    battle 线程托管）。
+   灵力镐（魔族，2026-11-10 用户规则）：任务追踪出现「前往大唐边境，
+   使用灵力镐」→ 点击任务追踪绿色文案**蕴灵石头**（不可点「灵力镐」，
+   那是物品说明）自动寻路（须先见位移才允许后续步骤，防在领取点
+   原地用镐打空）→ 到达目的
+   地（位置连续稳定且在目标地图）后打开背包任务储物格（与唤风符同
+   格）右键使用灵力镐（mingwang_lingligao）→ 用镐后出现「开采石头」
+   小游戏窗口（kaicaishitou 模板）→ 复用破除封印/钓鱼同款闭环
+   pochufengyin.play_pochufengyin（**长按运输 + 点按维持**：长按推过
+   带上缘 → 松手回落 → 回 C 后点按保持在 [L,R]）；小游戏结束后的
+   任务推进由 follow 继续跟踪，触发词消失即状态复位。
 5. 领取后（用户 2026-11-10 规则）：接取后出现对话框——对话框模板
    门控命中则点屏幕中间关闭；任务追踪出现「山河名望」→ 复用
    xuanshu.follow_task 跟踪到任务完成（每轮点击追踪绿字推进）。
@@ -150,10 +163,14 @@ CLAIM_NPC_FULL_INTERVAL = 3.0          # 条带未命中时的全帧兜底最小
 CLAIM_POINTS = {
     "魔族": {
         "map": "大唐边境",
-        "target": (477, 180),
-        "mini_click": (985, 384),
+        "target": (474, 185),
+        "mini_click": (987, 372),
         "world_icon": "shijie_datangbianjing.png",  # 世界地图标签（19.png）
         "npc_icon": "mingwang_nitianmo.png",        # NPC 逆天魔（20.png，43×44）
+        # 第二造型模板（用户 2026-11-10 提供，62×47）：逆天魔可能以不同
+        # 朝向/姿态/缩放出现，**两个模板任一命中即可**（取最高分），
+        # 阈值同 npc_threshold（魔族默认 CLAIM_NPC_THRESHOLD 0.75）。
+        "npc_icon2": "mingwang_nitianmo2.png",
         "npc_name": "逆天魔",
         "npc_full_fallback": True,
     },
@@ -232,6 +249,7 @@ CLAIM_TASKS = (
     {"title": "净化水晶", "level": "高级"},
     {"title": "五庄封印", "level": "高级"},
     {"title": "沙都修罗", "level": "高级"},
+    {"title": "凿石造像", "level": "中级"},
 )
 # ---- 任务执行对话（类似 xuanshu.DIALOG_OPTION_MAP：对话框文案 → 绿色选项）----
 # 逐条按游戏原文维护（用户 2026-11-10 提供）；文案匹配走 _dialog_text_present
@@ -251,7 +269,9 @@ DIALOG_OPTION_MAP = {
     "这该怎么办呢，好担心":"是武尊神遣我过来帮忙的。",
     "大事不妙！蟠桃园内大量的蟠桃树遭":"是武尊神遣我过来帮忙的。",
     "那个又唠叨又烦人的破龙王，天庭将这么重要的东海元石托付给他，居":"是武尊神遣我过来帮忙的。",
-    "糟糕，水晶丛林竟真被混沌缠上了，得赶快净化这些混沌！":"马上净化水晶丛林上的混沌。"
+    "糟糕，水晶丛林竟真被混沌缠上了，得赶快净化这些混沌！":"马上净化水晶丛林上的混沌。",
+    "咱们魔族的风格就是：有肉一块吃，有酒一块喝，至于有怪，还是你自己杀":"<山河名望>",
+    "这群手下真是越来越难管了，我让他们凿点石头给俺，这叫凿石头吗？":"是逆天魔遣我过来帮忙的。"
 }
 # ---- 点击屏幕中间推进的对话（同玄枢轶闻/客栈的跳过对话表机制）----
 # 键 = 对话框文案（_dialog_text_present 模糊匹配：逐行 + 全文拼接，抗
@@ -327,6 +347,76 @@ _seal_frame_key = None
 _seal_frame_rgb = None
 _seal_frame_bgr = None
 _seal_frame_pos = _SEAL_POS_UNSET
+
+# ---- 灵力镐（魔族）：追踪「前往大唐边境，使用灵力镐」→ 点蕴灵石头 → 到达 → 任务储物格用镐 ----
+# 用户 2026-11-10 流程：任务追踪出现「前往大唐边境，使用灵力镐」→ 点击
+# 任务追踪绿色文案**蕴灵石头**自动寻路 → 到达目的地（位置连续
+# 稳定且在目标地图）→ 打开背包任务储物格（与修罗回城符/唤风符同格）→
+# 右键使用灵力镐（mingwang_lingligao.png）。到达判定复用五庄封印/五倍
+# 显形镜的「位置连续稳定」逻辑；用镐后任务推进（子目标变化/任务完成/
+# 进入战斗）由 follow 引擎与 battle 线程继续托管，本状态机触发词消失即
+# 复位（连续 PICK_ABSENT_RESET 轮不见触发词）。
+# **初始须先见位移**（_pick_need_move=True）：魔族领取点与执行地图同为
+# 大唐边境，若领取后站在领取点原地（位置稳定）就直接用镐会打空——链接
+# 点击后必须看到位移（寻路已启动）才允许到达/用镐；点链接后长时间无位移
+# 连续 PICK_STUCK_CYCLES_USE 个重点周期仍不动，视为已在目的地（链接点击
+# 后原地不动），放行用镐。
+PICK_TASK_KEYWORDS = ("灵力镐", "灵力稿", "灵力搞")  # 追踪触发词（含 OCR 形近字）
+PICK_MAP = "大唐边境"                  # 目标地图（到达判定须在此图）
+# 绿色链接定位关键词（按顺序取首个命中）。2026-11-10 实机截图标定：
+# 追踪文案为「前往大唐边境，使用 灵力镐 /，用合适的力道开凿 蕴灵石头
+# (412,45)。」——两处都是亮绿链接，但可导航的是**蕴灵石头**；「灵力镐」
+# 点开的是物品说明（用户反馈点错）。因此只按蕴灵石头定位（短词「蕴灵」
+# 作 OCR 截断/形近兜底），其余绿字一律不点，未读到时等待重试。
+PICK_LINK_KEYWORDS = ("蕴灵石头", "蕴灵")
+PICK_ARRIVE_POLLS = 3                   # 位置连续稳定轮询数判定到达（同封印）
+PICK_POS_TOLERANCE = 3                  # 坐标稳定容差（像素）
+PICK_MOVE_DELTA = 5                     # 判定寻路已启动的位移阈值
+PICK_MOVE_STUCK_MAX = 4                 # 点链接后位置连续不变轮询数 → 重点链接
+PICK_STUCK_CYCLES_USE = 3               # 连续重点周期仍无位移 → 视为已在目的地，允许用镐
+PICK_LINK_RETRY_AFTER = 20.0            # 原地静止且不在目标地图时的重点链接间隔（秒）
+PICK_USE_GRACE = 3.0                    # 用镐后等待任务推进的宽限（秒）
+PICK_USE_RETRY_AFTER = 15.0             # 触发词仍在时的用镐重试间隔（秒）
+PICK_USE_RETRY_MAX = 2                  # 最多重试用镐次数
+PICK_ABSENT_RESET = 5                   # 触发词连续缺失轮询数 → 状态复位
+PICK_BAG_CLOSE_INTERVAL = 2.0           # 残留背包检测/关闭最小间隔（秒）
+PICK_ITEM_ICON = "mingwang_lingligao.png"  # 灵力镐（用户素材，46×42）
+PICK_ITEM_LABEL = "灵力镐"
+PICK_ITEM_THRESHOLD = 0.8               # 物品图标匹配阈值（静态图标）
+PICK_ITEM_FIND_TIMEOUT = 10.0           # 任务储物格中查找灵力镐的时限（秒）
+# ---- 用镐后「开采石头」小游戏（2026-11-10 用户规则）----
+# 使用灵力镐后出现窗口标题 kaicaishitou.png（用户素材，164×17）→ 复用
+# 破除封印/钓鱼同款进度条小游戏闭环 pochufengyin.play_pochufengyin。
+# **长按运输 + 点按维持（hold=True + hold_catch=True，2026-11-10 用户
+# 技巧）**：开始后按钮为「长按」，长按推进极快（~2.4 刻度/秒）、目标带
+# 仅 ~1 刻度宽且进带不锁定——钓鱼式按住到结束必然冲过目标带、松手又
+# 整体回退判失败。改为：长按把填充推过带上缘 → 松手让它回落 → 回到
+# C（带中心）后改为点按维持（点击率伺服把填充保持在 [L,R] 内到窗口
+# 结束），掉出带下重新长按（见 pochufengyin.POCHU_CATCH_*）。「长按」
+# 按钮为小游戏通用美术，复用玄枢钓鱼模板 xuanshu_diaoyu_changan.png。
+# 窗口检测同蛟魔探秘钓鱼：armed 门控（用镐成功起 PICK_MINING_ARM_TIMEOUT
+# 内有效）+ 限频（每 PICK_MINING_CHECK_INTERVAL 在 POCHU_REGION 内匹配
+# 标题），命中即阻塞执行到标题消失；未 armed 零成本。
+PICK_MINING_TITLE_ICON = "kaicaishitou.png"
+PICK_MINING_HOLD_ICON = "xuanshu_diaoyu_changan.png"  # 「长按」按钮（同引擎通用美术）
+PICK_MINING_ARM_TIMEOUT = _pochu_minigame.POCHU_ARM_TIMEOUT
+PICK_MINING_CHECK_INTERVAL = _pochu_minigame.POCHU_CHECK_INTERVAL
+# 状态机（对齐五庄封印）：0=等到达/用镐；1=已用镐等任务推进。
+# 不做战斗判定——战斗由 follow_task/battle 线程托管。
+_pick_phase = 0
+_pick_stable = 0            # 位置连续稳定轮询数
+_pick_last_pos = None       # 上次位置
+_pick_need_move = True      # 触发词出现后须位置先变化才允许用镐（领取点防打空）
+_pick_walk_from = None      # 移动验证起点位置
+_pick_move_stuck = 0        # 位置连续不变轮询数
+_pick_stuck_cycles = 0      # 连续重点周期数（≥PICK_STUCK_CYCLES_USE 放行用镐）
+_pick_use_at = 0.0          # 上次用镐时间（宽限窗口起点）
+_pick_use_retries = 0       # 用镐重试次数
+_pick_missing = 0           # 触发词连续缺失轮询数（≥5 复位）
+_pick_bag_close_at = 0.0    # 上次残留背包检测时间（限频）
+_pick_link_at = 0.0         # 上次点击链接时间（重点间隔）
+_pick_mining_armed_at = 0.0  # 用镐成功时间；>0 且未超时=开采石头窗口检测开启
+_pick_mining_last_check = 0.0  # 上次开采石头窗口检测时间（限频）
 
 # ---- 沙海迷踪（高级任务）执行入口 ----
 # 入口对话选项「少侠准备好清理地图了吗？」→「我已经准备好了」（在
@@ -800,6 +890,43 @@ def navigate_to_claim_point(win, claim):
     if ok:
         log(f"[名望] {info}", "SYS")
     return ok, info
+
+
+def _press_alt4_clear(win):
+    """到达领取点后、点击 NPC 领取前按 Alt+4 完全清屏（用户 2026-11-10
+    规则：隐藏界面元素，防 HUD/面板遮挡 NPC 与画面识别）。
+
+    静默操作走消息投递（游戏窗口无需前台，send_silent_hotkey 通道）；
+    非静默走物理热键，按键前校验游戏窗口在前台（热键经前台窗口送达，
+    非前台先激活再校验，仍失败保守跳过）。两种模式都必须执行
+    （用户明确「是否静默操作都需要」），失败仅记 WARN 不阻塞领取链。
+    返回描述文案。
+    """
+    if app_utils.silent_mode_on():
+        from . import silent_click  # 延迟导入防循环
+        info = silent_click.send_silent_hotkey(win, ("alt",), "4")
+        if info is None:
+            desc = "静默 Alt+4 清屏投递失败（窗口不存在）"
+            log(f"[名望] {desc}", "WARN")
+            return desc
+        log("[名望] 已静默投递 Alt+4 完全清屏", "SYS")
+        time.sleep(0.3)  # 等界面隐藏渲染
+        return "已静默投递 Alt+4 完全清屏"
+    try:
+        import win32gui
+        if win32gui.GetForegroundWindow() != int(win.hwnd):
+            win.activate()
+            time.sleep(0.3)
+        if win32gui.GetForegroundWindow() != int(win.hwnd):
+            desc = "游戏窗口未在前台（激活失败），Alt+4 清屏未发送"
+            log(f"[名望] {desc}", "WARN")
+            return desc
+    except Exception as e:
+        log(f"[名望] Alt+4 前台校验异常: {e}", "WARN")
+    Keyboard.key_hot("alt", "4")
+    log("[名望] 已按 Alt+4 完全清屏", "SYS")
+    time.sleep(0.3)  # 等界面隐藏渲染
+    return "已按 Alt+4 完全清屏"
 
 
 def _click_claim_option(win, items, img_np):
@@ -1716,20 +1843,21 @@ def _click_seal_link(win, items, img_np, link_idx=None):
     return True
 
 
-def _find_huanfengfu(win, timeout=SEAL_ITEM_FIND_TIMEOUT):
-    """在已打开的任务储物格中查找唤风符，返回 (pt 或 None, 描述)。"""
+def _find_task_item(win, icon, label, threshold=SEAL_ITEM_THRESHOLD,
+                    timeout=SEAL_ITEM_FIND_TIMEOUT):
+    """在已打开的任务储物格中查找指定物品，返回 (pt 或 None, 描述)。"""
     deadline = time.time() + timeout
     while time.time() < deadline:
         img = win.capture(force_activate=False)
         if img is None:
             time.sleep(0.4)
             continue
-        pt = game_map.match_frame_np(_bgr_frame(img), SEAL_ITEM_ICON,
-                                     threshold=SEAL_ITEM_THRESHOLD)
+        pt = game_map.match_frame_np(_bgr_frame(img), icon,
+                                     threshold=threshold)
         if pt is not None:
-            return pt, f"已在任务储物格中找到{SEAL_ITEM_LABEL}"
+            return pt, f"已在任务储物格中找到{label}"
         time.sleep(0.4)
-    return None, f"任务储物格中未找到{SEAL_ITEM_LABEL}"
+    return None, f"任务储物格中未找到{label}"
 
 
 def _close_bag_quiet(win):
@@ -1744,33 +1872,46 @@ def _close_bag_quiet(win):
         log(f"[名望] 背包关闭异常: {e}", "WARN")
 
 
-def _use_huanfengfu(win):
-    """打开任务储物格并右键使用唤风符，返回 (是否成功, 描述)。
+def _use_task_item(win, icon, label, threshold=SEAL_ITEM_THRESHOLD,
+                   find_timeout=SEAL_ITEM_FIND_TIMEOUT):
+    """打开任务储物格并右键使用指定物品，返回 (是否成功, 描述)。
 
     用户 2026-11-10 流程：打开背包 → 任务储物格（与修罗回城符同格，
-    通用能力在 bag.open_task_box，不引用其他任务模块）→ 识别唤风符
+    通用能力在 bag.open_task_box，不引用其他任务模块）→ 识别物品
     图标 → 右键使用。整段持背包锁（与其他背包流程互斥，防点击交错）。
     使用前若标准对话框在场则跳过（对话框遮住背包/右键落到对话上）。
+    唤风符（五庄封印）与灵力镐（使用灵力镐）共用本实现。
     """
     img = win.capture(force_activate=False)
     if img is not None and dialog_frame_score(_bgr_frame(img)) \
             >= DIALOG_FRAME_THRESHOLD:
-        return False, "对话框在场，暂不使用唤风符"
+        return False, f"对话框在场，暂不使用{label}"
     with app_utils._BAG_LOCK:
         ok, info = bag.open_task_box(win, prefix="名望")
         if not ok:
             return False, info
-        pt, finfo = _find_huanfengfu(win)
+        pt, finfo = _find_task_item(win, icon, label, threshold, find_timeout)
         if pt is None:
             _close_bag_quiet(win)
             return False, finfo
         if not bag.is_bag_open(win):
-            return False, "右键唤风符前背包已被关闭，未使用"
+            return False, f"右键{label}前背包已被关闭，未使用"
         human_click(win, pt[0], pt[1], button="secondary")
-        log(f"[名望] 已右键使用{SEAL_ITEM_LABEL} @({pt[0]},{pt[1]})", "SYS")
+        log(f"[名望] 已右键使用{label} @({pt[0]},{pt[1]})", "SYS")
         time.sleep(1.0)  # 等待使用生效（传送/战斗/任务完成）
         _close_bag_quiet(win)
-    return True, f"已使用{SEAL_ITEM_LABEL}"
+    return True, f"已使用{label}"
+
+
+def _use_huanfengfu(win):
+    """五庄封印：任务储物格右键使用唤风符（见 _use_task_item）。"""
+    return _use_task_item(win, SEAL_ITEM_ICON, SEAL_ITEM_LABEL)
+
+
+def _use_lingligao(win):
+    """灵力镐：任务储物格右键使用灵力镐（见 _use_task_item）。"""
+    return _use_task_item(win, PICK_ITEM_ICON, PICK_ITEM_LABEL,
+                          PICK_ITEM_THRESHOLD, PICK_ITEM_FIND_TIMEOUT)
 
 
 def _seal_maybe_advance_dialog(win, items, img_np):
@@ -1812,22 +1953,29 @@ def _seal_dialog_blocking(win, items, img_np):
     return True
 
 
+def _bag_box_on_frame(win, items):
+    """共享帧上检测背包是否打开（bag_box 模板，不做全帧兜底）。
+
+    对话框遮挡 bag_box 时 close_bag 会误报「背包未打开」而实际仍开着
+    （用户 2026-11-10 实测）；按帧检测 bag_box 再关是唯一可靠方式。
+    """
+    _rgb, bgr = _seal_frame(win, items)
+    if bgr is None:
+        return False
+    return game_map.match_frame_np(bgr, bag.BAG_BOX_ICON, threshold=0.8,
+                                   fallback=False) is not None
+
+
 def _seal_close_bag_if_open(win, items):
     """用符后残留背包清理：共享帧命中 bag_box 即关闭（限频重试）。
 
-    对话框遮挡 bag_box 时 close_bag 会误报「背包未打开」而实际仍开着
-    （用户 2026-11-10 实测）；等对话框消失后本函数按帧检测到再关
-    （跟随轮询，限频 2s）。
+    对话框消失后按帧检测到再关（跟随轮询，限频 2s）。
     """
     global _seal_bag_close_at
     now = time.time()
     if now - _seal_bag_close_at < SEAL_BAG_CLOSE_INTERVAL:
         return
-    _rgb, bgr = _seal_frame(win, items)
-    if bgr is None:
-        return
-    if game_map.match_frame_np(bgr, bag.BAG_BOX_ICON, threshold=0.8,
-                               fallback=False) is None:
+    if not _bag_box_on_frame(win, items):
         return
     _seal_bag_close_at = now
     log("[名望] 五庄封印：检测到残留背包，尝试关闭", "INFO")
@@ -2024,6 +2172,268 @@ def _handle_wuzhuang_seal(win, items, img_np):
     return _seal_wait_arrival(win, items, img_np, now)
 
 
+# ---- 灵力镐执行（追踪「前往大唐边境，使用灵力镐」→ 点链接 → 到达 →
+#      用镐 → 「开采石头」小游戏窗口 → 破除封印同款点击模式闭环）----
+def _reset_pick_state():
+    """灵力镐状态机复位（新任务领取成功/跨任务防残留）。"""
+    global _pick_phase, _pick_stable, _pick_last_pos, _pick_need_move, \
+        _pick_walk_from, _pick_move_stuck, _pick_stuck_cycles, _pick_use_at, \
+        _pick_use_retries, _pick_missing, _pick_bag_close_at, _pick_link_at, \
+        _pick_mining_armed_at, _pick_mining_last_check
+    _pick_phase = 0
+    _pick_stable = 0
+    _pick_last_pos = None
+    _pick_need_move = True
+    _pick_walk_from = None
+    _pick_move_stuck = 0
+    _pick_stuck_cycles = 0
+    _pick_use_at = 0.0
+    _pick_use_retries = 0
+    _pick_missing = 0
+    _pick_bag_close_at = 0.0
+    _pick_link_at = 0.0
+    _pick_mining_armed_at = 0.0
+    _pick_mining_last_check = 0.0
+
+
+def _pick_trigger(sig):
+    """追踪面板文案是否触发灵力镐流程（触发词含 OCR 形近字）。"""
+    return any(kw in sig for kw in PICK_TASK_KEYWORDS)
+
+
+def _pick_link_point(items, img_np):
+    """定位「蕴灵石头」绿色链接，返回点击点或 None。
+
+    实机文案见 PICK_LINK_KEYWORDS 注释：只认蕴灵石头（可导航），
+    「灵力镐」是物品说明链接，**不得点击**。按 PICK_LINK_KEYWORDS
+    顺序用 _seal_link_point 的比例定位 + 下划线吸附；限定追踪面板列
+    （panel_row_xmax，动态内容区左缘），排除居中对话框同名文案。
+    未读出返回 None，由调用方等待重试（禁止行级兜底）。
+    """
+    xmax = task_tracker.panel_row_xmax(img_np)
+    panel = [it for it in items
+             if it[2] >= 0.55 and it[1][0] < xmax]
+    for kw in PICK_LINK_KEYWORDS:
+        pt = _seal_link_point(panel, img_np, kw)
+        if pt is not None:
+            return pt
+    return None
+
+
+def _pick_green_picker(items, img_np):
+    """track_task green_picker：灵力镐任务只点「蕴灵石头」链接。
+
+    触发词在但链接未读出 → 返回 task_tracker.PICK_FAIL 等待重试：
+    引擎行级兜底会选中首条绿字下划线（实机即「灵力镐」，点开物品
+    说明——2026-11-10 用户反馈点错），必须拒绝兜底。非灵力镐任务
+    返回 None，回退引擎行级选择。
+    """
+    if not _pick_trigger(_seal_sig(items)):
+        return None
+    pt = _pick_link_point(items, img_np)
+    if pt is None:
+        return task_tracker.PICK_FAIL
+    return pt
+
+
+def _mingwang_green_picker(items, img_np):
+    """名望追踪链接精确点击：五庄封印链接优先，其次蕴灵石头导航链接。"""
+    pt = _seal_green_picker(items, img_np)
+    if pt is not None:
+        return pt
+    return _pick_green_picker(items, img_np)
+
+
+def _click_pick_link(win, items, img_np):
+    """点击「蕴灵石头」导航链接；未识别到返回 False（下轮询重试）。"""
+    global _pick_link_at
+    pt = _pick_link_point(items, img_np)
+    if pt is None:
+        return False
+    human_click(win, pt[0], pt[1])
+    _pick_link_at = time.time()
+    log(f"[名望] 灵力镐：已点击「蕴灵石头」追踪链接 "
+        f"@({pt[0]},{pt[1]})", "SYS")
+    return True
+
+
+def _pick_wait_arrival(win, items, img_np, now):
+    """phase 0：等位移启动 → 位置稳定到达 → 任务储物格用灵力镐。
+
+    到达判定同五庄封印/五倍显形镜（连续 PICK_ARRIVE_POLLS 次坐标差
+    ≤PICK_POS_TOLERANCE 即到达），且须位于目标地图。**初始/每次点
+    链接后须先见位移**（寻路已启动）才允许用镐——魔族领取点与执行
+    地图同为大唐边境，站在领取点原地用镐会打空；连续
+    PICK_STUCK_CYCLES_USE 个重点周期仍无位移视为已在目的地，放行。
+    """
+    global _pick_stable, _pick_last_pos, _pick_need_move, _pick_walk_from, \
+        _pick_move_stuck, _pick_stuck_cycles, _pick_phase, _pick_use_at, \
+        _pick_link_at
+    pos = _seal_pos(win, items)
+    if pos is None:
+        return False
+    if _pick_last_pos is not None \
+            and abs(pos[1] - _pick_last_pos[1]) <= PICK_POS_TOLERANCE \
+            and abs(pos[2] - _pick_last_pos[2]) <= PICK_POS_TOLERANCE:
+        _pick_stable += 1
+    else:
+        _pick_stable = 1
+    _pick_last_pos = pos
+    if _pick_need_move:
+        if _pick_walk_from is None:
+            _pick_walk_from = pos
+        if (abs(pos[1] - _pick_walk_from[1]) > PICK_MOVE_DELTA
+                or abs(pos[2] - _pick_walk_from[2]) > PICK_MOVE_DELTA):
+            _pick_need_move = False
+            _pick_stable = 0
+            _pick_move_stuck = 0
+            _pick_stuck_cycles = 0
+        else:
+            _pick_move_stuck += 1
+            if _pick_move_stuck >= PICK_MOVE_STUCK_MAX:
+                _pick_move_stuck = 0
+                _pick_stuck_cycles += 1
+                if _pick_stuck_cycles >= PICK_STUCK_CYCLES_USE:
+                    # 连续多次重点仍不动：已在目的地（链接点击后原地
+                    # 不动），放行到达判定
+                    _pick_need_move = False
+                    _pick_stable = 0
+                    log("[名望] 灵力镐：多次点击链接仍无位移，"
+                        "视为已在目的地", "WARN")
+                else:
+                    if _click_pick_link(win, items, img_np):
+                        log("[名望] 灵力镐：寻路未启动，已重新点击链接",
+                            "WARN")
+                    _pick_walk_from = pos
+            return False
+    if _pick_stable < PICK_ARRIVE_POLLS:
+        return False
+    if pos[0].strip() != PICK_MAP:
+        # 寻路中/尚未到达目标地图：原地静止超时则重点链接重新寻路
+        # （跨图/中途被打断时寻路已停，但链接仍在追踪面板上）
+        if now - _pick_link_at >= PICK_LINK_RETRY_AFTER \
+                and _click_pick_link(win, items, img_np):
+            _pick_walk_from = pos
+            _pick_stable = 0
+            log(f"[名望] 灵力镐：当前在{pos[0]}（非{PICK_MAP}），"
+                f"已重新点击链接寻路", "WARN")
+        return False
+    if _seal_dialog_blocking(win, items, img_np):
+        return False  # 对话框在场时不操作背包
+    ok, info = _use_lingligao(win)
+    if not ok:
+        _pick_stable = 0
+        log(f"[名望] 灵力镐：{info}，稍后重试", "WARN")
+        return False
+    _pick_phase = 1
+    _pick_use_at = time.time()
+    _arm_pick_mining_check()
+    log(f"[名望] 灵力镐：已在{PICK_MAP}使用灵力镐，等待任务推进", "SYS")
+    return True
+
+
+def _arm_pick_mining_check():
+    """用镐成功 → 开启「开采石头」小游戏窗口检测（armed 门控）。"""
+    global _pick_mining_armed_at
+    _pick_mining_armed_at = time.time()
+    log(f"[名望] 已使用灵力镐，开启开采石头窗口检测"
+        f"（{PICK_MINING_ARM_TIMEOUT}s 内有效）", "SYS")
+
+
+def _pick_mining_window_check(win):
+    """检测并执行「开采石头」小游戏（armed 门控 + 限频），返回是否已处理。
+
+    用户 2026-11-10 规则：使用灵力镐后检查 kaicaishitou 模板出现，
+    操作与破除封印/钓鱼共用闭环（**长按运输 + 点按维持**——长按把
+    填充推过目标带上缘，松手回落至带中心 C 后点按保持在 [L,R] 内，
+    见 pochufengyin.hold_catch）——窗口出现即阻塞执行
+    pochufengyin.play_pochufengyin（hold=True + hold_catch=True +
+    「长按」按钮模板），标题消失即结束。检测限频
+    PICK_MINING_CHECK_INTERVAL；未 armed/限频未到/未命中返回 False
+    （热路径零成本）。**须排在灵力镐状态机之前调用**：窗口在场时
+    相位机不得重试用镐（打开背包干扰小游戏）；armed 窗口外的调用零成本。
+    """
+    global _pick_mining_armed_at, _pick_mining_last_check
+    if _pick_mining_armed_at <= 0 \
+            or time.time() - _pick_mining_armed_at > PICK_MINING_ARM_TIMEOUT:
+        return False
+    if is_in_battle(win):
+        return False
+    now = time.time()
+    if now - _pick_mining_last_check < PICK_MINING_CHECK_INTERVAL:
+        return False
+    _pick_mining_last_check = now
+    img = win.capture(force_activate=False)
+    if img is None:
+        return False
+    score, wpt = game_map.best_match_np(
+        _bgr_frame(img), PICK_MINING_TITLE_ICON,
+        region=_pochu_minigame.POCHU_REGION)
+    if wpt is None or score < _pochu_minigame.POCHU_THRESHOLD:
+        return False
+    log(f"[名望] 检测到开采石头窗口 @({wpt[0]},{wpt[1]})"
+        f"（匹配度 {score:.2f}）", "SYS")
+    ok, info = _pochu_minigame.play_pochufengyin(
+        win, PICK_MINING_TITLE_ICON, prefix="名望", label="开采石头",
+        hold=True, action_icon=PICK_MINING_HOLD_ICON, hold_catch=True)
+    if ok:
+        _pick_mining_armed_at = 0.0
+    log(f"[名望] {info}", "SYS" if ok else "WARN")
+    return True
+
+
+def _pick_check_outcome(win, items, img_np, now):
+    """phase 1：用镐后等任务推进（触发词变化/任务消失/进入战斗）。
+
+    触发词仍在时按 PICK_USE_RETRY_AFTER 间隔限次重试用镐（任务推进可能
+    需多次使用）；触发词消失由 _handle_lingligao 连续缺失复位。不做
+    完成判定：任务整体消失由 follow 引擎判定，战斗由 battle 线程托管。
+    """
+    global _pick_use_at, _pick_use_retries
+    if now - _pick_use_at < PICK_USE_GRACE:
+        return False
+    if now - _pick_use_at >= PICK_USE_RETRY_AFTER \
+            and _pick_use_retries < PICK_USE_RETRY_MAX:
+        _pick_use_retries += 1
+        ok, info = _use_lingligao(win)
+        log(f"[名望] 灵力镐：任务未推进，重试用镐"
+            f"（{info}，{_pick_use_retries}/{PICK_USE_RETRY_MAX}）", "WARN")
+        if ok:
+            _pick_use_at = now
+            _arm_pick_mining_check()
+        return ok
+    return False
+
+
+def _handle_lingligao(win, items, img_np):
+    """灵力镐执行状态机（follow extras 通道，每轮询一次）。
+
+    触发：追踪面板文案含「灵力镐」（前往大唐边境，使用灵力镐）。
+    返回是否已处理（点击链接/使用灵力镐）。非本任务/等待阶段返回
+    False，不影响既有对话处理。不做战斗判定：战斗由 follow_task
+    跳过、battle 线程托管。
+    """
+    global _pick_missing, _pick_phase, _pick_bag_close_at
+    if _pick_phase == 1:
+        # 用镐后残留背包限频补关（对话框可能遮挡 bag_box 导致关闭失败）
+        now = time.time()
+        if now - _pick_bag_close_at >= PICK_BAG_CLOSE_INTERVAL \
+                and _bag_box_on_frame(win, items):
+            _pick_bag_close_at = now
+            log("[名望] 灵力镐：检测到残留背包，尝试关闭", "INFO")
+            _close_bag_quiet(win)
+    if not _pick_trigger(_seal_sig(items)):
+        _pick_missing += 1
+        if _pick_missing >= PICK_ABSENT_RESET:
+            _reset_pick_state()
+        return False
+    _pick_missing = 0
+    now = time.time()
+    if _pick_phase == 1:
+        return _pick_check_outcome(win, items, img_np, now)
+    return _pick_wait_arrival(win, items, img_np, now)
+
+
 def _click_known_dialog_option(win, items, img_np):
     """DIALOG_OPTION_MAP 命中 → 点对应绿字（含沙海/净化/钓鱼 arm 副作用）。
 
@@ -2058,12 +2468,20 @@ def _handle_dialog_options(win, items, img_np):
     窗口；蛟魔探秘钓鱼入口选项点击成功后 arm 小游戏窗口检测（与玄枢
     钓鱼同款闭环）。
     表值支持候选选项元组：按顺序逐个尝试，点到哪个算哪个。
-    五庄封印执行状态机（追踪双链接/坐标稳定到达/任务储物格用唤风符）
-    与沙都修罗搜索状态机（追踪文案触发 → 蟠桃园四路点找 NPC）在最前面
-    处理；其余任务无对应追踪文案时零操作。
+    五庄封印执行状态机（追踪双链接/坐标稳定到达/任务储物格用唤风符）、
+    灵力镐状态机（追踪「前往大唐边境，使用灵力镐」→ 点链接 → 到达 →
+    任务储物格用镐；用镐后出现「开采石头」小游戏窗口 → 钓鱼同款
+    长按模式闭环）与沙都修罗搜索状态机（追踪文案触发 → 蟠桃园四路点
+    找 NPC）在最前面处理；其余任务无对应追踪文案时零操作。
+    开采石头窗口检测排在灵力镐状态机之前：窗口在场时须先阻塞执行
+    小游戏，防状态机同时重试用镐（打开背包干扰小游戏）。
     返回是否已处理。
     """
     if _handle_wuzhuang_seal(win, items, img_np):
+        return True
+    if _pick_mining_window_check(win):
+        return True
+    if _handle_lingligao(win, items, img_np):
         return True
     if _handle_shadu_xiuluo(win, items, img_np):
         return True
@@ -2085,8 +2503,8 @@ def _follow_task(win, timeout=FOLLOW_TIMEOUT):
     聚宝模板检测（玄枢专属）；story_known_texts 传本模块对话表——
     否则本任务的带选项对话不在已知表内，选项未渲染时会被剧情兜底
     误点屏幕中间关闭；green_picker 让五庄封印按当前目标链接
-    （火藏之位→木藏之位）精确点击，其他任务无封印链接时自动退回
-    引擎默认行级选择。
+    （火藏之位→木藏之位）、灵力镐按「蕴灵石头」链接精确点击，
+    其他任务无对应链接时自动退回引擎默认行级选择。
     返回 (是否完成, 描述)。
     """
     global _seal_phase
@@ -2099,7 +2517,7 @@ def _follow_task(win, timeout=FOLLOW_TIMEOUT):
         _reset_seal_state()
     return follow_task(win, TASK_TITLE, prefix="名望", timeout=timeout,
                        extra_dialog_handler=_handle_dialog_options,
-                       green_picker=_seal_green_picker,
+                       green_picker=_mingwang_green_picker,
                        skip_texts=DIALOG_SKIP_TEXTS,
                        chuyijuebao_check=False,
                        story_known_texts=DIALOG_OPTION_MAP)
@@ -2165,10 +2583,11 @@ def _post_claim_flow(win):
     """领取后链路：关闭领取对话框 → 关残留面板 → 跟踪至任务完成。
 
     任务已点击领取，跟踪失败返回 False 由主循环下一轮走续跑分支处理
-    （不重走领取链重复接取）。新任务领取成功即复位五庄封印状态机，
-    防上一轮（火藏/木藏）状态残留。返回 (是否完成, 描述)。
+    （不重走领取链重复接取）。新任务领取成功即复位五庄封印/灵力镐
+    状态机，防上一轮状态残留。返回 (是否完成, 描述)。
     """
     _reset_seal_state()
+    _reset_pick_state()
     dismissed, dinfo = _dismiss_claim_dialog(win)
     log(f"[名望] {dinfo}", "SYS" if dismissed else "INFO")
     ok, info = _resume_tracking(win)
@@ -2194,6 +2613,8 @@ def _open_claim_panel(win, race):
     ok, info = navigate_to_claim_point(win, claim)
     if not ok:
         return False, info
+    # 到达坐标后、领取前：Alt+4 完全清屏（静默/物理模式都执行）
+    _press_alt4_clear(win)
     debug_overlay.set_phase("领取任务")
     return _claim_and_open_panel(win, claim)
 
