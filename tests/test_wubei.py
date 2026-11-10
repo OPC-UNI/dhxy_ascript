@@ -207,3 +207,39 @@ def test_huangpaoguai_no_keyword_no_pass(monkeypatch):
     assert wubei._handle_huangpaoguai(win, items, HPG_FRAME) is False
     assert passes == []
     assert wubei._hpg_need_click is False
+
+
+# ---- 显形镜：配额耗尽后「进度流程进行中」冻结替换计时（2026-11-10） ----
+
+def test_xj_quota_frozen_while_dialog_progress(monkeypatch):
+    """白龙马对话框已出现/按钮流程进行中时，配额分支不得重新告警并
+    重启 6s 替换计时。
+
+    回归 2026-11-10 22:19：对话框出现后处理器复位了告警/计时，但
+    跟踪处理器 phase 0 只认 use_count，下一轮询立即重抛「A、B 均未
+    触发」并重新武装 6s 计时——按钮/开打流程超过 6s 会在任务推进中
+    误替换。
+    """
+    logs = []
+    monkeypatch.setattr(wubei, "battle_watch_in_battle", lambda: False)
+    monkeypatch.setattr(wubei, "_xj_pos", lambda win, items: ("宝象国", 90, 85))
+    monkeypatch.setattr(wubei, "log",
+                        lambda msg, level="INFO": logs.append(msg))
+    # 状态机：已到达、用镜 2 次、白龙马对话框刚关闭（找任务按钮窗口内）
+    monkeypatch.setattr(wubei, "_xj_phase", 0)
+    monkeypatch.setattr(wubei, "_xj_stable", 3)
+    monkeypatch.setattr(wubei, "_xj_last_pos", ("宝象国", 90, 85))
+    monkeypatch.setattr(wubei, "_xj_use_count", 2)
+    monkeypatch.setattr(wubei, "_xj_need_move", False)
+    monkeypatch.setattr(wubei, "_xj_move_stuck", 0)
+    monkeypatch.setattr(wubei, "_xj_warned", False)
+    monkeypatch.setattr(wubei, "_xj_quota_exhausted_at", 0.0)
+    monkeypatch.setattr(wubei, "_xj_dismissed_at", 1000.0)  # >0：按钮流程进行中
+    monkeypatch.setattr(wubei, "_xj_btn_clicked_at", 0.0)
+    monkeypatch.setattr(wubei, "_xj_missing", 0)
+    items = [("前往火云戈壁处使用显形镜查探", (40, 260, 200, 280), 0.99)]
+    img = np.zeros((831, 1378, 3), dtype=np.uint8)
+    assert wubei._handle_xianxingjing_track(object(), items, img) is False
+    assert wubei._xj_warned is False
+    assert wubei._xj_quota_exhausted_at == 0.0
+    assert not any("A、B 两处" in m for m in logs)

@@ -2080,6 +2080,15 @@ def _handle_xianxingjing_track(win, items, img_np):
     if _xj_stable < XIANXINGJING_ARRIVE_POLLS:
         return False  # 还在寻路
     if _xj_use_count >= XIANXINGJING_USE_MAX:
+        # 白龙马对话框已出现即任务在推进（含晚到对话框/手动用镜）：
+        # 找按钮窗口、模板判定窗、开打对话期间冻结替换计时。否则对话框
+        # 关闭后的下一轮询会因 use_count 已满重新告警并重启 6s 卡死计时，
+        # 按钮/开打流程一旦超过 6s 就在推进中误替换任务（2026-11-10
+        # 22:19 实测：对话框出现后下一轮询立即重抛「A、B 均未触发」，
+        # 该轮开打 1s 内完成才未触发替换）
+        if _xj_fight_dialog_open(items) or _xj_dismissed_at > 0 \
+                or _xj_btn_clicked_at > 0:
+            return False
         if not _xj_warned:
             _xj_warned = True
             _xj_quota_exhausted_at = time.time()
