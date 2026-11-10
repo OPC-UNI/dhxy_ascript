@@ -104,21 +104,29 @@ def test_switch_next_by_click_wraps_around(monkeypatch):
 
 
 def test_switch_next_by_click_retry_same_index_then_success(monkeypatch):
-    clicks = []
+    clicks, invalidates = [], []
     _mock_silent_click(monkeypatch, clicks, tab=TAB_HWND, count=3, cur=0)
+    from src import silent_click
+    monkeypatch.setattr(silent_click, "invalidate_tab_items",
+                        lambda _w: invalidates.append(True))
     list_tabs, _ = _list_tabs_script([0xA, 0xA, 0xB])
     monkeypatch.setattr(tab_group.game, "list_tab_windows", list_tabs)
     assert tab_group._switch_next_by_click(_FakeWin()) == "idb"
     assert clicks == [1, 1]  # 重试同一序号：不重算（防竞态连切两个）
+    assert invalidates == [True]  # 重试前丢弃矩形缓存重读 UIA
 
 
 def test_switch_next_by_click_never_switches_returns_none(monkeypatch):
-    clicks = []
+    clicks, invalidates = [], []
     _mock_silent_click(monkeypatch, clicks, tab=TAB_HWND, count=3, cur=0)
+    from src import silent_click
+    monkeypatch.setattr(silent_click, "invalidate_tab_items",
+                        lambda _w: invalidates.append(True))
     list_tabs, _ = _list_tabs_script([0xA, 0xA, 0xA])
     monkeypatch.setattr(tab_group.game, "list_tab_windows", list_tabs)
     assert tab_group._switch_next_by_click(_FakeWin()) is None
-    assert clicks == [1, 1]
+    assert clicks == [1, 1, 1]  # 最多尝试 TAB_SWITCH_TRIES 次
+    assert invalidates == [True, True]
 
 
 def test_switch_next_by_click_no_tab_control(monkeypatch):

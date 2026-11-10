@@ -473,10 +473,11 @@ def test_tab_item_read_helpers(monkeypatch):
 
 # ---- 静默切 Tab 点击（UIA 矩形 + DOWN/UP 最小序列，2026-11-04 实机验证） ----
 
-# Tab 条窗口矩形原点 (100,50)（_FakeUser32 winrect 默认值）；
-# UIA 屏幕矩形 (102,52)-(276,75) → 中心 (189,63) → 客户区 (89,13)
-_FAKE_TAB_ITEMS = [("甲", (102, 52, 276, 75)), ("乙", (276, 52, 450, 75)),
-                   ("丙", (450, 52, 624, 75))]
+# Tab 项矩形为 Tab 条客户区坐标（_uia_tab_items 读取时已减去控件窗口
+# 原点，缓存后与窗口位置无关）：Tab 0 中心 (89,13)、Tab 1 中心 (263,13)、
+# Tab 2 中心 (437,13)。
+_FAKE_TAB_ITEMS = [("甲", (2, 2, 176, 25)), ("乙", (176, 2, 350, 25)),
+                   ("丙", (350, 2, 524, 25))]
 
 
 @pytest.fixture
@@ -491,7 +492,7 @@ def test_send_silent_tab_click_sequence(monkeypatch, _clear_tab_rects_cache):
                         lambda _w, _c: list(_FAKE_TAB_ITEMS))
     info = silent_click.send_silent_tab_click(_FakeWin(0x123), 1)
     assert info is not None and info["hwnd"] == _TAB_HWND and info["index"] == 1
-    assert info["point"] == (263, 13)  # (276+450)/2-100, (52+75)/2-50
+    assert info["point"] == (263, 13)  # (176+350)//2, (2+25)//2
     # 序列：TCM 计数读数 → 仅 DOWN+UP 两条鼠标消息（无移动/无移出）
     assert fake.msgs[0][1] == silent_click.TCM_GETITEMCOUNT
     mouse = fake.msgs[1:]
@@ -536,6 +537,8 @@ def test_send_silent_tab_click_uia_count_mismatch(monkeypatch,
 
 def test_tab_items_cache_reuse_and_count_invalidate(monkeypatch,
                                                     _clear_tab_rects_cache):
+    fake = _FakeUser32Tab()
+    monkeypatch.setattr(silent_click, "user32", fake)
     calls = []
 
     def _uia(_w, count):
@@ -549,3 +552,87 @@ def test_tab_items_cache_reuse_and_count_invalidate(monkeypatch,
     # Tab 数变化 → 失效重读
     assert silent_click.tab_items(win, 2) == _FAKE_TAB_ITEMS[:2]
     assert calls == [3, 2]
+
+
+def test_tab_items_cache_invalidates_on_control_resize(monkeypatch,
+                                                       _clear_tab_rects_cache):
+    # 窗口缩放改变 Tab 项布局：客户区尺寸变化 → 失效重读；
+    # 仅移动窗口（尺寸不变）不触发重读（矩形是客户区坐标）
+    fake = _FakeUser32Tab(client=(1366, 768))
+    monkeypatch.setattr(silent_click, "user32", fake)
+    calls = []
+
+    def _uia(_w, count):
+        calls.append(count)
+        return list(_FAKE_TAB_ITEMS[:count])
+    monkeypatch.setattr(silent_click, "_uia_tab_items", _uia)
+    win = _FakeWin(0x123)
+    silent_click.tab_items(win, 3)
+    fake.winrect = (900, 300, 2266, 1068)  # 移动：尺寸不变 → 命中缓存
+    silent_click.tab_items(win, 3)
+    assert calls == [3]
+    fake.client = (1200, 700)  # 缩放：客户区尺寸变化 → 重读
+    silent_click.tab_items(win, 3)
+    assert calls == [3, 3]
+
+
+def test_invalidate_tab_items_forces_reread(monkeypatch, _clear_tab_rects_cache):
+    fake = _FakeUser32Tab()
+    monkeypatch.setattr(silent_click, "user32", fake)
+    calls = []
+
+    def _uia(_w, count):
+        calls.append(count)
+        return list(_FAKE_TAB_ITEMS[:count])
+    monkeypatch.setattr(silent_click, "_uia_tab_items", _uia)
+    win = _FakeWin(0x123)
+    silent_click.tab_items(win, 3)
+    silent_click.tab_items(win, 3)
+    silent_click.invalidate_tab_items(win)
+    silent_click.tab_items(win, 3)
+    assert calls == [3, 3]
+
+
+def test_send_silent_tab_click_coords_survive_window_move(monkeypatch,
+                                                          _clear_tab_rects_cache):
+    # 2026-11-10 回归：缓存建立后拖动窗口，点击中心必须仍是客户区坐标
+    # (263,13)（旧实现按当前窗口原点重算屏幕矩形 → 越界/点不到）
+    fake = _FakeUser32Tab(tcm={silent_click.TCM_GETITEMCOUNT: 3})
+    monkeypatch.setattr(silent_click, "user32", fake)
+    monkeypatch.setattr(silent_click, "_uia_tab_items",
+                        lambda _w, _c: list(_FAKE_TAB_ITEMS))
+    win = _FakeWin(0x123)
+    silent_click.tab_items(win, 3)  # 建立缓存（窗口在 (100,50)）
+    fake.winrect = (900, 300, 2266, 1068)  # 窗口被拖动
+    info = silent_click.send_silent_tab_click(win, 1)
+    assert info is not None and info["point"] == (263, 13)
+    lp = (13 << 16) | 263
+    assert [m[1] for m in fake.msgs[-2:]] == [WM_LBUTTONDOWN, WM_LBUTTONUP]
+    assert fake.msgs[-1][3] == lp
+
+
+def test_send_silent_tab_click_stale_rect_refresh(monkeypatch,
+                                                  _clear_tab_rects_cache):
+    # 缓存矩形越界（布局已变）：失效重读一次，用新矩形投递
+    fake = _FakeUser32Tab(tcm={silent_click.TCM_GETITEMCOUNT: 3})
+    monkeypatch.setattr(silent_click, "user32", fake)
+    stale = [("甲", (5000, 2, 5174, 25)), ("乙", (5174, 2, 5348, 25)),
+             ("丙", (5348, 2, 5522, 25))]
+    seq = [stale, list(_FAKE_TAB_ITEMS)]
+    monkeypatch.setattr(silent_click, "_uia_tab_items",
+                        lambda _w, _c: seq.pop(0))
+    info = silent_click.send_silent_tab_click(_FakeWin(0x123), 1)
+    assert info is not None and info["point"] == (263, 13)
+
+
+def test_send_silent_tab_click_out_of_bounds_no_click(monkeypatch,
+                                                      _clear_tab_rects_cache):
+    # 越界矩形重读后仍越界：放弃投递（不点错 Tab 切错账号）
+    fake = _FakeUser32Tab(tcm={silent_click.TCM_GETITEMCOUNT: 3})
+    monkeypatch.setattr(silent_click, "user32", fake)
+    stale = [("甲", (5000, 2, 5174, 25)), ("乙", (5174, 2, 5348, 25)),
+             ("丙", (5348, 2, 5522, 25))]
+    monkeypatch.setattr(silent_click, "_uia_tab_items",
+                        lambda _w, _c: list(stale))
+    assert silent_click.send_silent_tab_click(_FakeWin(0x123), 1) is None
+    assert not any(m[1] in (WM_LBUTTONDOWN, WM_LBUTTONUP) for m in fake.msgs)

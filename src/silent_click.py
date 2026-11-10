@@ -18,9 +18,11 @@ WM_MOUSEMOVE→WM_LBUTTONDOWN→WM_LBUTTONUP。投递全程持 app_utils
 
 Tab 条切 Tab（静默+后台通道，2026-11-04 实机验证生效）：Tab 条是
 标准 SysTabControl32 子窗口，UIA 读 Tab 项矩形（send_silent_tab_click，
-DOWN+UP 最小序列）。【禁区】带指针的消息（TCM_GETITEMRECT 等）跨
-进程不封送、会令客户端崩溃（当日教训）；TCM_SETCURSEL 不切视图；
-TCM 消息仅用 int-only（GETITEMCOUNT/GETCURSEL）。
+DOWN+UP 最小序列）；矩形缓存为客户区坐标（读取时减去控件窗口原点），
+窗口移动不失效（2026-11-10 拖动窗口后整轮切 Tab 失效的教训）。【禁区】
+带指针的消息（TCM_GETITEMRECT 等）跨进程不封送、会令客户端崩溃（当日
+教训）；TCM_SETCURSEL 不切视图；TCM 消息仅用 int-only（GETITEMCOUNT/
+GETCURSEL）。
 """
 import ctypes
 import time
@@ -472,10 +474,15 @@ def send_and_report_key(win, log_fn, modifiers=("alt",), key="c",
 TCM_GETITEMCOUNT = 0x1304
 TCM_GETCURSEL = 0x130B
 
-# Tab 项缓存：main hwnd -> (count, [(名字, 屏幕矩形)×count])。
-# Tab 条是固定 UI（会话内 Tab 数不变则矩形不变，与高性能缓存白名单
-# 同原则）；Tab 数变化即失效重读。名字用于未登录过滤（未登录 Tab
-# 名 = 游戏标题，已登录 = 角色名）。
+# Tab 项缓存：main hwnd -> (count, 客户区尺寸, [(名字, 客户区矩形)×count])。
+# 矩形在 UIA 读取时即换算成 Tab 条客户区坐标（减去控件窗口矩形原点）：
+# UIA 给的是屏幕坐标，若直接缓存屏幕矩形，窗口一动缓存就过期——点击
+# 按旧屏幕原点换算成负/越界客户区坐标，客户端不消费（2026-11-10 实测：
+# 拖动游戏窗口后整轮静默切 Tab 全部「点击投递未被消费」）。客户区矩形
+# 与窗口位置无关，移动不需要失效；控件客户区尺寸变化（窗口缩放/DPI
+# 变化）才失效重读。Tab 条是固定 UI（会话内 Tab 数不变则布局不变，与
+# 高性能缓存白名单同原则）；Tab 数变化同样失效。名字用于未登录过滤
+# （未登录 Tab 名 = 游戏标题，已登录 = 角色名）。
 _tab_rects_cache = {}
 
 
@@ -516,10 +523,26 @@ def tab_current_index(tab):
     return int(user32.SendMessageW(tab, TCM_GETCURSEL, 0, 0) or 0)
 
 
-def _uia_tab_items(win, count):
-    """UIA 读 Tab 项 (名字, 屏幕矩形) 列表（按 Tab 顺序，长度须 == count；
-    失败 None）。
+def _client_size(tab):
+    """控件客户区尺寸 (宽, 高)；读取失败返回 None。"""
+    cr = wintypes.RECT()
+    if not user32.GetClientRect(tab, ctypes.byref(cr)):
+        return None
+    return (cr.right - cr.left, cr.bottom - cr.top)
 
+
+def _item_center(rect):
+    """Tab 项客户区矩形 → 中心点 (x, y)。"""
+    return (rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2
+
+
+def _uia_tab_items(win, count):
+    """UIA 读 Tab 项 (名字, Tab 条客户区矩形) 列表（按 Tab 顺序，长度
+    须 == count；失败 None）。
+
+    UIA BoundingRectangle 是屏幕坐标，读取时立刻减去 Tab 条窗口矩形
+    原点换算成客户区坐标——此后窗口怎么移动都不影响缓存值（2026-11-10
+    拖动窗口后整轮切换失效的教训）。
     COM 封送跨进程安全（TCM_GETITEMRECT 裸指针不可用，2026-11-04
     崩溃教训）。线程内 COM 惰性初始化：调用方线程（任务/战斗线程）
     首次调用时 CoInitializeEx，实例随调用结束配对释放——与 main.py
@@ -527,6 +550,10 @@ def _uia_tab_items(win, count):
     """
     import uiautomation as auto  # 惰性导入：仅切 Tab 路径需要
     try:
+        tab = tab_control_hwnd(win)
+        tr = wintypes.RECT()
+        if not tab or not user32.GetWindowRect(tab, ctypes.byref(tr)):
+            return None
         auto.UIAutomationInitializerInThread()
         root = auto.ControlFromHandle(int(getattr(win, "hwnd", 0) or 0))
         for c in root.GetChildren():
@@ -535,7 +562,8 @@ def _uia_tab_items(win, count):
                 for it in c.GetChildren():
                     br = it.BoundingRectangle
                     items.append((it.Name or "",
-                                 (br.left, br.top, br.right, br.bottom)))
+                                  (br.left - tr.left, br.top - tr.top,
+                                   br.right - tr.left, br.bottom - tr.top)))
                 return items if len(items) == count else None
         return None
     except Exception:
@@ -543,22 +571,34 @@ def _uia_tab_items(win, count):
 
 
 def tab_items(win, count):
-    """Tab 项 (名字, 屏幕矩形) 列表（带缓存；Tab 数变化或无缓存时
-    UIA 重读）。
+    """Tab 项 (名字, Tab 条客户区矩形) 列表（带缓存；Tab 数变化、
+    控件尺寸变化或无缓存时 UIA 重读）。
 
+    缓存命中条件：Tab 数相同且 Tab 条客户区尺寸未变（窗口移动不影响
+    客户区矩形，无需失效；缩放会改变 Tab 项布局，尺寸变化即重读）。
     长度必须与 count 一致才可用（UIA 读到的项数与 TCM 计数不一致
     视为失败——布局可能正在变化，宁可重试不点错 Tab）。名字供
     未登录过滤（未登录 Tab 名 = 游戏标题，见 tab_group）。
     """
     hwnd = int(getattr(win, "hwnd", 0) or 0)
+    tab = tab_control_hwnd(win)
+    size = _client_size(tab) if tab else None
     cached = _tab_rects_cache.get(hwnd)
-    if cached is not None and cached[0] == count:
-        return cached[1]
+    if cached is not None and cached[0] == count and cached[1] == size:
+        return cached[2]
     items = _uia_tab_items(win, count)
     if items and len(items) == count:
-        _tab_rects_cache[hwnd] = (count, items)
+        _tab_rects_cache[hwnd] = (count, size, items)
         return items
     return None
+
+
+def invalidate_tab_items(win):
+    """丢弃 Tab 项缓存（切 Tab 反复未生效时由调用方触发 UIA 重读自愈）。"""
+    try:
+        _tab_rects_cache.pop(int(getattr(win, "hwnd", 0) or 0), None)
+    except Exception:
+        pass
 
 
 def send_silent_tab_click(win, index):
@@ -567,8 +607,11 @@ def send_silent_tab_click(win, index):
 
     消息集最小化：仅 WM_LBUTTONDOWN→WM_LBUTTONUP（无前置移动、无
     移出——Tab 条无中性区，移出会悬停到别的 Tab 上）；2026-11-04
-    实机验证：视图切换、客户端稳定。序号越界/控件不存在/矩形获取
-    失败返回 None；成功返回投递描述 dict。
+    实机验证：视图切换、客户端稳定。
+    坐标：缓存里已是 Tab 条客户区矩形（见 _uia_tab_items），窗口移动
+    不影响；中心落在客户区外 = 缓存与当前布局不符（缩放/DPI 变化），
+    失效重读 UIA 一次，仍越界则放弃投递（防点错 Tab 切错账号）。
+    序号越界/控件不存在/矩形获取失败返回 None；成功返回投递描述 dict。
     """
     tab = tab_control_hwnd(win)
     if not tab:
@@ -579,13 +622,16 @@ def send_silent_tab_click(win, index):
     items = tab_items(win, count)
     if not items:
         return None
-    tr = wintypes.RECT()
-    if not user32.GetWindowRect(tab, ctypes.byref(tr)):
-        return None
-    r = items[index][1]
-    # UIA 屏幕矩形 → Tab 条控件客户区坐标（控件窗口矩形左上为原点）
-    cx = (r[0] + r[2]) // 2 - tr.left
-    cy = (r[1] + r[3]) // 2 - tr.top
+    cx, cy = _item_center(items[index][1])
+    size = _client_size(tab)
+    if size and not (0 <= cx < size[0] and 0 <= cy < size[1]):
+        invalidate_tab_items(win)
+        items = tab_items(win, count)
+        if not items:
+            return None
+        cx, cy = _item_center(items[index][1])
+        if not (0 <= cx < size[0] and 0 <= cy < size[1]):
+            return None
     lp = (cy << 16) | (cx & 0xFFFF)
     with app_utils._INPUT_LOCK:
         r_down = user32.SendMessageW(tab, WM_LBUTTONDOWN, MK_LBUTTON, lp)

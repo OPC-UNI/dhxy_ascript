@@ -16,7 +16,9 @@
   序列，silent_click.send_silent_tab_click；2026-11-04 实机验证：
   视图切换、客户端稳定），切换成败仍按可见子窗口句柄变化判定
   （与键盘路径同判据）；未登录 Tab 按 UIA 名（= 游戏标题）跳过
-  不切换（_next_logged_index），不浪费切换轮次
+  不切换（_next_logged_index），不浪费切换轮次。矩形缓存为客户区
+  坐标、窗口移动不失效；未生效时丢弃缓存重读 UIA 重试同一 Tab
+  （2026-11-10 拖动窗口后整轮切换失效的自愈）
 - 【禁区】Tab 条（SysTabControl32 子窗口）带指针的消息不可投递：
   2026-11-04 实测 TCM_GETITEMRECT 的 lParam 裸指针跨进程不封送，
   游戏按我方虚拟地址在自身进程写内存直接崩溃退出（无 WER 记录，
@@ -58,6 +60,9 @@ from .dialog_common import _dialog_text_present  # 巫医对话框文案模糊�
 
 # ---- 时序与预算参数（秒） ----
 TAB_SWITCH_SETTLE = 0.8    # Ctrl+Tab 后等待标题/可见性更新
+TAB_SWITCH_TRIES = 3       # Tab 条点击最大尝试次数（未生效时重试同一
+                           # Tab；每次重试前丢弃矩形缓存重读 UIA——窗口
+                           # 移动/布局变化会让缓存坐标过时，2026-11-10）
 TAB_CYCLE_GUARD = 10       # 切回队长/遍历队员的最大切换次数
 NO_CLICK_ZONE_Y = 60       # Tab 条区域（窗口相对 y<60）：鼠标禁入区
 AUTO_WAIT_FIRST = 5.0      # 首场战斗队员自动按钮等待上限（操作条轮询）
@@ -550,8 +555,11 @@ def _switch_next_by_click(win):
 
     下一 Tab 序号 = 下一已登录 Tab（未登录 Tab 按 UIA 名字跳过不切，
     _next_logged_index）；点击后按可见子窗口句柄变化判定（与键盘
-    路径同判据）。未生效重试一次同一 Tab（不重算序号——首次点击已
-    生效而判定竞态时，重点同一 Tab 是无操作，重算会连切两个）。
+    路径同判据）。未生效最多尝试 TAB_SWITCH_TRIES 次，始终点同一
+    Tab（不重算序号——首次点击已生效而判定竞态时，重点同一 Tab 是
+    无操作，重算会连切两个）；每次重试前丢弃 Tab 矩形缓存重读 UIA
+    （窗口被拖动/缩放后缓存坐标会过期，点击落到 Tab 条外客户端不
+    消费——2026-11-10 实机：拖动窗口后整轮「点击投递未被消费」）。
     切换生效后输出「切至哪个角色」日志：角色名（子窗口标题解析）+
     账号 ID（用户 2026-11-07 要求——只有切换生效后 ID 才可信，
     点击时仅知道 Tab 序号）。
@@ -583,23 +591,28 @@ def _switch_next_by_click(win):
                 f"({info['point'][0]},{info['point'][1]})（当前 Tab 未登录）", "INFO")
 
     before_hwnd, _before_id = _current(win)
-    info = silent_click.send_silent_tab_click(win, next_i)
+    info = None
+    for attempt in range(1, TAB_SWITCH_TRIES + 1):
+        if attempt > 1:
+            # 前一次未生效：缓存坐标可能已过时（窗口移动/缩放/布局
+            # 变化），丢弃重读后再点同一 Tab
+            silent_click.invalidate_tab_items(win)
+        info = silent_click.send_silent_tab_click(win, next_i)
+        if info is None:
+            time.sleep(TAB_SWITCH_SETTLE)  # 投递失败也给控件留恢复时间
+            continue
+        time.sleep(TAB_SWITCH_SETTLE)
+        after_hwnd, after_id = _current(win)
+        if after_hwnd is not None and after_hwnd != before_hwnd:
+            _log_switch_ok(after_id, info)
+            return after_id if after_id is not None else ""
     if info is None:
-        log("[组号] 静默切 Tab 点击投递失败（Tab 条不可达）", "WARN")
-        return None
-    time.sleep(TAB_SWITCH_SETTLE)
-    after_hwnd, after_id = _current(win)
-    if after_hwnd is not None and after_hwnd != before_hwnd:
-        _log_switch_ok(after_id, info)
-        return after_id if after_id is not None else ""
-    silent_click.send_silent_tab_click(win, next_i)  # 重试同一 Tab
-    time.sleep(TAB_SWITCH_SETTLE)
-    after_hwnd, after_id = _current(win)
-    if after_hwnd is None or after_hwnd == before_hwnd:
-        log("[组号] 静默切 Tab 未生效（点击投递未被消费），中止本轮", "WARN")
-        return None
-    _log_switch_ok(after_id, info)
-    return after_id if after_id is not None else ""
+        log("[组号] 静默切 Tab 点击投递失败（Tab 条不可达），中止本轮", "WARN")
+    else:
+        log(f"[组号] 静默切 Tab 未生效（点击投递未被消费，Tab {next_i} "
+            f"中心 ({info['point'][0]},{info['point'][1]})，已重读缓存"
+            f"重试 {TAB_SWITCH_TRIES} 次），中止本轮", "WARN")
+    return None
 
 
 def return_to_leader(win):
