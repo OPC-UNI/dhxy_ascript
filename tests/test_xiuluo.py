@@ -300,3 +300,22 @@ def test_task_state_panel_visible_task_found(monkeypatch):
     monkeypatch.setattr(xiuluo.task_tracker, "has_task_in",
                         lambda items, img_np, title, fallback=(): True)
     assert xiuluo._task_state(_FakeWin()) == (True, True)
+
+
+def test_claim_task_skips_when_task_reappeared(monkeypatch):
+    """误判消失走了领取、任务又出现：跳过领取，交主循环续跑跟踪。
+
+    2026-11-11 用户确认场景：任务真消失→走领取逻辑→过一会又出现，
+    应继续寻路而不是空等领取入口。
+    """
+    monkeypatch.setattr(xiuluo, "is_in_battle", lambda w: False)
+    monkeypatch.setattr(xiuluo.task_tracker, "ocr_track", lambda img: ([], None))
+    monkeypatch.setattr(xiuluo.task_tracker, "task_signature_in",
+                        lambda items, title: "sig")
+    called = []
+    monkeypatch.setattr(
+        xiuluo, "_click_entry_ensuring_dialog",
+        lambda w, **k: called.append(1) or (False, "x", None, None, None))
+    ok, info, frame = xiuluo._claim_task(_FakeWin())
+    assert ok is False and "续跑跟踪" in info and frame is None
+    assert called == []  # 不进入领取入口流程

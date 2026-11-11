@@ -347,3 +347,33 @@ def test_track_state_panel_visible_no_task(monkeypatch):
     monkeypatch.setattr(wubei.task_tracker, "ocr_track_read",
                         lambda img: ([], None))
     assert wubei._track_state(_FakeWin()) == (False, False, False, True)
+
+
+def test_claim_task_skips_when_task_reappeared(monkeypatch):
+    """误判消失走了领取、任务又出现：跳过领取，交主循环续跑跟踪。"""
+    monkeypatch.setattr(wubei, "is_in_battle", lambda w: False)
+    monkeypatch.setattr(wubei.task_tracker, "ocr_track", lambda img: ([], None))
+    monkeypatch.setattr(wubei.task_tracker, "task_signature_in",
+                        lambda items, title: "sig")
+    called = []
+    monkeypatch.setattr(
+        wubei, "_click_entry_ensuring_dialog",
+        lambda w, **k: called.append(1) or (False, "x", None, None, None))
+    ok, info, frame = wubei._claim_task(_FakeWin())
+    assert ok is False and "续跑跟踪" in info and frame is None
+    assert called == []  # 不进入领取入口流程
+
+
+def test_claim_task_replace_allows_existing_task(monkeypatch):
+    """替换任务场景（allow_existing=True）：面板有任务仍走领取流程。"""
+    monkeypatch.setattr(wubei, "is_in_battle", lambda w: False)
+    monkeypatch.setattr(wubei.task_tracker, "ocr_track", lambda img: ([], None))
+    monkeypatch.setattr(wubei.task_tracker, "task_signature_in",
+                        lambda items, title: "sig")
+    called = []
+    monkeypatch.setattr(
+        wubei, "_click_entry_ensuring_dialog",
+        lambda w, **k: called.append(1) or (False, "入口失败", None, None, None))
+    ok, info, frame = wubei._claim_task(_FakeWin(), allow_existing=True)
+    assert ok is False and info == "入口失败"
+    assert called == [1]  # 已进入领取入口流程

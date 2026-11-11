@@ -1204,6 +1204,13 @@ def _claim_task(win, allow_fill=False):
     if img0 is not None:
         items0, _ = task_tracker.ocr_track(img0)
         pre_sig = task_tracker.task_signature_in(items0, TASK_TITLE)
+    if pre_sig is not None:
+        # 追踪面板仍有修罗任务（误判消失走了领取、任务又出现，或旧任务
+        # 遗留未清）：游戏不会给重复领取（领取入口不出现），继续走领取
+        # 只会空等入口/重走领取点一整轮——直接返回让主循环下一轮
+        # _task_state 续跑跟踪（2026-11-11 用户确认场景：任务又出现时
+        # 应继续寻路，不要空耗领取流程）
+        return False, "任务追踪中仍有修罗任务，跳过领取（续跑跟踪）", None
     # 识图领取入口（按钮或灵兽村使者）并点击；点击后对话框未出现
     # （短窗口内选项不可见）判定坐标不对：打开小地图点击领取点坐标
     # 重定位后重试一次（用户确认的兜底路径）

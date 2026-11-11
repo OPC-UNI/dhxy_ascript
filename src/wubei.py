@@ -1438,7 +1438,7 @@ def _claim_verify_wait(win, pre_sig, t_opt, polls):
     time.sleep(max(0.0, 1.0 - (time.time() - t0)))
 
 
-def _claim_task(win, allow_fill=False):
+def _claim_task(win, allow_fill=False, allow_existing=False):
     """在领取点附近领取五倍任务（前提：已走到领取点附近）。
 
     识图 wubei_lingqu.png / wubei_xiangmoshiwei.png 点击（入口点击按
@@ -1455,6 +1455,11 @@ def _claim_task(win, allow_fill=False):
     1. 选项点击直接复用「对话框已出现」的同一帧（免重截+重 OCR）
     2. 校验循环内确认新任务渲染即返回（领取前有旧任务遗留面板时须
        签名变化才确认，不再重复一次 has_task 全量检查）
+
+    allow_existing：允许在追踪面板已有五倍任务时继续领取（替换任务
+    场景，need_replace=True——游戏允许重领替换）。默认 False：面板仍
+    有五倍任务说明「任务消失」是误判/任务又出现，跳过领取返回让主
+    循环续跑跟踪（2026-11-11 修罗同款，避免空等领取入口一整轮）。
     """
     global _claim_confirm_dlg_score
     _claim_confirm_dlg_score = None  # 本轮确认帧模板分复位（run_loop 消费）
@@ -1469,6 +1474,12 @@ def _claim_task(win, allow_fill=False):
     if img0 is not None:
         items0, _ = task_tracker.ocr_track(img0)
         pre_sig = task_tracker.task_signature_in(items0, TASK_TITLE)
+    if pre_sig is not None and not allow_existing:
+        # 追踪面板仍有五倍任务（误判消失走了领取、任务又出现）：跳过
+        # 领取返回，主循环下一轮 _track_state 续跑跟踪——不空等领取
+        # 入口（2026-11-11 修罗同款）；替换任务场景由 allow_existing
+        # 放行（游戏允许重领替换）
+        return False, "任务追踪中仍有五倍任务，跳过领取（续跑跟踪）", None
     # 识图领取入口（按钮或降魔侍卫）并点击；点击后对话框未出现
     # （短窗口内选项不可见）判定坐标不对：打开小地图点击领取点坐标
     # 重定位后重试一次（修罗同款兜底路径）
@@ -3091,7 +3102,8 @@ def run_loop(win, cycle_interval=1.0):
                 # 领取任务（校验帧随返回值带出，跟踪首轮复用免重复 OCR）；
                 # 队伍不足被拒时按开关决定是否重入监控补人循环
                 debug_overlay.set_phase("领取任务")  # 看板阶段
-                ok, info, claim_items = _claim_task(win, allow_fill=check_team)
+                ok, info, claim_items = _claim_task(win, allow_fill=check_team,
+                                                    allow_existing=need_replace)
                 if not ok:
                     if need_replace:
                         _replace_fail_streak += 1
