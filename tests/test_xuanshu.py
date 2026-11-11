@@ -372,13 +372,14 @@ def test_confirm_task_gone_post_battle_panel_missing_is_done(monkeypatch):
     """战斗结束路径（require_panel=False）：面板消失按任务消失判定。
 
     用户 2026-11-11 确认：战斗结束后任务追踪会消失，此时应打开背包
-    返程（非战斗轮询路径仍要求面板在场，防手动关面板误判）。
+    返程（非战斗轮询路径仍要求面板在场，防手动关面板误判）。客栈
+    任务完成同理（面板被游戏自动收起），共用该路径。
     """
     ocr_calls, logs = _patch_gone_env(monkeypatch, region=None)
     assert xuanshu._confirm_task_gone(_GuardWin(), "常规玩法",
                                       require_panel=False) is True
     assert ocr_calls  # 回退静态条带采集证据（原逻辑）
-    assert any("战斗结束后追踪面板不在场" in m for m, _ in logs)
+    assert any("追踪面板不在场，按任务消失判定" in m for m, _ in logs)
 
 
 # ---- follow 战斗结束转换：动画间隙不得消费 was_battle（2026-11-11） ----
@@ -446,3 +447,57 @@ def test_follow_battle_gap_keeps_battle_end_fastpath(monkeypatch):
     # 确认只发生在战斗线程确认结束后的第 4 拍（t=2.0），且走快路径
     assert confirms == [False]
     assert confirm_at == [2.0]
+
+
+# ---- 任务消失确认：面板缺席门可配置（客栈 2026-11-11 实测） ----
+def _patch_follow_minimal(monkeypatch, confirms):
+    """装配 follow_task 最小环境：任务从未出现在面板，首个确认即返回。"""
+    class _Win:
+        def capture(self, force_activate=False):
+            return object()
+
+    def _confirm(win, title, fb=(), first_img=None, polls=2,
+                 require_panel=True):
+        confirms.append(require_panel)
+        return True
+
+    monkeypatch.setattr(xuanshu, "log", lambda *a, **k: None)
+    monkeypatch.setattr(xuanshu, "battle_watch_in_battle", lambda: False)
+    monkeypatch.setattr(xuanshu, "is_in_battle", lambda win: False)
+    monkeypatch.setattr(xuanshu, "is_in_battle_frame", lambda img: False)
+    monkeypatch.setattr(xuanshu, "tab_group", type(
+        "T", (), {"pass_active": False, "active": staticmethod(lambda: False)}))
+    monkeypatch.setattr(xuanshu.task_tracker, "ocr_follow",
+                        lambda img: ([], None))
+    monkeypatch.setattr(xuanshu.task_tracker, "group_tasks",
+                        lambda items, xmax=0: [])
+    monkeypatch.setattr(xuanshu.task_tracker, "panel_row_xmax",
+                        lambda img_np: 400)
+    monkeypatch.setattr(xuanshu.task_tracker, "find_task",
+                        lambda tasks, title: None)
+    monkeypatch.setattr(xuanshu, "_confirm_task_gone", _confirm)
+    monkeypatch.setattr(xuanshu, "_task_gone_dialog_guard",
+                        lambda *a, **k: False)
+    return _Win()
+
+
+def test_follow_task_gone_require_panel_false_passthrough(monkeypatch):
+    """task_gone_require_panel=False（客栈）透传到确认函数。
+
+    游戏无追踪任务时自动收起面板：客栈交付完成瞬间面板消失，确认
+    必须按「面板缺席=完成」处理，否则空转到跟踪超时（实测卡 2~3 分钟）。
+    """
+    confirms = []
+    win = _patch_follow_minimal(monkeypatch, confirms)
+    ok, _info = xuanshu.follow_task(win, "客栈任务", timeout=30,
+                                    task_gone_require_panel=False)
+    assert ok is False  # 任务从未出现：假完成防护生效，回主循环重试
+    assert confirms == [False]
+
+
+def test_follow_task_gone_require_panel_default_true(monkeypatch):
+    """默认仍要求面板在场（修罗等手关面板防误判，2026-11-11 上午教训）。"""
+    confirms = []
+    win = _patch_follow_minimal(monkeypatch, confirms)
+    xuanshu.follow_task(win, "常规玩法", timeout=30)
+    assert confirms == [True]

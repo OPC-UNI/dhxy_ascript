@@ -35,7 +35,8 @@ class _Win:
         return np.zeros((831, 1378, 3), dtype=np.uint8)
 
 
-def _install(monkeypatch, *, p_values, title_frames, zone_frames=None):
+def _install(monkeypatch, *, p_values, title_frames, zone_frames=None,
+             target_x=908):
     """安装模板/测量替身：标题前 title_frames 帧可见，之后消失。
 
     p_values 按已开始后的轮询顺序消费（每轮一个刻度值，None=无填充）。
@@ -53,7 +54,7 @@ def _install(monkeypatch, *, p_values, title_frames, zone_frames=None):
         if icon == pochufengyin.POCHU_TARGET_ICON:
             if zone_frames is not None and win.n > zone_frames:
                 return None
-            return (908, 500)  # 目标带中心 C≈8.49
+            return (target_x, 500)  # 目标带中心（默认 C≈8.49）
         return None            # 「开始」按钮不出现在测试帧
 
     def _fill(bgr):
@@ -145,6 +146,39 @@ def test_click_mode_uses_click_not_hold(monkeypatch):
     assert ok and "结束" in info
     assert clicks and clicks[0] == (950, 600)
     assert _Hold.events == []
+
+
+def test_click_mode_advances_to_zone_center(monkeypatch):
+    """点击模式推进目标 = 目标带中心 C：填充在 L 附近（P=0.05，带
+    [0.0,1.1]）不能一进带就停手——破除封印松手后填充会回落，停在左缘
+    有掉出带下的风险，须点到 C≈0.5 附近（用户 2026-11-11）。"""
+    clicks = []
+    # C≈0.54：P=0.05/0.30/0.50 都 <C 继续点，P=0.59 ≥C 停手
+    win = _install(monkeypatch, p_values=[0.05, 0.30, 0.50, 0.60],
+                   title_frames=5, target_x=465)
+    monkeypatch.setattr(pochufengyin, "human_click",
+                        lambda w, x, y: clicks.append((x, y)))
+    monkeypatch.setattr(pochufengyin, "POCHU_TIER_NEAR", 0.0)
+    ok, info = pochufengyin.play_pochufengyin(
+        win, "title", prefix="客栈", label="破除封印")
+    assert ok and "命中区间" in info and "P=0.59" in info
+    assert len(clicks) == 3          # 到 C 附近即停手，P=0.59 那帧不点
+
+
+def test_click_mode_zero_click_in_band_reports_hit(monkeypatch):
+    """点击模式 0 次点击也要按实测 P 上报：填充一开始就在 C 以上
+    （P=0.59，带 [0.0,1.1]）→ 全程停手，结束必须报「命中区间」+P 实测值，
+    不能误报「P=未知/未确认命中」（2026-11-11 客栈实机日志教训）。"""
+    clicks = []
+    win = _install(monkeypatch, p_values=[0.60] * 6, title_frames=3,
+                   target_x=465)
+    monkeypatch.setattr(pochufengyin, "human_click",
+                        lambda w, x, y: clicks.append((x, y)))
+    ok, info = pochufengyin.play_pochufengyin(
+        win, "title", prefix="客栈", label="破除封印")
+    assert ok and "命中区间" in info
+    assert "P=0.59" in info and "P=未知" not in info
+    assert clicks == []
 
 
 class _FakeClock:

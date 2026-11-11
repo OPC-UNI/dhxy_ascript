@@ -405,3 +405,185 @@ def test_verify_find_awang_delegates_to_walk_to_dali(monkeypatch):
 
     ok, info = kezhan.verify_find_awang(W())
     assert ok is True and info == "已点击阿旺"
+
+
+# ---- 任务消失确认：客栈允许面板缺席（2026-11-11 16:29/16:33 实测） ----
+def test_follow_kezhan_disables_panel_requirement(monkeypatch):
+    """客栈 follow_task 必须传 task_gone_require_panel=False。
+
+    游戏在无追踪任务时会把「任务追踪」面板自动收起（只剩左缘小箭头）：
+    客栈任务在交付对话点完的瞬间面板即消失，若仍要求面板在场，任务
+    消失确认永远不判定、空转到跟踪超时（300s）才去领取（实测卡 2~3
+    分钟）。客栈任务在即面板必在，面板没了即完成。
+    """
+    seen = {}
+
+    def _fake_follow(win, title, **kwargs):
+        seen["title"] = title
+        seen.update(kwargs)
+        return True, "任务已从任务追踪中消失"
+
+    monkeypatch.setattr(kezhan, "follow_task", _fake_follow)
+    status, info = kezhan._follow_kezhan(object())
+    assert status == "done"
+    assert seen["task_gone_require_panel"] is False
+    assert seen["prefix"] == "客栈"
+
+
+# ---- 阿旺走近点按屏幕左右侧取侧（2026-11-11 用户规则） ----
+class _AwangWin:
+    """窗口宽 1376：中心 688，中间区 508~868（±180）。"""
+
+    class rect:
+        width = 1376
+        height = 828
+
+
+def test_awang_approach_left_side_walks_to_right():
+    """阿旺在屏幕左侧 → 走到其右侧 90px。"""
+    assert kezhan._awang_approach_pos(200, 400, _AwangWin()) == (290, 400)
+
+
+def test_awang_approach_right_side_walks_to_left():
+    """阿旺在屏幕右侧 → 走到其左侧 90px。"""
+    assert kezhan._awang_approach_pos(1200, 400, _AwangWin()) == (1110, 400)
+
+
+def test_awang_approach_center_region_no_walk():
+    """阿旺在屏幕中间 ±180px 内（含边界）→ 不走近，返回 None。"""
+    win = _AwangWin()
+    assert kezhan._awang_approach_pos(688, 400, win) is None
+    assert kezhan._awang_approach_pos(508, 400, win) is None
+    assert kezhan._awang_approach_pos(868, 400, win) is None
+    # 边界外一像素即按对应侧走近
+    assert kezhan._awang_approach_pos(507, 400, win) == (597, 400)
+    assert kezhan._awang_approach_pos(869, 400, win) == (779, 400)
+
+
+def test_check_awang_center_clicks_interact_point_directly(monkeypatch):
+    """阿旺在屏幕中间区域：直接点交互点，不再走近等待。"""
+    clicks, arrived = [], []
+    monkeypatch.setattr(kezhan, "log", lambda *a, **k: None)
+    monkeypatch.setattr(kezhan, "human_click",
+                        lambda win, x, y, **k: clicks.append((x, y)))
+    monkeypatch.setattr(kezhan, "_find_awang", lambda w: (700, 400))
+    monkeypatch.setattr(kezhan, "_wait_awang_arrival",
+                        lambda w: arrived.append(1))
+    ok, info = kezhan._check_awang(_AwangWin())
+    assert ok is True and info == "已点击阿旺"
+    assert clicks == [(700, 400)]
+    assert arrived == []
+
+
+def test_check_awang_left_side_walks_then_clicks(monkeypatch):
+    """阿旺在屏幕左侧：先点其右侧 90px 走近，到位后重新定位再点交互点。"""
+    clicks, arrived = [], []
+    monkeypatch.setattr(kezhan, "log", lambda *a, **k: None)
+    monkeypatch.setattr(kezhan, "human_click",
+                        lambda win, x, y, **k: clicks.append((x, y)))
+    monkeypatch.setattr(kezhan, "_find_awang", lambda w: (200, 400))
+    monkeypatch.setattr(kezhan, "_wait_awang_arrival",
+                        lambda w: arrived.append(1))
+    ok, info = kezhan._check_awang(_AwangWin())
+    assert ok is True and info == "已点击阿旺"
+    assert clicks == [(290, 400), (200, 400)]
+    assert arrived == [1]
+
+
+def test_check_awang_ocr_name_approach_uses_name_y(monkeypatch):
+    """OCR 名字兜底：交互点=名字上方 40px，走近点=名字行 y 的右/左侧 90px。"""
+    clicks, arrived = [], []
+    monkeypatch.setattr(kezhan, "log", lambda *a, **k: None)
+    monkeypatch.setattr(kezhan, "human_click",
+                        lambda win, x, y, **k: clicks.append((x, y)))
+    monkeypatch.setattr(kezhan, "_find_awang", lambda w: None)
+    monkeypatch.setattr(kezhan, "_find_awang_by_ocr", lambda w: (1200, 300))
+    monkeypatch.setattr(kezhan, "_wait_awang_arrival",
+                        lambda w: arrived.append(1))
+    ok, _info = kezhan._check_awang(_AwangWin())
+    assert ok is True
+    # 名字在屏幕右侧 → 走近点在其左侧 90px，y 取名字行中心
+    assert clicks == [(1110, 300), (1200, 260)]
+    assert arrived == [1]
+
+
+# ---- 阿旺模板组：三模板统一阈值 0.72（2026-11-11 用户提供素材） ----
+class _AwangCaptureWin:
+    def capture(self, **k):
+        import numpy as np
+        return np.zeros((8, 8, 4), np.uint8)  # RGBA 帧，_find_awang 截前 3 通道
+
+
+def _awang_templates_present(monkeypatch, missing=()):
+    monkeypatch.setattr(kezhan.game_map, "template_size",
+                        lambda icon: None if icon in missing else (24, 36))
+
+
+def _awang_scores(monkeypatch, scores):
+    monkeypatch.setattr(kezhan.game_map, "best_match_np",
+                        lambda frame, icon: scores[icon])
+
+
+def test_find_awang_three_templates_highest_score_wins(monkeypatch):
+    """三模板同帧匹配：达标模板中取最高分，未达标模板不参与。"""
+    monkeypatch.setattr(kezhan, "log", lambda *a, **k: None)
+    _awang_templates_present(monkeypatch)
+    _awang_scores(monkeypatch, {"awang.png": (0.60, (100, 100)),
+                                "awang2.png": (0.74, (200, 200)),
+                                "awang3.png": (0.80, (300, 300))})
+    assert kezhan._find_awang(_AwangCaptureWin()) == (300, 300)
+
+
+def test_find_awang_threshold_boundary_hits(monkeypatch):
+    """任一模板恰好 0.72 即命中（统一阈值含边界）。"""
+    monkeypatch.setattr(kezhan, "log", lambda *a, **k: None)
+    _awang_templates_present(monkeypatch)
+    _awang_scores(monkeypatch, {"awang.png": (0.72, (120, 130)),
+                                "awang2.png": (0.30, (0, 0)),
+                                "awang3.png": (0.20, (0, 0))})
+    assert kezhan._find_awang(_AwangCaptureWin()) == (120, 130)
+
+
+def test_find_awang_all_below_threshold_returns_none(monkeypatch):
+    """三模板分数均低于 0.72 → 未命中（交给 OCR 名字兜底）。"""
+    monkeypatch.setattr(kezhan, "log", lambda *a, **k: None)
+    _awang_templates_present(monkeypatch)
+    _awang_scores(monkeypatch, {"awang.png": (0.71, (10, 10)),
+                                "awang2.png": (0.71, (20, 20)),
+                                "awang3.png": (0.71, (30, 30))})
+    assert kezhan._find_awang(_AwangCaptureWin()) is None
+
+
+def test_find_awang_missing_template_skipped_warn_once(monkeypatch):
+    """缺失模板跳过、其余照常匹配；缺失告警只记录一次。"""
+    logs = []
+    monkeypatch.setattr(kezhan, "log",
+                        lambda msg, *a, **k: logs.append(msg))
+    monkeypatch.setattr(kezhan, "_awang_missing_logged", False)
+    _awang_templates_present(monkeypatch, missing=("awang3.png",))
+    _awang_scores(monkeypatch, {"awang.png": (0.50, (0, 0)),
+                                "awang2.png": (0.75, (250, 250))})
+    assert kezhan._find_awang(_AwangCaptureWin()) == (250, 250)
+    assert len(logs) == 1 and "awang3.png" in logs[0]
+    # 标志已置位：再次调用不重复告警
+    assert kezhan._find_awang(_AwangCaptureWin()) == (250, 250)
+    assert len(logs) == 1
+
+
+def test_find_awang_all_templates_missing_returns_none(monkeypatch):
+    """三模板全部缺失：直接返回 None（不截帧），OCR 名字兜底仍在。"""
+    logs, captured = [], []
+    monkeypatch.setattr(kezhan, "log",
+                        lambda msg, *a, **k: logs.append(msg))
+    monkeypatch.setattr(kezhan, "_awang_missing_logged", False)
+    monkeypatch.setattr(kezhan.game_map, "template_size", lambda icon: None)
+
+    class W:
+        def capture(self, **k):
+            captured.append(1)
+            return None
+
+    assert kezhan._find_awang(W()) is None
+    assert captured == []
+    assert len(logs) == 1
+

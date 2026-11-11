@@ -1302,9 +1302,11 @@ def _confirm_task_gone(win, title, fallback_texts=(), first_img=None,
     require_panel：追踪面板（renwuzhuizong.png 标题条）不在场时是否
     拒绝判定完成。True（默认，非战斗轮询）：面板被用户手动关闭/折叠
     时任务列表整体不可见，读不到任务不能当作任务消失（2026-11-11
-    用户实机寻路中关面板被误判完成）；False（战斗结束后的确认路径）：
-    用户 2026-11-11 确认「战斗结束后任务追踪会消失，此时应打开背包
-    返程」——面板缺席按消失处理，回退静态条带按原逻辑采集证据。
+    用户实机寻路中关面板被误判完成）；False（战斗结束后的确认路径、
+    客栈）：面板缺席按消失处理，回退静态条带按原逻辑采集证据。
+    游戏在无追踪任务时会把面板自动收起（只剩左缘小箭头）——客栈
+    任务完成瞬间面板即消失，此处若仍要求面板在场会一直空转到跟踪
+    超时（2026-11-11 16:29/16:33 实测）。
 
     first_img：调用方本轮已截取的帧（PIL）——战斗结束转换帧上的首个
     确认轮询跳过截图直接 OCR（返程链路上省一次截窗 ~0.3s）。
@@ -1370,8 +1372,8 @@ def _confirm_task_gone(win, title, fallback_texts=(), first_img=None,
             gone_region = TASK_GONE_REGION
             if not panel_missing_logged:
                 panel_missing_logged = True
-                log("[任务追踪] 战斗结束后追踪面板不在场，按任务消失判定"
-                    "（战斗结束路径）", "INFO")
+                log("[任务追踪] 追踪面板不在场，按任务消失判定"
+                    "（调用方允许面板缺席：战斗结束路径/客栈）", "INFO")
         panel_seen = True
         items, img_np = game_map.ocr_regions(img, (gone_region,))
         if task_tracker.find_task(
@@ -1507,8 +1509,8 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 signature_key=None, ignore_empty_key=False, skip_texts=None,
                 pre_click_handler=None, require_coord=False,
                 post_track_handler=None, signature_ratio=0.8,
-                task_gone_polls=None, dialog_tpl_gate=True,
-                dialog_extra_gate=None,
+                task_gone_polls=None, task_gone_require_panel=True,
+                dialog_tpl_gate=True, dialog_extra_gate=None,
                 chuyijuebao_check=True, battle_extras_tpl_gate=False,
                 story_dialog_dismiss=True, story_known_texts=None):
     """循环跟踪任务直到完成（prefix 供其他任务复用，如五环）。
@@ -1567,6 +1569,14 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
     求值——五倍非黄袍怪轮次传 1（该轮次战斗均为任务最终战斗，任务消失
     即完成；误判由主循环 has_task 复查兜住自愈），黄袍怪多杀轮次保持 2
     （两场战斗之间面板瞬时为空，1 轮会误判完成触发 4s 复查窗口）。
+    task_gone_require_panel：任务消失确认是否要求追踪面板（标题条模板）
+    在场。True（默认）：面板被手动关闭/折叠时列表整体不可见，读不到
+    任务不能当作消失（2026-11-11 手关面板误判教训，修罗等保留）；
+    False：面板缺席即按任务消失判定——游戏在无追踪任务时会把面板
+    自动收起（只剩左缘小箭头），客栈任务完成瞬间面板即消失、随后
+    脚本一直「面板未在场，不判定消失」空转到跟踪超时（2026-11-11
+    16:29/16:33 实测两轮各卡 2~3 分钟才由超时兜底去领取）。客栈
+    调用方传 False（用户确认：客栈任务在即面板必在，面板没了=完成）。
     dialog_tpl_gate：高性能模式下用对话框模板门控对话区 OCR（未命中
     模板即跳过，实测匹配 ~9ms vs OCR 470~930ms）。标准对话框
     （巫医/修罗/客栈/五倍领取与开打等）均命中；无标准边框的例外
@@ -1687,7 +1697,7 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
             # 门控空等 6s 后不判定（旧行为：战斗结束返程慢 10s）
             if _confirm_task_gone(win, title, fallback_keywords,
                 first_img=img, polls=_gone_polls(),
-                require_panel=not just_battle_ended):
+                require_panel=(not just_battle_ended) and task_gone_require_panel):
                 if _task_gone_dialog_guard(win, extra_dialog_handler,
                     tpl_gate=dialog_tpl_gate,
                     extra_gate=dialog_extra_gate):
@@ -1855,7 +1865,8 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                     title)
                 if task2 is None:
                     if _confirm_task_gone(win, title, fallback_keywords,
-                        first_img=img, polls=_gone_polls()):
+                        first_img=img, polls=_gone_polls(),
+                        require_panel=task_gone_require_panel):
                         if _task_gone_dialog_guard(win, extra_dialog_handler,
                             tpl_gate=dialog_tpl_gate,
                             extra_gate=dialog_extra_gate):
@@ -1998,7 +2009,8 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 title)
             if task2 is None:
                 if _confirm_task_gone(win, title, fallback_keywords,
-                    first_img=img, polls=_gone_polls()):
+                    first_img=img, polls=_gone_polls(),
+                    require_panel=task_gone_require_panel):
                     if _task_gone_dialog_guard(win, extra_dialog_handler,
                         tpl_gate=dialog_tpl_gate,
                         extra_gate=dialog_extra_gate):

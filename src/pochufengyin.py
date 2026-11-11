@@ -13,9 +13,10 @@ hold_catch=True，长按推过带上缘→松手回落→回 C 后点按维持�
 流程：
 弹窗出现 → 识别目标高亮区间 [L,R,C]（target 模板定位，目标带 ≈1 刻度宽）
 → 点「开始」（按钮同位置变为流程按钮）→ 每轮询一帧测量填充右边缘 P
-（HSV 金掩码 + 从左连通段）→ P<L 推进（点击模式按 C 三档连点 / 长按
-模式按住不放 / 冲刺连点模式按在线估算的每击推进量连点并持续维持）。
-点击模式 L≤P≤R 停手保持、P>R 过头永久停手；长按模式进入区间后继续按住
+（HSV 金掩码 + 从左连通段）→ 推进（点击模式按 C 三档连点到目标带中心
+C 附近才停手——破除封印松手后填充会回落，停在左缘有掉出带下的风险 /
+长按模式按住不放 / 冲刺连点模式按在线估算的每击推进量连点并持续维持）。
+点击模式 C≤P≤R 停手保持、P>R 过头永久停手；长按模式进入区间后继续按住
 （游戏锁定游标，松手会回退脱钩），仅 P>R 时松开让其回落；冲刺模式不按
 倒计时停手（填充条自动回退，须维持到窗口结束），P 低于维持点即补点。
 按钮变「保持」或倒计时 ≤3s（冲刺模式除外）完全停手等结算 → 标题消失
@@ -216,8 +217,10 @@ def play_pochufengyin(win, title_icon, prefix="客栈", label="破除封印",
        完全停手）
     3. 闭环（每 POCHU_TICK_PACE 一帧一判定，同帧复用性能规则 1）：
        测量填充右边缘 P（HSV 金掩码+连通段）与目标带 [L,R,C]（模板）
-       → P<L 推进：点击模式按 C 三档节奏连点、长按模式按住不放。
-       点击模式：L≤P≤R 停手保持、P>R 连续 2 轮确认过头后永久停手。
+       → 推进：点击模式按 C 三档节奏连点到 C 附近停手（松手后填充会
+       回落，只推到 L 有掉出带下的风险，用户 2026-11-11）、长按模式
+       按住不放。点击模式：C≤P≤R 停手保持、P>R 连续 2 轮确认过头后
+       永久停手。
        长按模式：进入区间后继续按住（游戏锁定游标，松手会回退脱钩），
        仅 P>R 连续 2 轮时松开让其回落、回到 L 以下自动再按住。
        按钮变「保持」或倒计时 ≤3s 完全停手等结算（长按期间跳过 OCR，
@@ -266,7 +269,8 @@ def play_pochufengyin(win, title_icon, prefix="客栈", label="破除封印",
     btn_pt = None                 # 「开始/流程按钮」位置（同位置，命中刷新、未命中缓存续按）
     last_seen = time.time()       # 标题最近命中时间（消失确认窗口起点）
     last_click = 0.0
-    last_p = None                 # 最近推进时测量的 P（刻度；停顿告警用）
+    last_p = None                 # 点击模式最近一次点击前测量的 P（停顿告警用）
+    last_meas_p = None            # 每轮最新测量 P（结束描述/命中判定用）
     stall_clicks = 0
     over_cnt = 0                  # P>R 连续轮数（过头确认防抖）
     terminal = None               # 完全停手原因（按钮保持/倒计时/过头）
@@ -373,12 +377,13 @@ def play_pochufengyin(win, title_icon, prefix="客栈", label="破除封印",
                 # 秒才确认结束（结束确认 2 秒窗口防单帧误判，不得缩短）
                 if time.time() - last_seen >= POCHU_END_WINDOW:
                     ok = terminal is not None and "保持" in terminal
-                    if zone is not None and last_p is not None:
+                    if zone is not None and last_meas_p is not None:
                         # 点击模式保留 ±0.3 容差（按下的量化跳变）；
                         # 长按模式连续测量，按精确区间判定命中
                         tol = 0.0 if hold else 0.3
-                        ok = ok or zone[0] - tol <= last_p <= zone[1] + tol
-                    state = f"P={last_p:.2f}" if last_p is not None else "P=未知"
+                        ok = ok or zone[0] - tol <= last_meas_p <= zone[1] + tol
+                    state = (f"P={last_meas_p:.2f}" if last_meas_p is not None
+                             else "P=未知")
                     if zone is not None:
                         state += f" 区间[{zone[0]:.1f},{zone[1]:.1f}]"
                     if last_cnt is not None:
@@ -463,9 +468,10 @@ def play_pochufengyin(win, title_icon, prefix="客栈", label="破除封印",
                         f"（已{act_name} {clicks} 次）", "SYS")
             px = pochu_fill_edge(bgr)
             p = 0.0 if px is None else pochu_tick(px)
-            if hold or mash:
-                # 长按/冲刺模式每轮记录最新 P（结束描述/命中判定用）
-                last_p = p
+            # 每轮记录最新测量 P：结束描述/命中判定用。点击模式 last_p 只在
+            # 点击时更新，0 次点击（填充一开始就在带内）时是 None——不能拿它
+            # 做结束判定，否则误报「P=未知/未确认命中」（2026-11-11 客栈实测）
+            last_meas_p = p
             # 完全停手判定（优先；terminal 一旦建立不再恢复）
             if terminal is None:
                 if btn and "保持" in btn:
@@ -676,8 +682,11 @@ def play_pochufengyin(win, title_icon, prefix="客栈", label="破除封印",
                             clicks += n
                             last_click = now
                             mash_waiting = True
-            elif terminal is None and p < L:
-                # 点击决策：P<L 才点（节奏按 C 三档）
+            elif terminal is None and p < C:
+                # 点击决策：推进到目标带中心 C 才停手（节奏按 C 三档）。
+                # 不能只推到 L 就停：破除封印松手后填充会回落，停在左缘
+                # 有一点回落就掉出带下（用户 2026-11-11：P=0.05 虽 >0 但
+                # 有风险），落在 C 附近上下各留 ~0.5 余量
                 if C < 4.0:
                     interval = POCHU_TIER_NEAR
                 elif C <= 7.0:
@@ -711,7 +720,9 @@ def play_pochufengyin(win, title_icon, prefix="客栈", label="破除封印",
                 last_log = now
                 if terminal is not None:
                     st = terminal
-                elif p < L:
+                elif p < (L if hold or mash else C):
+                    # 点击模式推进目标是带中心 C（防松手回落掉出带下），
+                    # 长按/冲刺模式仍以 L 为推进边界
                     st = f"{act_name}推进中 P={p:.2f}"
                 else:
                     st = f"保持区间内 P={p:.2f}"
@@ -722,4 +733,4 @@ def play_pochufengyin(win, title_icon, prefix="客栈", label="破除封印",
     finally:
         # 标题消失/战斗打断/异常退出统一抬起按键，防鼠标卡在按下状态
         _release_hold()
-    return False, f"{label}超时（{POCHU_TIMEOUT}s，{act_name} {clicks} 次，P={last_p}）"
+    return False, f"{label}超时（{POCHU_TIMEOUT}s，{act_name} {clicks} 次，P={last_meas_p}）"

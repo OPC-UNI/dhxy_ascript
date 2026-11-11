@@ -20,7 +20,7 @@
 跟踪与玄枢轶闻一致：点击任务追踪绿字下划线文案推进，战斗等待战斗线程处理
 （follow_task 战斗中自动跳过识别）。特殊任务步骤「前往洛阳城大理寺墙外附近」
 已实现手动寻路（世界地图 → 洛阳城 → 小地图 (620,317) → 到达 220,195 附近
-→ 检查阿旺 awang.png）；神秘宝箱（追踪文案「前面出现一个神秘宝箱，快去」
+→ 检查阿旺（三模板组 awang.png/awang2.png/awang3.png））；神秘宝箱（追踪文案「前面出现一个神秘宝箱，快去」
 出现时双模板匹配宝箱点击，到达遮挡时点屏幕中间让人物离开后再匹配）；
 四象镇魂按 青龙→白虎→朱雀→玄武 依次点击加固；三才锁阴阵（循法固阵）
 按 引灯阵法→镇煞阵法→定魂阵法 依次点击加固（文案阅读序与点击序不一致，
@@ -32,8 +32,9 @@ kezhan_yinlv.png 出现 → 记住五编钟位置 → 点开始演奏 → 按序
 破除封印小游戏（灵兔封印：对话「看来这就是那困住灵兔的封印了」→
 选项「消耗灵气，破除封印」→ 窗口标题 kezhan_pochufengyin.png 出现 →
 闭环控制：target 模板定位目标高亮区间 [L,R,C]（≈1 刻度宽）、HSV 金掩码
-+连通段测量填充右边缘 P（1~10 刻度，x 435~992）→ 点「开始」→ P<L 按
-C 三档节奏点击（C<4 慢/4~7 中/>7 快）、进区间停手、过头永久停手、
++连通段测量填充右边缘 P（1~10 刻度，x 435~992）→ 点「开始」→ 按
+C 三档节奏点击（C<4 慢/4~7 中/>7 快）推进到带中心 C 附近才停手（松手
+后填充会回落，停在左缘 L 有掉出带下的风险）、过头永久停手、
 按钮变「保持」或倒计时≤3s 完全停手 → 标题消失即任务结束；倒计时与按钮
 文字走差分门区域 OCR）；
 提交物品/无跟踪两类特殊任务后续单独处理。
@@ -570,17 +571,20 @@ DALI_MAP_CLICK_POS = (623, 317)               # 洛阳小地图上大理寺墙�
 DALI_TARGET_POS = (223, 195)                  # 到达目标（洛阳城坐标，±5 容差）
 DALI_ARRIVE_TIMEOUT = 120                     # 寻路等待超时（秒）
 DALI_REDO_INTERVAL = 15                       # 寻路完成后最短重做间隔（任务文案未更新时防重复点击）
-AWANG_ICON = "awang.png"                      # 阿旺 NPC 模板（用户实测素材）
+AWANG_ICONS = ("awang.png", "awang2.png", "awang3.png")  # 阿旺 NPC 模板组（用户素材：
+                                              # 三种外观/朝向，任一命中即可）
+AWANG_THRESHOLD = 0.72                        # 阿旺模板组统一匹配阈值（2026-11-11 用户指定）
 AWANG_FALLBACK_MAP_CLICK_POS = (548, 297)     # 兜底：洛阳小地图点击点（阿旺实际出现点，
                                               # 用户 2026-10-20 实测）
-AWANG_FALLBACK_TARGET_POS = (180, 207)        # 兜底到达目标（洛阳城坐标，±5 容差）
+AWANG_FALLBACK_TARGET_POS = (185, 207)        # 兜底到达目标（洛阳城坐标，±5 容差）
 AWANG_FALLBACK_ARRIVE_TIMEOUT = 120           # 兜底寻路等待超时（秒）
 AWANG_CLICK_OFFSET = 40                       # OCR 识别到名字标签后，点击目标在其正上方
                                               # 约 40px（用户实测：点文字本身无效）
-AWANG_APPROACH_OFFSET = 60                    # 走近点击：名字标签/模板中心左侧 30px——
-                                              # 距离过远时直接点交互点无效（实测 2026-10-20
-                                              # 点击后任务追踪不变），先点左侧让角色走过去
-                                              # （点在下方角色会站到 NPC 上挡住）
+AWANG_APPROACH_OFFSET = 90                    # 走近点击偏移（2026-11-11 用户规则）：
+                                              # 阿旺在屏幕左侧 → 点其右侧 90px；在屏幕
+                                              # 右侧 → 点其左侧 90px（朝屏幕中间一侧走近）
+AWANG_CENTER_MARGIN = 180                     # 屏幕中间区 = 中心左右各 180px：阿旺在此
+                                              # 区域内距离已够近，不走近，直接点交互点
 AWANG_ARRIVE_POLLS = 2                        # 走近寻路结束判定：位置连续不变读数次数（1s 间隔）
 AWANG_ARRIVE_TIMEOUT = 20                     # 走近等待超时（秒；点击远处 NPC 走过去约 10-15s）
 # NPC 名字 OCR 兜底查找的排除区（任务追踪面板；面板内文案如「找阿旺。」不可点）。
@@ -842,15 +846,32 @@ def _near_luoyang(pos, target):
 
 
 def _find_awang(win):
-    """查找阿旺模板；awang.png 未提供时仅记录一次（不刷日志）。"""
+    """查找阿旺模板组（awang.png / awang2.png / awang3.png，统一阈值
+    AWANG_THRESHOLD）。
+
+    单帧内三模板分别取全局最高分：任一达标即命中，多模板同时达标取
+    分数高者（相似模板比分数规则）；模板缺失时仅记录一次（不刷日志）。
+    OCR 名字兜底不受影响。
+    """
     global _awang_missing_logged
-    try:
-        return game_map.find_template(win, AWANG_ICON, threshold=0.75)
-    except Exception as e:
-        if not _awang_missing_logged:
-            log(f"[客栈] 阿旺模板不可用（{e}），改用 OCR 名字兜底", "WARN")
-            _awang_missing_logged = True
+    icons = [icon for icon in AWANG_ICONS
+             if game_map.template_size(icon) is not None]
+    if len(icons) < len(AWANG_ICONS) and not _awang_missing_logged:
+        missing = [icon for icon in AWANG_ICONS if icon not in icons]
+        log(f"[客栈] 阿旺模板缺失：{'、'.join(missing)}（其余模板照常匹配）", "WARN")
+        _awang_missing_logged = True
+    if not icons:
         return None
+    img = win.capture(force_activate=False)
+    if img is None:
+        return None
+    frame = cv2.cvtColor(np.asarray(img)[:, :, :3], cv2.COLOR_RGB2BGR)
+    best_score, best_pt = 0.0, None
+    for icon in icons:
+        score, pt = game_map.best_match_np(frame, icon)
+        if score >= AWANG_THRESHOLD and score > best_score:
+            best_score, best_pt = score, pt
+    return best_pt
 
 
 def _find_awang_by_ocr(win):
@@ -859,7 +880,7 @@ def _find_awang_by_ocr(win):
     只匹配短行（≤4 字）含「阿旺」，排除任务追踪面板区域（0,200-260,600），
     避免误点追踪文案（如「找阿旺。」）。点击目标由 _check_awang 换算：
     交互点=名字上方约 40px（用户实测：点文字本身无效）、走近点=名字
-    左侧 30px（点在下方角色会站到 NPC 上挡住）。
+    左/右侧 90px（按屏幕左右侧选侧，见 _awang_approach_pos）。
     """
     img = win.capture(force_activate=False)
     if img is None:
@@ -904,25 +925,46 @@ def _wait_awang_arrival(win):
         last = pos
 
 
+def _awang_approach_pos(x, y, win):
+    """按阿旺在屏幕中的左右位置返回走近点（窗口相对坐标）。
+
+    2026-11-11 用户规则：阿旺在屏幕左侧 → 走到其右侧
+    AWANG_APPROACH_OFFSET px；在屏幕右侧 → 走到其左侧同样距离
+    （朝屏幕中间一侧走近）；在屏幕中间区域（中心左右各
+    AWANG_CENTER_MARGIN px）→ 距离已够近，返回 None（不走近，
+    直接点交互点）。
+    """
+    cx = win.rect.width // 2
+    if x < cx - AWANG_CENTER_MARGIN:
+        return x + AWANG_APPROACH_OFFSET, y  # 阿旺在屏幕左侧：走到其右侧
+    if x > cx + AWANG_CENTER_MARGIN:
+        return x - AWANG_APPROACH_OFFSET, y  # 阿旺在屏幕右侧：走到其左侧
+    return None                              # 屏幕中间区域：无需走近
+
+
 def _check_awang(win):
-    """检查阿旺 NPC：先模板 awang.png，未命中时全屏 OCR 名字「阿旺」兜底；
+    """检查阿旺 NPC：先阿旺模板组（awang.png/awang2.png/awang3.png，
+    统一阈值 0.72），未命中时全屏 OCR 名字「阿旺」兜底；
     均未命中时按 Alt+C 降落（飞行状态地面 NPC 不可见，用户 2026-10-17
-    实测）后重试一轮。找到后两段点击：先点名字标签左侧 30px 走近
-    （距离过远时直接点交互点无效——实测 2026-10-20 点击后任务追踪
-    不变；点在下方角色会站到 NPC 上挡住），等寻路结束（位置稳定）后
-    重新定位再点交互点（固定 1s 等待在距离远时点不到，反复点击还会
-    打断寻路走不到位置）。返回 (是否成功, 描述)。
+    实测）后重试一轮。找到后按屏幕左右位置两段点击：阿旺在屏幕左侧点其
+    右侧 90px / 右侧点其左侧 90px 走近（距离过远时直接点交互点无效——实测
+    2026-10-20 点击后任务追踪不变；点在下方角色会站到 NPC 上挡住；站位取
+    朝屏幕中间一侧，2026-11-11 用户规则），屏幕中间 ±180px 内距离已够，
+    直接点交互点不走近；走近后等寻路结束（位置稳定）再重新定位点交互点
+    （固定 1s 等待在距离远时点不到，反复点击还会打断寻路走不到位置）。
+    返回 (是否成功, 描述)。
     """
 
     def _locate():
-        """定位阿旺，返回 (交互点, 走近点) 或 (None, None)。"""
+        """定位阿旺，返回 (交互点, 走近点) 或 (None, None)；
+        走近点 None = 阿旺已在屏幕中间区域，无需走近直接点交互点。"""
         pt = _find_awang(win)
         if pt is not None:
-            return pt, (pt[0] - AWANG_APPROACH_OFFSET, pt[1])
+            return pt, _awang_approach_pos(pt[0], pt[1], win)
         name = _find_awang_by_ocr(win)
         if name is not None:
             return (name[0], name[1] - AWANG_CLICK_OFFSET), \
-                   (name[0] - AWANG_APPROACH_OFFSET, name[1])
+                   _awang_approach_pos(name[0], name[1], win)
         return None, None
 
     pt, ap = _locate()
@@ -943,10 +985,16 @@ def _check_awang(win):
             log("[客栈] 未找到阿旺，游戏不在前台：跳过 Alt+C", "WARN")
     if pt is None:
         return False, "未找到阿旺（模板与 OCR 名字均未命中，Alt+C 后重试仍失败）"
-    # 两段点击：先点名字左侧 30px 走近（点击远处 NPC 会先走过去）；
+    if ap is None:
+        # 阿旺在屏幕中间 ±180px 内：距离已够近，无需走近，直接点交互点
+        human_click(win, pt[0], pt[1])
+        log(f"[客栈] 阿旺在屏幕中间区域，直接点击 @({pt[0]},{pt[1]})", "SYS")
+        return True, "已点击阿旺"
+    # 两段点击：先点阿旺左/右侧 90px 走近（点击远处 NPC 会先走过去）；
     # 等寻路结束——相机随角色移动，阿旺屏幕位置会变，须重新定位
+    side = "右" if ap[0] > pt[0] else "左"
     human_click(win, ap[0], ap[1])
-    log(f"[客栈] 已点击阿旺左侧 30px 走近 @({ap[0]},{ap[1]})", "SYS")
+    log(f"[客栈] 已点击阿旺{side}侧 {AWANG_APPROACH_OFFSET}px 走近 @({ap[0]},{ap[1]})", "SYS")
     _wait_awang_arrival(win)
     pt, _ = _locate()
     if pt is None:
@@ -1052,7 +1100,8 @@ def _walk_to_biwu(win):
 
 def verify_find_awang(win):
     """诊断页-客栈-找阿旺按钮：走真实找阿旺链路（走位到大理寺墙外 →
-    定位阿旺（模板 awang.png / OCR 名字兜底）→ 走近 → 点击交互点打开
+    定位阿旺（模板组 awang.png/awang2.png/awang3.png / OCR 名字兜底）→
+    走近 → 点击交互点打开
     对话；大理寺墙外未找到时兜底走洛阳城阿旺出现点重找一轮），与任务
     流程 _walk_to_dali 完全一致。返回 (是否成功, 描述)。
     """
@@ -2495,6 +2544,12 @@ def _follow_kezhan(win):
                            green_order=GREEN_CLICK_ORDER,
                            progress_key=_order_progress_key,
                            green_picker=_pick_task_green,
+                           # 客栈任务在即追踪面板必在（无任务时游戏自动
+                           # 收起面板）：任务完成瞬间面板消失若仍要求
+                           # 面板在场，任务消失确认永远不判定、空转到
+                           # 跟踪超时才去领取（2026-11-11 16:29/16:33
+                           # 实测各卡 2~3 分钟）；面板缺席按完成处理
+                           task_gone_require_panel=False,
                            # 模板门控：标准对话框模板或奇遇横幅模板任一命中
                            # 才做对话区 OCR（奇遇无标准边框，用 kezhan_qiyu.png
                            # 补门——两模板都未命中即跳过 OCR，高配模式省

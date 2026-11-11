@@ -11,14 +11,24 @@
   识别后关闭面板
 """
 import time
+from pathlib import Path
 
 import cv2
 import numpy as np
+import pytest
 from PIL import Image
 from ascript.windows.system import R
 
 from src import map as game_map
 from src import mingwang
+
+
+@pytest.fixture(autouse=True)
+def _reset_shahai_state(monkeypatch):
+    """沙海迷踪全局状态跨用例隔离（入口/小游戏 armed 时间戳）。"""
+    for name in ("_shahai_armed_at", "_shahai_game_armed_at",
+                 "_shahai_game_last_check"):
+        monkeypatch.setattr(mingwang, name, 0.0)
 
 # 模板 → 匹配阈值（与 mingwang 常量一致；shijie 标签走 open_mini_map_city
 # 默认 0.8）
@@ -808,6 +818,214 @@ def test_shahai_start_not_clicked_when_not_armed(monkeypatch):
                         lambda *a, **k: (_ for _ in ()).throw(
                             AssertionError("未 arm 不应点击")))
     assert mingwang._maybe_click_shahai_start(object()) is False
+
+
+def test_shahai_start_click_arms_game_check(monkeypatch):
+    """「开始」点击成功后 arm 小游戏弹窗检测窗口。"""
+    monkeypatch.setattr(mingwang, "_shahai_armed_at", time.time())
+    tpl = cv2.imread(R.img(mingwang.SHAHAI_START_ICON), cv2.IMREAD_COLOR)
+    th, tw = tpl.shape[:2]
+    frame = _noise_bgr(seed=20261120)
+    frame[300:300 + th, 600:600 + tw] = tpl
+    win = _FakeWin([_pil(frame)])
+    monkeypatch.setattr(mingwang, "human_click", lambda *a, **k: None)
+    assert mingwang._maybe_click_shahai_start(win)
+    assert mingwang._shahai_game_armed_at > 0
+
+
+# ---- 沙海迷踪「记住混沌」小游戏：黑点检测 / 阶段识别 / 点两下净化 ----
+@pytest.fixture
+def shahai_fixtures():
+    """用户实测标定截图目录（2.png 有 3 个黑点 / 3.png 无黑点）。"""
+    return Path(__file__).resolve().parent / "fixtures"
+
+
+def test_shahai_parse_top_and_stage_hint():
+    """顶部轮次/倒计时解析 + 底部提示阶段判定（用户 2026-11-11 文案）。"""
+    assert mingwang._shahai_parse_top("第 2 次地图 剩余 8 秒") == (2, 8)
+    assert mingwang._shahai_parse_top("第1次地图剩余6秒") == (1, 6)
+    assert mingwang._shahai_parse_top("第三次地图 剩余 10 秒") == (3, 10)
+    assert mingwang._shahai_parse_top("") == (None, None)
+    memory = "请记住混沌出现的位置，3秒后混沌将侵蚀入地图之中"
+    click = "请记住混沌出现的位置，点击令混沌显形，显形后再次点击将其净化！"
+    assert mingwang._shahai_stage_hint(memory) == "memory"
+    assert mingwang._shahai_stage_hint(click) == "click"
+    assert mingwang._shahai_stage_hint("无法识别的乱码") is None
+
+
+def test_shahai_dot_detection_calibration_images(shahai_fixtures):
+    """实测标定图（贴入 1378x831 窗口的标定区域）：
+    有黑点帧检出 3 个墨团，无黑点帧零检出（固定山体噪点被过滤）。"""
+    l, t, r, b = mingwang.SHAHAI_GAME_REGION
+
+    def paste(name):
+        img = cv2.imread(str(shahai_fixtures / name))
+        frame = np.full((831, 1378, 3), 120, np.uint8)
+        frame[t:b, l:r] = cv2.resize(img, (r - l, b - t))
+        return frame
+
+    dots = mingwang._shahai_find_dots(paste("shahai_dots.png"))
+    assert len(dots) == 3, dots
+    got = sorted((x, y) for x, y, _a in dots)
+    # 2.png 墨团中心 (320,249)/(512,104)/(127,252) 按区域缩放映射
+    expected = sorted([(703, 536), (907, 376), (498, 539)])
+    for (x, y), (ex, ey) in zip(got, expected):
+        assert abs(x - ex) <= 5 and abs(y - ey) <= 5, (got, expected)
+    assert mingwang._shahai_find_dots(paste("shahai_clean.png")) == []
+
+
+def test_shahai_dot_detection_ignores_dark_green_and_specks():
+    """深绿山体（最大通道 ≥60）与小面积墨点不误检。"""
+    frame = np.full((400, 700, 3), 190, np.uint8)
+    cv2.circle(frame, (200, 200), 14, (30, 70, 50), -1)   # 深绿山体噪点
+    cv2.circle(frame, (400, 200), 3, (10, 10, 10), -1)    # 过小墨点
+    cv2.circle(frame, (300, 250), 11, (15, 22, 28), -1)   # 真黑点
+    dots = mingwang._shahai_find_dots(frame, region=(50, 50, 650, 350))
+    assert len(dots) == 1, dots
+    assert abs(dots[0][0] - 300) <= 2 and abs(dots[0][1] - 250) <= 2
+
+
+def test_shahai_dot_tracking_confirm_hits():
+    """跨轮询同坐标命中累加；单帧命中按兜底保留。"""
+    entries = []
+    mingwang._shahai_track_dots(entries, [(100, 100, 200)], 1.0)
+    assert mingwang._shahai_pick_dots(entries) == [(100, 100)]
+    mingwang._shahai_track_dots(entries, [(102, 101, 180)], 1.3)
+    assert entries[0]["hits"] == 2
+    assert mingwang._shahai_pick_dots(entries) == [(102, 101)]
+
+
+def _box_frame(color=(200, 200, 200)):
+    return np.full((831, 1378, 3), color, np.uint8)
+
+
+def test_shahai_click_dot_two_clicks(monkeypatch):
+    """正常路径：第一下显形 → 间隔 0.2s 第二下净化，横条确认消散。
+
+    用户 2026-11-11 机制：两下之间严格 0.2s，之间不做截图/识别。
+    """
+    assert mingwang.SHAHAI_PAIR_GAP == 0.20
+    base = _box_frame()
+    win = _FakeWin([_pil(base), _pil(base)])  # 两下后烟雾已消散
+    clicks = []
+    sleeps = []
+    monkeypatch.setattr(mingwang, "human_click",
+                        lambda w, x, y, button="primary":
+                        clicks.append((x, y)))
+    monkeypatch.setattr(mingwang.time, "sleep", lambda s: sleeps.append(s))
+    monkeypatch.setattr(mingwang, "_shahai_ocr",
+                        lambda img, region: "此处混沌已消散！")
+    rec = mingwang._shahai_click_dot(win, 500, 400)
+    assert clicks == [(500, 400), (500, 400)]
+    assert sleeps.count(mingwang.SHAHAI_PAIR_GAP) == 1
+    assert rec["smoke_left"] is False and rec["ok"] is True
+    assert rec["t2"] > rec["t1"] > 0
+
+
+def test_shahai_click_dot_retries_when_smoke_left(monkeypatch):
+    """两下中有一下被吞（烟雾仍在且横条无反馈）→ 200ms 后补点一次净化。"""
+    base = _box_frame()
+    smoked = base.copy()
+    cv2.circle(smoked, (500, 400), 18, (70, 70, 70), -1)
+    # before=base → 两下后=somked → 复检=somked → 补点后=base
+    win = _FakeWin([_pil(base), _pil(smoked), _pil(smoked), _pil(base)])
+    clicks = []
+    ocr_calls = {"n": 0}
+
+    def fake_ocr(img, region):
+        ocr_calls["n"] += 1
+        return "此处混沌已消散！" if ocr_calls["n"] >= 2 else None
+
+    monkeypatch.setattr(mingwang, "human_click",
+                        lambda w, x, y, button="primary":
+                        clicks.append((x, y)))
+    monkeypatch.setattr(mingwang.time, "sleep", lambda s: None)
+    monkeypatch.setattr(mingwang, "_shahai_ocr", fake_ocr)
+    rec = mingwang._shahai_click_dot(win, 500, 400)
+    assert clicks == [(500, 400)] * 3
+    assert rec["retry"] > 0 and rec["ok"] is True
+    assert rec["smoke_left"] is False
+
+
+def test_shahai_click_dot_wrong_position(monkeypatch):
+    """点错坐标（无烟雾、横条「并非混沌所在」）：只点两下、不补点。"""
+    base = _box_frame()
+    win = _FakeWin([_pil(base), _pil(base)])
+    clicks = []
+    monkeypatch.setattr(mingwang, "human_click",
+                        lambda w, x, y, button="primary":
+                        clicks.append((x, y)))
+    monkeypatch.setattr(mingwang.time, "sleep", lambda s: None)
+    monkeypatch.setattr(mingwang, "_shahai_ocr",
+                        lambda img, region: "此处并非混沌所在，请少侠仔细回忆！")
+    rec = mingwang._shahai_click_dot(win, 500, 400)
+    assert clicks == [(500, 400), (500, 400)]
+    assert rec["ok"] is False and rec["smoke_left"] is False
+
+
+def test_maybe_play_shahai_detects_and_plays(monkeypatch):
+    """armed 窗口内弹窗在场 → 复用本帧阻塞执行小游戏并解除 armed。"""
+    monkeypatch.setattr(mingwang, "_shahai_game_armed_at", time.time())
+    monkeypatch.setattr(mingwang, "_shahai_game_present", lambda img: True)
+    called = {}
+
+    def fake_play(win, first_img=None, prefix="名望"):
+        called["img"] = first_img
+        return True, "小游戏完成"
+
+    monkeypatch.setattr(mingwang, "play_shahai_miyong", fake_play)
+    win = _FakeWin([_pil(_noise_bgr())])
+    assert mingwang._maybe_play_shahai(win) is True
+    assert called["img"] is win.frames[0]
+    assert mingwang._shahai_game_armed_at == 0.0
+
+
+def test_play_shahai_records_dots_and_purifies(monkeypatch):
+    """主循环：识别记忆阶段 3 个黑点 → 阶段切换 → 逐个净化 → 弹窗关闭结束。"""
+    monkeypatch.setattr(mingwang, "SHAHAI_TOP_OCR_INTERVAL", 0.0)
+    monkeypatch.setattr(mingwang, "SHAHAI_BOTTOM_OCR_INTERVAL", 0.0)
+    monkeypatch.setattr(mingwang, "SHAHAI_MID_OCR_INTERVAL", 0.0)
+    monkeypatch.setattr(mingwang, "SHAHAI_POLL_INTERVAL", 0.0)
+    monkeypatch.setattr(mingwang, "SHAHAI_MEMORY_MIN_SEC", 0.0)
+    monkeypatch.setattr(mingwang, "SHAHAI_POPUP_MISS_POLLS", 2)
+    monkeypatch.setattr(mingwang.time, "sleep", lambda s: None)
+    dots = [(400, 400), (500, 450), (600, 500)]
+    state = {"frames": 0, "top_calls": 0, "purified": None}
+
+    def fake_ocr(img, region):
+        if region == mingwang.SHAHAI_TOP_REGION:
+            state["top_calls"] += 1
+            if state["top_calls"] <= 2:
+                return "第 1 次地图 剩余 8 秒"
+            return None
+        return None
+
+    monkeypatch.setattr(mingwang, "_shahai_ocr", fake_ocr)
+    monkeypatch.setattr(
+        mingwang, "_shahai_text_gated",
+        lambda img, region, cache, force=False:
+        "点击令混沌显形，显形后再次点击将其净化！")
+
+    def fake_find(bgr, region=None):
+        state["frames"] += 1
+        if state["frames"] <= 2:
+            return [(x, y, 200) for x, y in dots]
+        return []
+
+    monkeypatch.setattr(mingwang, "_shahai_find_dots", fake_find)
+
+    def fake_purify(win, ds, prefix="名望"):
+        state["purified"] = list(ds)
+        return [{"x": x, "y": y, "t1": 1.0, "t2": 2.0, "retry": 0.0,
+                 "smoke_left": False, "message": "此处混沌已消散！",
+                 "ok": True}
+                for x, y in ds]
+
+    monkeypatch.setattr(mingwang, "_shahai_purify_dots", fake_purify)
+    win = _FakeWin([_pil(_noise_bgr())])
+    ok, info = mingwang.play_shahai_miyong(win)
+    assert ok and "1 轮" in info
+    assert state["purified"] == dots
 
 
 # ---- 净化水晶丛林：入口对话选项 → armed 检测「开始」按钮 → 战斗 ----
