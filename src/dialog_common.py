@@ -356,12 +356,28 @@ DIALOG_FRAME_THRESHOLD = 0.79              # 命中阈值（2026-11-07 巫医真
 
 # ---- 剧情对话点屏推进的寻路保护（2026-11-11 用户实机） ----
 # 剧情对话不挡路时人物照常自动寻路，此时点屏幕中间会取消寻路（人物
-# 停下不再走）。坐标连续 STORY_MOVE_STATIC_POLLS 次不变（跟随轮询
-# 0.5s/次 ≈1.5s，行走 1.5s 轮询坐标必变，客栈/名望到达判定同款信号）
-# 才允许点屏。
-STORY_MOVE_STATIC_POLLS = 3     # 连续坐标不变轮询数（站定确认）
+# 停下不再走）。用左上角地图位置文字的**像素比对**判断人物是否移动：
+# 站定时该区域像素逐帧全等，行走/换图时坐标数字变化（45 对真实帧实测：
+# 站立帧差 ≤0.26、行走 ≥0.50，走 1 格约 2~6），单次比对 ~0.1ms、零
+# OCR——不用每轮 OCR 坐标。阈值取 0.3（误判移动只是推迟 1s，误判站定
+# 会打断寻路，故向"移动"倾斜）。
+STORY_MOVE_STATIC_POLLS = 2     # 连续像素不变轮询数（站定确认，≈1s）
+STORY_MOVE_DIFF_THRESHOLD = 0.3 # 位置区平均像素差阈值
+STORY_MOVE_BACKOFF = 1.0        # 检测到移动后的复查间隔（秒）
 STORY_MOVE_TRACK_GRACE = 2.0    # 追踪寻路点击后的静默期（秒）
 STORY_MOVE_LOG_INTERVAL = 5.0   # 寻路抑制日志限频（秒）
+
+
+def _position_crop(img):
+    """地图位置文字区域裁剪（寻路判定的像素信号）。失败返回 None。"""
+    import numpy as np
+    if img is None:
+        return None
+    arr = np.asarray(img)
+    l, t, r, b = game_map.MAP_POS_REGION
+    if arr.ndim < 2 or arr.shape[0] < b or arr.shape[1] < r:
+        return None
+    return arr[t:b, l:r].astype(np.int16)
 
 
 def dialog_frame_score(frame):
@@ -451,10 +467,11 @@ class StoryDialogDismisser:
     ⑤ 对话区任何行都无绿字（带选项的对话不点）；
     ⑥ 连续 2 轮询命中（单帧可能是渲染过渡），点击间隔 ≥1s（多屏对话
        逐页推进，防连点）；
-    ⑦ 人物已站定（地图坐标连续 STORY_MOVE_STATIC_POLLS 次不变）——
-       寻路中点屏幕中间会取消自动寻路、人物停下不再走（2026-11-11
-       用户实机教训）。刚点过任务追踪的 STORY_MOVE_TRACK_GRACE 秒内
-       一律按寻路中处理（坐标显示有刷新间隔，起步瞬间读不到变化）。
+    ⑦ 人物已站定（地图位置文字区域像素连续 STORY_MOVE_STATIC_POLLS
+       次不变）——寻路中点屏幕中间会取消自动寻路、人物停下不再走
+       （2026-11-11 用户实机教训）。刚点过任务追踪的
+       STORY_MOVE_TRACK_GRACE 秒内一律按寻路中处理（坐标显示有刷新
+       间隔，起步瞬间读不到变化）。
     一个任务阶段一个实例（状态随实例重置，不跨任务泄漏）。
 
     img：调用方已截帧（PIL，可选）——寻路判定复用同一帧省一次截窗；
@@ -466,36 +483,49 @@ class StoryDialogDismisser:
         self.allow_dismiss = allow_dismiss
         self.streak = 0
         self.last_click_at = 0.0
-        self._last_pos = None       # 上次地图坐标（寻路判定基线）
-        self._static_polls = 0      # 连续坐标不变轮询数
+        self._last_crop = None      # 上次位置区像素（寻路判定基线）
+        self._static_polls = 0      # 连续像素不变轮询数
+        self._move_retry_at = 0.0   # 移动中复查退避截止时间
         self._move_log_at = 0.0     # 寻路抑制日志限频时间戳
 
     def _reset_walk(self):
         """重置寻路判定状态（对话关闭/守卫失败时调用）。"""
-        self._last_pos = None
+        self._last_crop = None
         self._static_polls = 0
+        self._move_retry_at = 0.0
 
     def _walking(self, win, img=None):
-        """人物是否仍在寻路（坐标仍在变化）。True = 禁止点屏。
+        """人物是否仍在寻路（位置区像素仍在变化）。True = 禁止点屏。
 
         剧情对话不挡路时人物照常自动寻路，此时点屏幕中间会取消寻路
         （2026-11-11 用户实机：人物停下不再走）——寻路中一律不点，
-        等人物站定（连续 STORY_MOVE_STATIC_POLLS 次坐标不变）再推进。
-        坐标不可读（无坐标场景/识别失败）按未寻路放行：保持旧行为，
+        等人物站定（连续 STORY_MOVE_STATIC_POLLS 次像素不变）再推进。
+        位置区像素比对零 OCR（~0.1ms）；检测到移动后退避
+        STORY_MOVE_BACKOFF 秒复查，长距离寻路不逐轮询比对。
+        无帧可查（截窗失败/调用方无窗口）按未寻路放行：保持旧行为，
         防无坐标场景的剧情对话永不推进（模板/绿字守卫仍在）。
         """
+        now = time.time()
         if app_utils.track_walk_idle_seconds() < STORY_MOVE_TRACK_GRACE:
-            return True  # 刚点过追踪寻路：坐标显示可能尚未刷新
-        pos = game_map.read_map_position(win, img=img) if img is not None \
-            else game_map.read_map_position(win)
-        if pos is None:
+            return True  # 刚点过追踪寻路：位置文字可能尚未刷新
+        if now < self._move_retry_at:
+            return True  # 移动中退避：不重复截帧/比对
+        if img is None and win is not None:
+            img = win.capture(force_activate=False)
+        crop = _position_crop(img)
+        if crop is None:
             self._reset_walk()
             return False
-        if self._last_pos is not None and pos == self._last_pos:
-            self._static_polls += 1
-        else:
-            self._static_polls = 0
-        self._last_pos = pos
+        if self._last_crop is not None and self._last_crop.shape == crop.shape:
+            import numpy as np
+            if float(np.abs(crop - self._last_crop).mean()) \
+                    >= STORY_MOVE_DIFF_THRESHOLD:
+                self._last_crop = crop
+                self._static_polls = 0
+                self._move_retry_at = now + STORY_MOVE_BACKOFF
+                return True
+        self._last_crop = crop
+        self._static_polls += 1
         return self._static_polls < STORY_MOVE_STATIC_POLLS
 
     def try_dismiss(self, win, items, img_np, prefix="", img=None):

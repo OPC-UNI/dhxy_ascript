@@ -42,7 +42,7 @@ _STORY = [_item("我被人骗了", 435, 395),
 
 
 def _dismiss_env(monkeypatch, score=0.99, green=False, known=(),
-                 pos=("洛阳城", 100, 100), idle=1e9, allow=None):
+                 idle=1e9, allow=None):
     import numpy as np
     clicks = []
     monkeypatch.setattr(dialog_common, "dialog_frame_score", lambda img: score)
@@ -51,9 +51,7 @@ def _dismiss_env(monkeypatch, score=0.99, green=False, known=(),
     monkeypatch.setattr(dialog_common, "_click_screen_center",
                         lambda win, times=1, prefix="": clicks.append(times))
     monkeypatch.setattr(dialog_common, "log", lambda msg, level="INFO": None)
-    # 寻路保护：默认坐标静止（连续不变 → 站定）+ 从未点过追踪寻路
-    monkeypatch.setattr(dialog_common.game_map, "read_map_position",
-                        lambda win, img=None: pos)
+    # 寻路保护：默认帧位置区像素不变（站定）+ 从未点过追踪寻路
     monkeypatch.setattr(dialog_common.app_utils, "track_walk_idle_seconds",
                         lambda: idle)
     gate = dialog_common.StoryDialogDismisser(known_texts=known,
@@ -61,48 +59,49 @@ def _dismiss_env(monkeypatch, score=0.99, green=False, known=(),
     return gate, clicks, np.zeros((831, 1378, 3), np.uint8)
 
 
+def _dismiss(gate, frame, prefix=""):
+    return gate.try_dismiss(None, _STORY, frame, prefix=prefix, img=frame)
+
+
 def test_story_dismiss_static_polls_then_click(monkeypatch):
-    """连续 2 轮询命中 + 人物站定（坐标连续 3 次不变）才点屏。
+    """连续 2 轮询命中 + 人物站定（位置区像素连续 2 次不变）才点屏。
 
     2026-11-11 用户实机：剧情对话不挡路时人物照常自动寻路，点屏幕
     中间会取消寻路（人物停下不再走）——须先确认站定。
     """
     gate, clicks, frame = _dismiss_env(monkeypatch)
-    assert gate.try_dismiss(None, _STORY, frame, prefix="测试") is False
-    assert gate.try_dismiss(None, _STORY, frame, prefix="测试") is False
-    assert gate.try_dismiss(None, _STORY, frame, prefix="测试") is False
-    assert gate.try_dismiss(None, _STORY, frame, prefix="测试") is False
-    assert gate.try_dismiss(None, _STORY, frame, prefix="测试") is True
+    assert _dismiss(gate, frame, "测试") is False
+    assert _dismiss(gate, frame, "测试") is False
+    assert _dismiss(gate, frame, "测试") is True
     assert clicks == [1]
 
 
 def test_story_dismiss_skips_while_walking(monkeypatch):
-    """人物坐标持续变化（寻路中）绝不点屏——防取消自动寻路。"""
-    gate, clicks, frame = _dismiss_env(monkeypatch)
-    seq = iter([("洛阳城", 100 + i, 100) for i in range(20)])
-    monkeypatch.setattr(dialog_common.game_map, "read_map_position",
-                        lambda win, img=None: next(seq))
-    for _ in range(10):
-        assert gate.try_dismiss(None, _STORY, frame) is False
+    """位置区像素持续变化（寻路中）绝不点屏——防取消自动寻路。"""
+    import numpy as np
+    gate, clicks, _ = _dismiss_env(monkeypatch)
+    monkeypatch.setattr(dialog_common, "STORY_MOVE_BACKOFF", 0.0)  # 每次都比对
+    for i in range(10):
+        frame = np.zeros((831, 1378, 3), np.uint8)
+        frame[60:90, 45:222] = (i * 10) % 256  # 坐标文字区域逐次变化
+        assert _dismiss(gate, frame) is False
     assert clicks == []
 
 
 def test_story_dismiss_skips_after_track_walk(monkeypatch):
-    """刚点过任务追踪：寻路起步窗口（坐标显示刷新滞后）不点屏。"""
+    """刚点过任务追踪：寻路起步窗口（位置文字刷新滞后）不点屏。"""
     gate, clicks, frame = _dismiss_env(
         monkeypatch, idle=dialog_common.STORY_MOVE_TRACK_GRACE - 0.5)
     for _ in range(10):
-        assert gate.try_dismiss(None, _STORY, frame) is False
+        assert _dismiss(gate, frame) is False
     assert clicks == []
 
 
-def test_story_dismiss_pos_unreadable_allows_click(monkeypatch):
-    """坐标不可读按未寻路放行（无坐标场景剧情对话仍可推进，旧行为）。"""
-    gate, clicks, frame = _dismiss_env(monkeypatch)
-    monkeypatch.setattr(dialog_common.game_map, "read_map_position",
-                        lambda win, img=None: None)
+def test_story_dismiss_no_frame_allows_click(monkeypatch):
+    """无帧可查（截窗失败/无窗口）按未寻路放行：保持旧行为。"""
+    gate, clicks, _ = _dismiss_env(monkeypatch)
     for _ in range(5):
-        gate.try_dismiss(None, _STORY, frame)
+        gate.try_dismiss(None, _STORY, None, img=None)
     assert clicks == [1]
 
 
