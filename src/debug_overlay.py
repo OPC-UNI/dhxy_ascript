@@ -37,6 +37,7 @@ import time
 from datetime import datetime, timedelta
 
 from .app_utils import log
+from . import user_data
 
 # ---- 绘制参数（游戏窗口相对坐标） ----
 OVERLAY_FONT = 18           # 字体大小（像素）
@@ -232,7 +233,8 @@ def record_round():
 
 
 def _stats_path():
-    return _config_dir() / STATS_FILENAME
+    # 按角色隔离：data/<角色ID>/task_stats.json（2026-11-11）
+    return user_data.stats_path()
 
 
 def _today_str():

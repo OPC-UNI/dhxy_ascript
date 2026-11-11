@@ -12,6 +12,8 @@ from contextlib import contextmanager
 from ascript.windows.hardware.mouse import Mouse
 from ascript.windows.system.key_value import KeyValue
 
+from . import user_data
+
 try:
     from pydirectinput import FailSafeException as _PDIFailSafe
 except ImportError:  # 理论不可达（ascript Mouse 依赖 pydirectinput），防御性兜底
@@ -501,6 +503,24 @@ def kv_remove_merged(key):
             _kv_commit_locked()
 
 
+def kv_remove_many_merged(keys):
+    """重读 config.json 后一次删除多个键（旧角色字段清理用）。
+
+    返回实际删除的键数量；无键可删时不写文件。
+    """
+    KeyValue._initialize()
+    removed = 0
+    with KeyValue._lock:
+        KeyValue._data = KeyValue._load_data()
+        for key in keys:
+            if key in KeyValue._data:
+                del KeyValue._data[key]
+                removed += 1
+        if removed:
+            _kv_commit_locked()
+    return removed
+
+
 def _kv_commit_locked():
     """锁内写盘（格式同库的 _commit；外层已持 _lock，不能再调 _commit——
     其内部会再次获取同一把非可重入锁导致死锁）。"""
@@ -540,23 +560,40 @@ HIGH_PERF_DIALOG_WAIT = 0.5
 _HIGH_PERF_CACHE_KEY = "high_perf_cache"
 
 
-def _persist_high_perf_cache():
-    """把固定位置缓存写入配置（kv_save_merged：重读合并，防任务子进程
-    用启动时的旧快照覆盖面板进程运行中新保存的设置）。"""
+def _load_high_perf_cache():
+    """读取当前角色的高性能缓存。
+
+    迁移后的新角色没有缓存文件、也不回退旧版全局缓存（2026-11-11
+    用户确认：只有迁移时的当前角色继承旧缓存，其他角色重新学习）。
+    未迁移的旧版/单测环境才回退 config.json 的全局键。
+    """
     try:
-        kv_save_merged(_HIGH_PERF_CACHE_KEY,
-                       {k: list(v) for k, v in _fixed_pos_cache.items()})
+        data = user_data.read_high_perf()
+        if data:
+            return data
+        if not user_data.is_migrated():
+            return KeyValue.get(_HIGH_PERF_CACHE_KEY, {}) or {}
+    except Exception:
+        pass
+    return {}
+
+
+def _persist_high_perf_cache():
+    """把固定位置缓存写入当前角色 high_perf_cache.json。"""
+    try:
+        user_data.write_high_perf(
+            {k: list(v) for k, v in _fixed_pos_cache.items()})
     except Exception as e:
         log(f"[高性能] 缓存持久化失败: {e}", "WARN")
 
 
 def set_high_perf(on):
-    """设置高性能开关（任务进程启动时调用一次）；开启时加载持久化缓存。"""
+    """设置高性能开关（任务进程启动时调用一次）；开启时加载当前角色缓存。"""
     global _high_perf
     _high_perf = bool(on)
     if _high_perf:
         try:
-            data = KeyValue.get(_HIGH_PERF_CACHE_KEY, {}) or {}
+            data = _load_high_perf_cache()
             for key, entry in data.items():
                 if (isinstance(entry, (list, tuple)) and len(entry) == 4
                         and all(isinstance(v, int) for v in entry)):
@@ -601,20 +638,32 @@ def char_key(win):
     return f"（ID：{m.group(1)}）" if m else title
 
 
+_MISSING = object()
+
+
 def _char_state_get(key, ckey, default=None):
-    """读取角色维度状态（损坏数据按未记录处理）。"""
+    """读取角色维度状态（data/<角色>/state.json；旧版未迁移时回退 config）。"""
+    role = user_data.role_id_from_char_key(ckey)
     try:
-        data = KeyValue.get(key, {}) or {}
-        return data.get(ckey, default)
+        value = user_data.get_state(key, role, _MISSING)
     except Exception:
-        return default
+        value = _MISSING
+    if value is not _MISSING:
+        return value
+    if not user_data.is_migrated():  # 旧版未迁移/单测兜底
+        try:
+            data = KeyValue.get(key, {}) or {}
+            return data.get(ckey, default)
+        except Exception:
+            pass
+    return default
 
 
 def _char_state_set(key, ckey, value):
-    """写入角色维度状态（kv_update_merged：保存前重读合并，防任务子进程
-    整文件覆写面板进程运行中保存的设置——同高性能缓存持久化的坑）。"""
+    """写入角色维度状态（data/<角色>/state.json，读-改-写原子替换）。"""
+    role = user_data.role_id_from_char_key(ckey)
     try:
-        kv_update_merged(key, lambda data: {**(data or {}), ckey: value})
+        user_data.set_state(key, value, role)
     except Exception as e:
         log(f"[状态] {key} 持久化失败: {e}", "WARN")
 
@@ -629,8 +678,26 @@ def char_state_get(key, win, default=None):
 
 
 def char_state_set(key, win, value):
-    """写入角色维度状态（合并写，防跨进程整文件覆写）。"""
+    """写入角色维度状态（data/<角色>/state.json）。"""
     _char_state_set(key, char_key(win), value)
+
+
+def role_state_get(key, default=None):
+    """读取当前角色 state.json 的键（每次直读文件，跨进程可见）。"""
+    try:
+        return user_data.get_state(key, None, default)
+    except Exception:
+        return default
+
+
+def role_state_set(key, value):
+    """写入当前角色 state.json 的键。成功返回 True。"""
+    try:
+        user_data.set_state(key, value)
+        return True
+    except Exception as e:
+        log(f"[状态] {key} 持久化失败: {e}", "WARN")
+        return False
 
 
 # ---- 摄妖香 1 小时有效期管理（实际有效期 1 小时；按 57 分钟续用，
@@ -719,12 +786,21 @@ _TASK_PROGRESS_KEY = "task_progress"  # {char_key: {"date": "YYYY-MM-DD", "modes
 def task_progress_done(win, mode):
     """该角色当天该任务已完成的次数（跨重启持久；跨天自动清零）。"""
     ckey = char_key(win)
+    role = user_data.role_id_from_char_key(ckey)
     today = time.strftime("%Y-%m-%d")
     try:
-        data = KeyValue.get(_TASK_PROGRESS_KEY, {}) or {}
-        entry = data.get(ckey, {})
-        if not isinstance(entry, dict) or entry.get("date") != today:
-            return 0
+        entry = user_data.get_state(_TASK_PROGRESS_KEY, role, None)
+    except Exception:
+        entry = None
+    if entry is None and not user_data.is_migrated():  # 旧版未迁移/单测兜底
+        try:
+            data = KeyValue.get(_TASK_PROGRESS_KEY, {}) or {}
+            entry = data.get(ckey, {})
+        except Exception:
+            entry = {}
+    if not isinstance(entry, dict) or entry.get("date") != today:
+        return 0
+    try:
         return int(entry.get("modes", {}).get(mode, 0) or 0)
     except Exception:
         return 0
@@ -733,19 +809,19 @@ def task_progress_done(win, mode):
 def task_progress_add(win, mode, done):
     """记录该角色当天任务完成次数（done 为含本轮总数）。"""
     ckey = char_key(win)
+    role = user_data.role_id_from_char_key(ckey)
     today = time.strftime("%Y-%m-%d")
 
-    def _merge(data):
-        data = data or {}
-        entry = data.get(ckey, {})
+    def _merge(state):
+        entry = state.get(_TASK_PROGRESS_KEY)
         if not isinstance(entry, dict) or entry.get("date") != today:
             entry = {"date": today, "modes": {}}
         entry.setdefault("modes", {})[mode] = int(done)
-        data[ckey] = entry
-        return data
+        state[_TASK_PROGRESS_KEY] = entry
+        return state
 
     try:
-        kv_update_merged(_TASK_PROGRESS_KEY, _merge)
+        user_data.update_state(_merge, role)
     except Exception as e:
         log(f"[进度] {mode} 进度持久化失败: {e}", "WARN")
 

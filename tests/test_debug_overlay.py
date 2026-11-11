@@ -124,3 +124,12 @@ def test_daily_trim_keeps_90_days(stats_env):
     do._stats_write(data)
     reloaded = do._stats_load()
     assert len(reloaded["daily"]) <= do.STATS_KEEP_DAYS
+
+
+def test_stats_path_is_per_role(monkeypatch, tmp_path):
+    """成就文件按角色隔离：data/<角色ID>/task_stats.json（2026-11-11）。"""
+    from src import user_data
+    monkeypatch.setattr(user_data, "config_dir", lambda: tmp_path)
+    monkeypatch.setattr(user_data, "_probe_role_id", lambda: "1001")
+    monkeypatch.setattr(user_data, "_ROLE_CACHE", {"id": None, "ts": 0.0})
+    assert do._stats_path() == tmp_path / "data" / "1001" / "task_stats.json"

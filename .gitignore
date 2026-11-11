@@ -15,6 +15,8 @@ debug_overlay_state.json
 debug_overlay_helper_exit.txt
 # 任务统计报表持久化档案（跨会话累计的用户数据，不入库）
 task_stats.json
+# 角色数据目录（按角色隔离的方案/成就/进度/高性能缓存，运行时用户数据）
+data/
 # 种族字形库（随挂机自动积累的运行时数据）
 team_race_glyphs*.npz
 # 本地日志文件（开发调试用，log 同时落盘到 logs/）

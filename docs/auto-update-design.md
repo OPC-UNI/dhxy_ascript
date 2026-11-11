@@ -3,7 +3,8 @@
 > 状态：已实现（v2.10.0，待发版实机验证）。日期：2026-11-09。
 > 目标：在现有「GitHub Actions 打包 → zip 解压即用」的分发方式上，增加
 > **检查更新 → 下载 → 覆盖升级 → 自动重启** 的完整链路；升级只替换程序文件，
-> `config.json` / `schemes.json` / `task_stats.json` 等用户数据原样保留。
+> `config.json` / `data/`（按角色隔离的方案/成就/进度/高性能缓存）/
+> `schemes.json` / `task_stats.json` 等用户数据原样保留。
 
 ---
 
@@ -468,9 +469,10 @@ available → downloading → ready → applying → restarting
 | `zhuomuniao.exe` | 替换（app 分片） |
 | `res/` 整目录 | 替换（app 分片；模板、UI、模型随版本更新） |
 | `pylibs/` 整目录 | 有变化才替换（pylibs 分片） |
-| `config.json` | **保留**（任务选择、阈值、热键、授权缓存、更新偏好） |
-| `schemes.json` | **保留**（配置方案） |
-| `task_stats.json` | **保留**（任务统计） |
+| `config.json` | **保留**（全局设置、当前角色设置快照、窗口绑定） |
+| `data/` | **保留**（按角色隔离的 settings / schemes / task_stats / state / high_perf_cache） |
+| `schemes.json` | **保留**（旧版全局方案；迁移后新版本不再读写，回滚用） |
+| `task_stats.json` | **保留**（旧版全局统计；迁移后新版本不再读写，回滚用） |
 | `path_cache.json` | **保留**（固定坐标缓存） |
 | `logs/` | **保留** |
 | `debug_overlay_state.json` | 保留（运行时状态，下次启动会重建） |
@@ -631,7 +633,7 @@ available → downloading → preparing（解压）→ stopping → applying →
 2. 修改若干配置/方案/统计 → 发布 v2.9.8 测试包到 `test/` 前缀。
 3. 客户端检查 → 下载 → 更新 → 重启：
    - 版本显示正确；
-   - `config.json`、`schemes.json`、`task_stats.json` 内容不变；
+   - `config.json`、`data/`、`schemes.json`、`task_stats.json` 内容不变；
    - 任务能正常启动。
 4. 回滚测试：测试包故意放一个启动即退的 exe → 确认自动回滚并能启动旧版。
 5. 多实例测试：开两个实例 → 更新被拒绝且提示明确。

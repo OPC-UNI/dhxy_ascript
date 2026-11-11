@@ -304,9 +304,9 @@ OCR 1.4-2.2 CPU 秒。整改后结构（内层循环每轮顺序固定为）：
 3. 需要绝对零开销时只能用静态画面；只要保留持续动效，合成器仍会
    每帧合成（上表 ~9.5% 单核即这部分底线），但远低于逐帧重绘。
 
-**统计与调试开关的关系**：`task_stats.json` 的 tick 在
+**统计与调试开关的关系**：`data/<角色ID>/task_stats.json` 的 tick 在
 `debug_overlay._supervise` 内执行，与 `debug_overlay` 开关无关；开关只
 控制悬浮层绘制指令与绘制子进程是否启动。开关关闭时统计照常累计
 （代码上 `_stats_tick` 在 `if enabled` 分支之外；当前 config.json
-`debug_overlay=false`，task_stats.json 仍有 634 轮/650 场历史记录），
+`debug_overlay=false`，角色 task_stats.json 仍有 634 轮/650 场历史记录），
 且不产生绘制进程，CPU 更低。

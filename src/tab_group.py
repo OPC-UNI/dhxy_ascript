@@ -303,10 +303,7 @@ def deactivate_group(reason=""):
     _team_member_ids = set()
     _acted_ids = set()
     log(f"[组号] 组号模式降级关闭{('：' + reason) if reason else ''}", "WARN")
-    try:
-        app_utils.kv_save_merged("group_detected", False)
-    except Exception as e:
-        log(f"[组号] 组号识别状态写入失败: {e}", "WARN")
+    app_utils.role_state_set("group_detected", False)
 
 
 def leader_battle_actions():
@@ -435,10 +432,7 @@ def startup_member_check(win, panel_names=None):
     confirmed = [m for m in members if m["in_team"]]
     _team_member_ids = {m["id"] for m in confirmed}
     if data.get("panel_read"):
-        try:
-            app_utils.kv_save_merged("group_detected", bool(confirmed))
-        except Exception as e:
-            log(f"[组号] 组号识别状态写入失败: {e}", "WARN")
+        app_utils.role_state_set("group_detected", bool(confirmed))
         # 队伍检查快照：组号页打开自动展示队长与在队伍中的队员（此前
         # 必须手动点「检查当前队伍」才出列表，2026-11-11 用户需求）
         try:

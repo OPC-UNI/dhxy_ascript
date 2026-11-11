@@ -751,8 +751,8 @@ def test_startup_member_check_writes_last_scan(monkeypatch):
     """启动检查写队伍检查快照（组号页打开自动展示）：只含在队伍中的
     队员，非组号成员不进快照。"""
     writes = {}
-    monkeypatch.setattr(tab_group.app_utils, "kv_save_merged",
-                        lambda key, value: writes.__setitem__(key, value))
+    monkeypatch.setattr(tab_group.app_utils, "role_state_set",
+                        lambda key, value: writes.__setitem__(key, value) or True)
     data = {"panel_read": True,
             "leader": {"id": "idL", "name": "队长甲",
                        "char": None, "beast": None},
@@ -774,8 +774,8 @@ def test_startup_member_check_writes_group_detected(monkeypatch):
     """面板昵称可读时同步写组号识别状态：确认到队员=组号 True、
     读不到不写（宽松保留上次状态）。"""
     writes = {}
-    monkeypatch.setattr(tab_group.app_utils, "kv_save_merged",
-                        lambda key, value: writes.__setitem__(key, value))
+    monkeypatch.setattr(tab_group.app_utils, "role_state_set",
+                        lambda key, value: writes.__setitem__(key, value) or True)
     data = {"panel_read": True,
             "leader": {"id": "idL", "name": "队长甲",
                        "char": None, "beast": None},
@@ -852,8 +852,8 @@ def test_deactivate_group_hides_and_disables(monkeypatch):
     """组号降级（启动未组队）：本次运行关闭组号模式（pass 不再激活）、
     清空成员状态，并写组号识别状态 False（侧边栏入口隐藏）。"""
     writes = {}
-    monkeypatch.setattr(tab_group.app_utils, "kv_save_merged",
-                        lambda key, value: writes.__setitem__(key, value))
+    monkeypatch.setattr(tab_group.app_utils, "role_state_set",
+                        lambda key, value: writes.__setitem__(key, value) or True)
     monkeypatch.setattr(tab_group, "_active", True)
     monkeypatch.setattr(tab_group, "_mode", "修罗")
     monkeypatch.setattr(tab_group, "_team_member_ids", {"idM1"})
@@ -956,8 +956,8 @@ def test_startup_member_check_no_match_distinct_message(monkeypatch):
     文案必须区别于「面板昵称未识别」，且写组号识别状态 False
     （2026-11-07 日志 20:38 误报教训）。"""
     writes = {}
-    monkeypatch.setattr(tab_group.app_utils, "kv_save_merged",
-                        lambda key, value: writes.__setitem__(key, value))
+    monkeypatch.setattr(tab_group.app_utils, "role_state_set",
+                        lambda key, value: writes.__setitem__(key, value) or True)
     data = {"panel_read": True,
             "leader": {"id": "idL", "name": "队长甲",
                        "char": None, "beast": None},

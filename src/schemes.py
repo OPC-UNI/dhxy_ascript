@@ -3,20 +3,21 @@
 方案 = 用户设置键的完整快照，白名单为 control_window 的设置 load/save
 键。运行时状态（任务进度、摄妖香时间戳、清屏标记、窗口绑定、授权缓存）、
 派生缓存（high_perf_cache）与调试相关全局设置（调试信息开关
-debug_overlay、「显示与调试」卡片解锁标记 debug_ui_unlocked）不进方案，
-全局共享——切换方案不得改变诊断入口/悬浮层显隐（用户 2026-11-10 要求
-调试开关放 config.json、不随方案走）。
+debug_overlay、「显示与调试」卡片解锁标记 debug_ui_unlocked）不进方案。
+界面主题 ui_theme 为全局设置（2026-11-11 用户确认：切账号/切方案不改主题）。
 
-存储：与 config.json 同目录的 schemes.json——
-    {"active": "默认", "默认": {设置键: 值}, ...}
-方案与 active 全局一份（多实例共享 config.json 的现状下不做按实例
-隔离，与现有「谁后写谁生效」的共享设置语义一致，用户确认接受）。
+存储（2026-11-11 起按角色隔离）：
+    data/<角色ID>/settings.json   # 当前生效设置（含未保存改动）
+    data/<角色ID>/schemes.json    # 命名方案快照 + active
+切换账号不改写 config.json：每个角色自己的 settings.json 就是生效设置，
+任务子进程直接读当前角色设置。新角色首次使用从默认值建「默认」方案
+（不继承其他角色的方案）。
 
 快照时机：仅在 切换/保存/另存新方案 三个时点更新——切换前先把当前
 设置快照回写当前活动方案，保证界面未保存改动不丢失；「保存」按钮
 按输入名写回活动方案（改名即重命名）。应用方案时缺失键以默认值
-补齐（快照语义完整），写入走 app_utils.kv_save_many_merged（重读→改→写
-一次，防跨进程旧快照整文件覆写）。
+补齐（快照语义完整），写入走 role_settings.update（当前角色
+data/<角色ID>/settings.json）。
 
 本模块不顶层导入 control_window（后者顶层导入本模块），设置键表经
 _control_window() 惰性获取——与 xiuluo 延迟导入同模式。
@@ -25,11 +26,10 @@ import json
 import threading
 from pathlib import Path
 
-from ascript.windows.system.key_value import KeyValue
-
 from . import app_utils
+from . import user_data
+from . import role_settings
 
-SCHEMES_FILENAME = "schemes.json"
 DEFAULT_SCHEME_NAME = "默认"
 MAX_NAME_LEN = 20
 _INVALID_NAME_CHARS = set('\\/:*?"<>|')
@@ -44,19 +44,18 @@ def _control_window():
     return cw
 
 
-def _schemes_path():
-    """schemes.json 路径：与 config.json 同目录（跟随 KeyValue 路径策略）。"""
-    KeyValue._initialize()
-    return KeyValue._file_path.parent / SCHEMES_FILENAME
+def _schemes_path(role=None):
+    """当前角色的 schemes.json 路径（data/<角色ID>/schemes.json）。"""
+    return user_data.schemes_path(role)
 
 
-def _load():
-    """读取 schemes.json；文件缺失/损坏/active 无效返回 None（调用方重建）。
+def _load(role=None):
+    """读取角色方案文件；缺失/损坏/active 无效返回 None（调用方重建）。
 
     不持有锁——仅在 _get_data/_update 锁内调用。
     """
     try:
-        data = json.loads(_schemes_path().read_text(encoding="utf-8"))
+        data = json.loads(_schemes_path(role).read_text(encoding="utf-8"))
         active = data.get("active") if isinstance(data, dict) else None
         if (isinstance(data, dict) and isinstance(active, str)
                 and isinstance(data.get(active), dict)):
@@ -66,19 +65,24 @@ def _load():
     return None
 
 
-def _save_locked(data):
+def _save_locked(data, role=None):
     """锁内写盘（调用方持 _SCHEMES_LOCK）。"""
-    _schemes_path().write_text(
+    _schemes_path(role).write_text(
         json.dumps(data, indent=4, ensure_ascii=False), encoding="utf-8")
 
 
-def _fresh_data():
-    """锁内读；文件缺失/损坏时按当前设置重建（「默认」方案 + 迁移）。"""
-    data = _load()
+def _default_data():
+    """全新角色/文件缺失时的默认方案（默认值，不继承当前 config）。"""
+    return {"active": DEFAULT_SCHEME_NAME,
+            DEFAULT_SCHEME_NAME: dict(_settings_spec())}
+
+
+def _fresh_data(role=None):
+    """锁内读；文件缺失时按默认值建「默认」方案（不继承其他角色设置）。"""
+    data = _load(role)
     if data is None:
-        data = {"active": DEFAULT_SCHEME_NAME,
-                DEFAULT_SCHEME_NAME: _snapshot_current()}
-        _save_locked(data)
+        data = _default_data()
+        _save_locked(data, role)
     return data
 
 
@@ -102,9 +106,9 @@ def _get_data():
 # 选中五环、次数 TASK_COUNT_DEFAULTS、摄妖香开、阈值 50、
 # 战斗 人物技能3-5/召唤兽攻击、修罗 5 人+男人男鬼、盒子/喊话
 # 关、检查队伍/自动归队开、五环活力继续开、高性能开、补血蓝开、
-# 清屏开、巫医开+间隔 5、法门关、主题浅色。
-# 调试信息开关（debug_overlay）与「显示与调试」解锁标记为全局设置，
-# 刻意不在表内：方案应用/快照都不碰，切换方案不再改变诊断入口显隐。
+# 清屏开、巫医开+间隔 5、法门关。
+# 调试信息开关（debug_overlay）、「显示与调试」解锁标记、界面主题
+# （ui_theme）为全局设置，刻意不在表内：方案应用/快照都不碰。
 def _settings_spec():
     """返回 {设置键: 默认值}（惰性取 control_window 常量）。"""
     cw = _control_window()
@@ -141,7 +145,7 @@ def _settings_spec():
         cw._CLEAR_SCREEN_KEY: True,
         cw._SILENT_MODE_KEY: True,
         cw._AUTO_FAMEN_KEY: False,
-        cw._UI_THEME_KEY: "light",
+        # ui_theme 为全局设置（2026-11-11 用户确认），不进方案
     }
 
 
@@ -189,12 +193,12 @@ def _snapshot_current():
         cw._CLEAR_SCREEN_KEY: cw.load_clear_screen(),
         cw._SILENT_MODE_KEY: cw.load_silent_mode(),
         cw._AUTO_FAMEN_KEY: cw.load_auto_famen(),
-        cw._UI_THEME_KEY: cw.load_ui_theme(),
+        # ui_theme 全局设置，不进方案快照（2026-11-11）
     }
 
 
 def _coerce(key, value):
-    """按默认值类型规整导入值：类型不符/越界回默认，防脏值进入 config.json
+    """按默认值类型规整导入值：类型不符/越界回默认，防脏值进入角色设置
     （load_* 对坏值可能直接 int() 崩溃——导入文件是外部输入，必须兜底）。"""
     cw = _control_window()
     spec = _settings_spec()
@@ -225,14 +229,14 @@ def _coerce(key, value):
 
 
 def _apply(settings):
-    """把方案设置写入 config.json：缺失键以默认值补齐、白名单外键丢弃、
-    值经 _coerce 规整（快照语义完整 + 外部文件兜底）。"""
+    """把方案设置写入当前角色 settings.json：缺失键以默认值补齐、
+    白名单外键丢弃、值经 _coerce 规整（快照语义完整 + 外部文件兜底）。"""
     if not isinstance(settings, dict):
         settings = {}
     spec = _settings_spec()
     mapping = {key: _coerce(key, settings[key]) if key in settings else default
                for key, default in spec.items()}
-    app_utils.kv_save_many_merged(mapping)
+    role_settings.update(mapping)
     # 静默操作：主进程立即生效（验证/诊断流程；任务子进程启动时按配置置位）
     try:
         app_utils.set_silent_mode(mapping[_control_window()._SILENT_MODE_KEY])
@@ -254,13 +258,45 @@ def _valid_name(name):
 
 # ---- 对外操作 ----
 
-def migrate_if_needed():
-    """首次启用方案：现有 config.json 设置落为「默认」方案并设为活动。
+def ensure_role_schemes(role=None):
+    """确保当前角色有方案文件（缺失时按默认值建「默认」）。"""
+    with _SCHEMES_LOCK:
+        data = _fresh_data(role)
+    return {"status": "success", "active": data.get("active")}
 
-    全新安装（无 config.json）时快照即全默认值。主进程启动时调用一次；
-    schemes.json 已存在则空操作（_update 读取时同样有重建兜底）。
+
+def bootstrap_current_role():
+    """迁移/首次启动：当前角色方案文件以 settings.json 实时设置为准。
+
+    保留旧方案列表，只把活动方案的内容替换为实时设置（迁移时未保存
+    的修改不丢）；文件不存在时新建「默认」。
     """
-    _update(lambda data: {"status": "success"})
+    with _SCHEMES_LOCK:
+        data = _load()
+        snap = _snapshot_current()
+        if data is None:
+            data = {"active": DEFAULT_SCHEME_NAME, DEFAULT_SCHEME_NAME: snap}
+        else:
+            active = data.get("active")
+            if isinstance(data.get(active), dict):
+                data[active] = snap
+            else:
+                data = {"active": DEFAULT_SCHEME_NAME,
+                        DEFAULT_SCHEME_NAME: snap}
+        _save_locked(data)
+    return {"status": "success", "active": data.get("active")}
+
+
+def activate_role(previous=None, current=None):
+    """角色切换：只确保当前角色方案文件存在。
+
+    生效设置已按角色存放在 data/<角色>/settings.json，切换角色无需
+    再改写 config.json；任务子进程直接读当前角色的设置文件。
+    """
+    current = current or user_data.current_role_id()
+    ensure_role_schemes(current)
+    return {"status": "success",
+            "switched": bool(previous and previous != current)}
 
 
 def list_schemes():
@@ -327,7 +363,7 @@ def resave_scheme(name):
 
 def save_scheme_copy(name):
     """另存新方案：当前设置另存为新方案（名字已占用时自动加序号后缀），
-    成功后新方案成为活动方案（config.json 无需改写：设置即当前）。"""
+    成功后新方案成为活动方案（settings.json 无需改写：设置即当前）。"""
     name, err = _valid_name(name)
     if err:
         return {"status": "error", "msg": err}

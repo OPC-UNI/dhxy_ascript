@@ -85,6 +85,7 @@ from src.control_window import (ControlWindow, bound_short_label,
 from src import app_utils  # 通用工具（日志、高性能模式共享设施）
 from src.app_utils import log, log_file_path  # 日志
 from src import game  # 游戏窗口操作
+from src import user_data  # 角色数据目录（data/<角色ID>/）
 from src import bag  # 背包操作
 from src import battle  # 战斗自动化（战斗监控与人物/召唤兽操作）
 from src import xuanshu  # 玄枢轶闻任务自动化
@@ -144,6 +145,16 @@ def _ensure_window_binding():
     wins = game.list_main_windows()
     if not wins:
         return  # 游戏未启动，无窗口可绑定
+    # 已绑定窗口换了账号（同一窗口重新登录）：标题账号 ID 与绑定记录
+    # 不一致时更新绑定，角色数据目录随新账号走（2026-11-11 按角色隔离）。
+    bound = game.find_bound_window()
+    if bound is not None:
+        title_id = user_data.role_id_from_text(getattr(bound, "title", ""))
+        raw = game.bound_window_id()
+        bid = raw.get("id") if isinstance(raw, dict) else raw
+        if title_id and bid and bid != f"（ID：{title_id}）":
+            game.save_bound_window(bound)
+            log(f"[绑定] 检测到账号变化，更新绑定: {bound.title}", "SYS")
     if len(wins) == 1:
         if game.find_bound_window() is None and "（ID：" in wins[0].title:
             # 单窗口自动保存绑定（无选择歧义）。仅限已登录窗口：
@@ -658,10 +669,57 @@ if __name__ == '__main__':
     # ---- 多开窗口绑定选择（弹框；须在控制窗口创建前独占一次消息循环） ----
     _ensure_window_binding()
 
-    # ---- 配置方案首次迁移：现有 config.json 设置落为「默认」方案 ----
-    # schemes.json 已存在时空操作（读取路径同样有重建兜底）
+    # ---- 角色数据目录迁移 + 按角色切换方案（2026-11-11） ----
     from src import schemes
-    schemes.migrate_if_needed()
+    migration = {"migrated": False, "role": user_data.DEFAULT_ROLE,
+                 "last_active_role": None}
+    try:
+        migration = user_data.migrate_if_needed()
+        if migration.get("migrated") or migration.get("settings_created"):
+            # 刚迁移出角色设置：活动方案以角色 settings.json 为准
+            schemes.bootstrap_current_role()
+        else:
+            schemes.ensure_role_schemes()
+        role = migration.get("role") or user_data.current_role_id(refresh=True)
+        schemes.activate_role(migration.get("last_active_role"), role)
+        user_data.set_last_active_role(role)
+        log(f"[数据] 角色数据目录: data/{role}"
+            + ("（已迁移旧版数据）" if migration.get("migrated") else ""), "SYS")
+        if migration.get("settings_created"):
+            log(f"[数据] 已建立角色设置 data/{role}/settings.json", "SYS")
+    except Exception as e:
+        # 迁移只复制不移动，根目录旧文件仍在；失败时继续启动并按需
+        # 重建当前角色默认数据（不因数据目录问题拒绝启动）。
+        log(f"[数据] 角色数据初始化失败，按旧版根目录配置继续: {e}", "WARN")
+
+    # ---- 旧版成就补导（迁移时复制失败/目的文件为空时的一次性修复） ----
+    if not migration.get("migrated") and migration.get("stats_imported"):
+        log(f"[数据] 已补导旧版成就到 "
+            f"data/{migration.get('role')}/task_stats.json", "SYS")
+
+    # ---- config.json 旧角色字段两阶段清理 ----
+    # 迁移当次不动 config（回滚安全）；下一次启动备份后删除。
+    if not migration.get("migrated"):
+        try:
+            pruned = user_data.prune_legacy_config(
+                skip_settings=bool(migration.get("settings_created")))
+            if pruned.get("pruned"):
+                keys = pruned.get("keys")
+                count = len(keys) if isinstance(keys, (list, tuple)) else 0
+                log(f"[数据] 已清理 config.json 旧字段 {count} 项"
+                    f"（备份 data/_legacy_config.json）", "SYS")
+        except Exception as e:
+            log(f"[数据] config.json 旧字段清理失败（下次启动重试）: {e}", "WARN")
+
+    # ---- 根目录旧版 schemes.json / task_stats.json 归档 ----
+    if not migration.get("migrated") and not migration.get("settings_created"):
+        try:
+            archived = user_data.archive_legacy_files()
+            if archived.get("archived"):
+                log("[数据] 已将旧版 schemes.json / task_stats.json "
+                    "归档到 data/_legacy/", "SYS")
+        except Exception as e:
+            log(f"[数据] 旧版文件归档失败（下次启动重试）: {e}", "WARN")
 
     # ---- 授权通过后装配主程序 ----
     # 必须放在 __main__ 内：Windows spawn 子进程会重新导入本模块但不执行此段

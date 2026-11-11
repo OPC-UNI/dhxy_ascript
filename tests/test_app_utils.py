@@ -335,3 +335,61 @@ def test_norm_name_for_cmp_confusables():
     assert app_utils.norm_name_for_cmp("碧桃娘子") == "碧桃娘子"
     assert app_utils.norm_name_for_cmp("") == ""
     assert app_utils.norm_name_for_cmp(None) == ""
+
+
+# ---- 角色维度状态按角色隔离（data/<角色>/state.json，2026-11-11） ----
+
+
+class _RoleWin:
+    def __init__(self, title):
+        self.title = title
+
+
+def _patch_role_data(monkeypatch, tmp_path):
+    from ascript.windows.system.key_value import KeyValue
+    from src import user_data
+    monkeypatch.setattr(user_data, "config_dir", lambda: tmp_path)
+    monkeypatch.setattr(user_data, "_probe_role_id", lambda: "1001")
+    monkeypatch.setattr(user_data, "_ROLE_CACHE", {"id": None, "ts": 0.0})
+    monkeypatch.setattr(user_data, "is_migrated", lambda: False)
+    monkeypatch.setattr(KeyValue, "get", lambda key, default=None: default)
+    return user_data
+
+
+def test_char_state_isolated_by_role(monkeypatch, tmp_path):
+    _patch_role_data(monkeypatch, tmp_path)
+    w1 = _RoleWin("服务器 - 角色甲（ID：1001）")
+    w2 = _RoleWin("服务器 - 角色乙（ID：2002）")
+    app_utils.char_state_set("mingwang_race", w1, {"date": "d", "race": "魔族"})
+    assert app_utils.char_state_get("mingwang_race", w1)["race"] == "魔族"
+    assert app_utils.char_state_get("mingwang_race", w2) is None
+    assert (tmp_path / "data" / "1001" / "state.json").exists()
+    assert not (tmp_path / "data" / "2002" / "state.json").exists()
+
+
+def test_task_progress_isolated_by_role(monkeypatch, tmp_path):
+    user_data = _patch_role_data(monkeypatch, tmp_path)
+    w1 = _RoleWin("服务器 - 角色甲（ID：1001）")
+    w2 = _RoleWin("服务器 - 角色乙（ID：2002）")
+    app_utils.task_progress_add(w1, "修罗", 3)
+    assert app_utils.task_progress_done(w1, "修罗") == 3
+    assert app_utils.task_progress_done(w2, "修罗") == 0
+    entry = user_data.get_state("task_progress", "1001")
+    assert entry["modes"] == {"修罗": 3}
+
+
+def test_kv_remove_many_merged(monkeypatch, tmp_path):
+    import json
+    import threading
+    from ascript.windows.system.key_value import KeyValue
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"a": 1, "b": 2, "c": 3}), encoding="utf-8")
+    monkeypatch.setattr(KeyValue, "_initialize", lambda: None)
+    monkeypatch.setattr(KeyValue, "_file_path", path)
+    monkeypatch.setattr(KeyValue, "_lock", threading.RLock())
+    monkeypatch.setattr(KeyValue, "_load_data",
+                        lambda: json.loads(path.read_text(encoding="utf-8")))
+    removed = app_utils.kv_remove_many_merged(["a", "c", "missing"])
+    assert removed == 2
+    assert json.loads(path.read_text(encoding="utf-8")) == {"b": 2}
+    assert KeyValue._data == {"b": 2}

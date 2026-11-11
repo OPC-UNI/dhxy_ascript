@@ -118,11 +118,24 @@ def _patch_kv_store(monkeypatch, data=None):
     return store
 
 
+def _patch_role_store(monkeypatch, data=None):
+    """角色 state.json 存储打桩：组号动作/快照按角色隔离（2026-11-11）。"""
+    from src import control_window
+    from src import user_data
+    store = dict(data or {})
+    monkeypatch.setattr(control_window.app_utils, "role_state_get",
+                        lambda key, default=None: store.get(key, default))
+    monkeypatch.setattr(control_window.app_utils, "role_state_set",
+                        lambda key, value: store.__setitem__(key, value) or True)
+    monkeypatch.setattr(user_data, "is_migrated", lambda: True)
+    return store
+
+
 def test_save_group_actions_merges_without_pruning(monkeypatch):
     """保存合并写入：已有账号条目保留（队员换队长/队伍变动后旧设置
     不丢，2026-11-07 需求——CDE 第一天设置、第二天直接读出）。"""
     from src import control_window
-    store = _patch_kv_store(monkeypatch, {
+    store = _patch_role_store(monkeypatch, {
         "group_member_actions": {
             "oldA": {"char": "防御", "beast": "无"}}})
     r = control_window.save_group_actions({
@@ -142,7 +155,7 @@ def test_save_group_actions_merges_without_pruning(monkeypatch):
 def test_save_group_actions_rejects_invalid(monkeypatch):
     """任一值非法拒绝整单（UI 下拉只出合法值，此为双保险）。"""
     from src import control_window
-    store = _patch_kv_store(monkeypatch)
+    store = _patch_role_store(monkeypatch)
     r = control_window.save_group_actions({
         "idB": {"char": "乱写", "beast": "攻击"}})
     assert r["status"] == "error"
@@ -157,7 +170,7 @@ def test_load_group_actions_filters_bad_entries(monkeypatch):
     """读取过滤非法条目（旧数据/手工改坏文件自愈），账号 ID 归一为
     字符串。"""
     from src import control_window
-    _patch_kv_store(monkeypatch, {
+    _patch_role_store(monkeypatch, {
         "group_member_actions": {
             12345: {"char": "攻击", "beast": "防御"},
             "bad": {"char": "乱写", "beast": "攻击"},
@@ -175,7 +188,7 @@ def test_save_group_last_scan_keeps_only_in_team(monkeypatch):
     """快照只存队长与确认在队伍中的队员（不在队伍账号即使设置过动作
     也不进快照）；面板没读到（panel_read=False）不覆盖上次快照。"""
     from src import control_window
-    store = _patch_kv_store(monkeypatch)
+    store = _patch_role_store(monkeypatch)
     data = {"panel_read": True,
             "leader": {"id": "idL", "name": "队长甲"},
             "members": [
@@ -199,7 +212,7 @@ def test_build_group_last_scan_payload_merges_actions(monkeypatch):
     snap = {"ts": 1762800000.0,
             "leader": {"id": "idL", "name": "队长甲"},
             "members": [{"id": "idM1", "name": "队员乙"}]}
-    _patch_kv_store(monkeypatch, {
+    _patch_role_store(monkeypatch, {
         "group_member_actions": {
             "idM1": {"char": "攻击", "beast": "防御"}}})
     monkeypatch.setattr(control_window, "load_group_last_scan", lambda: snap)
@@ -238,6 +251,17 @@ def test_snapshot_excludes_debug_globals(monkeypatch):
     snap = schemes._snapshot_current()
     assert _DEBUG_OVERLAY_KEY not in snap
     assert _DEBUG_UI_KEY not in snap
+
+
+def test_theme_is_global_not_in_scheme(monkeypatch):
+    """界面主题为全局设置（2026-11-11 用户确认）：不进方案白名单/
+    快照，切账号/切方案不改主题。"""
+    from src import schemes
+    from src.control_window import _UI_THEME_KEY
+    assert _UI_THEME_KEY not in schemes._settings_spec()
+    _patch_kv_empty(monkeypatch)
+    snap = schemes._snapshot_current()
+    assert _UI_THEME_KEY not in snap
 
 
 def test_debug_ui_unlock_save_load(monkeypatch):

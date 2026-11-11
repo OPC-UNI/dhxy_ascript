@@ -13,7 +13,8 @@
 - 本模块只依赖标准库：``main.py`` 在导入 ascript/webview/uiautomation 等
   重依赖之前执行 ``--apply-update`` 分支，保证助手快速进入。
 - 只覆盖 ``PART_TARGETS`` 白名单内的文件（exe/res/pylibs）；config.json、
-  schemes.json、task_stats.json、logs/ 等用户数据一律不动。
+  data/（按角色隔离的设置/方案/成就/进度/高性能缓存）、schemes.json、
+  task_stats.json、logs/ 等用户数据一律不动。
 - 安装目录 = 冻结 exe 所在目录；源码运行取仓库根，仅用于本地联调。
 """
 import ctypes

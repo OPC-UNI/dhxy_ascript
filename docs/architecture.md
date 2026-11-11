@@ -18,7 +18,7 @@
 | 任务编排 | 面板勾选任务 → 按顺序逐个进入 `_run_task_mode`；每个任务循环自然结束后切下一个，全部结束任务进程退出 |
 | 感知 | Win32 窗口截图（不激活）→ PIL 帧（OCR / 绿字）或 BGR 帧（模板匹配）；RapidOCR 三种引擎（全帧 / 区域 / 2x 放大）+ OpenCV 模板匹配 |
 | 执行 | 物理鼠标（拟人化，全局 `RLock` 串行）或静默消息通道（`WM_MOUSEMOVE/LBUTTONDOWN/UP`，不移动鼠标、不抢前台）；键盘同理区分物理 / `WM_SYSKEY` / `WM_CHAR` |
-| 持久化 | `config.json`（KeyValue：设置 + 角色维度进度）、`schemes.json`（配置方案）、`task_stats.json`（统计）、`debug_overlay_state.json`（看板/悬浮层心跳）、`logs/日期.log` |
+| 持久化 | `config.json`（KeyValue：软件全局设置 + 窗口绑定）、`data/<角色ID>/`（settings/schemes/state/task_stats/high_perf，按角色隔离）、`debug_overlay_state.json`（看板/悬浮层心跳）、`logs/日期.log`；详见 docs/user-data-layout.md |
 | 硬约束 | 每轮询只截一帧；模板热路径必须用 ROI 条带；OCR 与绿字判定必须用 PIL(RGB) 帧；跟随超时不计战斗时间；关键时序常量是实测校准资产 |
 
 ---
@@ -56,9 +56,8 @@ flowchart TB
     end
 
     subgraph DATA["持久化 / 资源"]
-        CFG[("config.json<br/>KeyValue 设置与进度")]
-        SCH[("schemes.json")]
-        STATS[("task_stats.json")]
+        CFG[("config.json<br/>KeyValue 软件全局设置")]
+        ROLE[("data/&lt;角色ID&gt;/<br/>settings / schemes / state / task_stats / high_perf")]
         STATE[("debug_overlay_state.json")]
         LOG[("logs/日期.log")]
         RES[("res/img 模板<br/>res/models OCR 模型")]
@@ -75,7 +74,7 @@ flowchart TB
     VERIFY --> GAME
     VERIFY --> MP_OCR
     UI --> CFG
-    UI --> SCH
+    UI --> ROLE
 
     TM -->|"multiprocessing.Process"| WRAP
     TM -->|"stop_event / terminate / kill"| WRAP
@@ -94,12 +93,12 @@ flowchart TB
     BT --> GAME
     TASKS --> GAME
     TASKS --> CFG
-    TASKS --> STATS
-    OVS --> STATS
+    TASKS --> ROLE
+    OVS --> ROLE
     OVS --> LOG
     TASKS --> LOG
     UI -->|"read_runtime_status"| STATE
-    UI -->|"read_task_stats"| STATS
+    UI -->|"read_task_stats"| ROLE
     TASKS --> RES
     BT --> RES
 
@@ -1207,7 +1206,7 @@ flowchart LR
 | 项 | 行为 |
 |---|---|
 | 开关置位 | 任务子进程 `app_utils.set_high_perf(load_high_perf())`；主进程验证按钮恒走识别路径 |
-| 缓存键 | `fixed_pos_get/set/clear(key, win)`，按固定键持久化到 `config.json`；读取时校验窗口尺寸，缩放/换窗口自动失效 |
+| 缓存键 | `fixed_pos_get/set/clear(key, win)`，按固定键持久化到当前角色 `data/<角色ID>/high_perf_cache.json`；读取时校验窗口尺寸，缩放/换窗口自动失效 |
 | 点击流程 | `high_perf_click`：缓存命中 → 直点；未命中 → 识别点击成功后写缓存；点击未生效 → 清缓存回退识别 |
 | 适用对象 | **只缓存固定 UI**（地图按钮、背包按钮、对话框选项、领取选项等）；识图定位的 NPC / 领取按钮随站位变化，禁止缓存 |
 | 背包捷径 | 高性能模式走 Alt+E 开包，与按钮位置漂移无关 |
@@ -1218,13 +1217,21 @@ flowchart LR
 
 | 文件 | 写入方 | 内容 | 读取方 |
 |---|---|---|---|
-| `config.json` | 主进程控制窗口 / 任务子进程（KeyValue 合并写） | 全部设置、任务选择与次数、角色维度进度、摄妖香时间戳、固定位置缓存、窗口绑定 | 两侧 |
-| `schemes.json` | 主进程 `schemes.py` | 多套配置快照 + 当前方案 | 主进程 |
-| `task_stats.json` | 任务子进程 `debug_overlay` | 轮次 / 战斗 / 耗时；累计与最近 90 天日档 | 主进程统计页 |
+| `config.json` | 主进程控制窗口 / 任务子进程（KeyValue 合并写） | 软件全局设置（主题/授权/更新/调试/老板键）、窗口绑定；任务设置清理后不再存放 | 两侧 |
+| `data/<角色ID>/settings.json` | 主进程控制窗口 `role_settings` | 该角色当前生效设置（任务选择/次数/阈值/战斗动作/各开关） | 两侧（任务子进程只读） |
+| `data/<角色ID>/schemes.json` | 主进程 `schemes.py` | 该角色多套配置快照 + 当前方案 | 主进程 |
+| `data/<角色ID>/task_stats.json` | 任务子进程 `debug_overlay` | 轮次 / 战斗 / 耗时；累计与最近 90 天日档 | 主进程成就页 |
+| `data/<角色ID>/state.json` | 两侧 `app_utils.role_state_*`（读-改-写原子替换） | 任务进度、摄妖香时间戳、清屏标记、名望种族、组号状态 | 两侧 |
+| `data/<角色ID>/high_perf_cache.json` | 任务子进程 `app_utils` | 高性能固定位置坐标缓存 | 任务子进程 |
+| `data/_meta.json` | 主进程 `user_data` | layout=2、迁移信息、known_roles、last_active_role、settings_migrated/settings_pruned、stats_imported、旧 config 字段清理标记 | 两侧 |
+| `data/_legacy_config.json` | 主进程 `user_data` | 第二次启动从 config.json 清理出的旧角色字段备份（手动回滚恢复用） | — |
+| `data/_legacy/` | 主进程 `user_data` | 根目录旧版 schemes.json / task_stats.json 归档（回滚旧版本用） | — |
 | `debug_overlay_state.json` | 任务子进程监督线程（原子写） | 悬浮层文案 + 运行看板结构化 status + 心跳 | 悬浮层子进程、主进程看板 |
 | `logs/日期.log` | 两侧 `app_utils.log` | 双写日志（控制台 + 文件） | 人工排障 |
 
 **KeyValue 注意**：`_load_data` 不刷新内存快照；任务子进程写配置必须走 `kv_save_merged` / `kv_update_merged` / `kv_remove_merged`，否则会覆盖主进程写入的运行时状态。
+
+**角色数据注意**：`data/` 下的设置/方案/成就/进度/高性能缓存按角色隔离；角色在启动阶段确定（`user_data.current_role_id`：实时窗口标题 → 绑定记录 → `_default`），切换账号需重启。`config.json` 在两阶段清理后只保留软件全局设置。旧版数据迁移与回滚规则见 docs/user-data-layout.md。
 
 ---
 

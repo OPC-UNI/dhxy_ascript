@@ -42,12 +42,14 @@ from ascript.windows.ui import WebWindow
 from . import game  # 游戏窗口查找（修罗回程验证用；game 不反向依赖本模块，可顶层导入）
 from . import app_utils  # KeyValue 合并读写（kv_save_merged/kv_remove_merged）
 from . import schemes  # 配置方案（多套设置快照切换 + 导入导出）
+from . import user_data  # 角色数据目录（data/<角色ID>/）
+from . import role_settings  # 当前角色生效设置（data/<角色ID>/settings.json）
 from . import hotkey  # 老板键（启动/停止按钮文案展示热键名）
 from . import updater  # 软件自动更新（清单/下载/覆盖升级）
 from . import update_config  # 更新渠道与节流常量
 from . import __version__  # 版本号唯一来源（src/__init__.py，面板关于/侧边栏展示）
 
-# ---- 任务模式（UI 多选项，KeyValue 持久化，记住上次选择） ----
+# ---- 任务模式（UI 多选项，角色设置持久化，记住上次选择） ----
 TASK_MODES = ["五环", "客栈", "修罗", "五倍", "玄枢轶闻", "名望", "仅战斗"]
 _DEFAULT_MODES = ["五环"]  # 首次默认选中五环（与原单选默认一致）
 _MODES_KEY = "task_modes"           # 多选列表（新键）
@@ -57,7 +59,7 @@ BATTLE_ONLY_MODE = "仅战斗"  # 特殊任务：与其它任务互斥，启动�
 # ---- 使用环境（高级设置-使用环境展示；只读信息） ----
 ENV_THEME = "水墨"               # 已适配的游戏 UI 主题
 ENV_ADAPT_RES = (1378, 831)      # 坐标标定的窗口分辨率（实测布局基准）
-# 是否使用摄妖香（UI 开关，KeyValue 持久化）
+# 是否使用摄妖香（UI 开关，角色设置持久化）
 _USE_SHEYAOXIANG_KEY = "use_sheyaoxiang"
 # 调试信息悬浮显示（UI 开关，KeyValue 持久化；游戏窗口上绘制任务/配置/进度）
 _DEBUG_OVERLAY_KEY = "debug_overlay"
@@ -103,9 +105,9 @@ def load_selected_modes():
     按保存顺序返回（= 面板已选任务的拖动顺序，执行顺序与列表一致）；
     旧数据本就按 TASK_MODES 固定顺序保存，读取结果与旧版一致。
     """
-    raw = KeyValue.get(_MODES_KEY, None)
+    raw = role_settings.get(_MODES_KEY, None)
     if raw is None:
-        old = KeyValue.get(_MODE_KEY_OLD)
+        old = role_settings.get(_MODE_KEY_OLD)
         raw = [old] if old in TASK_MODES else list(_DEFAULT_MODES)
     if not isinstance(raw, list):
         raw = []
@@ -113,14 +115,8 @@ def load_selected_modes():
 
 
 def _kv_save(key, value):
-    """KeyValue.save 包装：保存前重读合并。
-
-    任务子进程会向 config.json 写入运行时状态（摄妖香使用时间戳、
-    任务当天进度、清屏标记、高性能缓存），KeyValue 是整文件覆写——
-    面板进程直接保存会用启动时的旧快照覆盖掉这些写入（实测 1 小时
-    内吃两次摄妖香：五环用后时间戳被面板保存抹掉，修罗再吃）。
-    走 app_utils.kv_save_merged：锁内重读→改→写，旧快照不再参与。
-    """
+    """全局设置写入（主题/调试/更新等）：走 app_utils.kv_save_merged，
+    锁内重读→改→写，避免旧快照整文件覆写。"""
     app_utils.kv_save_merged(key, value)
 
 
@@ -132,18 +128,18 @@ def save_selected_modes(modes):
     """保存任务模式多选列表（过滤非法项、强制「仅战斗」互斥并保留
     传入顺序 = 面板拖动顺序，允许空列表），返回操作结果。"""
     modes = _sanitize_modes(modes)
-    _kv_save(_MODES_KEY, modes)
+    role_settings.set_value(_MODES_KEY, modes)
     return {"status": "success", "modes": modes}
 
 
 def load_use_sheyaoxiang():
     """读取是否使用摄妖香开关（首次默认开启）。"""
-    return bool(KeyValue.get(_USE_SHEYAOXIANG_KEY, True))
+    return bool(role_settings.get(_USE_SHEYAOXIANG_KEY, True))
 
 
 def save_use_sheyaoxiang(on):
     """保存是否使用摄妖香开关，返回操作结果。"""
-    _kv_save(_USE_SHEYAOXIANG_KEY, bool(on))
+    role_settings.set_value(_USE_SHEYAOXIANG_KEY, bool(on))
     return {"status": "success"}
 
 
@@ -241,7 +237,7 @@ def _clamp_count(mode, value):
 
 def load_task_counts():
     """读取各任务模式的执行次数（首次使用各自默认值，并夹在上下限内）。"""
-    return {mode: _clamp_count(mode, KeyValue.get(_COUNT_KEYS[mode],
+    return {mode: _clamp_count(mode, role_settings.get(_COUNT_KEYS[mode],
                                                   TASK_COUNT_DEFAULTS.get(mode, 0)))
             for mode in TASK_MODES}
 
@@ -251,7 +247,7 @@ def save_task_count(mode, value):
     if mode not in _COUNT_KEYS:
         return {"status": "error", "msg": "INVALID_MODE"}
     value = _clamp_count(mode, value)
-    _kv_save(_COUNT_KEYS[mode], value)
+    role_settings.set_value(_COUNT_KEYS[mode], value)
     return {"status": "success", "count": value}
 
 
@@ -260,41 +256,54 @@ def save_task_count(mode, value):
 _TASK_PROGRESS_KEY = "task_progress"  # 与 app_utils._TASK_PROGRESS_KEY 同键
 
 
-def _fresh_progress_modes():
-    """绕开 KeyValue 进程内缓存，直接重读 config.json 中的当天进度。
+def _legacy_progress_char_key():
+    """旧版进度键兜底（未迁移/单测）：当前窗口的角色键。"""
+    try:
+        win = game.find_main_window()
+        return app_utils.char_key(win) if win is not None else None
+    except Exception:
+        return None
 
-    进度由任务子进程的 app_utils.task_progress_add 写入（保存前重读
-    合并），主进程 KeyValue 快照读不到这些更新；进度条轮询必须走
-    文件直读（同 debug_overlay._read_switch 的原因）。
+
+def _fresh_progress_modes():
+    """直读当前角色 state.json 的当天进度（跨进程可见）。
+
+    任务子进程写 data/<角色>/state.json（读-改-写原子替换），主进程
+    每次直读文件。旧版未迁移时回退 config.json 的角色键；迁移后不再
+    回退，避免角色间串数据。
     返回 {mode: 当天已完成次数}，数据缺失/损坏按空处理。
     """
     try:
-        KeyValue._initialize()
-        data = KeyValue._load_data().get(_TASK_PROGRESS_KEY, {}) or {}
-        entry = data.get(_char_key_for_progress(), {})
-        if isinstance(entry, dict) and entry.get("date") == time.strftime("%Y-%m-%d"):
-            modes = entry.get("modes", {}) or {}
-            return {m: int(v) for m, v in modes.items() if isinstance(v, (int, float))}
+        entry = user_data.get_state(_TASK_PROGRESS_KEY, None, None)
     except Exception:
-        pass
+        entry = None
+    if entry is None and not user_data.is_migrated():
+        try:
+            KeyValue._initialize()
+            data = KeyValue._load_data().get(_TASK_PROGRESS_KEY, {}) or {}
+            entry = data.get(_legacy_progress_char_key() or "", {})
+        except Exception:
+            entry = None
+    if isinstance(entry, dict) and entry.get("date") == time.strftime("%Y-%m-%d"):
+        modes = entry.get("modes", {}) or {}
+        return {m: int(v) for m, v in modes.items() if isinstance(v, (int, float))}
     return {}
 
 
-_char_key_cache = {"key": None, "ts": 0.0}  # 角色键缓存（进度轮询每 2.5s 一次，窗口枚举 30s 刷一次）
-
-
-def _bound_char_key():
-    """从窗口绑定记录提取角色键（进度展示兜底用）。
-
-    游戏在登录界面/未启动时窗口标题无 ID，无法从标题解析角色；
-    绑定记录（bound_window_id）跨重启记住角色 ID，用它兜底对上
-    当天进度。无绑定/无法解析时返回 None。
-    """
-    raw = game.bound_window_id()
-    if isinstance(raw, dict):
-        raw = raw.get("id")
-    m = re.search(r"ID：(\d+)", str(raw or ""))
-    return f"（ID：{m.group(1)}）" if m else None
+def _short_label_from_title(title):
+    """从完整窗口标题提取「服务器+角色名」短文案；无 ID 返回 None。"""
+    if "ID：" not in (title or ""):
+        return None
+    parts = [p.strip() for p in title.split(" - ")]
+    if len(parts) >= 3:
+        char = re.sub(r"（ID：\d+）\s*$", "", parts[-1]).strip()
+        label = f"{parts[-2]}{char}"
+        if label:
+            return label
+    if re.fullmatch(r"（ID：\d+）", title.strip()):
+        return None  # 旧版纯 ID 绑定没有角色名，页面按「ID：xxx」展示
+    # 标题格式意外时退回完整标题，超长截断（窗口标题栏空间有限）
+    return title if len(title) <= 20 else title[:19] + "…"
 
 
 def bound_short_label():
@@ -309,40 +318,15 @@ def bound_short_label():
     title = (getattr(win, "title", "") or "") if win is not None else ""
     if "ID：" not in title:
         raw = game.bound_window_id()
-        if isinstance(raw, dict):
-            title = raw.get("title") or ""
-        else:
-            title = raw or ""
-    if "ID：" not in title:
-        return None
-    parts = [p.strip() for p in title.split(" - ")]
-    if len(parts) >= 3:
-        char = re.sub(r"（ID：\d+）\s*$", "", parts[-1]).strip()
-        label = f"{parts[-2]}{char}"
-        if label:
-            return label
-    # 标题格式意外时退回完整标题，超长截断（窗口标题栏空间有限）
-    return title if len(title) <= 20 else title[:19] + "…"
+        title = raw.get("title") if isinstance(raw, dict) else raw
+    return _short_label_from_title(title or "")
 
 
-def _char_key_for_progress():
-    """当前游戏窗口的角色键（进度按角色持久化）。
-
-    进度条轮询每 2.5 秒调用一次，窗口枚举（find_main_window 内部
-    两次 EnumWindows）不必每次都做：角色键 30 秒内不变，缓存复用；
-    换角色登录后标题变化，下一轮自动刷新。窗口在登录界面（标题
-    无 ID）或未启动时，回退绑定记录的角色 ID——进度展示不因登录
-    状态丢失（2026-10-22：游戏停在登录界面导致进度条全 0 的修复）。
-    """
-    now = time.time()
-    if now - _char_key_cache["ts"] > 30:
-        win = game.find_main_window()
-        key = app_utils.char_key(win) if win is not None else None
-        if not key or "ID：" not in key:
-            key = _bound_char_key()
-        _char_key_cache["key"] = key
-        _char_key_cache["ts"] = now
-    return _char_key_cache["key"]
+def bound_label_from_binding():
+    """只看绑定记录的角色短文案（成就页轮询用，不做窗口枚举）。"""
+    raw = game.bound_window_id()
+    title = raw.get("title") if isinstance(raw, dict) else raw
+    return _short_label_from_title(title or "")
 
 
 def task_progress_summary():
@@ -383,7 +367,7 @@ DEFAULT_THRESHOLD = 50
 
 def load_thresholds():
     """读取各条血蓝阈值（百分比，默认 50）。"""
-    return {name: KeyValue.get(key, DEFAULT_THRESHOLD)
+    return {name: role_settings.get(key, DEFAULT_THRESHOLD)
             for name, key in _THRESHOLD_KEYS.items()}
 
 
@@ -394,11 +378,11 @@ def save_threshold(name, value):
     value = int(value)
     if value < 5 or value > 95:
         return {"status": "error", "msg": "OUT_OF_RANGE"}
-    _kv_save(_THRESHOLD_KEYS[name], value)
+    role_settings.set_value(_THRESHOLD_KEYS[name], value)
     return {"status": "success", "threshold": value}
 
 
-# ---- 修罗设置（最少人数 + 必须有的种族，仅队长时生效，KeyValue 持久化） ----
+# ---- 修罗设置（最少人数 + 必须有的种族，仅队长时生效，角色设置持久化） ----
 XIULUO_MIN_DEFAULT = 5
 XIULUO_MIN_RANGE = (3, 5)  # 最少人数范围：最小 3，最大 5
 XIULUO_RACES = ["男人", "女人", "男鬼", "女鬼", "男仙", "女仙", "男魔", "女魔", "男巫", "女巫",
@@ -415,9 +399,9 @@ def load_xiuluo_settings():
     用户显式清空 = 无种族要求（空列表，领取前种族检查与缺人喊话
     均按无要求处理）——不再强制回退默认。
     """
-    min_members = int(KeyValue.get(_XIULUO_MIN_KEY, XIULUO_MIN_DEFAULT))
+    min_members = int(role_settings.get(_XIULUO_MIN_KEY, XIULUO_MIN_DEFAULT))
     min_members = min(XIULUO_MIN_RANGE[1], max(XIULUO_MIN_RANGE[0], min_members))
-    raw = KeyValue.get(_XIULUO_RACES_KEY, None)
+    raw = role_settings.get(_XIULUO_RACES_KEY, None)
     if raw is None:
         races = list(XIULUO_RACES_DEFAULT)
     else:
@@ -429,18 +413,18 @@ def load_xiuluo_settings():
 def save_xiuluo_min(value):
     """保存修罗最少人数（夹取 3~5），返回操作结果。"""
     value = min(XIULUO_MIN_RANGE[1], max(XIULUO_MIN_RANGE[0], int(value)))
-    _kv_save(_XIULUO_MIN_KEY, value)
+    role_settings.set_value(_XIULUO_MIN_KEY, value)
     return {"status": "success", "min_members": value}
 
 
 def save_xiuluo_races(races):
     """保存修罗必须有的种族（过滤非法项，按逗号串存储），返回操作结果。"""
     races = [r for r in (races or []) if r in XIULUO_RACES]
-    _kv_save(_XIULUO_RACES_KEY, ",".join(races))
+    role_settings.set_value(_XIULUO_RACES_KEY, ",".join(races))
     return {"status": "success", "races": races}
 
 
-# ---- 五环设置：活力不足继续任务（UI 开关，KeyValue 持久化，默认开启；
+# ---- 五环设置：活力不足继续任务（UI 开关，角色设置持久化，默认开启；
 #      开启时活力值不足对话框点「不差那点小钱，快给我任务吧。」花钱
 #      领取继续任务；关闭时点「那可不行，我一会再来。」结束任务） ----
 _WUHUAN_VITALITY_CONTINUE_KEY = "wuhuan_vitality_continue"
@@ -448,12 +432,12 @@ _WUHUAN_VITALITY_CONTINUE_KEY = "wuhuan_vitality_continue"
 
 def load_wuhuan_vitality_continue():
     """读取五环活力不足继续任务开关（首次默认开启）。"""
-    return bool(KeyValue.get(_WUHUAN_VITALITY_CONTINUE_KEY, True))
+    return bool(role_settings.get(_WUHUAN_VITALITY_CONTINUE_KEY, True))
 
 
 def save_wuhuan_vitality_continue(on):
     """保存五环活力不足继续任务开关，返回操作结果。"""
-    _kv_save(_WUHUAN_VITALITY_CONTINUE_KEY, bool(on))
+    role_settings.set_value(_WUHUAN_VITALITY_CONTINUE_KEY, bool(on))
     return {"status": "success"}
 
 
@@ -461,23 +445,23 @@ def save_wuhuan_vitality_continue(on):
 _WUBEI_HEZI_KEY = "wubei_auto_hezi"
 
 
-# ---- 五倍检查队伍（UI 开关，KeyValue 持久化；默认开启，关闭时
+# ---- 五倍检查队伍（UI 开关，角色设置持久化；默认开启，关闭时
 #      跳过全部队伍检查直接领取——可能不是队长，被拒也不补人） ----
 _WUBEI_CHECK_TEAM_KEY = "wubei_check_team"
 
 
 def load_wubei_check_team():
     """读取五倍检查队伍开关（首次默认开启）。"""
-    return bool(KeyValue.get(_WUBEI_CHECK_TEAM_KEY, True))
+    return bool(role_settings.get(_WUBEI_CHECK_TEAM_KEY, True))
 
 
 def save_wubei_check_team(on):
     """保存五倍检查队伍开关，返回操作结果。"""
-    _kv_save(_WUBEI_CHECK_TEAM_KEY, bool(on))
+    role_settings.set_value(_WUBEI_CHECK_TEAM_KEY, bool(on))
     return {"status": "success"}
 
 
-# ---- 五倍自动创建队伍（UI 开关，KeyValue 持久化；默认关闭。开启时
+# ---- 五倍自动创建队伍（UI 开关，角色设置持久化；默认关闭。开启时
 #      任务启动若无队伍自动创建——点组队按钮 → 菜单「创建队伍」，
 #      创建成功后走正常队伍检查与补人流程；已有队伍无操作。
 #      实现见 team.ensure_team_created） ----
@@ -486,16 +470,16 @@ _WUBEI_AUTO_CREATE_TEAM_KEY = "wubei_auto_create_team"
 
 def load_wubei_auto_create_team():
     """读取五倍自动创建队伍开关（首次默认关闭）。"""
-    return bool(KeyValue.get(_WUBEI_AUTO_CREATE_TEAM_KEY, False))
+    return bool(role_settings.get(_WUBEI_AUTO_CREATE_TEAM_KEY, False))
 
 
 def save_wubei_auto_create_team(on):
     """保存五倍自动创建队伍开关，返回操作结果。"""
-    _kv_save(_WUBEI_AUTO_CREATE_TEAM_KEY, bool(on))
+    role_settings.set_value(_WUBEI_AUTO_CREATE_TEAM_KEY, bool(on))
     return {"status": "success"}
 
 
-# ---- 仅战斗自动归队（UI 开关，KeyValue 持久化，默认开启；仅战斗
+# ---- 仅战斗自动归队（UI 开关，角色设置持久化，默认开启；仅战斗
 #      模式不判定身份——死亡落轮回司自动点「归队」，队长身份由
 #      maybe_rejoin 自动跳过。实现见 main._battle_only_loop） ----
 _BATTLE_ONLY_AUTO_REJOIN_KEY = "battle_only_auto_rejoin"
@@ -503,16 +487,16 @@ _BATTLE_ONLY_AUTO_REJOIN_KEY = "battle_only_auto_rejoin"
 
 def load_battle_only_auto_rejoin():
     """读取仅战斗自动归队开关（首次默认开启）。"""
-    return bool(KeyValue.get(_BATTLE_ONLY_AUTO_REJOIN_KEY, True))
+    return bool(role_settings.get(_BATTLE_ONLY_AUTO_REJOIN_KEY, True))
 
 
 def save_battle_only_auto_rejoin(on):
     """保存仅战斗自动归队开关，返回操作结果。"""
-    _kv_save(_BATTLE_ONLY_AUTO_REJOIN_KEY, bool(on))
+    role_settings.set_value(_BATTLE_ONLY_AUTO_REJOIN_KEY, bool(on))
     return {"status": "success"}
 
 
-# ---- 五倍自动归队（UI 开关，KeyValue 持久化；默认开启。仅非队长
+# ---- 五倍自动归队（UI 开关，角色设置持久化；默认开启。仅非队长
 #      生效：战斗死亡落轮回司后自动打开队伍面板点「归队」传送回队长，
 #      实现见 team.maybe_rejoin（归队按钮模板待用户提供）） ----
 _WUBEI_AUTO_REJOIN_KEY = "wubei_auto_rejoin"
@@ -520,16 +504,16 @@ _WUBEI_AUTO_REJOIN_KEY = "wubei_auto_rejoin"
 
 def load_wubei_auto_rejoin():
     """读取五倍自动归队开关（首次默认开启）。"""
-    return bool(KeyValue.get(_WUBEI_AUTO_REJOIN_KEY, True))
+    return bool(role_settings.get(_WUBEI_AUTO_REJOIN_KEY, True))
 
 
 def save_wubei_auto_rejoin(on):
     """保存五倍自动归队开关，返回操作结果。"""
-    _kv_save(_WUBEI_AUTO_REJOIN_KEY, bool(on))
+    role_settings.set_value(_WUBEI_AUTO_REJOIN_KEY, bool(on))
     return {"status": "success"}
 
 
-# ---- 五倍缺人自动喊话（UI 开关，KeyValue 持久化；默认开启。
+# ---- 五倍缺人自动喊话（UI 开关，角色设置持久化；默认开启。
 #      喊话内容为固定值（wubei.py WUBEI_SHOUT_DEFAULT），不再对外
 #      保留内容设置——用户 2026-10-14 确认） ----
 _WUBEI_SHOUT_SWITCH_KEY = "wubei_shout"
@@ -537,23 +521,23 @@ _WUBEI_SHOUT_SWITCH_KEY = "wubei_shout"
 
 def load_wubei_shout_switch():
     """读取五倍缺人自动喊话开关（首次默认开启）。"""
-    return bool(KeyValue.get(_WUBEI_SHOUT_SWITCH_KEY, True))
+    return bool(role_settings.get(_WUBEI_SHOUT_SWITCH_KEY, True))
 
 
 def save_wubei_shout_switch(on):
     """保存五倍缺人自动喊话开关，返回操作结果。"""
-    _kv_save(_WUBEI_SHOUT_SWITCH_KEY, bool(on))
+    role_settings.set_value(_WUBEI_SHOUT_SWITCH_KEY, bool(on))
     return {"status": "success"}
 
 
 def load_wubei_hezi():
     """读取五倍自动抢盒子开关（首次默认关闭）。"""
-    return bool(KeyValue.get(_WUBEI_HEZI_KEY, False))
+    return bool(role_settings.get(_WUBEI_HEZI_KEY, False))
 
 
 def save_wubei_hezi(on):
     """保存五倍自动抢盒子开关，返回操作结果。"""
-    _kv_save(_WUBEI_HEZI_KEY, bool(on))
+    role_settings.set_value(_WUBEI_HEZI_KEY, bool(on))
     return {"status": "success"}
 
 
@@ -563,16 +547,16 @@ _XIULUO_HEZI_KEY = "xiuluo_auto_hezi"
 
 def load_xiuluo_hezi():
     """读取修罗自动抢盒子开关（首次默认关闭）。"""
-    return bool(KeyValue.get(_XIULUO_HEZI_KEY, False))
+    return bool(role_settings.get(_XIULUO_HEZI_KEY, False))
 
 
 def save_xiuluo_hezi(on):
     """保存修罗自动抢盒子开关，返回操作结果。"""
-    _kv_save(_XIULUO_HEZI_KEY, bool(on))
+    role_settings.set_value(_XIULUO_HEZI_KEY, bool(on))
     return {"status": "success"}
 
 
-# ---- 高性能模式（UI 开关，通用设置，KeyValue 持久化，默认开启；
+# ---- 高性能模式（UI 开关，通用设置，角色设置持久化，默认开启；
 #      开启后各任务模块固定位置 UI（按钮/对话框选项）首次识别记录
 #      坐标，后续直接按坐标点击 + 效果校验，失败回退识别路径——
 #      位置漂移/窗口缩放时自动失效并自愈；旧修罗键自动迁移） ----
@@ -582,19 +566,19 @@ _XIULUO_HIGH_PERF_KEY_OLD = "xiuluo_high_perf"
 
 def load_high_perf():
     """读取高性能开关（首次默认开启；旧修罗高性能键自动迁移到通用键）。"""
-    if KeyValue.get(_HIGH_PERF_KEY) is None \
-            and KeyValue.get(_XIULUO_HIGH_PERF_KEY_OLD) is not None:
-        _kv_save(_HIGH_PERF_KEY, bool(KeyValue.get(_XIULUO_HIGH_PERF_KEY_OLD)))
-    return bool(KeyValue.get(_HIGH_PERF_KEY, True))
+    if role_settings.get(_HIGH_PERF_KEY) is None \
+            and role_settings.get(_XIULUO_HIGH_PERF_KEY_OLD) is not None:
+        role_settings.set_value(_HIGH_PERF_KEY, bool(role_settings.get(_XIULUO_HIGH_PERF_KEY_OLD)))
+    return bool(role_settings.get(_HIGH_PERF_KEY, True))
 
 
 def save_high_perf(on):
     """保存高性能开关，返回操作结果。"""
-    _kv_save(_HIGH_PERF_KEY, bool(on))
+    role_settings.set_value(_HIGH_PERF_KEY, bool(on))
     return {"status": "success"}
 
 
-# ---- 战斗结束自动补血量蓝量（UI 开关，通用设置，KeyValue 持久化，
+# ---- 战斗结束自动补血量蓝量（UI 开关，通用设置，角色设置持久化，
 #      默认开启；关闭后战斗结束不再检测血蓝条、不自动右键回满——
 #      battle.watch_loop 战后分支门控） ----
 _AUTO_REFILL_KEY = "auto_refill"
@@ -602,16 +586,16 @@ _AUTO_REFILL_KEY = "auto_refill"
 
 def load_auto_refill():
     """读取战斗结束自动补血量蓝量开关（首次默认开启）。"""
-    return bool(KeyValue.get(_AUTO_REFILL_KEY, True))
+    return bool(role_settings.get(_AUTO_REFILL_KEY, True))
 
 
 def save_auto_refill(on):
     """保存战斗结束自动补血量蓝量开关，返回操作结果。"""
-    _kv_save(_AUTO_REFILL_KEY, bool(on))
+    role_settings.set_value(_AUTO_REFILL_KEY, bool(on))
     return {"status": "success"}
 
 
-# ---- 启动清屏（UI 开关，通用设置，KeyValue 持久化，默认开启；
+# ---- 启动清屏（UI 开关，通用设置，角色设置持久化，默认开启；
 #      每次任务启动时执行一次：Alt+6 屏蔽非队伍玩家 + Alt+5 屏蔽摊位，
 #      实现见 src/clear_screen.py） ----
 _CLEAR_SCREEN_KEY = "clear_screen"
@@ -619,16 +603,16 @@ _CLEAR_SCREEN_KEY = "clear_screen"
 
 def load_clear_screen():
     """读取启动清屏开关（首次默认开启）。"""
-    return bool(KeyValue.get(_CLEAR_SCREEN_KEY, True))
+    return bool(role_settings.get(_CLEAR_SCREEN_KEY, True))
 
 
 def save_clear_screen(on):
     """保存启动清屏开关，返回操作结果。"""
-    _kv_save(_CLEAR_SCREEN_KEY, bool(on))
+    role_settings.set_value(_CLEAR_SCREEN_KEY, bool(on))
     return {"status": "success"}
 
 
-# ---- 静默操作（UI 开关，通用设置，KeyValue 持久化，默认开启；
+# ---- 静默操作（UI 开关，通用设置，角色设置持久化，默认开启；
 #      开启后全部点击走窗口消息通道、鼠标移动变空操作，游戏窗口
 #      可不前台——实现见 app_utils._SILENT_CLICK 与 silent_click.py；
 #      关闭时保持原物理鼠标方案（各键盘/激活类操作恢复原行为）） ----
@@ -637,18 +621,18 @@ _SILENT_MODE_KEY = "silent_mode"
 
 def load_silent_mode():
     """读取静默操作开关（首次默认开启）。"""
-    return bool(KeyValue.get(_SILENT_MODE_KEY, True))
+    return bool(role_settings.get(_SILENT_MODE_KEY, True))
 
 
 def save_silent_mode(on):
     """保存静默操作开关并让主进程立即生效（验证/诊断流程），
     返回操作结果。任务子进程在启动时按配置置位。"""
-    _kv_save(_SILENT_MODE_KEY, bool(on))
+    role_settings.set_value(_SILENT_MODE_KEY, bool(on))
     app_utils.set_silent_mode(bool(on))
     return {"status": "success"}
 
 
-# ---- 修罗检查队伍（UI 开关，KeyValue 持久化；关闭时领取前跳过全部
+# ---- 修罗检查队伍（UI 开关，角色设置持久化；关闭时领取前跳过全部
 #      队伍检查，默认开启（关闭时每轮回程后开面板检查 5~7s 的耗时
 #      也一并跳过——用户可按需关闭）） ----
 _XIULUO_CHECK_TEAM_KEY = "xiuluo_check_team"
@@ -656,16 +640,16 @@ _XIULUO_CHECK_TEAM_KEY = "xiuluo_check_team"
 
 def load_xiuluo_check_team():
     """读取修罗检查队伍开关（首次默认开启）。"""
-    return bool(KeyValue.get(_XIULUO_CHECK_TEAM_KEY, True))
+    return bool(role_settings.get(_XIULUO_CHECK_TEAM_KEY, True))
 
 
 def save_xiuluo_check_team(on):
     """保存修罗检查队伍开关，返回操作结果。"""
-    _kv_save(_XIULUO_CHECK_TEAM_KEY, bool(on))
+    role_settings.set_value(_XIULUO_CHECK_TEAM_KEY, bool(on))
     return {"status": "success"}
 
 
-# ---- 修罗自动创建队伍（UI 开关，KeyValue 持久化；默认关闭。开启时
+# ---- 修罗自动创建队伍（UI 开关，角色设置持久化；默认关闭。开启时
 #      任务启动若无队伍自动创建——点组队按钮 → 菜单「创建队伍」，
 #      创建成功后走正常队伍检查与补人流程；已有队伍无操作。
 #      实现见 team.ensure_team_created） ----
@@ -674,16 +658,16 @@ _XIULUO_AUTO_CREATE_TEAM_KEY = "xiuluo_auto_create_team"
 
 def load_xiuluo_auto_create_team():
     """读取修罗自动创建队伍开关（首次默认关闭）。"""
-    return bool(KeyValue.get(_XIULUO_AUTO_CREATE_TEAM_KEY, False))
+    return bool(role_settings.get(_XIULUO_AUTO_CREATE_TEAM_KEY, False))
 
 
 def save_xiuluo_auto_create_team(on):
     """保存修罗自动创建队伍开关，返回操作结果。"""
-    _kv_save(_XIULUO_AUTO_CREATE_TEAM_KEY, bool(on))
+    role_settings.set_value(_XIULUO_AUTO_CREATE_TEAM_KEY, bool(on))
     return {"status": "success"}
 
 
-# ---- 修罗自动归队（UI 开关，KeyValue 持久化；默认开启。仅非队长
+# ---- 修罗自动归队（UI 开关，角色设置持久化；默认开启。仅非队长
 #      生效：战斗死亡落轮回司后自动打开队伍面板点「归队」传送回队长，
 #      实现见 team.maybe_rejoin；与五倍同款） ----
 _XIULUO_AUTO_REJOIN_KEY = "xiuluo_auto_rejoin"
@@ -691,30 +675,30 @@ _XIULUO_AUTO_REJOIN_KEY = "xiuluo_auto_rejoin"
 
 def load_xiuluo_auto_rejoin():
     """读取修罗自动归队开关（首次默认开启）。"""
-    return bool(KeyValue.get(_XIULUO_AUTO_REJOIN_KEY, True))
+    return bool(role_settings.get(_XIULUO_AUTO_REJOIN_KEY, True))
 
 
 def save_xiuluo_auto_rejoin(on):
     """保存修罗自动归队开关，返回操作结果。"""
-    _kv_save(_XIULUO_AUTO_REJOIN_KEY, bool(on))
+    role_settings.set_value(_XIULUO_AUTO_REJOIN_KEY, bool(on))
     return {"status": "success"}
 
 
-# ---- 修罗自动巫医（UI 开关+间隔，KeyValue 持久化；默认开启、每 5 轮
+# ---- 修罗自动巫医（UI 开关+间隔，角色设置持久化；默认开启、每 5 轮
 #      一次——每 N 轮领取后无条件前往巫医 NPC 医治，血蓝正常也照常） ----
-# ---- 修罗缺人自动喊话（UI 开关，KeyValue 持久化；默认开启。
+# ---- 修罗缺人自动喊话（UI 开关，角色设置持久化；默认开启。
 #      喊话内容按必须种族拼装（xiuluo._build_shout_text），无内容设置） ----
 _XIULUO_SHOUT_SWITCH_KEY = "xiuluo_shout"
 
 
 def load_xiuluo_shout_switch():
     """读取修罗缺人自动喊话开关（首次默认开启）。"""
-    return bool(KeyValue.get(_XIULUO_SHOUT_SWITCH_KEY, True))
+    return bool(role_settings.get(_XIULUO_SHOUT_SWITCH_KEY, True))
 
 
 def save_xiuluo_shout_switch(on):
     """保存修罗缺人自动喊话开关，返回操作结果。"""
-    _kv_save(_XIULUO_SHOUT_SWITCH_KEY, bool(on))
+    role_settings.set_value(_XIULUO_SHOUT_SWITCH_KEY, bool(on))
     return {"status": "success"}
 
 
@@ -726,19 +710,19 @@ _WUYI_INTERVAL_MAX = 90
 
 def load_xiuluo_auto_wuyi():
     """读取修罗自动巫医开关（首次默认开启）。"""
-    return bool(KeyValue.get(_XIULUO_AUTO_WUYI_KEY, True))
+    return bool(role_settings.get(_XIULUO_AUTO_WUYI_KEY, True))
 
 
 def save_xiuluo_auto_wuyi(on):
     """保存修罗自动巫医开关，返回操作结果。"""
-    _kv_save(_XIULUO_AUTO_WUYI_KEY, bool(on))
+    role_settings.set_value(_XIULUO_AUTO_WUYI_KEY, bool(on))
     return {"status": "success"}
 
 
 def load_xiuluo_wuyi_interval():
     """读取修罗自动巫医间隔（轮，首次默认 5）。"""
     try:
-        value = int(KeyValue.get(_XIULUO_WUYI_INTERVAL_KEY, 5))
+        value = int(role_settings.get(_XIULUO_WUYI_INTERVAL_KEY, 5))
     except (TypeError, ValueError):
         value = 5
     return max(_WUYI_INTERVAL_MIN, min(_WUYI_INTERVAL_MAX, value))
@@ -752,7 +736,7 @@ def save_xiuluo_wuyi_interval(value):
         return {"status": "error", "msg": "INVALID_INTERVAL"}
     if not (_WUYI_INTERVAL_MIN <= value <= _WUYI_INTERVAL_MAX):
         return {"status": "error", "msg": "OUT_OF_RANGE"}
-    _kv_save(_XIULUO_WUYI_INTERVAL_KEY, value)
+    role_settings.set_value(_XIULUO_WUYI_INTERVAL_KEY, value)
     return {"status": "success", "interval": value}
 
 
@@ -762,19 +746,19 @@ _WUBEI_WUYI_INTERVAL_KEY = "wubei_wuyi_interval"
 
 def load_wubei_auto_wuyi():
     """读取五倍自动巫医开关（首次默认开启，与修罗一致）。"""
-    return bool(KeyValue.get(_WUBEI_AUTO_WUYI_KEY, True))
+    return bool(role_settings.get(_WUBEI_AUTO_WUYI_KEY, True))
 
 
 def save_wubei_auto_wuyi(on):
     """保存五倍自动巫医开关，返回操作结果。"""
-    _kv_save(_WUBEI_AUTO_WUYI_KEY, bool(on))
+    role_settings.set_value(_WUBEI_AUTO_WUYI_KEY, bool(on))
     return {"status": "success"}
 
 
 def load_wubei_wuyi_interval():
     """读取五倍自动巫医间隔（轮，首次默认 5，与修罗一致）。"""
     try:
-        value = int(KeyValue.get(_WUBEI_WUYI_INTERVAL_KEY, 5))
+        value = int(role_settings.get(_WUBEI_WUYI_INTERVAL_KEY, 5))
     except (TypeError, ValueError):
         value = 5
     return max(_WUYI_INTERVAL_MIN, min(_WUYI_INTERVAL_MAX, value))
@@ -788,27 +772,27 @@ def save_wubei_wuyi_interval(value):
         return {"status": "error", "msg": "INVALID_INTERVAL"}
     if not (_WUYI_INTERVAL_MIN <= value <= _WUYI_INTERVAL_MAX):
         return {"status": "error", "msg": "OUT_OF_RANGE"}
-    _kv_save(_WUBEI_WUYI_INTERVAL_KEY, value)
+    role_settings.set_value(_WUBEI_WUYI_INTERVAL_KEY, value)
     return {"status": "success", "interval": value}
 
 
-# ---- 五倍是否领取奎木狼任务（UI 开关，KeyValue 持久化，默认开启；
+# ---- 五倍是否领取奎木狼任务（UI 开关，角色设置持久化，默认开启；
 #      关闭时领取到奎木狼任务自动重新领取替换，逻辑同锁妖网） ----
 _WUBEI_KUIMULANG_KEY = "wubei_kuimulang"
 
 
 def load_wubei_kuimulang_switch():
     """读取五倍领取奎木狼任务开关（首次默认开启）。"""
-    return bool(KeyValue.get(_WUBEI_KUIMULANG_KEY, True))
+    return bool(role_settings.get(_WUBEI_KUIMULANG_KEY, True))
 
 
 def save_wubei_kuimulang_switch(on):
     """保存五倍领取奎木狼任务开关，返回操作结果。"""
-    _kv_save(_WUBEI_KUIMULANG_KEY, bool(on))
+    role_settings.set_value(_WUBEI_KUIMULANG_KEY, bool(on))
     return {"status": "success"}
 
 
-# ---- 组号专用（UI 开关，修罗/五倍各一，KeyValue 持久化，默认关闭；
+# ---- 组号专用（UI 开关，修罗/五倍各一，角色设置持久化，默认关闭；
 #      一个窗口内多个登录 Tab 视为一组号：队长带队，队员 Tab 自动挂
 #      战斗/巫医/补血蓝，实现见 src/tab_group.py） ----
 _XIULUO_TAB_GROUP_KEY = "xiuluo_tab_group"
@@ -816,12 +800,12 @@ _XIULUO_TAB_GROUP_KEY = "xiuluo_tab_group"
 
 def load_xiuluo_tab_group():
     """读取修罗组号专用开关（首次默认关闭）。"""
-    return bool(KeyValue.get(_XIULUO_TAB_GROUP_KEY, False))
+    return bool(role_settings.get(_XIULUO_TAB_GROUP_KEY, False))
 
 
 def save_xiuluo_tab_group(on):
     """保存修罗组号专用开关，返回操作结果。"""
-    _kv_save(_XIULUO_TAB_GROUP_KEY, bool(on))
+    role_settings.set_value(_XIULUO_TAB_GROUP_KEY, bool(on))
     return {"status": "success"}
 
 
@@ -830,16 +814,16 @@ _WUBEI_TAB_GROUP_KEY = "wubei_tab_group"
 
 def load_wubei_tab_group():
     """读取五倍组号专用开关（首次默认关闭）。"""
-    return bool(KeyValue.get(_WUBEI_TAB_GROUP_KEY, False))
+    return bool(role_settings.get(_WUBEI_TAB_GROUP_KEY, False))
 
 
 def save_wubei_tab_group(on):
     """保存五倍组号专用开关，返回操作结果。"""
-    _kv_save(_WUBEI_TAB_GROUP_KEY, bool(on))
+    role_settings.set_value(_WUBEI_TAB_GROUP_KEY, bool(on))
     return {"status": "success"}
 
 
-# ---- 战斗设置（人物/召唤兽默认战斗动作，UI 单选项，KeyValue 持久化） ----
+# ---- 战斗设置（人物/召唤兽默认战斗动作，UI 单选项，角色设置持久化） ----
 # 人物：技能面板 3 行 × 5 列共 15 格 + 攻击/防御/捕捉/逃跑/无
 CHAR_BATTLE_ACTIONS = ([f"技能{r}-{c}" for r in range(1, 4) for c in range(1, 6)]
                        + ["攻击", "防御", "捕捉", "逃跑", "无"])
@@ -854,7 +838,7 @@ def load_battle_actions():
     result = {}
     for name, key in _BATTLE_KEYS.items():
         options = CHAR_BATTLE_ACTIONS if name == "char" else BEAST_BATTLE_ACTIONS
-        value = KeyValue.get(key, _DEFAULT_BATTLE[name])
+        value = role_settings.get(key, _DEFAULT_BATTLE[name])
         result[name] = value if value in options else _DEFAULT_BATTLE[name]
     return result
 
@@ -866,14 +850,15 @@ def save_battle_action(target, value):
     options = CHAR_BATTLE_ACTIONS if target == "char" else BEAST_BATTLE_ACTIONS
     if value not in options:
         return {"status": "error", "msg": "INVALID_VALUE"}
-    _kv_save(_BATTLE_KEYS[target], value)
+    role_settings.set_value(_BATTLE_KEYS[target], value)
     return {"status": "success"}
 
 
 # ---- 组号成员战斗动作（按账号 ID 持久化，组号设置面板编辑） ----
-# 单键存整表 {账号ID: {"char":..., "beast":...}}：账号 ID 来自 Tab 标题
-# 「（ID：账号）」。只增改不删——队员换队长/队伍变动后旧账号设置保留
-# （用户 2026-11-07 需求：CDE 第一天设置、第二天换队长后直接读出）。
+# 存当前队长角色 data/<角色ID>/state.json：{账号ID: {"char":..., "beast":...}}
+# 账号 ID 来自 Tab 标题「（ID：账号）」。只增改不删——队员换队长/队伍
+# 变动后旧账号设置保留（用户 2026-11-07 需求）；2026-11-11 起按队长
+# 角色隔离，切换队长账号后各自一套。
 _GROUP_ACTIONS_KEY = "group_member_actions"
 # 组号识别状态（任务进程启动检查写入，面板「组号」侧边栏入口显隐信号）：
 # 面板昵称可读且确认到 ≥1 名在队伍中的队员 Tab = 是组号 → True；可读且
@@ -892,10 +877,12 @@ def load_group_actions():
     """读取全部组号成员战斗动作 {账号ID: {"char":..., "beast":...}}。
 
     条目缺人物/召唤兽动作或值非法时丢弃（旧数据/手工改坏文件自愈）。
-    单号模式不使用本数据；任务进程跨进程读取（KeyValue 首次访问从
-    磁盘加载，与任务进度同机制）。
+    单号模式不使用本数据；任务进程每次直读当前角色的 state.json。
     """
-    data = KeyValue.get(_GROUP_ACTIONS_KEY, {}) or {}
+    data = app_utils.role_state_get(_GROUP_ACTIONS_KEY, None)
+    if data is None and not user_data.is_migrated():
+        data = KeyValue.get(_GROUP_ACTIONS_KEY, {}) or {}  # 旧版未迁移/单测兜底
+    data = data if isinstance(data, dict) else {}
     result = {}
     for aid, entry in data.items():
         if not isinstance(entry, dict):
@@ -929,7 +916,8 @@ def save_group_actions(mapping):
         incoming[str(aid)] = {"char": char, "beast": beast}
     cur = load_group_actions()
     cur.update(incoming)
-    app_utils.kv_save_merged(_GROUP_ACTIONS_KEY, cur)
+    if not app_utils.role_state_set(_GROUP_ACTIONS_KEY, cur):
+        return {"status": "error", "msg": "SAVE_FAILED"}
     return {"status": "success"}
 
 
@@ -956,17 +944,17 @@ def save_group_last_scan(data):
                     for m in data.get("members") or []
                     if isinstance(m, dict) and m.get("in_team") and m.get("id")],
     }
-    try:
-        app_utils.kv_save_merged(_GROUP_LAST_SCAN_KEY, snapshot)
-    except Exception as e:
-        app_utils.log(f"[组号] 保存队伍检查快照失败: {e}", "WARN")
+    if not app_utils.role_state_set(_GROUP_LAST_SCAN_KEY, snapshot):
+        app_utils.log("[组号] 保存队伍检查快照失败", "WARN")
         return None
     return snapshot["ts"]
 
 
 def load_group_last_scan():
-    """读取最近一次队伍检查快照（主进程直读磁盘，任务进程刚写也能看到）。"""
-    snap = app_utils.kv_read_fresh(_GROUP_LAST_SCAN_KEY, None)
+    """读取最近一次队伍检查快照（当前角色 state.json，跨进程可见）。"""
+    snap = app_utils.role_state_get(_GROUP_LAST_SCAN_KEY, None)
+    if snap is None and not user_data.is_migrated():
+        snap = app_utils.kv_read_fresh(_GROUP_LAST_SCAN_KEY, None)  # 旧版兜底
     return snap if isinstance(snap, dict) else None
 
 
@@ -1013,7 +1001,7 @@ def build_group_last_scan_payload():
     return {"status": "success", "ok": True, "info": info, "data": data}
 
 
-# ---- 自动使用法门（UI 开关，KeyValue 持久化，默认关闭；开启后每场
+# ---- 自动使用法门（UI 开关，角色设置持久化，默认关闭；开启后每场
 #      战斗第 1 回合操作条出现时先点一次法门坐标再继续配置的战斗
 #      操作——坐标标定见 battle.FAMEN_CLICK_POS） ----
 _AUTO_FAMEN_KEY = "auto_famen"
@@ -1021,12 +1009,12 @@ _AUTO_FAMEN_KEY = "auto_famen"
 
 def load_auto_famen():
     """读取自动使用法门开关（首次默认关闭）。"""
-    return bool(KeyValue.get(_AUTO_FAMEN_KEY, False))
+    return bool(role_settings.get(_AUTO_FAMEN_KEY, False))
 
 
 def save_auto_famen(on):
     """保存自动使用法门开关，返回操作结果。"""
-    _kv_save(_AUTO_FAMEN_KEY, bool(on))
+    role_settings.set_value(_AUTO_FAMEN_KEY, bool(on))
     return {"status": "success"}
 
 
@@ -1798,11 +1786,14 @@ class ControlWindow(WebWindow):
         return debug_overlay.read_runtime_status()
 
     def get_task_stats(self):
-        """任务统计报表数据：直读任务子进程持久化的 task_stats.json
+        """任务成就数据：直读当前角色 data/<ID>/task_stats.json
         （累计/各模式/最近 7 天/最近一次会话快照）。任务未运行或已
-        停止时文件保留，照常返回。"""
+        停止时文件保留，照常返回；附 role（id/label）标明当前角色。"""
         from . import debug_overlay
-        return debug_overlay.read_task_stats()
+        data = debug_overlay.read_task_stats()
+        role = user_data.current_role_id()
+        data["role"] = {"id": role, "label": bound_label_from_binding() or ""}
+        return data
 
     def clear_task_stats(self):
         """清空任务统计：任务运行中拒绝（子进程正在写文件，防竞态）。"""
@@ -1817,12 +1808,13 @@ class ControlWindow(WebWindow):
         show = 组号开关开（修罗/五倍任一）且任务启动检查曾识别到组号
         （group_detected）且当前窗口已登录 Tab ≥2（实时枚举，账号变化
         即时反映——tab2 角色不在队伍不算组号，用户 2026-11-07 定义）。
-        group_detected 由任务进程 kv_save_merged 写入，必须直读磁盘
-        （app_utils.kv_read_fresh）——KeyValue.get 读本进程旧快照，
-        跨进程写入永远看不到（2026-11-07 实测入口不展示）。
+        group_detected 由任务进程写入当前角色 state.json，主进程每次
+        直读文件（跨进程可见）。
         """
         switch_on = load_xiuluo_tab_group() or load_wubei_tab_group()
-        detected = bool(app_utils.kv_read_fresh(_GROUP_DETECTED_KEY, False))
+        detected = bool(app_utils.role_state_get(_GROUP_DETECTED_KEY, False))
+        if not detected and not user_data.is_migrated():
+            detected = bool(app_utils.kv_read_fresh(_GROUP_DETECTED_KEY, False))
         tabs = 0
         if switch_on and detected:
             try:
