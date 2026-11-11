@@ -168,6 +168,56 @@ def test_load_group_actions_filters_bad_entries(monkeypatch):
     assert result == {"12345": {"char": "攻击", "beast": "防御"}}
 
 
+# ---- 队伍检查快照：组号页打开自动展示（2026-11-11 用户需求） ----
+
+
+def test_save_group_last_scan_keeps_only_in_team(monkeypatch):
+    """快照只存队长与确认在队伍中的队员（不在队伍账号即使设置过动作
+    也不进快照）；面板没读到（panel_read=False）不覆盖上次快照。"""
+    from src import control_window
+    store = _patch_kv_store(monkeypatch)
+    data = {"panel_read": True,
+            "leader": {"id": "idL", "name": "队长甲"},
+            "members": [
+                {"id": "idM1", "name": "队员乙", "in_team": True},
+                {"id": "idM2", "name": "路人丙", "in_team": False}]}
+    ts = control_window.save_group_last_scan(data)
+    assert ts and store["group_last_scan"]["leader"]["id"] == "idL"
+    snap = store["group_last_scan"]
+    assert snap["members"] == [{"id": "idM1", "name": "队员乙"}]
+    assert snap["ts"] == ts
+    # panel_read=False：不覆盖
+    assert control_window.save_group_last_scan(
+        {"panel_read": False, "leader": {"id": "x"}, "members": []}) is None
+    assert store["group_last_scan"]["members"] == [{"id": "idM1", "name": "队员乙"}]
+
+
+def test_build_group_last_scan_payload_merges_actions(monkeypatch):
+    """组号页打开自动展示载荷：只含快照内（在队伍）的队员，战斗动作
+    按账号 ID 实时读 group_member_actions。"""
+    from src import control_window
+    snap = {"ts": 1762800000.0,
+            "leader": {"id": "idL", "name": "队长甲"},
+            "members": [{"id": "idM1", "name": "队员乙"}]}
+    _patch_kv_store(monkeypatch, {
+        "group_member_actions": {
+            "idM1": {"char": "攻击", "beast": "防御"}}})
+    monkeypatch.setattr(control_window, "load_group_last_scan", lambda: snap)
+    r = control_window.build_group_last_scan_payload()
+    assert r["ok"] and r["data"]["leader"]["id"] == "idL"
+    assert r["data"]["leader"]["char"] is None
+    assert r["data"]["members"] == [{"id": "idM1", "name": "队员乙",
+                                     "in_team": True,
+                                     "char": "攻击", "beast": "防御"}]
+    assert r["data"]["snapshot_ts"] == snap["ts"]
+    assert "上次检查" in r["info"]
+    # 无快照：ok=False 引导手动检查
+    monkeypatch.setattr(control_window, "load_group_last_scan", lambda: None)
+    r2 = control_window.build_group_last_scan_payload()
+    assert r2["status"] == "success" and r2["ok"] is False
+    assert r2["data"] is None
+
+
 # ---- 调试相关全局设置不进配置方案（2026-11-10 用户要求） ----
 
 

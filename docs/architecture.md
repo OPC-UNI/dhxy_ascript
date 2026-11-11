@@ -635,7 +635,7 @@ flowchart TB
 flowchart TB
     A["run_loop"] --> A1["读取设置<br/>检查队伍 / 自动巫医间隔 / 喊话 / 自动创建"]
     A1 --> A2["启动清场<br/>申请待处理态：清空申请列表"]
-    A2 --> A3["自动创建队伍（开关开且非战斗）<br/>战斗中顺延到首个非战斗轮"]
+    A2 --> A3["自动创建队伍：开关开且「检查队伍」开时<br/>并入首次队伍检查（组号 startup_check /<br/>单号首次领取前检查）；检查队伍关时单独执行<br/>战斗中顺延"]
     A3 --> A4{"当天进度已达上限？"}
     A4 -- 是 --> Z0["结束任务"]
     A4 -- 否 --> A5["tab_group.init_task<br/>组号开关 + 已登录 Tab ≥2"]
@@ -654,14 +654,17 @@ flowchart TB
     L --> L1["ensure_leader_tab 护栏"]
     L1 --> L2{"战斗中？"}
     L2 -- 是 --> L3["等待战斗结束"]
-    L2 -- 否 --> L4["申请清场 / 自动创建 顺延执行"]
+    L2 -- 否 --> L4["申请清场；自动创建仅「检查队伍」关闭时顺延执行"]
     L4 --> L5{"追踪已有修罗任务？"}
     L5 -- 是 --> L6["record_leader_status(True)<br/>_team_checked=True → follow"]
     L5 -- 否 --> L7{"检查队伍开 且 首次未检查？"}
-    L7 -- 是 --> L8["读位置/帧判断是否在领取点"]
-    L8 -- 不在 --> L9["_check_team_with_retry<br/>瞬态失败原地重查；确定性非队长 → keep_alive"]
+    L7 -- 是 --> L7a{"组号启动检查已读到人数？"}
+    L7a -- 是 --> L7b["人数下限达标 → ready 直接领取<br/>不足 → 走位后监控补人<br/>不再为身份重开面板"]
+    L7a -- 否 --> L8["读位置/帧判断是否在领取点"]
+    L8 -- 不在 --> L9["_check_team_with_retry<br/>自动创建并入首次检查（同一次菜单）<br/>瞬态失败原地重查；确定性非队长 → keep_alive"]
     L8 -- 在 --> L10["跳过身份预检"]
     L7 -- 否 --> L10
+    L7b --> L11
     L9 --> L11["_walk_to_claim_spot"]
     L10 --> L11
     L11 --> L12{"检查队伍开 且 首次未检查？"}
@@ -715,7 +718,7 @@ flowchart TB
 flowchart TB
     A["run_loop"] --> A1["读取设置<br/>检查队伍 / 自动巫医 / 喊话 / 自动创建 / 奎木狼开关"]
     A1 --> A2["启动清场：申请待处理态 → 清空申请列表"]
-    A2 --> A3["自动创建队伍（战斗中顺延）"]
+    A2 --> A3["自动创建队伍：开关开且「检查队伍」开时<br/>并入首次队伍检查（组号 startup_check /<br/>单号首次领取前检查）；检查队伍关时单独执行<br/>战斗中顺延"]
     A3 --> A4{"当天进度已达上限？"}
     A4 -- 是 --> Z0["结束任务"]
     A4 -- 否 --> A5["tab_group.init_task + 启动检查<br/>同修罗：队长判定 / 成员动作 / 未组队降级"]
@@ -725,7 +728,7 @@ flowchart TB
     L1 --> L2{"战斗中？"}
     L2 -- 是 --> L3["等待战斗结束"]
     L3 --> L
-    L2 -- 否 --> L4["申请清场 / 自动创建顺延"]
+    L2 -- 否 --> L4["申请清场；自动创建仅「检查队伍」关闭时顺延"]
     L4 --> T1["_track_state 一次 OCR<br/>任务存在？锁妖网？奎木狼？"]
     T1 --> T2{"_task_gone_last_round？"}
     T2 -- 是 --> T3["跳过错检，直接领取"]
@@ -735,7 +738,7 @@ flowchart TB
     T6 -- 是 --> F["直接跟踪<br/>_fight_via_kanda=False"]
     T6 -- 否 --> T3
     T5 --> C
-    T3 --> C["领取前队伍预检（开关开且首次）<br/>不在领取点先判身份；瞬态失败原地重查"]
+    T3 --> C["领取前队伍预检（开关开且首次）<br/>组号启动检查已读人数 → ready / 走位后补人；<br/>否则不在领取点先判身份<br/>自动创建并入首次检查；瞬态失败原地重查"]
     C --> C1["_walk_to_claim_spot"]
     C1 --> C2["首次：_monitor_team_and_fill<br/>人满才领取；非队长 keep_alive"]
     C2 --> C3["_claim_task(allow_fill)"]
@@ -1002,6 +1005,8 @@ flowchart TB
     A1 --> A2{"申请加入面板已开<br/>或组队按钮为 zudui_item2？"}
     A2 -- 是 --> A3["确定性队长 → 返回 wait（人数待补）"]
     A2 -- 否 --> A4["open_team_panel：组队按钮→菜单→队伍信息"]
+    A4 -- "未组队且 create_if_missing" --> A4b["同一次菜单打开内点「创建队伍」<br/>面板打开即创建成功"]
+    A4b --> A7
     A4 -- 未组队 --> A5["返回 not_leader（确定性状态，不重试）"]
     A4 -- 菜单打不开 --> A6["重截 2 帧复查申请人证据<br/>仍无 → 队长无法判定（瞬态）"]
     A4 -- 面板打开 --> A7["截帧：双模板比分数判队长<br/>解散 vs 离开，各达标且更高者胜"]
@@ -1082,7 +1087,7 @@ flowchart TB
     A6 --> S["startup_check"]
     S --> S1["战斗中先等结束（≤90s）"]
     S1 --> S2["clear_pending_apply 启动清场"]
-    S2 --> S3["classify_leader_with_panel<br/>双模板 + 复核"]
+    S2 --> S3["classify_leader_with_panel<br/>双模板 + 复核<br/>create_if_missing：未组队同菜单内创建"]
     S3 --> S4{"unclear？"}
     S4 -- 是 --> S5["3s 后同一面板重判一次"]
     S4 -- 否 --> S6{"队长？"}
@@ -1091,7 +1096,8 @@ flowchart TB
     S6 -- 是 --> S7a["同面板读成员昵称<br/>漏检区域补读一帧"]
     S7a --> S8["close_team_panel"]
 
-    S8 --> M["startup_member_check"]
+    S8 --> S8a["startup_team_count：昵称可读数=人数下限<br/>达标时任务侧免首次领取前队伍检查"]
+    S8a --> M["startup_member_check"]
     M --> M1["枚举 Tab + 面板昵称模糊匹配"]
     M1 --> M2["确认在队伍中的队员 Tab 集合<br/>排除队伍里的外人"]
     M2 --> M3{"确认队员已设置战斗动作？"}

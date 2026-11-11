@@ -1175,13 +1175,46 @@ def is_team_panel_open(win):
     return False, "队伍面板未打开"
 
 
-def open_team_panel(win):
+def _create_team_in_menu(win, img, prefix="[组队]"):
+    """菜单已打开且无「队伍信息」（未组队）：点「创建队伍」并等面板打开。
+
+    自动创建队伍合并路径共用（open_team_panel 的 create_if_missing 与
+    ensure_team_created，2026-11-11 组号逻辑优化：不再单独开一次菜单
+    查「是否已组队」再开第二次菜单开面板）。创建成功会打开队伍信息
+    面板（用户 2026-11-07 确认），面板保持打开由调用方处理。
+    失败描述以「未组队」开头：调用方 is_definitive_not_leader 与
+    「未组队」判定按确定性状态处理，与旧链路「创建失败后正常队伍检查
+    返回未组队」一致。模板缺失时降级报错绝不误点菜单其他项。
+    返回 (是否成功, 描述)。
+    """
+    if not _tpl_path(CHUANGJIAN_DUIWU_ICON).exists():
+        _close_menu(win)
+        return False, (f"未组队（创建队伍按钮模板未提供"
+                       f"：res/img/{CHUANGJIAN_DUIWU_ICON}）")
+    pt = game_map.find_template_in(img, CHUANGJIAN_DUIWU_ICON, _TEMPLATE_THRESHOLD)
+    if pt is None:
+        _close_menu(win)
+        return False, "未组队（菜单中未定位到「创建队伍」按钮）"
+    human_click(win, pt[0], pt[1])
+    log(f"{prefix} 已点击创建队伍 @ ({pt[0]},{pt[1]})，等待队伍面板打开", "SYS")
+    if not _wait_panel(win):
+        # 创建失败时菜单可能仍残留，关闭防遮挡后续流程
+        _close_menu(win)
+        return False, "未组队（点击创建队伍后队伍面板未打开）"
+    return True, "队伍创建成功（队伍信息面板已打开）"
+
+
+def open_team_panel(win, create_if_missing=False, prefix="[组队]"):
     """打开队伍面板：确保组队菜单打开 → 点击菜单「队伍信息」。
 
     仅已组队时菜单才有「队伍信息」，未组队时无法打开面板。
     面板已打开时直接复用——实机踩坑：面板开着时点「队伍信息」会把它
     切换关闭（按钮开关式），必须先检查面板状态。
     打开后保持面板开启，由调用方 close_team_panel 关闭。
+    create_if_missing=True（自动创建队伍合并路径，2026-11-11 优化）：
+    未组队时在同一次菜单打开内点「创建队伍」创建——自动创建开关不再
+    单独开一次菜单查「是否已组队」，省重复点击组队按钮；创建成功面板
+    保持打开（创建即打开），调用方照常读取。
     返回 (是否成功, 描述)。
     """
     if _is_panel_open(win):
@@ -1190,8 +1223,10 @@ def open_team_panel(win):
     if not opened:
         return False, "组队菜单未打开"
     if not _has_duiwuxinxi(img):
-        _close_menu(win)
-        return False, "未组队（菜单中无「队伍信息」）"
+        if not create_if_missing:
+            _close_menu(win)
+            return False, "未组队（菜单中无「队伍信息」）"
+        return _create_team_in_menu(win, img, prefix=prefix)
     pt = game_map.find_template_in(img, DUIWU_XINXI_ICON, _TEMPLATE_THRESHOLD)
     if pt is None:
         _close_menu(win)
@@ -1288,28 +1323,13 @@ def ensure_team_created(win, prefix="[组队]"):
     if _has_duiwuxinxi(img):
         _close_menu(win)
         return True, "已在队伍中，无需创建"
-    if not _tpl_path(CHUANGJIAN_DUIWU_ICON).exists():
-        _close_menu(win)
-        return False, (f"创建队伍按钮模板未提供"
-                       f"（待补充 res/img/{CHUANGJIAN_DUIWU_ICON}）")
-    pt = game_map.find_template_in(img, CHUANGJIAN_DUIWU_ICON, _TEMPLATE_THRESHOLD)
-    if pt is None:
-        _close_menu(win)
-        return False, "菜单中未定位到「创建队伍」按钮（chuangjianduiwu）"
-    human_click(win, pt[0], pt[1])
-    log(f"{prefix} 已点击创建队伍 @ ({pt[0]},{pt[1]})，等待队伍面板打开", "SYS")
-    for _ in range(_PANEL_WAIT_TRIES):
-        time.sleep(_PANEL_WAIT_INTERVAL)
-        if _is_panel_open(win):
-            close_team_panel(win)
-            return True, "队伍创建成功（队伍信息面板已打开）"
-    # 创建失败时菜单可能仍残留，关闭防遮挡后续流程（_close_menu 内部
-    # 先查菜单是否打开，未打开即空操作）
-    _close_menu(win)
-    return False, "点击创建队伍后队伍面板未打开（创建失败或出现确认对话框）"
+    ok, info = _create_team_in_menu(win, img, prefix=prefix)
+    if ok:
+        close_team_panel(win)
+    return ok, info
 
 
-def classify_leader_with_panel(win):
+def classify_leader_with_panel(win, create_if_missing=False, prefix="[组队]"):
     """队长身份三分类（面板保持打开，调用方负责关闭）。
 
     面板未打开则先打开（未组队/打不开返回 not_leader + 原因）；帧内
@@ -1318,10 +1338,13 @@ def classify_leader_with_panel(win):
     （2026-11-05 队长面板单帧误判教训）。复核只重截帧、面板保持
     打开，供组号启动检查在同一面板打开内继续读成员昵称（2026-11-07
     启动开 3 次面板的修复）。
+    create_if_missing=True：自动创建队伍并入本次菜单打开（组号启动
+    检查路径，见 open_team_panel）。
     返回 (kind, 描述)；kind：leader / not_leader / unclear。
     """
     if not _is_panel_open(win):
-        ok, info = open_team_panel(win)
+        ok, info = open_team_panel(win, create_if_missing=create_if_missing,
+                                   prefix=prefix)
         if not ok:
             # 申请待处理态（zudui_item2/申请加入面板残留）下菜单打不开、
             # 面板无法打开，但该证据即确定性队长（只有队长收到入队
@@ -1428,9 +1451,14 @@ def check_team_conditions(win, min_members=None, required_races=None):
     return True, f"队伍满足条件（{len(races)} 人: {'、'.join(races)}）"
 
 
-def check_team_min(win, min_members=None, allow_kick=False):
+def check_team_min(win, min_members=None, allow_kick=False,
+                   create_if_missing=False, prefix="[组队]"):
     """领取前队伍检查（通用，修罗/五倍等复用）：一次打开队伍面板完成
     队长判定、人数检查与成员信息采集。
+
+    create_if_missing=True：自动创建队伍并入本次菜单打开（未组队时
+    直接点「创建队伍」，成功后照常判身份/人数）——自动创建开关不再
+    单独开菜单查是否组队（2026-11-11 组号逻辑优化）。
 
     开面板前先查申请人证据（申请加入面板已开，或组队按钮为 zudui_item2
     申请待处理态）——该状态即确定性队长（只有队长会收到入队申请），
@@ -1458,7 +1486,8 @@ def check_team_min(win, min_members=None, allow_kick=False):
             # 按人数待补返回，由监控循环补人后重查（见 docstring）
             record_leader_status(True)
             return "wait", "队伍人数待补（有申请人待处理，确定性队长）", []
-        ok, info = open_team_panel(win)
+        ok, info = open_team_panel(win, create_if_missing=create_if_missing,
+                                   prefix=prefix)
         if not ok:
             # 未组队是确定性非队长状态，直接用原因作描述（套「队长无法
             # 判定」外壳语义矛盾：没组队就没有队长，无从「判定」）；

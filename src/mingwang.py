@@ -273,14 +273,17 @@ LEVEL_OCR_ALIASES = str.maketrans({"級": "级"})  # OCR 常把「级」读成�
 # 残像所示位置」时按四个路点在蟠桃园搜索 NPC 并点击（见下方沙都修罗
 # 执行状态机常量）；其余阶段由通用跟踪 + 战斗线程托管。
 CLAIM_TASKS = (
+    # 魔族
     {"title": "蛟魔复仇", "level": "高级"},
     {"title": "沙海迷踪", "level": "高级"},
     {"title": "蛟魔探秘", "level": "高级"},
     {"title": "凿石造像", "level": "中级"},
     {"title": "魔王重聚", "level": "高级"}, # 未完成，需要使用后到某个地图巡逻找到，后续在做
+    # 仙族
     {"title": "净化水晶", "level": "高级"},
     {"title": "五庄封印", "level": "高级"},
     {"title": "沙都修罗", "level": "高级"},
+    # 鬼族
 )
 # ---- 任务执行对话（类似 xuanshu.DIALOG_OPTION_MAP：对话框文案 → 绿色选项）----
 # 逐条按游戏原文维护（用户 2026-11-10 提供）；文案匹配走 _dialog_text_present

@@ -881,6 +881,11 @@ _GROUP_ACTIONS_KEY = "group_member_actions"
 # （保留上次状态，宽松）。主进程读此键 + 组号开关 + 当前窗口已登录
 # Tab ≥2 决定入口显隐（用户 2026-11-07 需求：识别到是组号才展示）。
 _GROUP_DETECTED_KEY = "group_detected"
+# 最近一次队伍检查快照（任务进程启动检查 / 组号页「检查当前队伍」写入）：
+# 组号页打开时自动展示上次确认的队长与在队伍中的队员（此前必须手动点
+# 检查才出列表，2026-11-11 用户需求）。只存账号 ID/角色名与时间戳，
+# 战斗动作不复制（展示时按账号 ID 读 group_member_actions 实时合并）。
+_GROUP_LAST_SCAN_KEY = "group_last_scan"
 
 
 def load_group_actions():
@@ -926,6 +931,86 @@ def save_group_actions(mapping):
     cur.update(incoming)
     app_utils.kv_save_merged(_GROUP_ACTIONS_KEY, cur)
     return {"status": "success"}
+
+
+def save_group_last_scan(data):
+    """保存最近一次队伍检查快照（组号页打开自动展示的数据源）。
+
+    data 为 tab_group.scan_group_members 的返回数据。只存队长与「确认
+    在队伍中」的队员（账号 ID/角色名）——不在队伍的账号无论是否设置过
+    动作都不进快照（用户 2026-11-11 要求）；战斗动作不复制，展示时按
+    账号 ID 实时读 group_member_actions。panel_read=False 不覆盖（面板
+    没读到不代表队伍变了，保留上次可用快照）。
+    任务进程（启动检查）与主进程（手动检查）共用；跨进程合并写。
+    返回快照时间戳（秒）或 None（未保存）。
+    """
+    if not isinstance(data, dict) or not data.get("panel_read"):
+        return None
+    leader = data.get("leader")
+    leader = leader if isinstance(leader, dict) else {}
+    snapshot = {
+        "ts": time.time(),
+        "leader": {"id": str(leader.get("id") or ""),
+                   "name": leader.get("name") or ""},
+        "members": [{"id": str(m.get("id") or ""), "name": m.get("name") or ""}
+                    for m in data.get("members") or []
+                    if isinstance(m, dict) and m.get("in_team") and m.get("id")],
+    }
+    try:
+        app_utils.kv_save_merged(_GROUP_LAST_SCAN_KEY, snapshot)
+    except Exception as e:
+        app_utils.log(f"[组号] 保存队伍检查快照失败: {e}", "WARN")
+        return None
+    return snapshot["ts"]
+
+
+def load_group_last_scan():
+    """读取最近一次队伍检查快照（主进程直读磁盘，任务进程刚写也能看到）。"""
+    snap = app_utils.kv_read_fresh(_GROUP_LAST_SCAN_KEY, None)
+    return snap if isinstance(snap, dict) else None
+
+
+def build_group_last_scan_payload():
+    """组号页「打开自动展示上次检查」载荷（与手动检查同结构）。
+
+    返回 {"status","ok","info","data"}；data 与 onGroupCheckResult 的
+    data 同形（leader/members/panel_read/options + snapshot_ts），成员
+    只含快照确认在队伍的队员，动作按账号 ID 实时合并。无快照 ok=False。
+    """
+    snap = load_group_last_scan()
+    leader_snap = snap.get("leader") if isinstance(snap, dict) else None
+    if not isinstance(leader_snap, dict) or not leader_snap.get("id"):
+        return {"status": "success", "ok": False,
+                "info": "暂无队伍检查记录，请点「检查当前队伍」", "data": None}
+    saved = load_group_actions()
+    lid = str(leader_snap.get("id") or "")
+    lentry = saved.get(lid) or {}
+    leader = {"id": lid, "name": leader_snap.get("name") or "",
+              "char": lentry.get("char"), "beast": lentry.get("beast")}
+    members = []
+    for m in snap.get("members") or []:
+        if not isinstance(m, dict):
+            continue
+        mid = str(m.get("id") or "")
+        if not mid:
+            continue
+        entry = saved.get(mid) or {}
+        members.append({"id": mid, "name": m.get("name") or "",
+                        "in_team": True,
+                        "char": entry.get("char"), "beast": entry.get("beast")})
+    ts = snap.get("ts")
+    try:
+        when = time.strftime("%m-%d %H:%M", time.localtime(float(ts))) \
+            if ts else "未知时间"
+    except (TypeError, ValueError, OSError):
+        when = "未知时间"
+    data = {"leader": leader, "members": members, "panel_read": True,
+            "options": {"char": CHAR_BATTLE_ACTIONS,
+                        "beast": BEAST_BATTLE_ACTIONS},
+            "snapshot_ts": ts}
+    info = (f"上次检查（{when}）：队长 {leader['name'] or leader['id']}，"
+            f"队伍内队员 {len(members)} 名；队伍/账号变化时请重新检查")
+    return {"status": "success", "ok": True, "info": info, "data": data}
 
 
 # ---- 自动使用法门（UI 开关，KeyValue 持久化，默认关闭；开启后每场
@@ -1039,6 +1124,7 @@ class ControlWindow(WebWindow):
         self.expose(self.save_xiuluo_wuyi_interval)
         self.expose(self.save_xiuluo_tab_group)
         self.expose(self.group_check_team)
+        self.expose(self.group_last_scan)
         self.expose(self.group_save_actions)
         self.expose(self.get_group_state)
         self.expose(self.save_high_perf)
@@ -1641,8 +1727,21 @@ class ControlWindow(WebWindow):
             self.add_logs([f"[组号] 检查结果: {info}"])
         except Exception:
             pass
+        if ok and data:
+            # 手动检查同时刷新快照：组号页下次打开（含程序重启）自动展示
+            ts = save_group_last_scan(data)
+            if ts is not None:
+                data["snapshot_ts"] = ts
         self._notify_group_check_result(ok, info, data)
         self._group_checking = False
+
+    def group_last_scan(self):
+        """组号页打开自动展示最近一次队伍检查快照（任务启动检查写入）。
+
+        只读：不枚举窗口、不点击游戏。载荷与手动检查同结构，页面据此
+        渲染队长/队员行；同一会话已有较新数据时页面自行忽略。
+        """
+        return build_group_last_scan_payload()
 
     def _notify_group_check_result(self, ok, info, data):
         """组号队伍检查结果回推页面（组号设置页成员行渲染）。

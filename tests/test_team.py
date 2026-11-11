@@ -419,6 +419,58 @@ def test_ensure_team_created_menu_not_open(monkeypatch):
     assert env["clicked"] == []
 
 
+# ---- 自动创建并入队伍面板打开（2026-11-11 组号逻辑优化） ----
+
+
+def test_open_team_panel_create_if_missing(monkeypatch):
+    """create_if_missing：未组队时同一次菜单打开内点「创建队伍」，
+    成功后面板保持打开供调用方判身份/读成员（不再分开两次开菜单）。"""
+    env = _mock_create_env(monkeypatch, panel_results=[False, True])
+    ok, desc = team.open_team_panel(None, create_if_missing=True)
+    assert ok and "创建成功" in desc
+    assert env["clicked"] == [(120, 300)]
+    assert env["menu_closed"] == 0    # 成功路径不额外关菜单
+    assert env["panel_closed"] == 0   # 面板保持打开
+
+
+def test_open_team_panel_create_if_missing_template_missing(monkeypatch):
+    """create_if_missing 且模板缺失：报「未组队（模板未提供）」并关
+    菜单——调用方按确定性未组队处理，绝不误点菜单其他项。"""
+    env = _mock_create_env(monkeypatch, tpl_exists=False)
+    ok, desc = team.open_team_panel(None, create_if_missing=True)
+    assert not ok and "未组队" in desc and "模板未提供" in desc
+    assert env["clicked"] == []
+    assert env["menu_closed"] == 1
+
+
+def test_open_team_panel_no_create_by_default(monkeypatch):
+    """默认不创建：菜单无「队伍信息」直接关菜单报未组队（原行为）。"""
+    env = _mock_create_env(monkeypatch)
+    ok, desc = team.open_team_panel(None)
+    assert not ok and "未组队" in desc
+    assert env["clicked"] == []
+    assert env["menu_closed"] == 1
+
+
+def test_check_team_min_forwards_create_flag(monkeypatch):
+    """check_team_min 把自动创建标记与日志前缀传到 open_team_panel。"""
+    seen = {}
+    monkeypatch.setattr(team, "_is_panel_open", lambda win: False)
+    monkeypatch.setattr(team, "has_pending_apply", lambda img: False)
+
+    def open_panel(win, create_if_missing=False, prefix="[组队]"):
+        seen["create"] = create_if_missing
+        seen["prefix"] = prefix
+        return False, "组队菜单未打开"
+
+    monkeypatch.setattr(team, "open_team_panel", open_panel)
+    monkeypatch.setattr(team, "record_leader_status", lambda is_leader: None)
+    win = _SeqWin([_frame()])
+    team.check_team_min(win, create_if_missing=True,
+                        prefix="[五倍][创建队伍]")
+    assert seen == {"create": True, "prefix": "[五倍][创建队伍]"}
+
+
 def test_chuangjianduiwu_target_frame_unique_hit():
     """创建队伍模板目标帧（贴入原模板）以 0.8 阈值唯一命中（用户
     2026-11-07 提供 113x22 模板；真图交叉验证待实机菜单帧校准）。"""
@@ -1251,7 +1303,7 @@ def test_classify_leader_pending_apply_is_leader(monkeypatch):
     """面板打不开但 item2 在场：确定性队长，不得按「队长无法判定」停任务。"""
     monkeypatch.setattr(team, "_is_panel_open", lambda win: False)
     monkeypatch.setattr(team, "open_team_panel",
-                        lambda win: (False, "组队菜单未打开"))
+                        lambda win, **kw: (False, "组队菜单未打开"))
     monkeypatch.setattr(team, "record_leader_status", lambda is_leader: None)
     monkeypatch.setattr(team.game_map, "find_template_in",
                         lambda img, icon, threshold=0.8, region=None: (100, 100)
@@ -1263,7 +1315,7 @@ def test_classify_leader_pending_apply_is_leader(monkeypatch):
 def test_classify_leader_panel_fail_no_evidence_not_leader(monkeypatch):
     monkeypatch.setattr(team, "_is_panel_open", lambda win: False)
     monkeypatch.setattr(team, "open_team_panel",
-                        lambda win: (False, "未组队（菜单中无「队伍信息」）"))
+                        lambda win, **kw: (False, "未组队（菜单中无「队伍信息」）"))
     monkeypatch.setattr(team, "record_leader_status", lambda is_leader: None)
     monkeypatch.setattr(team.game_map, "find_template_in",
                         lambda img, icon, threshold=0.8, region=None: None)
@@ -1277,7 +1329,7 @@ def test_check_team_min_pending_apply_fallback_after_menu_fail(monkeypatch):
     动效抖动首帧漏检、菜单路径帧命中）。"""
     monkeypatch.setattr(team, "_is_panel_open", lambda win: False)
     monkeypatch.setattr(team, "open_team_panel",
-                        lambda win: (False, "组队菜单未打开"))
+                        lambda win, **kw: (False, "组队菜单未打开"))
     monkeypatch.setattr(team, "record_leader_status", lambda is_leader: None)
     calls = {"n": 0}
 
@@ -1296,7 +1348,7 @@ def test_check_team_min_menu_fail_no_pending_evidence(monkeypatch):
     """菜单打不开且 3 帧都无申请证据：保持「队长无法判定」瞬态语义。"""
     monkeypatch.setattr(team, "_is_panel_open", lambda win: False)
     monkeypatch.setattr(team, "open_team_panel",
-                        lambda win: (False, "组队菜单未打开"))
+                        lambda win, **kw: (False, "组队菜单未打开"))
     monkeypatch.setattr(team, "record_leader_status", lambda is_leader: None)
     monkeypatch.setattr(team, "has_pending_apply", lambda img: False)
     win = _SeqWin([_frame()])

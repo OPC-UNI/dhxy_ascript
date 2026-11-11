@@ -50,6 +50,7 @@ from . import app_utils  # 静默操作门控（silent_mode_on/keyboard_ok）
 from .control_window import (load_high_perf,  # 高性能开关：巫医 pass 直点门控
                              load_group_actions,  # 组号成员战斗动作（按账号 ID）
                              load_battle_actions,  # 通用战斗动作（队长回退）
+                             save_group_last_scan,  # 队伍检查快照（组号页自动展示）
                              CHAR_BATTLE_ACTIONS,  # 组号设置页下拉选项（人物）
                              BEAST_BATTLE_ACTIONS)  # 组号设置页下拉选项（召唤兽）
 from . import game  # 子窗口枚举（每个 Tab 一个 Win32Window）
@@ -211,7 +212,7 @@ def leader_id():
     return _leader_id
 
 
-def startup_check(win):
+def startup_check(win, create_if_missing=False, prefix="[组号]"):
     """组号模式启动检查：一次打开队伍面板完成队长判定与成员昵称读取。
 
     战斗中先等战斗结束（队伍面板战斗中不可用，误报非队长会停任务）；
@@ -220,6 +221,9 @@ def startup_check(win):
     （team.panel_member_names）供 startup_member_check 复用。
     旧链路启动开 3 次队伍面板（队长判定 + 复核重开 + 成员检查），
     2026-11-07 用户反馈后合并为 1 次。
+    create_if_missing=True：自动创建队伍并入本次菜单打开（未组队时
+    直接点「创建队伍」，见 team.open_team_panel）——启动时不再先单独
+    开菜单查是否组队（2026-11-11 组号逻辑优化）。
     返回 (是否队长, 描述, 成员昵称或None)；昵称仅队长时读取，
     None 表示读不到（成员检查按宽松处理）。
     """
@@ -235,7 +239,8 @@ def startup_check(win):
     hit, clear_info = team.clear_pending_apply(win)
     if hit:
         log(f"[组号] 启动清场: {clear_info}", "SYS")
-    kind, info = team.classify_leader_with_panel(win)
+    kind, info = team.classify_leader_with_panel(
+        win, create_if_missing=create_if_missing, prefix=prefix)
     if kind == "unclear":
         time.sleep(3)
         kind, info = team.classify_leader_with_panel(win)
@@ -266,6 +271,19 @@ def startup_check(win):
                                  for idx, (_i2, name) in enumerate(names)]
     team.close_team_panel(win)
     return kind == "leader", info, names
+
+
+def startup_team_count(panel_names):
+    """启动检查面板昵称 → 队伍人数下限（None=面板未读到，需正常检查）。
+
+    panel_member_names 返回 5 个区域（空位与 OCR 漏读均为 None），
+    非 None 数量是真实人数的下限：下限已达到要求人数即确定人满，
+    调用方可跳过首次领取前的队伍检查；下限不足时交正常检查复核
+    （保守，绝不把未读到的队员当空位误判 ready）。
+    """
+    if panel_names is None:
+        return None
+    return sum(1 for _i, n in panel_names if n)
 
 
 # ---- 组号成员战斗动作（按账号 ID，组号设置面板编辑） ----
@@ -421,6 +439,12 @@ def startup_member_check(win, panel_names=None):
             app_utils.kv_save_merged("group_detected", bool(confirmed))
         except Exception as e:
             log(f"[组号] 组号识别状态写入失败: {e}", "WARN")
+        # 队伍检查快照：组号页打开自动展示队长与在队伍中的队员（此前
+        # 必须手动点「检查当前队伍」才出列表，2026-11-11 用户需求）
+        try:
+            save_group_last_scan(data)
+        except Exception as e:
+            log(f"[组号] 保存队伍检查快照失败: {e}", "WARN")
     missing = [m for m in confirmed if m["char"] is None]
     if missing:
         names = "、".join(f"{m['name']}(ID {m['id']})" for m in missing)

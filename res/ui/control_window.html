@@ -1683,6 +1683,7 @@
         if (name === 'system') refreshEnv();
         if (name === 'dash') { refreshProgress(); refreshRuntimeStatus(); }
         if (name === 'stats') refreshStats();
+        if (name === 'group') groupLoadLastScan();
     }
 
     /* ================= 运行看板渲染 ================= */
@@ -3227,6 +3228,7 @@
     /* ================= 组号设置页 ================= */
     let groupChecking = false;   // 检查请求在途标记（防连点）
     let groupData = null;        // 最近一次检查结果（成员行渲染与保存的数据源）
+    let groupDataTs = 0;         // 当前展示数据的来源时间戳（秒）：快照/手动检查
 
     // 检查当前队伍：枚举 Tab + 开队伍面板读成员昵称匹配，结果经 onGroupCheckResult 异步回推
     async function groupCheckTeam() {
@@ -3249,6 +3251,29 @@
             groupChecking = false;
             btnGroupCheck.disabled = false;
         }
+    }
+
+    // 打开组号页自动展示最近一次队伍检查快照（任务启动检查/手动检查写入）：
+    // 只展示确认在队伍中的队员，动作按账号 ID 实时合并。已展示更新的数据
+    // 则不覆盖（保护未保存的下拉选择）。
+    async function groupLoadLastScan() {
+        try {
+            const r = await callPython('group_last_scan');
+            if (!r || r.status !== 'success' || !r.ok || !r.data) {
+                if (!groupData && r && r.info) {
+                    groupCheckMsgEl.style.color = 'var(--text)';
+                    groupCheckMsgEl.innerText = r.info;
+                }
+                return;
+            }
+            const ts = Number(r.data.snapshot_ts) || 0;
+            if (groupData && ts <= groupDataTs) return;
+            groupData = r.data;
+            groupDataTs = ts;
+            groupCheckMsgEl.style.color = 'var(--text)';
+            groupCheckMsgEl.innerText = r.info;
+            groupRender();
+        } catch (e) { /* 桥接未就绪时忽略 */ }
     }
 
     function groupSelect(options, value) {
@@ -3326,6 +3351,9 @@
         groupCheckMsgEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
         groupCheckMsgEl.innerText = (ok ? '✔ ' : '✘ ') + info;
         groupData = ok ? data : null;
+        if (groupData) {
+            groupDataTs = Number(groupData.snapshot_ts) || (Date.now() / 1000);
+        }
         groupRender();
     };
 

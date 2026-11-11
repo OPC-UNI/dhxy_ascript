@@ -656,7 +656,7 @@ def test_startup_check_single_panel_open(monkeypatch):
                         lambda win: (False, "无申请待处理态"))
     opens = []
 
-    def classify(win):
+    def classify(win, **kw):
         opens.append("classify")
         return "leader", "是队长（面板可见「解散队伍」）"
     monkeypatch.setattr(team_mod, "classify_leader_with_panel", classify)
@@ -668,6 +668,40 @@ def test_startup_check_single_panel_open(monkeypatch):
     assert ok and "是队长" in info
     assert names[1][1] == "碧桃娘子"
     assert opens == ["classify"]
+
+
+def test_startup_check_forwards_create_flag(monkeypatch):
+    """自动创建并入启动检查：create_if_missing/prefix 原样传给队长判定
+    （2026-11-11 组号逻辑优化：不再先单独开菜单查是否组队）。"""
+    import src.team as team_mod
+    import src.battle as battle_mod
+    seen = {}
+    monkeypatch.setattr(battle_mod, "is_in_battle", lambda win: False)
+    monkeypatch.setattr(team_mod, "clear_pending_apply",
+                        lambda win: (False, "无申请待处理态"))
+
+    def classify(win, **kw):
+        seen.update(kw)
+        return "leader", "是队长"
+
+    monkeypatch.setattr(team_mod, "classify_leader_with_panel", classify)
+    monkeypatch.setattr(team_mod, "panel_member_names",
+                        lambda img: [(0, "队长甲")])
+    monkeypatch.setattr(team_mod, "close_team_panel",
+                        lambda win: (True, ""))
+    tab_group.startup_check(_ScanWin(), create_if_missing=True,
+                            prefix="[五倍][创建队伍]")
+    assert seen == {"create_if_missing": True,
+                    "prefix": "[五倍][创建队伍]"}
+
+
+def test_startup_team_count_lower_bound():
+    """启动检查面板昵称人数下限：None 区域（空位/漏读）不计；面板未
+    读到（None）返回 None 交正常检查。"""
+    assert tab_group.startup_team_count(None) is None
+    assert tab_group.startup_team_count(
+        [(0, "队长甲"), (1, None), (2, "玩家乙")]) == 2
+    assert tab_group.startup_team_count([(0, None)] * 5) == 0
 
 
 def test_startup_check_unclear_rechecks_without_reopen(monkeypatch):
@@ -682,7 +716,7 @@ def test_startup_check_unclear_rechecks_without_reopen(monkeypatch):
     monkeypatch.setattr(time_mod, "sleep", lambda s: None)
     calls = {"n": 0}
 
-    def classify(win):
+    def classify(win, **kw):
         calls["n"] += 1
         if calls["n"] == 2:
             return "leader", "是队长（面板可见「解散队伍」）"
@@ -706,11 +740,34 @@ def test_startup_check_clears_pending_apply_first(monkeypatch):
     monkeypatch.setattr(team_mod, "clear_pending_apply",
                         lambda win: order.append("clear") or (True, "已清空申请列表并关闭面板"))
     monkeypatch.setattr(team_mod, "classify_leader_with_panel",
-                        lambda win: order.append("classify") or ("leader", "是队长"))
+                        lambda win, **kw: order.append("classify") or ("leader", "是队长"))
     monkeypatch.setattr(team_mod, "panel_member_names", lambda img: [(0, "队长甲")])
     monkeypatch.setattr(team_mod, "close_team_panel", lambda win: (True, ""))
     ok, _info, _names = tab_group.startup_check(_ScanWin())
     assert ok and order == ["clear", "classify"]
+
+
+def test_startup_member_check_writes_last_scan(monkeypatch):
+    """启动检查写队伍检查快照（组号页打开自动展示）：只含在队伍中的
+    队员，非组号成员不进快照。"""
+    writes = {}
+    monkeypatch.setattr(tab_group.app_utils, "kv_save_merged",
+                        lambda key, value: writes.__setitem__(key, value))
+    data = {"panel_read": True,
+            "leader": {"id": "idL", "name": "队长甲",
+                       "char": None, "beast": None},
+            "members": [
+                {"id": "idM1", "name": "碧桃娘子", "in_team": True,
+                 "char": "攻击", "beast": "防御"},
+                {"id": "idM2", "name": "路人", "in_team": False,
+                 "char": None, "beast": None}]}
+    monkeypatch.setattr(tab_group, "scan_group_members",
+                        lambda win, pn=None: (True, "ok", data))
+    tab_group.startup_member_check(_ScanWin())
+    snap = writes.get("group_last_scan")
+    assert snap is not None
+    assert snap["leader"]["id"] == "idL"
+    assert snap["members"] == [{"id": "idM1", "name": "碧桃娘子"}]
 
 
 def test_startup_member_check_writes_group_detected(monkeypatch):
@@ -876,7 +933,7 @@ def test_startup_check_merges_name_reread(monkeypatch):
                         lambda win: (False, "无申请待处理态"))
     monkeypatch.setattr(time_mod, "sleep", lambda s: None)
     monkeypatch.setattr(team_mod, "classify_leader_with_panel",
-                        lambda win: ("leader", "是队长（面板可见「解散队伍」）"))
+                        lambda win, **kw: ("leader", "是队长（面板可见「解散队伍」）"))
     reads = []
 
     def read(img):

@@ -1453,31 +1453,33 @@ def _claim_task(win, allow_fill=False):
     return False, "已点击领取选项，但任务追踪中未检测到任务（重走领取点后仍无）", None
 
 
-def _check_team_ready(win):
+def _check_team_ready(win, create_if_missing=False):
     """领取前队伍检查（修罗设置仅在队长时生效，一次面板开关）。
 
     队长时按通用设置-修罗设置的最少人数检查（本步不检查种族）。
     检查结果顺带更新调试悬浮层「队伍」行（身份 + 成员信息）。
+    create_if_missing：自动创建队伍并入本次菜单打开（见 team.check_team_min）。
     返回 (状态, 描述)；状态见 team.check_xiuluo_team：
     ready 可领取 / wait 人数不足 / not_leader 非队长或队长无法判定。
     """
     settings = load_xiuluo_settings()
-    status, info, members = team.check_team_min(win,
-                                                min_members=settings["min_members"],
-                                                allow_kick=True)
+    status, info, members = team.check_team_min(
+        win, min_members=settings["min_members"], allow_kick=True,
+        create_if_missing=create_if_missing, prefix="[修罗][创建队伍]")
     team.update_overlay_team(status, info, members)
     return status, info
 
 
-def _check_team_with_retry(win, tries=3):
+def _check_team_with_retry(win, tries=3, create_if_missing=False):
     """队伍检查带瞬态失败重试（与五倍同款，审计 B5）：截窗失败/面板
     打不开可能是瞬时问题，一次失败即转非队长保持模式会把队长永久
     挂起。瞬态类失败短间隔重试，连续 N 次才按 not_leader 处理；
     明确的非队长判定（面板打开且无解散按钮）与未组队（菜单中无
-    「队伍信息」）不重试——未组队是确定性状态，重试纯空转。"""
+    「队伍信息」）不重试——未组队是确定性状态，重试纯空转。
+    create_if_missing：自动创建队伍并入首次菜单打开（调用方保证只消费一次）。"""
     last = ("not_leader", "队伍检查未执行")
     for i in range(tries):
-        status, info = _check_team_ready(win)
+        status, info = _check_team_ready(win, create_if_missing=create_if_missing)
         last = (status, info)
         if status != "not_leader":
             return status, info
@@ -1998,7 +2000,7 @@ def _shout_recruit(win):
     log(f"[修罗] 已自动喊话: {_shout_text}", "SYS")
 
 
-def _monitor_team_and_fill(win):
+def _monitor_team_and_fill(win, create_if_missing=False):
     """队长缺人监控循环（领取前与「战斗力异常强大」被拒后共用）。
 
     每轮先看申请人证据（申请面板已开，或组队按钮为 zudui_item2
@@ -2013,6 +2015,8 @@ def _monitor_team_and_fill(win):
     查人数发现申请待处理态（check_team_min 开面板前查，返回 wait 而非
     「队长无法判定」）时同样先补人再重查，不空等重查间隔。
 
+    create_if_missing：首次查人数时把自动创建队伍并入同一次菜单打开
+    （仅在「预检被跳过」的首次领取路径传入，补人与被拒路径不传）。
     间隔：识别失败（OCR 噪声）3s 短重查，缺人无申请人 10s 重查。
     全链路时序（被拒→补人→重领，含各步间隔）详见
     docs/xiuluo-team-fill-flow.md。
@@ -2028,7 +2032,9 @@ def _monitor_team_and_fill(win):
             log(f"[修罗] 补人: {fill_info}", "SYS" if ok_fill else "INFO")
             if ok_fill:
                 continue  # 已补人，立即重查
-        status, info = _check_team_with_retry(win)
+        status, info = _check_team_with_retry(win,
+                                              create_if_missing=create_if_missing)
+        create_if_missing = False  # 自动创建只在首次检查内执行
         if status == "not_leader":
             if team.is_definitive_not_leader(info):
                 _keep_alive(win, info)  # 无限循环，用户手动停止
@@ -2189,9 +2195,12 @@ def run_loop(win, cycle_interval=1.0):
     # 自动创建队伍（修罗设置开关，默认关闭）：任务开始时若无队伍自动
     # 创建（组队按钮 → 菜单「创建队伍」），创建成功后走正常队伍检查与
     # 补人流程；已有队伍时本开关无其他逻辑。战斗中不操作（组队菜单会
-    # 遮挡战斗操作），顺延到主循环每轮开头重试。先于组号启动检查执行：
-    # 组号模式下队长未组队时先创建再判身份（startup_check 未组队会
-    # 直接停任务）；成员/已组队场景创建跳过或空操作，身份检查照旧
+    # 遮挡战斗操作），顺延到战斗结束后的首次检查。
+    # 合并执行（2026-11-11 组号逻辑优化）：开启「检查队伍」时不再单独
+    # 开一次菜单查「是否已组队」——自动创建并入首次队伍面板打开（组号
+    # 走 startup_check，单号走首次领取前队伍检查），同一次菜单打开完成
+    # 「有无队伍 / 开面板 / 缺队伍则创建」，省重复点击组队按钮；仅
+    # 「检查队伍」关闭（没有可合并的检查）时才单独执行。
     auto_create = load_xiuluo_auto_create_team()
     log(f"[修罗] 自动创建队伍: {'开（无队伍时任务开始自动创建）' if auto_create else '关'}", "SYS")
     # 申请待处理态清场（2026-11-07 用户结论，日志 22:03 教训）：启动时
@@ -2209,12 +2218,14 @@ def run_loop(win, cycle_interval=1.0):
         log("[修罗] 战斗中，申请待处理态清场顺延至战斗结束", "INFO")
     pending_create = auto_create
     create_defer_logged = False
-    if pending_create and not is_in_battle(win):
-        pending_create = False
-        _auto_create_team_once(win)
-    elif pending_create:
-        create_defer_logged = True
-        log("[修罗] 战斗中，自动创建队伍顺延至战斗结束", "INFO")
+    if pending_create and not check_team:
+        # 检查队伍关闭：没有可合并的队伍检查，自动创建单独执行（原链路）
+        if not is_in_battle(win):
+            pending_create = False
+            _auto_create_team_once(win)
+        else:
+            create_defer_logged = True
+            log("[修罗] 战斗中，自动创建队伍顺延至战斗结束", "INFO")
 
     done = app_utils.task_progress_done(win, TASK_MODE)  # 当天已完成（跨重启持久）
     if done:
@@ -2228,12 +2239,21 @@ def run_loop(win, cycle_interval=1.0):
     # 指定）；队长判定后检查队员组号战斗动作设置，缺失即停止任务
     # 提示先设置。已登录 Tab <2（单号）不激活，行为与旧版完全一致。
     tab_group.init_task(win, TASK_MODE, load_xiuluo_tab_group())
+    group_leader_confirmed = False  # 组号启动检查已确认队长：首次领取前不再
+                                    # 为身份判定开面板（2026-11-11）
+    group_team_count = None  # 组号启动检查面板昵称人数下限（None=未读到）：
+                             # 达到修罗设置人数时首次领取前免队伍检查
+                             # （2026-11-11 组号逻辑优化）
+    group_min_members = None
     if tab_group.active():
         if not check_team:
             log("[修罗] 组号模式要求开启「检查队伍」开关（修罗设置），停止任务，请开启后重新启动", "ERROR")
             return "组号模式：请先在修罗设置开启「检查队伍」开关后重新启动"
-        # 启动检查一次开面板：队长判定 + 成员昵称读取（旧链路开 3 次）
-        ok_leader, leader_info, panel_names = tab_group.startup_check(win)
+        # 启动检查一次开面板：队长判定 + 成员昵称读取（旧链路开 3 次）；
+        # 自动创建队伍并入同一次菜单打开（未组队时直接点创建）
+        ok_leader, leader_info, panel_names = tab_group.startup_check(
+            win, create_if_missing=pending_create)
+        pending_create = False  # 自动创建已在启动检查内消费（成败均不再单独创建）
         if not ok_leader:
             if "未组队" in leader_info:
                 # 确定性未组队（启动前解散队伍等）：组号降级关闭（隐藏
@@ -2253,6 +2273,16 @@ def run_loop(win, cycle_interval=1.0):
                     f"（请在「组号」设置面板设置后重新启动）", "ERROR")
                 return f"组号模式：请在「组号」设置面板为 {names} 设置战斗动作后重新启动"
             log(f"[修罗] 组号启动检查: {member_info}", "SYS")
+            # 启动检查已确认队长：首次领取前的队伍检查用本快照替代，
+            # 抢盒子的队长规则依赖此记录（跳过检查时无 check_team_min）
+            team.record_leader_status(True)
+            group_leader_confirmed = True
+            group_team_count = tab_group.startup_team_count(panel_names)
+            group_min_members = load_xiuluo_settings()["min_members"]
+            if group_team_count is not None:
+                log(f"[修罗] 组号启动检查：队伍面板可读成员 {group_team_count} 人"
+                    f"（人数下限，满 {group_min_members} 人免首次领取前队伍检查）",
+                    "INFO")
             acts = tab_group.leader_battle_actions()
             log(f"[修罗] 组号队长战斗动作: 人物 {acts['char']}，召唤兽 {acts['beast']}"
                 + ("（本账号组号设置）" if tab_group.load_group_actions().get(tab_group.leader_id())
@@ -2273,13 +2303,13 @@ def run_loop(win, cycle_interval=1.0):
             hit, apply_clear_info = team.clear_pending_apply(win)
             if hit:
                 log(f"[修罗] 启动清场: {apply_clear_info}", "SYS")
-        # 自动创建队伍顺延重试（启动时战斗中）：战斗结束后的首个非战斗
-        # 轮次执行创建，一次即消费（成败均不再重试，失败由正常队伍检查
-        # 按未组队处理）
-        if pending_create and not is_in_battle(win):
+        # 自动创建队伍顺延（启动时战斗中、检查队伍关闭）：战斗结束后的
+        # 首个非战斗轮次单独执行，一次即消费；开启检查队伍时由首次队伍
+        # 检查合并执行（见领取前队伍检查），这里不开菜单
+        if pending_create and not check_team and not is_in_battle(win):
             pending_create = False
             _auto_create_team_once(win)
-        elif pending_create and not create_defer_logged:
+        elif pending_create and not check_team and not create_defer_logged:
             create_defer_logged = True
             log("[修罗] 战斗中，自动创建队伍顺延至战斗结束", "INFO")
         # 1. 领任务：任务追踪中已有修罗任务（续跑）→ 跳过领取，直接跟踪。
@@ -2317,38 +2347,65 @@ def run_loop(win, cycle_interval=1.0):
             pre_status = None  # 1.0 预检结果（ready/wait）：走位后按结果
                                # 分支，避免监控循环重复开面板检查
             if check_team and not _team_checked:
-                # 1.0 非队长判定：已在领取点附近时跳过（返程落点就在领取点，
-                #    1.2 监控循环马上会检查——先查再走位会让面板连续开合两次，
-                #    一次开合实测 5~7s）；不在领取点则先判定身份，非队长不白走寻路
-                img0 = win.capture(force_activate=False)
-                pos0 = game_map.read_map_position(win, img=img0) \
-                    if img0 is not None else None
-                frame0 = cv2.cvtColor(np.asarray(img0), cv2.COLOR_RGB2BGR) \
-                    if img0 is not None else None
-                # 按钮直达信号只在地图名读不出或为灵兽村时可信
-                # （按钮模板与五倍领取按钮跨图误命中，见 _walk_to_claim_spot）
-                at_spot = _near_claim_spot(pos0, CLAIM_NEAR_TOLERANCE) \
-                    or (frame0 is not None
-                        and (pos0 is None or pos0[0].strip() == LINGSHOUCUN)
-                        and game_map.match_frame_np(frame0, LINGQU_ICON) is not None)
-                if not at_spot:
-                    # 瞬态失败（遮挡/按钮未命中/截图失败）原地按间隔重查、
-                    # 不走位——瞬态下身份未定，走位会让非队长白走寻路
-                    # （用户 2026-10-27）；真实队长瞬态恢复后原地通过检查
-                    # 再走位，无进度损失。确定性非队长由 _keep_alive 处理。
-                    while True:
-                        status, info = _check_team_with_retry(win)
-                        if status == "not_leader" \
-                                and team.is_definitive_not_leader(info):
-                            _keep_alive(win, info)
-                        if status != "not_leader":
-                            pre_status = status
-                            break
-                        interval = (TEAM_RECOG_RETRY_INTERVAL
-                                    if "识别失败" in info
-                                    else TEAM_CHECK_RETRY_INTERVAL)
-                        log(f"[修罗] {info}（瞬态失败，{interval}s 后原地重查）", "WARN")
-                        time.sleep(interval)
+                if group_leader_confirmed:
+                    # 组号启动检查刚在同一面板打开内确认过队长与成员
+                    # （2026-11-11 优化）：不再为首次领取重开面板。人数
+                    # 取面板昵称下限——达标直接领取（ready），不足/未读
+                    # 到则走位后由监控循环补人
+                    if group_team_count is not None \
+                            and group_team_count >= group_min_members:
+                        pre_status = "ready"
+                        log(f"[修罗] 组号启动检查已确认队伍 {group_team_count}/"
+                            f"{group_min_members} 人，跳过首次领取前队伍检查", "SYS")
+                    elif group_team_count is not None:
+                        log(f"[修罗] 组号启动检查读到 {group_team_count}/"
+                            f"{group_min_members} 人，走位后进入监控循环补人", "SYS")
+                    else:
+                        log("[修罗] 组号启动检查已确认队长（人数未读到），"
+                            "走位后进入监控循环检查", "SYS")
+                else:
+                    # 1.0 非队长判定：已在领取点附近时跳过（返程落点就在
+                    #    领取点，1.2 监控循环马上会检查——先查再走位会让面板
+                    #    连续开合两次，一次开合实测 5~7s）；不在领取点则先
+                    #    判定身份，非队长不白走寻路
+                    img0 = win.capture(force_activate=False)
+                    pos0 = game_map.read_map_position(win, img=img0) \
+                        if img0 is not None else None
+                    frame0 = cv2.cvtColor(np.asarray(img0), cv2.COLOR_RGB2BGR) \
+                        if img0 is not None else None
+                    # 按钮直达信号只在地图名读不出或为灵兽村时可信
+                    # （按钮模板与五倍领取按钮跨图误命中，见 _walk_to_claim_spot）
+                    at_spot = _near_claim_spot(pos0, CLAIM_NEAR_TOLERANCE) \
+                        or (frame0 is not None
+                            and (pos0 is None or pos0[0].strip() == LINGSHOUCUN)
+                            and game_map.match_frame_np(frame0, LINGQU_ICON) is not None)
+                    if not at_spot:
+                        # 瞬态失败（遮挡/按钮未命中/截图失败）原地按间隔重查、
+                        # 不走位——瞬态下身份未定，走位会让非队长白走寻路
+                        # （用户 2026-10-27）；真实队长瞬态恢复后原地通过检查
+                        # 再走位，无进度损失。确定性非队长由 _keep_alive 处理。
+                        # 自动创建队伍并入本次检查（同一次菜单打开）
+                        while True:
+                            status, info = _check_team_with_retry(
+                                win, create_if_missing=pending_create)
+                            pending_create = False  # 自动创建一次即消费
+                            if status == "not_leader" \
+                                    and team.is_definitive_not_leader(info):
+                                _keep_alive(win, info)
+                            if status != "not_leader":
+                                pre_status = status
+                                break
+                            interval = (TEAM_RECOG_RETRY_INTERVAL
+                                        if "识别失败" in info
+                                        else TEAM_CHECK_RETRY_INTERVAL)
+                            log(f"[修罗] {info}（瞬态失败，{interval}s 后原地重查）", "WARN")
+                            time.sleep(interval)
+            elif pending_create and not is_in_battle(win):
+                # 首次领取前队伍检查已被「续跑任务」置位跳过
+                # （_team_checked）：自动创建无检查可合并，单独兜底一次；
+                # 战斗中不操作，顺延到下一轮
+                pending_create = False
+                _auto_create_team_once(win)
             # 1.1 队长：队伍是否满都先走到领取点附近
             debug_overlay.set_phase("前往领取点")  # 看板阶段
             ok, info = _walk_to_claim_spot(win, just_returned=just_returned)
@@ -2374,7 +2431,10 @@ def run_loop(win, cycle_interval=1.0):
                         time.sleep(TEAM_CHECK_RETRY_INTERVAL)
                     debug_overlay.set_phase("检查队伍")  # 看板阶段
                     log("[修罗] 首次领取前进入队伍监控循环（缺人自动补）", "SYS")
-                    _monitor_team_and_fill(win)
+                    # 预检被跳过（已在领取点/组号人数不足）时，自动
+                    # 创建并入监控的首次检查
+                    _monitor_team_and_fill(win, create_if_missing=pending_create)
+                    pending_create = False
                     log("[修罗] 队伍人数满足要求，开始领取", "SYS")
             # 1.3 领取任务（校验帧随返回值带出，跟踪首轮复用免重复 OCR）；
             #     队伍不足被拒（战斗力异常强大提示）在 _claim_task 内已
