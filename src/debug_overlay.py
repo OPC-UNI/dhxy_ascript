@@ -20,6 +20,9 @@
   开关切换后约一个轮询周期（2 秒）生效
 - 绘制指令经状态文件传递（任务/绘制进程共享工作目录，与 KeyValue
   同路径解析），含行文本与屏幕坐标（由任务进程按游戏窗口 rect 计算）
+- 任务统计（task_stats.json）与悬浮层开关无关：统计在 _supervise 内
+  每周期累积，开关只决定是否生成绘制指令/拉起绘制子进程（关闭时统计
+  照常记录，且少一个绘制进程）
 
 位置与颜色常量集中在文件头部，实机效果不满意时直接调整。
 """
@@ -521,6 +524,18 @@ def _supervise(win):
                         log(f"[调试] 悬浮层绘制进程已退出，自动重启（累计第 {restart_count} 次）", "WARN")
                 with _helper_lock:
                     _helper_proc = _spawn_helper()
+            elif not enabled and proc is not None:
+                # 开关在任务中途关闭：回收绘制进程（空闲时它仍是一个
+                # Python 进程，每秒读状态文件空转）。下次开启会重新拉起；
+                # 统计写入在本监督线程内，不受影响。
+                with _helper_lock:
+                    _helper_proc = None
+                if proc.poll() is None:
+                    try:
+                        proc.terminate()
+                        proc.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
         except Exception as e:
             log(f"[调试] 悬浮层异常: {e}", "WARN")
         time.sleep(OVERLAY_INTERVAL)

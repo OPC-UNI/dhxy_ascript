@@ -326,6 +326,7 @@
         /* 覆盖 .card 的 column 方向：印章/信息/操作横排 */
         .dash-hero { display: flex; flex-direction: row; align-items: center; gap: 18px; padding: 16px; }
         .seal {
+            position: relative;  /* 光晕伪元素的定位锚点 */
             display: flex; flex-direction: column; align-items: center; justify-content: center;
             width: 66px; height: 66px; border-radius: 6px; border: 2px solid;
             font-family: KaiTi, STKaiti, '楷体', serif; font-size: 19px; line-height: 1.2;
@@ -333,59 +334,80 @@
             transition: background 0.3s, color 0.3s, border-color 0.3s;
         }
         /* ---- 印章动效：与阶段状态联动（JS 按阶段挂 phase-* 类；
-                prefers-reduced-motion 全局禁用全部动画） ---- */
-        /* 待命：灰章呼吸（轻微明暗，不抢眼） */
-        .seal.idle { background: transparent; color: var(--text-dim); border-color: var(--border2); animation: sealBreath 3.5s ease-in-out infinite; }
-        @keyframes sealBreath {
-            0%, 100% { box-shadow: 0 0 0 0 rgba(139, 148, 140, 0); border-color: var(--border2); }
-            50% { box-shadow: 0 0 9px 1px rgba(139, 148, 140, 0.30); border-color: var(--text-dim); }
+                prefers-reduced-motion 全局禁用全部动画）。
+                光晕 = 独立伪元素上的静态 box-shadow，只动画 opacity
+                （合成器属性，不逐帧重绘主线程）。旧实现逐帧动画
+                box-shadow：实测 renderer -89%、GPU -49%，见
+                docs/performance.md §11。相位只改 --glow 颜色/时长。 ---- */
+        .seal::after {
+            content: "";
+            position: absolute; inset: 0; border-radius: 6px;
+            pointer-events: none; opacity: 0;
+            box-shadow: 0 0 12px 2px var(--glow, rgba(192, 57, 43, 0.5));
         }
-        /* 运行中默认：红章标准脉冲 */
-        .seal.running { background: var(--seal); color: #fff; border-color: var(--seal); animation: sealPulse 2s ease-in-out infinite; }
-        @keyframes sealPulse {
-            0%, 100% { box-shadow: 0 0 0 0 rgba(192, 57, 43, 0); transform: rotate(-3deg); }
-            50% { box-shadow: 0 0 12px 2px rgba(192, 57, 43, 0.45); transform: rotate(-3deg); }
+        /* 待命：灰章静态（故意不做呼吸动画）。box-shadow 无限动画会让
+           WebView2 每帧重绘：面板空闲停在看板页时实测 renderer + GPU
+           进程合计约 35% 单核，而待命态没有任何状态需要表达——面板空闲
+           必须零渲染开销（2026-11-11 实测，见 docs/performance.md §11）。 */
+        .seal.idle { background: transparent; color: var(--text-dim); border-color: var(--border2); }
+        /* 运行中默认：红章标准脉冲（光晕 2s） */
+        .seal.running {
+            background: var(--seal); color: #fff; border-color: var(--seal);
+            --glow: rgba(192, 57, 43, 0.5);
         }
-        /* 战斗中：快速强脉冲（0.9s 高频 + 大光晕微放大） */
-        .seal.running.phase-battle { animation: sealBattle 0.9s ease-in-out infinite; }
-        @keyframes sealBattle {
-            0%, 100% { box-shadow: 0 0 6px 1px rgba(192, 57, 43, 0.35); transform: rotate(-3deg) scale(1); }
-            50% { box-shadow: 0 0 18px 5px rgba(192, 57, 43, 0.65); transform: rotate(-3deg) scale(1.05); }
+        .seal.running::after {
+            will-change: opacity;
+            animation: sealGlow 2s ease-in-out infinite;
+        }
+        @keyframes sealGlow {
+            0%, 100% { opacity: 0.2; }
+            50% { opacity: 0.9; }
+        }
+        /* 战斗中：0.9s 快速脉冲 + 光晕微放大（transform 同样走合成器） */
+        .seal.running.phase-battle {
+            --glow: rgba(192, 57, 43, 0.65);
+            animation: sealBattleScale 0.9s ease-in-out infinite;
+        }
+        .seal.running.phase-battle::after { animation-duration: 0.9s; }
+        @keyframes sealBattleScale {
+            0%, 100% { transform: rotate(-3deg) scale(1); }
+            50% { transform: rotate(-3deg) scale(1.05); }
         }
         /* 移动类阶段（寻路/前往/返程）：左右轻摆走路节奏 */
-        .seal.running.phase-walk { animation: sealWalk 1.6s ease-in-out infinite; }
-        @keyframes sealWalk {
-            0%, 100% { box-shadow: 0 0 10px 1px rgba(192, 57, 43, 0.35); transform: rotate(-3deg) translateX(0); }
+        .seal.running.phase-walk {
+            --glow: rgba(192, 57, 43, 0.55);
+            animation: sealWalkShift 1.6s ease-in-out infinite;
+        }
+        .seal.running.phase-walk::after { animation-duration: 1.6s; }
+        @keyframes sealWalkShift {
+            0%, 100% { transform: rotate(-3deg) translateX(0); }
             25% { transform: rotate(-4deg) translateX(-2px); }
             75% { transform: rotate(-2deg) translateX(2px); }
         }
         /* 任务对话：慢节奏柔光（对话期场景静止，动效收敛） */
-        .seal.running.phase-talk { animation: sealTalk 2.4s ease-in-out infinite; }
-        @keyframes sealTalk {
-            0%, 100% { box-shadow: 0 0 8px 1px rgba(192, 57, 43, 0.35); transform: rotate(-3deg); }
-            50% { box-shadow: 0 0 14px 4px rgba(192, 57, 43, 0.7); transform: rotate(-3deg); }
-        }
+        .seal.running.phase-talk { --glow: rgba(192, 57, 43, 0.6); }
+        .seal.running.phase-talk::after { animation-duration: 2.4s; }
         /* 相位章共用：亮色底配 --seal-ink 墨字（朱砂红章保持白字） */
         .seal.running.phase-heal, .seal.running.phase-team,
         .seal.running.phase-claim { color: var(--seal-ink); }
         /* 巫医：石绿章——治愈柔光（印章蘸色换颜料） */
-        .seal.running.phase-heal { background: var(--accent); border-color: var(--accent); animation: sealHeal 2.4s ease-in-out infinite; }
-        @keyframes sealHeal {
-            0%, 100% { box-shadow: 0 0 8px 1px rgba(47, 191, 113, 0.30); }
-            50% { box-shadow: 0 0 14px 4px rgba(47, 191, 113, 0.60); }
+        .seal.running.phase-heal {
+            background: var(--accent); border-color: var(--accent);
+            --glow: rgba(47, 191, 113, 0.6);
         }
+        .seal.running.phase-heal::after { animation-duration: 2.4s; }
         /* 组队：黛蓝章——汇聚脉冲 */
-        .seal.running.phase-team { background: var(--team); border-color: var(--team); animation: sealTeam 2s ease-in-out infinite; }
-        @keyframes sealTeam {
-            0%, 100% { box-shadow: 0 0 8px 1px rgba(92, 155, 209, 0.30); }
-            50% { box-shadow: 0 0 14px 4px rgba(92, 155, 209, 0.60); }
+        .seal.running.phase-team {
+            background: var(--team); border-color: var(--team);
+            --glow: rgba(92, 155, 209, 0.6);
         }
+        .seal.running.phase-team::after { animation-duration: 2s; }
         /* 领取任务：藤黄章——柔光 */
-        .seal.running.phase-claim { background: var(--gold); border-color: var(--gold); animation: sealClaim 2.4s ease-in-out infinite; }
-        @keyframes sealClaim {
-            0%, 100% { box-shadow: 0 0 8px 1px rgba(201, 161, 92, 0.30); }
-            50% { box-shadow: 0 0 14px 4px rgba(201, 161, 92, 0.60); }
+        .seal.running.phase-claim {
+            background: var(--gold); border-color: var(--gold);
+            --glow: rgba(201, 161, 92, 0.6);
         }
+        .seal.running.phase-claim::after { animation-duration: 2.4s; }
         .dash-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
         .info-row { font-size: 13px; color: var(--text); display: flex; gap: 8px; line-height: 1.4; }
         .info-k { color: var(--text-dim); width: 58px; flex-shrink: 0; }
@@ -1843,14 +1865,18 @@
                 runtimeStatus = s;
                 renderDash();
             }
-            // 组号入口显隐：组号开关开 + 启动检查识别到组号 + 已登录
-            // Tab ≥2（任务未运行也轮询，启动识别后即展示入口）
+        } catch (e) { /* 桥接未就绪时忽略 */ }
+    }
+
+    // 组号入口显隐：组号开关开 + 启动检查识别到组号 + 已登录 Tab ≥2。
+    // 由 5s 兜底轮询 + syncStatus（任务启停）驱动；原先挂在 1.5s 看板
+    // 轮询里，未运行且非看板页时也会每 1.5s 跨桥枚举窗口，无谓唤醒。
+    async function refreshGroupState() {
+        try {
             const g = await callPython('get_group_state');
             if (g && typeof g.show === 'boolean') {
                 navGroup.style.display = g.show ? 'flex' : 'none';
             }
-            // 统计页激活时同步刷新（与看板同节拍；仅激活时轮询）
-            if (pageStats.classList.contains('active')) await refreshStats();
         } catch (e) { /* 桥接未就绪时忽略 */ }
     }
 
@@ -2458,8 +2484,42 @@
         progressData = p;
         renderDash();
     }
-    setInterval(refreshProgress, 2500);   // 运行中每 2.5s 轮询进度
-    setInterval(refreshRuntimeStatus, 1500);  // 看板运行状态每 1.5s 轮询
+    // 轮询调度：只在「窗口可见 + 当前激活页需要该数据」时跨桥取数。
+    // 非激活页由 switchPage 即时刷新，任务启停由 syncStatus 即时刷新；
+    // 空闲停在设置/系统等页时不再产生看板/统计轮询（WebView2 渲染进程
+    // 与 Python 桥接都会因此被无谓唤醒）。
+    function pageIsActive(id) {
+        const el = document.getElementById(id);
+        return !!el && el.classList.contains('active');
+    }
+    function pollStatusTick() {
+        if (document.visibilityState === 'hidden') return;
+        if (!running) return;  // 未启动：状态文件不存在、统计不再变化，无需跨桥
+        if (pageIsActive('page-dash')) refreshRuntimeStatus();
+        else if (pageIsActive('page-stats')) refreshStats();
+    }
+    function pollProgressTick() {
+        if (document.visibilityState === 'hidden') return;
+        if (running && pageIsActive('page-dash')) refreshProgress();
+    }
+    function pollGroupTick() {
+        if (document.visibilityState === 'hidden') return;
+        refreshGroupState();  // 导航入口全局可见，慢节奏兜底（启停已即时刷新）
+    }
+    setInterval(pollStatusTick, 1500);     // 看板状态 / 统计页 1.5s
+    setInterval(pollProgressTick, 2500);   // 看板进度 2.5s
+    setInterval(pollGroupTick, 5000);      // 组号入口 5s
+    // 从托盘/最小化恢复可见：立即补一次当前页数据（隐藏期间轮询停摆）
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') return;
+        if (pageIsActive('page-dash')) {
+            refreshProgress();
+            refreshRuntimeStatus();
+        } else if (pageIsActive('page-stats')) {
+            refreshStats();
+        }
+        refreshGroupState();
+    });
 
     /* ================= 使用环境（系统页，打开时刷新） ================= */
     async function refreshEnv() {
@@ -3020,6 +3080,7 @@
         });
         update();  // 应用老板键文案（启动/停止按钮后缀）
         await refreshProgress();
+        refreshGroupState();  // 组号入口首屏即时刷新（其后 5s 兜底轮询）
     }
 
     /* ================= Python 侧回调入口（名称与语义必须与后端一致） ================= */
@@ -3035,6 +3096,9 @@
         update();
         refreshProgress();  // 启停后进度立即刷新
         refreshRuntimeStatus();
+        refreshGroupState();  // 启动检查写入组号识别结果后入口即时显隐
+        // 统计页激活时启停立即刷新（轮询在未运行态会停摆，会话条需即时消失/出现）
+        if (pageStats.classList.contains('active')) refreshStats();
         if (running) {  // 运行中自动展开日志抽屉（用户可手动收起）
             logDrawer.classList.remove('collapsed');
             logToggle.innerText = '收 起';

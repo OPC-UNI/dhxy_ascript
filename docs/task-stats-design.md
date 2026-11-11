@@ -137,6 +137,10 @@
 | 战斗 | 复用既有 `set_battle(no)`（每场进入必调）：supervisor 每周期对比上次 battle_no 求增量，归当前模式 | 零改动（2s 粒度足够报表用） |
 | 耗时 | supervisor 每周期把 tick 增量归当前模式 + 当日；会话开始时间由 `main.task_start` 置 `set_session_start()` | main.py 一行 + debug_overlay 计数 |
 
+**与调试开关的关系**：统计 tick 在 `debug_overlay._supervise` 内执行，
+与「调试信息」开关无关——开关只控制悬浮层绘制指令与绘制子进程，关闭
+时统计照常累计（见 docs/performance.md §11 实测）。
+
 ### 5.3 桥接接口（control_window.py）
 
 | 接口 | 行为 |
