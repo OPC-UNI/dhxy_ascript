@@ -587,3 +587,23 @@ def test_find_awang_all_templates_missing_returns_none(monkeypatch):
     assert captured == []
     assert len(logs) == 1
 
+
+# ---- 阿旺兜底到达目标：185/176 两个落点任一到达即可（2026-11-11 用户） ----
+def test_near_luoyang_accepts_either_fallback_landing():
+    """兜底目标为多落点：落在 (185,207)/(176,207) 任一点 ±5 内即算到达。"""
+    tgt = kezhan.AWANG_FALLBACK_TARGET_POS
+    assert kezhan._near_luoyang(("洛阳城", 185, 207), tgt) is True
+    assert kezhan._near_luoyang(("洛阳城", 176, 207), tgt) is True
+    assert kezhan._near_luoyang(("洛阳城", 180, 210), tgt) is True
+    assert kezhan._near_luoyang(("洛阳城", 165, 207), tgt) is False
+    assert kezhan._near_luoyang(("长安", 185, 207), tgt) is False
+    assert kezhan._near_luoyang(None, tgt) is False
+
+
+def test_near_luoyang_single_target_still_works():
+    """单点目标（大理寺墙外等）行为不变。"""
+    assert kezhan._near_luoyang(("洛阳城", 223, 195),
+                                kezhan.DALI_TARGET_POS) is True
+    assert kezhan._near_luoyang(("洛阳城", 223, 205),
+                                kezhan.DALI_TARGET_POS) is False
+

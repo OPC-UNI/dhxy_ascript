@@ -105,6 +105,7 @@ YINLV_ENTRY_OPTION = "来吧，我还怕了你不成？"
 DIALOG_OPTION_MAP = {
     "瑶池近日要办迎仙大会，宴上那道琉璃映月羹": YAOCHI_DIALOG_OPTION,
     "少侠有什么事吗": "客栈任务",
+    "所谓狡兔三洞，小仙分身遍布三界，少侠在哪见到我都不必惊讶。":"客栈任务",
     "有空我请你喝瑶池鲜酿": "那我就坐等瑶池鲜酿了",
     "被镇于修罗古城中的妖邪近日隐隐躁动": "修罗出世非同小可，我这便前去加固封印",
     "火云戈壁的浮屠塔近来邪气外泄": "护法镇魔是我的强项，我这便前往。",
@@ -576,7 +577,8 @@ AWANG_ICONS = ("awang.png", "awang2.png", "awang3.png")  # 阿旺 NPC 模板组�
 AWANG_THRESHOLD = 0.72                        # 阿旺模板组统一匹配阈值（2026-11-11 用户指定）
 AWANG_FALLBACK_MAP_CLICK_POS = (548, 297)     # 兜底：洛阳小地图点击点（阿旺实际出现点，
                                               # 用户 2026-10-20 实测）
-AWANG_FALLBACK_TARGET_POS = (185, 207)        # 兜底到达目标（洛阳城坐标，±5 容差）
+AWANG_FALLBACK_TARGET_POS = ((185, 207), (176, 207))  # 兜底到达目标（洛阳城坐标，±5 容差；
+                                              # 两个落点任一到达即可，用户 2026-11-11 实测）
 AWANG_FALLBACK_ARRIVE_TIMEOUT = 120           # 兜底寻路等待超时（秒）
 AWANG_CLICK_OFFSET = 40                       # OCR 识别到名字标签后，点击目标在其正上方
                                               # 约 40px（用户实测：点文字本身无效）
@@ -841,8 +843,14 @@ def _has_task(win):
 
 
 def _near_luoyang(pos, target):
-    """判断是否在洛阳城目标坐标附近（±5 容差；复用 game_map.is_at_position）。"""
-    return game_map.is_at_position(pos, LUOYANG_CITY, target[0], target[1], 5)
+    """判断是否在洛阳城目标坐标附近（±5 容差；复用 game_map.is_at_position）。
+
+    target 支持单点 (x, y) 或多落点 ((x1,y1), (x2,y2), ...)：落在任一点
+    附近即算到达（阿旺兜底落点 176/185 均可能出现，用户 2026-11-11）。
+    """
+    targets = (target,) if isinstance(target[0], int) else target
+    return any(game_map.is_at_position(pos, LUOYANG_CITY, x, y, 5)
+               for x, y in targets)
 
 
 def _find_awang(win):
@@ -1009,13 +1017,17 @@ def _walk_to_luoyang_pos(win, click_pos, target_pos, timeout, desc):
     否则世界地图 → 洛阳城 → 小地图；点击 click_pos 后等待到达目标附近。
     返回 (是否成功, 描述)。
 
+    target_pos 支持单点 (x, y) 或多落点序列 ((x1,y1), (x2,y2), ...)，
+    落在任一点附近即算到达（见 _near_luoyang）。
+
     等待期间只用普通位置读取：Alt+C 恢复会打断自动寻路
     （实测按 Alt+C 后角色停在原地不再移动），识别失败跳过本轮即可。
     """
+    targets = (target_pos,) if isinstance(target_pos[0], int) else target_pos
     if is_in_battle(win):
         return False, "战斗中，跳过本轮寻路"
     pos = game_map.read_position_with_recovery(win)
-    if _near_luoyang(pos, target_pos):
+    if _near_luoyang(pos, targets):
         return True, f"已在{desc}附近"
     close_scene_panels(win, "客栈")
     if pos is not None and pos[0].strip() == LUOYANG_CITY:
@@ -1042,7 +1054,7 @@ def _walk_to_luoyang_pos(win, click_pos, target_pos, timeout, desc):
             time.sleep(2.0)
             continue
         pos = game_map.read_map_position(win, img=img)
-        if _near_luoyang(pos, target_pos):
+        if _near_luoyang(pos, targets):
             log(f"[客栈] 已到达{desc}附近", "SYS")
             return True, f"已到达{desc}附近"
         # 位置长时间不变（寻路被打断/无响应）→ 提前退出交给外层重试，
@@ -1058,13 +1070,14 @@ def _walk_to_luoyang_pos(win, click_pos, target_pos, timeout, desc):
         if polls % 5 == 0:
             log(f"[客栈] 前往{desc}中... 当前位置: {pos or '识别失败'}", "INFO")
         time.sleep(1.5)
-    return False, f"寻路到{desc}超时（未到达洛阳城 {target_pos[0]},{target_pos[1]} 附近）"
+    pts = "、".join(f"{x},{y}" for x, y in targets)
+    return False, f"寻路到{desc}超时（未到达洛阳城 {pts} 附近）"
 
 
 def _walk_to_dali(win):
     """前往洛阳城大理寺墙外并检查阿旺；未找到时兜底走小地图
-    (548,297) 到洛阳城 (180,207) 附近（阿旺实际出现点，用户
-    2026-10-20 实测）重找一轮。返回 (是否成功, 描述)。"""
+    (548,297) 到洛阳城 (185,207)/(176,207) 附近（阿旺实际出现点，
+    用户 2026-10-20/2026-11-11 实测）重找一轮。返回 (是否成功, 描述)。"""
     ok, info = _walk_to_luoyang_pos(win, DALI_MAP_CLICK_POS, DALI_TARGET_POS,
                                     DALI_ARRIVE_TIMEOUT, "大理寺墙外")
     if not ok:
@@ -1073,8 +1086,8 @@ def _walk_to_dali(win):
     if ok:
         return True, info
     # 大理寺墙外未找到阿旺：兜底点击小地图 (548,297) 前往洛阳城
-    # (180,207) 附近再找一轮（找到后的点击逻辑同 _check_awang）
-    log(f"[客栈] {info}，兜底前往洛阳城 (180,207) 附近重找阿旺", "WARN")
+    # (185,207)/(176,207) 附近再找一轮（找到后的点击逻辑同 _check_awang）
+    log(f"[客栈] {info}，兜底前往洛阳城 (185,207)/(176,207) 附近重找阿旺", "WARN")
     ok2, info2 = _walk_to_luoyang_pos(win, AWANG_FALLBACK_MAP_CLICK_POS,
                                       AWANG_FALLBACK_TARGET_POS,
                                       AWANG_FALLBACK_ARRIVE_TIMEOUT,
