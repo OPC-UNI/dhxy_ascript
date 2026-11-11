@@ -463,6 +463,109 @@ def test_xj_walk_click_never_clicks_use_line(monkeypatch):
     assert clicks == [(120, 266)]  # 点的是前往行中心，不是用镜行
 
 
+# ---- 显形镜任务按钮：模板未现但对话框仍在场 → 继续点屏推进（2026-11-11） ----
+
+def _patch_xj_btn_env(monkeypatch, score, pts):
+    """装配 _handle_xianxingjing 找模板窗口环境。"""
+    clicks, logs = [], []
+    monkeypatch.setattr(wubei, "battle_watch_in_battle", lambda: False)
+    monkeypatch.setattr(wubei, "_xj_dialog_present", lambda items: False)
+    monkeypatch.setattr(wubei, "_xj_fight_dialog_open", lambda items: False)
+    monkeypatch.setattr(wubei, "_xj_frame",
+                        lambda win, items: (None, np.zeros((10, 10, 3),
+                                                           dtype=np.uint8)))
+    monkeypatch.setattr(wubei.game_map, "best_match_np",
+                        lambda bgr, icon: (score, (0, 0)))
+    monkeypatch.setattr(wubei.game_map, "match_frame_all",
+                        lambda bgr, icon, threshold=0.8: pts)
+    monkeypatch.setattr(wubei, "dialog_frame_score", lambda img_np: 0.99)
+    monkeypatch.setattr(wubei, "_click_screen_center",
+                        lambda win, times=1, prefix="": clicks.append("center"))
+    monkeypatch.setattr(wubei, "human_click",
+                        lambda win, x, y, **k: clicks.append((x, y)))
+    monkeypatch.setattr(wubei, "move_away", lambda win: None)
+    monkeypatch.setattr(wubei, "log",
+                        lambda msg, level="INFO": logs.append(msg))
+    monkeypatch.setattr(wubei, "_xj_btn_clicked_at", 0.0)
+    monkeypatch.setattr(wubei, "_xj_btn_missing", 0)
+    monkeypatch.setattr(wubei, "_xj_dismissed_at", wubei.time.time() - 1.0)
+    monkeypatch.setattr(wubei, "_xj_dialog_clicked_at",
+                        wubei.time.time() - wubei.XIANXINGJING_RESIDUAL_CLICK
+                        - 0.1)
+    monkeypatch.setattr(wubei, "_xj_tpl_best", (0.0, (0, 0)))
+    return clicks, logs
+
+
+def test_xj_template_missing_dialog_present_reclicks(monkeypatch):
+    """模板未现但标准对话框仍在场：继续点屏推进（白龙马文本页两次点屏
+    有一次被开场动画吞掉时，按钮被剩余文字遮挡，2026-11-11 14:11 实测）。"""
+    clicks, logs = _patch_xj_btn_env(monkeypatch, score=0.62, pts=[])
+    items = [("前往火云洞、火云洞处使用", (40, 258, 200, 274), 0.99),
+             ("显形镜查探。", (40, 276, 140, 292), 0.99)]
+    img = np.zeros((831, 1378, 3), dtype=np.uint8)
+    # 返回 True（本帧已处理）：同帧剧情兜底不再点一次，防双点打到世界
+    assert wubei._handle_xianxingjing(object(), items, img) is True
+    assert clicks == ["center"]
+    assert any("继续点屏幕中间推进" in m for m in logs)
+    assert wubei._xj_tpl_best[0] == 0.62  # 失败诊断用最高分
+
+
+def _patch_xj_dialog_env(monkeypatch, last_center_click_ago):
+    clicks, logs = [], []
+    monkeypatch.setattr(wubei, "battle_watch_in_battle", lambda: False)
+    monkeypatch.setattr(wubei, "_xj_dialog_present", lambda items: True)
+    monkeypatch.setattr(wubei, "_click_screen_center",
+                        lambda win, times=1, prefix="": clicks.append("center"))
+    monkeypatch.setattr(wubei, "log",
+                        lambda msg, level="INFO": logs.append(msg))
+    monkeypatch.setattr(wubei, "dc_last_center_click_at",
+                        lambda: wubei.time.time() - last_center_click_ago)
+    monkeypatch.setattr(wubei, "_xj_dialog_clicked_at", 0.0)
+    monkeypatch.setattr(wubei, "_xj_dismissed_at", 0.0)
+    monkeypatch.setattr(wubei, "_xj_tpl_best", (0.9, (1, 1)))
+    monkeypatch.setattr(wubei, "_xj_quota_exhausted_at", 0.0)
+    monkeypatch.setattr(wubei, "_xj_warned", False)
+    return clicks, logs
+
+
+def test_xj_dialog_click_skipped_when_story_gate_just_clicked(monkeypatch):
+    """剧情兜底刚点过屏幕中间（白龙马文案尚未 OCR 出的过渡帧）：显形镜
+    处理器不得补点——对话框一次即关，第二次点击落到世界让人物走动
+    （2026-11-11 14:11 用户确认，当日 5/26 次模板未命中）。"""
+    clicks, logs = _patch_xj_dialog_env(monkeypatch, last_center_click_ago=0.3)
+    items = [("一阵光芒闪过，白龙马出现在眼前", (400, 300, 900, 340), 0.9)]
+    img = np.zeros((831, 1378, 3), dtype=np.uint8)
+    assert wubei._handle_xianxingjing(object(), items, img) is True
+    assert clicks == []
+    assert any("不重复点击" in m for m in logs)
+    assert wubei._xj_dismissed_at > 0  # 模板窗口照常开启
+
+
+def test_xj_dialog_click_after_cooldown_clicks_once(monkeypatch):
+    """无他人点击时显形镜处理器照常点一次关闭对话框。"""
+    clicks, _logs = _patch_xj_dialog_env(monkeypatch,
+                                         last_center_click_ago=
+                                         wubei.XIANXINGJING_XJ_CLICK_GUARD + 1)
+    items = [("一阵光芒闪过，白龙马出现在眼前", (400, 300, 900, 340), 0.9)]
+    img = np.zeros((831, 1378, 3), dtype=np.uint8)
+    assert wubei._handle_xianxingjing(object(), items, img) is True
+    assert clicks == ["center"]
+    assert wubei._xj_dismissed_at > 0
+
+
+def test_xj_template_hit_clicks_button_not_reclick(monkeypatch):
+    """模板达标时点击按钮、不点屏推进（回归：先取最高分再取候选）。"""
+    clicks, _logs = _patch_xj_btn_env(monkeypatch, score=0.92,
+                                      pts=[(0.92, 100, 200)])
+    items = [("前往火云洞、火云洞处使用", (40, 258, 200, 274), 0.99),
+             ("显形镜查探。", (40, 276, 140, 292), 0.99)]
+    img = np.zeros((831, 1378, 3), dtype=np.uint8)
+    assert wubei._handle_xianxingjing(object(), items, img) is True
+    assert clicks == [(100, 200)]
+    assert wubei._xj_btn_clicked_at > 0
+    assert wubei._xj_dismissed_at == 0.0
+
+
 # ---- 领取点到达判据地图名门控（2026-11-11 用户规则：五倍必须宝象国） ----
 def test_in_claim_map_requires_baoxiangguo():
     assert wubei._in_claim_map(("宝象国", 86, 86))

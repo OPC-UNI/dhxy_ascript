@@ -81,7 +81,9 @@ from .control_window import (load_task_counts,  # 任务次数上限
 from .dialog_common import (SCREEN_CENTER_POS, green_option_center,
                             _dialog_text_present,
                             dialog_frame_score, DIALOG_FRAME_THRESHOLD,
-                            _click_screen_center)  # 对话框共享组件（屏幕中间点击/选项中心/文案检测）
+                            _click_screen_center,
+                            last_center_click_at as dc_last_center_click_at,
+                            )  # 对话框共享组件（屏幕中间点击/选项中心/文案检测）
 from .xuanshu import follow_task  # 任务跟踪（绿字点击寻路/战斗跳过/附加对话处理）
 from . import tab_group  # 组号模式（一窗口多 Tab）：初始化/队员 pass/抑制标志
 
@@ -199,10 +201,16 @@ XIANXINGJING_DIALOG_TEXT = "一阵光芒闪过，白龙马出现在眼前，竟�
 # 误判「本处未触发」→ A/B 配额耗尽 → 替换任务。命中任一短关键词即
 # 视为白龙马对话框在场（关键词取句中稳定短语）。
 XIANXINGJING_DIALOG_KEYWORDS = ("白龙马出现在眼前", "一阵光芒闪过")
+# follow 剧情兜底的「已知对话表」：白龙马对话框由显形镜处理器点一次关闭
+# （用户 2026-11-11 确认一次即消失）。兜底若同时点击，第二次点击落到世界
+# 会让人物走动、任务按钮模板窗口空耗（当日 5/26 次模板未命中，14:11 实机
+# 白龙马已出但模板未识别）。长句 + 短关键词都给，OCR 截断时同样拦得住。
+WUBEI_STORY_KNOWN_TEXTS = (XIANXINGJING_DIALOG_TEXT,) + XIANXINGJING_DIALOG_KEYWORDS
 XIANXINGJING_TASK_ICON = "wubei_bailongma_task.png"  # 白龙马任务按钮（用户提供素材）
 # 流程（用户实测）：白龙马对话框出现 → 对话框文字遮挡任务按钮模板，
-# 先连点屏幕中间两次关闭文字 → 再识别点击模板开始对话；后续开打
-# 选项（证明实力/消灭它）由 FIGHT_DIALOG_OPTIONS 处理
+# 点屏幕中间关闭文字（用户 2026-11-11 确认一次点击即关闭；处理器点后
+# 文案仍在才按 3s 冷却再点，兜底与处理器不得各点一次）→ 再识别点击
+# 模板开始对话；后续开打选项（证明实力/消灭它）由 FIGHT_DIALOG_OPTIONS 处理
 XIANXINGJING_TEMPLATE_WINDOW = 6.0  # 关闭对话框后找模板的窗口（秒）
 XIANXINGJING_LINK_KEYWORD = "镜"  # 追踪链接关键词（识别显形镜任务阶段）。
 XIANXINGJING_USE_TEXT = "显形镜查探"  # 用镜文案精确匹配（「用显形镜查探。」/
@@ -261,6 +269,17 @@ _xj_dialog_clicked_at = 0.0  # 白龙马对话框屏幕中间连点时间（冷�
 _xj_diag_at = 0.0            # 宽限内「对话框在场但文案不匹配」诊断日志时间
                              # （每次宽限最多一条，2026-11-10 临时诊断）
 _xj_dismissed_at = 0.0       # 对话框关闭时间（此后窗口内找模板点击）
+_xj_tpl_best = (0.0, (0, 0)) # 找模板窗口内的最高匹配分与位置（失败日志诊断）
+XIANXINGJING_XJ_CLICK_GUARD = 2.5  # 白龙马对话框点击前检查「屏幕中间最近一次
+                                   # 点击」的间隔：剧情兜底刚点过（文案尚未
+                                   # OCR 出的过渡帧命中）时不再补点——对话框
+                                   # 一次即关，第二次点击落到世界让人物走动
+                                   # （2026-11-11 14:11 实测）
+XIANXINGJING_RESIDUAL_CLICK = 2.0  # 模板未现但对话框仍在场时继续点屏推进的
+                                   # 间隔（秒）：点屏可能落在开场动画上被吞，
+                                   # 对话框仍在场、按钮被文字遮挡无法匹配；
+                                   # 一次点击即关闭（用户 2026-11-11 确认），
+                                   # 关掉后本分支自然不再触发
 # ---- 白龙马任务按钮点击失败 → 替换任务（用户 2026-10-17 决策）：
 # 关闭遮挡文字的点地点击会让人物走动，走远后点任务按钮无效（模板
 # 可见但点击不生效）；或模板始终被遮挡不出现。原「点寻路链接走回
@@ -359,8 +378,8 @@ def _reset_xianxingjing_state(keep_progress=False):
     global _xj_phase, _xj_stable, _xj_anchor, _xj_last_pos, _xj_use_count, \
         _xj_grace_start, _xj_warned, _xj_missing, _xj_need_move, _xj_walk_from, \
         _xj_move_stuck, _xj_walk_side, _xj_flip_count, _xj_veto_click_at, \
-        _xj_dialog_clicked_at, _xj_dismissed_at, _xj_quota_exhausted_at, \
-        _xj_diag_at
+        _xj_dialog_clicked_at, _xj_dismissed_at, _xj_tpl_best, \
+        _xj_quota_exhausted_at, _xj_diag_at
     global _xj_btn_clicked_at, _xj_btn_missing, _xj_btn_candidates, _xj_btn_idx, \
         _xj_need_replace, _xj_block_clicked_at
     _xj_phase = 0
@@ -372,6 +391,7 @@ def _reset_xianxingjing_state(keep_progress=False):
     _xj_move_stuck = 0
     _xj_dialog_clicked_at = 0.0
     _xj_dismissed_at = 0.0
+    _xj_tpl_best = (0.0, (0, 0))
     _xj_diag_at = 0.0
     _xj_btn_clicked_at = 0.0
     _xj_btn_missing = 0
@@ -766,9 +786,11 @@ def verify_xj_flow(win):
     pts = game_map.match_frame_all(frame, XIANXINGJING_TASK_ICON,
                                    threshold=XIANXINGJING_BTN_THRESHOLD)
     if not pts:
-        log(f"[五倍][验证] 测试白龙马模板: 无命中（阈值 "
-            f"{XIANXINGJING_BTN_THRESHOLD} 以上 0 处候选）", "WARN")
-        return True, f"0 处候选命中（阈值 {XIANXINGJING_BTN_THRESHOLD}）"
+        score, (bx, by) = game_map.best_match_np(frame, XIANXINGJING_TASK_ICON)
+        log(f"[五倍][验证] 测试白龙马模板: 无命中（最高分 {score:.2f} "
+            f"@({bx},{by})，阈值 {XIANXINGJING_BTN_THRESHOLD}）", "WARN")
+        return True, (f"0 处候选命中（最高分 {score:.2f} < 阈值 "
+                      f"{XIANXINGJING_BTN_THRESHOLD}）")
     log(f"[五倍][验证] 测试白龙马模板: 共 {len(pts)} 处候选，按任务顺序实际点击验证", "SYS")
     for i, (score, x, y) in enumerate(pts, 1):
         log(f"[五倍][验证] 候选{i}: 匹配度 {score:.2f} @({x},{y})", "SYS")
@@ -1999,7 +2021,7 @@ def _handle_xianxingjing(win, items, img_np):
     未命中（模板被遮挡不出现/点地点击走远后点击无效）不再走回重试，
     一律抛 ReplaceTaskError 重新领取替换任务。返回是否已处理。
     """
-    global _xj_dialog_clicked_at, _xj_dismissed_at
+    global _xj_dialog_clicked_at, _xj_dismissed_at, _xj_tpl_best
     global _xj_btn_clicked_at, _xj_btn_missing, _xj_btn_candidates, _xj_btn_idx, \
         _xj_block_clicked_at
     global _xj_warned, _xj_quota_exhausted_at
@@ -2017,9 +2039,16 @@ def _handle_xianxingjing(win, items, img_np):
         _xj_warned = False
         if now - _xj_dialog_clicked_at >= 3.0:
             _xj_dialog_clicked_at = now
-            _click_screen_center(win, times=1, prefix="五倍")
+            if now - dc_last_center_click_at() >= XIANXINGJING_XJ_CLICK_GUARD:
+                _click_screen_center(win, times=1, prefix="五倍")
+                log("[五倍] 显形镜：白龙马对话框已出现，已点屏幕中间关闭遮挡文字", "SYS")
+            else:
+                # 剧情兜底刚点过屏（白龙马文案尚未 OCR 出的过渡帧被兜底
+                # 当普通剧情对话点了）：一次点击对话框即关闭，此处补点
+                # 会落到世界画面让人物走动（用户 2026-11-11 确认）
+                log("[五倍] 显形镜：白龙马对话框文字可见但刚点过屏，不重复点击", "SYS")
             _xj_dismissed_at = now  # 关闭后开始窗口内找模板
-            log("[五倍] 显形镜：白龙马对话框已出现，已点屏幕中间关闭遮挡文字", "SYS")
+            _xj_tpl_best = (0.0, (0, 0))
         return True
     # 判定窗：刚点过模板，等对话打开（开打选项出现即点击生效）
     if _xj_btn_clicked_at:
@@ -2107,8 +2136,27 @@ def _handle_xianxingjing(win, items, img_np):
     if now - _xj_dismissed_at < XIANXINGJING_TEMPLATE_WINDOW:
         _, bgr = _xj_frame(win, items)
         if bgr is not None:
-            pts = game_map.match_frame_all(bgr, XIANXINGJING_TASK_ICON,
-                                           threshold=XIANXINGJING_BTN_THRESHOLD)
+            # 先取全局最高分：未达阈值时顺带得到诊断分（失败日志用），
+            # 达标再取全部候选（命中罕见，两次匹配代价可忽略）
+            score, where = game_map.best_match_np(bgr, XIANXINGJING_TASK_ICON)
+            if score > _xj_tpl_best[0]:
+                _xj_tpl_best = (score, where)
+            if score >= XIANXINGJING_BTN_THRESHOLD:
+                pts = game_map.match_frame_all(
+                    bgr, XIANXINGJING_TASK_ICON,
+                    threshold=XIANXINGJING_BTN_THRESHOLD)
+    if not pts and dialog_frame_score(img_np) >= DIALOG_FRAME_THRESHOLD \
+            and now - _xj_dialog_clicked_at >= XIANXINGJING_RESIDUAL_CLICK:
+        # 模板未现但标准对话框仍在场：白龙马文本页没点完（两次点屏中
+        # 有一次被开场动画吞掉，剩余页文案不含关键词、上游不再点），
+        # 按钮被文字遮住无法匹配——继续点屏幕中间推进，露出的按钮
+        # 下一轮询再匹配（2026-11-11 14:11 用户实机：白龙马已出但模板
+        # 未识别，手动点击后才进入；当日 5/26 次模板未命中）
+        _xj_dialog_clicked_at = now
+        _click_screen_center(win, times=1, prefix="五倍")
+        log("[五倍] 显形镜：模板未现且对话框仍在场，继续点屏幕中间推进", "WARN")
+        return True  # 本帧已处理：防同帧剧情兜底再点一次（双点会把有效
+                     # 点击点到世界画面）
     if pts:
         _xj_btn_candidates = pts
         _xj_btn_idx = 0
@@ -2125,6 +2173,9 @@ def _handle_xianxingjing(win, items, img_np):
     if _xj_btn_missing >= XIANXINGJING_BTN_MISS_MAX:
         # 不消费计数：确认轮询守卫吞 extras 异常时下一轮询重抛，
         # 最终在正常轮询路径传播（替换成功后状态复位清零）
+        log(f"[五倍] 显形镜：白龙马任务按钮未出现（模板最高分 "
+            f"{_xj_tpl_best[0]:.2f} @{_xj_tpl_best[1]}，阈值 "
+            f"{XIANXINGJING_BTN_THRESHOLD}）", "WARN")
         _fail_xj_replace("白龙马任务按钮未出现")
     return False
 
@@ -2431,6 +2482,7 @@ def _follow_to_done(win, first_items=None):
                            first_items=first_items,
                            skip_texts={},  # 禁用 xuanshu 默认跳过表（玄枢轶闻
                                            # 专属文案，五倍自有对话处理——审计问题 2）
+                           story_known_texts=WUBEI_STORY_KNOWN_TEXTS,
                            pre_click_handler=_handle_pre_click,
                            post_track_handler=_maybe_tab_bars_pass,
                            task_gone_polls=_hpg_gone_polls,
@@ -3045,15 +3097,19 @@ def run_loop(win, cycle_interval=1.0):
     round_no = 0
     while True:
         try:
-            round_no += 1
-            log(f"[五倍] ==== 第 {round_no} 轮 ====", "SYS")
             # 组号护栏：pass 切回失败残留时先回队长 Tab 再走本轮流程
             if tab_group.active() and not tab_group.ensure_leader_tab(win):
                 time.sleep(cycle_interval)
                 continue
-            if is_in_battle(win):
+            # 战斗等待放在轮次日志与计数之前：等待战斗结束的空转不应
+            # 刷「第 N 轮」日志或推高 round_no（2026-11-11 实测空转一次
+            # 战斗刷 50+ 轮，且影响 auto_wuyi 的轮次相位）。战斗线程
+            # 确认状态优先（廉价读），单帧模板漏匹配不会漏判。
+            if battle_watch_in_battle() or is_in_battle(win):
                 time.sleep(cycle_interval)
                 continue
+            round_no += 1
+            log(f"[五倍] ==== 第 {round_no} 轮 ====", "SYS")
             # 申请待处理态清场顺延（启动时战斗中）：战斗结束后的首个
             # 非战斗轮次执行，一次即消费；先清场后创建——清场后按钮
             # 恢复普通态，创建流程的菜单才能打开

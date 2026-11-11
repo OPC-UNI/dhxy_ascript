@@ -242,6 +242,20 @@ def _click_dialog_option_by_index(win, items, img_np, dtxt, idx, prefix=""):
     return True
 
 
+_last_center_click_at = 0.0  # 最近一次点屏幕中间的时间（跨组件防双点）
+
+
+def last_center_click_at():
+    """最近一次「点屏幕中间」的时间戳。
+
+    供其他组件（如五倍显形镜处理器）判断剧情兜底是否刚点过屏：同一次
+    对话由两个组件各自点一次会把第二次点击打到世界画面（2026-11-11
+    14:11 白龙马对话框一次即关，第二次点击让人物走动、任务按钮模板
+    窗口空耗——当日 5/26 次模板未命中）。
+    """
+    return _last_center_click_at
+
+
 def _click_screen_center(win, times=DIALOG_SKIP_CLICKS, prefix=""):
     """点击屏幕中间若干次（推进 NPC 对话）。
 
@@ -253,9 +267,11 @@ def _click_screen_center(win, times=DIALOG_SKIP_CLICKS, prefix=""):
     的寻路保护）。非标准对话框（模板不在场）保持旧的固定连点行为，
     单次点击不做复检（无多余点击，零开销）。
     """
+    global _last_center_click_at
     tag = f"[{prefix}] " if prefix else ""
     cx, cy = SCREEN_CENTER_POS
     tracked = False
+    _last_center_click_at = time.time()
     if times > 1:
         img = win.capture(force_activate=False)
         tracked = img is not None \
