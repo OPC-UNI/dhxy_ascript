@@ -379,3 +379,70 @@ def test_confirm_task_gone_post_battle_panel_missing_is_done(monkeypatch):
                                       require_panel=False) is True
     assert ocr_calls  # 回退静态条带采集证据（原逻辑）
     assert any("战斗结束后追踪面板不在场" in m for m, _ in logs)
+
+
+# ---- follow 战斗结束转换：动画间隙不得消费 was_battle（2026-11-11） ----
+
+def test_follow_battle_gap_keeps_battle_end_fastpath(monkeypatch):
+    """战斗线程确认在战斗中的动画间隙帧（操作条/回合横幅单帧漏匹配）
+    必须仍按战斗处理：不消费 was_battle、不进任务消失确认；线程确认
+    结束后的首个非战斗帧走 require_panel=False 快路径。
+
+    回归 2026-11-11 13:49/13:52：间隙帧消费 was_battle 后，真战斗结束
+    退回 require_panel=True 严格路径空等 6s 并「不判定消失」，返程
+    慢 10s（黄袍怪那次连烧 3 个 6s 窗口）。
+    """
+    clock = _GoneClock()
+    battle_states = [False,              # 外层循环战斗门
+                     True, True, False]  # 内层：间隙 ×2（线程仍在战斗）→ 结束
+    frames = [True, False, False, False]  # 战斗帧 → 间隙帧 ×2 → 结束帧
+    confirms, confirm_at = [], []
+
+    class _Win:
+        def capture(self, force_activate=False):
+            return object()
+
+    task = {"title": "常规玩法", "lines": [("前往龙窟五层消灭修罗", None)],
+            "text": "常规玩法"}
+    monkeypatch.setattr(xuanshu, "time", clock)
+    monkeypatch.setattr(xuanshu, "log", lambda *a, **k: None)
+    monkeypatch.setattr(xuanshu, "battle_watch_in_battle",
+                        lambda: battle_states.pop(0) if battle_states else False)
+    monkeypatch.setattr(xuanshu, "is_in_battle", lambda win: False)
+    monkeypatch.setattr(xuanshu, "is_in_battle_frame",
+                        lambda img: frames.pop(0) if frames else False)
+
+    def _confirm(win, title, fb=(), first_img=None, polls=2,
+                 require_panel=True):
+        confirms.append(require_panel)
+        confirm_at.append(clock.t)
+        return True
+
+    monkeypatch.setattr(xuanshu, "_confirm_task_gone", _confirm)
+    monkeypatch.setattr(xuanshu, "_task_gone_dialog_guard",
+                        lambda *a, **k: False)
+    monkeypatch.setattr(xuanshu, "_maybe_sheyaoxiang", lambda win: None)
+    monkeypatch.setattr(xuanshu.app_utils, "mark_track_walk", lambda: None)
+    monkeypatch.setattr(xuanshu.debug_overlay, "set_phase", lambda *a: None)
+    monkeypatch.setattr(xuanshu.tab_group, "pass_active", False)
+    monkeypatch.setattr(xuanshu.tab_group, "active", lambda: False)
+    monkeypatch.setattr(xuanshu.task_tracker, "ocr_follow",
+                        lambda img: ([("常规玩法", [10, 240, 180, 258], 0.99)],
+                                     None))
+    monkeypatch.setattr(xuanshu.task_tracker, "group_tasks",
+                        lambda items, xmax=0: [])
+    monkeypatch.setattr(xuanshu.task_tracker, "panel_row_xmax",
+                        lambda img_np: 400)
+    monkeypatch.setattr(xuanshu.task_tracker, "find_task",
+                        lambda tasks, title: task if not confirms else None)
+    monkeypatch.setattr(xuanshu.task_tracker, "task_signature",
+                        lambda t: "常规玩法|前往龙窟五层消灭修罗")
+    monkeypatch.setattr(xuanshu.task_tracker, "track_task",
+                        lambda win, title, **k: (True, "已点击"))
+
+    ok, _info = xuanshu.follow_task(_Win(), "常规玩法", timeout=30)
+    assert ok is True
+    # 间隙帧（线程确认仍在战斗）不得触发确认、不得消费 was_battle：
+    # 确认只发生在战斗线程确认结束后的第 4 拍（t=2.0），且走快路径
+    assert confirms == [False]
+    assert confirm_at == [2.0]

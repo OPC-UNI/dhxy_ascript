@@ -1649,12 +1649,15 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
             time.sleep(FOLLOW_POLL_INTERVAL)
             continue
         # 战斗中：任务追踪不可用（可能误判任务消失），等待战斗结束。
-        # 战斗等待时间不计入超时（deadline 顺延，见 battle_since 说明）
-        if is_in_battle(win):
+        # 战斗等待时间不计入超时（deadline 顺延，见 battle_since 说明）。
+        # 战斗线程确认状态优先（廉价读）：单帧模板判定在战斗动画间隙
+        # 会漏匹配，漏掉的帧会走进任务消失确认空烧 6s（2026-11-11 实测）
+        if battle_watch_in_battle() or is_in_battle(win):
             if battle_since is None:
                 battle_since = time.time()
             time.sleep(FOLLOW_POLL_INTERVAL)
             continue
+        just_battle_ended = battle_since is not None
         if battle_since is not None:
             deadline += time.time() - battle_since
             battle_since = None
@@ -1679,8 +1682,12 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
             task_tracker.group_tasks(items, task_tracker.panel_row_xmax(img_np)),
             title)
         if task is None:
+            # 战斗刚结束的首个非战斗轮：与内层战斗结束路径同语义——面板
+            # 缺席按任务消失处理（用户 2026-11-11 确认），不走严格面板
+            # 门控空等 6s 后不判定（旧行为：战斗结束返程慢 10s）
             if _confirm_task_gone(win, title, fallback_keywords,
-                first_img=img, polls=_gone_polls()):
+                first_img=img, polls=_gone_polls(),
+                require_panel=not just_battle_ended):
                 if _task_gone_dialog_guard(win, extra_dialog_handler,
                     tpl_gate=dialog_tpl_gate,
                     extra_gate=dialog_extra_gate):
@@ -1773,7 +1780,8 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
         last_poll_items = None
         track_gate = task_tracker.TrackGate()  # 面板差分门（共享组件，见 task_tracker）
         last_battle_extras_at = 0.0 # 战斗中 extras 上次对话框 OCR 时间（限频）
-        was_battle = False      # 上一轮询为战斗帧（战斗结束转换帧直接做任务消失确认）
+        was_battle = False      # 本轮询前处于战斗（战斗结束转换帧直接做任务消失确认）；
+                                # 战斗帧与战斗线程确认状态都会置位，动画间隙不消费
 
         while time.time() < deadline:
             time.sleep(CONFIRM_POLL_INTERVAL if changed_once else FOLLOW_POLL_INTERVAL)
@@ -1786,8 +1794,13 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
             # 战斗帧判定前置（性能 2026-10-27）：战斗 UI 遮挡追踪面板，
             # 面板差分门与帧复用均失效（战斗动画帧帧不同），先判战斗、
             # 命中即跳过面板/对话框全量 OCR——原先 OCR 在战斗判定之前，
-            # 战斗期每轮空烧双区域 OCR（实测 1.4-2.2 CPU 秒/次）
-            if is_in_battle_frame(img):
+            # 战斗期每轮空烧双区域 OCR（实测 1.4-2.2 CPU 秒/次）。
+            # 战斗线程确认状态一并采信（2026-11-11）：操作条/回合横幅
+            # 单帧漏匹配的动画间隙帧必须仍按战斗处理——旧实现把间隙帧
+            # 当战后首帧，消费 was_battle 并进任务消失确认空烧 6s，真
+            # 战斗结束反而退回严格路径再烧 6s（13:49/13:52 实测返程慢
+            # 10~30s）
+            if is_in_battle_frame(img) or battle_watch_in_battle():
                 was_battle = True
                 # 战斗等待时间不计入超时（与外层 is_in_battle 门同一预算；
                 # 首个非战斗帧处一次性顺延 deadline）
@@ -1899,10 +1912,12 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 changed_once = False  # 变化未持续（OCR 抖动），回退正常轮询
                 continue
             # 战斗结束转换帧：跳过全区域 OCR 直接做任务消失确认——战斗
-            # 帧已由循环头部拦截，走到此处即「战斗后的首个非战斗帧」；
-            # 证据在战斗线程 2s 结束确认窗口内即开始收集，返程交接省时
-            # （实测 2026-10-24 战斗结束→开背包恒 2s，根因为全区域 OCR
-            # 拖晚确认循环进入，门开时证据才 1 轮、还需补 1 轮 ~1.9s）
+            # 帧已由循环头部拦截（战斗线程确认状态一并采信，动画间隙
+            # 不会误走到这里），走到此处即「战斗线程确认结束后的首个
+            # 非战斗帧」；证据在战斗线程结束确认完成后立即收集，返程
+            # 交接省时（实测 2026-10-24 战斗结束→开背包恒 2s，根因为
+            # 全区域 OCR 拖晚确认循环进入，门开时证据才 1 轮、还需补
+            # 1 轮 ~1.9s）
             if was_battle:
                 was_battle = False
                 last_poll_items = None

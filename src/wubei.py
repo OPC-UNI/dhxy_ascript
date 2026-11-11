@@ -212,7 +212,19 @@ XIANXINGJING_USE_TEXT = "显形镜查探"  # 用镜文案精确匹配（「用�
 # 三字全匹配会漏检导致状态机全程不启动；「镜」在五倍其他任务的追踪
 # 文案中不出现（消灭魔尊/奎木狼/营救三藏等），误报风险可忽略
 XIANXINGJING_GRACE = 6.0              # 用镜后等白龙马对话框的宽限（秒）
-XIANXINGJING_ARRIVE_POLLS = 3         # 位置连续稳定轮询数判定到达（每次 ~1.7s）
+XIANXINGJING_ARRIVE_POLLS = 3         # 到达判定：锚点位置持续不变的轮询数（实测
+                                      # follow 轮询 ~1.0-1.4s/次，2026-11-11；旧实现
+                                      # 注释的 ~1.7s/次已过时）
+XIANXINGJING_STABLE_TOL = 1           # 站定容差（每轴，相对窗口锚点的累计位移）：
+                                      # 只容忍坐标 OCR 抖动 1；步行每轮询移动 2-3，
+                                      # 累计必超——旧实现比相邻两帧（≤3/轴）会把
+                                      # 行走判成静止（2026-11-11 半路用镜根因）
+XIANXINGJING_MAP_MATCH_RATIO = 0.5    # 地图名与追踪链接文案滑动窗口的字符重合率下限
+                                      # （「火云戈壁」vs OCR「火云洞」实测 2/4）
+XIANXINGJING_MAP_VETO_CLICK = 3.0     # 地图门否决后重点寻路链接的最小间隔（秒）
+XIANXINGJING_FLIP_MAX = 3             # 寻路未启动翻侧重试上限（每次导航）：对话框/
+                                      # 遮挡吞点击时旧逻辑 A/B 无限乒乓（2026-11-11
+                                      # 13:09 连续 11 次/50s），超限按失败替换任务
 XIANXINGJING_USE_MAX = 2              # 最多用镜次数（A、B 两处）
 XIANXINGJING_MOVE_STUCK_MAX = 4       # 点寻路链接后位置连续不变轮询数 → 换另一侧链接再点
                                       # （点回当前所在处链接时寻路不启动；偶现只识别到
@@ -231,7 +243,8 @@ XIANXINGJING_QUOTA_STUCK_TIMEOUT = 6   # A、B 两处均失败后的卡死超时
 # 读成「豆」）让签名每轮询抖动，复位会把位置稳定计数清零，
 # 到达判定永远凑不满 3 次）
 _xj_phase = 0           # 0=等到达 1=已用镜等对话框
-_xj_stable = 0          # 位置连续稳定轮询数
+_xj_stable = 0          # 锚点位置持续不变的轮询数
+_xj_anchor = None       # 到达判定锚点（稳定窗口起始位置，含地图名）
 _xj_last_pos = None     # 上次位置
 _xj_use_count = 0       # 已用镜次数
 _xj_grace_start = 0.0   # 宽限窗口起点
@@ -242,6 +255,8 @@ _xj_need_move = False   # 点寻路链接后须位置先变化才允许再次用
 _xj_walk_from = None    # 寻路链接点击时的位置（验证移动起点）
 _xj_move_stuck = 0      # 点寻路链接后位置连续不变轮询数（翻侧重试判据）
 _xj_walk_side = None    # 上次寻路点击的链接侧 "a"/"b"（None=尚未点过；下次点另一侧）
+_xj_flip_count = 0      # 本次导航的翻侧点击次数（上限 XIANXINGJING_FLIP_MAX）
+_xj_veto_click_at = 0.0 # 地图门否决后重点寻路链接时间（冷却）
 _xj_dialog_clicked_at = 0.0  # 白龙马对话框屏幕中间连点时间（冷却防连点）
 _xj_diag_at = 0.0            # 宽限内「对话框在场但文案不匹配」诊断日志时间
                              # （每次宽限最多一条，2026-11-10 临时诊断）
@@ -331,29 +346,32 @@ def _xj_pos(win, items):
     return _xjf_pos
 
 
-def _reset_xianxingjing_state():
-    """显形镜状态机复位（任务领取成功后调用，防跨任务残留）。"""
-    global _xj_phase, _xj_stable, _xj_last_pos, _xj_use_count, \
+def _reset_xianxingjing_state(keep_progress=False):
+    """显形镜状态机复位。
+
+    keep_progress=True（阶段关键词瞬时消失的安全复位）：只清瞬时状态，
+    保留 A/B 配额、侧别、寻路起点与配额卡死计时。follow 轮次重启（任务
+    瞬时消失确认）期间关键词可能连续两轮读不到，旧实现全量复位会把
+    状态机退回「第 1/2 处」重新用 A 侧——2026-11-11 13:21:26 实测在
+    已验证错误的位置又用了一次镜。新任务领取仍走全量复位（调用方
+    不传参）。
+    """
+    global _xj_phase, _xj_stable, _xj_anchor, _xj_last_pos, _xj_use_count, \
         _xj_grace_start, _xj_warned, _xj_missing, _xj_need_move, _xj_walk_from, \
-        _xj_move_stuck, _xj_walk_side, \
+        _xj_move_stuck, _xj_walk_side, _xj_flip_count, _xj_veto_click_at, \
         _xj_dialog_clicked_at, _xj_dismissed_at, _xj_quota_exhausted_at, \
         _xj_diag_at
     global _xj_btn_clicked_at, _xj_btn_missing, _xj_btn_candidates, _xj_btn_idx, \
         _xj_need_replace, _xj_block_clicked_at
     _xj_phase = 0
     _xj_stable = 0
+    _xj_anchor = None
     _xj_last_pos = None
-    _xj_use_count = 0
     _xj_grace_start = 0.0
-    _xj_warned = False
     _xj_missing = 0
-    _xj_need_move = False
-    _xj_walk_from = None
     _xj_move_stuck = 0
-    _xj_walk_side = None
     _xj_dialog_clicked_at = 0.0
     _xj_dismissed_at = 0.0
-    _xj_quota_exhausted_at = 0.0
     _xj_diag_at = 0.0
     _xj_btn_clicked_at = 0.0
     _xj_btn_missing = 0
@@ -361,6 +379,15 @@ def _reset_xianxingjing_state():
     _xj_btn_idx = 0
     _xj_need_replace = False
     _xj_block_clicked_at = 0.0
+    _xj_veto_click_at = 0.0
+    if not keep_progress:
+        _xj_use_count = 0
+        _xj_walk_side = None
+        _xj_need_move = False
+        _xj_walk_from = None
+        _xj_flip_count = 0
+        _xj_warned = False
+        _xj_quota_exhausted_at = 0.0
 
 # ---- 领取前队伍检查（检查队伍开关开启时；队伍固定 5 人） ----
 TEAM_CHECK_RETRY_INTERVAL = 10  # 缺人且无申请人可补时的重查间隔（秒）
@@ -1684,6 +1711,10 @@ def _click_xianxingjing_walk(win, items, img_np, side="b"):
     cands = [(t, r) for t, r, s in items
              if s >= 0.55 and r[0] < task_tracker.PANEL_MAX_X
              and task_tracker.is_green_text(img_np, r)]
+    # 「用显形镜查探」用镜行同为亮绿可点文案：链接行缺失时不能把它当
+    # 寻路链接点（点它=提前用镜，2026-11-11 审计）。含「前往」的合行保留
+    cands = [c for c in cands
+             if "前往" in c[0] or XIANXINGJING_USE_TEXT not in norm_text(c[0])]
     if not cands:
         return False
     # 优先含「前往」的全行（A/B 簇都在矩形内），否则取任意绿字行
@@ -1891,6 +1922,47 @@ def _xj_dialog_present(items):
                for kw in XIANXINGJING_DIALOG_KEYWORDS)
 
 
+def _xj_map_matches(pos, items):
+    """当前地图名是否出现在追踪链接文案（任务标出的两处地点）里。
+
+    用镜必须站在任务地点：到达判据（站定）没有目标坐标，人物停在领取
+    城/半路（寻路点击被对话框吞、被打断）时也会「站定」——宝象国原地
+    用镜实测 2026-11-11 13:17。链接行形如「前往火云洞、火云洞处使用」，
+    地名 OCR 常与位置文案各有 1 字误读（「火云戈壁」读成「火云洞」），
+    按滑动窗口字符重合率 ≥XIANXINGJING_MAP_MATCH_RATIO 视为命中。
+    只看含「前往」/「处使用」的面板行（链接行及其拆行碎片）：任务标题
+    「宝象迷情降魔任务」与领取城「宝象国」共享两字，纳入匹配会放过
+    错误场景。
+    """
+    if pos is None:
+        return False
+    name = norm_text(pos[0])
+    if len(name) < 2:
+        return False
+    lines = []
+    for txt, rect, score in items:
+        if score < 0.55 or rect[0] >= task_tracker.PANEL_MAX_X:
+            continue
+        line = norm_text(txt)
+        if "前往" in line or "处使用" in line:
+            lines.append(line)
+            if name in line:
+                return True
+    if not lines:
+        return False  # 链接行读不出：不采信（下一轮询复读，超时由 follow 兜底）
+    need = set(name)
+    for line in lines:
+        for w in (len(name) - 1, len(name), len(name) + 1):
+            if w < 2 or w > len(line):
+                continue
+            for i in range(len(line) - w + 1):
+                overlap = len(need & set(line[i:i + w]))
+                if overlap >= 2 \
+                        and overlap / float(len(need)) >= XIANXINGJING_MAP_MATCH_RATIO:
+                    return True
+    return False
+
+
 def _xj_quota_stuck():
     """显形镜 A/B 配额耗尽：告警一次并计时，超时抛 ReplaceTaskError。
 
@@ -2064,20 +2136,22 @@ def _handle_xianxingjing_track(win, items, img_np):
     对话框出现时由 _handle_xianxingjing（调用链上游）处理。
     返回是否已处理（点击了链接）。
     """
-    global _xj_phase, _xj_stable, _xj_last_pos, _xj_use_count, \
+    global _xj_phase, _xj_stable, _xj_anchor, _xj_last_pos, _xj_use_count, \
         _xj_grace_start, _xj_warned, _xj_missing, _xj_need_move, _xj_walk_from, \
-        _xj_move_stuck, _xj_walk_side, \
+        _xj_move_stuck, _xj_walk_side, _xj_flip_count, _xj_veto_click_at, \
         _xj_quota_exhausted_at, _xj_need_replace, _xj_diag_at
     if battle_watch_in_battle():
         return False  # 战斗中：面板隐藏不可点链接（防宽限过期后战斗期空点）
     sig = "".join(norm_text(t) for t, r, s in items
                   if s >= 0.55 and r[0] < task_tracker.PANEL_MAX_X)
     if XIANXINGJING_LINK_KEYWORD not in sig:
-        # 非显形镜任务阶段：连续 2 轮询消失才复位状态（单轮询 OCR
-        # 漏读不误复位）
+        # 非显形镜任务阶段：连续 2 轮询消失才复位瞬时状态（单轮询 OCR
+        # 漏读不误复位）。保留配额/侧别：follow 轮次重启期间关键词会
+        # 短暂读不到，全量复位会让状态机退回「第 1/2 处」重复用 A 侧
+        # （2026-11-11 13:21:26 实测）；新任务领取走全量复位。
         _xj_missing += 1
         if _xj_missing >= 2:
-            _reset_xianxingjing_state()
+            _reset_xianxingjing_state(keep_progress=True)
         return False
     _xj_missing = 0
     now = time.time()
@@ -2138,8 +2212,10 @@ def _handle_xianxingjing_track(win, items, img_np):
                 f"{'A' if side == 'a' else 'B'} 侧", "WARN")
             _xj_phase = 0
             _xj_stable = 0
+            _xj_anchor = None
             _xj_need_move = True    # 须位置变化（寻路启动）后才允许再次用镜
             _xj_move_stuck = 0
+            _xj_flip_count = 0      # 新导航段：翻侧重试预算重置
             _xj_walk_from = pos if pos is not None else _xj_last_pos
             return True
         log("[五倍] 显形镜：追踪面板未找到寻路链接，下轮询重试", "WARN")
@@ -2148,10 +2224,17 @@ def _handle_xianxingjing_track(win, items, img_np):
     pos = _xj_pos(win, items)
     if pos is None:
         return False
-    if _xj_last_pos is not None and abs(pos[1] - _xj_last_pos[1]) <= 3 \
-            and abs(pos[2] - _xj_last_pos[2]) <= 3:
+    # 到达判定：相对稳定窗口锚点的累计位移，不是相邻轮询差。旧实现
+    # 只比较相邻两帧（每轴 ≤3），步行每轮询移动 2-3 单位时可被连判
+    # 「稳定」3 次误判到达，半路就点用镜（2026-11-11 实测：用镜坐标
+    # 沿同一路带散布 47/162/170/186/198，13:17 甚至在宝象国原地用镜）。
+    # 锚点含地图名：跨图坐标巧合不会续算。
+    if _xj_anchor is not None and pos[0] == _xj_anchor[0] \
+            and abs(pos[1] - _xj_anchor[1]) <= XIANXINGJING_STABLE_TOL \
+            and abs(pos[2] - _xj_anchor[2]) <= XIANXINGJING_STABLE_TOL:
         _xj_stable += 1
     else:
+        _xj_anchor = pos
         _xj_stable = 1
     _xj_last_pos = pos
     # 点寻路链接后须位置先变化（寻路启动）才允许再次用镜：链接
@@ -2163,19 +2246,28 @@ def _handle_xianxingjing_track(win, items, img_np):
                 abs(pos[1] - _xj_walk_from[1]) > 5
                 or abs(pos[2] - _xj_walk_from[2]) > 5):
             _xj_need_move = False
-            _xj_stable = 0  # 移动开始：重新累计到达稳定
+            _xj_anchor = None  # 移动开始：重新累计到达稳定
+            _xj_stable = 0
             _xj_move_stuck = 0
+            _xj_flip_count = 0
         else:
             _xj_move_stuck += 1
             if _xj_move_stuck >= XIANXINGJING_MOVE_STUCK_MAX:
+                _xj_move_stuck = 0  # 已翻侧或未翻：计数清零避免刷点
+                if _xj_flip_count >= XIANXINGJING_FLIP_MAX:
+                    # 翻侧预算用尽仍未起步：对话框/遮挡吞点击时旧逻辑
+                    # A/B 无限乒乓（2026-11-11 13:09 连续 11 次/50s），
+                    # 按失败替换任务（与其他按钮失败路径同语义）
+                    _fail_xj_replace("寻路未启动（翻侧重试用尽）")
+                _xj_flip_count += 1
                 flip = "b" if _xj_walk_side == "a" else "a"
                 if _click_xianxingjing_walk(win, items, img_np, side=flip):
                     _xj_walk_side = flip
                     log(f"[五倍] 显形镜：寻路未启动（位置不变），改点"
-                        f"{'A' if flip == 'a' else 'B'} 侧链接重试", "WARN")
+                        f"{'A' if flip == 'a' else 'B'} 侧链接重试"
+                        f"（{_xj_flip_count}/{XIANXINGJING_FLIP_MAX}）", "WARN")
                     pos = _xj_pos(win, items)  # 共享帧缓存，免截窗
                     _xj_walk_from = pos if pos is not None else _xj_last_pos
-                _xj_move_stuck = 0  # 已翻侧或无法点击：计数清零避免刷点
             return False
     if _xj_stable < XIANXINGJING_ARRIVE_POLLS:
         return False  # 还在寻路
@@ -2191,16 +2283,35 @@ def _handle_xianxingjing_track(win, items, img_np):
             return False
         _xj_quota_stuck()
         return False
-    # 已到达（位置连续稳定）：点追踪面板「显形镜」文案用镜
+    # 用镜地图门（2026-11-11）：站定不等于到达目的地——寻路点击被
+    # 对话框吞/被打断时人物停在领取城或半路，站定判据无从分辨。当前
+    # 地图必须是追踪链接文案标出的两处地点之一；不匹配就不用镜，限频
+    # 重点同一侧寻路链接把人物重新送出去（点击被吞时即自愈）。
+    if not _xj_map_matches(pos, items):
+        if now - _xj_veto_click_at >= XIANXINGJING_MAP_VETO_CLICK:
+            _xj_veto_click_at = now
+            veto_side = _xj_walk_side or "a"
+            if _click_xianxingjing_walk(win, items, img_np, side=veto_side):
+                log(f"[五倍] 显形镜：站定但不在任务地点（当前位置 {pos}），"
+                    f"已重点寻路链接{'A' if veto_side == 'a' else 'B'} 侧"
+                    f"重新寻路", "WARN")
+                _xj_need_move = True
+                _xj_move_stuck = 0
+                _xj_walk_from = pos
+                return True
+        return False
+    # 已到达（锚点稳定 + 地图匹配）：点追踪面板「显形镜」文案用镜
     cur_side = _xj_walk_side or "a"  # 默认落点 A（追踪绿字寻路）
     log(f"[五倍] 显形镜：已到达（位置稳定），点击追踪文案用镜"
         f"（第 {_xj_use_count + 1}/{XIANXINGJING_USE_MAX} 处，"
         f"{'A' if cur_side == 'a' else 'B'} 侧）", "SYS")
     if _click_xianxingjing_use(win, items, img_np):
         _xj_use_count += 1
+        _xj_flip_count = 0  # 每次用镜独立翻侧预算
         _xj_phase = 1
         _xj_grace_start = now
         _xj_stable = 0
+        _xj_anchor = None
         return True
     log("[五倍] 显形镜：追踪面板未找到显形镜文案，下轮询重试", "WARN")
     return False

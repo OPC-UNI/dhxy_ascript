@@ -6,6 +6,7 @@
 点到非链接文字偶现点击无反应。修正后点下划线中心（链接专属标记）。
 """
 import numpy as np
+import pytest
 
 from src import wubei
 
@@ -228,6 +229,7 @@ def test_xj_quota_frozen_while_dialog_progress(monkeypatch):
     # 状态机：已到达、用镜 2 次、白龙马对话框刚关闭（找任务按钮窗口内）
     monkeypatch.setattr(wubei, "_xj_phase", 0)
     monkeypatch.setattr(wubei, "_xj_stable", 3)
+    monkeypatch.setattr(wubei, "_xj_anchor", ("宝象国", 90, 85))
     monkeypatch.setattr(wubei, "_xj_last_pos", ("宝象国", 90, 85))
     monkeypatch.setattr(wubei, "_xj_use_count", 2)
     monkeypatch.setattr(wubei, "_xj_need_move", False)
@@ -296,6 +298,7 @@ def test_xj_use_log_includes_side(monkeypatch):
                         lambda win, items, img_np: True)
     monkeypatch.setattr(wubei, "_xj_phase", 0)
     monkeypatch.setattr(wubei, "_xj_stable", 3)
+    monkeypatch.setattr(wubei, "_xj_anchor", ("平顶山", 212, 131))
     monkeypatch.setattr(wubei, "_xj_last_pos", ("平顶山", 212, 131))
     monkeypatch.setattr(wubei, "_xj_use_count", 0)
     monkeypatch.setattr(wubei, "_xj_need_move", False)
@@ -306,6 +309,158 @@ def test_xj_use_log_includes_side(monkeypatch):
     img = np.zeros((831, 1378, 3), dtype=np.uint8)
     assert wubei._handle_xianxingjing_track(object(), items, img) is True
     assert any("用镜" in m and "A 侧" in m for m in logs)
+
+
+# ---- 显形镜：到达锚点/地图门/翻侧上限（2026-11-11 半路用镜修复） ----
+
+def test_xj_walking_never_counts_as_arrived(monkeypatch):
+    """步行每轮询移动 2-3 单位：旧实现比相邻两帧（每轴 ≤3）会连判
+    「稳定」→ 半路用镜；锚点累计判定必须在位移后清零重计。"""
+    used = []
+    positions = iter([("火云戈壁", 150, 70), ("火云戈壁", 153, 71),
+                      ("火云戈壁", 156, 72), ("火云戈壁", 159, 73)])
+    monkeypatch.setattr(wubei, "battle_watch_in_battle", lambda: False)
+    monkeypatch.setattr(wubei, "_xj_pos", lambda win, items: next(positions))
+    monkeypatch.setattr(wubei, "log", lambda *a, **k: None)
+    monkeypatch.setattr(wubei, "_click_xianxingjing_use",
+                        lambda win, items, img_np: used.append(1) or True)
+    monkeypatch.setattr(wubei, "_xj_phase", 0)
+    monkeypatch.setattr(wubei, "_xj_stable", 0)
+    monkeypatch.setattr(wubei, "_xj_anchor", None)
+    monkeypatch.setattr(wubei, "_xj_last_pos", None)
+    monkeypatch.setattr(wubei, "_xj_use_count", 0)
+    monkeypatch.setattr(wubei, "_xj_need_move", False)
+    monkeypatch.setattr(wubei, "_xj_move_stuck", 0)
+    monkeypatch.setattr(wubei, "_xj_walk_side", None)
+    monkeypatch.setattr(wubei, "_xj_missing", 0)
+    monkeypatch.setattr(wubei, "_xj_veto_click_at", wubei.time.time())
+    items = [("前往火云戈壁、火云戈壁处使", (40, 260, 200, 280), 0.99),
+             ("显形镜查探。", (40, 276, 140, 292), 0.99)]
+    img = np.zeros((831, 1378, 3), dtype=np.uint8)
+    for _ in range(4):
+        assert wubei._handle_xianxingjing_track(object(), items, img) is False
+    assert used == []
+    assert wubei._xj_stable <= 1
+
+
+def test_xj_map_matches_ocr_tolerance():
+    """地图门：位置地名与链接地名各有 1 字 OCR 误读仍算同图；
+    标题「宝象迷情」不得让领取城「宝象国」蒙混过关。"""
+    items = [("宝象迷情降魔任务", (10, 240, 180, 258), 0.99),
+             ("前往火云洞、火云洞处使用", (40, 260, 200, 280), 0.99)]
+    assert wubei._xj_map_matches(("火云戈壁", 162, 71), items)
+    assert wubei._xj_map_matches(("火云洞", 70, 27), items)
+    assert not wubei._xj_map_matches(("宝象国", 77, 130), items)
+    assert not wubei._xj_map_matches(("平顶山", 100, 30), items)
+    assert not wubei._xj_map_matches(None, items)
+    # 链接行拆行：第二处地名可能落在无「前往」的「处使用」碎片行
+    split = [("前往火云洞、", (40, 258, 120, 274), 0.99),
+             ("火云戈壁处使用", (40, 276, 200, 292), 0.99)]
+    assert wubei._xj_map_matches(("火云戈壁", 47, 72), split)
+
+
+def test_xj_map_gate_vetoes_use_and_reclicks_link(monkeypatch):
+    """站定在领取城（任务地点是别的地图）不得用镜：限频重点寻路链接
+    （2026-11-11 13:17 宝象国 77,130 实测）。"""
+    used, walks, logs = [], [], []
+    monkeypatch.setattr(wubei, "battle_watch_in_battle", lambda: False)
+    monkeypatch.setattr(wubei, "_xj_pos", lambda win, items: ("宝象国", 77, 130))
+    monkeypatch.setattr(wubei, "log",
+                        lambda msg, level="INFO": logs.append(msg))
+    monkeypatch.setattr(wubei, "_click_xianxingjing_use",
+                        lambda win, items, img_np: used.append(1) or True)
+    monkeypatch.setattr(wubei, "_click_xianxingjing_walk",
+                        lambda win, items, img_np, side="b":
+                        walks.append(side) or True)
+    monkeypatch.setattr(wubei, "_xj_phase", 0)
+    monkeypatch.setattr(wubei, "_xj_stable", 3)
+    monkeypatch.setattr(wubei, "_xj_anchor", ("宝象国", 77, 130))
+    monkeypatch.setattr(wubei, "_xj_last_pos", ("宝象国", 77, 130))
+    monkeypatch.setattr(wubei, "_xj_use_count", 0)
+    monkeypatch.setattr(wubei, "_xj_need_move", False)
+    monkeypatch.setattr(wubei, "_xj_move_stuck", 0)
+    monkeypatch.setattr(wubei, "_xj_walk_side", None)
+    monkeypatch.setattr(wubei, "_xj_missing", 0)
+    monkeypatch.setattr(wubei, "_xj_veto_click_at", 0.0)
+    items = [("前往火云洞、火云洞处使用", (40, 260, 200, 280), 0.99),
+             ("显形镜查探。", (40, 276, 140, 292), 0.99)]
+    img = np.zeros((831, 1378, 3), dtype=np.uint8)
+    assert wubei._handle_xianxingjing_track(object(), items, img) is True
+    assert used == []
+    assert walks == ["a"]
+    assert any("不在任务地点" in m for m in logs)
+    assert wubei._xj_need_move is True  # 重点链接后须先见移动才允许用镜
+
+
+def test_xj_keyword_miss_reset_keeps_quota(monkeypatch):
+    """follow 轮次重启时关键词瞬时消失：安全复位保留 A/B 配额与侧别，
+    不再退回「第 1/2 处」重复用 A 侧（2026-11-11 13:21:26）。"""
+    monkeypatch.setattr(wubei, "battle_watch_in_battle", lambda: False)
+    monkeypatch.setattr(wubei, "log", lambda *a, **k: None)
+    monkeypatch.setattr(wubei, "_xj_phase", 1)
+    monkeypatch.setattr(wubei, "_xj_use_count", 1)
+    monkeypatch.setattr(wubei, "_xj_walk_side", "b")
+    monkeypatch.setattr(wubei, "_xj_warned", True)
+    monkeypatch.setattr(wubei, "_xj_quota_exhausted_at", 123.0)
+    monkeypatch.setattr(wubei, "_xj_missing", 1)
+    items = [("宝象迷情降魔任务", (10, 240, 180, 258), 0.99)]
+    img = np.zeros((831, 1378, 3), dtype=np.uint8)
+    assert wubei._handle_xianxingjing_track(object(), items, img) is False
+    assert wubei._xj_use_count == 1
+    assert wubei._xj_walk_side == "b"
+    assert wubei._xj_warned is True         # 配额卡死计时不被重启
+    assert wubei._xj_quota_exhausted_at == 123.0
+    assert wubei._xj_phase == 0             # 瞬时状态照常复位
+    assert wubei._xj_missing == 0
+
+
+def test_xj_flip_retry_capped(monkeypatch):
+    """寻路未启动翻侧 3 次后按失败替换，不再 A/B 无限乒乓
+    （2026-11-11 13:09 连续 11 次/50s 实测）。"""
+    monkeypatch.setattr(wubei, "battle_watch_in_battle", lambda: False)
+    monkeypatch.setattr(wubei, "_xj_pos",
+                        lambda win, items: ("火云洞", 73, 31))
+    monkeypatch.setattr(wubei, "log", lambda *a, **k: None)
+    monkeypatch.setattr(wubei, "_click_xianxingjing_walk",
+                        lambda win, items, img_np, side="b": True)
+    monkeypatch.setattr(wubei, "_xj_phase", 0)
+    monkeypatch.setattr(wubei, "_xj_stable", 1)
+    monkeypatch.setattr(wubei, "_xj_anchor", ("火云洞", 73, 31))
+    monkeypatch.setattr(wubei, "_xj_use_count", 1)
+    monkeypatch.setattr(wubei, "_xj_need_move", True)
+    monkeypatch.setattr(wubei, "_xj_walk_from", ("火云洞", 73, 31))
+    monkeypatch.setattr(wubei, "_xj_move_stuck",
+                        wubei.XIANXINGJING_MOVE_STUCK_MAX - 1)
+    monkeypatch.setattr(wubei, "_xj_flip_count", wubei.XIANXINGJING_FLIP_MAX)
+    monkeypatch.setattr(wubei, "_xj_walk_side", "a")
+    monkeypatch.setattr(wubei, "_xj_missing", 0)
+    monkeypatch.setattr(wubei, "_xj_need_replace", False)
+    items = [("前往火云洞、火云洞处使用", (40, 260, 200, 280), 0.99),
+             ("显形镜查探。", (40, 276, 140, 292), 0.99)]
+    img = np.zeros((831, 1378, 3), dtype=np.uint8)
+    with pytest.raises(wubei.ReplaceTaskError):
+        wubei._handle_xianxingjing_track(object(), items, img)
+    assert wubei._xj_need_replace is True
+
+
+def test_xj_walk_click_never_clicks_use_line(monkeypatch):
+    """链接行缺失时「用显形镜查探」行不得被当寻路链接点（点它=用镜）。"""
+    clicks = []
+    monkeypatch.setattr(wubei, "human_click",
+                        lambda win, x, y, **k: clicks.append((x, y)))
+    monkeypatch.setattr(wubei, "move_away", lambda win: None)
+    monkeypatch.setattr(wubei, "log", lambda *a, **k: None)
+    monkeypatch.setattr(wubei.task_tracker, "is_green_text",
+                        lambda img, rect: True)
+    img = np.zeros((831, 1378, 3), dtype=np.uint8)
+    use_only = [("用显形镜查探。", [40, 276, 140, 292], 0.99)]
+    assert wubei._click_xianxingjing_walk(object(), use_only, img,
+                                          side="a") is False
+    assert clicks == []
+    both = [("前往火云洞、火云洞处使用", [40, 258, 200, 274], 0.99),
+            ("用显形镜查探。", [40, 276, 140, 292], 0.99)]
+    assert wubei._click_xianxingjing_walk(object(), both, img, side="a") is True
+    assert clicks == [(120, 266)]  # 点的是前往行中心，不是用镜行
 
 
 # ---- 领取点到达判据地图名门控（2026-11-11 用户规则：五倍必须宝象国） ----
