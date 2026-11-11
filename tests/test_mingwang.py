@@ -44,6 +44,7 @@ TEMPLATES = (
     (mingwang.CLAIM_SHANHE_ICON, mingwang.CLAIM_SHANHE_THRESHOLD),
     (mingwang.SEAL_ITEM_ICON, mingwang.SEAL_ITEM_THRESHOLD),
     (mingwang.PICK_ITEM_ICON, mingwang.PICK_ITEM_THRESHOLD),
+    (mingwang.CHUANYIN_ITEM_ICON, mingwang.CHUANYIN_ITEM_THRESHOLD),
     (mingwang.PICK_MINING_TITLE_ICON, mingwang._pochu_minigame.POCHU_THRESHOLD),
     (mingwang.SHADU_WORLD_ICON, 0.8),  # 世界地图标签（open_mini_map_city 默认 0.8）
     (mingwang.SHADU_NPC_ICON, mingwang.SHADU_NPC_THRESHOLD),
@@ -1997,3 +1998,446 @@ def test_pick_mining_armed_on_use(monkeypatch):
         mingwang._handle_lingligao(object(), [], frame)
     assert state["use"] == 1
     assert mingwang._pick_mining_armed_at > 0
+
+
+# ---- 传音石（追踪「使用传音石找到魔王和魔王护法」→ 任务储物格使用）----
+def test_chuanyin_trigger_keywords():
+    assert mingwang._chuanyin_trigger(
+        "山河名望 使用传音石找到魔王和魔王护")
+    assert mingwang._chuanyin_trigger("山河名望 使用传音")  # 拆行截断短词兜底
+    assert not mingwang._chuanyin_trigger("火藏之位 木藏之位")
+    assert not mingwang._chuanyin_trigger("")
+
+
+def _patch_chuanyin_sm(monkeypatch):
+    """传音石状态机替换：使用记录、对话框门、残留背包检测。"""
+    state = {"use": 0, "ok": True, "dialog": False}
+    monkeypatch.setattr(mingwang, "_seal_sig",
+                        lambda items: "山河名望 使用传音石找到魔王和魔王护")
+    monkeypatch.setattr(mingwang, "_seal_dialog_blocking",
+                        lambda win, items, img: state["dialog"])
+    monkeypatch.setattr(mingwang, "_bag_box_on_frame",
+                        lambda win, items: False)
+
+    def _use(win):
+        state["use"] += 1
+        return state["ok"], "已使用传音石"
+
+    monkeypatch.setattr(mingwang, "_use_chuanyinshi", _use)
+    return state
+
+
+def test_chuanyin_uses_item_then_retries(monkeypatch):
+    """触发 → 用传音石一次；间隔内不重复；到间隔限次重试后只等待。"""
+    state = _patch_chuanyin_sm(monkeypatch)
+    mingwang._reset_chuanyin_state()
+    frame = _pick_frame()
+    assert mingwang._handle_chuanyinshi(object(), [], frame) is True
+    assert state["use"] == 1 and mingwang._chuanyin_phase == 1
+    assert mingwang._handle_chuanyinshi(object(), [], frame) is False
+    assert state["use"] == 1                       # 宽限/间隔内不重试
+    mingwang._chuanyin_use_at = time.time() - mingwang.CHUANYIN_USE_RETRY_AFTER
+    assert mingwang._handle_chuanyinshi(object(), [], frame) is True
+    assert state["use"] == 2
+    mingwang._chuanyin_use_at = time.time() - mingwang.CHUANYIN_USE_RETRY_AFTER
+    assert mingwang._handle_chuanyinshi(object(), [], frame) is True
+    assert state["use"] == 3
+    mingwang._chuanyin_use_at = time.time() - mingwang.CHUANYIN_USE_RETRY_AFTER
+    assert mingwang._handle_chuanyinshi(object(), [], frame) is False
+    assert state["use"] == 3                       # 重试次数用尽只等待
+    assert mingwang._chuanyin_phase == 1
+
+
+def test_chuanyin_use_failure_retried(monkeypatch):
+    """使用失败（背包/对话框瞬态）→ 不进入 phase 1，按间隔重试且不耗配额。"""
+    state = _patch_chuanyin_sm(monkeypatch)
+    state["ok"] = False
+    mingwang._reset_chuanyin_state()
+    frame = _pick_frame()
+    assert mingwang._handle_chuanyinshi(object(), [], frame) is False
+    assert state["use"] == 1 and mingwang._chuanyin_phase == 0
+    mingwang._handle_chuanyinshi(object(), [], frame)   # 间隔内不重试
+    assert state["use"] == 1
+    state["ok"] = True
+    mingwang._chuanyin_use_at = time.time() - mingwang.CHUANYIN_USE_RETRY_AFTER
+    assert mingwang._handle_chuanyinshi(object(), [], frame) is True
+    assert mingwang._chuanyin_phase == 1
+    assert mingwang._chuanyin_use_retries == 0
+
+
+def test_chuanyin_dialog_blocks_bag(monkeypatch):
+    """对话框在场 → 不使用道具（交给对话处理），且不消耗重试间隔。"""
+    state = _patch_chuanyin_sm(monkeypatch)
+    state["dialog"] = True
+    mingwang._reset_chuanyin_state()
+    assert mingwang._handle_chuanyinshi(object(), [], _pick_frame()) is False
+    assert state["use"] == 0 and mingwang._chuanyin_use_at == 0.0
+
+
+def test_chuanyin_reset_when_trigger_gone_before_use(monkeypatch):
+    """未使用时（phase 0）触发词连续消失 → 状态复位。"""
+    state = _patch_chuanyin_sm(monkeypatch)
+    state["ok"] = False
+    mingwang._reset_chuanyin_state()
+    frame = _pick_frame()
+    mingwang._handle_chuanyinshi(object(), [], frame)   # 使用失败置宽限时间
+    assert mingwang._chuanyin_phase == 0
+    assert mingwang._chuanyin_use_at > 0
+    monkeypatch.setattr(mingwang, "_seal_sig",
+                        lambda items: "山河名望 找到魔王")
+    for _ in range(mingwang.CHUANYIN_ABSENT_RESET):
+        mingwang._handle_chuanyinshi(object(), [], frame)
+    assert mingwang._chuanyin_use_at == 0.0
+    assert mingwang._chuanyin_missing == 0
+
+
+def test_chuanyin_phase1_persists_without_trigger(monkeypatch):
+    """已使用后触发词长期缺失（战斗中面板不可见）→ 不复位，防战后重复使用。"""
+    state = _patch_chuanyin_sm(monkeypatch)
+    mingwang._reset_chuanyin_state()
+    frame = _pick_frame()
+    mingwang._handle_chuanyinshi(object(), [], frame)
+    use_at = mingwang._chuanyin_use_at
+    assert mingwang._chuanyin_phase == 1
+    monkeypatch.setattr(mingwang, "_seal_sig", lambda items: "")
+    for _ in range(mingwang.CHUANYIN_ABSENT_RESET * 2):
+        assert mingwang._handle_chuanyinshi(object(), [], frame) is False
+    assert mingwang._chuanyin_phase == 1
+    assert mingwang._chuanyin_use_at == use_at
+
+
+def test_use_chuanyinshi_clicks_task_item(monkeypatch):
+    """任务储物格（bag.open_task_box 通用能力）命中传音石 → 右键使用。"""
+    win = _FakeWin([_pil(_noise_bgr(seed=13))])
+    monkeypatch.setattr(mingwang, "dialog_frame_score", lambda frame: 0.1)
+    called = []
+    monkeypatch.setattr(mingwang.bag, "open_task_box",
+                        lambda w, prefix="": called.append(prefix)
+                        or (True, "任务储物格已打开"))
+    seen = {}
+
+    def _find(w, icon, label, threshold=0.8, timeout=10.0):
+        seen.update(icon=icon, label=label, threshold=threshold,
+                    timeout=timeout)
+        return (610, 310), f"已找到{label}"
+
+    monkeypatch.setattr(mingwang, "_find_task_item", _find)
+    monkeypatch.setattr(mingwang.bag, "is_bag_open", lambda w: True)
+    clicks = []
+    monkeypatch.setattr(mingwang, "human_click",
+                        lambda w, x, y, button="primary":
+                        clicks.append((x, y, button)))
+    monkeypatch.setattr(mingwang, "_close_bag_quiet", lambda w: None)
+    monkeypatch.setattr(mingwang.time, "sleep", lambda s: None)
+    ok, info = mingwang._use_chuanyinshi(win)
+    assert ok and "传音石" in info
+    assert called == ["名望"]
+    assert seen == {"icon": mingwang.CHUANYIN_ITEM_ICON,
+                    "label": mingwang.CHUANYIN_ITEM_LABEL,
+                    "threshold": mingwang.CHUANYIN_ITEM_THRESHOLD,
+                    "timeout": mingwang.CHUANYIN_ITEM_FIND_TIMEOUT}
+    assert clicks == [(610, 310, "secondary")]
+
+
+# ---- 蛟魔复仇（暗雷战斗）：到达文案地图后降落 ----
+JIAMO_SIG = ("日常蛟魔复仇山河名望仙族兵士逃窜而去请在女儿村仔细搜查"
+             "可不能让让他就这么走了暗雷战斗")
+
+
+def test_jiamo_target_map_parse():
+    """「请在<地图>仔细搜查」解析目标地图（含 OCR 形近变体/后缀剥离）。"""
+    assert mingwang._jiamo_target_map(JIAMO_SIG) == "女儿村"
+    assert mingwang._jiamo_target_map("山河名望请在长寿村搜查暗雷战斗") == "长寿村"
+    assert mingwang._jiamo_target_map("山河名望请在女儿村仟细搜查暗雷战斗") == "女儿村"
+    assert mingwang._jiamo_target_map("山河名望请在女儿村一带仔细搜查暗雷战斗") == "女儿村"
+    assert mingwang._jiamo_target_map("山河名望请在仔细搜查暗雷战斗") is None
+    assert mingwang._jiamo_target_map("山河名望暗雷战斗") is None
+
+
+def test_jiamo_trigger_from_tracker_items():
+    """实机追踪面板 OCR 行（含拆行）→ _seal_sig 触发词 + 目标地图解析。"""
+    items = [
+        ("[日常]蛟魔复仇[山河名望]", [11, 230, 205, 253], 0.99),
+        ("仙族兵士逃窜而去，请在女儿村仔细搜查，可不能让让他就这么走了。",
+         [11, 256, 300, 280], 0.98),
+        ("（暗雷战斗）", [11, 282, 120, 300], 0.97),
+    ]
+    sig = mingwang._seal_sig(items)
+    assert mingwang.JIAMO_ANLEI_KEYWORD in sig
+    assert mingwang._jiamo_target_map(sig) == "女儿村"
+
+
+def test_jiamo_map_match():
+    """地名比对：精确 + 等长 ≥3 字容 1 字误读；不做包含匹配。"""
+    assert mingwang._jiamo_map_match("女儿村", "女儿村")
+    assert mingwang._jiamo_map_match("女儿材", "女儿村")
+    assert not mingwang._jiamo_map_match("长寿村", "女儿村")
+    assert not mingwang._jiamo_map_match("长安城", "长安城东")  # 前缀地图不误判
+    assert not mingwang._jiamo_map_match("天宫", "地府")        # 2 字不容错
+    assert not mingwang._jiamo_map_match(None, "女儿村")
+    assert not mingwang._jiamo_map_match("女儿村", None)
+
+
+def _patch_jiamo(monkeypatch, sig, pos, land_ok=True):
+    """蛟魔复仇状态机替换：追踪文案、位置读取、降落/关面板记录。"""
+    state = {"land": 0, "close": 0, "sig": sig, "pos": pos, "ok": land_ok,
+             "pos_reads": 0}
+    monkeypatch.setattr(mingwang, "_seal_sig", lambda items: state["sig"])
+
+    def _pos(win, items):
+        state["pos_reads"] += 1
+        return state["pos"]
+
+    monkeypatch.setattr(mingwang, "_seal_pos", _pos)
+
+    def _land(win):
+        state["land"] += 1
+        return state["ok"], ("已降落（无需降落）" if state["ok"]
+                             else "战斗中不可使用飞行驭器")
+
+    def _close(win):
+        state["close"] += 1
+        return True, "飞行驭器面板已关闭"
+
+    monkeypatch.setattr(mingwang.zuoqi, "ensure_landed", _land)
+    monkeypatch.setattr(mingwang.zuoqi, "close_feixingyuqi_panel", _close)
+    return state
+
+
+def test_jiamo_waits_until_target_map(monkeypatch):
+    """寻路途中（其它地图）不降落；到达目标地图 → 降落一次并关面板。"""
+    state = _patch_jiamo(monkeypatch, JIAMO_SIG, ("洛阳城", 144, 41))
+    mingwang._reset_jiamo_state()
+    assert mingwang._handle_jiamo_anlei(object(), [], None) is False
+    assert state["land"] == 0 and mingwang._jiamo_phase == 0
+    state["pos"] = ("女儿村", 88, 40)
+    mingwang._jiamo_pos_at = 0.0
+    assert mingwang._handle_jiamo_anlei(object(), [], None) is True
+    assert state["land"] == 1 and state["close"] == 1
+    assert mingwang._jiamo_phase == 1
+    # 已降落：后续轮询零动作（位置不可读/战斗心跳也不重复降落）
+    state["pos"] = None
+    mingwang._jiamo_pos_at = 0.0
+    assert mingwang._handle_jiamo_anlei(object(), [], None) is False
+    assert state["land"] == 1 and state["pos_reads"] == 2
+
+
+def test_jiamo_pos_check_throttled(monkeypatch):
+    """位置地名 OCR 按间隔限频（轮询热路径不每轮读位置）。"""
+    state = _patch_jiamo(monkeypatch, JIAMO_SIG, ("洛阳城", 1, 1))
+    mingwang._reset_jiamo_state()
+    assert mingwang._handle_jiamo_anlei(object(), [], None) is False
+    assert state["pos_reads"] == 1
+    assert mingwang._handle_jiamo_anlei(object(), [], None) is False
+    assert state["pos_reads"] == 1                 # 间隔内不再读位置
+    mingwang._jiamo_pos_at = time.time() - mingwang.JIAMO_POS_CHECK_INTERVAL
+    assert mingwang._handle_jiamo_anlei(object(), [], None) is False
+    assert state["pos_reads"] == 2
+
+
+def test_jiamo_land_failure_retries(monkeypatch):
+    """降落失败（战斗中/面板瞬态）→ 保持 phase 0，按间隔重试。"""
+    state = _patch_jiamo(monkeypatch, JIAMO_SIG, ("女儿村", 1, 1),
+                         land_ok=False)
+    mingwang._reset_jiamo_state()
+    assert mingwang._handle_jiamo_anlei(object(), [], None) is False
+    assert state["land"] == 1 and state["close"] == 1  # 成败都尝试关面板
+    assert mingwang._jiamo_phase == 0
+    mingwang._jiamo_pos_at = 0.0
+    assert mingwang._handle_jiamo_anlei(object(), [], None) is False
+    assert state["land"] == 1                      # 重试间隔内不再开面板
+    mingwang._jiamo_pos_at = 0.0
+    mingwang._jiamo_land_at = time.time() - mingwang.JIAMO_LAND_RETRY_AFTER
+    state["ok"] = True
+    assert mingwang._handle_jiamo_anlei(object(), [], None) is True
+    assert state["land"] == 2 and mingwang._jiamo_phase == 1
+
+
+def test_jiamo_new_target_map_relands(monkeypatch):
+    """多段搜查换图：目标地图变化 → 重新到达判定并再次降落。"""
+    state = _patch_jiamo(monkeypatch, JIAMO_SIG, ("女儿村", 1, 1))
+    mingwang._reset_jiamo_state()
+    assert mingwang._handle_jiamo_anlei(object(), [], None) is True
+    assert mingwang._jiamo_phase == 1 and state["land"] == 1
+    state["sig"] = "山河名望请在长寿村仔细搜查暗雷战斗"
+    state["pos"] = ("长寿村", 5, 6)
+    mingwang._jiamo_pos_at = 0.0
+    mingwang._jiamo_land_at = time.time() - mingwang.JIAMO_LAND_RETRY_AFTER
+    assert mingwang._handle_jiamo_anlei(object(), [], None) is True
+    assert mingwang._jiamo_target == "长寿村"
+    assert state["land"] == 2 and mingwang._jiamo_phase == 1
+
+
+def test_jiamo_reset_when_trigger_gone(monkeypatch):
+    """触发词连续缺失 → 状态复位；空 OCR 帧（战斗心跳）不计缺失。"""
+    state = _patch_jiamo(monkeypatch, JIAMO_SIG, ("女儿村", 1, 1))
+    mingwang._reset_jiamo_state()
+    assert mingwang._handle_jiamo_anlei(object(), [], None) is True
+    # 战斗中 extras 空 items 心跳不计数：已降落状态保持
+    state["sig"] = ""
+    for _ in range(mingwang.JIAMO_ABSENT_RESET * 2):
+        assert mingwang._handle_jiamo_anlei(object(), [], None) is False
+    assert mingwang._jiamo_phase == 1
+    # 追踪面板可读且触发词消失 → 连续 N 轮后复位
+    state["sig"] = "山河名望仙族兵士已被击败"
+    for _ in range(mingwang.JIAMO_ABSENT_RESET):
+        mingwang._handle_jiamo_anlei(object(), [], None)
+    assert mingwang._jiamo_phase == 0 and mingwang._jiamo_target is None
+
+
+def test_jiamo_arrival_fallback_when_unparsed(monkeypatch):
+    """锚词 OCR 变形致解析失败 → 「请在」后窗口含当前地名即到达。"""
+    sig = "山河名望仙族兵士逃窜而去请在女儿村走一遭暗雷战斗"
+    state = _patch_jiamo(monkeypatch, sig, ("女儿村", 9, 9))
+    mingwang._reset_jiamo_state()
+    assert mingwang._jiamo_target_map(sig) is None
+    assert mingwang._handle_jiamo_anlei(object(), [], None) is True
+    assert mingwang._jiamo_target == "女儿村"
+    assert state["land"] == 1 and mingwang._jiamo_phase == 1
+
+
+def test_handle_dialog_options_calls_jiamo(monkeypatch):
+    """extras 链接入：蛟魔复仇处理器命中即短路返回（前置处理器全部放行）。"""
+    for name in ("_maybe_play_shahai", "_handle_wuzhuang_seal",
+                 "_pick_mining_window_check", "_handle_lingligao",
+                 "_handle_chuanyinshi"):
+        monkeypatch.setattr(mingwang, name, lambda *a, **k: False)
+    monkeypatch.setattr(mingwang, "_handle_jiamo_anlei",
+                        lambda w, items, img: True)
+    assert mingwang._handle_dialog_options(object(), [], None) is True
+
+
+# ---- 去领取点飞行（用户 2026-11-11 规则：去接任务必须飞起来）----
+def _patch_claim_flight(monkeypatch, fly_results, land_results=(True, "已降落")):
+    """飞行驭器替换：起飞/降落按序返回结果，记录调用与关面板次数。"""
+    state = {"fly": [], "land": [], "close": 0, "fly_results": list(fly_results)}
+    if isinstance(land_results, list):
+        state["land_results"] = list(land_results)
+    else:
+        state["land_results"] = [land_results]
+
+    def _fly(win):
+        state["fly"].append(1)
+        if state["fly_results"]:
+            return state["fly_results"].pop(0)
+        return True, "已在飞行中（无需起飞）"
+
+    def _land(win):
+        state["land"].append(1)
+        if state["land_results"]:
+            return state["land_results"].pop(0)
+        return True, "已降落"
+
+    def _close(win):
+        state["close"] += 1
+        return True, "飞行驭器面板已关闭"
+
+    monkeypatch.setattr(mingwang.zuoqi, "ensure_flying", _fly)
+    monkeypatch.setattr(mingwang.zuoqi, "ensure_landed", _land)
+    monkeypatch.setattr(mingwang.zuoqi, "close_feixingyuqi_panel", _close)
+    return state
+
+
+def test_claim_fly_up_success(monkeypatch):
+    """去领取点前起飞：一次成功即返回，起飞后关面板。"""
+    state = _patch_claim_flight(monkeypatch, [(True, "已起飞")])
+    ok, info = mingwang._claim_fly_up(object())
+    assert ok and "已起飞" in info
+    assert len(state["fly"]) == 1 and state["close"] == 1
+
+
+def test_claim_fly_up_retries_then_fails(monkeypatch):
+    """起飞失败按 CLAIM_FLY_ATTEMPTS 重试，全失败返回 False（硬前置）。"""
+    state = _patch_claim_flight(
+        monkeypatch, [(False, "面板未出现")] * mingwang.CLAIM_FLY_ATTEMPTS)
+    monkeypatch.setattr(mingwang.time, "sleep", lambda s: None)
+    ok, info = mingwang._claim_fly_up(object())
+    assert not ok and "面板未出现" in info
+    assert len(state["fly"]) == mingwang.CLAIM_FLY_ATTEMPTS
+    assert state["close"] == mingwang.CLAIM_FLY_ATTEMPTS
+
+
+def test_claim_land_retries(monkeypatch):
+    """到达领取点降落：首次失败重试成功；关面板次数与尝试一致。"""
+    state = _patch_claim_flight(
+        monkeypatch, [],
+        land_results=[(False, "面板内未定位到降落按钮"), (True, "已降落")])
+    monkeypatch.setattr(mingwang.time, "sleep", lambda s: None)
+    ok, info = mingwang._claim_land(object())
+    assert ok and "已降落" in info
+    assert len(state["land"]) == 2 and state["close"] == 2
+
+
+def _patch_navigate(monkeypatch, pos, fly_ok=(True, "已起飞")):
+    """navigate_to_claim_point 环境替换：位置/地图/点击/到达/飞行。"""
+    order = []
+    monkeypatch.setattr(mingwang, "is_in_battle", lambda w: False)
+    monkeypatch.setattr(mingwang, "close_scene_panels",
+                        lambda w, p: order.append("close_panels"))
+    monkeypatch.setattr(mingwang.game_map, "read_map_position",
+                        lambda w: pos)
+    monkeypatch.setattr(mingwang.game_map, "open_mini_map_city",
+                        lambda w, icon, label:
+                        order.append("world_map") or (True, "小地图已打开"))
+    monkeypatch.setattr(mingwang.game_map, "open_mini_map",
+                        lambda w: order.append("mini_map") or (True, "已打开"))
+    monkeypatch.setattr(mingwang, "human_click",
+                        lambda w, x, y, button="primary":
+                        order.append(("click", x, y)))
+    monkeypatch.setattr(mingwang, "wait_arrive",
+                        lambda w, c: (True, "已到达领取点附近"))
+    monkeypatch.setattr(mingwang.time, "sleep", lambda s: None)
+
+    def _fly(win):
+        order.append("fly")
+        return fly_ok
+
+    monkeypatch.setattr(mingwang, "_claim_fly_up", _fly)
+    return order
+
+
+def test_navigate_claim_point_flys_before_travel(monkeypatch):
+    """不在领取点 → 先起飞再经世界地图寻路（起飞失败本轮不前往）。"""
+    claim = mingwang.CLAIM_POINTS["魔族"]
+    order = _patch_navigate(monkeypatch, ("长安城", 88, 40))
+    ok, _info = mingwang.navigate_to_claim_point(object(), claim)
+    assert ok
+    assert order.index("fly") < order.index("world_map")
+    assert ("click", claim["mini_click"][0], claim["mini_click"][1]) in order
+
+    order2 = _patch_navigate(monkeypatch, ("长安城", 88, 40),
+                             fly_ok=(False, "面板未出现"))
+    ok, info = mingwang.navigate_to_claim_point(object(), claim)
+    assert not ok and "起飞失败" in info
+    assert "world_map" not in order2 and order2.count("fly") == 1
+
+
+def test_navigate_claim_point_at_point_skips_fly(monkeypatch):
+    """已在领取点 → 无行程不要求起飞（降落由 _open_claim_panel 统一处理）。"""
+    claim = mingwang.CLAIM_POINTS["魔族"]
+    order = _patch_navigate(monkeypatch, (claim["map"], claim["target"][0],
+                                          claim["target"][1]))
+    ok, info = mingwang.navigate_to_claim_point(object(), claim)
+    assert ok and "已在领取点" in info
+    assert "fly" not in order
+
+
+def test_open_claim_panel_lands_before_alt4(monkeypatch):
+    """到达领取点：先降落再 Alt+4 清屏、再点 NPC（顺序不得调换）。"""
+    order = []
+    monkeypatch.setattr(mingwang, "is_in_battle", lambda w: False)
+    monkeypatch.setattr(mingwang, "_find_panel_anchor", lambda bgr: None)
+    monkeypatch.setattr(mingwang, "navigate_to_claim_point",
+                        lambda w, c: order.append("nav") or (True, "已到达"))
+    monkeypatch.setattr(mingwang, "_claim_land",
+                        lambda w: order.append("land") or (True, "已降落"))
+    monkeypatch.setattr(mingwang, "_press_alt4_clear",
+                        lambda w: order.append("alt4"))
+    monkeypatch.setattr(mingwang, "_claim_and_open_panel",
+                        lambda w, c: order.append("claim")
+                        or (True, "已打开面板"))
+    monkeypatch.setattr(mingwang.debug_overlay, "set_phase", lambda p: None)
+    win = _FakeWin([_pil(_noise_bgr(seed=21))])
+    ok, info = mingwang._open_claim_panel(win, "魔族")
+    assert ok and "面板" in info
+    assert order == ["nav", "land", "alt4", "claim"]

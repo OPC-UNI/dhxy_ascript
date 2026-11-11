@@ -11,6 +11,10 @@
    暂不识别（后续 TODO）。识别后关闭面板（右键标题牌 → 再点按钮 →
    Esc 三级兜底）。
 2. 领取点（种族配置化，见 CLAIM_POINTS）：
+   **前往领取点前必须先用飞行驭器起飞**（用户 2026-11-11 规则：去接
+   任务必须飞起来；复用 zuoqi.ensure_flying，起飞后关面板；起飞失败
+   本轮不前往、按主循环重试）；到达领取点后降落再点 NPC（飞行状态
+   地面 NPC 不可见——客栈阿旺同款实测，不降落会点不到逆天魔/武尊神）。
    - 魔族：大唐边境 (477,180) 附近，NPC 逆天魔。
      已在大唐边境 → 打开小地图点击 (985,384)；不在 → 世界地图点击
      「大唐边境」（shijie_datangbianjing.png）打开该地图小地图 →
@@ -62,6 +66,19 @@
    pochufengyin.play_pochufengyin（**长按运输 + 点按维持**：长按推过
    带上缘 → 松手回落 → 回 C 后点按保持在 [L,R]）；小游戏结束后的
    任务推进由 follow 继续跟踪，触发词消失即状态复位。
+   传音石（2026-11-11 用户规则）：任务追踪出现「使用传音石找到魔王和
+   魔王护法」→ 打开背包任务储物格（与唤风符/灵力镐同格）右键使用
+   传音石（mingwang_chuanyinshi）——用后在追踪面板出现的魔王/魔王
+   护法导航绿字链接由 follow 引擎通用绿字点击推进；触发词仍在时按
+   间隔限次重试使用（未使用时触发词连续缺失即复位；已使用后状态
+   保持到新任务领取，防战斗中面板不可见导致战后重复使用）。
+   蛟魔复仇暗雷战斗（2026-11-11 用户规则）：任务追踪文案含「暗雷战斗」
+   （如「仙族兵士逃窜而去，请在女儿村仔细搜查……（暗雷战斗）」）时，
+   点击追踪绿字自动寻路到文案中的地图（「请在<地图>仔细搜查」解析）；
+   脚本按 1s 限频识别左上角位置地名，到达目标地图后调用飞行驭器降落
+   （zuoqi.ensure_landed，降落后关面板防遮挡）→ 等待暗雷遭遇战斗
+   （战斗由 follow_task/battle 线程托管，不做特殊处理）。已降落状态
+   保持到目标地图变化（多段搜查换图重新降落）或触发词连续缺失复位。
 5. 领取后（用户 2026-11-10 规则）：接取后出现对话框——对话框模板
    门控命中则点屏幕中间关闭；任务追踪出现「山河名望」→ 复用
    xuanshu.follow_task 跟踪到任务完成（每轮点击追踪绿字推进）。
@@ -102,6 +119,7 @@ from . import app_utils  # 静默模式判定（Esc 兜底按键通道）
 from . import map as game_map  # 地图操作（世界地图/小地图/位置识别）
 from . import task_tracker  # 任务追踪面板（对话框区域常量）
 from . import bag  # 背包操作（五庄封印任务储物格用唤风符）
+from . import zuoqi  # 飞行驭器（蛟魔复仇到达目标地图后降落）
 from . import pochufengyin as _pochu_minigame  # 破除封印/钓鱼共用小游戏（闭环实现）
 from .battle import is_in_battle, is_in_battle_frame  # 战斗判定（单帧复用）
 from . import debug_overlay  # 调试信息悬浮层（任务阶段更新）
@@ -164,6 +182,14 @@ CLAIM_NPC_THRESHOLD = 0.75             # NPC 默认匹配阈值（NPC 待机动�
                                        # 种族可用 npc_threshold 覆盖，如仙族 0.7）
 CLAIM_NPC_BAND = (200, 120, 1180, 750)  # NPC 搜索条带（世界区域，排除 HUD/追踪面板）
 CLAIM_NPC_FULL_INTERVAL = 3.0          # 条带未命中时的全帧兜底最小间隔（秒）
+# ---- 去领取点飞行（用户 2026-11-11 规则：去接任务必须飞起来）----
+# 前往领取点（大唐边境/天宫）前复用飞行驭器起飞（zuoqi.ensure_flying：
+# 面板识别飞行状态，未飞行点「飞行」；高性能模式 Alt+U 直开面板），
+# 飞行赶路；到达领取点后降落再点 NPC（飞行状态地面 NPC 不可见）。
+# 起飞是硬前置：起飞未确认本轮不前往领取点，返回失败由主循环下一轮
+# 重试（每轮最多 CLAIM_FLY_ATTEMPTS 次，避免单轮里长时间卡住）。
+CLAIM_FLY_ATTEMPTS = 2       # 起飞尝试次数（面板/按键瞬态重试）
+CLAIM_LAND_ATTEMPTS = 2      # 到达领取点后的降落尝试次数
 CLAIM_POINTS = {
     "魔族": {
         "map": "大唐边境",
@@ -250,11 +276,11 @@ CLAIM_TASKS = (
     {"title": "蛟魔复仇", "level": "高级"},
     {"title": "沙海迷踪", "level": "高级"},
     {"title": "蛟魔探秘", "level": "高级"},
-    {"title": "魔王重聚", "level": "高级"},
+    {"title": "凿石造像", "level": "中级"},
+    {"title": "魔王重聚", "level": "高级"}, # 未完成，需要使用后到某个地图巡逻找到，后续在做
     {"title": "净化水晶", "level": "高级"},
     {"title": "五庄封印", "level": "高级"},
     {"title": "沙都修罗", "level": "高级"},
-    {"title": "凿石造像", "level": "中级"},
 )
 # ---- 任务执行对话（类似 xuanshu.DIALOG_OPTION_MAP：对话框文案 → 绿色选项）----
 # 逐条按游戏原文维护（用户 2026-11-10 提供）；文案匹配走 _dialog_text_present
@@ -425,6 +451,64 @@ _pick_bag_close_at = 0.0    # 上次残留背包检测时间（限频）
 _pick_link_at = 0.0         # 上次点击链接时间（重点间隔）
 _pick_mining_armed_at = 0.0  # 用镐成功时间；>0 且未超时=开采石头窗口检测开启
 _pick_mining_last_check = 0.0  # 上次开采石头窗口检测时间（限频）
+
+# ---- 传音石（追踪「使用传音石找到魔王和魔王护法」→ 任务储物格使用）----
+# 用户 2026-11-11 流程：任务追踪面板出现「使用传音石找到魔王和魔王护
+# （法）」时，打开背包 → 任务储物格（与唤风符/灵力镐同格）→ 右键使用
+# 传音石（mingwang_chuanyinshi.png，用户提供 47×47 图标）。使用后在
+# 追踪面板出现的魔王/魔王护法导航绿字链接由 follow 引擎通用绿字点击
+# 推进，本状态机只负责用道具：触发词仍在时按间隔限次重试（使用可能
+# 被对话框/背包遮挡吞掉）。未使用时触发词连续缺失即复位；已使用后
+# 状态保持到新任务领取（战斗中追踪面板不可见，复位会导致战后重复
+# 使用传音石）。不做战斗判定——战斗由 follow_task/battle 线程托管。
+CHUANYIN_TASK_KEYWORDS = ("传音石", "传音")  # 追踪触发词（短词兜底 OCR 拆行/截断）
+CHUANYIN_ITEM_ICON = "mingwang_chuanyinshi.png"  # 传音石（用户素材，47×47）
+CHUANYIN_ITEM_LABEL = "传音石"
+CHUANYIN_ITEM_THRESHOLD = 0.8            # 物品图标匹配阈值（静态图标）
+CHUANYIN_ITEM_FIND_TIMEOUT = 10.0        # 任务储物格中查找传音石的时限（秒）
+CHUANYIN_USE_RETRY_AFTER = 15.0          # 两次使用之间的最小间隔（首次立即执行）
+CHUANYIN_USE_RETRY_MAX = 2               # 最多重试使用次数
+CHUANYIN_ABSENT_RESET = 5                # 触发词连续缺失轮询数 → 状态复位
+CHUANYIN_BAG_CLOSE_INTERVAL = 2.0        # 残留背包检测/关闭最小间隔（秒）
+# 状态机（对齐灵力镐）：0=未使用；1=已使用等任务推进。
+_chuanyin_phase = 0
+_chuanyin_use_at = 0.0       # 上次使用时间（宽限窗口起点）
+_chuanyin_use_retries = 0    # 使用重试次数
+_chuanyin_missing = 0        # 触发词连续缺失轮询数（≥5 复位）
+_chuanyin_bag_close_at = 0.0 # 上次残留背包检测时间（限频）
+
+# ---- 蛟魔复仇（暗雷战斗）：追踪「请在<地图>仔细搜查（暗雷战斗）」→ 到达后降落 ----
+# 用户 2026-11-11 规则：追踪面板任务文案括号内含「暗雷战斗」时，点击
+# 追踪绿字即自动寻路到文案中的地图（实机原文：「仙族兵士逃窜而去，
+# 请在女儿村仔细搜查，可不能让让他就这么走了。（暗雷战斗）」→ 女儿村）；
+# 脚本持续识别左上角地图位置地名，到达目标地图后执行降落（飞行驭器
+# 已有能力 zuoqi.ensure_landed：面板识别飞行状态，飞行中点「降落」，
+# 降落后关面板防遮挡），随后等待暗雷遭遇战斗——战斗由 follow_task/
+# battle 线程托管，本状态机不做特殊处理。已降落标志保持到目标地图
+# 变化（蛟魔复仇多段搜查换图重新降落）或触发词连续缺失复位；新任务
+# 领取时一并复位。
+JIAMO_ANLEI_KEYWORD = "暗雷战斗"     # 追踪触发词（任务描述括号内）
+# 目标地图解析：「请在<地图>仔细搜查」——地图名 2~8 字非贪婪，锚定在
+# 「仔细/搜查」之前（OCR 形近变体一并收录；_seal_sig 已去标点，直接在
+# 拼接后的追踪面板文案上匹配）。解析失败时用 _JIAMO_AFTER_RE 的「请在」
+# 后 10 字窗口做「当前地名出现在其中」兜底（见 _jiamo_arrived）。
+JIAMO_MAP_RE = re.compile(
+    r"请在([一-鿿]{2,8}?)(?:仔细|仔佃|仟细|行细|息细|搜查|搜査|搜察)")
+_JIAMO_AFTER_RE = re.compile(r"请在([一-鿿]{2,10})")
+JIAMO_MAP_SUFFIX_RE = re.compile(r"(?:附近|一带|之内|以内|内|中|的)+$")
+# 锚词本身被捕获的退化形态（如「请在仔细搜查」缺地图名）：不作目标
+_JIAMO_ANCHOR_WORDS = ("仔细", "仔佃", "仟细", "行细", "息细",
+                       "搜查", "搜査", "搜察")
+JIAMO_POS_CHECK_INTERVAL = 1.0   # 位置地名 OCR 最小间隔（秒；轮询热路径限频）
+JIAMO_LAND_RETRY_AFTER = 5.0     # 降落失败（战斗中/面板未开）后的重试间隔（秒）
+JIAMO_ABSENT_RESET = 5           # 触发词连续缺失轮询数 → 状态复位（空 OCR 帧不计）
+# 状态机：0=等到达；1=已降落等战斗（保持到目标地图变化/复位）。
+_jiamo_phase = 0
+_jiamo_target = None          # 解析出的目标地图名
+_jiamo_missing = 0            # 触发词连续缺失轮询数（≥JIAMO_ABSENT_RESET 复位）
+_jiamo_pos_at = 0.0           # 上次位置地名检测时间（限频）
+_jiamo_land_at = 0.0          # 上次降落尝试时间（重试间隔）
+_jiamo_warned = False         # 目标地图解析失败已告警（每状态实例一次）
 
 # ---- 沙海迷踪（高级任务）执行入口 ----
 # 入口对话选项「少侠准备好清理地图了吗？」→「我已经准备好了」（在
@@ -917,11 +1001,61 @@ def wait_arrive(win, claim, timeout=ARRIVE_TIMEOUT):
     return False, f"等待寻路完成超时（{timeout}s）"
 
 
+def _claim_fly_up(win):
+    """前往领取点前确保飞行中（用户 2026-11-11 规则：去接任务必须飞起来）。
+
+    复用飞行驭器已有能力 zuoqi.ensure_flying（面板识别飞行状态——
+    已在飞行中无操作；未飞行点「飞行」按钮起飞；高性能模式 Alt+U
+    直开面板），每次尝试后关面板防遮挡小地图/世界地图点击。起飞是
+    硬前置：CLAIM_FLY_ATTEMPTS 次仍失败返回 False，本轮不前往领取点
+    （主循环下一轮重试），绝不静默改走地面寻路。
+    返回 (是否飞行中, 描述)。
+    """
+    info = ""
+    for attempt in range(1, CLAIM_FLY_ATTEMPTS + 1):
+        ok, info = zuoqi.ensure_flying(win)
+        zuoqi.close_feixingyuqi_panel(win)
+        if ok:
+            log(f"[名望] 去领取点前已起飞（{info}），飞行赶路", "SYS")
+            return True, info
+        log(f"[名望] 起飞失败（第 {attempt}/{CLAIM_FLY_ATTEMPTS} 次）：{info}",
+            "WARN")
+        if attempt < CLAIM_FLY_ATTEMPTS:
+            time.sleep(1.0)
+    return False, info
+
+
+def _claim_land(win):
+    """到达领取点后降落（飞行状态地面 NPC 不可见，不降落点不到 NPC）。
+
+    与客栈阿旺同款实测教训：飞行中地面 NPC 模板不出现。复用飞行驭器
+    zuoqi.ensure_landed（已在地面时无操作），每次尝试后关面板；失败只
+    告警不阻断——领取链的 NPC 点击重试与下一轮领取都会再次尝试降落。
+    返回 (是否已降落, 描述)。
+    """
+    info = ""
+    for attempt in range(1, CLAIM_LAND_ATTEMPTS + 1):
+        ok, info = zuoqi.ensure_landed(win)
+        zuoqi.close_feixingyuqi_panel(win)
+        if ok:
+            log(f"[名望] 到达领取点已降落（{info}）", "SYS")
+            return True, info
+        log(f"[名望] 领取点降落失败（第 {attempt}/{CLAIM_LAND_ATTEMPTS} 次）："
+            f"{info}", "WARN")
+        if attempt < CLAIM_LAND_ATTEMPTS:
+            time.sleep(1.0)
+    return False, info
+
+
 def navigate_to_claim_point(win, claim):
     """寻路到种族领取点（目标坐标附近）。
 
     已在领取地图 → 打开小地图点击 mini_click；不在 → 世界地图点击
     种族地图标签打开该地图小地图再点击。到达后返回成功。
+    **前往前必须起飞**（用户 2026-11-11 规则）：不在领取点时先
+    _claim_fly_up 飞起来再打开地图点击目的地；起飞未确认本轮失败，
+    由主循环重试。已在领取点时不飞（无行程），降落由 _open_claim_panel
+    统一处理。
     返回 (是否成功, 描述)。
     """
     if is_in_battle(win):
@@ -940,6 +1074,10 @@ def navigate_to_claim_point(win, claim):
     if _at_claim_point(pos, claim):
         log(f"[名望] 已在领取点附近（{loc}），跳过寻路", "SYS")
         return True, f"已在领取点附近（{loc}）"
+
+    ok, fly_info = _claim_fly_up(win)
+    if not ok:
+        return False, f"去领取点前起飞失败（{fly_info}），本轮不前往"
 
     if pos is not None and pos[0].strip() == map_name:
         ok, info = game_map.open_mini_map(win)
@@ -2539,6 +2677,13 @@ def _use_lingligao(win):
                           PICK_ITEM_THRESHOLD, PICK_ITEM_FIND_TIMEOUT)
 
 
+def _use_chuanyinshi(win):
+    """传音石：任务储物格右键使用传音石（见 _use_task_item）。"""
+    return _use_task_item(win, CHUANYIN_ITEM_ICON, CHUANYIN_ITEM_LABEL,
+                          CHUANYIN_ITEM_THRESHOLD,
+                          CHUANYIN_ITEM_FIND_TIMEOUT)
+
+
 def _seal_maybe_advance_dialog(win, items, img_np):
     """到达/切换链接时对话框无绿字选项 → 限次点屏幕中间推进。
 
@@ -3059,6 +3204,205 @@ def _handle_lingligao(win, items, img_np):
     return _pick_wait_arrival(win, items, img_np, now)
 
 
+# ---- 传音石执行（追踪「使用传音石找到魔王和魔王护法」→ 任务储物格使用）----
+def _reset_chuanyin_state():
+    """传音石状态机复位（新任务领取成功/跨任务防残留）。"""
+    global _chuanyin_phase, _chuanyin_use_at, _chuanyin_use_retries, \
+        _chuanyin_missing, _chuanyin_bag_close_at
+    _chuanyin_phase = 0
+    _chuanyin_use_at = 0.0
+    _chuanyin_use_retries = 0
+    _chuanyin_missing = 0
+    _chuanyin_bag_close_at = 0.0
+
+
+def _chuanyin_trigger(sig):
+    """追踪面板文案是否触发传音石流程（「使用传音石找到魔王和魔王护法」）。"""
+    return any(kw in sig for kw in CHUANYIN_TASK_KEYWORDS)
+
+
+def _handle_chuanyinshi(win, items, img_np):
+    """传音石执行状态机（follow extras 通道，每轮询一次）。
+
+    触发：追踪面板文案含「传音石」→ 打开背包 → 任务储物格右键使用
+    传音石（_use_task_item 内含对话框在场跳过与背包锁）。用后等任务
+    推进（追踪文案变化/任务消失由 follow 判定；魔王/魔王护法导航
+    绿字链接由引擎通用绿字点击推进），触发词仍在时按
+    CHUANYIN_USE_RETRY_AFTER 间隔限次重试（用后被吞/任务需再次使用）。
+    使用失败（背包/对话框瞬态）同样按间隔重试，不消耗重试次数。
+    不做战斗判定：战斗由 follow_task 跳过、battle 线程托管。
+    返回是否已处理（成功使用了道具）。
+    """
+    global _chuanyin_missing, _chuanyin_phase, _chuanyin_use_at, \
+        _chuanyin_use_retries, _chuanyin_bag_close_at
+    if _chuanyin_phase == 1:
+        # 用后对话框可能遮挡背包导致关闭失败：残留背包限频补关
+        now = time.time()
+        if now - _chuanyin_bag_close_at >= CHUANYIN_BAG_CLOSE_INTERVAL \
+                and _bag_box_on_frame(win, items):
+            _chuanyin_bag_close_at = now
+            log("[名望] 传音石：检测到残留背包，尝试关闭", "INFO")
+            _close_bag_quiet(win)
+    if not _chuanyin_trigger(_seal_sig(items)):
+        # phase 1 不因文案缺失复位（对齐五庄封印）：战斗中追踪面板不可见，
+        # 复位会在战后重复使用传音石；重试配额未用尽时下次触发仍可继续用。
+        if _chuanyin_phase == 0:
+            _chuanyin_missing += 1
+            if _chuanyin_missing >= CHUANYIN_ABSENT_RESET:
+                _reset_chuanyin_state()
+        return False
+    _chuanyin_missing = 0
+    now = time.time()
+    if now - _chuanyin_use_at < CHUANYIN_USE_RETRY_AFTER:
+        return False  # 两次使用的最小间隔未到（首次 _use_at=0 立即执行）
+    if _chuanyin_phase == 1:
+        if _chuanyin_use_retries >= CHUANYIN_USE_RETRY_MAX:
+            return False  # 重试次数用尽：只等任务推进（follow 判定完成）
+        ok, info = _use_chuanyinshi(win)
+        _chuanyin_use_at = now  # 失败也按间隔重排（不消耗重试配额）
+        if ok:
+            _chuanyin_use_retries += 1
+        log(f"[名望] 传音石：任务未推进，重试使用传音石"
+            f"（{info}，{_chuanyin_use_retries}/{CHUANYIN_USE_RETRY_MAX}）",
+            "SYS" if ok else "WARN")
+        return ok
+    if _seal_dialog_blocking(win, items, img_np):
+        return False  # 对话框在场时不操作背包（无选项对话顺带点屏推进）
+    ok, info = _use_chuanyinshi(win)
+    _chuanyin_use_at = time.time()
+    if not ok:
+        log(f"[名望] 传音石：{info}，稍后重试", "WARN")
+        return False
+    _chuanyin_phase = 1
+    _chuanyin_use_retries = 0
+    log("[名望] 传音石：已使用传音石，等待任务推进", "SYS")
+    return True
+
+
+# ---- 蛟魔复仇（暗雷战斗）：到达文案地图后降落，等待遭遇战斗 ----
+def _reset_jiamo_state():
+    """蛟魔复仇暗雷战斗状态机复位（新任务领取/触发词连续缺失）。"""
+    global _jiamo_phase, _jiamo_target, _jiamo_missing, _jiamo_pos_at, \
+        _jiamo_land_at, _jiamo_warned
+    _jiamo_phase = 0
+    _jiamo_target = None
+    _jiamo_missing = 0
+    _jiamo_pos_at = 0.0
+    _jiamo_land_at = 0.0
+    _jiamo_warned = False
+
+
+def _jiamo_target_map(sig):
+    """从追踪文案解析目标地图名（「请在<地图>仔细搜查」）；失败返回 None。"""
+    m = JIAMO_MAP_RE.search(sig)
+    if m is None:
+        return None
+    name = JIAMO_MAP_SUFFIX_RE.sub("", m.group(1))
+    if len(name) < 2 or name in _JIAMO_ANCHOR_WORDS:
+        return None  # 缺地图名的退化文案（捕获到锚词本身）
+    return name
+
+
+def _jiamo_map_match(current, target):
+    """当前位置地名与目标地图是否一致（等长 ≥3 字容 1 字 OCR 误读）。
+
+    不做包含匹配：长安城/长安城东 这类前缀地图会把途经/邻近地图误判
+    为到达（虽只多降落一次，仍以精确判定为准）。地图位置识别是标定
+    资产、可信度高，容错只针对任务文案一侧的单字误读（如 女儿村→女儿材）。
+    """
+    if not current or not target:
+        return False
+    if current == target:
+        return True
+    if len(current) == len(target) >= 3:
+        return sum(a != b for a, b in zip(current, target)) <= 1
+    return False
+
+
+def _jiamo_arrived(sig, current, target):
+    """到达判定：地名与目标地图匹配；目标未解析时「请在」后窗口兜底。
+
+    兜底只认「请在」后 10 字窗口内出现当前地名（如 OCR 把「仔细搜查」
+    读花导致正则失败，但地名仍可读），避免把追踪面板其它任务的文案
+    误当到达证据。
+    """
+    if _jiamo_map_match(current, target):
+        return True
+    if target is not None:
+        return False
+    m = _JIAMO_AFTER_RE.search(sig)
+    return bool(m) and bool(current) and current in m.group(1)
+
+
+def _handle_jiamo_anlei(win, items, img_np):
+    """蛟魔复仇暗雷战斗状态机（follow extras 通道，每轮询一次）。
+
+    触发：追踪面板文案含「暗雷战斗」——点击追踪绿字由 follow 引擎完成
+    （本处理器不点链接，不干涉寻路）。触发后按 JIAMO_POS_CHECK_INTERVAL
+    限频识别当前位置地名，到达文案中的目标地图（如女儿村）后调用
+    飞行驭器降落（zuoqi.ensure_landed，降落后关面板防遮挡），随后
+    等待暗雷遭遇战斗——战斗由 follow_task/battle 线程托管，不做特殊
+    处理。目标地图变化（多段搜查换图）时重新执行到达/降落判定；
+    触发词连续 JIAMO_ABSENT_RESET 轮缺失即复位（空 OCR 帧为战斗心跳/
+    加载过渡，不计缺失，防战斗中清掉已降落状态导致战后重复降落）。
+    返回是否已处理（执行了降落）。
+    """
+    global _jiamo_phase, _jiamo_target, _jiamo_missing, _jiamo_pos_at, \
+        _jiamo_land_at, _jiamo_warned
+    sig = _seal_sig(items)
+    if JIAMO_ANLEI_KEYWORD not in sig:
+        if sig:  # 空 OCR 帧不计缺失（战斗中面板不可见，见 docstring）
+            _jiamo_missing += 1
+            if _jiamo_missing >= JIAMO_ABSENT_RESET:
+                _reset_jiamo_state()
+        return False
+    _jiamo_missing = 0
+    target = _jiamo_target_map(sig)
+    if target is not None and not _jiamo_map_match(_jiamo_target or "", target):
+        first = _jiamo_target is None
+        _jiamo_target = target
+        if not first:
+            # 目标地图变化：重新执行到达/降落判定（已降落标志清零；
+            # 降落重试时钟不复位——文案 OCR 抖动来回解析成两个地图时
+            # 不会把重试间隔打穿、每轮询都开面板）
+            _jiamo_phase = 0
+            log(f"[名望] 蛟魔复仇：目标地图变为{target}，重新等待到达后降落",
+                "SYS")
+        else:
+            log(f"[名望] 蛟魔复仇：目标地图{target}（暗雷战斗），"
+                f"到达后执行降落", "SYS")
+    elif target is None and not _jiamo_warned:
+        _jiamo_warned = True
+        log("[名望] 蛟魔复仇：追踪文案未解析出目标地图（暗雷战斗），"
+            "按「请在」后地名出现判定到达", "WARN")
+    if _jiamo_phase == 1:
+        return False  # 已降落：等待暗雷遭遇战斗（battle 线程托管）
+    now = time.time()
+    if now - _jiamo_pos_at < JIAMO_POS_CHECK_INTERVAL:
+        return False  # 位置 OCR 限频（轮询热路径，规则同 OCR 三原则）
+    _jiamo_pos_at = now
+    pos = _seal_pos(win, items)
+    if pos is None:
+        return False  # 位置不可读（加载/飞行过渡帧）：下轮再查
+    if not _jiamo_arrived(sig, pos[0], _jiamo_target):
+        return False  # 仍在其它地图寻路中
+    if _jiamo_target is None:
+        _jiamo_target = pos[0]  # 「请在」窗口兜底命中：以当前地名落定目标
+        log(f"[名望] 蛟魔复仇：位置兜底确认目标地图{_jiamo_target}", "INFO")
+    if now - _jiamo_land_at < JIAMO_LAND_RETRY_AFTER:
+        return False  # 降落失败后的重试间隔未到
+    _jiamo_land_at = now
+    log(f"[名望] 蛟魔复仇：已到达{_jiamo_target}，执行降落", "SYS")
+    ok, info = zuoqi.ensure_landed(win)
+    _closed, cinfo = zuoqi.close_feixingyuqi_panel(win)  # 降落后面板保持打开
+    log(f"[名望] 蛟魔复仇：降落{'成功' if ok else '失败'}：{info}；{cinfo}",
+        "SYS" if ok else "WARN")
+    if not ok:
+        return False  # 战斗中/面板瞬态失败：按间隔重试
+    _jiamo_phase = 1
+    return True
+
+
 def _click_known_dialog_option(win, items, img_np):
     """DIALOG_OPTION_MAP 命中 → 点对应绿字（含沙海/净化/钓鱼 arm 副作用）。
 
@@ -3097,8 +3441,11 @@ def _handle_dialog_options(win, items, img_np):
     五庄封印执行状态机（追踪双链接/坐标稳定到达/任务储物格用唤风符）、
     灵力镐状态机（追踪「前往大唐边境，使用灵力镐」→ 点链接 → 到达 →
     任务储物格用镐；用镐后出现「开采石头」小游戏窗口 → 钓鱼同款
-    长按模式闭环）与沙都修罗搜索状态机（追踪文案触发 → 蟠桃园四路点
-    找 NPC）在最前面处理；其余任务无对应追踪文案时零操作。
+    长按模式闭环）、传音石状态机（追踪「使用传音石找到魔王和魔王护法」
+    → 任务储物格右键使用传音石）、蛟魔复仇暗雷战斗状态机（追踪「请在
+    <地图>仔细搜查（暗雷战斗）」→ 到达目标地图后降落）与沙都修罗搜索
+    状态机（追踪文案触发 → 蟠桃园四路点找 NPC）在最前面处理；其余任务
+    无对应追踪文案时零操作。
     开采石头窗口检测排在灵力镐状态机之前：窗口在场时须先阻塞执行
     小游戏，防状态机同时重试用镐（打开背包干扰小游戏）。沙海迷踪
     小游戏弹窗为模态窗口，检测放在最前（在场时其它处理器零操作）。
@@ -3111,6 +3458,10 @@ def _handle_dialog_options(win, items, img_np):
     if _pick_mining_window_check(win):
         return True
     if _handle_lingligao(win, items, img_np):
+        return True
+    if _handle_chuanyinshi(win, items, img_np):
+        return True
+    if _handle_jiamo_anlei(win, items, img_np):
         return True
     if _handle_shadu_xiuluo(win, items, img_np):
         return True
@@ -3212,11 +3563,14 @@ def _post_claim_flow(win):
     """领取后链路：关闭领取对话框 → 关残留面板 → 跟踪至任务完成。
 
     任务已点击领取，跟踪失败返回 False 由主循环下一轮走续跑分支处理
-    （不重走领取链重复接取）。新任务领取成功即复位五庄封印/灵力镐
-    状态机，防上一轮状态残留。返回 (是否完成, 描述)。
+    （不重走领取链重复接取）。新任务领取成功即复位五庄封印/灵力镐/
+    传音石/蛟魔复仇暗雷战斗状态机，防上一轮状态残留。返回 (是否完成,
+    描述)。
     """
     _reset_seal_state()
     _reset_pick_state()
+    _reset_chuanyin_state()
+    _reset_jiamo_state()
     dismissed, dinfo = _dismiss_claim_dialog(win)
     log(f"[名望] {dinfo}", "SYS" if dismissed else "INFO")
     ok, info = _resume_tracking(win)
@@ -3242,6 +3596,10 @@ def _open_claim_panel(win, race):
     ok, info = navigate_to_claim_point(win, claim)
     if not ok:
         return False, info
+    # 到达领取点先降落（含「已在领取点」跳寻路的路径）：飞行状态地面
+    # NPC 不可见，不降落会点不到逆天魔/武尊神（客栈阿旺同款实测）。
+    # 必须在 Alt+4 清屏前完成（清屏后面板/托盘隐藏，无法再操作飞行驭器）。
+    _claim_land(win)
     # 到达坐标后、领取前：Alt+4 完全清屏（静默/物理模式都执行）
     _press_alt4_clear(win)
     debug_overlay.set_phase("领取任务")
