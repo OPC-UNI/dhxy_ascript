@@ -247,14 +247,30 @@ def _click_screen_center(win, times=DIALOG_SKIP_CLICKS, prefix=""):
 
     固定次数点击——多屏对话无需枚举后续文案，命中首屏文案即连点推进
     （漏推进由下一轮询 OCR 自愈；逐次校验文案会卡住多屏对话，实测废弃）。
+    连点 >1 次时首次点击前确认标准对话框在场，之后每次点击前复检模板，
+    对话框已消失即停——对话页数少于连点次数时，多余点击落到游戏世界会
+    取消自动寻路、人物停下不走（2026-11-11 用户实机，同 StoryDialogDismisser
+    的寻路保护）。非标准对话框（模板不在场）保持旧的固定连点行为，
+    单次点击不做复检（无多余点击，零开销）。
     """
     tag = f"[{prefix}] " if prefix else ""
     cx, cy = SCREEN_CENTER_POS
+    tracked = False
+    if times > 1:
+        img = win.capture(force_activate=False)
+        tracked = img is not None \
+            and dialog_frame_score(img) >= DIALOG_FRAME_THRESHOLD
+    clicked = 0
     for _ in range(times):
         human_click(win, cx, cy)
+        clicked += 1
         time.sleep(0.3)  # 对话推进间隔（漏推进由下一轮询 OCR 自愈）
+        if tracked and clicked < times:
+            img = win.capture(force_activate=False)
+            if img is None or dialog_frame_score(img) < DIALOG_FRAME_THRESHOLD:
+                break  # 对话已关闭：剩余点击会落到世界画面
     move_away(win)  # 鼠标停留选项上会使其悬停变色，干扰后续绿字判定
-    log(f"{tag}已点击屏幕中间 {times} 次（推进对话）", "SYS")
+    log(f"{tag}已点击屏幕中间 {clicked} 次（推进对话）", "SYS")
 
 
 @lru_cache(maxsize=None)
@@ -337,6 +353,15 @@ def close_scene_panels(win, prefix="", quiet=False):
 DIALOG_FRAME_ICON = "dialog_frame.png"
 DIALOG_FRAME_BAND = (350, 200, 1030, 650)  # 居中对话框搜索条带（DIALOG_REGION 外扩）
 DIALOG_FRAME_THRESHOLD = 0.79              # 命中阈值（2026-11-07 巫医真图 0.795 校准）
+
+# ---- 剧情对话点屏推进的寻路保护（2026-11-11 用户实机） ----
+# 剧情对话不挡路时人物照常自动寻路，此时点屏幕中间会取消寻路（人物
+# 停下不再走）。坐标连续 STORY_MOVE_STATIC_POLLS 次不变（跟随轮询
+# 0.5s/次 ≈1.5s，行走 1.5s 轮询坐标必变，客栈/名望到达判定同款信号）
+# 才允许点屏。
+STORY_MOVE_STATIC_POLLS = 3     # 连续坐标不变轮询数（站定确认）
+STORY_MOVE_TRACK_GRACE = 2.0    # 追踪寻路点击后的静默期（秒）
+STORY_MOVE_LOG_INTERVAL = 5.0   # 寻路抑制日志限频（秒）
 
 
 def dialog_frame_score(frame):
@@ -425,8 +450,15 @@ class StoryDialogDismisser:
        边框（商店面板实测 0.653 < 0.79）不误点世界；
     ⑤ 对话区任何行都无绿字（带选项的对话不点）；
     ⑥ 连续 2 轮询命中（单帧可能是渲染过渡），点击间隔 ≥1s（多屏对话
-       逐页推进，防连点）。
+       逐页推进，防连点）；
+    ⑦ 人物已站定（地图坐标连续 STORY_MOVE_STATIC_POLLS 次不变）——
+       寻路中点屏幕中间会取消自动寻路、人物停下不再走（2026-11-11
+       用户实机教训）。刚点过任务追踪的 STORY_MOVE_TRACK_GRACE 秒内
+       一律按寻路中处理（坐标显示有刷新间隔，起步瞬间读不到变化）。
     一个任务阶段一个实例（状态随实例重置，不跨任务泄漏）。
+
+    img：调用方已截帧（PIL，可选）——寻路判定复用同一帧省一次截窗；
+    None 时内部截帧（force_activate=False，不抢焦点）。
     """
 
     def __init__(self, known_texts=(), allow_dismiss=None):
@@ -434,8 +466,39 @@ class StoryDialogDismisser:
         self.allow_dismiss = allow_dismiss
         self.streak = 0
         self.last_click_at = 0.0
+        self._last_pos = None       # 上次地图坐标（寻路判定基线）
+        self._static_polls = 0      # 连续坐标不变轮询数
+        self._move_log_at = 0.0     # 寻路抑制日志限频时间戳
 
-    def try_dismiss(self, win, items, img_np, prefix=""):
+    def _reset_walk(self):
+        """重置寻路判定状态（对话关闭/守卫失败时调用）。"""
+        self._last_pos = None
+        self._static_polls = 0
+
+    def _walking(self, win, img=None):
+        """人物是否仍在寻路（坐标仍在变化）。True = 禁止点屏。
+
+        剧情对话不挡路时人物照常自动寻路，此时点屏幕中间会取消寻路
+        （2026-11-11 用户实机：人物停下不再走）——寻路中一律不点，
+        等人物站定（连续 STORY_MOVE_STATIC_POLLS 次坐标不变）再推进。
+        坐标不可读（无坐标场景/识别失败）按未寻路放行：保持旧行为，
+        防无坐标场景的剧情对话永不推进（模板/绿字守卫仍在）。
+        """
+        if app_utils.track_walk_idle_seconds() < STORY_MOVE_TRACK_GRACE:
+            return True  # 刚点过追踪寻路：坐标显示可能尚未刷新
+        pos = game_map.read_map_position(win, img=img) if img is not None \
+            else game_map.read_map_position(win)
+        if pos is None:
+            self._reset_walk()
+            return False
+        if self._last_pos is not None and pos == self._last_pos:
+            self._static_polls += 1
+        else:
+            self._static_polls = 0
+        self._last_pos = pos
+        return self._static_polls < STORY_MOVE_STATIC_POLLS
+
+    def try_dismiss(self, win, items, img_np, prefix="", img=None):
         """满足全部守卫时点屏幕中间一次，返回是否已点击。"""
         if self.allow_dismiss is not None and not self.allow_dismiss():
             self.streak = 0
@@ -445,22 +508,32 @@ class StoryDialogDismisser:
                         if it[2] >= 0.55 and it[1][0] >= dl and it[1][1] >= dt]
         if not region_items:
             self.streak = 0
+            self._reset_walk()
             return False
         if any(_dialog_text_present(region_items, t)
                for t in self.known_texts):
             self.streak = 0
+            self._reset_walk()
             return False
         if dialog_frame_score(img_np) < DIALOG_FRAME_THRESHOLD:
             self.streak = 0
+            self._reset_walk()
             return False
         if any(task_tracker.is_green_text(img_np, it[1]) for it in region_items):
             self.streak = 0  # 有绿字选项：不是无选项剧情对话
+            self._reset_walk()
             return False
         self.streak += 1
         if self.streak < 2:
             return False
         now = time.time()
         if now - self.last_click_at < 1.0:
+            return False
+        if self._walking(win, img):
+            if now - self._move_log_at >= STORY_MOVE_LOG_INTERVAL:
+                self._move_log_at = now
+                log(f"[{prefix}] 人物寻路中，暂不点屏推进剧情对话（防打断寻路）",
+                    "INFO")
             return False
         self.last_click_at = now
         self.streak = 0

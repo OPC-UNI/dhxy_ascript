@@ -254,7 +254,8 @@ def _story_env(monkeypatch, score=0.99, green=False):
     """搭 _dismiss_story_dialog 桩环境，返回点屏次数列表。
 
     共享实现 StoryDialogDismisser 在 dialog_common 中取模板分与点屏，
-    桩打在 dialog_common 上；实例状态（streak/last_click）逐用例重置。
+    桩打在 dialog_common 上；实例状态（streak/last_click/寻路判定）逐
+    用例重置。坐标桩返回静止坐标（站定），寻路时间戳桩返回从未寻路。
     """
     from src import dialog_common
     clicks = []
@@ -264,16 +265,28 @@ def _story_env(monkeypatch, score=0.99, green=False):
     monkeypatch.setattr(dialog_common, "_click_screen_center",
                         lambda win, times=1, prefix="": clicks.append(times))
     monkeypatch.setattr(dialog_common, "log", lambda msg, level="INFO": None)
-    wuhuan._story_dismisser.streak = 0
-    wuhuan._story_dismisser.last_click_at = 0.0
+    monkeypatch.setattr(dialog_common.game_map, "read_map_position",
+                        lambda win, img=None: ("长安", 100, 100))
+    monkeypatch.setattr(dialog_common.app_utils, "track_walk_idle_seconds",
+                        lambda: 1e9)
+    dismisser = wuhuan._story_dismisser
+    dismisser.streak = 0
+    dismisser.last_click_at = 0.0
+    dismisser._reset_walk()
     wuhuan._give_expected_until = 0.0
     return clicks
 
 
 def test_story_dialog_dismiss_after_two_polls(monkeypatch):
-    """连续 2 轮询命中无选项剧情对话才点屏（单帧可能是渲染过渡）。"""
+    """连续 2 轮询命中 + 人物站定确认（坐标连续 3 次不变）才点屏。
+
+    2026-11-11 用户实机：寻路中点屏幕中间会取消自动寻路（人物停下
+    不再走）。
+    """
     clicks = _story_env(monkeypatch)
-    assert wuhuan._dismiss_story_dialog(None, _STORY_ITEMS, _BLANK_FRAME) is False
+    for _ in range(4):
+        assert wuhuan._dismiss_story_dialog(
+            None, _STORY_ITEMS, _BLANK_FRAME) is False
     assert wuhuan._dismiss_story_dialog(None, _STORY_ITEMS, _BLANK_FRAME) is True
     assert clicks == [1]
 
@@ -316,7 +329,8 @@ def test_story_dialog_panel_items_ignored(monkeypatch):
     items = _make([("五环[五环]", 14, 233, 100, 253),
                    ("去找大唐边境(193,144)惯骗[3/5]", 20, 249, 260, 276)]) \
         + _STORY_ITEMS
-    assert wuhuan._dismiss_story_dialog(None, items, _BLANK_FRAME) is False
+    for _ in range(4):
+        assert wuhuan._dismiss_story_dialog(None, items, _BLANK_FRAME) is False
     assert wuhuan._dismiss_story_dialog(None, items, _BLANK_FRAME) is True
     assert clicks == [1]
 
@@ -327,7 +341,9 @@ def test_submit_dialog_falls_back_to_story_dismiss(monkeypatch):
     _story_env(monkeypatch)
     monkeypatch.setattr(wuhuan.game_map, "find_template",
                         lambda win, icon, threshold=None: None)
-    assert wuhuan._handle_submit_dialog(None, _STORY_ITEMS, _BLANK_FRAME) is False
+    for _ in range(4):
+        assert wuhuan._handle_submit_dialog(
+            None, _STORY_ITEMS, _BLANK_FRAME) is False
     assert wuhuan._handle_submit_dialog(None, _STORY_ITEMS, _BLANK_FRAME) is True
 
 

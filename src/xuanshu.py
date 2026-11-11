@@ -2035,8 +2035,10 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                         break
             # 无选项剧情对话兜底：点屏幕中间推进/关闭（不处理会常驻屏幕，
             # 对话门每轮命中、对话区 OCR 每 0.5s 空烧，2026-11-10 实测）
+            # img 为本轮已截帧（复用 OCR 结果时为 None，寻路判定内部补截）：
+            # 寻路中点屏会取消自动寻路，人物停下不走（2026-11-11 用户实机）
             if not handled and story_gate is not None:
-                story_gate.try_dismiss(win, items, img_np, prefix=prefix)
+                story_gate.try_dismiss(win, items, img_np, prefix=prefix, img=img)
         else:
             return False, f"第 {rounds} 轮跟踪后任务信息无变化（超时）"
     return False, f"跟踪任务超时（{timeout}s）"
