@@ -202,6 +202,9 @@ _returned_last_round = False    # 上一轮返程成功（回城符已使用、�
                                 # 轮询等待加载完成，不误走世界地图寻路
                                 # （实测 12:30 传送加载超 8s 白走地图 ~11s）；
                                 # 进入领取流程时消耗复位，仅对紧邻轮次生效
+_panel_closed_active = False    # 追踪面板关闭告警状态（一次关闭只告警
+                                # 一次）：面板不在场时不按「无任务」走领取
+                                # （2026-11-11 用户实机）
 
 # ---- 高性能模式（通用设置开关，共享设施见 app_utils：领取选项/看打
 #      选项固定位置缓存点击 + 效果校验 + 识别回退；背包按钮缓存已下沉
@@ -618,6 +621,18 @@ def _near_claim_spot(pos, tolerance):
                                   CLAIM_SPOT[0], CLAIM_SPOT[1], tolerance)
 
 
+def _in_claim_map(pos):
+    """位置是否在领取地图灵兽村（领取按钮模板跨图误命中门控）。
+
+    领取按钮「任务」横幅模板与五环长安云游大师领取按钮等相似横幅
+    同图，其他地图同样会命中（2026-11-11 用户实机：长安步行途中被
+    误判已到领取点，点开错误对话框进战斗）。用户规则：修罗领取必须
+    在灵兽村（五倍必须宝象国）。位置读取失败按不在处理——无法确认
+    在灵兽村时不得采信按钮信号。
+    """
+    return pos is not None and pos[0].strip() == LINGSHOUCUN
+
+
 def _near_shizhe_spot(pos):
     """是否在灵兽村使者领取点坐标框内（严格 x/y 上下界，非容差圆）。"""
     if pos is None or pos[0] != LINGSHOUCUN:
@@ -930,10 +945,12 @@ def _walk_to_claim_spot(win, just_returned=False):
     # 位置读取（同帧复用）。非返程轮次（任务切换/中途失败后位置未知）
     # 按钮信号须地图名门控：领取按钮模板与五倍宝象国领取按钮同图
     # （跨模板匹配 0.947），跨图误命中会把五倍领取按钮当成修罗入口
-    # （2026-10-23 五倍反向实测）。坐标误读场景（111,90→11,90/102,79/
-    # 18,14）地图名仍对，按钮信号继续兜底
+    # （2026-10-23 五倍反向实测）；长安等地图的五环「任务」领取横幅
+    # 同样命中（2026-11-11 用户实机）。坐标误读场景（111,90→11,90/
+    # 102,79/18,14）地图名仍对，按钮信号继续兜底；地图名读不出时不
+    # 采信按钮（无法确认在灵兽村）
     pos = game_map.read_map_position(win, img=img)
-    if btn_visible and (pos is None or pos[0].strip() == LINGSHOUCUN):
+    if btn_visible and _in_claim_map(pos):
         return True, "已在领取点附近（领取按钮可见）"
     # 坐标未识别时不使用使者模板兜底——使者远距离也可见，远处命中会
     # 误判已在领取点、点击无效（用户 2026-10-11 确认）：到达判定只认
@@ -979,19 +996,28 @@ def _walk_to_claim_spot(win, just_returned=False):
     time.sleep(1.0)  # 等待自动寻路启动
     game_map.close_maps(win)
     # 等待到达：按钮可见优先（直接信号），坐标 ±5 作为次级判据
-    # （坐标误读时按钮判据兜底，实测站在领取点空等 30s+ 的根因）
+    # （坐标误读时按钮判据兜底，实测站在领取点空等 30s+ 的根因）。
+    # 按钮判据须地图名门控（_in_claim_map）：按钮模板在其他地图同样
+    # 命中，跨图误判到达会点开错误对话框（2026-11-11 用户实机长安
+    # 步行途中）。每轮询只截一帧：战斗判定/双模板匹配/位置 OCR 同帧复用
     deadline = time.time() + CLAIM_ARRIVE_TIMEOUT
     polls = 0
     while time.time() < deadline:
-        if is_in_battle(win):
+        img = win.capture(force_activate=False)
+        if img is None:
             time.sleep(2.0)
             continue
-        if game_map.find_template(win, LINGQU_ICON) is not None:
+        if is_in_battle_frame(img):
+            time.sleep(2.0)
+            continue
+        frame = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
+        pos = game_map.read_map_position(win, img=img)  # 同帧复用
+        if _in_claim_map(pos) \
+                and game_map.match_frame_np(frame, LINGQU_ICON) is not None:
             log("[修罗] 已到达领取点附近（领取按钮可见）", "SYS")
             return True, "已到达领取点附近"
-        pos = game_map.read_map_position(win)
         if _near_shizhe_spot(pos) \
-                and game_map.find_template(win, LINGSHOUCUN_SHIZHE_ICON) is not None:
+                and game_map.match_frame_np(frame, LINGSHOUCUN_SHIZHE_ICON) is not None:
             # 使者领取点：仅使者可见时须坐标框内才算到达（使者远距离
             # 也可见，不能单独作到达判据——用户 2026-10-21）
             log("[修罗] 已到达领取点附近（使者可见，坐标框内可领取）", "SYS")
@@ -1025,12 +1051,19 @@ def _relocate_to_claim_spot(win):
     deadline = time.time() + CLAIM_ARRIVE_TIMEOUT
     polls = 0
     while time.time() < deadline:
-        if is_in_battle(win):
+        img = win.capture(force_activate=False)
+        if img is None:
             time.sleep(2.0)
             continue
-        if game_map.find_template(win, LINGQU_ICON) is not None:
+        if is_in_battle_frame(img):
+            time.sleep(2.0)
+            continue
+        frame = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
+        pos = game_map.read_map_position(win, img=img)  # 同帧复用
+        # 按钮判据同 _walk_to_claim_spot：须地图名门控（跨图误命中）
+        if _in_claim_map(pos) \
+                and game_map.match_frame_np(frame, LINGQU_ICON) is not None:
             return True, "已重走到领取点附近（领取按钮可见）"
-        pos = game_map.read_map_position(win)
         if _near_claim_spot(pos, WALK_ARRIVE_TOLERANCE):
             return True, "已重走到领取点附近"
         polls += 1
@@ -1117,13 +1150,21 @@ def _click_entry_ensuring_dialog(win, log_tag="[修罗]", hover_before_click=Fal
             time.sleep(1.0)
             game_map.close_maps(win)
             # 等待重定位到达（只认领取按钮——按钮才代表进入可点击范围，
-            # 使者模板远距离也会命中，不能作到达判据）
+            # 使者模板远距离也会命中，不能作到达判据）。按钮判据须
+            # 地图名门控（跨图误命中，同 _walk_to_claim_spot）
             deadline = time.time() + CLAIM_ARRIVE_TIMEOUT
             while time.time() < deadline:
-                if is_in_battle(win):
+                img = win.capture(force_activate=False)
+                if img is None:
                     time.sleep(2.0)
                     continue
-                if game_map.find_template(win, LINGQU_ICON) is not None:
+                if is_in_battle_frame(img):
+                    time.sleep(2.0)
+                    continue
+                pos = game_map.read_map_position(win, img=img)
+                if _in_claim_map(pos) and game_map.match_frame_np(
+                        cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR),
+                        LINGQU_ICON) is not None:
                     break
                 time.sleep(2.0)
             appear_timeout = CLAIM_DIALOG_TIMEOUT
@@ -2080,6 +2121,27 @@ def _auto_create_team_once(win):
     log(f"[修罗][创建队伍] {info}", "SYS" if ok else "WARN")
 
 
+def _task_state(win):
+    """一次截帧判定续跑状态：(追踪面板是否有修罗任务, 面板是否在场)。
+
+    面板不在场（标题条模板未命中：手动关闭/折叠）时返回 (False, False)
+    ——ocr_track 会回退静态区域，世界浮字/对话框文字可能误命中任务
+    文案（2026-11-11 实测静态区域读到「消灭修罗」误判任务存在，跟踪
+    空转整轮）。战斗帧面板被战斗 UI 覆盖属正常：返回 (False, True)
+    放行原领取分支（走位/跟踪自行按战斗跳过）；截图失败同放行。
+    """
+    img = win.capture(force_activate=False)
+    if img is None:
+        return False, True
+    if is_in_battle_frame(img):
+        return False, True
+    if not task_tracker.panel_visible(img=img):
+        return False, False
+    items, img_np = task_tracker.ocr_track(img)
+    return task_tracker.has_task_in(items, img_np, TASK_TITLE,
+                                    TASK_FALLBACK_TEXTS), True
+
+
 def run_loop(win, cycle_interval=1.0):
     """修罗主循环：领任务 → 寻路 → 对话开打 → 战斗 → 返程 → 循环领取。
 
@@ -2100,7 +2162,7 @@ def run_loop(win, cycle_interval=1.0):
     返回结束原因描述。
     """
     global _fight_via_kanda, _team_checked, _task_gone_last_round, _returned_last_round, \
-        _shout_text
+        _shout_text, _panel_closed_active
     max_rounds = load_task_counts().get(TASK_MODE, 0)
     log(f"[修罗] 任务次数上限: {max_rounds if max_rounds > 0 else '不限'}", "SYS")
     # 高性能模式开关由 main.task_start 按通用设置置位（共享设施）
@@ -2218,7 +2280,14 @@ def run_loop(win, cycle_interval=1.0):
         #    本轮开始必然无任务——has_task（区域 OCR ~0.9s）只在可能
         #    续跑时检查（进程首轮或上轮跟踪失败未确认完成）
         claim_items = None  # 领取校验帧（续跑路径无，跟踪首轮自行截图+OCR）
-        if not _task_gone_last_round and task_tracker.has_task(win, TASK_TITLE, TASK_FALLBACK_TEXTS):
+        # 续跑检查（一次截帧）：任务存在性 + 追踪面板在场。面板不在场时
+        # 不得判定「无任务」（下面走等待分支）；存在性判定须面板在场
+        # 门控，防静态区域浮字误命中（见 _task_state）
+        if _task_gone_last_round:
+            task_present, panel_ok = False, True
+        else:
+            task_present, panel_ok = _task_state(win)
+        if task_present:
             log("[修罗] 任务追踪中已有修罗任务，直接跟踪", "SYS")
             # 已有任务必为队长（用户 2026-10-25 确认）：置位队长记录与
             # 队伍检查标记，下一轮领取免「队长判定 + 监控补人」双检查、
@@ -2230,6 +2299,20 @@ def run_loop(win, cycle_interval=1.0):
             if _task_gone_last_round:
                 _task_gone_last_round = False
                 log("[修罗] 上一轮已确认任务完成，跳过任务检查，直接领取", "INFO")
+            elif not panel_ok:
+                # 任务追踪面板被手动关闭/折叠时，面板内任务列表整体
+                # 不可见——读不到任务 ≠ 任务不存在，此时返程领取必然
+                # 失败（2026-11-11 用户实机：寻路中关闭面板被误判任务
+                # 完成）。等面板恢复后再判定（_task_state 已把战斗帧
+                # 按放行处理，不会因战斗 UI 遮挡停在这里）
+                if not _panel_closed_active:
+                    _panel_closed_active = True
+                    log("[修罗] 任务追踪面板未打开（标题条未命中），"
+                        "无法确认任务是否完成，等待面板恢复", "WARN")
+                time.sleep(2.0)
+                continue
+            else:
+                _panel_closed_active = False
             # 刚返程标记：进入领取流程即消耗复位（仅紧邻轮次生效；
             # 位置识别失败时等待传送加载完成，见 _walk_to_claim_spot）
             just_returned = _returned_last_round

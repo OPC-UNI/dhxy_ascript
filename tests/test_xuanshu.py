@@ -315,3 +315,54 @@ def test_click_green_option_filters_abandon(monkeypatch):
     assert [t for t, _, _ in seen["items"]] == ["玄枢轶闻"]
     assert seen["text"] == "领取玄枢轶闻"
     assert seen["prefix"] == "玄枢轶闻"
+
+
+# ---- 任务消失确认：追踪面板关闭不得判完成（2026-11-11 用户实机） ----
+class _GoneClock:
+    """可控时钟：sleep 推进虚拟时间，time 返回虚拟时间。"""
+
+    def __init__(self):
+        self.t = 0.0
+
+    def time(self):
+        return self.t
+
+    def sleep(self, dt):
+        self.t += dt
+
+
+def _patch_gone_env(monkeypatch, region):
+    """装配 _confirm_task_gone 依赖：region=None 模拟标题条未命中。"""
+    clock = _GoneClock()
+    ocr_calls = []
+    logs = []
+    monkeypatch.setattr(xuanshu, "time", clock)
+    monkeypatch.setattr(xuanshu, "is_in_battle_frame", lambda img: False)
+    monkeypatch.setattr(xuanshu, "battle_watch_in_battle", lambda: False)
+    monkeypatch.setattr(xuanshu, "_task_gone_region", lambda img_np: region)
+    monkeypatch.setattr(xuanshu.task_tracker, "panel_row_xmax",
+                        lambda img_np: 400)
+    monkeypatch.setattr(xuanshu.game_map, "ocr_regions",
+                        lambda img, regions: ocr_calls.append(1) or ([], None))
+    monkeypatch.setattr(xuanshu, "log",
+                        lambda msg, level="INFO": logs.append((msg, level)))
+    return ocr_calls, logs
+
+
+def test_confirm_task_gone_panel_closed_not_done(monkeypatch):
+    """标题条未命中（面板关闭/折叠）时不计证据、不判定任务消失。
+
+    2026-11-11 用户实机：寻路中手动关闭追踪面板，OCR 读不到任务 →
+    2s 内被误判任务完成、返程重新领取（必然领不到）。
+    """
+    ocr_calls, logs = _patch_gone_env(monkeypatch, region=None)
+    assert xuanshu._confirm_task_gone(_GuardWin(), "常规玩法") is False
+    assert ocr_calls == []  # 面板不在场：不做面板 OCR，只用模板判在场
+    assert any("标题条未命中" in m for m, _ in logs)
+
+
+def test_confirm_task_gone_panel_visible_no_task_is_done(monkeypatch):
+    """面板在场且连续轮询无任务 → 正常判定任务消失（完成）。"""
+    ocr_calls, _logs = _patch_gone_env(monkeypatch, region=(0, 210, 400, 470))
+    assert xuanshu._confirm_task_gone(_GuardWin(), "常规玩法") is True
+    assert len(ocr_calls) >= xuanshu.TASK_GONE_CONFIRM_POLLS

@@ -187,6 +187,26 @@ def track_content_region(img_np, min_width=TRACK_MIN_WIDTH):
     return (l, b, right, bottom)
 
 
+def panel_visible(img=None, win=None):
+    """任务追踪面板是否在场（标题条模板 renwuzhuizong.png 命中）。
+
+    面板被手动关闭/折叠时标题条消失、面板内任务列表整体不可见——
+    此时 OCR 读不到任务不能当作「任务不存在/已完成」（2026-11-11
+    用户实机：寻路中手动关闭追踪面板，2s 内被误判任务完成、返程
+    重新领取必然失败）。调用方据此把「无任务 → 去领取」的判定
+    加上「面板在场」前提。
+    img 为调用方已截 PIL 帧（优先，免重截）；否则用 win 截一帧，
+    截图失败按不可见处理。
+    """
+    if img is None:
+        if win is None:
+            return False
+        img = win.capture(force_activate=False)
+        if img is None:
+            return False
+    return track_content_region(np.asarray(img)) is not None
+
+
 def task_block_region(img_np, fallback=None):
     """任务块裁剪区域（动态）：内容区顶-2、高 85，横向取内容区左右缘。
 

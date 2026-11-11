@@ -433,6 +433,9 @@ _replace_fail_streak = 0        # 替换任务连续失败次数：领取失败�
                                 # 签名未变化（替换未生效）计数，≥3 终止任务
                                 # （防旧任务在面板致校验假成功 → 无限替换循环）
 REPLACE_FAIL_LIMIT = 3          # 替换任务连续失败上限
+_panel_closed_active = False    # 追踪面板关闭告警状态（一次关闭只告警
+                                # 一次）：面板不在场时不按「无任务」走领取
+                                # （2026-11-11 用户实机）
 
 # ---- 战斗（战斗操作由 battle.watch_loop 线程负责） ----
 BATTLE_END_POLL = 2.0            # 等待战斗结束的轮询间隔
@@ -462,6 +465,18 @@ def _near_claim_spot(pos, tolerance):
     """判断位置是否在宝象国领取点附近（地名精确匹配，容差抗 OCR 噪声）。"""
     return game_map.is_at_position(pos, BAOXIANGGUO,
                                    CLAIM_SPOT[0], CLAIM_SPOT[1], tolerance)
+
+
+def _in_claim_map(pos):
+    """位置是否在领取地图宝象国（领取按钮模板跨图误命中门控）。
+
+    领取按钮「任务」横幅模板与修罗灵兽村/长安五环等领取按钮同图
+    （跨模板 0.947），其他地图同样会命中，跨图误判到达会点开错误
+    对话框（2026-11-11 用户实机修罗侧教训）。用户规则：五倍领取
+    必须在宝象国（修罗必须灵兽村）。位置读取失败按不在处理——
+    无法确认在宝象国时不得采信按钮信号。
+    """
+    return pos is not None and pos[0].strip() == BAOXIANGGUO
 
 
 def _near_walk_target_spot(pos):
@@ -805,21 +820,28 @@ def _track_has_kuimulang(items):
 
 
 def _track_state(win):
-    """一次追踪面板 OCR 同时判定：任务是否存在 + 是否为锁妖网/奎木狼任务。
+    """一次截帧判定：任务是否存在 + 是否锁妖网/奎木狼 + 追踪面板是否在场。
 
     续跑路径原为两次 TRACK OCR（has_task ~0.9s + 锁妖网检查 ~0.9s），
     合并省一半（性能审计 B）。区域由标题条模板动态定位（读标题场景，
     最小宽度 430 校准），has_task_in 内部按 x<400 过滤，判定语义不变。
-    截图失败按无任务处理。
+    面板不在场（标题条模板未命中：手动关闭/折叠）时返回无任务且
+    panel_ok=False——ocr_track_read 会回退静态区域，世界浮字/对话框
+    可能误命中任务文案（2026-11-11 实测修罗侧静态区域读到「消灭
+    修罗」误判任务存在，跟踪空转）；调用方据 panel_ok 等待面板恢复，
+    不得按「无任务」走领取。截图失败沿用旧行为放行。
     """
     img = win.capture(force_activate=False)
     if img is None:
-        return False, False, False
+        return False, False, False, True
+    if not task_tracker.panel_visible(img=img):
+        return False, False, False, False
     items, img_np = task_tracker.ocr_track_read(img)
     exists = task_tracker.has_task_in(items, img_np, TASK_TITLE, TASK_FALLBACK_TEXTS)
     return (exists,
             _track_has_suoyaowang(items) if exists else False,
-            _track_has_kuimulang(items) if exists else False)
+            _track_has_kuimulang(items) if exists else False,
+            True)
 
 
 def _near_xiangmoshiwei_spot(pos):
@@ -1121,10 +1143,11 @@ def _walk_to_claim_spot(win, just_returned=False):
     # 按钮信号须地图名门控：领取按钮模板与修罗灵兽村领取按钮同图
     # （跨模板匹配 0.947），跨图误命中实测 2026-10-23：修罗返程落点
     # 灵兽村，五倍误判「已在领取点」点开修罗对话框、小地图兜底跨图
-    # 乱走。坐标误读场景（修罗实测 111,90→11,90）地图名仍对，按钮
-    # 信号继续兜底
+    # 乱走；长安等地图的五环「任务」领取横幅同样命中（2026-11-11
+    # 用户实机）。坐标误读场景（修罗实测 111,90→11,90）地图名仍对，
+    # 按钮信号继续兜底；地图名读不出时不采信按钮（无法确认在宝象国）
     pos = game_map.read_map_position(win, img=img)
-    if btn_visible and (pos is None or pos[0].strip() == BAOXIANGGUO):
+    if btn_visible and _in_claim_map(pos):
         return True, "已在领取点附近（领取按钮可见）"
     if _near_xiangmoshiwei_spot(pos) \
             and game_map.match_frame_np(frame, XIANGMOSHIWEI_ICON) is not None:
@@ -1165,9 +1188,9 @@ def _walk_to_claim_spot(win, just_returned=False):
     # 提前返回后入口等待按走位规则只在落点 (94,84)±2 点），小地图
     # 落点 (94,84)±2 作为坐标判据（用户实测落点；旧判据用 86,86 与
     # 真实落点差 8 单位永不命中），降魔侍卫 (86,78)±6 内可见也算
-    # 到达（坐标补充）。每轮询只截一帧：战斗判定与双模板匹配共用
-    # （is_in_battle_frame + match_frame_np）；位置 OCR 为次级判据
-    # 限频每 3 轮询一次（NPC 命中时同帧补读，按钮判据覆盖绝大多数到达）
+    # 到达（坐标补充）。每轮询只截一帧：战斗判定、双模板匹配与位置
+    # OCR 共用一帧；位置每轮读——按钮判据已改为地图名门控（见
+    # _in_claim_map），须与按钮判定同帧的读数
     deadline = time.time() + CLAIM_ARRIVE_TIMEOUT
     polls = 0
     _walk_pos = None
@@ -1181,18 +1204,22 @@ def _walk_to_claim_spot(win, just_returned=False):
             time.sleep(2.0)
             continue
         frame = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
-        if game_map.match_frame_np(frame, LINGQU_ICON, fallback=False) is not None:
+        npc_hit = game_map.match_frame_np(frame, XIANGMOSHIWEI_ICON) is not None
+        btn_hit = game_map.match_frame_np(frame, LINGQU_ICON,
+                                          fallback=False) is not None
+        polls += 1
+        # 位置每轮读（同帧复用）：按钮判据须地图名门控——按钮模板
+        # 与其他领取点同图，跨图误命中会误判到达（2026-11-11 用户
+        # 实机修罗侧：长安步行途中被误判、点开错误对话框）
+        _walk_pos = game_map.read_map_position(win, img=img)
+        if _walk_pos is not None:
+            pos_seen = True
+        if btn_hit and _in_claim_map(_walk_pos):
             log("[五倍] 已到达领取点附近（领取按钮可见）", "SYS")
             return True, "已到达领取点附近"
-        npc_hit = game_map.match_frame_np(frame, XIANGMOSHIWEI_ICON) is not None
-        polls += 1
-        if npc_hit or polls % 3 == 1:
-            _walk_pos = game_map.read_map_position(win, img=img)  # 同帧复用（规则 1）
-            if _walk_pos is not None:
-                pos_seen = True
-            if _near_walk_target_spot(_walk_pos):
-                log("[五倍] 已到达领取点附近（小地图落点）", "SYS")
-                return True, "已到达领取点附近"
+        if _near_walk_target_spot(_walk_pos):
+            log("[五倍] 已到达领取点附近（小地图落点）", "SYS")
+            return True, "已到达领取点附近"
         # 降魔侍卫坐标补充（用户 2026-10-29）：NPC 可见且在 (86,78)±4
         # 内即算到达（入口为 NPC 时按钮不出现）；位置读不到仅当本段
         # 走位中位置曾可读（走到 NPC 旁位置显示会消失，巫医同款现象）
@@ -1236,10 +1263,12 @@ def _relocate_to_claim_spot(win):
             time.sleep(2.0)
             continue
         frame = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
-        if game_map.match_frame_np(frame, LINGQU_ICON) is not None:
+        pos = game_map.read_map_position(win, img=img)
+        # 按钮判据同 _walk_to_claim_spot：须地图名门控（跨图误命中）
+        if _in_claim_map(pos) \
+                and game_map.match_frame_np(frame, LINGQU_ICON) is not None:
             return True, "已重走到领取点附近（领取按钮可见）"
         npc_hit = game_map.match_frame_np(frame, XIANGMOSHIWEI_ICON) is not None
-        pos = game_map.read_map_position(win, img=img)
         if _near_walk_target_spot(pos):
             return True, "已重走到领取点附近"
         if npc_hit and _near_xiangmoshiwei_spot(pos):
@@ -1335,6 +1364,7 @@ def _click_entry_ensuring_dialog(win, log_tag="[五倍]", hover_before_click=Fal
             game_map.close_maps(win)
             # 等待重定位到达（只认领取按钮——按钮才代表进入可点击范围，
             # NPC 模板动画波动且远距离也可能命中，不能作到达判据）。
+            # 按钮/NPC 判据须地图名门控（跨图误命中，同 _walk_to_claim_spot）。
             # 每轮询只截一帧（性能审计 C）
             deadline = time.time() + CLAIM_ARRIVE_TIMEOUT
             while time.time() < deadline:
@@ -1346,11 +1376,13 @@ def _click_entry_ensuring_dialog(win, log_tag="[五倍]", hover_before_click=Fal
                     time.sleep(2.0)
                     continue
                 frame = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
-                if game_map.match_frame_np(frame, LINGQU_ICON) is not None:
+                pos = game_map.read_map_position(win, img=img)
+                if _in_claim_map(pos) and game_map.match_frame_np(
+                        frame, LINGQU_ICON) is not None:
                     break
                 if game_map.match_frame_np(frame, XIANGMOSHIWEI_ICON) is not None \
-                        and _near_xiangmoshiwei_spot(
-                            game_map.read_map_position(win, img=img)):
+                        and _in_claim_map(pos) \
+                        and _near_xiangmoshiwei_spot(pos):
                     break
                 time.sleep(2.0)
             appear_timeout = CLAIM_DIALOG_TIMEOUT
@@ -2798,7 +2830,7 @@ def run_loop(win, cycle_interval=1.0):
     """
     global _fight_via_kanda, _team_checked, _task_gone_last_round, _xj_need_replace, \
         _replace_fail_streak, _hpg_task_seen, _shout_text, _returned_last_round, \
-        _kuimulang_on, _last_replace_at
+        _kuimulang_on, _last_replace_at, _panel_closed_active
     max_rounds = load_task_counts().get(TASK_MODE, 0)
     log(f"[五倍] 任务次数上限: {max_rounds if max_rounds > 0 else '不限'}", "SYS")
     log(f"[五倍] 领取点宝象国 {CLAIM_SPOT[0]},{CLAIM_SPOT[1]}，队伍固定 5 人", "SYS")
@@ -2930,9 +2962,11 @@ def run_loop(win, cycle_interval=1.0):
                 task_exists = False
                 suoyaowang = False
                 kuimulang = False
+                panel_ok = True      # 已确认完成，无需面板
             else:
-                # 一次 OCR 同时判定任务存在与锁妖网/奎木狼文案（性能审计 B）
-                task_exists, suoyaowang, kuimulang = _track_state(win)
+                # 一次截帧判定任务存在 + 锁妖网/奎木狼文案 + 面板在场
+                # （性能审计 B；面板门控见 _track_state）
+                task_exists, suoyaowang, kuimulang, panel_ok = _track_state(win)
             xj_replace = _xj_need_replace
             _xj_need_replace = False  # 消费替换请求（本轮走领取分支）
             kuimulang_replace = kuimulang and not _kuimulang_on
@@ -2964,6 +2998,19 @@ def run_loop(win, cycle_interval=1.0):
                 if _task_gone_last_round:
                     _task_gone_last_round = False
                     log("[五倍] 上一轮已确认任务完成，跳过任务检查，直接领取", "INFO")
+                elif not panel_ok:
+                    # 任务追踪面板被手动关闭/折叠时，面板内任务列表整体
+                    # 不可见——读不到任务 ≠ 任务不存在，此时返程领取必然
+                    # 失败（2026-11-11 用户实机修罗侧同款）。等面板恢复后
+                    # 再判定；战斗帧遮挡面板的情况在轮首已跳过，不会误入
+                    if not _panel_closed_active:
+                        _panel_closed_active = True
+                        log("[五倍] 任务追踪面板未打开（标题条未命中），"
+                            "无法确认任务是否完成，等待面板恢复", "WARN")
+                    time.sleep(2.0)
+                    continue
+                else:
+                    _panel_closed_active = False
                 # 首次领取前队长判定（检查队伍开关 + _team_checked 双门控；
                 # 关闭开关时完全跳过，对齐修罗）：已在领取点附近时跳过
                 # 非队长判定（返程落点就在领取点，监控循环马上会检查——

@@ -245,3 +245,58 @@ def test_wuyi_chain_timeout_self_click_uses_cached_pos(wuyi_chain, monkeypatch):
     assert ok is True
     assert "已自行点击选项" in info
     assert wuyi_chain["clicks"] == [NPC_PT, (650, 420)]
+
+
+# ---- 领取点到达判据地图名门控（2026-11-11 用户实机长安误判） ----
+def test_in_claim_map_requires_lingshoucun():
+    assert xiuluo._in_claim_map(("灵兽村", 111, 90))
+    assert not xiuluo._in_claim_map(("长安", 367, 27))
+    assert not xiuluo._in_claim_map(("长安城东", 111, 90))
+    assert not xiuluo._in_claim_map(None)  # 位置读不出不采信按钮
+
+
+def test_walk_to_claim_spot_button_in_changan_not_arrival(monkeypatch):
+    """长安命中「任务」按钮模板（五环领取横幅同图）：不得判到达。"""
+    win = _FakeWin()
+    monkeypatch.setattr(xiuluo, "is_in_battle", lambda w: False)
+    monkeypatch.setattr(xiuluo.game_map, "match_frame_np",
+                        lambda frame, icon, **k: (300, 300))
+    monkeypatch.setattr(xiuluo.game_map, "read_map_position",
+                        lambda w, img=None: ("长安", 367, 27))
+    monkeypatch.setattr(xiuluo, "_open_claim_map",
+                        lambda w, pos=None: (False, "地图导航中止"))
+    ok, info = xiuluo._walk_to_claim_spot(win)
+    assert ok is False and info == "地图导航中止"
+
+
+def test_walk_to_claim_spot_button_in_lingshoucun_arrival(monkeypatch):
+    win = _FakeWin()
+    monkeypatch.setattr(xiuluo, "is_in_battle", lambda w: False)
+    monkeypatch.setattr(xiuluo.game_map, "match_frame_np",
+                        lambda frame, icon, **k: (300, 300))
+    monkeypatch.setattr(xiuluo.game_map, "read_map_position",
+                        lambda w, img=None: ("灵兽村", 165, 98))
+    ok, info = xiuluo._walk_to_claim_spot(win)
+    assert ok is True and "领取按钮可见" in info
+
+
+def test_task_state_panel_closed(monkeypatch):
+    """面板不在场：返回 (无任务, False)，不得 OCR 静态区域误采信。"""
+    monkeypatch.setattr(xiuluo, "is_in_battle_frame", lambda img: False)
+    monkeypatch.setattr(xiuluo.task_tracker, "panel_visible", lambda **k: False)
+
+    def _boom(img):
+        raise AssertionError("面板不在场不应 OCR 追踪区域")
+
+    monkeypatch.setattr(xiuluo.task_tracker, "ocr_track", _boom)
+    assert xiuluo._task_state(_FakeWin()) == (False, False)
+
+
+def test_task_state_panel_visible_task_found(monkeypatch):
+    monkeypatch.setattr(xiuluo, "is_in_battle_frame", lambda img: False)
+    monkeypatch.setattr(xiuluo.task_tracker, "panel_visible", lambda **k: True)
+    monkeypatch.setattr(xiuluo.task_tracker, "ocr_track",
+                        lambda img: ([], None))
+    monkeypatch.setattr(xiuluo.task_tracker, "has_task_in",
+                        lambda items, img_np, title, fallback=(): True)
+    assert xiuluo._task_state(_FakeWin()) == (True, True)

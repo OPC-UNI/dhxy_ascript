@@ -249,9 +249,12 @@ TASK_GONE_GATE_POLL_INTERVAL = 0.2 # 证据已足时等战斗线程确认门的�
 # 标题+约 9 行内容行，最深实测链接 291 下留约 180px 余量，OCR 降至
 # ~0.6s。兜底行落到条带外的偶发漏判由主循环 has_task 全区域复查兜住
 # （判错任务消失 → 复查发现仍在 → 跳过返程继续跟踪，~2s 自愈）。
-# 静态值为兜底；运行时由 _task_gone_region 按内容区位置动态推导
+# 静态值为标定基准；运行时由 _task_gone_region 按内容区位置动态推导
 # （内容区顶=标题条底≈227：条带 top=内容区顶-18≈210、bottom=+242≈470，
-# 与标定值一致，面板漂移时跟随）。
+# 与标定值一致，面板漂移时跟随）。标题条未命中（面板被关闭/折叠）
+# 时 _task_gone_region 返回 None，该帧不计任务消失证据，不回退
+# 静态条带——面板不在场时条带 OCR 必然为空，回退会把「面板关闭」
+# 误判成「任务消失」（2026-11-11 用户实机）。
 TASK_GONE_REGION = (0, 210, 400, 470)
 
 
@@ -261,7 +264,9 @@ def _task_gone_region(img_np):
     相对标定 TASK_GONE_REGION=(0,210,400,470) 与内容区顶（标题条底）
     的偏移：top=内容区顶-18、bottom=内容区顶+242；横向取内容区左右缘
     （标题/链接行均在区内，右侧收窄同时减少 OCR 面积）。标题条模板
-    未命中返回 None（调用方回退静态 TASK_GONE_REGION）。
+    未命中返回 None——此时追踪面板不在场（被手动关闭/折叠或遮挡），
+    面板内任务列表整体不可见，_confirm_task_gone 不得据此判定任务
+    消失（2026-11-11 用户实机教训）。
     """
     region = task_tracker.track_content_region(img_np)
     if region is None:
@@ -1316,6 +1321,8 @@ def _confirm_task_gone(win, title, fallback_texts=(), first_img=None,
     # 等战斗结束后重新确认），避免长时间遮挡下误判完成
     hard_deadline = time.time() + TASK_GONE_CONFIRM_TIMEOUT * 4
     gone_polls = 0
+    panel_seen = False       # 确认窗口内是否见过追踪面板（标题条模板命中）
+    panel_missing_logged = False
     while time.time() < deadline and time.time() < hard_deadline:
         img = first_img if first_img is not None else win.capture(force_activate=False)
         first_img = None
@@ -1332,7 +1339,22 @@ def _confirm_task_gone(win, title, fallback_texts=(), first_img=None,
             deadline = time.time() + TASK_GONE_CONFIRM_TIMEOUT
             time.sleep(2.0)
             continue
-        gone_region = _task_gone_region(np.asarray(img)) or TASK_GONE_REGION
+        gone_region = _task_gone_region(np.asarray(img))
+        if gone_region is None:
+            # 任务追踪面板不在场（renwuzhuizong.png 标题条模板未命中）：
+            # 面板被手动关闭/折叠或全屏 UI 覆盖时，面板内任务列表整体
+            # 不可见——OCR 读不到任务 ≠ 任务消失，不能作为完成证据
+            # （2026-11-11 用户实机：寻路中手动关闭追踪面板，2s 内被
+            # 误判任务完成、返程重新领取必失败）。与战斗帧同待遇：
+            # 本帧不计证据、延长确认窗口；整窗未见面板时最终返回 False
+            if not panel_missing_logged:
+                panel_missing_logged = True
+                log("[任务追踪] 追踪面板标题条未命中（面板已关闭/折叠？），"
+                    "本帧不计任务消失证据", "WARN")
+            deadline = time.time() + TASK_GONE_CONFIRM_TIMEOUT
+            time.sleep(TASK_GONE_POLL_INTERVAL)
+            continue
+        panel_seen = True
         items, img_np = game_map.ocr_regions(img, (gone_region,))
         if task_tracker.find_task(
                 task_tracker.group_tasks(
@@ -1379,6 +1401,10 @@ def _confirm_task_gone(win, title, fallback_texts=(), first_img=None,
         # 确认为门，战斗未结束一律返回 False 继续跟踪，由外层战斗
         # 检查等战斗结束后重新确认）
         log("[任务追踪] 任务消失确认：窗口耗尽但战斗未结束，不判定消失", "WARN")
+        return False
+    if not panel_seen:
+        # 整窗未见追踪面板：无从判断任务是否存在，按未完成处理
+        log("[任务追踪] 任务消失确认：追踪面板始终不在场，不判定任务消失", "WARN")
         return False
     return True  # 确认窗口内始终未见任务：视为完成
 

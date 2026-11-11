@@ -520,3 +520,29 @@ def test_has_new_task_in_similar_sig_filtered():
     items = _old_task_items(first="前往火云戈壁使用显形镜探查")
     assert not task_tracker.has_new_task_in(items, _track_img_np(),
                                             "除魔任务", (), OLD_SIG)
+
+
+# ---- 追踪面板在场判定（renwuzhuizong.png 标题条模板） ----
+class _PanelWin:
+    def __init__(self, img=None):
+        self.img = img
+
+    def capture(self, force_activate=False):
+        return self.img
+
+
+def test_panel_visible_false_when_header_missing(monkeypatch):
+    """标题条未命中（面板关闭/折叠）→ False；截图失败同样按不可见。"""
+    monkeypatch.setattr(task_tracker, "track_content_region",
+                        lambda img_np, **k: None)
+    img = Image.new("RGB", (100, 100))
+    assert task_tracker.panel_visible(img=img) is False
+    assert task_tracker.panel_visible(win=_PanelWin(img)) is False
+    assert task_tracker.panel_visible(win=_PanelWin(None)) is False
+
+
+def test_panel_visible_true_when_header_found(monkeypatch):
+    monkeypatch.setattr(task_tracker, "track_content_region",
+                        lambda img_np, **k: (0, 227, 300, 557))
+    assert task_tracker.panel_visible(
+        img=Image.new("RGB", (100, 100))) is True

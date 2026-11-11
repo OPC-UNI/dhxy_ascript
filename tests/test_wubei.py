@@ -306,3 +306,44 @@ def test_xj_use_log_includes_side(monkeypatch):
     img = np.zeros((831, 1378, 3), dtype=np.uint8)
     assert wubei._handle_xianxingjing_track(object(), items, img) is True
     assert any("用镜" in m and "A 侧" in m for m in logs)
+
+
+# ---- 领取点到达判据地图名门控（2026-11-11 用户规则：五倍必须宝象国） ----
+def test_in_claim_map_requires_baoxiangguo():
+    assert wubei._in_claim_map(("宝象国", 86, 86))
+    assert not wubei._in_claim_map(("长安", 367, 27))
+    assert not wubei._in_claim_map(("灵兽村", 111, 90))
+    assert not wubei._in_claim_map(None)  # 位置读不出不采信按钮
+
+
+def test_walk_to_claim_spot_button_in_changan_not_arrival(monkeypatch):
+    """长安命中「任务」按钮模板（同图跨模板）：不得判到达。"""
+    win = _FakeWin()
+    monkeypatch.setattr(wubei, "is_in_battle_frame", lambda img: False)
+    monkeypatch.setattr(wubei.game_map, "match_frame_np",
+                        lambda frame, icon, **k: (300, 300)
+                        if icon == wubei.LINGQU_ICON else None)
+    monkeypatch.setattr(wubei.game_map, "read_map_position",
+                        lambda w, img=None: ("长安", 367, 27))
+    monkeypatch.setattr(wubei, "_open_claim_map",
+                        lambda w, pos=None: (False, "地图导航中止"))
+    ok, info = wubei._walk_to_claim_spot(win)
+    assert ok is False and info == "地图导航中止"
+
+
+def test_track_state_panel_closed(monkeypatch):
+    """面板不在场：返回无任务且 panel_ok=False（由 run_loop 等待恢复）。"""
+    monkeypatch.setattr(wubei.task_tracker, "panel_visible", lambda **k: False)
+
+    def _boom(img):
+        raise AssertionError("面板不在场不应 OCR 追踪区域")
+
+    monkeypatch.setattr(wubei.task_tracker, "ocr_track_read", _boom)
+    assert wubei._track_state(_FakeWin()) == (False, False, False, False)
+
+
+def test_track_state_panel_visible_no_task(monkeypatch):
+    monkeypatch.setattr(wubei.task_tracker, "panel_visible", lambda **k: True)
+    monkeypatch.setattr(wubei.task_tracker, "ocr_track_read",
+                        lambda img: ([], None))
+    assert wubei._track_state(_FakeWin()) == (False, False, False, True)
