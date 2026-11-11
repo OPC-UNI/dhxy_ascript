@@ -366,3 +366,16 @@ def test_confirm_task_gone_panel_visible_no_task_is_done(monkeypatch):
     ocr_calls, _logs = _patch_gone_env(monkeypatch, region=(0, 210, 400, 470))
     assert xuanshu._confirm_task_gone(_GuardWin(), "常规玩法") is True
     assert len(ocr_calls) >= xuanshu.TASK_GONE_CONFIRM_POLLS
+
+
+def test_confirm_task_gone_post_battle_panel_missing_is_done(monkeypatch):
+    """战斗结束路径（require_panel=False）：面板消失按任务消失判定。
+
+    用户 2026-11-11 确认：战斗结束后任务追踪会消失，此时应打开背包
+    返程（非战斗轮询路径仍要求面板在场，防手动关面板误判）。
+    """
+    ocr_calls, logs = _patch_gone_env(monkeypatch, region=None)
+    assert xuanshu._confirm_task_gone(_GuardWin(), "常规玩法",
+                                      require_panel=False) is True
+    assert ocr_calls  # 回退静态条带采集证据（原逻辑）
+    assert any("战斗结束后追踪面板不在场" in m for m, _ in logs)
