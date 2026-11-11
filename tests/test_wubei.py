@@ -332,21 +332,21 @@ def test_walk_to_claim_spot_button_in_changan_not_arrival(monkeypatch):
 
 
 def test_track_state_panel_closed(monkeypatch):
-    """面板不在场：返回无任务且 panel_ok=False（由 run_loop 等待恢复）。"""
+    """面板不在场：按无任务返回（不阻塞领取），且不得 OCR 静态区域误采信。"""
     monkeypatch.setattr(wubei.task_tracker, "panel_visible", lambda **k: False)
 
     def _boom(img):
         raise AssertionError("面板不在场不应 OCR 追踪区域")
 
     monkeypatch.setattr(wubei.task_tracker, "ocr_track_read", _boom)
-    assert wubei._track_state(_FakeWin()) == (False, False, False, False)
+    assert wubei._track_state(_FakeWin()) == (False, False, False)
 
 
 def test_track_state_panel_visible_no_task(monkeypatch):
     monkeypatch.setattr(wubei.task_tracker, "panel_visible", lambda **k: True)
     monkeypatch.setattr(wubei.task_tracker, "ocr_track_read",
                         lambda img: ([], None))
-    assert wubei._track_state(_FakeWin()) == (False, False, False, True)
+    assert wubei._track_state(_FakeWin()) == (False, False, False)
 
 
 def test_claim_task_skips_when_task_reappeared(monkeypatch):

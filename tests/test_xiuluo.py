@@ -281,7 +281,7 @@ def test_walk_to_claim_spot_button_in_lingshoucun_arrival(monkeypatch):
 
 
 def test_task_state_panel_closed(monkeypatch):
-    """面板不在场：返回 (无任务, False)，不得 OCR 静态区域误采信。"""
+    """面板不在场：按无任务返回（不阻塞领取），且不得 OCR 静态区域误采信。"""
     monkeypatch.setattr(xiuluo, "is_in_battle_frame", lambda img: False)
     monkeypatch.setattr(xiuluo.task_tracker, "panel_visible", lambda **k: False)
 
@@ -289,7 +289,7 @@ def test_task_state_panel_closed(monkeypatch):
         raise AssertionError("面板不在场不应 OCR 追踪区域")
 
     monkeypatch.setattr(xiuluo.task_tracker, "ocr_track", _boom)
-    assert xiuluo._task_state(_FakeWin()) == (False, False)
+    assert xiuluo._task_state(_FakeWin()) is False
 
 
 def test_task_state_panel_visible_task_found(monkeypatch):
@@ -299,7 +299,7 @@ def test_task_state_panel_visible_task_found(monkeypatch):
                         lambda img: ([], None))
     monkeypatch.setattr(xiuluo.task_tracker, "has_task_in",
                         lambda items, img_np, title, fallback=(): True)
-    assert xiuluo._task_state(_FakeWin()) == (True, True)
+    assert xiuluo._task_state(_FakeWin()) is True
 
 
 def test_claim_task_skips_when_task_reappeared(monkeypatch):

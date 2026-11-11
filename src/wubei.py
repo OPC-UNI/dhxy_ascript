@@ -433,9 +433,6 @@ _replace_fail_streak = 0        # 替换任务连续失败次数：领取失败�
                                 # 签名未变化（替换未生效）计数，≥3 终止任务
                                 # （防旧任务在面板致校验假成功 → 无限替换循环）
 REPLACE_FAIL_LIMIT = 3          # 替换任务连续失败上限
-_panel_closed_active = False    # 追踪面板关闭告警状态（一次关闭只告警
-                                # 一次）：面板不在场时不按「无任务」走领取
-                                # （2026-11-11 用户实机）
 
 # ---- 战斗（战斗操作由 battle.watch_loop 线程负责） ----
 BATTLE_END_POLL = 2.0            # 等待战斗结束的轮询间隔
@@ -820,28 +817,27 @@ def _track_has_kuimulang(items):
 
 
 def _track_state(win):
-    """一次截帧判定：任务是否存在 + 是否锁妖网/奎木狼 + 追踪面板是否在场。
+    """一次截帧判定：任务是否存在 + 是否锁妖网/奎木狼任务。
 
     续跑路径原为两次 TRACK OCR（has_task ~0.9s + 锁妖网检查 ~0.9s），
     合并省一半（性能审计 B）。区域由标题条模板动态定位（读标题场景，
     最小宽度 430 校准），has_task_in 内部按 x<400 过滤，判定语义不变。
-    面板不在场（标题条模板未命中：手动关闭/折叠）时返回无任务且
-    panel_ok=False——ocr_track_read 会回退静态区域，世界浮字/对话框
-    可能误命中任务文案（2026-11-11 实测修罗侧静态区域读到「消灭
-    修罗」误判任务存在，跟踪空转）；调用方据 panel_ok 等待面板恢复，
-    不得按「无任务」走领取。截图失败沿用旧行为放行。
+    面板不在场（标题条模板未命中）时按无任务返回——ocr_track_read 会
+    回退静态区域，世界浮字/对话框可能误命中任务文案（2026-11-11 修罗
+    侧实测）；面板门控**只作用于任务存在判定，不阻断领取**：面板缺席
+    时按无任务走领取分支（用户 2026-11-11：领取被拒→补人→人数够了
+    必须继续领取，不能被面板缺席阻塞流程）。截图失败同按无任务处理。
     """
     img = win.capture(force_activate=False)
     if img is None:
-        return False, False, False, True
+        return False, False, False
     if not task_tracker.panel_visible(img=img):
-        return False, False, False, False
+        return False, False, False
     items, img_np = task_tracker.ocr_track_read(img)
     exists = task_tracker.has_task_in(items, img_np, TASK_TITLE, TASK_FALLBACK_TEXTS)
     return (exists,
             _track_has_suoyaowang(items) if exists else False,
-            _track_has_kuimulang(items) if exists else False,
-            True)
+            _track_has_kuimulang(items) if exists else False)
 
 
 def _near_xiangmoshiwei_spot(pos):
@@ -2841,7 +2837,7 @@ def run_loop(win, cycle_interval=1.0):
     """
     global _fight_via_kanda, _team_checked, _task_gone_last_round, _xj_need_replace, \
         _replace_fail_streak, _hpg_task_seen, _shout_text, _returned_last_round, \
-        _kuimulang_on, _last_replace_at, _panel_closed_active
+        _kuimulang_on, _last_replace_at
     max_rounds = load_task_counts().get(TASK_MODE, 0)
     log(f"[五倍] 任务次数上限: {max_rounds if max_rounds > 0 else '不限'}", "SYS")
     log(f"[五倍] 领取点宝象国 {CLAIM_SPOT[0]},{CLAIM_SPOT[1]}，队伍固定 5 人", "SYS")
@@ -2973,11 +2969,11 @@ def run_loop(win, cycle_interval=1.0):
                 task_exists = False
                 suoyaowang = False
                 kuimulang = False
-                panel_ok = True      # 已确认完成，无需面板
             else:
-                # 一次截帧判定任务存在 + 锁妖网/奎木狼文案 + 面板在场
-                # （性能审计 B；面板门控见 _track_state）
-                task_exists, suoyaowang, kuimulang, panel_ok = _track_state(win)
+                # 一次截帧判定任务存在 + 锁妖网/奎木狼文案（性能审计 B；
+                # 面板门控只作用于任务存在判定，见 _track_state——面板
+                # 缺席按无任务走领取，不阻塞领取流程，用户 2026-11-11）
+                task_exists, suoyaowang, kuimulang = _track_state(win)
             xj_replace = _xj_need_replace
             _xj_need_replace = False  # 消费替换请求（本轮走领取分支）
             kuimulang_replace = kuimulang and not _kuimulang_on
@@ -3009,19 +3005,6 @@ def run_loop(win, cycle_interval=1.0):
                 if _task_gone_last_round:
                     _task_gone_last_round = False
                     log("[五倍] 上一轮已确认任务完成，跳过任务检查，直接领取", "INFO")
-                elif not panel_ok:
-                    # 任务追踪面板被手动关闭/折叠时，面板内任务列表整体
-                    # 不可见——读不到任务 ≠ 任务不存在，此时返程领取必然
-                    # 失败（2026-11-11 用户实机修罗侧同款）。等面板恢复后
-                    # 再判定；战斗帧遮挡面板的情况在轮首已跳过，不会误入
-                    if not _panel_closed_active:
-                        _panel_closed_active = True
-                        log("[五倍] 任务追踪面板未打开（标题条未命中），"
-                            "无法确认任务是否完成，等待面板恢复", "WARN")
-                    time.sleep(2.0)
-                    continue
-                else:
-                    _panel_closed_active = False
                 # 首次领取前队长判定（检查队伍开关 + _team_checked 双门控；
                 # 关闭开关时完全跳过，对齐修罗）：已在领取点附近时跳过
                 # 非队长判定（返程落点就在领取点，监控循环马上会检查——

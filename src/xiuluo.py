@@ -202,9 +202,6 @@ _returned_last_round = False    # 上一轮返程成功（回城符已使用、�
                                 # 轮询等待加载完成，不误走世界地图寻路
                                 # （实测 12:30 传送加载超 8s 白走地图 ~11s）；
                                 # 进入领取流程时消耗复位，仅对紧邻轮次生效
-_panel_closed_active = False    # 追踪面板关闭告警状态（一次关闭只告警
-                                # 一次）：面板不在场时不按「无任务」走领取
-                                # （2026-11-11 用户实机）
 
 # ---- 高性能模式（通用设置开关，共享设施见 app_utils：领取选项/看打
 #      选项固定位置缓存点击 + 效果校验 + 识别回退；背包按钮缓存已下沉
@@ -2129,24 +2126,27 @@ def _auto_create_team_once(win):
 
 
 def _task_state(win):
-    """一次截帧判定续跑状态：(追踪面板是否有修罗任务, 面板是否在场)。
+    """一次截帧判定续跑状态：追踪面板是否有修罗任务。
 
-    面板不在场（标题条模板未命中：手动关闭/折叠）时返回 (False, False)
-    ——ocr_track 会回退静态区域，世界浮字/对话框文字可能误命中任务
-    文案（2026-11-11 实测静态区域读到「消灭修罗」误判任务存在，跟踪
-    空转整轮）。战斗帧面板被战斗 UI 覆盖属正常：返回 (False, True)
-    放行原领取分支（走位/跟踪自行按战斗跳过）；截图失败同放行。
+    面板不在场（标题条模板未命中）时返回 False——ocr_track 会回退
+    静态区域，世界浮字/对话框文字可能误命中任务文案（2026-11-11
+    实测静态区域读到「消灭修罗」误判任务存在，跟踪空转整轮）。
+    面板门控**只作用于「任务存在」判定，不阻断领取**：面板缺席时
+    按无任务走领取分支（用户 2026-11-11：领取被拒→补人→人数够了
+    必须继续领取，不能被面板缺席阻塞流程）；战斗帧面板被战斗 UI
+    覆盖属正常，同样按无任务放行（走位/跟踪自行按战斗跳过）；
+    截图失败同放行（沿用旧行为）。
     """
     img = win.capture(force_activate=False)
     if img is None:
-        return False, True
+        return False
     if is_in_battle_frame(img):
-        return False, True
+        return False
     if not task_tracker.panel_visible(img=img):
-        return False, False
+        return False
     items, img_np = task_tracker.ocr_track(img)
     return task_tracker.has_task_in(items, img_np, TASK_TITLE,
-                                    TASK_FALLBACK_TEXTS), True
+                                    TASK_FALLBACK_TEXTS)
 
 
 def run_loop(win, cycle_interval=1.0):
@@ -2169,7 +2169,7 @@ def run_loop(win, cycle_interval=1.0):
     返回结束原因描述。
     """
     global _fight_via_kanda, _team_checked, _task_gone_last_round, _returned_last_round, \
-        _shout_text, _panel_closed_active
+        _shout_text
     max_rounds = load_task_counts().get(TASK_MODE, 0)
     log(f"[修罗] 任务次数上限: {max_rounds if max_rounds > 0 else '不限'}", "SYS")
     # 高性能模式开关由 main.task_start 按通用设置置位（共享设施）
@@ -2287,13 +2287,14 @@ def run_loop(win, cycle_interval=1.0):
         #    本轮开始必然无任务——has_task（区域 OCR ~0.9s）只在可能
         #    续跑时检查（进程首轮或上轮跟踪失败未确认完成）
         claim_items = None  # 领取校验帧（续跑路径无，跟踪首轮自行截图+OCR）
-        # 续跑检查（一次截帧）：任务存在性 + 追踪面板在场。面板不在场时
-        # 不得判定「无任务」（下面走等待分支）；存在性判定须面板在场
-        # 门控，防静态区域浮字误命中（见 _task_state）
+        # 续跑检查（一次截帧）：追踪面板是否有修罗任务。面板门控只用于
+        # 「任务存在」判定（防静态区域浮字误命中），面板缺席/战斗帧按
+        # 无任务放行进入领取分支——用户 2026-11-11：领取被拒→补人→
+        # 人数够了必须继续领取，不能被面板缺席阻塞流程
         if _task_gone_last_round:
-            task_present, panel_ok = False, True
+            task_present = False
         else:
-            task_present, panel_ok = _task_state(win)
+            task_present = _task_state(win)
         if task_present:
             log("[修罗] 任务追踪中已有修罗任务，直接跟踪", "SYS")
             # 已有任务必为队长（用户 2026-10-25 确认）：置位队长记录与
@@ -2306,20 +2307,6 @@ def run_loop(win, cycle_interval=1.0):
             if _task_gone_last_round:
                 _task_gone_last_round = False
                 log("[修罗] 上一轮已确认任务完成，跳过任务检查，直接领取", "INFO")
-            elif not panel_ok:
-                # 任务追踪面板被手动关闭/折叠时，面板内任务列表整体
-                # 不可见——读不到任务 ≠ 任务不存在，此时返程领取必然
-                # 失败（2026-11-11 用户实机：寻路中关闭面板被误判任务
-                # 完成）。等面板恢复后再判定（_task_state 已把战斗帧
-                # 按放行处理，不会因战斗 UI 遮挡停在这里）
-                if not _panel_closed_active:
-                    _panel_closed_active = True
-                    log("[修罗] 任务追踪面板未打开（标题条未命中），"
-                        "无法确认任务是否完成，等待面板恢复", "WARN")
-                time.sleep(2.0)
-                continue
-            else:
-                _panel_closed_active = False
             # 刚返程标记：进入领取流程即消耗复位（仅紧邻轮次生效；
             # 位置识别失败时等待传送加载完成，见 _walk_to_claim_spot）
             just_returned = _returned_last_round

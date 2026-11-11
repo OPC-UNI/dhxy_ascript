@@ -1208,24 +1208,33 @@ def open_team_panel(win):
     return True, "队伍面板已打开"
 
 
-def close_team_panel(win):
+def close_team_panel(win, retries=3):
     """关闭队伍面板：鼠标移到面板关闭按钮 zudui_close 上，左键点击。
 
-    点击后校验 duiwumianban 消失。返回 (是否成功, 描述)。
+    点击后校验 duiwumianban 消失。带重试（与申请加入面板同款）：
+    2026-11-11 实测补人流程结束后队伍面板单次点击未命中/按钮模板
+    未命中会静默留下，盖住左上任务追踪面板，主循环「面板不在场」
+    等待无法自愈。全部失败留 WARN 日志（此前静默丢弃，无迹可查）。
+    返回 (是否成功, 描述)。
     """
-    if not _is_panel_open(win):
-        return True, "队伍面板本就未打开"
-    pt = game_map.find_template(win, ZUDUI_CLOSE_ICON, _TEMPLATE_THRESHOLD)
-    if pt is None:
-        return False, "未找到面板关闭按钮（zudui_close）"
-    human_move(win.rect.left + pt[0], win.rect.top + pt[1])
-    time.sleep(0.15)  # 悬停让按钮进入可点击状态
-    human_click(win, pt[0], pt[1])
-    for _ in range(_PANEL_WAIT_TRIES):
-        time.sleep(_PANEL_WAIT_INTERVAL)
+    for attempt in range(1, retries + 1):
         if not _is_panel_open(win):
-            return True, "队伍面板已关闭"
-    return False, "队伍面板关闭失败（duiwumianban 仍可见）"
+            if attempt == 1:
+                return True, "队伍面板本就未打开"
+            return True, f"队伍面板已关闭（第 {attempt - 1} 次点击生效）"
+        pt = game_map.find_template(win, ZUDUI_CLOSE_ICON, _TEMPLATE_THRESHOLD)
+        if pt is None:
+            time.sleep(_PANEL_WAIT_INTERVAL)
+            continue
+        human_move(win.rect.left + pt[0], win.rect.top + pt[1])
+        time.sleep(0.15)  # 悬停让按钮进入可点击状态
+        human_click(win, pt[0], pt[1])
+        for _ in range(_PANEL_WAIT_TRIES):
+            time.sleep(_PANEL_WAIT_INTERVAL)
+            if not _is_panel_open(win):
+                return True, f"队伍面板已关闭（第 {attempt} 次点击生效）"
+    log(f"[组队] 队伍面板关闭失败（重试 {retries} 次仍在）", "WARN")
+    return False, f"队伍面板关闭失败（重试 {retries} 次仍在）"
 
 
 # ---- 组队状态检查 ----
