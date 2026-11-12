@@ -566,6 +566,75 @@ def test_xj_template_hit_clicks_button_not_reclick(monkeypatch):
     assert wubei._xj_dismissed_at == 0.0
 
 
+# ---- 显形镜：无本买卖对话框（用镜前后均点「偶然路过」关闭，2026-11-12） ----
+
+def _patch_xj_wuben_env(monkeypatch):
+    """装配无本买卖对话框环境（共享选项点击路径的依赖一并替换）。"""
+    from src import dialog_common
+    clicks, logs = [], []
+    monkeypatch.setattr(wubei, "battle_watch_in_battle", lambda: False)
+    monkeypatch.setattr(wubei, "log",
+                        lambda msg, level="INFO": logs.append(msg))
+    monkeypatch.setattr(dialog_common, "log",
+                        lambda msg, level="INFO": logs.append(msg))
+    monkeypatch.setattr(dialog_common, "human_click",
+                        lambda win, x, y, **k: clicks.append((x, y)))
+    monkeypatch.setattr(dialog_common, "move_away", lambda win: None)
+    monkeypatch.setattr(dialog_common.app_utils, "fixed_pos_set",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(wubei, "_xj_block_clicked_at", 0.0)
+    return clicks, logs
+
+
+def _wuben_items():
+    return [("无本的买卖最好做", (400, 260, 900, 290), 0.95),
+            ("偶然路过", (430, 300, 560, 330), 0.95)]
+
+
+def test_xj_wuben_dialog_clicks_option(monkeypatch):
+    """用镜前（phase 0）出现无本买卖对话框：点「偶然路过」关闭并接管
+    本帧；冷却内不连点（对话框关闭动画期）。"""
+    clicks, logs = _patch_xj_wuben_env(monkeypatch)
+    monkeypatch.setattr(wubei, "_xj_phase", 0)
+    img = np.zeros((831, 1378, 3), dtype=np.uint8)
+    img[300:330, 430:560] = (0, 255, 0)  # 选项绿字
+    assert wubei._handle_xianxingjing(object(), _wuben_items(), img) is True
+    assert len(clicks) == 1
+    assert wubei._xj_block_clicked_at > 0
+    assert any("偶然路过" in m for m in logs)
+    assert wubei._handle_xianxingjing(object(), _wuben_items(), img) is True
+    assert len(clicks) == 1  # 防连点
+
+
+def test_xj_wuben_after_use_freezes_grace(monkeypatch):
+    """用镜后（phase 1 宽限窗口）出现：同样接管并冻结宽限计时——
+    对话框处理期间不得按宽限过期误转另一处。"""
+    clicks, _logs = _patch_xj_wuben_env(monkeypatch)
+    monkeypatch.setattr(wubei, "_xj_phase", 1)
+    monkeypatch.setattr(wubei, "_xj_grace_start", 0.0)
+    img = np.zeros((831, 1378, 3), dtype=np.uint8)
+    img[300:330, 430:560] = (0, 255, 0)
+    assert wubei._handle_xianxingjing(object(), _wuben_items(), img) is True
+    assert len(clicks) == 1
+    assert wubei._xj_grace_start > 0
+
+
+def test_xj_wuben_option_unread_no_blind_click(monkeypatch):
+    """选项未识别到：仍接管本帧（防剧情兜底点屏），但不盲点。"""
+    clicks, _logs = _patch_xj_wuben_env(monkeypatch)
+    img = np.zeros((831, 1378, 3), dtype=np.uint8)
+    items = [("无本的买卖最好做", (400, 260, 900, 290), 0.95)]
+    assert wubei._handle_xj_wuben(object(), items, img) is True
+    assert clicks == []
+
+
+def test_xj_wuben_absent_not_handled():
+    """其他对话（白龙马长句）不得被无本买卖处理器接管。"""
+    img = np.zeros((831, 1378, 3), dtype=np.uint8)
+    items = [("一阵光芒闪过，白龙马出现在眼前", (400, 300, 900, 340), 0.9)]
+    assert wubei._handle_xj_wuben(object(), items, img) is False
+
+
 # ---- 领取点到达判据地图名门控（2026-11-11 用户规则：五倍必须宝象国） ----
 def test_in_claim_map_requires_baoxiangguo():
     assert wubei._in_claim_map(("宝象国", 86, 86))

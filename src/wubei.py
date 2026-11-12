@@ -83,6 +83,7 @@ from .control_window import (load_task_counts,  # 任务次数上限
                              load_wubei_tab_group)  # 五倍设置：组号专用开关
 from .dialog_common import (SCREEN_CENTER_POS, green_option_center,
                             _dialog_text_present,
+                            _click_green_option_once,
                             dialog_frame_score, DIALOG_FRAME_THRESHOLD,
                             _click_screen_center,
                             last_center_click_at as dc_last_center_click_at,
@@ -204,11 +205,19 @@ XIANXINGJING_DIALOG_TEXT = "一阵光芒闪过，白龙马出现在眼前，竟�
 # 误判「本处未触发」→ A/B 配额耗尽 → 替换任务。命中任一短关键词即
 # 视为白龙马对话框在场（关键词取句中稳定短语）。
 XIANXINGJING_DIALOG_KEYWORDS = ("白龙马出现在眼前", "一阵光芒闪过")
+# 无本买卖对话框（用户 2026-11-12 规则）：使用显形镜前后都可能出现
+# （误点路边 NPC 等），带绿字选项「偶然路过」——出现即由
+# _handle_xj_wuben 优先点选项关闭（剧情兜底对带绿字的对话不点屏）。
+XJ_WUBEN_DIALOG_TEXT = "无本的买卖最好做"
+XJ_WUBEN_OPTION = "偶然路过"
 # follow 剧情兜底的「已知对话表」：白龙马对话框由显形镜处理器点一次关闭
 # （用户 2026-11-11 确认一次即消失）。兜底若同时点击，第二次点击落到世界
 # 会让人物走动、任务按钮模板窗口空耗（当日 5/26 次模板未命中，14:11 实机
 # 白龙马已出但模板未识别）。长句 + 短关键词都给，OCR 截断时同样拦得住。
-WUBEI_STORY_KNOWN_TEXTS = (XIANXINGJING_DIALOG_TEXT,) + XIANXINGJING_DIALOG_KEYWORDS
+# 无本买卖对话框同表：由 _handle_xj_wuben 点「偶然路过」关闭，兜底不得
+# 当无选项剧情对话点屏（有绿字时剧情兜底本就不点，此为双保险）。
+WUBEI_STORY_KNOWN_TEXTS = (XIANXINGJING_DIALOG_TEXT,) \
+    + XIANXINGJING_DIALOG_KEYWORDS + (XJ_WUBEN_DIALOG_TEXT,)
 XIANXINGJING_TASK_ICON = "wubei_bailongma_task.png"  # 白龙马任务按钮（用户提供素材）
 # 流程（用户实测）：白龙马对话框出现 → 对话框文字遮挡任务按钮模板，
 # 点屏幕中间关闭文字（用户 2026-11-11 确认一次点击即关闭；处理器点后
@@ -311,7 +320,7 @@ XJ_BLOCK_DIALOGS = (
     ("这是喜还是忧，我也说不准了", None, "喜忧"),
     ("我是红孩儿，不是哪吒", None, "红孩儿"),
     ("我爹是平天大圣牛魔王，我不坑爹", None, "红孩儿"),
-    ("无本的买卖最好做", "偶然路过", "无本买卖"),
+    (XJ_WUBEN_DIALOG_TEXT, XJ_WUBEN_OPTION, "无本买卖"),
 )
 XJ_BLOCK_CLOSE_WAIT = 1.5   # 误点对话框选项点击后的关闭等待（秒）：关闭动画期
                             # 不点下一候选（点击会被对话框吞掉）
@@ -2017,12 +2026,42 @@ def _xj_quota_stuck():
         raise ReplaceTaskError("显形镜 A、B 两处用镜均未触发白龙马对话框")
 
 
-def _handle_xianxingjing(win, items, img_np):
-    """显形镜查探：白龙马对话框出现时先点屏幕中间关闭遮挡文字
-    （对话框文字挡住任务按钮模板），随后窗口内识别点击模板开始对话；
-    开打选项（证明实力/消灭它）由 _handle_fight_dialog 处理。
-    对话框持续存在时按 3 秒冷却重试。
+def _handle_xj_wuben(win, items, img_np):
+    """「无本的买卖最好做」对话框 → 点「偶然路过」关闭（用户 2026-11-12 规则）。
 
+    该弹窗在使用显形镜前后都可能出现（用户实机确认）：此前只有判定窗
+    内「点任务按钮候选误触」的 XJ_BLOCK_DIALOGS 路径能处理，用镜前
+    （寻路/到达）与用镜后宽限窗口内出现时无人处理——带绿字选项的对话
+    剧情兜底不点屏（有绿字不点），对话框常驻会卡死整个流程。出现即
+    接管（返回 True，本帧其余处理推后到下一轮询），选项点击走共享
+    _click_green_option_once（精确子串 + 模糊/同行拆行兜底，限定对话框
+    区绿字行）；选项未识别到时不盲点，下一轮询重试。
+    _xj_block_clicked_at 兼作防连点冷却，与判定窗路径共用：点击后 1s
+    内不重复点；对话框关闭后判定窗按 XJ_BLOCK_CLOSE_WAIT 等关闭动画
+    再点下一候选（语义一致）。
+    """
+    global _xj_block_clicked_at
+    if not _dialog_text_present(items, XJ_WUBEN_DIALOG_TEXT):
+        return False
+    now = time.time()
+    if now - _xj_block_clicked_at >= 1.0:
+        if _click_green_option_once(win, items, img_np, XJ_WUBEN_OPTION,
+                                    prefix="五倍"):
+            _xj_block_clicked_at = now
+            log("[五倍] 显形镜：无本买卖对话框，已点击选项「偶然路过」关闭",
+                "SYS")
+    return True
+
+
+def _handle_xianxingjing(win, items, img_np):
+    """显形镜查探：无本买卖对话框优先点「偶然路过」关闭；白龙马对话框
+    出现时先点屏幕中间关闭遮挡文字（对话框文字挡住任务按钮模板），
+    随后窗口内识别点击模板开始对话；开打选项（证明实力/消灭它）由
+    _handle_fight_dialog 处理。对话框持续存在时按 3 秒冷却重试。
+
+    无本买卖对话框（用户 2026-11-12 规则，见 _handle_xj_wuben）：用镜
+    前后都可能出现，出现即接管并冻结宽限窗口（phase 1）——对话框处理
+    期间不得按宽限过期误转另一处。
     模板同屏可能多处相似图案（实测 2026-10-21）：取全部候选逐一
     点击，以开打对话出现判定生效；候选全部点完仍无对话才失败。
     候选误点阻塞对话框（用户 2026-10-30，表见 XJ_BLOCK_DIALOGS）：
@@ -2037,11 +2076,15 @@ def _handle_xianxingjing(win, items, img_np):
     global _xj_dialog_clicked_at, _xj_dismissed_at, _xj_tpl_best
     global _xj_btn_clicked_at, _xj_btn_missing, _xj_btn_candidates, _xj_btn_idx, \
         _xj_block_clicked_at
-    global _xj_warned, _xj_quota_exhausted_at
+    global _xj_warned, _xj_quota_exhausted_at, _xj_grace_start
     now = time.time()
     if battle_watch_in_battle():
         _xj_btn_clicked_at = 0.0  # 战斗中：判定窗冻结，战斗流程接管
         return False
+    if _handle_xj_wuben(win, items, img_np):
+        if _xj_phase == 1:
+            _xj_grace_start = now  # 对话框处理期间冻结宽限窗口
+        return True
     if _xj_dialog_present(items):
         # 白龙马对话框：点屏幕中间关闭遮挡文字（3s 冷却防连点；
         # 点地点击可能让人物走动——走远后模板点击无效，由失败
@@ -2448,9 +2491,9 @@ def _handle_fight_dialog(win, items, img_np):
 
 
 def _handle_follow_extras(win, items, img_np):
-    """跟随期间的附加对话处理：白龙马对话框（点任务按钮）优先，
-    其次显形镜 A→B 回退（用镜/换点），再次对话开打选项
-    （证明实力/消灭它），最后黄袍怪多杀重点链接。
+    """跟随期间的附加对话处理：无本买卖对话框（点「偶然路过」）与
+    白龙马对话框（点任务按钮）优先，其次显形镜 A→B 回退（用镜/换点），
+    再次对话开打选项（证明实力/消灭它），最后黄袍怪多杀重点链接。
 
     追踪文案出现「使用任务栏的锁妖网捕捉」时抛 ReplaceTaskError
     （follow_task 约定：回调抛异常向上传播，供调用方做任务级终止）——
