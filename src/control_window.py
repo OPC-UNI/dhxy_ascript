@@ -385,6 +385,24 @@ def save_threshold(name, value):
     return {"status": "success", "threshold": value}
 
 
+# ---- 缺人自动喊话公共部分（修罗/五倍/种族比武设置，角色设置持久化） ----
+# 喊话内容可在任务设置里修改保存；{种族} 占位符仅修罗使用——喊话时
+# 替换为必须种族（顿号连接，无必须种族时替换为「随意来人」）。
+# 清空内容保存恢复默认（开关才是喊话的总开关，避免误清空静默不喊）。
+SHOUT_TEXT_MAX_LEN = 60
+XIULUO_SHOUT_TEXT_DEFAULT = "百次修罗来人，效率队，来{种族}"
+WUBEI_SHOUT_TEXT_DEFAULT = "百次五倍来人，效率队"
+ZHONGZU_SHOUT_TEXT_DEFAULT = "种族比武来人，效率队"
+
+
+def _norm_shout_text(raw, default):
+    """喊话内容规范化：去首尾空白、超长截断、空内容恢复默认。"""
+    text = str(raw if raw is not None else "").strip()
+    if not text:
+        text = default
+    return text[:SHOUT_TEXT_MAX_LEN]
+
+
 # ---- 修罗设置（最少人数 + 必须有的种族，仅队长时生效，角色设置持久化） ----
 XIULUO_MIN_DEFAULT = 5
 XIULUO_MIN_RANGE = (3, 5)  # 最少人数范围：最小 3，最大 5
@@ -516,10 +534,11 @@ def save_wubei_auto_rejoin(on):
     return {"status": "success"}
 
 
-# ---- 五倍缺人自动喊话（UI 开关，角色设置持久化；默认开启。
-#      喊话内容为固定值（wubei.py WUBEI_SHOUT_DEFAULT），不再对外
-#      保留内容设置——用户 2026-10-14 确认） ----
+# ---- 五倍缺人自动喊话（UI 开关 + 喊话内容，角色设置持久化；默认开启。
+#      喊话内容可在五倍设置里修改保存，默认「百次五倍来人，效率队」
+#      （2026-11-12 用户要求内容可设置） ----
 _WUBEI_SHOUT_SWITCH_KEY = "wubei_shout"
+_WUBEI_SHOUT_TEXT_KEY = "wubei_shout_text"
 
 
 def load_wubei_shout_switch():
@@ -531,6 +550,19 @@ def save_wubei_shout_switch(on):
     """保存五倍缺人自动喊话开关，返回操作结果。"""
     role_settings.set_value(_WUBEI_SHOUT_SWITCH_KEY, bool(on))
     return {"status": "success"}
+
+
+def load_wubei_shout_text():
+    """读取五倍喊话内容（默认「百次五倍来人，效率队」）。"""
+    return _norm_shout_text(role_settings.get(_WUBEI_SHOUT_TEXT_KEY, None),
+                            WUBEI_SHOUT_TEXT_DEFAULT)
+
+
+def save_wubei_shout_text(text):
+    """保存五倍喊话内容（去空白/截断，空内容恢复默认），返回生效内容。"""
+    value = _norm_shout_text(text, WUBEI_SHOUT_TEXT_DEFAULT)
+    role_settings.set_value(_WUBEI_SHOUT_TEXT_KEY, value)
+    return {"status": "success", "text": value}
 
 
 def load_wubei_hezi():
@@ -689,9 +721,11 @@ def save_xiuluo_auto_rejoin(on):
 
 # ---- 修罗自动巫医（UI 开关+间隔，角色设置持久化；默认开启、每 5 轮
 #      一次——每 N 轮领取后无条件前往巫医 NPC 医治，血蓝正常也照常） ----
-# ---- 修罗缺人自动喊话（UI 开关，角色设置持久化；默认开启。
-#      喊话内容按必须种族拼装（xiuluo._build_shout_text），无内容设置） ----
+# ---- 修罗缺人自动喊话（UI 开关 + 喊话内容，角色设置持久化；默认开启。
+#      内容支持 {种族} 占位符：喊话时替换为必须种族，见
+#      xiuluo._build_shout_text） ----
 _XIULUO_SHOUT_SWITCH_KEY = "xiuluo_shout"
+_XIULUO_SHOUT_TEXT_KEY = "xiuluo_shout_text"
 
 
 def load_xiuluo_shout_switch():
@@ -703,6 +737,19 @@ def save_xiuluo_shout_switch(on):
     """保存修罗缺人自动喊话开关，返回操作结果。"""
     role_settings.set_value(_XIULUO_SHOUT_SWITCH_KEY, bool(on))
     return {"status": "success"}
+
+
+def load_xiuluo_shout_text():
+    """读取修罗喊话内容（默认「百次修罗来人，效率队，来{种族}」）。"""
+    return _norm_shout_text(role_settings.get(_XIULUO_SHOUT_TEXT_KEY, None),
+                            XIULUO_SHOUT_TEXT_DEFAULT)
+
+
+def save_xiuluo_shout_text(text):
+    """保存修罗喊话内容（去空白/截断，空内容恢复默认），返回生效内容。"""
+    value = _norm_shout_text(text, XIULUO_SHOUT_TEXT_DEFAULT)
+    role_settings.set_value(_XIULUO_SHOUT_TEXT_KEY, value)
+    return {"status": "success", "text": value}
 
 
 _XIULUO_AUTO_WUYI_KEY = "xiuluo_auto_wuyi"
@@ -906,8 +953,8 @@ def save_wubei_tab_group(on):
 
 
 # ---- 种族比武设置（UI 开关，角色设置持久化；队伍任务固定 5 人。
-#      检查队伍/自动创建队伍/自动归队/组号专用与修罗同款；无喊话、
-#      无最少人数、无必须种族（用户 2026-11-12 确认）；自动巫医
+#      检查队伍/自动创建队伍/自动归队/缺人喊话/组号专用与修罗同款；
+#      无最少人数设置、无必须种族（用户 2026-11-12 确认）；自动巫医
 #      链路暂未实现（设置保留）、自动修理复用 repair.py） ----
 _ZHONGZU_CHECK_TEAM_KEY = "zhongzu_check_team"
 
@@ -949,6 +996,37 @@ def save_zhongzu_auto_rejoin(on):
     """保存种族比武自动归队开关，返回操作结果。"""
     role_settings.set_value(_ZHONGZU_AUTO_REJOIN_KEY, bool(on))
     return {"status": "success"}
+
+
+# 种族比武缺人自动喊话（UI 开关 + 喊话内容，角色设置持久化；默认开启，
+# 2026-11-12 用户要求与修罗/五倍一致——缺人等待时周期性喊话招募，
+# 仅队长生效）
+_ZHONGZU_SHOUT_SWITCH_KEY = "zhongzu_shout"
+_ZHONGZU_SHOUT_TEXT_KEY = "zhongzu_shout_text"
+
+
+def load_zhongzu_shout_switch():
+    """读取种族比武缺人自动喊话开关（首次默认开启）。"""
+    return bool(role_settings.get(_ZHONGZU_SHOUT_SWITCH_KEY, True))
+
+
+def save_zhongzu_shout_switch(on):
+    """保存种族比武缺人自动喊话开关，返回操作结果。"""
+    role_settings.set_value(_ZHONGZU_SHOUT_SWITCH_KEY, bool(on))
+    return {"status": "success"}
+
+
+def load_zhongzu_shout_text():
+    """读取种族比武喊话内容（默认「种族比武来人，效率队」）。"""
+    return _norm_shout_text(role_settings.get(_ZHONGZU_SHOUT_TEXT_KEY, None),
+                            ZHONGZU_SHOUT_TEXT_DEFAULT)
+
+
+def save_zhongzu_shout_text(text):
+    """保存种族比武喊话内容（去空白/截断，空恢复默认），返回生效内容。"""
+    value = _norm_shout_text(text, ZHONGZU_SHOUT_TEXT_DEFAULT)
+    role_settings.set_value(_ZHONGZU_SHOUT_TEXT_KEY, value)
+    return {"status": "success", "text": value}
 
 
 _ZHONGZU_AUTO_WUYI_KEY = "zhongzu_auto_wuyi"
@@ -1341,6 +1419,7 @@ class ControlWindow(WebWindow):
         self.expose(self.save_wubei_auto_rejoin)
         self.expose(self.save_battle_only_auto_rejoin)
         self.expose(self.save_wubei_shout_switch)
+        self.expose(self.save_wubei_shout_text)
         self.expose(self.save_wubei_auto_wuyi)
         self.expose(self.save_wubei_wuyi_interval)
         self.expose(self.save_wubei_auto_repair)
@@ -1350,12 +1429,15 @@ class ControlWindow(WebWindow):
         self.expose(self.save_zhongzu_check_team)
         self.expose(self.save_zhongzu_auto_create_team)
         self.expose(self.save_zhongzu_auto_rejoin)
+        self.expose(self.save_zhongzu_shout_switch)
+        self.expose(self.save_zhongzu_shout_text)
         self.expose(self.save_zhongzu_auto_wuyi)
         self.expose(self.save_zhongzu_wuyi_interval)
         self.expose(self.save_zhongzu_auto_repair)
         self.expose(self.save_zhongzu_repair_interval)
         self.expose(self.save_zhongzu_tab_group)
         self.expose(self.save_xiuluo_shout_switch)
+        self.expose(self.save_xiuluo_shout_text)
         self.expose(self.save_debug_overlay)
         self.expose(self.save_debug_ui_unlocked)
         self.expose(self.save_auto_famen)
@@ -1892,6 +1974,7 @@ class ControlWindow(WebWindow):
                           "auto_create_team": load_wubei_auto_create_team(),
                           "auto_rejoin": load_wubei_auto_rejoin(),
                           "shout": load_wubei_shout_switch(),
+                          "shout_text": load_wubei_shout_text(),
                           "auto_wuyi": load_wubei_auto_wuyi(),
                           "wuyi_interval": load_wubei_wuyi_interval(),
                           "auto_repair": load_wubei_auto_repair(),
@@ -1901,12 +1984,15 @@ class ControlWindow(WebWindow):
                 "zhongzu": {"check_team": load_zhongzu_check_team(),
                             "auto_create_team": load_zhongzu_auto_create_team(),
                             "auto_rejoin": load_zhongzu_auto_rejoin(),
+                            "shout": load_zhongzu_shout_switch(),
+                            "shout_text": load_zhongzu_shout_text(),
                             "auto_wuyi": load_zhongzu_auto_wuyi(),
                             "wuyi_interval": load_zhongzu_wuyi_interval(),
                             "auto_repair": load_zhongzu_auto_repair(),
                             "repair_interval": load_zhongzu_repair_interval(),
                             "tab_group": load_zhongzu_tab_group()},
                 "xiuluo_shout": load_xiuluo_shout_switch(),
+                "xiuluo_shout_text": load_xiuluo_shout_text(),
                 "battle_only_auto_rejoin": load_battle_only_auto_rejoin(),
                 "auto_famen": load_auto_famen(),
                 "debug_overlay": load_debug_overlay(),
@@ -2166,6 +2252,10 @@ class ControlWindow(WebWindow):
         """五倍设置变更：保存缺人自动喊话开关状态。"""
         return save_wubei_shout_switch(on)
 
+    def save_wubei_shout_text(self, text):
+        """五倍设置变更：保存喊话内容（返回规范化后的生效内容）。"""
+        return save_wubei_shout_text(text)
+
     def save_wubei_auto_wuyi(self, on):
         """五倍设置变更：保存自动巫医开关状态。"""
         return save_wubei_auto_wuyi(on)
@@ -2202,6 +2292,14 @@ class ControlWindow(WebWindow):
         """种族比武设置变更：保存自动归队开关状态。"""
         return save_zhongzu_auto_rejoin(on)
 
+    def save_zhongzu_shout_switch(self, on):
+        """种族比武设置变更：保存缺人自动喊话开关状态。"""
+        return save_zhongzu_shout_switch(on)
+
+    def save_zhongzu_shout_text(self, text):
+        """种族比武设置变更：保存喊话内容（返回规范化后的生效内容）。"""
+        return save_zhongzu_shout_text(text)
+
     def save_zhongzu_auto_wuyi(self, on):
         """种族比武设置变更：保存自动巫医开关状态。"""
         return save_zhongzu_auto_wuyi(on)
@@ -2225,6 +2323,10 @@ class ControlWindow(WebWindow):
     def save_xiuluo_shout_switch(self, on):
         """修罗设置变更：保存缺人自动喊话开关状态。"""
         return save_xiuluo_shout_switch(on)
+
+    def save_xiuluo_shout_text(self, text):
+        """修罗设置变更：保存喊话内容（返回规范化后的生效内容）。"""
+        return save_xiuluo_shout_text(text)
 
     def save_debug_overlay(self, on):
         """调试信息开关变更：保存开关状态（悬浮层由任务侧读取、
@@ -3123,17 +3225,18 @@ class ControlWindow(WebWindow):
         """高级设置-喊话测试：向游戏聊天发送一次喊话内容（验证发送
         链路；与验证按钮同款约束——任务运行中拒绝、游戏须前台）。
 
-        target：wubei 发五倍喊话内容（任务设置可配）；xiuluo 发修罗
-        按必须种族拼装的文案（_build_shout_text）。
+        target：wubei/xiuluo/zhongzu 分别发对应任务设置里保存的喊话内容；
+        修罗的 {种族} 占位符按必须种族实时替换（_build_shout_text）。
         """
         if self._tm.is_running():
             return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
         if target == "xiuluo":
             from . import xiuluo  # 延迟导入：xiuluo 反向导入本模块（避免循环）
             text = xiuluo._build_shout_text()
+        elif target == "zhongzu":
+            text = load_zhongzu_shout_text()
         else:
-            from . import wubei  # 延迟导入：wubei 反向导入本模块（避免循环）
-            text = wubei.WUBEI_SHOUT_DEFAULT
+            text = load_wubei_shout_text()
         win = game.find_main_window()
         if win is None:
             return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}

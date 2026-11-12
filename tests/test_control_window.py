@@ -122,28 +122,67 @@ def test_settings_spec_auto_create_team_defaults(monkeypatch):
 
 
 def test_settings_spec_shout_and_tab_group_defaults(monkeypatch):
-    """缺人自动喊话 / 组号专用默认开启（修罗/五倍；load 与 spec 一致）。
+    """缺人自动喊话 / 组号专用默认开启（修罗/五倍/种族比武；load 与 spec 一致）。
 
     2026-11-12 用户确认：喊话 load 默认开但 spec 曾为关闭（新角色实际
-    关、老角色缺键实际开），本次统一为开；组号专用默认开（已登录 Tab
-    <2 的单号不激活，行为与关闭一致）。
+    关、老角色缺键实际开），本次统一为开；种族比武喊话同日加入；
+    组号专用默认开（已登录 Tab <2 的单号不激活，行为与关闭一致）。
     """
     from src import schemes
     from src.control_window import (
         _XIULUO_SHOUT_SWITCH_KEY, _WUBEI_SHOUT_SWITCH_KEY,
+        _ZHONGZU_SHOUT_SWITCH_KEY,
         _XIULUO_TAB_GROUP_KEY, _WUBEI_TAB_GROUP_KEY,
         load_xiuluo_shout_switch, load_wubei_shout_switch,
+        load_zhongzu_shout_switch,
         load_xiuluo_tab_group, load_wubei_tab_group)
     spec = schemes._settings_spec()
     for key in (_XIULUO_SHOUT_SWITCH_KEY, _WUBEI_SHOUT_SWITCH_KEY,
+                _ZHONGZU_SHOUT_SWITCH_KEY,
                 _XIULUO_TAB_GROUP_KEY, _WUBEI_TAB_GROUP_KEY):
         assert spec[key] is True
     _patch_kv_empty(monkeypatch)
     for key, load in ((_XIULUO_SHOUT_SWITCH_KEY, load_xiuluo_shout_switch),
                       (_WUBEI_SHOUT_SWITCH_KEY, load_wubei_shout_switch),
+                      (_ZHONGZU_SHOUT_SWITCH_KEY, load_zhongzu_shout_switch),
                       (_XIULUO_TAB_GROUP_KEY, load_xiuluo_tab_group),
                       (_WUBEI_TAB_GROUP_KEY, load_wubei_tab_group)):
         assert load() == spec[key]
+
+
+def test_shout_text_settings_defaults_and_save():
+    """喊话内容设置（2026-11-12 用户要求可修改保存）：三任务默认内容与
+    方案快照一致；保存去首尾空白、空内容恢复默认、超长截断。"""
+    from src import schemes
+    from src.control_window import (
+        _XIULUO_SHOUT_TEXT_KEY, _WUBEI_SHOUT_TEXT_KEY, _ZHONGZU_SHOUT_TEXT_KEY,
+        XIULUO_SHOUT_TEXT_DEFAULT, WUBEI_SHOUT_TEXT_DEFAULT,
+        ZHONGZU_SHOUT_TEXT_DEFAULT, SHOUT_TEXT_MAX_LEN,
+        load_xiuluo_shout_text, load_wubei_shout_text, load_zhongzu_shout_text,
+        save_xiuluo_shout_text, save_wubei_shout_text, save_zhongzu_shout_text)
+    spec = schemes._settings_spec()
+    assert spec[_XIULUO_SHOUT_TEXT_KEY] == XIULUO_SHOUT_TEXT_DEFAULT
+    assert spec[_WUBEI_SHOUT_TEXT_KEY] == WUBEI_SHOUT_TEXT_DEFAULT
+    assert spec[_ZHONGZU_SHOUT_TEXT_KEY] == ZHONGZU_SHOUT_TEXT_DEFAULT
+    # 未写入时 load 返回默认
+    assert load_xiuluo_shout_text() == XIULUO_SHOUT_TEXT_DEFAULT
+    assert load_wubei_shout_text() == WUBEI_SHOUT_TEXT_DEFAULT
+    assert load_zhongzu_shout_text() == ZHONGZU_SHOUT_TEXT_DEFAULT
+    # 保存生效：去首尾空白
+    assert save_xiuluo_shout_text("  百次修罗速度队  ")["text"] == "百次修罗速度队"
+    assert load_xiuluo_shout_text() == "百次修罗速度队"
+    save_wubei_shout_text("五倍来人群")
+    assert load_wubei_shout_text() == "五倍来人群"
+    save_zhongzu_shout_text("比武来人群")
+    assert load_zhongzu_shout_text() == "比武来人群"
+    # 清空保存恢复默认，并回传生效内容（UI 输入框同步显示）
+    assert save_wubei_shout_text("   ") == {
+        "status": "success", "text": WUBEI_SHOUT_TEXT_DEFAULT}
+    assert load_wubei_shout_text() == WUBEI_SHOUT_TEXT_DEFAULT
+    # 超长内容截断到上限
+    long_text = "喊" * (SHOUT_TEXT_MAX_LEN + 10)
+    assert save_zhongzu_shout_text(long_text)["text"] == "喊" * SHOUT_TEXT_MAX_LEN
+    assert load_zhongzu_shout_text() == "喊" * SHOUT_TEXT_MAX_LEN
 
 
 # ---- 组号成员战斗动作持久化（2026-11-07） ----

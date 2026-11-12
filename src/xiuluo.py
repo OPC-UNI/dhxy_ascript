@@ -60,6 +60,7 @@ from . import battle  # 巫医预期时间戳（点 NPC 后通知战斗线程切
 from . import repair  # 自动修理装备（洛阳城，共享工具模块）
 from .control_window import (load_task_counts, load_xiuluo_settings,
                              load_xiuluo_shout_switch,
+                             load_xiuluo_shout_text,
                              load_xiuluo_check_team,
                              load_xiuluo_auto_create_team,
                              load_xiuluo_auto_rejoin,
@@ -187,7 +188,7 @@ TEAM_CHECK_RETRY_INTERVAL = 10  # 缺人且无申请人可补时的重查间隔�
 TEAM_RECOG_RETRY_INTERVAL = 3   # 成员识别失败（OCR 噪声）时的重试间隔（秒）：
                                 # 识别失败≠人数不足，等满 10s 纯属空转
 SHOUT_MIN_INTERVAL = 30         # 缺人自动喊话最短间隔（秒，防刷屏）
-_shout_text = ""                # 本轮喊话内容（按必须种族拼装；空=不喊话）
+_shout_text = ""                # 本轮喊话内容（设置内容，{种族}已替换；空=不喊话）
 _shout_last_at = 0.0            # 上次喊话时间（跨监控调用保持间隔）
 
 # ---- 对话开打（寻路到达后出现对话面板） ----
@@ -1968,18 +1969,23 @@ def verify_claim_flow(win, silent=False):
     return False, "对话框选项未识别（未领取，已尝试关闭对话框）"
 
 
-def _build_shout_text():
-    """缺人喊话内容（用户 2026-10-14 指定格式）：
+def _build_shout_text(template=None):
+    """缺人喊话内容：读取修罗设置里的喊话内容（默认
+    「百次修罗来人，效率队，来{种族}」），把 {种族} 占位符替换为
+    必须种族（顿号连接；无必须种族时替换为「随意来人」）。
 
-    有必须种族 → 「百次修罗来人，效率队，来男人」（多种族顿号连接）；
-    无必须种族 → 「百次修罗来人，效率队，随意来人」。
+    模板例：必须种族 男人+男鬼 → 「百次修罗来人，效率队，来男人、男鬼」；
+    无必须种族 → 「百次修罗来人，效率队，来随意来人」。
     注意：不得带连续「+」号——游戏聊天拦截连续加号（实测消息不出
     现在公屏，喊话测试按钮二分定位确认）。
     """
+    if template is None:
+        template = load_xiuluo_shout_text()
     races = load_xiuluo_settings()["races"]
-    if races:
-        return f"百次修罗来人，效率队，来{'、'.join(races)}"
-    return "百次修罗来人，效率队，随意来人"
+    filled = "、".join(races) if races else "随意来人"
+    # 兼容中文输入法打出的全角大括号「｛种族｝」
+    return (template.replace("{种族}", filled)
+            .replace("｛种族｝", filled))
 
 
 def _shout_recruit(win):

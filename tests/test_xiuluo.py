@@ -320,3 +320,28 @@ def test_claim_task_skips_when_task_reappeared(monkeypatch):
     assert ok is False and "续跑跟踪" in info and frame is None
     assert called == []  # 不进入领取入口流程
 
+
+
+# ---- 缺人喊话内容（2026-11-12：设置内容 + {种族} 占位符替换） ----
+
+def test_build_shout_text_replaces_race_placeholder(monkeypatch):
+    """{种族} 替换为必须种族（顿号连接）；无必须种族替换为「随意来人」。"""
+    monkeypatch.setattr(xiuluo, "load_xiuluo_shout_text",
+                        lambda: "百次修罗来人，效率队，来{种族}")
+    monkeypatch.setattr(xiuluo, "load_xiuluo_settings",
+                        lambda: {"min_members": 5,
+                                 "races": ["男人", "男鬼"]})
+    assert xiuluo._build_shout_text() == "百次修罗来人，效率队，来男人、男鬼"
+    monkeypatch.setattr(xiuluo, "load_xiuluo_settings",
+                        lambda: {"min_members": 5, "races": []})
+    assert xiuluo._build_shout_text() == "百次修罗来人，效率队，来随意来人"
+
+
+def test_build_shout_text_custom_template(monkeypatch):
+    """自定义内容照常喊出；无占位符时原样输出。"""
+    monkeypatch.setattr(xiuluo, "load_xiuluo_shout_text",
+                        lambda: "百次修罗速度队，{种族}优先")
+    monkeypatch.setattr(xiuluo, "load_xiuluo_settings",
+                        lambda: {"min_members": 5, "races": ["女仙"]})
+    assert xiuluo._build_shout_text() == "百次修罗速度队，女仙优先"
+    assert xiuluo._build_shout_text("随缘来人") == "随缘来人"

@@ -310,6 +310,9 @@ def test_zhongzu_settings_defaults(monkeypatch):
     assert control_window.load_zhongzu_check_team() is True
     assert control_window.load_zhongzu_auto_create_team() is True
     assert control_window.load_zhongzu_auto_rejoin() is True
+    assert control_window.load_zhongzu_shout_switch() is True
+    assert control_window.load_zhongzu_shout_text() == \
+        control_window.ZHONGZU_SHOUT_TEXT_DEFAULT
     assert control_window.load_zhongzu_auto_wuyi() is True
     assert control_window.load_zhongzu_wuyi_interval() == 5
     assert control_window.load_zhongzu_auto_repair() is True
@@ -319,6 +322,9 @@ def test_zhongzu_settings_defaults(monkeypatch):
     assert spec[control_window._ZHONGZU_CHECK_TEAM_KEY] is True
     assert spec[control_window._ZHONGZU_AUTO_CREATE_TEAM_KEY] is True
     assert spec[control_window._ZHONGZU_AUTO_REJOIN_KEY] is True
+    assert spec[control_window._ZHONGZU_SHOUT_SWITCH_KEY] is True
+    assert spec[control_window._ZHONGZU_SHOUT_TEXT_KEY] == \
+        control_window.ZHONGZU_SHOUT_TEXT_DEFAULT
     assert spec[control_window._ZHONGZU_AUTO_WUYI_KEY] is True
     assert spec[control_window._ZHONGZU_WUYI_INTERVAL_KEY] == 5
     assert spec[control_window._ZHONGZU_AUTO_REPAIR_KEY] is True
@@ -332,3 +338,58 @@ def test_zhongzu_count_default_and_max():
     assert control_window.TASK_COUNT_MAX["种族比武"] == 100
     assert control_window._clamp_count("种族比武", 1000) == 100
     assert control_window._clamp_count("种族比武", 0) == 0
+
+
+# ---- 缺人自动喊话（2026-11-12 新增：开关 + 可设置内容） ----
+
+class _Clock:
+    """可控时钟：sleep 推进虚拟时间，time 返回虚拟时间。"""
+
+    def __init__(self, t=1_000_000.0):
+        self.t = t
+
+    def time(self):
+        return self.t
+
+    def sleep(self, dt):
+        self.t += dt
+
+
+def _run_monitor_once(monkeypatch, shout_text, last_at):
+    """跑一轮监控：首次缺人等待、第二次人满返回；返回喊话次数。"""
+    calls = {"checks": 0, "shouts": 0}
+
+    class _Win:
+        def capture(self, force_activate=False):
+            return IMG
+
+    def fake_check(win, create_if_missing=False):
+        calls["checks"] += 1
+        if calls["checks"] == 1:
+            return "waiting", "队伍人数不足（3/5），等待申请人"
+        return "ready", "队伍已满"
+
+    monkeypatch.setattr(zhongzu, "_check_team_with_retry", fake_check)
+    monkeypatch.setattr(zhongzu.team, "has_pending_apply", lambda img: False)
+    monkeypatch.setattr(zhongzu, "_shout_recruit",
+                        lambda win: calls.__setitem__("shouts",
+                                                      calls["shouts"] + 1))
+    monkeypatch.setattr(zhongzu, "time", _Clock())
+    monkeypatch.setattr(zhongzu, "_shout_text", shout_text)
+    monkeypatch.setattr(zhongzu, "_shout_last_at", last_at)
+    zhongzu._monitor_team_and_fill(_Win())
+    return calls
+
+
+def test_monitor_shout_when_short_and_no_applicant(monkeypatch):
+    """缺人等待且无申请人可补时喊话招募。"""
+    calls = _run_monitor_once(monkeypatch, "种族比武来人", 0.0)
+    assert calls["checks"] == 2
+    assert calls["shouts"] == 1
+
+
+def test_monitor_shout_disabled_or_throttled(monkeypatch):
+    """开关关闭（内容为空）不喊话；距上次喊话不足最短间隔不重复喊话。"""
+    assert _run_monitor_once(monkeypatch, "", 0.0)["shouts"] == 0
+    assert _run_monitor_once(
+        monkeypatch, "种族比武来人", 1_000_000.0)["shouts"] == 0

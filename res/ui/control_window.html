@@ -203,6 +203,17 @@
             border-left: 3px solid var(--gold); color: var(--text-dim);
         }
         .group-sub { color: var(--text-dim); font-size: 12px; font-family: "微软雅黑"; }
+        /* 缺人喊话内容编辑（任务专属设置）：左标签 + 右输入框同行，
+           回车保存（无需保存按钮） */
+        .shout-row .group-label { flex: 0 0 auto; }
+        .shout-input {
+            flex: 1; min-width: 0; box-sizing: border-box;
+            background: var(--panel2); color: var(--text);
+            border: 1px solid var(--border2); border-radius: 4px;
+            padding: 3px 8px; height: 26px; font-size: 12px;
+            font-family: "微软雅黑";
+        }
+        .shout-input:focus { border-color: var(--accent); outline: none; }
         /* 提示横幅（任务锁定/授权临期/异常） */
         .banner {
             width: 100%; flex-shrink: 0; border-radius: 8px; padding: 8px 12px;
@@ -671,7 +682,7 @@
         </div>
         <!-- ============ 任务页（待选/已选双区 + 拖动排序 + 次数 + 专属设置手风琴） ============ -->
         <div class="page" id="page-task">
-            <div class="banner warn" id="task-lock-banner" style="display:none">任务运行中：任务选择、顺序与次数不可修改，停止后可编辑；专属设置修改下次启动生效</div>
+            <div class="banner warn" id="task-lock-banner" style="display:none">任务运行中：选择/顺序/次数不可修改；专属设置下次启动生效</div>
             <div class="task-zone">
                 <div class="group-title">已选任务<span class="zone-hint">按顺序执行 · 拖动「≡」手柄或用 ↑↓ 调整</span></div>
                 <div id="task-selected-list" class="task-list"></div>
@@ -729,27 +740,32 @@
                     <label class="switch-row">
                         <input type="checkbox" id="xiuluo-check-team">
                         <span class="switch-track"></span>
-                        <span>检查队伍（默认开启）</span>
+                        <span>检查队伍</span>
                     </label>
                     <label class="switch-row">
                         <input type="checkbox" id="xiuluo-auto-create-team">
                         <span class="switch-track"></span>
-                        <span>自动创建队伍（任务开始时无队伍自动创建，默认开启）</span>
+                        <span>自动创建队伍</span>
                     </label>
                     <label class="switch-row">
                         <input type="checkbox" id="xiuluo-auto-rejoin">
                         <span class="switch-track"></span>
-                        <span>自动归队（非队长死亡落轮回司自动点归队，默认开启）</span>
+                        <span>自动归队</span>
                     </label>
                     <label class="switch-row">
                         <input type="checkbox" id="xiuluo-shout">
                         <span class="switch-track"></span>
-                        <span>缺人自动喊话（按必须种族拼装内容，仅队长生效）</span>
+                        <span>缺人自动喊话</span>
                     </label>
+                    <div class="group-row shout-row">
+                        <span class="group-label">喊话内容</span>
+                        <input type="text" id="xiuluo-shout-text" class="shout-input"
+                               maxlength="60" placeholder="百次修罗来人，效率队，来{种族}">
+                    </div>
                     <label class="switch-row">
                         <input type="checkbox" id="xiuluo-auto-wuyi">
                         <span class="switch-track"></span>
-                        <span>自动巫医（每 N 轮一次，默认开启）</span>
+                        <span>自动巫医</span>
                     </label>
                     <div class="group-row">
                         <span class="group-label">巫医间隔</span>
@@ -762,7 +778,7 @@
                     <label class="switch-row">
                         <input type="checkbox" id="xiuluo-auto-repair">
                         <span class="switch-track"></span>
-                        <span>自动修理装备（每 N 场战斗一次，默认开启）</span>
+                        <span>自动修理装备</span>
                     </label>
                     <div class="group-row" id="xiuluo-repair-interval-row">
                         <span class="group-label">修理间隔（场）</span>
@@ -785,12 +801,12 @@
                     <label class="switch-row">
                         <input type="checkbox" id="xiuluo-hezi">
                         <span class="switch-track"></span>
-                        <span>自动抢盒子（仅非队长生效）</span>
+                        <span>自动抢盒子</span>
                     </label>
                     <label class="switch-row">
                         <input type="checkbox" id="xiuluo-tab-group">
                         <span class="switch-track"></span>
-                        <span>组号专用（一窗口多账号：队员自动挂战斗/巫医/补血蓝，非队长停止任务；默认开启，单号不激活）</span>
+                        <span>组号专用（一窗口多账号）</span>
                     </label>
                 </div>
             </div>
@@ -811,32 +827,37 @@
                     <label class="switch-row">
                         <input type="checkbox" id="wubei-hezi">
                         <span class="switch-track"></span>
-                        <span>自动抢盒子（仅非队长生效）</span>
+                        <span>自动抢盒子</span>
                     </label>
                     <label class="switch-row">
                         <input type="checkbox" id="wubei-check-team">
                         <span class="switch-track"></span>
-                        <span>检查队伍（队伍固定 5 人，缺人自动补）</span>
+                        <span>检查队伍</span>
                     </label>
                     <label class="switch-row">
                         <input type="checkbox" id="wubei-auto-create-team">
                         <span class="switch-track"></span>
-                        <span>自动创建队伍（任务开始时无队伍自动创建，默认开启）</span>
+                        <span>自动创建队伍</span>
                     </label>
                     <label class="switch-row">
                         <input type="checkbox" id="wubei-auto-rejoin">
                         <span class="switch-track"></span>
-                        <span>自动归队（非队长死亡落轮回司自动点归队，默认开启）</span>
+                        <span>自动归队</span>
                     </label>
                     <label class="switch-row">
                         <input type="checkbox" id="wubei-shout">
                         <span class="switch-track"></span>
-                        <span>缺人自动喊话（固定内容「百次五倍来人，效率队」，仅队长生效）</span>
+                        <span>缺人自动喊话</span>
                     </label>
+                    <div class="group-row shout-row">
+                        <span class="group-label">喊话内容</span>
+                        <input type="text" id="wubei-shout-text" class="shout-input"
+                               maxlength="60" placeholder="百次五倍来人，效率队">
+                    </div>
                     <label class="switch-row">
                         <input type="checkbox" id="wubei-auto-wuyi">
                         <span class="switch-track"></span>
-                        <span>自动巫医（每 N 轮一次，默认开启）</span>
+                        <span>自动巫医</span>
                     </label>
                     <div class="group-row">
                         <span class="group-label">巫医间隔</span>
@@ -849,7 +870,7 @@
                     <label class="switch-row">
                         <input type="checkbox" id="wubei-auto-repair">
                         <span class="switch-track"></span>
-                        <span>自动修理装备（每 N 场战斗一次，默认开启）</span>
+                        <span>自动修理装备</span>
                     </label>
                     <div class="group-row" id="wubei-repair-interval-row">
                         <span class="group-label">修理间隔（场）</span>
@@ -862,17 +883,17 @@
                     <label class="switch-row">
                         <input type="checkbox" id="wubei-suoyaowang" disabled>
                         <span class="switch-track"></span>
-                        <span>领取锁妖网任务（暂不可用，默认关闭）</span>
+                        <span>领取锁妖网任务（暂不可用）</span>
                     </label>
                     <label class="switch-row">
                         <input type="checkbox" id="wubei-kuimulang">
                         <span class="switch-track"></span>
-                        <span>领取奎木狼任务（默认开启；关闭时领取到奎木狼任务自动重新领取替换）</span>
+                        <span>领取奎木狼任务（关闭则自动重领替换）</span>
                     </label>
                     <label class="switch-row">
                         <input type="checkbox" id="wubei-tab-group">
                         <span class="switch-track"></span>
-                        <span>组号专用（一窗口多账号：队员自动挂战斗/巫医/补血蓝，非队长停止任务；默认开启，单号不激活）</span>
+                        <span>组号专用（一窗口多账号）</span>
                     </label>
                 </div>
             </div>
@@ -893,27 +914,37 @@
                     <label class="switch-row">
                         <input type="checkbox" id="zhongzu-check-team">
                         <span class="switch-track"></span>
-                        <span>检查队伍（队伍固定 5 人，缺人自动补）</span>
+                        <span>检查队伍</span>
                     </label>
                     <label class="switch-row">
                         <input type="checkbox" id="zhongzu-auto-create-team">
                         <span class="switch-track"></span>
-                        <span>自动创建队伍（任务开始时无队伍自动创建，默认开启）</span>
+                        <span>自动创建队伍</span>
                     </label>
                     <label class="switch-row">
                         <input type="checkbox" id="zhongzu-auto-rejoin">
                         <span class="switch-track"></span>
-                        <span>自动归队（非队长死亡落轮回司自动点归队，默认开启）</span>
+                        <span>自动归队</span>
                     </label>
+                    <label class="switch-row">
+                        <input type="checkbox" id="zhongzu-shout">
+                        <span class="switch-track"></span>
+                        <span>缺人自动喊话</span>
+                    </label>
+                    <div class="group-row shout-row">
+                        <span class="group-label">喊话内容</span>
+                        <input type="text" id="zhongzu-shout-text" class="shout-input"
+                               maxlength="60" placeholder="种族比武来人，效率队">
+                    </div>
                     <label class="switch-row">
                         <input type="checkbox" id="zhongzu-tab-group">
                         <span class="switch-track"></span>
-                        <span>组号专用（一窗口多账号：队员自动挂战斗/巫医/补血蓝，非队长停止任务；默认开启，单号不激活）</span>
+                        <span>组号专用（一窗口多账号）</span>
                     </label>
                     <label class="switch-row">
                         <input type="checkbox" id="zhongzu-auto-wuyi">
                         <span class="switch-track"></span>
-                        <span>自动巫医（每 N 轮一次，默认开启；链路待标定 NPC 后实现）</span>
+                        <span>自动巫医（暂未实现）</span>
                     </label>
                     <div class="group-row">
                         <span class="group-label">巫医间隔</span>
@@ -926,7 +957,7 @@
                     <label class="switch-row">
                         <input type="checkbox" id="zhongzu-auto-repair">
                         <span class="switch-track"></span>
-                        <span>自动修理装备（每 N 场战斗一次，默认开启）</span>
+                        <span>自动修理装备</span>
                     </label>
                     <div class="group-row" id="zhongzu-repair-interval-row">
                         <span class="group-label">修理间隔（场）</span>
@@ -936,7 +967,6 @@
                             <button class="th-btn" onclick="zhongzuRepairInterval(1)">＋</button>
                         </div>
                     </div>
-                    <div class="group-hint">领取点（长安 286,159）与助威令模板已标定；巫医链路暂未实现（设置保留，首次轮到提示后跳过）。</div>
                 </div>
             </div>
             <div class="task-card" data-mode="玄枢轶闻">
@@ -975,14 +1005,14 @@
                     <label class="switch-row">
                         <input type="checkbox" id="battle-only-auto-rejoin">
                         <span class="switch-track"></span>
-                        <span>自动归队（死亡落轮回司自动点归队，默认开启）</span>
+                        <span>自动归队</span>
                     </label>
                 </div>
             </div>
                 </div>
                 <div class="task-zone-empty" id="task-available-empty" style="display:none">全部任务已选择</div>
             </div>
-            <div class="group-hint">点击「待选任务」卡片加入已选（按加入顺序排列）；「已选任务」按顺序依次执行，拖动「≡」手柄或点 ↑↓ 调整顺序，点卡片移回待选。「仅战斗」与其它任务互斥：选中后仅运行战斗监控（自动战斗/补血蓝/巫医，不做任务操作；仅保留自动归队——死亡落轮回司自动点归队，开关默认开启），持续运行至手动停止。「种族比武」为队伍任务（固定 5 人）：长安领取 → 任务追踪绿字寻路 → 对话命中「进入战斗/开始战斗/开始采集/开始开采/开始训练」任一即点击 → 任务从追踪面板消失即完成 → 助威令返程；领取人数不足时任务不会出现（无独立弹窗），自动复查队伍并进入补人循环；巫医链路暂未实现（设置保留）。「名望」当前为第一阶段：启动时追踪已有「山河名望」任务则跳过领取直接续跑跟踪；否则种族判定（人物属性面板）→ 魔族前往大唐边境 → 点击逆天魔 → 对话选「开启山河名望志」→ 打开山河名望面板 → 按 高级>中级>初级 优先级 + 卡片顺序领取已实现任务（蛟魔复仇/沙海迷踪/蛟魔探秘/五庄封印/沙都修罗）→ 关闭领取对话框 → 复用 follow_task 跟踪至任务完成（任务对话按 DIALOG_OPTION_MAP 处理；沙海迷踪入口确认后识别「开始」按钮点击进入战斗，战斗结束即完成；蛟魔探秘入口确认后识别钓鱼窗口标题，复用 pochufengyin 点击冲刺连点闭环（mash：连点冲刺+维持泵点击率伺服（位置与持续点击率正相关，停手约 1 秒即回退），不按倒计时停手））→ 回去领取下一轮，直到次数上限（仙族与其它任务执行流程待补充）。全部完成后自动结束。</div>
+            <div class="group-hint">点击卡片加入已选，按顺序执行；拖动「≡」手柄或点 ↑↓ 调整顺序，点卡片移回待选。「仅战斗」与其它任务互斥，持续运行至手动停止。</div>
         </div>
         <!-- ============ 组号页（队伍成员检查 + 按账号战斗动作设置） ============ -->
         <div class="page" id="page-group">
@@ -1480,7 +1510,11 @@
                         <button id="btn-verify-shout-xl" class="btn" onclick="verifyShout('xiuluo')">测试修罗喊话</button>
                         <span class="verify-result" id="shout-xl-verify-result"></span>
                     </div>
-                    <div class="group-hint">向游戏聊天发送一次喊话验证 Enter→输入→Enter 链路：五倍发固定内容「百次五倍来人，效率队」；修罗发按必须种族拼装的文案（如「百次修罗来人，效率队，来男人」）。发送后请查看游戏公屏是否出现消息。任务运行中不可验证。</div>
+                    <div class="verify-row">
+                        <button id="btn-verify-shout-zz" class="btn" onclick="verifyShout('zhongzu')">测试种族比武喊话</button>
+                        <span class="verify-result" id="shout-zz-verify-result"></span>
+                    </div>
+                    <div class="group-hint">向游戏聊天发送一次喊话验证 Enter→输入→Enter 链路：分别发送对应任务设置里保存的喊话内容（修罗的「{种族}」按必须种族实时替换）。发送后请查看游戏公屏是否出现消息。任务运行中不可验证。</div>
                 </div>
                 <div class="group-box">
                     <div class="group-title">模板与坐标</div>
@@ -1660,6 +1694,10 @@
     const wubeiKuimulang = document.getElementById('wubei-kuimulang');
     const wubeiTabGroup = document.getElementById('wubei-tab-group');
     const xiuluoShout = document.getElementById('xiuluo-shout');
+    const xiuluoShoutText = document.getElementById('xiuluo-shout-text');
+    const wubeiShoutText = document.getElementById('wubei-shout-text');
+    const zhongzuShout = document.getElementById('zhongzu-shout');
+    const zhongzuShoutText = document.getElementById('zhongzu-shout-text');
     const wuhuanVitalityContinue = document.getElementById('wuhuan-vitality-continue');
     // 组号设置页
     const navGroup = document.getElementById('nav-group');
@@ -1721,6 +1759,8 @@
     const shoutVerifyResultEl = document.getElementById('shout-verify-result');
     const btnVerifyShoutXl = document.getElementById('btn-verify-shout-xl');
     const shoutXlVerifyResultEl = document.getElementById('shout-xl-verify-result');
+    const btnVerifyShoutZz = document.getElementById('btn-verify-shout-zz');
+    const shoutZzVerifyResultEl = document.getElementById('shout-zz-verify-result');
     const btnVerifyJiguan = document.getElementById('btn-verify-jiguan');
     const jiguanVerifyResultEl = document.getElementById('jiguan-verify-result');
     const btnVerifyPosition = document.getElementById('btn-verify-position');
@@ -3000,6 +3040,32 @@
         callPython('save_xiuluo_races', checked);
     }
 
+    /* ---- 缺人喊话内容保存（修罗/五倍/种族比武；回车保存，无提示无按钮。
+          返回值同步回输入框——清空保存时后端恢复默认，输入框须显示生效内容） ---- */
+    async function saveShoutText(fn, input) {
+        let r = null;
+        try {
+            r = await callPython(fn, input.value);
+        } catch (e) {
+            r = null;
+        }
+        if (r && r.status === 'success' && r.text !== undefined) {
+            input.value = r.text;
+        }
+    }
+
+    function saveXiuluoShoutText() {
+        return saveShoutText('save_xiuluo_shout_text', xiuluoShoutText);
+    }
+
+    function saveWubeiShoutText() {
+        return saveShoutText('save_wubei_shout_text', wubeiShoutText);
+    }
+
+    function saveZhongzuShoutText() {
+        return saveShoutText('save_zhongzu_shout_text', zhongzuShoutText);
+    }
+
     async function xiuluoWuyiInterval(delta) {
         const el = xiuluoWuyiIntervalEl;
         const cur = parseInt(el.innerText);
@@ -3138,6 +3204,19 @@
     });
     zhongzuAutoRejoin.addEventListener('change', () => {
         callPython('save_zhongzu_auto_rejoin', zhongzuAutoRejoin.checked);
+    });
+    zhongzuShout.addEventListener('change', () => {
+        callPython('save_zhongzu_shout_switch', zhongzuShout.checked);
+    });
+    // 喊话内容输入框：Enter 保存
+    xiuluoShoutText.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') saveXiuluoShoutText();
+    });
+    wubeiShoutText.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') saveWubeiShoutText();
+    });
+    zhongzuShoutText.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') saveZhongzuShoutText();
     });
     zhongzuAutoWuyi.addEventListener('change', () => {
         callPython('save_zhongzu_auto_wuyi', zhongzuAutoWuyi.checked);
@@ -3469,6 +3548,9 @@
         wubeiAutoRejoin.checked = !!(info.wubei && info.wubei.auto_rejoin);
         battleOnlyAutoRejoin.checked = !!info.battle_only_auto_rejoin;
         wubeiShout.checked = !!(info.wubei && info.wubei.shout);
+        if (info.wubei && info.wubei.shout_text !== undefined) {
+            wubeiShoutText.value = info.wubei.shout_text;
+        }
         wubeiAutoWuyi.checked = !!(info.wubei && info.wubei.auto_wuyi);
         if (info.wubei && info.wubei.wuyi_interval) {
             wubeiWuyiIntervalEl.innerText = info.wubei.wuyi_interval;
@@ -3483,6 +3565,10 @@
         zhongzuCheckTeam.checked = !!(info.zhongzu && info.zhongzu.check_team);
         zhongzuAutoCreateTeam.checked = !!(info.zhongzu && info.zhongzu.auto_create_team);
         zhongzuAutoRejoin.checked = !!(info.zhongzu && info.zhongzu.auto_rejoin);
+        zhongzuShout.checked = !!(info.zhongzu && info.zhongzu.shout);
+        if (info.zhongzu && info.zhongzu.shout_text !== undefined) {
+            zhongzuShoutText.value = info.zhongzu.shout_text;
+        }
         zhongzuAutoWuyi.checked = !!(info.zhongzu && info.zhongzu.auto_wuyi);
         if (info.zhongzu && info.zhongzu.wuyi_interval) {
             zhongzuWuyiIntervalEl.innerText = info.zhongzu.wuyi_interval;
@@ -3494,6 +3580,9 @@
         }
         zhongzuTabGroup.checked = !!(info.zhongzu && info.zhongzu.tab_group);
         xiuluoShout.checked = !!info.xiuluo_shout;
+        if (info.xiuluo_shout_text !== undefined) {
+            xiuluoShoutText.value = info.xiuluo_shout_text;
+        }
         wuhuanVitalityContinue.checked = !!info.wuhuan_vitality_continue;
         const ths = info.thresholds || {};
         for (const key of ['char_hp', 'char_mp', 'beast_hp', 'beast_mp']) {
@@ -4387,8 +4476,10 @@
     async function verifyShout(target) {
         if (verifying) return;
         verifying = true;
-        const btn = target === 'xiuluo' ? btnVerifyShoutXl : btnVerifyShout;
-        const resEl = target === 'xiuluo' ? shoutXlVerifyResultEl : shoutVerifyResultEl;
+        const btn = target === 'xiuluo' ? btnVerifyShoutXl
+                  : (target === 'zhongzu' ? btnVerifyShoutZz : btnVerifyShout);
+        const resEl = target === 'xiuluo' ? shoutXlVerifyResultEl
+                    : (target === 'zhongzu' ? shoutZzVerifyResultEl : shoutVerifyResultEl);
         btn.disabled = true;
         resEl.style.color = 'var(--text)';
         resEl.innerText = '发送中...';

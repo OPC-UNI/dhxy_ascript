@@ -75,6 +75,7 @@ from .control_window import (load_task_counts,  # 任务次数上限
                              load_wubei_auto_create_team,  # 五倍设置：自动创建队伍开关
                              load_wubei_auto_rejoin,  # 五倍设置：自动归队开关
                              load_wubei_shout_switch,  # 五倍设置：缺人自动喊话开关
+                             load_wubei_shout_text,  # 五倍设置：缺人喊话内容
                              load_wubei_auto_wuyi,  # 五倍设置：自动巫医开关
                              load_wubei_wuyi_interval,  # 五倍设置：自动巫医间隔（轮）
                              load_wubei_auto_repair,  # 五倍设置：自动修理装备开关
@@ -426,10 +427,10 @@ TEAM_CHECK_RETRY_INTERVAL = 10  # 缺人且无申请人可补时的重查间隔�
 TEAM_RECOG_RETRY_INTERVAL = 3   # 成员识别失败（OCR 噪声）时的重试间隔（秒）：
                                 # 识别失败≠人数不足，等满 10s 纯属空转
 SHOUT_MIN_INTERVAL = 30         # 缺人自动喊话最短间隔（秒，防刷屏）
-WUBEI_SHOUT_DEFAULT = "百次五倍来人，效率队"  # 喊话固定内容（不对外保留设置，
-                                              # 用户 2026-10-14 确认；游戏聊天
-                                              # 拦截连续加号，内容不得带 +）
-_shout_text = ""                # 本轮喊话内容（开关开启时=固定内容；关=空不喊话）
+# 喊话内容来自五倍设置（默认「百次五倍来人，效率队」，可在面板修改
+# 保存，见 control_window.load_wubei_shout_text；游戏聊天拦截连续加号，
+# 内容不得带 +）
+_shout_text = ""                # 本轮喊话内容（开关开启时=设置内容；关=空不喊话）
 _shout_last_at = 0.0            # 上次喊话时间（跨监控调用保持间隔）
 
 # ---- 返程（用户流程：背包任务储物格 → 五倍回城符右键 → 回宝象国；
@@ -3094,7 +3095,7 @@ def run_loop(win, cycle_interval=1.0):
     # 读 KeyValue）
     _kuimulang_on = load_wubei_kuimulang_switch()
     log(f"[五倍] 领取奎木狼任务: {'开' if _kuimulang_on else '关（奎木狼任务重新领取替换）'}", "SYS")
-    _shout_text = WUBEI_SHOUT_DEFAULT if load_wubei_shout_switch() else ""
+    _shout_text = load_wubei_shout_text() if load_wubei_shout_switch() else ""
     if _shout_text:
         log(f"[五倍] 缺人自动喊话: 开（{_shout_text}，最短间隔 {SHOUT_MIN_INTERVAL}s）", "SYS")
     # 自动创建队伍（五倍设置开关，默认开启）：任务开始时若无队伍自动

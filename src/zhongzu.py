@@ -11,6 +11,7 @@
        寻路等待到达领取点（±5）
    1.2 到达后进入队伍监控循环（种族比武设置，仅队长生效）：
        固定 5 人，缺人从申请加入面板允许申请人补齐 → 人满才领取；
+       缺人等待且无申请人时按最短间隔喊话招募（喊话开关/内容可设置）；
        自动创建队伍并入首次队伍面板打开（未组队时直接创建）；
        队长被转移则转 1.0 非队长保持模式
    1.3 到达领取点先按 Alt+4 完全清屏（隐藏昵称/界面遮挡，每次领取
@@ -43,6 +44,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 from ascript.windows.system import R  # 资源路由（模板路径）
+from ascript.windows.hardware.keyboard import Keyboard  # 缺人喊话键盘输入
 
 from .app_utils import (human_click, human_move, precise_click, log,
                         move_away, norm_text)
@@ -58,6 +60,8 @@ from . import repair
 from .control_window import (load_task_counts, load_zhongzu_check_team,
                              load_zhongzu_auto_create_team,
                              load_zhongzu_auto_rejoin,
+                             load_zhongzu_shout_switch,
+                             load_zhongzu_shout_text,
                              load_zhongzu_auto_wuyi,
                              load_zhongzu_wuyi_interval,
                              load_zhongzu_auto_repair,
@@ -108,6 +112,12 @@ CLAIM_UNCONFIGURED_INFO = (
 TEAM_MIN_MEMBERS = 5            # 领取与人数监控的固定人数（用户 2026-11-12 确认）
 TEAM_CHECK_RETRY_INTERVAL = 10  # 缺人且无申请人可补时的重查间隔（秒）
 TEAM_RECOG_RETRY_INTERVAL = 3   # 成员识别失败（OCR 噪声）时的重试间隔（秒）
+SHOUT_MIN_INTERVAL = 30         # 缺人自动喊话最短间隔（秒，防刷屏）
+# 喊话内容来自种族比武设置（默认「种族比武来人，效率队」，可在面板修改
+# 保存，见 control_window.load_zhongzu_shout_text；游戏聊天拦截连续加号，
+# 内容不得带 +）
+_shout_text = ""                # 本轮喊话内容（开关开启时=设置内容；关=空不喊话）
+_shout_last_at = 0.0            # 上次喊话时间（跨监控调用保持间隔）
 
 # ---- 任务对话（寻路到达后出现；用户 2026-11-12 确认五选一） ----
 TASK_DIALOG_OPTIONS = ("进入战斗", "开始战斗", "开始采集", "开始开采", "开始训练")
@@ -312,6 +322,35 @@ def _check_team_with_retry(win, tries=3, create_if_missing=False):
     return last
 
 
+def _shout_recruit(win):
+    """缺人自动喊话：输入内容（中文自动走剪贴板粘贴，Keyboard.input
+    内置）→ Enter 发送到游戏当前默认频道（与修罗/五倍链路一致）。
+
+    静默模式（高级设置默认开）走 WM_CHAR 逐字符注入 + 回车发送，无需
+    前台（2026-11-03 用户实测有效）；投递失败不记时间戳，下轮重试。
+    """
+    global _shout_last_at
+    if app_utils.silent_mode_on():
+        from . import silent_click  # 延迟导入：避免模块级循环
+        info = silent_click.send_silent_text(win, _shout_text, end_enter=True)
+        if info is None:
+            log("[种族比武] 静默喊话投递失败（窗口不存在）", "WARN")
+            return
+        _shout_last_at = time.time()
+        log(f"[种族比武] 已静默喊话: {_shout_text}", "SYS")
+        return
+    # 先激活游戏窗口：键盘事件只进前台窗口
+    win.activate()
+    time.sleep(0.5)
+    # 游戏聊天输入常驻（无需 Enter 打开）：直接输入 + Enter 发送
+    Keyboard.input(_shout_text)
+    time.sleep(0.8)  # 等待剪贴板粘贴完成（中文走 Ctrl+V 粘贴，需落地时间）
+    Keyboard.key("enter")  # 发送
+    time.sleep(0.5)
+    _shout_last_at = time.time()
+    log(f"[种族比武] 已自动喊话: {_shout_text}", "SYS")
+
+
 def _monitor_team_and_fill(win, create_if_missing=False):
     """队长缺人监控循环（领取前共用）。
 
@@ -319,7 +358,8 @@ def _monitor_team_and_fill(win, create_if_missing=False):
     申请待处理态）：有则先补人（按最近一次人数检查的缺口一次补满，
     补满或全失败后清空残留申请列表，立即重查），无则查人数——缺人
     按间隔重查、人满返回（调用方随即领取）；非队长转保持模式（不返回）。
-    本任务不喊话（用户 2026-11-12 确认）。
+    缺人等待且无申请人时按 SHOUT_MIN_INTERVAL 限频喊话招募（喊话开关
+    与内容见种族比武设置，仅队长会进入本循环）。
     """
     shortfall = None  # 最近一次人数检查的缺口（缺 N 补 N）；None=未知按 1 人补
     while True:
@@ -360,6 +400,13 @@ def _monitor_team_and_fill(win, create_if_missing=False):
                 continue
         interval = (TEAM_RECOG_RETRY_INTERVAL if "识别失败" in info
                     else TEAM_CHECK_RETRY_INTERVAL)
+        # 缺人自动喊话（间隔限频；有申请人正在补时走上面的补人分支，
+        # 不喊话）
+        if _shout_text and time.time() - _shout_last_at >= SHOUT_MIN_INTERVAL:
+            try:
+                _shout_recruit(win)
+            except Exception as e:
+                log(f"[种族比武] 喊话失败: {e}", "WARN")
         log(f"[种族比武] {info}，暂无申请人可补，{interval}s 后重查", "WARN")
         time.sleep(interval)
 
@@ -1089,7 +1136,7 @@ def run_loop(win, cycle_interval=1.0):
     结束条件：完成任务次数达到设置的次数上限即返回结束原因。
     """
     global _started_via_option, _team_checked, _task_gone_last_round, \
-        _wuyi_notice_logged, _claim_clear_done
+        _wuyi_notice_logged, _claim_clear_done, _shout_text
     _started_via_option = False
     _team_checked = False
     _task_gone_last_round = False
@@ -1118,6 +1165,12 @@ def run_loop(win, cycle_interval=1.0):
     auto_rejoin = load_zhongzu_auto_rejoin()
     log(f"[种族比武] 自动归队: "
         f"{'开（非队长死亡落轮回司自动点归队）' if auto_rejoin else '关'}", "SYS")
+    # 缺人自动喊话（种族比武设置，默认开）：队长缺人等待且无申请人时
+    # 按 SHOUT_MIN_INTERVAL 限频发送设置里的喊话内容
+    _shout_text = load_zhongzu_shout_text() if load_zhongzu_shout_switch() else ""
+    if _shout_text:
+        log(f"[种族比武] 缺人自动喊话: 开（{_shout_text}，"
+            f"最短间隔 {SHOUT_MIN_INTERVAL}s）", "SYS")
     # 申请待处理态清场（启动时组队按钮为申请态则菜单打不开，先清场）
     pending_apply_clear = True
     if not is_in_battle(win):
