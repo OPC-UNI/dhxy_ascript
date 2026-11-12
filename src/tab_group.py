@@ -1019,6 +1019,119 @@ def _wuyi_one(win, tab_id):
     log(f"[组号] 队员 Tab（ID {tab_id}）巫医对话框未出现/选项未识别，跳过", "WARN")
 
 
+# ---- 修理装备 pass ----
+
+def member_repair_pass(win, force=False):
+    """修理 pass：队长点完修理选项后，逐个队员点击其自动弹出的修理对话框。
+
+    前置（用户 2026-11-12 确认）：队长点击修理 NPC 后所有队员自动弹出
+    对话框（两套弹窗：有装备需要修理 / 无装备需要修理，互斥出现）、
+    不点不消失——队员不点 NPC。对话框未弹出/选项未识别 → 超时跳过记日志。
+    高性能模式 + 队长选项坐标新鲜（battle.record_repair_option_pos 刚记录，
+    同一对话框布局队员位置相同）时直点同一坐标，省每队员截图+OCR。
+    force=True 供验证模式绕过 active() 检查（主进程无任务模式）。
+    """
+    global pass_active, _no_members_logged
+    if not _active and not force:
+        return
+    if not force and not _team_member_ids:
+        # 见 member_auto_pass 同款说明：未确认队员 Tab 不碰，跳过不切
+        if not _no_members_logged:
+            _no_members_logged = True
+            log("[组号] 未确认到在队伍中的队员 Tab，跳过修理 pass", "WARN")
+        return
+    if not _try_enter_pass():
+        return  # 另一 pass 进行中：放弃本轮，等下一轮时机
+    try:
+        if not _pass_foreground_ok(win):
+            log("[组号] 游戏窗口未在前台，跳过修理 pass", "WARN")
+            return
+        from . import battle  # 函数内导入，避免循环依赖
+        pos = battle.last_repair_option_pos
+        leader_label = battle.last_repair_option_label
+        fresh = pos is not None and leader_label is not None \
+            and time.time() - battle.last_repair_option_at <= WUYI_POS_FRESH
+        if fresh and load_high_perf():
+            log(f"[组号] 修理 pass 高性能直点：复用队长选项坐标 ({pos[0]},{pos[1]})", "INFO")
+            _for_each_member(
+                win, lambda w, cur: _repair_click_direct(w, cur, pos, leader_label),
+                "修理 pass（高性能直点）", force=force, only_members=True)
+        else:
+            _for_each_member(win, _repair_one, "修理 pass", force=force,
+                             only_members=True)
+    finally:
+        _exit_pass()
+
+
+def _repair_click_direct(win, tab_id, pos, leader_label):
+    """高性能直点：队员对话框与队长同变体时直接点队长选项坐标。
+
+    两套修理弹窗（有装备/无装备）选项位置不同（选项文案唯一：「确认修理」
+    /「算了，还是看看」），且各账号装备状态独立——队员弹窗选项与队长
+    不同时不能直点队长坐标，改按本弹窗映射在本帧内识别选项后点击
+    （同 _repair_one，省一次截图）。
+    点击 y 下移半行高（同巫医：绿字中心比可点击中心偏高）。点击前确认
+    对话框在屏（无对话框/截图失败跳过，不点场景）。
+    """
+    from . import battle, repair  # 函数内导入，避免循环依赖
+    img = win.capture(force_activate=False)
+    if img is None:
+        return
+    items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
+    spec = repair.match_dialog(items)
+    if spec is None:
+        log(f"[组号] 队员 Tab（ID {tab_id}）无修理对话框，跳过", "WARN")
+        return
+    option = spec[1]
+    if option != leader_label:
+        # 队员弹窗变体与队长不同：按本弹窗选项识别点击
+        pt = battle._find_repair_option(items, img_np, option, img=img)
+        if pt is None:
+            log(f"[组号] 队员 Tab（ID {tab_id}）修理弹窗变体不同且选项未识别，跳过", "WARN")
+            return
+        x, y = pt[0], pt[1] + WUYI_OPTION_Y_OFFSET
+        if _guarded_click(win, x, y):
+            log(f"[组号] 队员 Tab（ID {tab_id}）已点击「{option}」"
+                f" @ ({x},{y})（变体不同，识别点击）", "SYS")
+        move_away(win)
+        return
+    x, y = pos[0], pos[1] + WUYI_OPTION_Y_OFFSET
+    if _guarded_click(win, x, y):
+        log(f"[组号] 队员 Tab（ID {tab_id}）已点击修理选项 @ ({x},{y})（高性能直点）", "SYS")
+    move_away(win)
+
+
+def _repair_one(win, tab_id):
+    """单个队员 Tab 的修理对话框处理（出现→点对应弹窗的绿色选项）。
+
+    识别路径：匹配两套弹窗文案 → 按映射取选项 → 定位并点击（y 下移
+    半行高）；点中即由游戏机制保证关闭，不做事后回验。
+    """
+    from . import repair, battle  # 函数内导入，避免循环依赖
+    deadline = time.time() + WUYI_DIALOG_WAIT
+    while time.time() < deadline:
+        img = win.capture(force_activate=False)
+        if img is None:
+            time.sleep(0.5)
+            continue
+        items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
+        spec = repair.match_dialog(items)
+        if spec is None:
+            time.sleep(0.5)
+            continue
+        text, option = spec
+        pt = battle._find_repair_option(items, img_np, option, img=img)
+        if pt is not None:
+            x, y = pt[0], pt[1] + WUYI_OPTION_Y_OFFSET
+            if _guarded_click(win, x, y):
+                log(f"[组号] 队员 Tab（ID {tab_id}）已点击「{option}」"
+                    f" @ ({x},{y})", "SYS")
+            move_away(win)  # 悬停会让选项变色
+            return
+        time.sleep(0.5)  # 对话框在但选项未识别：继续轮询
+    log(f"[组号] 队员 Tab（ID {tab_id}）修理对话框未出现/选项未识别，跳过", "WARN")
+
+
 # ---- 回血回蓝 pass ----
 
 def member_bars_pass(win):

@@ -215,6 +215,28 @@ WUYI_CACHE_GREEN_RATIO = 0.02  # 缓存直点的绿字校验：条带内亮绿�
                                # （选项文字占条带 6~25%，阈值留量；场景植被
                                # 亮绿在无对话框时不参与——校验仅在文案命中后）
 
+# ---- 修理装备对话框（洛阳城；文案/选项规格由 repair 模块提供） ----
+# 修理弹窗只会在任务侧点击修理 NPC 之后出现——战斗线程只做「点击 NPC
+# 后的预期窗口」检查（不做空闲轮询，修理弹窗不会自己弹出，空闲检查纯耗
+# CPU）。点击 NPC 前任务侧置 repair_expected_at，战斗线程窗口内 2s 节奏
+# 检查并点选项；点击成功记录 last_repair_option_at 供任务侧轮询（内存读，
+# 零截图零 OCR——与巫医同一套信号机制）。
+repair_expected_at = 0.0     # 主流程点击修理 NPC 的时刻（任务侧设置、战斗线程读取）
+last_repair_option_pos = None  # 最近一次修理选项点击位置（组号队员 pass 直点复用）
+last_repair_option_at = 0.0    # 最近一次修理选项点击时间（任务侧轮询信号）
+last_repair_option_label = None  # 最近一次点击的选项文案（两套弹窗选项唯一：
+                                 # 「确认修理」/「算了，还是看看」；队员各账号装备
+                                 # 状态不同，弹窗可能不同——变体不同则按本弹窗
+                                 # 映射识别，不直点队长坐标）
+# 按（任务模式, 选项文案）分键的选项位置缓存：两套修理弹窗选项位置不同；
+# 同一弹窗拆多个文案片段时仍共享同一份位置缓存。绿字条带校验同巫医缓存。
+_repair_pos_by_key = {}
+REPAIR_EXPECT_WINDOW = 15.0   # 点击修理 NPC 后的高频检查窗口（秒）：
+                              # 覆盖任务侧 12s 等待上限 + 对话框渲染余量
+REPAIR_CHECK_INTERVAL = 2.0   # 预期窗口内的检查节奏（秒）
+REPAIR_CLICK_COOLDOWN = 5.0   # 点击选项后的冷却期（对话框未关闭时防重复点击）
+_repair_option_missing_warned = False  # 选项未识别告警去重（对话框消失后复位）
+
 # ---- 巫医空闲 OCR 自适应降级（2026-11-04 实测） ----
 # 差分门校准假设被实测推翻：非队长站立场景 2s 间隔噪声差分 2.5~66
 # 全部超过 WUYI_DIFF_THRESHOLD（其他玩家走动/飘字/场景动画），门恒
@@ -978,6 +1000,128 @@ def record_wuyi_option_pos(pt, text=None):
         _wuyi_pos_by_key[_wuyi_cache_key(text)] = (int(pt[0]), int(pt[1]))
 
 
+def _repair_cache_key(option):
+    """修理选项缓存键：任务模式 + 选项文案（两套弹窗各自独立学习）。"""
+    try:
+        mode = current_task_mode()
+    except Exception:
+        mode = None
+    return (mode, option)
+
+
+def _repair_cached_pt(img_np, option=None):
+    """修理选项缓存位置的绿字校验：通过返回缓存点，否则 None（走识别）。
+
+    与 _wuyi_cached_pt 同款：缓存点周围 ±40x±10 条带内须存在亮绿文字
+    才直点（弹窗布局漂移/误命中会被校验拦截，识别成功后刷新缓存）。
+    """
+    key = _repair_cache_key(option)
+    pos = _repair_pos_by_key.get(key)
+    if pos is None or img_np is None:
+        return None
+    x, y = pos
+    if not (0 <= x < img_np.shape[1] and 0 <= y < img_np.shape[0]):
+        return None
+    l, t = max(0, x - 40), max(0, y - 10)
+    r, b = min(img_np.shape[1], x + 40), min(img_np.shape[0], y + 10)
+    if task_tracker.green_ratio(img_np, (l, t, r, b),
+                                min_g=task_tracker.GREEN_BRIGHT_MIN) \
+            >= WUYI_CACHE_GREEN_RATIO:
+        return (x, y)
+    return None
+
+
+def record_repair_option_pos(pt, option=None):
+    """记录修理选项点击位置与时间（组号队员 pass 直点复用 + 任务侧信号）。
+
+    队长侧每次点击修理选项（战斗线程/验证/超时兜底）后调用：同一客户端
+    同一对话框布局，队员 Tab 的选项位置与队长一致，新鲜期内
+    （tab_group.WUYI_POS_FRESH）队员 pass 直接点同一坐标。option 为
+    选项文案（两套弹窗唯一，同时用于变体比对与位置缓存分键）。
+    """
+    global last_repair_option_pos, last_repair_option_at, last_repair_option_label
+    last_repair_option_pos = (int(pt[0]), int(pt[1]))
+    last_repair_option_at = time.time()
+    if option:
+        last_repair_option_label = option
+        _repair_pos_by_key[_repair_cache_key(option)] = (int(pt[0]), int(pt[1]))
+
+
+def _find_green_option(items, img_np, option_text):
+    """在 OCR 行中查找指定绿字选项，返回点击坐标或 None。
+
+    去标点精确子串匹配（游戏内原文）；限定对话框区域（x≥PANEL_MAX_X）
+    且为绿字行，避免误点追踪面板的绿字链接（与 _find_wuyi_option 同款）。
+    """
+    needle = _norm_text(option_text)
+    if not needle:
+        return None
+    for txt, rect, score in items:
+        if score >= 0.55 and needle in _norm_text(txt) \
+                and rect[0] >= task_tracker.PANEL_MAX_X \
+                and task_tracker.is_green_text(img_np, rect):
+            return task_tracker.green_text_center(img_np, rect,
+                                                  prefer_underline=False)
+    return None
+
+
+def _find_repair_option(items, img_np, option_text, img=None):
+    """修理选项定位：绿字匹配 → 未命中且传入 PIL 帧时对话框区 2x 放大重识别。"""
+    pt = _find_green_option(items, img_np, option_text)
+    if pt is not None or img is None:
+        return pt
+    l, t, r, b = task_tracker.DIALOG_REGION
+    crop = img.crop((l, t, r, b)).resize(((r - l) * 2, (b - t) * 2),
+                                         Image.LANCZOS)
+    items2, _ = game_map.ocr_zoom(crop)  # 快引擎：max/1600 检出分辨率同档
+    mapped = [(txt, [l + rect[0] // 2, t + rect[1] // 2,
+                     l + rect[2] // 2, t + rect[3] // 2], score)
+              for txt, rect, score in items2]
+    return _find_green_option(mapped, img_np, option_text)
+
+
+def _handle_repair_dialog(win, img=None):
+    """修理对话框：文案命中 repair.REPAIR_DIALOGS 时点击对应绿色选项。
+
+    两套弹窗（有装备/无装备）互斥，按映射表匹配文案 → 对应选项；选项
+    定位走分键位置缓存（绿字校验）→ 绿字识别 → 2x 放大兜底。返回是否
+    已点击。仅在预期窗口内被 watch_loop 调用（不做空闲轮询）。
+
+    与巫医一致走 dialog_ocr_skip 模板门：高性能模式下对话框模板未命中
+    即跳过对话区 OCR（标准对话框边框必命中）；模板门漏检由任务侧 12s
+    超时兜底自点覆盖（兜底路径直接 OCR，不再过模板门）。
+    """
+    global _repair_option_missing_warned
+    from . import repair  # 函数内导入：repair 顶层导入本模块（避免循环依赖）
+    if img is None:
+        img = win.capture(force_activate=False)
+    if img is None:
+        return False
+    if dialog_common.dialog_ocr_skip(img):
+        return False  # 高性能+模板未命中：无对话框，跳过修理 OCR
+    items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
+    spec = repair.match_dialog(items)
+    if spec is None:
+        _repair_option_missing_warned = False
+        return False
+    text, option = spec
+    pt = _repair_cached_pt(img_np, option)
+    if pt is None:
+        pt = _find_repair_option(items, img_np, option, img=img)
+    if pt is None:
+        if not _repair_option_missing_warned:
+            log(f"[战斗] 修理对话框出现，但未识别到「{option}」选项", "WARN")
+            _repair_option_missing_warned = True
+        return False
+    human_click(win, pt[0], pt[1])
+    log(f"[战斗] 修理对话框：已点击「{option}」 @ ({pt[0]},{pt[1]})"
+        f"（弹窗: {text[:6]}…）", "SYS")
+    record_repair_option_pos(pt, option)  # 组号队员 pass 直点复用 + 任务侧信号
+    move_away(win)  # 悬停会让选项变色（切队员 Tab 后干扰绿字判定）
+    _repair_option_missing_warned = False
+    return True
+
+
 def _wuyi_check_interval(now, last_battle_end_at, expected_at):
     """巫医检查节奏：战后高发窗口或主流程 NPC 预期窗口内 2s，否则 10s 兜底。
 
@@ -1108,6 +1252,8 @@ def watch_loop(win):
     last_battle_end_at = 0.0  # 上次战斗结束时间（巫医弹窗高发窗口起点）
     last_hezi_check = 0.0  # 上次修罗盒子检查时间
     hezi_click_at = 0.0    # 上次点击「我需要」时间（冷却）
+    last_repair_check = 0.0  # 上次修理对话框检查时间（仅预期窗口内）
+    repair_click_at = 0.0    # 上次点击修理选项时间（冷却）
     battle_enter_at = 0.0  # 本场战斗进场时刻（坐标快速结束信号的启用门）
     pos_hold = False       # 坐标路径结束确认后置位：先见一帧非战斗画面才允许
                            # 重新进入判定（胜利画面残留回合横幅可能仍匹配战斗
@@ -1149,6 +1295,8 @@ def watch_loop(win):
                         _watch_in_battle = True  # 任务侧共享状态
                         battle_no += 1
                         battle_enter_at = time.time()  # 坐标快速结束信号启用门起点
+                        from . import repair  # 函数内导入：避免顶层循环依赖
+                        repair.record_battle(win)  # 今日修理计数（按任务模式、自然日）
                         debug_overlay.set_battle(battle_no)  # 调试悬浮层场次
                         debug_overlay.set_phase(f"战斗中 · 第 {battle_no} 场")  # 看板阶段
                         log(f"[战斗] 第 {battle_no} 场战斗开始", "SYS")
@@ -1234,6 +1382,14 @@ def watch_loop(win):
                     if now - hezi_click_at >= XIULUO_HEZI_RETRY_COOLDOWN \
                             and _handle_hezi(win, bgr=bgr):
                         hezi_click_at = now
+                # 修理对话框：只在任务侧点击修理 NPC 后的预期窗口内检查
+                # （修理弹窗不会自行出现，窗口外保持零 OCR 成本）
+                if now - repair_expected_at < REPAIR_EXPECT_WINDOW \
+                        and now - last_repair_check >= REPAIR_CHECK_INTERVAL:
+                    last_repair_check = now
+                    if now - repair_click_at >= REPAIR_CLICK_COOLDOWN \
+                            and _handle_repair_dialog(win, img=img):
+                        repair_click_at = now
         except UserAbort as e:
             log(f"[战斗] {e}，战斗监控退出", "WARN")
             break

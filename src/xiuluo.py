@@ -57,6 +57,7 @@ from .battle import is_in_battle, is_in_battle_frame  # 战斗状态判定（统
 from .battle import WUYI_DIALOG_TEXTS  # 巫医对话框文案（自动巫医等待判定）
 from .battle import _find_wuyi_option  # 「全部医治和修复」选项定位（验证模式自行点击）
 from . import battle  # 巫医预期时间戳（点 NPC 后通知战斗线程切入 2s 高频检查）
+from . import repair  # 自动修理装备（洛阳城，共享工具模块）
 from .control_window import (load_task_counts, load_xiuluo_settings,
                              load_xiuluo_shout_switch,
                              load_xiuluo_check_team,
@@ -64,7 +65,9 @@ from .control_window import (load_task_counts, load_xiuluo_settings,
                              load_xiuluo_auto_rejoin,
                              load_xiuluo_auto_wuyi,
                              load_xiuluo_wuyi_interval,
-                             load_xiuluo_tab_group)  # 任务次数上限/修罗设置/自动巫医/自动归队/组号开关
+                             load_xiuluo_auto_repair,
+                             load_xiuluo_repair_interval,
+                             load_xiuluo_tab_group)  # 任务次数上限/修罗设置/自动巫医/自动修理/自动归队/组号开关
 from .xuanshu import follow_task  # 任务跟踪（绿字点击寻路/战斗跳过/附加对话处理）
 from . import tab_group  # 组号模式（一窗口多 Tab）：初始化/队员 pass/抑制标志
 from .dialog_common import (_dialog_text_present, _norm_dialog_present,
@@ -610,6 +613,16 @@ def verify_tab_wuyi_flow(win):
         return False, f"{info}；组号模式未激活（需窗口内 ≥2 个已登录 Tab），队员 pass 未执行"
     tab_group.member_wuyi_pass(win, force=True)
     return True, f"{info}；队员巫医 pass 已执行"
+
+
+def verify_repair_flow(win):
+    """验证自动修理流程（诊断-验证修理，主进程调用，不改变任务状态）。"""
+    return repair.verify_repair_flow(win, prefix="修罗")
+
+
+def verify_tab_repair_flow(win):
+    """验证组号修理（诊断-验证组号修理，主进程调用，不改变任务状态）。"""
+    return repair.verify_tab_repair_flow(win, TASK_MODE, prefix="修罗")
 
 
 def _near_claim_spot(pos, tolerance):
@@ -2188,11 +2201,17 @@ def run_loop(win, cycle_interval=1.0):
     wuyi_interval = max(1, load_xiuluo_wuyi_interval())
     log(f"[修罗] 自动巫医: {'开' if auto_wuyi else '关'}"
         + (f"（每 {wuyi_interval} 轮）" if auto_wuyi else ""), "SYS")
+    # 自动修理装备（通用设置开关，默认开、每 30 场战斗一次）：每轮领取后
+    # 按今日累计战斗场次判断，满足即前往洛阳城修理（repair.py）
+    auto_repair = load_xiuluo_auto_repair()
+    repair_interval = max(1, load_xiuluo_repair_interval())
+    log(f"[修罗] 自动修理装备: {'开' if auto_repair else '关'}"
+        + (f"（每 {repair_interval} 场战斗）" if auto_repair else ""), "SYS")
     log(f"[修罗] 检查队伍: {'开（领取前检查队伍）' if check_team else '关（跳过队伍检查，直接领取）'}", "SYS")
     _shout_text = _build_shout_text() if load_xiuluo_shout_switch() else ""
     if _shout_text:
         log(f"[修罗] 缺人自动喊话: 开（{_shout_text}，最短间隔 {SHOUT_MIN_INTERVAL}s）", "SYS")
-    # 自动创建队伍（修罗设置开关，默认关闭）：任务开始时若无队伍自动
+    # 自动创建队伍（修罗设置开关，默认开启）：任务开始时若无队伍自动
     # 创建（组队按钮 → 菜单「创建队伍」），创建成功后走正常队伍检查与
     # 补人流程；已有队伍时本开关无其他逻辑。战斗中不操作（组队菜单会
     # 遮挡战斗操作），顺延到战斗结束后的首次检查。
@@ -2233,7 +2252,7 @@ def run_loop(win, cycle_interval=1.0):
     if 0 < max_rounds <= done:
         log(f"[修罗] 当天进度已达上限 {done}/{max_rounds}，无需再执行", "SYS")
         return f"已完成 {done} 次修罗任务，达到次数上限 {max_rounds}"
-    # 组号专用（高级设置开关，默认关闭）：一窗口多 Tab 多账号时激活，
+    # 组号专用（高级设置开关，默认开启）：一窗口多 Tab 多账号时激活，
     # 队长带队、队员按账号配置挂战斗/巫医/补血蓝。激活时要求「检查
     # 队伍」开关必须开启（队员身份靠队伍面板匹配，用户 2026-11-07
     # 指定）；队长判定后检查队员组号战斗动作设置，缺失即停止任务
@@ -2317,6 +2336,7 @@ def run_loop(win, cycle_interval=1.0):
         #    本轮开始必然无任务——has_task（区域 OCR ~0.9s）只在可能
         #    续跑时检查（进程首轮或上轮跟踪失败未确认完成）
         claim_items = None  # 领取校验帧（续跑路径无，跟踪首轮自行截图+OCR）
+        repair_round = False  # 本轮是否执行了自动修理（续跑路径不修理）
         # 续跑检查（一次截帧）：追踪面板是否有修罗任务。面板门控只用于
         # 「任务存在」判定（防静态区域浮字误命中），面板缺席/战斗帧按
         # 无任务放行进入领取分支——用户 2026-11-11：领取被拒→补人→
@@ -2455,6 +2475,8 @@ def run_loop(win, cycle_interval=1.0):
             # 对话框（若有）→ 去巫医 → 识别模板 → 点击 → 全部医治；
             # 对话框可能在走近巫医时才弹出，到达窗口另有兜底
             wuyi_round = auto_wuyi and round_no % wuyi_interval == 0
+            repair_round = auto_repair and repair.is_due(win, TASK_MODE,
+                                                         repair_interval)
             # 领取校验确认帧的 OCR 行（取帧失败路径为 None）：实测已含该
             # 对话框（2026-11-10 3/3 轮），直接复用取消免一次截图+OCR
             claim_dialog_items = claim_items[0] if claim_items else None
@@ -2468,11 +2490,20 @@ def run_loop(win, cycle_interval=1.0):
                 # follow 对话区 OCR + 战斗线程巫医检查 + 看打 2x 兜底
                 # 三重空烧（2026-11-09 py-spy 实测领取后 CPU 峰值来源）
                 _dismiss_block_dialog_after_claim(win, items=claim_dialog_items)
+            # 自动修理装备（用户流程，默认开、每 30 场战斗一次）：今日累计
+            # 场次达到间隔 → 前往洛阳城修理（巫医之后：同图巫医先做，修理
+            # 跨图后直接恢复寻路）。失败仅记日志，不阻断后续寻路。
+            if repair_round:
+                debug_overlay.set_phase("自动修理")  # 看板阶段
+                ok3, info3 = repair.auto_repair(win, TASK_MODE, prefix="修罗")
+                log(f"[修罗][修理] {info3}", "SYS" if ok3 else "WARN")
         # 2~4. 寻路 / 对话开打 / 战斗：由任务跟踪统一驱动
         #     （寻路点击绿字自动进行，对话开打走附加对话处理，
         #      战斗由战斗监控线程自动操作、跟踪中自动跳过）；
         #     领取校验帧传入后首轮跳过截图+OCR 立即点击绿字
-        ok, info = _follow_to_done(win, first_items=claim_items)
+        #     （修理行程后旧帧已过期——重新截帧识别）
+        ok, info = _follow_to_done(
+            win, first_items=None if repair_round else claim_items)
         if not ok:
             log(f"[修罗] {info}", "WARN")
             time.sleep(cycle_interval)

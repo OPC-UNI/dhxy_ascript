@@ -461,7 +461,7 @@ def save_wubei_check_team(on):
     return {"status": "success"}
 
 
-# ---- 五倍自动创建队伍（UI 开关，角色设置持久化；默认关闭。开启时
+# ---- 五倍自动创建队伍（UI 开关，角色设置持久化；默认开启。开启时
 #      任务启动若无队伍自动创建——点组队按钮 → 菜单「创建队伍」，
 #      创建成功后走正常队伍检查与补人流程；已有队伍无操作。
 #      实现见 team.ensure_team_created） ----
@@ -469,8 +469,8 @@ _WUBEI_AUTO_CREATE_TEAM_KEY = "wubei_auto_create_team"
 
 
 def load_wubei_auto_create_team():
-    """读取五倍自动创建队伍开关（首次默认关闭）。"""
-    return bool(role_settings.get(_WUBEI_AUTO_CREATE_TEAM_KEY, False))
+    """读取五倍自动创建队伍开关（首次默认开启）。"""
+    return bool(role_settings.get(_WUBEI_AUTO_CREATE_TEAM_KEY, True))
 
 
 def save_wubei_auto_create_team(on):
@@ -649,7 +649,7 @@ def save_xiuluo_check_team(on):
     return {"status": "success"}
 
 
-# ---- 修罗自动创建队伍（UI 开关，角色设置持久化；默认关闭。开启时
+# ---- 修罗自动创建队伍（UI 开关，角色设置持久化；默认开启。开启时
 #      任务启动若无队伍自动创建——点组队按钮 → 菜单「创建队伍」，
 #      创建成功后走正常队伍检查与补人流程；已有队伍无操作。
 #      实现见 team.ensure_team_created） ----
@@ -657,8 +657,8 @@ _XIULUO_AUTO_CREATE_TEAM_KEY = "xiuluo_auto_create_team"
 
 
 def load_xiuluo_auto_create_team():
-    """读取修罗自动创建队伍开关（首次默认关闭）。"""
-    return bool(role_settings.get(_XIULUO_AUTO_CREATE_TEAM_KEY, False))
+    """读取修罗自动创建队伍开关（首次默认开启）。"""
+    return bool(role_settings.get(_XIULUO_AUTO_CREATE_TEAM_KEY, True))
 
 
 def save_xiuluo_auto_create_team(on):
@@ -776,6 +776,84 @@ def save_wubei_wuyi_interval(value):
     return {"status": "success", "interval": value}
 
 
+# ---- 自动修理装备（UI 开关+间隔场次，角色设置持久化；默认开启、每 30
+#      场战斗一次——领取任务后按今日累计场次判断，前往洛阳城修理。
+#      实现在 src/repair.py，战斗线程预期窗口处理对话框） ----
+_XIULUO_AUTO_REPAIR_KEY = "xiuluo_auto_repair"
+_XIULUO_REPAIR_INTERVAL_KEY = "xiuluo_repair_interval"
+_WUBEI_AUTO_REPAIR_KEY = "wubei_auto_repair"
+_WUBEI_REPAIR_INTERVAL_KEY = "wubei_repair_interval"
+_REPAIR_INTERVAL_MIN = 1
+_REPAIR_INTERVAL_MAX = 999
+_REPAIR_INTERVAL_DEFAULT = 30
+
+
+def load_xiuluo_auto_repair():
+    """读取修罗自动修理装备开关（首次默认开启）。"""
+    return bool(role_settings.get(_XIULUO_AUTO_REPAIR_KEY, True))
+
+
+def save_xiuluo_auto_repair(on):
+    """保存修罗自动修理装备开关，返回操作结果。"""
+    role_settings.set_value(_XIULUO_AUTO_REPAIR_KEY, bool(on))
+    return {"status": "success"}
+
+
+def load_xiuluo_repair_interval():
+    """读取修罗自动修理间隔（场战斗，首次默认 30）。"""
+    try:
+        value = int(role_settings.get(_XIULUO_REPAIR_INTERVAL_KEY,
+                                      _REPAIR_INTERVAL_DEFAULT))
+    except (TypeError, ValueError):
+        value = _REPAIR_INTERVAL_DEFAULT
+    return max(_REPAIR_INTERVAL_MIN, min(_REPAIR_INTERVAL_MAX, value))
+
+
+def save_xiuluo_repair_interval(value):
+    """保存修罗自动修理间隔（1~999 场），返回操作结果。"""
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        return {"status": "error", "msg": "INVALID_INTERVAL"}
+    if not (_REPAIR_INTERVAL_MIN <= value <= _REPAIR_INTERVAL_MAX):
+        return {"status": "error", "msg": "OUT_OF_RANGE"}
+    role_settings.set_value(_XIULUO_REPAIR_INTERVAL_KEY, value)
+    return {"status": "success", "interval": value}
+
+
+def load_wubei_auto_repair():
+    """读取五倍自动修理装备开关（首次默认开启，与修罗一致）。"""
+    return bool(role_settings.get(_WUBEI_AUTO_REPAIR_KEY, True))
+
+
+def save_wubei_auto_repair(on):
+    """保存五倍自动修理装备开关，返回操作结果。"""
+    role_settings.set_value(_WUBEI_AUTO_REPAIR_KEY, bool(on))
+    return {"status": "success"}
+
+
+def load_wubei_repair_interval():
+    """读取五倍自动修理间隔（场战斗，首次默认 30，与修罗一致）。"""
+    try:
+        value = int(role_settings.get(_WUBEI_REPAIR_INTERVAL_KEY,
+                                      _REPAIR_INTERVAL_DEFAULT))
+    except (TypeError, ValueError):
+        value = _REPAIR_INTERVAL_DEFAULT
+    return max(_REPAIR_INTERVAL_MIN, min(_REPAIR_INTERVAL_MAX, value))
+
+
+def save_wubei_repair_interval(value):
+    """保存五倍自动修理间隔（1~999 场），返回操作结果。"""
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        return {"status": "error", "msg": "INVALID_INTERVAL"}
+    if not (_REPAIR_INTERVAL_MIN <= value <= _REPAIR_INTERVAL_MAX):
+        return {"status": "error", "msg": "OUT_OF_RANGE"}
+    role_settings.set_value(_WUBEI_REPAIR_INTERVAL_KEY, value)
+    return {"status": "success", "interval": value}
+
+
 # ---- 五倍是否领取奎木狼任务（UI 开关，角色设置持久化，默认开启；
 #      关闭时领取到奎木狼任务自动重新领取替换，逻辑同锁妖网） ----
 _WUBEI_KUIMULANG_KEY = "wubei_kuimulang"
@@ -792,15 +870,16 @@ def save_wubei_kuimulang_switch(on):
     return {"status": "success"}
 
 
-# ---- 组号专用（UI 开关，修罗/五倍各一，角色设置持久化，默认关闭；
+# ---- 组号专用（UI 开关，修罗/五倍各一，角色设置持久化，默认开启；
 #      一个窗口内多个登录 Tab 视为一组号：队长带队，队员 Tab 自动挂
-#      战斗/巫医/补血蓝，实现见 src/tab_group.py） ----
+#      战斗/巫医/补血蓝，实现见 src/tab_group.py。单号（已登录 Tab<2）
+#      不激活，行为与关闭时完全一致） ----
 _XIULUO_TAB_GROUP_KEY = "xiuluo_tab_group"
 
 
 def load_xiuluo_tab_group():
-    """读取修罗组号专用开关（首次默认关闭）。"""
-    return bool(role_settings.get(_XIULUO_TAB_GROUP_KEY, False))
+    """读取修罗组号专用开关（首次默认开启）。"""
+    return bool(role_settings.get(_XIULUO_TAB_GROUP_KEY, True))
 
 
 def save_xiuluo_tab_group(on):
@@ -813,8 +892,8 @@ _WUBEI_TAB_GROUP_KEY = "wubei_tab_group"
 
 
 def load_wubei_tab_group():
-    """读取五倍组号专用开关（首次默认关闭）。"""
-    return bool(role_settings.get(_WUBEI_TAB_GROUP_KEY, False))
+    """读取五倍组号专用开关（首次默认开启）。"""
+    return bool(role_settings.get(_WUBEI_TAB_GROUP_KEY, True))
 
 
 def save_wubei_tab_group(on):
@@ -1110,6 +1189,8 @@ class ControlWindow(WebWindow):
         self.expose(self.save_xiuluo_auto_rejoin)
         self.expose(self.save_xiuluo_auto_wuyi)
         self.expose(self.save_xiuluo_wuyi_interval)
+        self.expose(self.save_xiuluo_auto_repair)
+        self.expose(self.save_xiuluo_repair_interval)
         self.expose(self.save_xiuluo_tab_group)
         self.expose(self.group_check_team)
         self.expose(self.group_last_scan)
@@ -1127,6 +1208,8 @@ class ControlWindow(WebWindow):
         self.expose(self.save_wubei_shout_switch)
         self.expose(self.save_wubei_auto_wuyi)
         self.expose(self.save_wubei_wuyi_interval)
+        self.expose(self.save_wubei_auto_repair)
+        self.expose(self.save_wubei_repair_interval)
         self.expose(self.save_wubei_kuimulang_switch)
         self.expose(self.save_wubei_tab_group)
         self.expose(self.save_xiuluo_shout_switch)
@@ -1140,12 +1223,16 @@ class ControlWindow(WebWindow):
         self.expose(self.verify_xiuluo_claim)
         self.expose(self.verify_xiuluo_wuyi)
         self.expose(self.verify_xiuluo_tab_wuyi)
+        self.expose(self.verify_xiuluo_repair)
+        self.expose(self.verify_xiuluo_tab_repair)
         self.expose(self.verify_xiuluo_claim_silent)
         self.expose(self.verify_xiuluo_wuyi_silent)
         self.expose(self.verify_xiuluo_return_silent)
         self.expose(self.verify_wubei_claim)
         self.expose(self.verify_wubei_return)
         self.expose(self.verify_wubei_wuyi)
+        self.expose(self.verify_wubei_repair)
+        self.expose(self.verify_wubei_tab_repair)
         self.expose(self.verify_wubei_xj)
         self.expose(self.verify_wuhuan_cloth)
         self.expose(self.verify_wuhuan_claim)
@@ -1648,6 +1735,8 @@ class ControlWindow(WebWindow):
                 "xiuluo_auto_rejoin": load_xiuluo_auto_rejoin(),
                 "xiuluo_auto_wuyi": load_xiuluo_auto_wuyi(),
                 "xiuluo_wuyi_interval": load_xiuluo_wuyi_interval(),
+                "xiuluo_auto_repair": load_xiuluo_auto_repair(),
+                "xiuluo_repair_interval": load_xiuluo_repair_interval(),
                 "xiuluo_tab_group": load_xiuluo_tab_group(),
                 "high_perf": load_high_perf(),
                 "auto_refill": load_auto_refill(),
@@ -1660,6 +1749,8 @@ class ControlWindow(WebWindow):
                           "shout": load_wubei_shout_switch(),
                           "auto_wuyi": load_wubei_auto_wuyi(),
                           "wuyi_interval": load_wubei_wuyi_interval(),
+                          "auto_repair": load_wubei_auto_repair(),
+                          "repair_interval": load_wubei_repair_interval(),
                           "kuimulang": load_wubei_kuimulang_switch(),
                           "tab_group": load_wubei_tab_group()},
                 "xiuluo_shout": load_xiuluo_shout_switch(),
@@ -1869,6 +1960,14 @@ class ControlWindow(WebWindow):
         """修罗设置变更：保存自动巫医间隔（轮）。"""
         return save_xiuluo_wuyi_interval(value)
 
+    def save_xiuluo_auto_repair(self, on):
+        """修罗设置变更：保存自动修理装备开关状态。"""
+        return save_xiuluo_auto_repair(on)
+
+    def save_xiuluo_repair_interval(self, value):
+        """修罗设置变更：保存自动修理间隔（场战斗）。"""
+        return save_xiuluo_repair_interval(value)
+
     def save_xiuluo_tab_group(self, on):
         """修罗设置变更：保存组号专用开关状态。"""
         return save_xiuluo_tab_group(on)
@@ -1920,6 +2019,14 @@ class ControlWindow(WebWindow):
     def save_wubei_wuyi_interval(self, value):
         """五倍设置变更：保存自动巫医间隔（轮）。"""
         return save_wubei_wuyi_interval(value)
+
+    def save_wubei_auto_repair(self, on):
+        """五倍设置变更：保存自动修理装备开关状态。"""
+        return save_wubei_auto_repair(on)
+
+    def save_wubei_repair_interval(self, value):
+        """五倍设置变更：保存自动修理间隔（场战斗）。"""
+        return save_wubei_repair_interval(value)
 
     def save_wubei_kuimulang_switch(self, on):
         """五倍设置变更：保存领取奎木狼任务开关状态。"""
@@ -2143,6 +2250,84 @@ class ControlWindow(WebWindow):
                 ok_js = "true" if ok else "false"
                 self.webview_instance.evaluate_js(
                     f"if(window.onTabWuyiVerifyResult){{window.onTabWuyiVerifyResult({ok_js}, {json.dumps(info)});}}")
+            except Exception:
+                pass
+
+    # ---- 自动修理装备验证（诊断页：修罗/五倍 × 单号/组号） ----
+
+    def verify_xiuluo_repair(self):
+        """诊断-验证修理：修罗自动修理链路（主进程自行点选项，不改任务状态）。"""
+        return self._start_repair_verify("xiuluo", group=False)
+
+    def verify_xiuluo_tab_repair(self):
+        """诊断-验证组号修理：队长修理链路 + 队员 Tab 修理 pass。"""
+        return self._start_repair_verify("xiuluo", group=True)
+
+    def verify_wubei_repair(self):
+        """诊断-验证修理：五倍自动修理链路（主进程自行点选项，不改任务状态）。"""
+        return self._start_repair_verify("wubei", group=False)
+
+    def verify_wubei_tab_repair(self):
+        """诊断-验证组号修理：五倍队长修理链路 + 队员 Tab 修理 pass。"""
+        return self._start_repair_verify("wubei", group=True)
+
+    def _start_repair_verify(self, task, group):
+        """修理验证公共入口：校验任务/窗口状态后起验证线程。"""
+        if self._tm.is_running():
+            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if self._verifying:
+            return {"status": "error", "msg": "验证进行中，请稍候"}
+        win = game.find_main_window()
+        if win is None:
+            return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
+        if not _game_window_clickable(win):
+            return {"status": "error",
+                    "msg": "游戏窗口被其他窗口遮挡，请将游戏窗口置于前台后再验证"}
+        self._verifying = True
+        label = "修罗" if task == "xiuluo" else "五倍"
+        name = f"{task}-{'tab-' if group else ''}repair-verify"
+        threading.Thread(target=self._run_repair_verify,
+                         args=(task, group, win), daemon=True, name=name).start()
+        msg = f"验证已开始：{label}修理链路（世界地图 → 洛阳城 → 修理 NPC → 对话框选项）"
+        if group:
+            msg += "；随后逐个队员 Tab 点修理对话框并切回队长（需 ≥2 个已登录 Tab）"
+        return {"status": "success", "msg": msg}
+
+    def _run_repair_verify(self, task, group, win):
+        """修理验证线程体：跑任务模块的修理链路，结果回推页面与日志窗。"""
+        from . import xiuluo, wubei  # 延迟导入：任务模块反向导入本模块（避免循环）
+        mod = xiuluo if task == "xiuluo" else wubei
+        label = "修罗" if task == "xiuluo" else "五倍"
+        try:
+            self.add_logs([f"[验证] 开始验证{label}自动修理"
+                           + ("（含组号队员 pass）" if group else "") + "..."])
+            if group:
+                ok, info = mod.verify_tab_repair_flow(win)
+            else:
+                ok, info = mod.verify_repair_flow(win)
+        except Exception as e:
+            ok, info = False, f"验证异常: {e}"
+        try:
+            self.add_logs([f"[验证] 结果: {info}"])
+        except Exception:
+            pass
+        self._notify_repair_verify_result(task, group, ok, info)
+        self._verifying = False
+
+    def _notify_repair_verify_result(self, task, group, ok, info):
+        """修理验证结果回推页面（按任务/单号组号选择对应回调）。"""
+        callbacks = {
+            ("xiuluo", False): "onRepairVerifyResult",
+            ("xiuluo", True): "onTabRepairVerifyResult",
+            ("wubei", False): "onWubeiRepairVerifyResult",
+            ("wubei", True): "onWubeiTabRepairVerifyResult",
+        }
+        cb = callbacks[(task, group)]
+        if self.webview_instance:
+            try:
+                ok_js = "true" if ok else "false"
+                self.webview_instance.evaluate_js(
+                    f"if(window.{cb}){{window.{cb}({ok_js}, {json.dumps(info)});}}")
             except Exception:
                 pass
 

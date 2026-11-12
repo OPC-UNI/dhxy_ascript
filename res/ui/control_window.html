@@ -734,7 +734,7 @@
                     <label class="switch-row">
                         <input type="checkbox" id="xiuluo-auto-create-team">
                         <span class="switch-track"></span>
-                        <span>自动创建队伍（任务开始时无队伍自动创建，默认关闭）</span>
+                        <span>自动创建队伍（任务开始时无队伍自动创建，默认开启）</span>
                     </label>
                     <label class="switch-row">
                         <input type="checkbox" id="xiuluo-auto-rejoin">
@@ -759,6 +759,19 @@
                             <button class="th-btn" onclick="xiuluoWuyiInterval(1)">＋</button>
                         </div>
                     </div>
+                    <label class="switch-row">
+                        <input type="checkbox" id="xiuluo-auto-repair">
+                        <span class="switch-track"></span>
+                        <span>自动修理装备（每 N 场战斗一次，默认开启）</span>
+                    </label>
+                    <div class="group-row" id="xiuluo-repair-interval-row">
+                        <span class="group-label">修理间隔（场）</span>
+                        <div class="group-ctrl">
+                            <button class="th-btn" onclick="xiuluoRepairInterval(-1)">−</button>
+                            <span class="th-val" id="xiuluo-repair-interval">30</span>
+                            <button class="th-btn" onclick="xiuluoRepairInterval(1)">＋</button>
+                        </div>
+                    </div>
                     <div class="group-row">
                         <span class="group-label">最少人数</span>
                         <div class="group-ctrl">
@@ -777,7 +790,7 @@
                     <label class="switch-row">
                         <input type="checkbox" id="xiuluo-tab-group">
                         <span class="switch-track"></span>
-                        <span>组号专用（一窗口多账号：队员自动挂战斗/巫医/补血蓝，非队长停止任务）</span>
+                        <span>组号专用（一窗口多账号：队员自动挂战斗/巫医/补血蓝，非队长停止任务；默认开启，单号不激活）</span>
                     </label>
                 </div>
             </div>
@@ -808,7 +821,7 @@
                     <label class="switch-row">
                         <input type="checkbox" id="wubei-auto-create-team">
                         <span class="switch-track"></span>
-                        <span>自动创建队伍（任务开始时无队伍自动创建，默认关闭）</span>
+                        <span>自动创建队伍（任务开始时无队伍自动创建，默认开启）</span>
                     </label>
                     <label class="switch-row">
                         <input type="checkbox" id="wubei-auto-rejoin">
@@ -834,6 +847,19 @@
                         </div>
                     </div>
                     <label class="switch-row">
+                        <input type="checkbox" id="wubei-auto-repair">
+                        <span class="switch-track"></span>
+                        <span>自动修理装备（每 N 场战斗一次，默认开启）</span>
+                    </label>
+                    <div class="group-row" id="wubei-repair-interval-row">
+                        <span class="group-label">修理间隔（场）</span>
+                        <div class="group-ctrl">
+                            <button class="th-btn" onclick="wubeiRepairInterval(-1)">−</button>
+                            <span class="th-val" id="wubei-repair-interval">30</span>
+                            <button class="th-btn" onclick="wubeiRepairInterval(1)">＋</button>
+                        </div>
+                    </div>
+                    <label class="switch-row">
                         <input type="checkbox" id="wubei-suoyaowang" disabled>
                         <span class="switch-track"></span>
                         <span>领取锁妖网任务（暂不可用，默认关闭）</span>
@@ -846,7 +872,7 @@
                     <label class="switch-row">
                         <input type="checkbox" id="wubei-tab-group">
                         <span class="switch-track"></span>
-                        <span>组号专用（一窗口多账号：队员自动挂战斗/巫医/补血蓝，非队长停止任务）</span>
+                        <span>组号专用（一窗口多账号：队员自动挂战斗/巫医/补血蓝，非队长停止任务；默认开启，单号不激活）</span>
                     </label>
                 </div>
             </div>
@@ -1236,6 +1262,14 @@
                         <span class="verify-result" id="tab-wuyi-verify-result"></span>
                     </div>
                     <div class="verify-row">
+                        <button id="btn-verify-xiuluo-repair" class="btn" onclick="verifyXiuluoRepair()">验证修理</button>
+                        <span class="verify-result" id="repair-verify-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="btn-verify-xiuluo-tab-repair" class="btn" onclick="verifyXiuluoTabRepair()">验证组号修理</button>
+                        <span class="verify-result" id="tab-repair-verify-result"></span>
+                    </div>
+                    <div class="verify-row">
                         <button id="btn-verify-xiuluo-claim-silent" class="btn" onclick="verifyXiuluoClaimSilent()">静默修罗领取</button>
                         <span class="verify-result" id="silent-claim-verify-result"></span>
                     </div>
@@ -1247,7 +1281,7 @@
                         <button id="btn-verify-xiuluo-return-silent" class="btn" onclick="verifyXiuluoReturnSilent()">静默修罗回程</button>
                         <span class="verify-result" id="silent-return-verify-result"></span>
                     </div>
-                    <div class="group-hint">与实际流程一致、时序无额外延时，且都不改变任务状态：回程=定位回城符不点击；领取=点击领取按钮开对话框、选项仅定位不点击、点屏幕中间关闭；巫医=走位到 NPC、定位后点击打开对话框（医治选项由战斗线程处理）；组号巫医=巫医完整链路后逐个切换队员 Tab 点击其医治对话框并切回队长（需窗口内 ≥2 个已登录 Tab，开关状态不校验）。静默修罗领取/静默修罗巫医/静默修罗回程=与领取/巫医/回程验证同流程，但全程静默点击（不移动物理鼠标、不激活游戏窗口，游戏窗口可不前台），用于验证静默通道跑通完整链路。任务运行中不可验证。</div>
+                    <div class="group-hint">与实际流程一致、时序无额外延时，且都不改变任务状态：回程=定位回城符不点击；领取=点击领取按钮开对话框、选项仅定位不点击、点屏幕中间关闭；巫医=走位到 NPC、定位后点击打开对话框（医治选项由战斗线程处理）；组号巫医=巫医完整链路后逐个切换队员 Tab 点击其医治对话框并切回队长（需窗口内 ≥2 个已登录 Tab，开关状态不校验）；修理=走位到洛阳城修理 NPC、点击打开对话框（两套弹窗按文案→选项映射，选项由验证流程自行点击，与战斗线程等效）；组号修理=修理完整链路后逐个切换队员 Tab 点击其修理对话框并切回队长（需 ≥2 个已登录 Tab）。静默修罗领取/静默修罗巫医/静默修罗回程=与领取/巫医/回程验证同流程，但全程静默点击（不移动物理鼠标、不激活游戏窗口，游戏窗口可不前台），用于验证静默通道跑通完整链路。任务运行中不可验证。</div>
                 </div>
                 <div class="group-box">
                     <div class="group-title">五倍链路</div>
@@ -1264,10 +1298,18 @@
                         <span class="verify-result" id="wubei-wuyi-verify-result"></span>
                     </div>
                     <div class="verify-row">
+                        <button id="btn-verify-wubei-repair" class="btn" onclick="verifyWubeiRepair()">验证修理</button>
+                        <span class="verify-result" id="wubei-repair-verify-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="btn-verify-wubei-tab-repair" class="btn" onclick="verifyWubeiTabRepair()">验证组号修理</button>
+                        <span class="verify-result" id="wubei-tab-repair-verify-result"></span>
+                    </div>
+                    <div class="verify-row">
                         <button id="btn-verify-wubei-xj" class="btn" onclick="verifyWubeiXj()">测试白龙马模板</button>
                         <span class="verify-result" id="wubei-xj-verify-result"></span>
                     </div>
-                    <div class="group-hint">与实际流程一致、时序无额外延时，且不改变任务状态：领取=走位到宝象国领取点 → 点击领取入口（领取任务按钮/降魔侍卫）打开对话框 → 选项「除魔卫国，义不容辞」仅定位不点击 → 点拒绝选项「事态严重，我等退散」关闭对话框；回程=定位回城符不点击（回城符模板待提供，缺失时报模板未提供）；巫医=走位到巫医 NPC、定位后点击打开对话框（医治选项由验证流程自行点击，与任务进程中战斗线程点击行为等效）；白龙马模板=按任务流程实际点击候选（找全部候选→逐一真实点击→误点对话框自动关闭→开打对话出现即停止并停留，请手动关闭对话框）。任务运行中不可验证。</div>
+                    <div class="group-hint">与实际流程一致、时序无额外延时，且不改变任务状态：领取=走位到宝象国领取点 → 点击领取入口（领取任务按钮/降魔侍卫）打开对话框 → 选项「除魔卫国，义不容辞」仅定位不点击 → 点拒绝选项「事态严重，我等退散」关闭对话框；回程=定位回城符不点击（回城符模板待提供，缺失时报模板未提供）；巫医=走位到巫医 NPC、定位后点击打开对话框（医治选项由验证流程自行点击，与任务进程中战斗线程点击行为等效）；修理=走位到洛阳城修理 NPC、点击打开对话框（两套弹窗按文案→选项映射，选项由验证流程自行点击）；组号修理=修理完整链路后逐个切换队员 Tab 点击其修理对话框并切回队长（需 ≥2 个已登录 Tab）；白龙马模板=按任务流程实际点击候选（找全部候选→逐一真实点击→误点对话框自动关闭→开打对话出现即停止并停留，请手动关闭对话框）。任务运行中不可验证。</div>
                 </div>
                 <div class="group-box">
                     <div class="group-title">五环链路</div>
@@ -1522,6 +1564,9 @@
     const silentMode = document.getElementById('silent-mode');
     const autoFamen = document.getElementById('auto-famen');
     const xiuluoWuyiIntervalEl = document.getElementById('xiuluo-wuyi-interval');
+    const xiuluoAutoRepair = document.getElementById('xiuluo-auto-repair');
+    const xiuluoRepairIntervalEl = document.getElementById('xiuluo-repair-interval');
+    const xiuluoRepairIntervalRow = document.getElementById('xiuluo-repair-interval-row');
     const wubeiHezi = document.getElementById('wubei-hezi');
     const wubeiCheckTeam = document.getElementById('wubei-check-team');
     const wubeiAutoCreateTeam = document.getElementById('wubei-auto-create-team');
@@ -1529,6 +1574,9 @@
     const wubeiShout = document.getElementById('wubei-shout');
     const wubeiAutoWuyi = document.getElementById('wubei-auto-wuyi');
     const wubeiWuyiIntervalEl = document.getElementById('wubei-wuyi-interval');
+    const wubeiAutoRepair = document.getElementById('wubei-auto-repair');
+    const wubeiRepairIntervalEl = document.getElementById('wubei-repair-interval');
+    const wubeiRepairIntervalRow = document.getElementById('wubei-repair-interval-row');
     const wubeiKuimulang = document.getElementById('wubei-kuimulang');
     const wubeiTabGroup = document.getElementById('wubei-tab-group');
     const xiuluoShout = document.getElementById('xiuluo-shout');
@@ -1553,6 +1601,10 @@
     const wuyiVerifyResultEl = document.getElementById('wuyi-verify-result');
     const btnVerifyXiuluoTabWuyi = document.getElementById('btn-verify-xiuluo-tab-wuyi');
     const tabWuyiVerifyResultEl = document.getElementById('tab-wuyi-verify-result');
+    const btnVerifyXiuluoRepair = document.getElementById('btn-verify-xiuluo-repair');
+    const repairVerifyResultEl = document.getElementById('repair-verify-result');
+    const btnVerifyXiuluoTabRepair = document.getElementById('btn-verify-xiuluo-tab-repair');
+    const tabRepairVerifyResultEl = document.getElementById('tab-repair-verify-result');
     const btnVerifyXiuluoClaimSilent = document.getElementById('btn-verify-xiuluo-claim-silent');
     const silentClaimVerifyResultEl = document.getElementById('silent-claim-verify-result');
     const btnVerifyXiuluoWuyiSilent = document.getElementById('btn-verify-xiuluo-wuyi-silent');
@@ -1565,6 +1617,10 @@
     const wubeiReturnVerifyResultEl = document.getElementById('wubei-return-verify-result');
     const btnVerifyWubeiWuyi = document.getElementById('btn-verify-wubei-wuyi');
     const wubeiWuyiVerifyResultEl = document.getElementById('wubei-wuyi-verify-result');
+    const btnVerifyWubeiRepair = document.getElementById('btn-verify-wubei-repair');
+    const wubeiRepairVerifyResultEl = document.getElementById('wubei-repair-verify-result');
+    const btnVerifyWubeiTabRepair = document.getElementById('btn-verify-wubei-tab-repair');
+    const wubeiTabRepairVerifyResultEl = document.getElementById('wubei-tab-repair-verify-result');
     const btnVerifyWubeiXj = document.getElementById('btn-verify-wubei-xj');
     const wubeiXjVerifyResultEl = document.getElementById('wubei-xj-verify-result');
     const btnVerifyWuhuanCloth = document.getElementById('btn-verify-wuhuan-cloth');
@@ -2880,6 +2936,33 @@
         if (r && r.status === 'success') el.innerText = r.interval;
     }
 
+    // 自动修理间隔（场战斗，1~999；开关关闭时整行隐藏——用户 2026-11-12 要求）
+    async function xiuluoRepairInterval(delta) {
+        const el = xiuluoRepairIntervalEl;
+        const cur = parseInt(el.innerText);
+        const val = Math.min(999, Math.max(1, cur + delta));
+        if (val === cur) return;
+        const r = await callPython('save_xiuluo_repair_interval', val);
+        if (r && r.status === 'success') el.innerText = r.interval;
+    }
+
+    async function wubeiRepairInterval(delta) {
+        const el = wubeiRepairIntervalEl;
+        const cur = parseInt(el.innerText);
+        const val = Math.min(999, Math.max(1, cur + delta));
+        if (val === cur) return;
+        const r = await callPython('save_wubei_repair_interval', val);
+        if (r && r.status === 'success') el.innerText = r.interval;
+    }
+
+    function applyXiuluoRepairVisibility() {
+        xiuluoRepairIntervalRow.style.display = xiuluoAutoRepair.checked ? '' : 'none';
+    }
+
+    function applyWubeiRepairVisibility() {
+        wubeiRepairIntervalRow.style.display = wubeiAutoRepair.checked ? '' : 'none';
+    }
+
     /* ================= 各开关变更：立即保存 ================= */
     useSyx.addEventListener('change', () => {
         callPython('save_use_sheyaoxiang', useSyx.checked);
@@ -2936,6 +3019,10 @@
     xiuluoAutoWuyi.addEventListener('change', () => {
         callPython('save_xiuluo_auto_wuyi', xiuluoAutoWuyi.checked);
     });
+    xiuluoAutoRepair.addEventListener('change', () => {
+        applyXiuluoRepairVisibility();
+        callPython('save_xiuluo_auto_repair', xiuluoAutoRepair.checked);
+    });
     xiuluoTabGroup.addEventListener('change', () => {
         callPython('save_xiuluo_tab_group', xiuluoTabGroup.checked);
     });
@@ -2974,6 +3061,10 @@
     });
     wubeiAutoWuyi.addEventListener('change', () => {
         callPython('save_wubei_auto_wuyi', wubeiAutoWuyi.checked);
+    });
+    wubeiAutoRepair.addEventListener('change', () => {
+        applyWubeiRepairVisibility();
+        callPython('save_wubei_auto_repair', wubeiAutoRepair.checked);
     });
     wubeiKuimulang.addEventListener('change', () => {
         callPython('save_wubei_kuimulang_switch', wubeiKuimulang.checked);
@@ -3203,6 +3294,8 @@
         xiuluoAutoCreateTeam.checked = !!info.xiuluo_auto_create_team;
         xiuluoAutoRejoin.checked = !!info.xiuluo_auto_rejoin;
         xiuluoAutoWuyi.checked = !!info.xiuluo_auto_wuyi;
+        xiuluoAutoRepair.checked = !!info.xiuluo_auto_repair;
+        applyXiuluoRepairVisibility();
         xiuluoTabGroup.checked = !!info.xiuluo_tab_group;
         highPerf.checked = !!info.high_perf;
         autoRefill.checked = !!info.auto_refill;
@@ -3242,6 +3335,9 @@
         if (info.xiuluo_wuyi_interval) {
             xiuluoWuyiIntervalEl.innerText = info.xiuluo_wuyi_interval;
         }
+        if (info.xiuluo_repair_interval !== undefined) {
+            xiuluoRepairIntervalEl.innerText = info.xiuluo_repair_interval;
+        }
         wubeiHezi.checked = !!(info.wubei && info.wubei.hezi);
         wubeiCheckTeam.checked = !!(info.wubei && info.wubei.check_team);
         wubeiAutoCreateTeam.checked = !!(info.wubei && info.wubei.auto_create_team);
@@ -3251,6 +3347,11 @@
         wubeiAutoWuyi.checked = !!(info.wubei && info.wubei.auto_wuyi);
         if (info.wubei && info.wubei.wuyi_interval) {
             wubeiWuyiIntervalEl.innerText = info.wubei.wuyi_interval;
+        }
+        wubeiAutoRepair.checked = !!(info.wubei && info.wubei.auto_repair);
+        applyWubeiRepairVisibility();
+        if (info.wubei && info.wubei.repair_interval !== undefined) {
+            wubeiRepairIntervalEl.innerText = info.wubei.repair_interval;
         }
         wubeiKuimulang.checked = !!(info.wubei && info.wubei.kuimulang);
         wubeiTabGroup.checked = !!(info.wubei && info.wubei.tab_group);
@@ -3442,6 +3543,64 @@
         btnVerifyXiuluoTabWuyi.disabled = false;
         tabWuyiVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
         tabWuyiVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+    };
+
+    // 修罗修理验证：洛阳城修理链路（主进程自行点选项），结果经 onRepairVerifyResult 回推
+    async function verifyXiuluoRepair() {
+        if (verifying) return;
+        verifying = true;
+        btnVerifyXiuluoRepair.disabled = true;
+        repairVerifyResultEl.style.color = 'var(--text)';
+        repairVerifyResultEl.innerText = '验证中...';
+        try {
+            const r = await callPython('verify_xiuluo_repair');
+            if (!r || r.status !== 'success') {
+                repairVerifyResultEl.style.color = 'var(--danger)';
+                repairVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
+                verifying = false;
+                btnVerifyXiuluoRepair.disabled = false;
+            }
+        } catch (e) {
+            repairVerifyResultEl.style.color = 'var(--danger)';
+            repairVerifyResultEl.innerText = '验证请求异常';
+            verifying = false;
+            btnVerifyXiuluoRepair.disabled = false;
+        }
+    }
+    window.onRepairVerifyResult = function (ok, info) {
+        verifying = false;
+        btnVerifyXiuluoRepair.disabled = false;
+        repairVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        repairVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+    };
+
+    // 修罗组号修理验证：队长修理链路 + 队员 Tab 修理 pass，结果经 onTabRepairVerifyResult 回推
+    async function verifyXiuluoTabRepair() {
+        if (verifying) return;
+        verifying = true;
+        btnVerifyXiuluoTabRepair.disabled = true;
+        tabRepairVerifyResultEl.style.color = 'var(--text)';
+        tabRepairVerifyResultEl.innerText = '验证中...';
+        try {
+            const r = await callPython('verify_xiuluo_tab_repair');
+            if (!r || r.status !== 'success') {
+                tabRepairVerifyResultEl.style.color = 'var(--danger)';
+                tabRepairVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
+                verifying = false;
+                btnVerifyXiuluoTabRepair.disabled = false;
+            }
+        } catch (e) {
+            tabRepairVerifyResultEl.style.color = 'var(--danger)';
+            tabRepairVerifyResultEl.innerText = '验证请求异常';
+            verifying = false;
+            btnVerifyXiuluoTabRepair.disabled = false;
+        }
+    }
+    window.onTabRepairVerifyResult = function (ok, info) {
+        verifying = false;
+        btnVerifyXiuluoTabRepair.disabled = false;
+        tabRepairVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        tabRepairVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
     /* ================= 组号设置页 ================= */
@@ -3937,6 +4096,64 @@
         btnVerifyWubeiWuyi.disabled = false;
         wubeiWuyiVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
         wubeiWuyiVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+    };
+
+    // 五倍修理验证：洛阳城修理链路（主进程自行点选项），结果经 onWubeiRepairVerifyResult 回推
+    async function verifyWubeiRepair() {
+        if (verifying) return;
+        verifying = true;
+        btnVerifyWubeiRepair.disabled = true;
+        wubeiRepairVerifyResultEl.style.color = 'var(--text)';
+        wubeiRepairVerifyResultEl.innerText = '验证中...';
+        try {
+            const r = await callPython('verify_wubei_repair');
+            if (!r || r.status !== 'success') {
+                wubeiRepairVerifyResultEl.style.color = 'var(--danger)';
+                wubeiRepairVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
+                verifying = false;
+                btnVerifyWubeiRepair.disabled = false;
+            }
+        } catch (e) {
+            wubeiRepairVerifyResultEl.style.color = 'var(--danger)';
+            wubeiRepairVerifyResultEl.innerText = '验证请求异常';
+            verifying = false;
+            btnVerifyWubeiRepair.disabled = false;
+        }
+    }
+    window.onWubeiRepairVerifyResult = function (ok, info) {
+        verifying = false;
+        btnVerifyWubeiRepair.disabled = false;
+        wubeiRepairVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        wubeiRepairVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+    };
+
+    // 五倍组号修理验证：队长修理链路 + 队员 Tab 修理 pass，结果经 onWubeiTabRepairVerifyResult 回推
+    async function verifyWubeiTabRepair() {
+        if (verifying) return;
+        verifying = true;
+        btnVerifyWubeiTabRepair.disabled = true;
+        wubeiTabRepairVerifyResultEl.style.color = 'var(--text)';
+        wubeiTabRepairVerifyResultEl.innerText = '验证中...';
+        try {
+            const r = await callPython('verify_wubei_tab_repair');
+            if (!r || r.status !== 'success') {
+                wubeiTabRepairVerifyResultEl.style.color = 'var(--danger)';
+                wubeiTabRepairVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
+                verifying = false;
+                btnVerifyWubeiTabRepair.disabled = false;
+            }
+        } catch (e) {
+            wubeiTabRepairVerifyResultEl.style.color = 'var(--danger)';
+            wubeiTabRepairVerifyResultEl.innerText = '验证请求异常';
+            verifying = false;
+            btnVerifyWubeiTabRepair.disabled = false;
+        }
+    }
+    window.onWubeiTabRepairVerifyResult = function (ok, info) {
+        verifying = false;
+        btnVerifyWubeiTabRepair.disabled = false;
+        wubeiTabRepairVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        wubeiTabRepairVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
     // 白龙马模板测试：与机关模板测试同模式，结果经 onWubeiXjVerifyResult 异步回推

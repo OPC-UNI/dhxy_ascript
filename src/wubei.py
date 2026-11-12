@@ -69,6 +69,7 @@ from .battle import (is_in_battle, is_in_battle_frame,
 from .battle import WUYI_DIALOG_TEXTS  # 巫医对话框文案（自动巫医等待判定）
 from .battle import _find_wuyi_option  # 「全部医治和修复」选项定位（超时兜底自行点击）
 from . import battle  # 巫医预期时间戳（点 NPC 后通知战斗线程切入 2s 高频检查）
+from . import repair  # 自动修理装备（洛阳城，共享工具模块）
 from .control_window import (load_task_counts,  # 任务次数上限
                              load_wubei_check_team,  # 五倍设置：检查队伍开关
                              load_wubei_auto_create_team,  # 五倍设置：自动创建队伍开关
@@ -76,6 +77,8 @@ from .control_window import (load_task_counts,  # 任务次数上限
                              load_wubei_shout_switch,  # 五倍设置：缺人自动喊话开关
                              load_wubei_auto_wuyi,  # 五倍设置：自动巫医开关
                              load_wubei_wuyi_interval,  # 五倍设置：自动巫医间隔（轮）
+                             load_wubei_auto_repair,  # 五倍设置：自动修理装备开关
+                             load_wubei_repair_interval,  # 五倍设置：自动修理间隔（场战斗）
                              load_wubei_kuimulang_switch,  # 五倍设置：领取奎木狼任务开关
                              load_wubei_tab_group)  # 五倍设置：组号专用开关
 from .dialog_common import (SCREEN_CENTER_POS, green_option_center,
@@ -765,6 +768,16 @@ def verify_wuyi_flow(win):
     """
     return _run_wuyi_chain(win, hover_before_click=True, report_condition=True,
                            click_option_self=True)
+
+
+def verify_repair_flow(win):
+    """验证自动修理流程（诊断-验证修理，主进程调用，不改变任务状态）。"""
+    return repair.verify_repair_flow(win, prefix="五倍")
+
+
+def verify_tab_repair_flow(win):
+    """验证组号修理（诊断-验证组号修理，主进程调用，不改变任务状态）。"""
+    return repair.verify_tab_repair_flow(win, TASK_MODE, prefix="五倍")
 
 
 def verify_xj_flow(win):
@@ -3024,6 +3037,12 @@ def run_loop(win, cycle_interval=1.0):
     wuyi_interval = max(1, load_wubei_wuyi_interval())
     log(f"[五倍] 自动巫医: {'开' if auto_wuyi else '关'}"
         + (f"（每 {wuyi_interval} 轮）" if auto_wuyi else ""), "SYS")
+    # 自动修理装备（通用设置开关，默认开、每 30 场战斗一次）：每轮领取后
+    # 按今日累计战斗场次判断，满足即前往洛阳城修理（repair.py）
+    auto_repair = load_wubei_auto_repair()
+    repair_interval = max(1, load_wubei_repair_interval())
+    log(f"[五倍] 自动修理装备: {'开' if auto_repair else '关'}"
+        + (f"（每 {repair_interval} 场战斗）" if auto_repair else ""), "SYS")
     # 领取奎木狼任务开关（五倍设置，默认开）：关闭时追踪文案含奎木狼
     # 即重新领取替换（逻辑同锁妖网——跟随期检查共用此全局，免每轮询
     # 读 KeyValue）
@@ -3032,7 +3051,7 @@ def run_loop(win, cycle_interval=1.0):
     _shout_text = WUBEI_SHOUT_DEFAULT if load_wubei_shout_switch() else ""
     if _shout_text:
         log(f"[五倍] 缺人自动喊话: 开（{_shout_text}，最短间隔 {SHOUT_MIN_INTERVAL}s）", "SYS")
-    # 自动创建队伍（五倍设置开关，默认关闭）：任务开始时若无队伍自动
+    # 自动创建队伍（五倍设置开关，默认开启）：任务开始时若无队伍自动
     # 创建（组队按钮 → 菜单「创建队伍」），创建成功后走正常队伍检查与
     # 补人流程；已有队伍时本开关无其他逻辑。战斗中不操作（组队菜单会
     # 遮挡战斗操作），顺延到战斗结束后的首次检查。
@@ -3071,7 +3090,7 @@ def run_loop(win, cycle_interval=1.0):
     if 0 < max_rounds <= done:
         log(f"[五倍] 当天进度已达上限 {done}/{max_rounds}，无需再执行", "SYS")
         return f"已完成 {done} 次五倍任务，达到次数上限 {max_rounds}"
-    # 组号专用（高级设置开关，默认关闭）：一窗口多 Tab 多账号时激活，
+    # 组号专用（高级设置开关，默认开启）：一窗口多 Tab 多账号时激活，
     # 队长带队、队员按账号配置挂战斗/巫医/补血蓝。激活时要求「检查
     # 队伍」开关必须开启（队员身份靠队伍面板匹配，用户 2026-11-07
     # 指定）；队长判定后检查队员组号战斗动作设置，缺失即停止任务
@@ -3156,6 +3175,7 @@ def run_loop(win, cycle_interval=1.0):
             #    本轮开始必然无任务——has_task（区域 OCR ~0.9s）只在可能
             #    续跑时检查（进程首轮或上轮跟踪失败未确认完成）
             claim_items = None  # 领取校验帧（续跑路径无，跟踪首轮自行截图+OCR）
+            repair_round = False  # 本轮是否执行了自动修理（续跑路径不修理）
             # 锁妖网捕捉/奎木狼开关关闭/显形镜按钮恢复失败：即使追踪中
             # 已有任务也走领取分支重新领取替换（用户 2026-10-11 确认
             # 游戏允许重领替换）
@@ -3349,12 +3369,23 @@ def run_loop(win, cycle_interval=1.0):
                     debug_overlay.set_phase("自动巫医")  # 看板阶段
                     ok2, info2 = _auto_wuyi(win)
                     log(f"[五倍][巫医] {info2}", "SYS" if ok2 else "WARN")
+                # 自动修理装备（用户流程，默认开、每 30 场战斗一次）：
+                # 今日累计场次达到间隔 → 前往洛阳城修理（巫医之后：同图
+                # 巫医先做，修理跨图后直接恢复寻路）；失败仅记日志，
+                # 不阻断后续寻路
+                if auto_repair and repair.is_due(win, TASK_MODE, repair_interval):
+                    repair_round = True
+                    debug_overlay.set_phase("自动修理")  # 看板阶段
+                    ok3, info3 = repair.auto_repair(win, TASK_MODE, prefix="五倍")
+                    log(f"[五倍][修理] {info3}", "SYS" if ok3 else "WARN")
             # 2~4. 寻路 / 对话开打 / 战斗：由任务跟踪统一驱动
             #     （寻路点击绿字自动进行，对话开打走附加对话处理，
             #      战斗由战斗监控线程自动操作、跟踪中自动跳过）；
             #     领取校验帧传入后首轮跳过截图+OCR 立即点击绿字
+            #     （修理行程后旧帧已过期——重新截帧识别）
             try:
-                ok, info = _follow_to_done(win, first_items=claim_items)
+                ok, info = _follow_to_done(
+                    win, first_items=None if repair_round else claim_items)
             except ReplaceTaskError as e:
                 log(f"[五倍] 检测到「{e}」，中断跟踪，下一轮重新领取替换", "WARN")
                 time.sleep(cycle_interval)

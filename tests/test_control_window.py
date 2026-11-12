@@ -6,8 +6,26 @@
 - 仅战斗单独选中 → 保留
 - 非法模式过滤不受影响
 """
+import inspect
+import re
+
+from src import control_window
 from src.control_window import (BATTLE_ONLY_MODE, TASK_MODES, _sanitize_modes,
                                 _COUNT_KEYS, TASK_COUNT_DEFAULTS)
+
+
+def test_all_exposed_methods_exist():
+    """self.expose(self.X) 的每个 X 必须是类方法。
+
+    __init__ 在窗口构造时立即执行 expose，缺失即启动崩溃（2026-11-12
+    自动修理开关只加了模块级函数、漏类包装方法，启动 AttributeError）。
+    """
+    src = inspect.getsource(control_window.ControlWindow.__init__)
+    names = set(re.findall(r"self\.expose\(self\.(\w+)\)", src))
+    assert names  # 解析自检：正则失效时不得静默通过
+    missing = sorted(n for n in names
+                     if not hasattr(control_window.ControlWindow, n))
+    assert missing == []
 
 
 def test_sanitize_keeps_battle_only_when_alone():
@@ -86,19 +104,45 @@ def test_settings_spec_rejoin_and_check_team_defaults(monkeypatch):
 
 
 def test_settings_spec_auto_create_team_defaults(monkeypatch):
-    """自动创建队伍键在方案快照默认值表中存在且默认关闭（修罗/五倍
-    各一开关；load_* 首次默认与 _settings_spec 必须一致）。"""
+    """自动创建队伍键在方案快照默认值表中存在且默认开启（修罗/五倍
+    各一开关；load_* 首次默认与 _settings_spec 必须一致，2026-11-12
+    用户改为默认开）。"""
     from src import schemes
     from src.control_window import (_WUBEI_AUTO_CREATE_TEAM_KEY,
                                     _XIULUO_AUTO_CREATE_TEAM_KEY,
                                     load_wubei_auto_create_team,
                                     load_xiuluo_auto_create_team)
     spec = schemes._settings_spec()
-    assert spec[_WUBEI_AUTO_CREATE_TEAM_KEY] is False
-    assert spec[_XIULUO_AUTO_CREATE_TEAM_KEY] is False
+    assert spec[_WUBEI_AUTO_CREATE_TEAM_KEY] is True
+    assert spec[_XIULUO_AUTO_CREATE_TEAM_KEY] is True
     _patch_kv_empty(monkeypatch)
     for key, load in ((_WUBEI_AUTO_CREATE_TEAM_KEY, load_wubei_auto_create_team),
                       (_XIULUO_AUTO_CREATE_TEAM_KEY, load_xiuluo_auto_create_team)):
+        assert load() == spec[key]
+
+
+def test_settings_spec_shout_and_tab_group_defaults(monkeypatch):
+    """缺人自动喊话 / 组号专用默认开启（修罗/五倍；load 与 spec 一致）。
+
+    2026-11-12 用户确认：喊话 load 默认开但 spec 曾为关闭（新角色实际
+    关、老角色缺键实际开），本次统一为开；组号专用默认开（已登录 Tab
+    <2 的单号不激活，行为与关闭一致）。
+    """
+    from src import schemes
+    from src.control_window import (
+        _XIULUO_SHOUT_SWITCH_KEY, _WUBEI_SHOUT_SWITCH_KEY,
+        _XIULUO_TAB_GROUP_KEY, _WUBEI_TAB_GROUP_KEY,
+        load_xiuluo_shout_switch, load_wubei_shout_switch,
+        load_xiuluo_tab_group, load_wubei_tab_group)
+    spec = schemes._settings_spec()
+    for key in (_XIULUO_SHOUT_SWITCH_KEY, _WUBEI_SHOUT_SWITCH_KEY,
+                _XIULUO_TAB_GROUP_KEY, _WUBEI_TAB_GROUP_KEY):
+        assert spec[key] is True
+    _patch_kv_empty(monkeypatch)
+    for key, load in ((_XIULUO_SHOUT_SWITCH_KEY, load_xiuluo_shout_switch),
+                      (_WUBEI_SHOUT_SWITCH_KEY, load_wubei_shout_switch),
+                      (_XIULUO_TAB_GROUP_KEY, load_xiuluo_tab_group),
+                      (_WUBEI_TAB_GROUP_KEY, load_wubei_tab_group)):
         assert load() == spec[key]
 
 
