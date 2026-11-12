@@ -1050,37 +1050,11 @@ def _press_alt4_clear(win):
     """到达领取点后、点击 NPC 领取前按 Alt+4 完全清屏（用户 2026-11-10
     规则：隐藏界面元素，防 HUD/面板遮挡 NPC 与画面识别）。
 
-    静默操作走消息投递（游戏窗口无需前台，send_silent_hotkey 通道）；
-    非静默走物理热键，按键前校验游戏窗口在前台（热键经前台窗口送达，
-    非前台先激活再校验，仍失败保守跳过）。两种模式都必须执行
-    （用户明确「是否静默操作都需要」），失败仅记 WARN 不阻塞领取链。
-    返回描述文案。
+    静默操作走消息投递、非静默走物理热键（前置校验前台），两种模式
+    都执行、失败仅 WARN 不阻塞领取链；实现见 app_utils.press_alt4_clear
+    （名望/种族比武共用能力）。返回描述文案。
     """
-    if app_utils.silent_mode_on():
-        from . import silent_click  # 延迟导入防循环
-        info = silent_click.send_silent_hotkey(win, ("alt",), "4")
-        if info is None:
-            desc = "静默 Alt+4 清屏投递失败（窗口不存在）"
-            log(f"[名望] {desc}", "WARN")
-            return desc
-        log("[名望] 已静默投递 Alt+4 完全清屏", "SYS")
-        time.sleep(0.3)  # 等界面隐藏渲染
-        return "已静默投递 Alt+4 完全清屏"
-    try:
-        import win32gui
-        if win32gui.GetForegroundWindow() != int(win.hwnd):
-            win.activate()
-            time.sleep(0.3)
-        if win32gui.GetForegroundWindow() != int(win.hwnd):
-            desc = "游戏窗口未在前台（激活失败），Alt+4 清屏未发送"
-            log(f"[名望] {desc}", "WARN")
-            return desc
-    except Exception as e:
-        log(f"[名望] Alt+4 前台校验异常: {e}", "WARN")
-    Keyboard.key_hot("alt", "4")
-    log("[名望] 已按 Alt+4 完全清屏", "SYS")
-    time.sleep(0.3)  # 等界面隐藏渲染
-    return "已按 Alt+4 完全清屏"
+    return app_utils.press_alt4_clear(win, prefix="[名望]")
 
 
 def _click_claim_option(win, items, img_np):

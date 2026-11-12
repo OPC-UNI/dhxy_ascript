@@ -10,6 +10,7 @@ import time
 from contextlib import contextmanager
 
 from ascript.windows.hardware.mouse import Mouse
+from ascript.windows.hardware.keyboard import Keyboard
 from ascript.windows.system.key_value import KeyValue
 
 from . import user_data
@@ -166,6 +167,42 @@ def keyboard_ok(win=None):
         return win32gui.GetForegroundWindow() == int(getattr(win, "hwnd", 0))
     except Exception:
         return False
+
+
+def press_alt4_clear(win, prefix=""):
+    """按 Alt+4 完全清屏（隐藏昵称/界面元素，防遮挡画面识别与点击）。
+
+    任务领取前使用（名望 2026-11-10、种族比武 2026-11-12 用户规则）。
+    静默模式走消息投递（游戏窗口无需前台）；非静默走物理热键，按键前
+    校验游戏窗口在前台（非前台先激活再校验，仍失败跳过）。失败只记
+    WARN 不阻塞调用方；按键后等 0.3s 界面刷新。返回描述文案。
+    """
+    tag = f"{prefix} " if prefix else ""
+    if _SILENT_CLICK:
+        from . import silent_click  # 延迟导入防循环
+        info = silent_click.send_silent_hotkey(win, ("alt",), "4")
+        if info is None:
+            desc = "静默 Alt+4 清屏投递失败（窗口不存在）"
+            log(f"{tag}{desc}", "WARN")
+            return desc
+        log(f"{tag}已静默投递 Alt+4 完全清屏", "SYS")
+        time.sleep(0.3)  # 等界面隐藏渲染
+        return "已静默投递 Alt+4 完全清屏"
+    try:
+        import win32gui
+        if win32gui.GetForegroundWindow() != int(win.hwnd):
+            win.activate()
+            time.sleep(0.3)
+        if win32gui.GetForegroundWindow() != int(win.hwnd):
+            desc = "游戏窗口未在前台（激活失败），Alt+4 清屏未发送"
+            log(f"{tag}{desc}", "WARN")
+            return desc
+    except Exception as e:
+        log(f"{tag}Alt+4 前台校验异常: {e}", "WARN")
+    Keyboard.key_hot("alt", "4")
+    log(f"{tag}已按 Alt+4 完全清屏", "SYS")
+    time.sleep(0.3)  # 等界面隐藏渲染
+    return "已按 Alt+4 完全清屏"
 
 
 def _silent_click(win, x, y, button="primary"):

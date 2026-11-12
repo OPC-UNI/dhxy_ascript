@@ -13,7 +13,11 @@
        固定 5 人，缺人从申请加入面板允许申请人补齐 → 人满才领取；
        自动创建队伍并入首次队伍面板打开（未组队时直接创建）；
        队长被转移则转 1.0 非队长保持模式
-   1.3 点击领取 NPC → 对话框点绿色选项
+   1.3 到达领取点先按 Alt+4 完全清屏（隐藏昵称/界面遮挡，每次领取
+       只按一次），再识别领取 NPC 模板并点击（模板组任一命中；同屏
+       多个候选取最右侧；且人物坐标必须在领取点
+       ±CLAIM_NEAR_TOLERANCE 内才允许点击——NPC 进入视野不算到位，
+       防寻路途中远处点击）→ 对话框点绿色选项
        「我们也可以为服务器的比武大会贡献力量，放心吧。」
        → 校验任务出现在追踪面板
        领取人数不足（用户 2026-11-12 实机）：点击选项后任务不出现
@@ -74,12 +78,19 @@ TASK_FALLBACK_TEXTS = ("比武大会",)  # has_task 兜底匹配串（用户 202
 
 # ---- 领取任务（长安；用户 2026-11-12 提供领取 NPC 模板与坐标） ----
 CHANGAN = "长安"                              # 位置识别地名（精确匹配）
-CLAIM_NPC_ICON = "zhongzu_claim_npc.png"      # 领取 NPC 模板（用户提供 29x55）
-CLAIM_SPOT = (286, 159)                       # 领取点地图坐标（长安 286,159）
+CLAIM_NPC_ICONS = ("zhongzu_claim_npc.png",   # 领取 NPC 模板（用户提供 29x55）
+                   "zhongzu_claim_npc2.png",  # 第二外观模板（用户 2026-11-12
+                                              # 提供 20x23）
+                   "zhongzu_claim_npc3.png")  # 第三外观模板（用户 2026-11-12
+                                              # 提供 24x27）
+CLAIM_NPC_THRESHOLD = 0.8                     # NPC 模板组统一匹配阈值
+CLAIM_SPOT = (285, 160)                       # 领取点地图坐标（长安 286,159）
 CLAIM_MAP_POS = (737, 387)                    # 小地图领取点点击点（用户提供）
-CLAIM_NEAR_TOLERANCE = 15                     # 已在领取点附近判定容差
+CLAIM_NEAR_TOLERANCE = 3                     # 领取点坐标容差（到达判定 +
+                                             # 点击门控：不满足不点 NPC，
+                                             # 用户 2026-11-12）
 CLAIM_NEAR_ENTRY_GRACE = 3.0                  # 位置近但 NPC 未出现的渲染短窗口（秒）
-WALK_ARRIVE_TOLERANCE = 5                     # 寻路到达判定容差（更严格）
+WALK_ARRIVE_TOLERANCE = 3                     # 寻路到达判定容差（更严格）
 CLAIM_ENTRY_FIRST_WAIT = 4.5                  # 首轮等待入口出现的短窗口（秒）
 CLAIM_ARRIVE_TIMEOUT = 90                     # 寻路到领取点的超时
 CLAIM_BUTTON_TIMEOUT = 20                     # 重试时等待领取入口出现的超时
@@ -122,6 +133,7 @@ _started_via_option = False    # 本轮是否由任务选项启动（决定战�
 _team_checked = False          # 首次领取后置位：后续轮次跳过队伍检查
 _task_gone_last_round = False  # 上一轮任务消失已确认（跳过 has_task 检查）
 _wuyi_notice_logged = False    # 自动巫医「未实现」提示每次任务启动只记一次
+_claim_clear_done = False      # 本次领取是否已按过 Alt+4 清屏（防切换态重复按）
 
 
 _TEMPLATE_EXISTS_CACHE = {}  # 模板存在性缓存（任务进程运行期不新增素材；
@@ -141,10 +153,85 @@ def _template_exists(icon):
     return exists
 
 
+_claim_npc_missing_logged = False  # 领取 NPC 模板组缺失告警只记一次
+
+
+def _claim_npc_icons():
+    """可用的领取 NPC 模板组（缺失模板跳过并只告警一次，其余照常匹配）。"""
+    global _claim_npc_missing_logged
+    icons = tuple(icon for icon in CLAIM_NPC_ICONS if _template_exists(icon))
+    if len(icons) < len(CLAIM_NPC_ICONS) and not _claim_npc_missing_logged:
+        _claim_npc_missing_logged = True
+        missing = [icon for icon in CLAIM_NPC_ICONS if icon not in icons]
+        log(f"[种族比武] 领取 NPC 模板缺失：{'、'.join(missing)}"
+            f"（其余模板照常匹配）", "WARN")
+    return icons
+
+
+def _claim_npc_candidates(frame):
+    """当前帧中领取 NPC 的全部候选，返回 [(score, x, y), ...]。
+
+    模板组逐模板取全部命中（阈值 CLAIM_NPC_THRESHOLD），合并为候选。
+    同一 NPC 可能被多个模板同时命中（各自中心略有偏差），调用方按 x
+    取最右侧即可，无需跨模板去重。
+    """
+    pts = []
+    for icon in _claim_npc_icons():
+        pts.extend(game_map.match_frame_all(frame, icon,
+                                            threshold=CLAIM_NPC_THRESHOLD))
+    return pts
+
+
+def _pick_claim_npc(cands):
+    """从候选里取最右侧点击（用户 2026-11-12 规则），空列表返回 None。
+
+    match_frame_all 返回 np.int64，这里统一转原生 int 供点击。
+    """
+    if not cands:
+        return None
+    _, x, y = max(cands, key=lambda c: c[1])
+    return int(x), int(y)
+
+
+def _find_claim_npc_np(frame, verbose=False):
+    """在 BGR 帧中查找领取 NPC 点击点，返回 (x, y) 或 None。
+
+    领取点附近同屏可能出现两个相同 NPC（用户 2026-11-12 实机）：
+    多个候选取最右侧点击（右侧才是可领取的正确 NPC，用户指定规则）。
+    verbose：候选数多于 1 时记一条日志（点击决策点用，轮询路径不开）。
+    注意本函数只回答「NPC 在哪」，是否允许点击由调用方做坐标门控
+    （见 _wait_claim_entry）。
+    """
+    cands = _claim_npc_candidates(frame)
+    pt = _pick_claim_npc(cands)
+    if pt is not None and verbose and len(cands) > 1:
+        log(f"[种族比武] 领取 NPC 候选 {len(cands)} 个，"
+            f"取最右侧 ({pt[0]}, {pt[1]}) 点击", "INFO")
+    return pt
+
+
+def _pos_text(pos):
+    """位置日志文本：长安[280,160]；识别失败。"""
+    return f"{pos[0].strip()}[{pos[1]},{pos[2]}]" if pos else "识别失败"
+
+
 def _claim_configured():
-    """领取三件套是否已标定（坐标/小地图点/模板均需就绪）。"""
+    """领取三件套是否已标定（坐标/小地图点/至少一个 NPC 模板就绪）。"""
     return (CLAIM_SPOT is not None and CLAIM_MAP_POS is not None
-            and _template_exists(CLAIM_NPC_ICON))
+            and bool(_claim_npc_icons()))
+
+
+def _clear_claim_screen(win):
+    """到达领取点后、识别领取 NPC 模板前按 Alt+4 完全清屏（用户
+    2026-11-12 规则，与名望领取同款）：隐藏昵称/界面元素防遮挡模板
+    识别与点击。清屏是切换态——每次领取只按一次（重复按会恢复原样），
+    本轮首次调用生效，失败只告警不阻塞后续识别。
+    """
+    global _claim_clear_done
+    if _claim_clear_done:
+        return
+    _claim_clear_done = True
+    app_utils.press_alt4_clear(win, prefix="[种族比武]")
 
 
 def _near_claim_spot(pos, tolerance):
@@ -374,12 +461,11 @@ def _open_claim_map(win, pos=None):
 def _walk_to_claim_spot(win):
     """寻路到长安领取点附近（与队伍人数无关，队长身份下执行）。
 
-    已在领取点附近（±15）且领取 NPC 可见 → 跳过寻路；位置近但 NPC
-    未出现给 3s 渲染短窗口，仍无则小地图重走。位置读取失败按不在
-    附近处理，直接走地图寻路。
-    到达判定：领取 NPC 可见（须地图名门控，防跨图误命中）或坐标
-    ±5 严格容差。
-    返回 (是否成功, 描述)。
+    到达领取点（坐标 CLAIM_SPOT ± CLAIM_NEAR_TOLERANCE）先按 Alt+4
+    完全清屏，再识别领取 NPC 模板：可见则跳过寻路；未出现给 3s 渲染
+    短窗口，仍无则小地图重走。坐标未到位时（即使 NPC 已进入视野）一律
+    小地图重走领取点——点击前的坐标门控见 _wait_claim_entry。位置读取
+    失败按未到位处理。返回 (是否成功, 描述)。
     """
     if not _claim_configured():
         return False, CLAIM_UNCONFIGURED_INFO
@@ -388,18 +474,25 @@ def _walk_to_claim_spot(win):
     img = win.capture(force_activate=False)
     if img is None:
         return False, "截图失败"
-    frame = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
-    npc_visible = game_map.match_frame_np(frame, CLAIM_NPC_ICON) is not None
     pos = game_map.read_map_position(win, img=img)
-    if npc_visible and _in_claim_map(pos):
-        return True, "已在领取点附近（领取 NPC 可见）"
     if _near_claim_spot(pos, CLAIM_NEAR_TOLERANCE):
-        # 位置近但入口不可见：可能是位置误读或超出可点击范围，
+        # 到达领取点：先 Alt+4 完全清屏，再识别领取 NPC 模板
+        # （用户 2026-11-12 规则：隐藏昵称/界面遮挡）
+        _clear_claim_screen(win)
+        img = win.capture(force_activate=False)  # 清屏后重截一帧
+        frame = (cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
+                 if img is not None else None)
+        if frame is not None and _find_claim_npc_np(frame) is not None:
+            return True, "已在领取点附近（领取 NPC 可见）"
+        # 清屏后入口仍未出现：可能是渲染中或超出可点击范围，
         # 给入口一个渲染短窗口，仍无则小地图重走
         deadline = time.time() + CLAIM_NEAR_ENTRY_GRACE
         while time.time() < deadline:
-            if game_map.find_template(win, CLAIM_NPC_ICON) is not None:
-                return True, "已在领取点附近（领取 NPC 可见）"
+            img2 = win.capture(force_activate=False)
+            if img2 is not None:
+                frame2 = cv2.cvtColor(np.asarray(img2), cv2.COLOR_RGB2BGR)
+                if _find_claim_npc_np(frame2) is not None:
+                    return True, "已在领取点附近（领取 NPC 可见）"
             time.sleep(0.5)
         log("[种族比武] 位置近但领取 NPC 未出现，改走小地图重走领取点", "WARN")
     ok, info = _open_claim_map(win, pos)  # 决策帧已读位置，同帧复用
@@ -420,12 +513,24 @@ def _walk_to_claim_spot(win):
             continue
         frame = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
         pos = game_map.read_map_position(win, img=img)  # 同帧复用
-        if _in_claim_map(pos) \
-                and game_map.match_frame_np(frame, CLAIM_NPC_ICON) is not None:
-            log("[种族比武] 已到达领取点附近（领取 NPC 可见）", "SYS")
-            return True, "已到达领取点附近"
         if _near_claim_spot(pos, WALK_ARRIVE_TOLERANCE):
+            # 到达领取点：先 Alt+4 完全清屏，再识别领取 NPC 模板
+            # （用户 2026-11-12 规则）
+            _clear_claim_screen(win)
+            img2 = win.capture(force_activate=False)
+            if img2 is not None:
+                frame2 = cv2.cvtColor(np.asarray(img2), cv2.COLOR_RGB2BGR)
+                if _find_claim_npc_np(frame2) is not None:
+                    log("[种族比武] 已到达领取点附近（领取 NPC 可见）",
+                        "SYS")
+                    return True, "已到达领取点附近"
             log("[种族比武] 已到达领取点附近", "SYS")
+            return True, "已到达领取点附近"
+        if _in_claim_map(pos) \
+                and _find_claim_npc_np(frame) is not None:
+            # NPC 进入视野但坐标未到位：提前结束寻路等待，点击前仍有
+            # 坐标门控（_wait_claim_entry 会等走到位）
+            log("[种族比武] 已到达领取点附近（领取 NPC 可见）", "SYS")
             return True, "已到达领取点附近"
         polls += 1
         if polls % 5 == 0:
@@ -460,7 +565,7 @@ def _relocate_to_claim_spot(win):
         frame = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
         pos = game_map.read_map_position(win, img=img)
         if _in_claim_map(pos) \
-                and game_map.match_frame_np(frame, CLAIM_NPC_ICON) is not None:
+                and _find_claim_npc_np(frame) is not None:
             return True, "已重走到领取点附近（领取 NPC 可见）"
         if _near_claim_spot(pos, WALK_ARRIVE_TOLERANCE):
             return True, "已重走到领取点附近"
@@ -472,8 +577,17 @@ def _relocate_to_claim_spot(win):
 
 
 def _wait_claim_entry(win, timeout):
-    """等待领取 NPC 出现，返回坐标或 None（战斗中跳过等待）。"""
+    """等待「领取 NPC 可见 + 人物坐标在领取点附近」，返回 (点击坐标, 位置)。
+
+    坐标门控（用户 2026-11-12）：NPC 进入视野不算到位，必须
+    _near_claim_spot(pos, CLAIM_NEAR_TOLERANCE) 通过才允许点击，
+    防止寻路途中从远处点 NPC（远处点击开不了对话框，只会触发重走）。
+    门控未通过时继续轮询——自动寻路可能仍在走向领取点；每次调用
+    只记一条未到位原因日志。超时返回 (None, None)。
+    命中帧同帧读一次地图位置（不重截窗），供点击日志打印实际站位。
+    """
     deadline = time.time() + timeout
+    gate_logged = False
     while time.time() < deadline:
         img = win.capture(force_activate=False)
         if img is None:
@@ -483,11 +597,26 @@ def _wait_claim_entry(win, timeout):
             time.sleep(2.0)
             continue
         frame = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
-        pt = game_map.match_frame_np(frame, CLAIM_NPC_ICON)
-        if pt is not None:
-            return pt
-        time.sleep(1.5)
-    return None
+        cands = _claim_npc_candidates(frame)
+        pt = _pick_claim_npc(cands)
+        if pt is None:
+            time.sleep(1.5)
+            continue
+        pos = game_map.read_map_position(win, img=img)  # 同帧复用
+        if not _near_claim_spot(pos, CLAIM_NEAR_TOLERANCE):
+            if not gate_logged:
+                gate_logged = True
+                log(f"[种族比武] 领取 NPC 可见但坐标不在领取点附近"
+                    f"（{_pos_text(pos)}，目标 {CHANGAN}"
+                    f"[{CLAIM_SPOT[0]},{CLAIM_SPOT[1]}]"
+                    f"±{CLAIM_NEAR_TOLERANCE}），暂不点击", "WARN")
+            time.sleep(1.5)
+            continue
+        if len(cands) > 1:
+            log(f"[种族比武] 领取 NPC 候选 {len(cands)} 个，"
+                f"取最右侧 ({pt[0]}, {pt[1]}) 点击", "INFO")
+        return pt, pos
+    return None, None
 
 
 def _find_claim_option(items, img_np):
@@ -529,28 +658,35 @@ def _click_entry_ensuring_dialog(win):
     """点击领取 NPC 并确保对话框出现；未出现判定坐标不对，小地图重定位
     后重试一次。返回 (是否成功, 描述, 对话框帧)；成功时对话框已打开
     （选项可见），帧供领取流程同帧点选项。
+
+    进入领取链先确保已按 Alt+4 清屏（本轮首次生效，见
+    _clear_claim_screen）：覆盖「NPC 进入视野提前结束寻路」的情况，
+    保证点击前的模板识别与点击不被昵称/界面遮挡。
     """
+    _clear_claim_screen(win)
     dialog_seen = False
     appear_timeout = CLAIM_DIALOG_APPEAR_TIMEOUT
     seen_frame = None
     for attempt in (1, 2):
         wait_timeout = (CLAIM_ENTRY_FIRST_WAIT if attempt == 1
                         else CLAIM_BUTTON_TIMEOUT)
-        pt = _wait_claim_entry(win, wait_timeout)
+        pt, pos = _wait_claim_entry(win, wait_timeout)
         if pt is None:
             if attempt == 1:
-                log(f"[种族比武] 等待领取 NPC {wait_timeout}s 未出现，"
-                    f"小地图重走领取点后重试", "WARN")
+                log(f"[种族比武] 等待领取 NPC/坐标到位 {wait_timeout}s "
+                    f"未满足，小地图重走领取点后重试", "WARN")
                 ok, info = _relocate_to_claim_spot(win)
                 if not ok:
                     log(f"[种族比武] {info}", "WARN")
-                    return False, "到达后未出现领取 NPC", None
+                    return False, "到达后未出现领取 NPC 或坐标未到位", None
                 continue
-            return False, "到达后未出现领取 NPC（重走领取点后仍无）", None
+            return False, ("到达后未出现领取 NPC 或坐标未到位"
+                           "（重走领取点后仍无）"), None
         # 瞬时点击（取消拟人化移动）：走动中镜头随人物移动，拟人化
         # 移动期间点击位置已过期
         precise_click(win, pt[0], pt[1], move_duration=0)
-        log(f"[种族比武] 已点击领取 NPC ({pt[0]}, {pt[1]})", "SYS")
+        log(f"[种族比武] 已点击领取 NPC ({pt[0]}, {pt[1]})，"
+            f"当前坐标: {_pos_text(pos)}", "SYS")
         deadline = time.time() + appear_timeout
         while time.time() < deadline:
             img = win.capture(force_activate=False)
@@ -585,8 +721,7 @@ def _click_entry_ensuring_dialog(win):
                     continue
                 frame = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
                 pos = game_map.read_map_position(win, img=img)
-                if _in_claim_map(pos) and game_map.match_frame_np(
-                        frame, CLAIM_NPC_ICON) is not None:
+                if _in_claim_map(pos) and _find_claim_npc_np(frame) is not None:
                     break
                 time.sleep(2.0)
             appear_timeout = CLAIM_DIALOG_TIMEOUT
@@ -707,7 +842,9 @@ def verify_claim_flow(win):
     （仅移动鼠标定位，不点击——点击即领取）→ 点屏幕中间关闭对话框。
     不领取任务、不检查队伍（单人也可验证）；失败时返回原因。
     """
+    global _claim_clear_done
     tag = "[种族比武][验证]"
+    _claim_clear_done = False  # 验证轮次：到达领取点后允许按一次 Alt+4
     if is_in_battle(win):
         return False, "战斗中，无法验证领取"
     ok, info = _walk_to_claim_spot(win)
@@ -952,11 +1089,12 @@ def run_loop(win, cycle_interval=1.0):
     结束条件：完成任务次数达到设置的次数上限即返回结束原因。
     """
     global _started_via_option, _team_checked, _task_gone_last_round, \
-        _wuyi_notice_logged
+        _wuyi_notice_logged, _claim_clear_done
     _started_via_option = False
     _team_checked = False
     _task_gone_last_round = False
     _wuyi_notice_logged = False
+    _claim_clear_done = False
 
     max_rounds = load_task_counts().get(TASK_MODE, 0)
     log(f"[种族比武] 任务次数上限: {max_rounds if max_rounds > 0 else '不限'}",
@@ -1010,7 +1148,7 @@ def run_loop(win, cycle_interval=1.0):
     # 置于组号初始化之前——未标定时不产生组号激活/降级等副作用
     if not _claim_configured() and not _task_state(win):
         log(f"[种族比武] {CLAIM_UNCONFIGURED_INFO}", "ERROR")
-        log("[种族比武] 请确认 res/img/zhongzu_claim_npc.png 存在，"
+        log("[种族比武] 请确认 res/img/zhongzu_claim_npc*.png 至少一个存在，"
             "且 CLAIM_SPOT/CLAIM_MAP_POS 已填写后重新启动", "WARN")
         return CLAIM_UNCONFIGURED_INFO
 
@@ -1123,8 +1261,7 @@ def run_loop(win, cycle_interval=1.0):
                     at_spot = _near_claim_spot(pos0, CLAIM_NEAR_TOLERANCE) \
                         or (frame0 is not None
                             and (pos0 is None or pos0[0].strip() == CHANGAN)
-                            and game_map.match_frame_np(
-                                frame0, CLAIM_NPC_ICON) is not None)
+                            and _find_claim_npc_np(frame0) is not None)
                     if not at_spot:
                         while True:
                             status, info = _check_team_with_retry(
@@ -1147,6 +1284,7 @@ def run_loop(win, cycle_interval=1.0):
                 _auto_create_team_once(win)
             # 1.1 队长：队伍是否满都先走到领取点附近
             debug_overlay.set_phase("前往领取点")
+            _claim_clear_done = False  # 新领取轮次：允许到达后按一次 Alt+4
             ok, info = _walk_to_claim_spot(win)
             if not ok:
                 log(f"[种族比武] {info}", "WARN")

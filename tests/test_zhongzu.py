@@ -3,6 +3,9 @@
 验证点：
 - 任务对话五选一绿色选项匹配（进入战斗/开始战斗/开始采集/开始开采/
   开始训练），非绿字/追踪面板区域行不参与
+- 领取 NPC 模板组：缺失模板跳过、同屏多个候选取最右侧
+- 领取 NPC 点击门控：人物坐标不在领取点附近时不点击（NPC 可见不算到位）
+- 到达领取点先 Alt+4 清屏再识别 NPC 模板（每次领取只按一次）
 - 领取对话框选项匹配：完整文案 → 尾部 → 短兜底
 - 领取三件套未标定时 run_loop 安全结束（不空转、不乱点）
 - 新增种族比武设置键默认值与方案快照一致
@@ -152,10 +155,146 @@ def test_click_claim_map_pos_clamps_out_of_window(monkeypatch):
     assert clicks[-1] == (300, 400)
 
 
+def test_find_claim_npc_picks_rightmost(monkeypatch):
+    """领取 NPC 模板组：同屏两个候选时取最右侧（用户 2026-11-12 规则）。"""
+    monkeypatch.setattr(zhongzu, "_claim_npc_icons",
+                        lambda: ("a.png", "b.png"))
+    hits = {"a.png": [(0.95, 400, 300), (0.91, 700, 305)],
+            "b.png": [(0.88, 702, 302)]}
+    calls = []
+
+    def _fake_all(frame, icon, threshold=0.8):
+        calls.append((icon, threshold))
+        return hits[icon]
+
+    monkeypatch.setattr(zhongzu.game_map, "match_frame_all", _fake_all)
+    assert zhongzu._find_claim_npc_np(IMG) == (702, 302)
+    # 模板组逐个匹配，统一走 CLAIM_NPC_THRESHOLD
+    assert [c[0] for c in calls] == ["a.png", "b.png"]
+    assert all(c[1] == zhongzu.CLAIM_NPC_THRESHOLD for c in calls)
+
+
+def test_find_claim_npc_single_and_none(monkeypatch):
+    """单候选正常返回；无候选返回 None。"""
+    monkeypatch.setattr(zhongzu, "_claim_npc_icons", lambda: ("a.png",))
+    monkeypatch.setattr(zhongzu.game_map, "match_frame_all",
+                        lambda frame, icon, threshold=0.8: [(0.9, 500, 320)])
+    assert zhongzu._find_claim_npc_np(IMG) == (500, 320)
+    monkeypatch.setattr(zhongzu.game_map, "match_frame_all",
+                        lambda frame, icon, threshold=0.8: [])
+    assert zhongzu._find_claim_npc_np(IMG) is None
+
+
+def test_claim_npc_icons_skips_missing(monkeypatch):
+    """模板缺失时跳过且只告警一次（其余模板照常参与匹配）。"""
+    logs = []
+    monkeypatch.setattr(zhongzu, "_claim_npc_missing_logged", False)
+    monkeypatch.setattr(zhongzu, "log",
+                        lambda msg, level="INFO": logs.append((msg, level)))
+    monkeypatch.setattr(zhongzu, "_template_exists",
+                        lambda icon: icon == "zhongzu_claim_npc.png")
+    icons = zhongzu._claim_npc_icons()
+    assert icons == ("zhongzu_claim_npc.png",)
+    assert len(logs) == 1 and "缺失" in logs[0][0]
+    # 再次调用复用缓存，不重复告警
+    assert zhongzu._claim_npc_icons() == icons
+    assert len(logs) == 1
+
+
+def test_wait_claim_entry_reads_position_on_hit_frame(monkeypatch):
+    """命中帧同时读地图位置（点击日志打印当前坐标，用户 2026-11-12）。"""
+    frame = np.zeros((831, 1378, 3), dtype=np.uint8)
+    seen = {}
+    here = (zhongzu.CHANGAN, *zhongzu.CLAIM_SPOT)  # 坐标到位，门控放行
+
+    class _Win:
+        def capture(self, force_activate=False):
+            return frame
+
+    monkeypatch.setattr(zhongzu, "is_in_battle_frame", lambda img: False)
+    monkeypatch.setattr(zhongzu, "_claim_npc_candidates",
+                        lambda frame: [(0.98, 818, 358)])
+
+    def _read_pos(win, img=None):
+        seen["img"] = img
+        return here
+
+    monkeypatch.setattr(zhongzu.game_map, "read_map_position", _read_pos)
+    assert zhongzu._wait_claim_entry(_Win(), 1.0) == ((818, 358), here)
+    assert seen["img"] is frame  # 同帧复用，不重复截窗
+
+
+def test_clear_claim_screen_once_per_attempt(monkeypatch):
+    """到达领取点后的 Alt+4 清屏每次领取只按一次（切换态防重复翻转）。"""
+    calls = []
+    monkeypatch.setattr(zhongzu, "_claim_clear_done", False)
+    monkeypatch.setattr(zhongzu.app_utils, "press_alt4_clear",
+                        lambda win, prefix="": calls.append(prefix))
+    zhongzu._clear_claim_screen(None)
+    zhongzu._clear_claim_screen(None)
+    assert calls == ["[种族比武]"]
+    # 新一轮领取复位后再按一次
+    monkeypatch.setattr(zhongzu, "_claim_clear_done", False)
+    zhongzu._clear_claim_screen(None)
+    assert len(calls) == 2
+
+
+def test_walk_to_claim_spot_clears_before_recognize(monkeypatch):
+    """已在领取点：先 Alt+4 清屏，再识别领取 NPC 模板（用户 2026-11-12）。"""
+    order = []
+    frame = np.zeros((831, 1378, 3), dtype=np.uint8)
+    here = (zhongzu.CHANGAN, *zhongzu.CLAIM_SPOT)
+
+    class _Win:
+        def capture(self, force_activate=False):
+            return frame
+
+    monkeypatch.setattr(zhongzu, "_claim_configured", lambda: True)
+    monkeypatch.setattr(zhongzu, "is_in_battle", lambda win: False)
+    monkeypatch.setattr(zhongzu.game_map, "read_map_position",
+                        lambda win, img=None: here)
+    monkeypatch.setattr(zhongzu, "_clear_claim_screen",
+                        lambda win: order.append("clear"))
+    monkeypatch.setattr(zhongzu, "_find_claim_npc_np",
+                        lambda frame, verbose=False: order.append("match")
+                        or (818, 358))
+    ok, info = zhongzu._walk_to_claim_spot(_Win())
+    assert ok and "领取 NPC 可见" in info
+    assert order[:2] == ["clear", "match"]  # 清屏先于模板识别
+
+
+def test_wait_claim_entry_gates_click_by_coordinate(monkeypatch):
+    """坐标不在领取点附近时不得点击（用户 2026-11-12 坐标门控）。"""
+    frame = np.zeros((831, 1378, 3), dtype=np.uint8)
+    logs = []
+    far_x = zhongzu.CLAIM_SPOT[0] + zhongzu.CLAIM_NEAR_TOLERANCE + 5
+
+    class _Win:
+        def capture(self, force_activate=False):
+            return frame
+
+    monkeypatch.setattr(zhongzu, "is_in_battle_frame", lambda img: False)
+    monkeypatch.setattr(zhongzu, "_claim_npc_candidates",
+                        lambda frame: [(0.98, 818, 358)])
+    monkeypatch.setattr(zhongzu.game_map, "read_map_position",
+                        lambda win, img=None: (zhongzu.CHANGAN, far_x,
+                                               zhongzu.CLAIM_SPOT[1]))
+    monkeypatch.setattr(zhongzu, "log",
+                        lambda msg, level="INFO": logs.append((msg, level)))
+    monkeypatch.setattr(zhongzu.time, "sleep", lambda s: None)
+
+    assert zhongzu._wait_claim_entry(_Win(), 0.05) == (None, None)
+    assert any("坐标不在领取点附近" in msg for msg, _ in logs)
+
+
 def test_claim_configured_with_provided_assets():
-    """用户 2026-11-12 提供的领取三件套已就位（NPC 模板/坐标/小地图点）。"""
-    assert zhongzu.CLAIM_SPOT == (286, 159)
-    assert zhongzu.CLAIM_MAP_POS == (737, 387)
+    """用户 2026-11-12 提供的领取三件套已就位（NPC 模板组/坐标/小地图点）。"""
+    # 领取点坐标/容差为用户实机标定资产，会持续微调，这里只校验已填写
+    assert zhongzu.CLAIM_SPOT is not None
+    assert zhongzu.CLAIM_MAP_POS is not None
+    assert zhongzu.CLAIM_NPC_ICONS == (
+        "zhongzu_claim_npc.png", "zhongzu_claim_npc2.png",
+        "zhongzu_claim_npc3.png")
     assert zhongzu._claim_configured() is True
 
 
