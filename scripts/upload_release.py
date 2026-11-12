@@ -29,6 +29,17 @@ manual 完整包**不上传 OSS**：仅首个带自动更新的版本（v2.10.0�
       --manifest dist_update/update.json \
       --manifest-only
 
+清理 prefix/app 与 prefix/pylibs 下的旧包（只保留本次清单引用的对象 +
+--prune-keep 个最近旧版，默认 1 = 上一版兜底），不上传任何东西：
+
+    python scripts/upload_release.py \
+      --endpoint ... --bucket ... --prefix ... \
+      --manifest dist_update/update.json \
+      --prune-only
+
+清理要求 RAM 子账号对该前缀有 ListObjects / DeleteObject（见
+docs/auto-update-design.md §4.2）；无权限时只打印警告并跳过，不影响发布。
+
 依赖：`pip install oss2`（仅 CI/发布机需要，不进运行依赖）。
 """
 import argparse
@@ -79,6 +90,51 @@ def _put(bucket, key, path, content_type, cache_control, dry_run):
     bucket.put_object_from_file(key, str(path), headers=headers)
 
 
+def _prune_objects(oss2_mod, bucket, dir_prefix, keep_keys, keep_extra,
+                   dry_run):
+    """删除目录前缀下未被当前清单引用的旧对象。
+
+    keep_keys 为本次 update.json 引用的 key（绝不删）；另按 LastModified
+    保留最近的 keep_extra 个旧对象（默认 1 = 上一版），覆盖「客户端已拉到
+    旧清单、下载尚未完成」的短暂竞态；0 表示只留本次引用的对象。
+
+    只清理 prefix/app/ 与 prefix/pylibs/：update.json 与 manual/ 完整包
+    不经此处。缺 ListObjects 权限时打印警告跳过，清理失败不应阻断发布。
+    """
+    keep = set(keep_keys)
+    try:
+        objects = list(oss2_mod.ObjectIterator(bucket, prefix=dir_prefix))
+    except oss2_mod.exceptions.OssError as e:
+        print("警告：列取 %s 失败，跳过清理（%s）。"
+              "如需清理，给 RAM 子账号补该前缀的 ListObjects/DeleteObject。"
+              % (dir_prefix, e))
+        return
+    others = [obj for obj in objects if obj.key not in keep]
+    others.sort(key=lambda obj: obj.last_modified, reverse=True)
+    survivors = others[:max(0, keep_extra)]
+    doomed = others[max(0, keep_extra):]
+    freed = sum(obj.size for obj in doomed) / 1024 / 1024
+    print("清理 %s：共 %d 个对象 → 保留引用 %d 个 + 最近 %d 个，删除 %d 个"
+          "（%.1f MB）"
+          % (dir_prefix, len(objects), len(objects) - len(others),
+             len(survivors), len(doomed), freed))
+    for obj in survivors:
+        print("  保留上一版：%s" % obj.key)
+    if not doomed:
+        return
+    for obj in doomed[:10]:
+        print("  删除：%s" % obj.key)
+    if len(doomed) > 10:
+        print("  ...其余 %d 个略" % (len(doomed) - 10))
+    if dry_run:
+        print("  [dry-run] 未实际删除")
+        return
+    # BatchDeleteObjects 单次上限 1000 个 key。
+    for start in range(0, len(doomed), 1000):
+        chunk = [obj.key for obj in doomed[start:start + 1000]]
+        bucket.batch_delete_objects(chunk)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="上传更新资产到阿里云 OSS")
     parser.add_argument("--endpoint", required=True)
@@ -92,13 +148,19 @@ def main(argv=None):
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--manifest-only", action="store_true",
                         help="只上传 update.json（修正清单文案用，zip 不动）")
+    parser.add_argument("--prune-only", action="store_true",
+                        help="只清理 app/ 与 pylibs/ 下的旧包，不上传")
+    parser.add_argument("--prune-keep", type=int, default=1,
+                        help="清理时每个目录额外保留的最近旧对象数"
+                             "（默认 1 = 上一版兜底；0 = 只留本次引用的）")
     args = parser.parse_args(argv)
 
-    if not args.manifest_only:
+    if not args.manifest_only and not args.prune_only:
         for name in ("app_zip", "pylibs_zip"):
             if not getattr(args, name):
-                raise SystemExit("缺少 --%s（或使用 --manifest-only）"
-                                 % name.replace("_", "-"))
+                raise SystemExit(
+                    "缺少 --%s（或使用 --manifest-only / --prune-only）"
+                    % name.replace("_", "-"))
 
     manifest_path = pathlib.Path(args.manifest)
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -112,6 +174,18 @@ def main(argv=None):
     pylibs_key = "%s/pylibs/zhuomuniao-pylibs-%s.zip" % (
         prefix, parts["pylibs"]["sha256"][:8])
     manifest_key = "%s/update.json" % prefix
+
+    if args.prune_only:
+        # 清理必须列取对象，dry-run 也需要凭证（只打印不删除）。
+        oss2_mod, bucket = _bucket(args)
+        for dir_prefix, keep_keys in (
+                ("%s/app/" % prefix, [app_key]),
+                ("%s/pylibs/" % prefix, [pylibs_key])):
+            _prune_objects(oss2_mod, bucket, dir_prefix, keep_keys,
+                           args.prune_keep, args.dry_run)
+        print("清理完成：%s/app 与 %s/pylibs 仅保留本次清单引用的对象"
+              " + 最近 %d 个旧对象" % (prefix, prefix, max(0, args.prune_keep)))
+        return 0
 
     if args.dry_run:
         bucket = None  # 本地演练不需要 oss2 / 密钥

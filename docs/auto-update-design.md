@@ -38,7 +38,9 @@
   2. Nuitka onefile 构建 `zhuomuniao.exe`；
   3. numpy/onnxruntime 排除出 exe，组装为 `pylibs/`；
   4. 打包 `release_pkg`（exe + res + pylibs）为 `zhuomuniao-windows.zip`；
-  5. 上传 Actions artifact，打 tag 时发 GitHub Release。
+  5. 上传 Actions artifact，打 tag 时发 GitHub Release；
+  6. 打 tag 时还要：上传 OSS → 公网清单校验 → 清理 `app/`、`pylibs/` 旧包
+     （只留最新两版，见 §4.2）。
 - 用户侧：解压 zip 到任意目录，双击 `zhuomuniao.exe` 运行。
 
 ### 2.2 与更新相关的既有事实
@@ -123,8 +125,8 @@ bucket: dhxy-ascript-new（私有）
   写入权限：仅 CI 使用的 RAM 子账号，限该前缀 PutObject/GetObject
 
 zhuomuniao/stable/update.json                          # 始终指向最新版
-zhuomuniao/stable/app/zhuomuniao-app-<version>.zip     # 版本命名，不可变
-zhuomuniao/stable/pylibs/zhuomuniao-pylibs-<sha8>.zip  # 内容寻址，未变则复用
+zhuomuniao/stable/app/zhuomuniao-app-<version>.zip     # 版本命名，不可变；只留最新两版
+zhuomuniao/stable/pylibs/zhuomuniao-pylibs-<sha8>.zip  # 内容寻址，未变则复用；只留最新两版
 zhuomuniao/stable/manual/zhuomuniao-windows-latest.zip # 完整包：仅首个带自动更新的
                                                        # 版本（v2.10.0）上传一次
 ```
@@ -133,6 +135,12 @@ manual 完整包**只在 v2.10.0 上传一次，之后发版不再上传/覆盖 
 装 v2.10.0 后走面板升级即可（该版本已带 updater），省存储与流量成本。
 版本命名的 `zhuomuniao-windows-<version>.zip` 仍每次发版生成，由 GitHub
 Release 归档（workflow 附产物）。
+
+`app/` 与 `pylibs/` 的旧对象由发布流程自动清理：CI 在公网清单校验通过后执行
+`upload_release.py --prune-only --prune-keep 1`，删除未被当前清单引用的对象，
+只保留「本次引用 + 上一版」。客户端只按当前 `update.json` 下载缺失分片，
+不会请求历史版本；上一版留作兜底——客户端可能已拉到旧清单、下载尚未完成，
+此时旧 zip 仍需可下载。清理失败不影响发布，历史版本以 GitHub Release 归档为准。
 
 当前客户端清单地址（编译期常量 `src/update_config.py`）：
 
@@ -159,9 +167,39 @@ https://dhxy-ascript-new.oss-cn-beijing.aliyuncs.com/zhuomuniao/stable/update.js
 }
 ```
 
-RAM 子账号策略只需目标前缀的 `oss:PutObject` / `oss:GetObject` / `oss:HeadObject`，
-不要授予 `oss:ListObjects` 或其它 bucket 权限。CI 在上传后会请求一次公网清单，
-策略未配置时会直接失败并提示。
+RAM 子账号策略：目标前缀的 `oss:PutObject` / `oss:GetObject` / `oss:HeadObject`，
+加上旧包清理所需的前缀级 `oss:DeleteObject` 与 `oss:ListObjects`（用
+`oss:Prefix` 条件限到 `zhuomuniao/stable/*`）：
+
+```json
+{
+  "Version": "1",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["oss:PutObject", "oss:GetObject", "oss:HeadObject"],
+      "Resource": ["acs:oss:*:*:dhxy-ascript-new/zhuomuniao/stable/*"]
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["oss:DeleteObject"],
+      "Resource": [
+        "acs:oss:*:*:dhxy-ascript-new/zhuomuniao/stable/app/*",
+        "acs:oss:*:*:dhxy-ascript-new/zhuomuniao/stable/pylibs/*"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["oss:ListObjects"],
+      "Resource": ["acs:oss:*:*:dhxy-ascript-new"],
+      "Condition": {"StringLike": {"oss:Prefix": ["zhuomuniao/stable/*"]}}
+    }
+  ]
+}
+```
+
+CI 在上传后会请求一次公网清单，策略未配置时会直接失败并提示；清理步骤在缺少
+`ListObjects` / `DeleteObject` 时只打印警告并跳过，不影响发布。
 
 缓存头：
 
@@ -184,8 +222,9 @@ OSS_ACCESS_KEY_SECRET
 UPDATE_BASE_URL       # https://update.example.com/zhuomuniao/stable
 ```
 
-RAM 子账号最小权限：仅目标前缀的 `PutObject` / `GetObject` / `HeadObject`，不给
-`ListObjects`、不给其它 bucket。密钥只存在于 Actions Secrets，不写进仓库。
+RAM 子账号最小权限：目标前缀的 `PutObject` / `GetObject` / `HeadObject`，旧包
+清理用的前缀级 `DeleteObject` 与（`oss:Prefix` 限定）`ListObjects`，不给其它
+bucket 权限（策略示例见 §4.2）。密钥只存在于 Actions Secrets，不写进仓库。
 
 腾讯云 COS 对应 `COS_SECRET_ID` / `COS_SECRET_KEY` / `COS_REGION` / `COS_BUCKET`，
 CI 步骤换成 `coscli cp`。两者只需要实现其中一套，另一套留作迁移备注。

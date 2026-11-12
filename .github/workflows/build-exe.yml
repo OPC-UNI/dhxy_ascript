@@ -313,6 +313,28 @@ jobs:
             exit 1
           }
 
+      - name: 清理 OSS 旧包（app/ 与 pylibs/ 只保留最新两版）
+        if: startsWith(github.ref, 'refs/tags/')
+        continue-on-error: true
+        shell: pwsh
+        env:
+          OSS_ACCESS_KEY_ID: ${{ secrets.OSS_ACCESS_KEY_ID }}
+          OSS_ACCESS_KEY_SECRET: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
+        run: |
+          # 旧包不再被任何清单引用（客户端只按当前 update.json 下载缺失分片），
+          # 留在 bucket 里纯占存储。放在公网校验之后：确认新清单可读再删；
+          # --prune-keep 1 额外留上一版——客户端可能已拉到旧清单、下载尚未
+          # 完成，此时旧 zip 仍需可下载。清理失败不影响发布（continue-on-error），
+          # 历史版本仍有 GitHub Release 归档。RAM 需 ListObjects/DeleteObject
+          # （见 docs/auto-update-design.md §4.2）。
+          python scripts/upload_release.py `
+            --endpoint $env:OSS_ENDPOINT `
+            --bucket $env:OSS_BUCKET `
+            --prefix $env:OSS_PREFIX `
+            --manifest dist_update/update.json `
+            --prune-only `
+            --prune-keep 1
+
       - name: 发布到 GitHub Release（仅打 tag，内部留档）
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
