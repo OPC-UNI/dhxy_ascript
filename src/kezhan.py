@@ -25,6 +25,9 @@
 四象镇魂按 青龙→白虎→朱雀→玄武 依次点击加固；三才锁阴阵（循法固阵）
 按 引灯阵法→镇煞阵法→定魂阵法 依次点击加固（文案阅读序与点击序不一致，
 按「第N处阵法已加固完成」计数选下一个关键词，同玄枢轶闻封印按序开启）；
+智戏成空（前往凤巢）按 风吟印→炎阳印→水镜印 依次点击开启三处封印
+（同三才结构：阅读序 水镜印、风吟印、炎阳印 ≠ 点击序，按「第N处封印
+已开启」计数选下一个关键词，三处全开文案「封印已经全部开启」）；
 音律小游戏（辨八音：对话「来吧，我还怕了你不成？」→ 窗口横幅
 kezhan_yinlv.png 出现 → 记住五编钟位置 → 点开始演奏 → 按序点击
 5 1 4 5 1 1 5 5 1 5 4 3 2 3 5（15 次；首个 3.4s、间隔 1.45s，
@@ -32,11 +35,12 @@ kezhan_yinlv.png 出现 → 记住五编钟位置 → 点开始演奏 → 按序
 破除封印小游戏（灵兔封印：对话「看来这就是那困住灵兔的封印了」→
 选项「消耗灵气，破除封印」→ 窗口标题 kezhan_pochufengyin.png 出现 →
 闭环控制：target 模板定位目标高亮区间 [L,R,C]（≈1 刻度宽）、HSV 金掩码
-+连通段测量填充右边缘 P（1~10 刻度，x 435~992）→ 点「开始」→ 按
-C 三档节奏点击（C<4 慢/4~7 中/>7 快）推进到带中心 C 附近才停手（松手
-后填充会回落，停在左缘 L 有掉出带下的风险）、过头永久停手、
-按钮变「保持」或倒计时≤3s 完全停手 → 标题消失即任务结束；倒计时与按钮
-文字走差分门区域 OCR）；
++连通段测量填充右边缘 P（1~10 刻度，x 435~992）→ 点「开始」→
+**冲刺连点（mash，与名望蛟魔探秘同款窗口同款打法）**：rapid_click_burst
+按在线估算的每击推进量连点冲进目标带（三档拟人节奏 ~2 击/秒 实测 7s
+只推到 P≈1.4，到不了目标带——2026-11-12 日志），到带后维持泵点击率
+伺服对抗自动回退、不按倒计时停手，按钮变「保持」或标题消失结束；
+倒计时与按钮文字走差分门区域 OCR）；
 提交物品/无跟踪两类特殊任务后续单独处理。
 """
 import re
@@ -105,6 +109,7 @@ YINLV_ENTRY_OPTION = "来吧，我还怕了你不成？"
 DIALOG_OPTION_MAP = {
     "瑶池近日要办迎仙大会，宴上那道琉璃映月羹": YAOCHI_DIALOG_OPTION,
     "少侠有什么事吗": "客栈任务",
+    "蟠桃园土地": "客栈任务",
     "所谓狡兔三洞，小仙分身遍布三界，少侠在哪见到我都不必惊讶。":"客栈任务",
     "有空我请你喝瑶池鲜酿": "那我就坐等瑶池鲜酿了",
     "被镇于修罗古城中的妖邪近日隐隐躁动": "修罗出世非同小可，我这便前去加固封印",
@@ -267,7 +272,8 @@ DIALOG_OPTION_MAP = {
     "嘿！他闺女抓周时我还送过小木弓呢！定要带两坛自酿的虎骨酒去！":"那你快准备好酒，我先告辞。",
     "少侠看着面生啊……":"长安余庆轩有喜，掌柜托我送帖。",
     "朋友，买香料？三百文一两。":"我是替长安余庆轩送请柬的。",
-    "哦！我的老朋友！我们宝象国规矩，喜气要闪金光一一到时我就把祖传的西":"离成亲还有些日子，你慢慢准备，我先告辞。"
+    "哦！我的老朋友！我们宝象国规矩，喜气要闪金光一一到时我就把祖传的西":"离成亲还有些日子，你慢慢准备，我先告辞。",
+    "此中玄机嘛……你且记好：先破风吟阵，再解炎阳印，终启水镜界。这三重":"风火水三相轮回...妙极！我这便去试试。"
 
 }
 # 需要点击屏幕中间跳过的对话框文案 → 点击次数（出现则连点屏幕中间推进
@@ -504,7 +510,22 @@ GREEN_CLICK_ORDER = ["青龙", "白虎", "朱雀", "玄武"]
 # _jiguan_link_picker）；回调在非本任务阶段自门控不介入。
 SANCAI_LINK_ORDER = ("引灯阵法", "镇煞阵法", "定魂阵法")  # 点击顺序（领取对话：先点灯，再镇煞，终定魂）
 SANCAI_PROGRESS_RE = re.compile(r"第\s*([一二三四五1-5])\s*处\s*阵法\s*已\s*加固\s*完成")
-_SANCAI_ORD = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5}
+_CN_ORD = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5}
+# ---- 智戏成空任务（前往凤巢：按 风吟印→炎阳印→水镜印 依次开启三处封印）----
+# 用户 2026-11-12 实机截图（1.5x 放大，1378x831 窗口坐标）实测：初始文案
+# 「根据客栈掌柜所示，前往凤巢按风火水三相轮回之序开启水镜印、风吟印、
+# 炎阳印三处封印。」——关键词行 OCR (23,285)-(219,305)，三个链接下划线
+# y=304 x24-68/84-128/144-188（阅读序 水镜→风吟→炎阳 ≠ 点击序）；每点完
+# 一处面板出现「第N处封印已开启」，三处全开后变「封印已经全部开启」——
+# 进度信号。与三才同构：progress_key（已开启计数）+ green_picker（按计数
+# 选关键词、下划线实线段定位）实现，回调在非本任务阶段自门控不介入。
+# 点击序依据任务追踪原文「按风火水三相轮回之序开启」与领取对话「先破
+# 风吟阵，再解炎阳印，终启水镜界」（2026-11-12 用户确认：风→炎阳→水镜）。
+ZHIXI_LINK_ORDER = ("风吟印", "炎阳印", "水镜印")
+ZHIXI_PROGRESS_RE = re.compile(r"第\s*([一二三四五1-5])\s*处\s*封印\s*已\s*开启")
+# 三处全开文案「封印已经全部开启」（用户 2026-11-12 提供）；匹配只用短键
+# 「全部开启」——抗「已/己」OCR 混淆，且该四字组合在本任务之外不出现。
+ZHIXI_ALL_OPEN_TEXT = "全部开启"
 # ---- 拍毒虫小游戏（入口对话框 → 开始 → 拍虫） ----
 BUG_START_TEXT = "请在游戏开始后拍打毒虫，不要误伤蜻蜓和七星虫哦"  # 入口对话框文案
 BUG_START_ICON = "bug_start.png"       # 开始按钮模板（38.png 实测素材）
@@ -1219,9 +1240,11 @@ def _order_green_state(items, img_np):
 
 
 def _order_progress_key(items, img_np):
-    """任务进度键：三才阵法已加固计数 / 四象仍为绿字的顺序关键词列表
-    （如 白虎,朱雀,玄武）。
+    """任务进度键：智戏成空已开启封印数 / 三才已加固计数 / 四象仍为
+    绿字的顺序关键词列表（如 白虎,朱雀,玄武）。
 
+    智戏成空：每点完一处面板出现「第N处封印已开启」，三处全开为
+    「封印已经全部开启」，计数即进度。
     三才：每点完一处面板出现「第N处阵法已加固完成」，计数即进度
     （同 xuanshu._jiguan_link_progress）。
     四象：封印完成关键词变红（文字不变），绿字集合缩小即任务推进，
@@ -1231,6 +1254,9 @@ def _order_progress_key(items, img_np):
     会被吞掉（实测 2026-10-13「经史类→天象类」相似 0.93 未触发
     再点击）；键为精确比较，且经两轮询确认过滤单次 OCR 抖动。
     """
+    key = _zhixi_progress_key(items, img_np)
+    if key is not None:
+        return key
     key = _sancai_progress_key(items, img_np)
     if key is not None:
         return key
@@ -1260,14 +1286,17 @@ def _pick_order_green(items, img_np):
     return l + cx, t + cy
 
 
-def _sancai_panel_lines(items, img_np=None):
-    """三才任务关注的面板行（任务追踪面板区域内，排除居中对话框；
+def _panel_lines(items, img_np=None):
+    """任务追踪面板内的 OCR 行（三才/智戏成空共用；排除居中对话框——
     领取/跟踪对话框同含关键词，面板外行命中会把对话框选项当链接）。
     纵向取动态内容区（面板漂移跟随）；横向行首限 panel_row_xmax
     （对话框行行首 ≥400 恒被排除）。img_np 为 None 时回退静态区域
-    （纯文本过滤场景）。"""
-    _pl, pt_, _pr, pb = _track_panel_region(img_np)
-    xmax = task_tracker.panel_row_xmax(img_np)
+    （纯文本过滤场景）。
+    行首界直接由本次区域左缘推导（与 panel_row_xmax 同值：同一动态
+    区域 +160，两条静态兜底的左缘均为 0）——省一次标题模板定位，
+    本函数在跟踪轮询内被多条判定调用（热路径）。"""
+    pl, pt_, _pr, pb = _track_panel_region(img_np)
+    xmax = max(task_tracker.PANEL_MAX_X, pl + 160)
     return [(txt, rect, score) for txt, rect, score in items
             if score >= 0.55 and rect[0] < xmax and pt_ <= rect[1] <= pb]
 
@@ -1275,15 +1304,15 @@ def _sancai_panel_lines(items, img_np=None):
 def _sancai_stage(items, img_np=None):
     """是否处于三才阵法阶段：面板存在任一顺序关键词。"""
     return any(any(kw in norm_text(txt) for kw in SANCAI_LINK_ORDER)
-               for txt, _, _ in _sancai_panel_lines(items, img_np))
+               for txt, _, _ in _panel_lines(items, img_np))
 
 
 def _sancai_count(items, img_np=None):
     """面板「第N处阵法已加固完成」的最大序数（无则 None）。"""
     best = None
-    for txt, _, _ in _sancai_panel_lines(items, img_np):
+    for txt, _, _ in _panel_lines(items, img_np):
         for m in SANCAI_PROGRESS_RE.finditer(norm_text(txt)):
-            n = _SANCAI_ORD.get(m.group(1))
+            n = _CN_ORD.get(m.group(1))
             if n is None and m.group(1).isdigit():
                 n = int(m.group(1))
             if n is not None and (best is None or n > best):
@@ -1291,18 +1320,23 @@ def _sancai_count(items, img_np=None):
     return best
 
 
-def _sancai_locate_link(items, img_np, kw):
-    """定位三才任务关键词链接的点击点：下划线实线段中心上方 2px。
+def _locate_panel_link(items, img_np, kw):
+    """定位面板关键词链接的点击点：下划线实线段中心上方 2px。
 
-    关键词嵌在描述行内，一行可能含两个链接（如「引灯阵法、定魂阵法」），
-    行级选择无法区分——按关键词在行文本中的位置比例估计 x 中心，配对
-    最近的 ≥20px 连续亮绿下划线实线段（下划线是链接专属标记，检测窗口
-    同 task_tracker.green_text_center：框底 -10~+8px、右探 +60px）。
+    三才/智戏成空共用。关键词嵌在描述行内，一行可能含多个链接（如
+    「引灯阵法、定魂阵法」「水镜印、风吟印、炎阳印」），行级选择无法
+    区分——按关键词在行文本中的位置比例估计 x 中心，配对最近的 ≥20px
+    连续亮绿下划线实线段（下划线是链接专属标记，检测窗口同
+    task_tracker.green_text_center：框底 -10~+8px、右探 +60px）。
     下划线缺失（渲染变体）时回退行内绿色字形簇（同 _order_green_state
     的字符合并），纵向点击行底上方 2px（行底可点区规则）。关键词被
-    OCR 拆行/漏读时返回 None（调用方拒绝行级兜底，等待重试）。
+    OCR 拆行时按「行尾后缀 + 下一行行首前缀」跨行兜底（见
+    _locate_split_panel_link，2026-11-12 用户提醒：追踪文案变化会
+    改变链接位置/折行）；仍无法定位返回 None（调用方拒绝行级兜底，
+    等待重试）。
     """
-    for txt, rect, _ in _sancai_panel_lines(items, img_np):
+    lines = _panel_lines(items, img_np)
+    for txt, rect, _ in lines:
         ntxt = norm_text(txt)
         i = ntxt.find(kw)
         if i < 0:
@@ -1346,6 +1380,31 @@ def _sancai_locate_link(items, img_np, kw):
             rel_cx = est_cx - rect[0]
             best = min(merged, key=lambda c: abs((c[0] + c[2]) / 2 - rel_cx))
             return rect[0] + (best[0] + best[2]) // 2, rect[1] + best[3] - 2
+    return _locate_split_panel_link(lines, kw)
+
+
+def _locate_split_panel_link(lines, kw):
+    """跨行拆分关键词兜底：kw 被折行拆成「行尾后缀 + 下一行行首前缀」。
+
+    游戏按字格折行，三字链接可能正好跨行（如「…开启炎阳」/「印、水镜
+    印…」），单行 find 两行都落空。按相邻行对匹配全部拆分点（1+2、
+    2+1），命中后落到后缀所在行：x 取后缀中心的文本比例位置、y 取
+    行底上方 2px（段中文字本身即链接可点区，不要求该行有 ≥20px
+    实线段——单字后缀的下划线窄于阈值检测不到）。追踪文案每次变化
+    都会重新折行，本兜底与主路径一样逐帧重定位，不缓存坐标。
+    无拆分对返回 None（调用方拒绝行级兜底，等待重试）。
+    """
+    ordered = sorted(lines, key=lambda it: it[1][1])
+    for (t1, r1, _), (t2, r2, _) in zip(ordered, ordered[1:]):
+        if r2[1] - r1[3] > 40:
+            continue  # 非相邻折行（行距 ≈18~24px，遗漏中间行时不硬配）
+        n1, n2 = norm_text(t1), norm_text(t2)
+        if not n1 or not n2:
+            continue
+        for k in range(1, len(kw)):
+            if n1.endswith(kw[:k]) and n2.startswith(kw[k:]):
+                est = r1[0] + int((len(n1) - k / 2) / len(n1) * (r1[2] - r1[0]))
+                return est, r1[3] - 2
     return None
 
 
@@ -1365,7 +1424,7 @@ def _sancai_picker(items, img_np):
         n = 0
     if n >= len(SANCAI_LINK_ORDER):
         return None
-    pt = _sancai_locate_link(items, img_np, SANCAI_LINK_ORDER[n])
+    pt = _locate_panel_link(items, img_np, SANCAI_LINK_ORDER[n])
     return pt if pt is not None else task_tracker.PICK_FAIL
 
 
@@ -1379,9 +1438,75 @@ def _sancai_progress_key(items, img_np):
     return "0" if _sancai_stage(items, img_np) else None
 
 
+def _zhixi_stage(items, img_np=None):
+    """是否处于智戏成空阶段：面板存在任一封印链接关键词。
+
+    三个印名（风吟印/炎阳印/水镜印）为本任务独有，其他客栈任务与
+    领取对话表都不出现（对话里的「风吟阵/水镜界」不是关键词，且居中
+    对话行被 _panel_lines 排除）；空转期零误介入。
+    """
+    return any(any(kw in norm_text(txt) for kw in ZHIXI_LINK_ORDER)
+               for txt, _, _ in _panel_lines(items, img_np))
+
+
+def _zhixi_count(items, img_np=None):
+    """智戏成空进度：已开启封印数（无进度文案则 None）。
+
+    1/2 来自「第N处封印已开启」；三处全开的文案「封印已经全部开启」
+    无序号（用户 2026-11-12 提供），按短键「全部开启」命中即 3。
+    """
+    best = None
+    for txt, _, _ in _panel_lines(items, img_np):
+        ntxt = norm_text(txt)
+        if ZHIXI_ALL_OPEN_TEXT in ntxt:
+            return len(ZHIXI_LINK_ORDER)
+        for m in ZHIXI_PROGRESS_RE.finditer(ntxt):
+            n = _CN_ORD.get(m.group(1))
+            if n is None and m.group(1).isdigit():
+                n = int(m.group(1))
+            if n is not None and (best is None or n > best):
+                best = n
+    return best
+
+
+def _zhixi_picker(items, img_np):
+    """智戏成空精确点击：按已开启计数选下一个关键词（风吟→炎阳→水镜）。
+
+    非本任务阶段返回 None（回退三才/四象/行级选择）。阶段内目标无法
+    定位返回 PICK_FAIL（拒绝行级兜底点击——兜底按阅读序点第一个绿字
+    会点到 水镜印，破坏 风吟→炎阳→水镜 顺序，同三才/xuanshu 封印
+    按序开启）。计数用尽（≥3）返回 None：全部开启后的复命链接交回
+    行级选择。
+    """
+    n = _zhixi_count(items, img_np)
+    if n is None:
+        if not _zhixi_stage(items, img_np):
+            return None
+        n = 0
+    if n >= len(ZHIXI_LINK_ORDER):
+        return None
+    pt = _locate_panel_link(items, img_np, ZHIXI_LINK_ORDER[n])
+    return pt if pt is not None else task_tracker.PICK_FAIL
+
+
+def _zhixi_progress_key(items, img_np):
+    """智戏成空进度键：已开启封印数；阶段内未开启为 0（与点击前基线
+    一致，点后 1/2/3 变化即推进），阶段外 None（交由三才/四象/默认
+    文本签名驱动）。键带「封印」前缀与三才的数字键区分（同一跟踪
+    轮次只有一个任务，前缀主要便于日志辨认进度来源）。
+    """
+    n = _zhixi_count(items, img_np)
+    if n is not None:
+        return f"封印{n}"
+    return "封印0" if _zhixi_stage(items, img_np) else None
+
+
 def _pick_task_green(items, img_np):
-    """任务绿字精确点击调度：三才阵法优先（PICK_FAIL 直接透传，
-    拒绝行级兜底），其余任务回退四象顺序逻辑。"""
+    """任务绿字精确点击调度：智戏成空 → 三才阵法 → 四象顺序逻辑；
+    PICK_FAIL 直接透传（拒绝行级兜底）。"""
+    pt = _zhixi_picker(items, img_np)
+    if pt is not None:
+        return pt
     pt = _sancai_picker(items, img_np)
     if pt is not None:
         return pt
@@ -1568,9 +1693,16 @@ _pochu_fill_edge = _pochu_minigame.pochu_fill_edge
 
 
 def _play_pochufengyin(win):
-    """破除封印小游戏闭环（共享实现在 pochufengyin）。返回 (是否完成, 描述)。"""
+    """破除封印小游戏闭环（共享实现在 pochufengyin）。返回 (是否完成, 描述)。
+
+    与名望「蛟魔探秘钓鱼」同款点击窗口，必须开冲刺连点（mash=True）：
+    该窗口单击推进只有 ~0.1 刻度、填充条停手会回退，三档拟人节奏
+    ~2 击/秒 在 10s 倒计时内只能推到 P≈1.4（2026-11-12 实机日志），
+    到不了 [3.0,4.0] 一类的目标带。
+    """
     return _pochu_minigame.play_pochufengyin(win, POCHU_TITLE_ICON,
-                                             prefix="客栈", label="破除封印")
+                                             prefix="客栈", label="破除封印",
+                                             mash=True)
 
 
 def _match_baoxiang(img):
@@ -2551,7 +2683,8 @@ def _claim_task(win, pt):
 
 
 def _follow_kezhan(win):
-    """客栈 follow_task 统一参数调用（四象/三才顺序绿字点击 + 附加对话处理）。"""
+    """客栈 follow_task 统一参数调用（智戏成空/四象/三才顺序绿字点击 +
+    附加对话处理）。"""
     ok, info = follow_task(win, TASK_TITLE, prefix="客栈",
                            extra_dialog_handler=_handle_follow_extras,
                            green_order=GREEN_CLICK_ORDER,

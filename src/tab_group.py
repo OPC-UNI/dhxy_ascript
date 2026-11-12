@@ -135,7 +135,7 @@ def _exit_pass():
 def init_task(win, mode, switch_on):
     """任务启动时初始化组号状态（开关开才枚举，一次）。
 
-    激活条件：mode ∈ {修罗, 五倍} 且 switch_on 且已登录 Tab ≥2 且
+    激活条件：mode ∈ {修罗, 五倍, 种族比武} 且 switch_on 且已登录 Tab ≥2 且
     当前 Tab ID 可解析（可见子窗口标题）。不满足时置不激活——单号
     （已登录 Tab <2）行为与旧版完全一致。枚举失败只告警不激活。
 
@@ -155,7 +155,7 @@ def init_task(win, mode, switch_on):
     _team_member_ids = set()
     _acted_ids = set()
     _no_members_logged = False
-    if mode not in ("修罗", "五倍") or not switch_on:
+    if mode not in ("修罗", "五倍", "种族比武") or not switch_on:
         return
     try:
         children = game.list_tab_windows(win)
@@ -191,7 +191,7 @@ def init_task(win, mode, switch_on):
 
 
 def active():
-    """组号模式是否激活（任务模式须仍为修罗/五倍）。
+    """组号模式是否激活（任务模式须仍为激活时的模式）。
 
     多任务顺序执行时切到其他模式（如客栈）后不激活，防误切 Tab。
     """

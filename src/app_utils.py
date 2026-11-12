@@ -736,12 +736,12 @@ def current_task_mode():
 
 
 def sheyaoxiang_skip_nonleader(mode=None):
-    """修罗/五倍模式下非队长不续用摄妖香（跟队无需自用，用户
-    2026-10-21）；其他模式与队长/身份未判定一律 False（照常续用）。
+    """修罗/五倍/种族比武模式下非队长不续用摄妖香（跟队无需自用，
+    用户 2026-10-21）；其他模式与队长/身份未判定一律 False（照常续用）。
     mode 缺省时取当前任务模式（多任务顺序执行场景）。"""
     if mode is None:
         mode = current_task_mode()
-    if mode not in ("修罗", "五倍"):
+    if mode not in ("修罗", "五倍", "种族比武"):
         return False
     from . import team  # 函数内导入：team 依赖 app_utils，避免循环导入
     return team.known_leader() is False

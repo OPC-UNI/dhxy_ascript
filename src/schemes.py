@@ -105,7 +105,8 @@ def _get_data():
 # 覆盖 control_window 设置键；默认值与各 load_* 函数首次默认相同：
 # 选中五环、次数 TASK_COUNT_DEFAULTS、摄妖香开、阈值 50、
 # 战斗 人物技能3-5/召唤兽攻击、修罗 5 人+男人男鬼、盒子关、
-# 检查队伍/自动创建队伍/自动归队/喊话/组号开、五环活力继续开、
+# 检查队伍/自动创建队伍/自动归队/喊话/组号开、种族比武同款队伍开关
+# 与巫医/修理间隔、五环活力继续开、
 # 高性能开、补血蓝开、清屏开、巫医开+间隔 5、修理开+间隔 30、法门关。
 # 调试信息开关（debug_overlay）、「显示与调试」解锁标记、界面主题
 # （ui_theme）为全局设置，刻意不在表内：方案应用/快照都不碰。
@@ -143,6 +144,14 @@ def _settings_spec():
         cw._WUBEI_REPAIR_INTERVAL_KEY: 30,
         cw._WUBEI_KUIMULANG_KEY: True,
         cw._WUBEI_TAB_GROUP_KEY: True,
+        cw._ZHONGZU_CHECK_TEAM_KEY: True,
+        cw._ZHONGZU_AUTO_CREATE_TEAM_KEY: True,
+        cw._ZHONGZU_AUTO_REJOIN_KEY: True,
+        cw._ZHONGZU_AUTO_WUYI_KEY: True,
+        cw._ZHONGZU_WUYI_INTERVAL_KEY: 5,
+        cw._ZHONGZU_AUTO_REPAIR_KEY: True,
+        cw._ZHONGZU_REPAIR_INTERVAL_KEY: 30,
+        cw._ZHONGZU_TAB_GROUP_KEY: True,
         cw._BATTLE_ONLY_AUTO_REJOIN_KEY: True,
         cw._HIGH_PERF_KEY: True,
         cw._AUTO_REFILL_KEY: True,
@@ -195,6 +204,14 @@ def _snapshot_current():
         cw._WUBEI_REPAIR_INTERVAL_KEY: cw.load_wubei_repair_interval(),
         cw._WUBEI_KUIMULANG_KEY: cw.load_wubei_kuimulang_switch(),
         cw._WUBEI_TAB_GROUP_KEY: cw.load_wubei_tab_group(),
+        cw._ZHONGZU_CHECK_TEAM_KEY: cw.load_zhongzu_check_team(),
+        cw._ZHONGZU_AUTO_CREATE_TEAM_KEY: cw.load_zhongzu_auto_create_team(),
+        cw._ZHONGZU_AUTO_REJOIN_KEY: cw.load_zhongzu_auto_rejoin(),
+        cw._ZHONGZU_AUTO_WUYI_KEY: cw.load_zhongzu_auto_wuyi(),
+        cw._ZHONGZU_WUYI_INTERVAL_KEY: cw.load_zhongzu_wuyi_interval(),
+        cw._ZHONGZU_AUTO_REPAIR_KEY: cw.load_zhongzu_auto_repair(),
+        cw._ZHONGZU_REPAIR_INTERVAL_KEY: cw.load_zhongzu_repair_interval(),
+        cw._ZHONGZU_TAB_GROUP_KEY: cw.load_zhongzu_tab_group(),
         cw._BATTLE_ONLY_AUTO_REJOIN_KEY: cw.load_battle_only_auto_rejoin(),
         cw._HIGH_PERF_KEY: cw.load_high_perf(),
         cw._AUTO_REFILL_KEY: cw.load_auto_refill(),
@@ -220,9 +237,13 @@ def _coerce(key, value):
                 v = min(95, max(5, v))
             elif key == cw._XIULUO_MIN_KEY:
                 v = min(cw.XIULUO_MIN_RANGE[1], max(cw.XIULUO_MIN_RANGE[0], v))
-            elif key in (cw._XIULUO_WUYI_INTERVAL_KEY, cw._WUBEI_WUYI_INTERVAL_KEY):
+            elif key in (cw._XIULUO_WUYI_INTERVAL_KEY,
+                         cw._WUBEI_WUYI_INTERVAL_KEY,
+                         cw._ZHONGZU_WUYI_INTERVAL_KEY):
                 v = min(cw._WUYI_INTERVAL_MAX, max(cw._WUYI_INTERVAL_MIN, v))
-            elif key in (cw._XIULUO_REPAIR_INTERVAL_KEY, cw._WUBEI_REPAIR_INTERVAL_KEY):
+            elif key in (cw._XIULUO_REPAIR_INTERVAL_KEY,
+                         cw._WUBEI_REPAIR_INTERVAL_KEY,
+                         cw._ZHONGZU_REPAIR_INTERVAL_KEY):
                 v = min(cw._REPAIR_INTERVAL_MAX, max(cw._REPAIR_INTERVAL_MIN, v))
             elif key in cw._COUNT_KEYS.values():
                 v = max(0, v)

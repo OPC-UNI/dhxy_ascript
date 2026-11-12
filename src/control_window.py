@@ -50,7 +50,8 @@ from . import update_config  # 更新渠道与节流常量
 from . import __version__  # 版本号唯一来源（src/__init__.py，面板关于/侧边栏展示）
 
 # ---- 任务模式（UI 多选项，角色设置持久化，记住上次选择） ----
-TASK_MODES = ["五环", "客栈", "修罗", "五倍", "玄枢轶闻", "名望", "仅战斗"]
+TASK_MODES = ["五环", "客栈", "修罗", "五倍", "种族比武", "玄枢轶闻", "名望",
+              "仅战斗"]
 _DEFAULT_MODES = ["五环"]  # 首次默认选中五环（与原单选默认一致）
 _MODES_KEY = "task_modes"           # 多选列表（新键）
 _MODE_KEY_OLD = "task_mode"         # 旧单选键（自动迁移）
@@ -221,11 +222,13 @@ def _as_bool(value):
 
 
 # ---- 任务次数设置（每个任务模式独立，步进 1，下限 0；部分模式有上限） ----
-TASK_COUNT_DEFAULTS = {"五环": 2, "客栈": 20, "修罗": 90, "五倍": 100, "玄枢轶闻": 5, "名望": 5,
+TASK_COUNT_DEFAULTS = {"五环": 2, "客栈": 20, "修罗": 90, "五倍": 100,
+                       "种族比武": 10, "玄枢轶闻": 5, "名望": 5,
                        "仅战斗": 0}  # 仅战斗持续运行无次数概念（0=不限；页面无步进器，
                                      # 方案快照 _settings_spec 按 _COUNT_KEYS 展开需要该键）
 # 上限约束：未列出的模式（修罗、五倍）无上限
-TASK_COUNT_MAX = {"五环": 2, "客栈": 20, "玄枢轶闻": 5, "名望": 5}
+TASK_COUNT_MAX = {"五环": 2, "客栈": 20, "种族比武": 100,
+                  "玄枢轶闻": 5, "名望": 5}
 _COUNT_KEYS = {mode: f"task_count_{mode}" for mode in TASK_MODES}
 
 
@@ -870,7 +873,7 @@ def save_wubei_kuimulang_switch(on):
     return {"status": "success"}
 
 
-# ---- 组号专用（UI 开关，修罗/五倍各一，角色设置持久化，默认开启；
+# ---- 组号专用（UI 开关，修罗/五倍/种族比武各一，角色设置持久化，默认开启；
 #      一个窗口内多个登录 Tab 视为一组号：队长带队，队员 Tab 自动挂
 #      战斗/巫医/补血蓝，实现见 src/tab_group.py。单号（已登录 Tab<2）
 #      不激活，行为与关闭时完全一致） ----
@@ -899,6 +902,138 @@ def load_wubei_tab_group():
 def save_wubei_tab_group(on):
     """保存五倍组号专用开关，返回操作结果。"""
     role_settings.set_value(_WUBEI_TAB_GROUP_KEY, bool(on))
+    return {"status": "success"}
+
+
+# ---- 种族比武设置（UI 开关，角色设置持久化；队伍任务固定 5 人。
+#      检查队伍/自动创建队伍/自动归队/组号专用与修罗同款；无喊话、
+#      无最少人数、无必须种族（用户 2026-11-12 确认）；自动巫医
+#      链路暂未实现（设置保留）、自动修理复用 repair.py） ----
+_ZHONGZU_CHECK_TEAM_KEY = "zhongzu_check_team"
+
+
+def load_zhongzu_check_team():
+    """读取种族比武检查队伍开关（首次默认开启）。"""
+    return bool(role_settings.get(_ZHONGZU_CHECK_TEAM_KEY, True))
+
+
+def save_zhongzu_check_team(on):
+    """保存种族比武检查队伍开关，返回操作结果。"""
+    role_settings.set_value(_ZHONGZU_CHECK_TEAM_KEY, bool(on))
+    return {"status": "success"}
+
+
+_ZHONGZU_AUTO_CREATE_TEAM_KEY = "zhongzu_auto_create_team"
+
+
+def load_zhongzu_auto_create_team():
+    """读取种族比武自动创建队伍开关（首次默认开启）。"""
+    return bool(role_settings.get(_ZHONGZU_AUTO_CREATE_TEAM_KEY, True))
+
+
+def save_zhongzu_auto_create_team(on):
+    """保存种族比武自动创建队伍开关，返回操作结果。"""
+    role_settings.set_value(_ZHONGZU_AUTO_CREATE_TEAM_KEY, bool(on))
+    return {"status": "success"}
+
+
+_ZHONGZU_AUTO_REJOIN_KEY = "zhongzu_auto_rejoin"
+
+
+def load_zhongzu_auto_rejoin():
+    """读取种族比武自动归队开关（首次默认开启）。"""
+    return bool(role_settings.get(_ZHONGZU_AUTO_REJOIN_KEY, True))
+
+
+def save_zhongzu_auto_rejoin(on):
+    """保存种族比武自动归队开关，返回操作结果。"""
+    role_settings.set_value(_ZHONGZU_AUTO_REJOIN_KEY, bool(on))
+    return {"status": "success"}
+
+
+_ZHONGZU_AUTO_WUYI_KEY = "zhongzu_auto_wuyi"
+_ZHONGZU_WUYI_INTERVAL_KEY = "zhongzu_wuyi_interval"
+
+
+def load_zhongzu_auto_wuyi():
+    """读取种族比武自动巫医开关（首次默认开启；链路暂未实现）。"""
+    return bool(role_settings.get(_ZHONGZU_AUTO_WUYI_KEY, True))
+
+
+def save_zhongzu_auto_wuyi(on):
+    """保存种族比武自动巫医开关，返回操作结果。"""
+    role_settings.set_value(_ZHONGZU_AUTO_WUYI_KEY, bool(on))
+    return {"status": "success"}
+
+
+def load_zhongzu_wuyi_interval():
+    """读取种族比武自动巫医间隔（轮，首次默认 5）。"""
+    try:
+        value = int(role_settings.get(_ZHONGZU_WUYI_INTERVAL_KEY, 5))
+    except (TypeError, ValueError):
+        value = 5
+    return max(_WUYI_INTERVAL_MIN, min(_WUYI_INTERVAL_MAX, value))
+
+
+def save_zhongzu_wuyi_interval(value):
+    """保存种族比武自动巫医间隔（1~90 轮），返回操作结果。"""
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        return {"status": "error", "msg": "INVALID_INTERVAL"}
+    if not (_WUYI_INTERVAL_MIN <= value <= _WUYI_INTERVAL_MAX):
+        return {"status": "error", "msg": "OUT_OF_RANGE"}
+    role_settings.set_value(_ZHONGZU_WUYI_INTERVAL_KEY, value)
+    return {"status": "success", "interval": value}
+
+
+_ZHONGZU_AUTO_REPAIR_KEY = "zhongzu_auto_repair"
+_ZHONGZU_REPAIR_INTERVAL_KEY = "zhongzu_repair_interval"
+
+
+def load_zhongzu_auto_repair():
+    """读取种族比武自动修理装备开关（首次默认开启）。"""
+    return bool(role_settings.get(_ZHONGZU_AUTO_REPAIR_KEY, True))
+
+
+def save_zhongzu_auto_repair(on):
+    """保存种族比武自动修理装备开关，返回操作结果。"""
+    role_settings.set_value(_ZHONGZU_AUTO_REPAIR_KEY, bool(on))
+    return {"status": "success"}
+
+
+def load_zhongzu_repair_interval():
+    """读取种族比武自动修理间隔（场战斗，首次默认 30）。"""
+    try:
+        value = int(role_settings.get(_ZHONGZU_REPAIR_INTERVAL_KEY, 30))
+    except (TypeError, ValueError):
+        value = 30
+    return max(_REPAIR_INTERVAL_MIN, min(_REPAIR_INTERVAL_MAX, value))
+
+
+def save_zhongzu_repair_interval(value):
+    """保存种族比武自动修理间隔（1~999 场），返回操作结果。"""
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        return {"status": "error", "msg": "INVALID_INTERVAL"}
+    if not (_REPAIR_INTERVAL_MIN <= value <= _REPAIR_INTERVAL_MAX):
+        return {"status": "error", "msg": "OUT_OF_RANGE"}
+    role_settings.set_value(_ZHONGZU_REPAIR_INTERVAL_KEY, value)
+    return {"status": "success", "interval": value}
+
+
+_ZHONGZU_TAB_GROUP_KEY = "zhongzu_tab_group"
+
+
+def load_zhongzu_tab_group():
+    """读取种族比武组号专用开关（首次默认开启）。"""
+    return bool(role_settings.get(_ZHONGZU_TAB_GROUP_KEY, True))
+
+
+def save_zhongzu_tab_group(on):
+    """保存种族比武组号专用开关，返回操作结果。"""
+    role_settings.set_value(_ZHONGZU_TAB_GROUP_KEY, bool(on))
     return {"status": "success"}
 
 
@@ -1212,6 +1347,14 @@ class ControlWindow(WebWindow):
         self.expose(self.save_wubei_repair_interval)
         self.expose(self.save_wubei_kuimulang_switch)
         self.expose(self.save_wubei_tab_group)
+        self.expose(self.save_zhongzu_check_team)
+        self.expose(self.save_zhongzu_auto_create_team)
+        self.expose(self.save_zhongzu_auto_rejoin)
+        self.expose(self.save_zhongzu_auto_wuyi)
+        self.expose(self.save_zhongzu_wuyi_interval)
+        self.expose(self.save_zhongzu_auto_repair)
+        self.expose(self.save_zhongzu_repair_interval)
+        self.expose(self.save_zhongzu_tab_group)
         self.expose(self.save_xiuluo_shout_switch)
         self.expose(self.save_debug_overlay)
         self.expose(self.save_debug_ui_unlocked)
@@ -1230,6 +1373,7 @@ class ControlWindow(WebWindow):
         self.expose(self.verify_xiuluo_return_silent)
         self.expose(self.verify_wubei_claim)
         self.expose(self.verify_wubei_return)
+        self.expose(self.verify_zhongzu_claim)
         self.expose(self.verify_wubei_wuyi)
         self.expose(self.verify_wubei_repair)
         self.expose(self.verify_wubei_tab_repair)
@@ -1704,7 +1848,7 @@ class ControlWindow(WebWindow):
 
     def get_init_data(self):
         """页面初始化数据：主题、任务模式多选、任务次数、摄妖香开关、
-        各条阈值、战斗动作、修罗/五倍设置与调试信息开关。
+        各条阈值、战斗动作、修罗/五倍/种族比武设置与调试信息开关。
 
         首次回调即页面首屏就绪：置位后就绪标记并补投启动阶段的暂存日志
         （授权校验结果等主进程启动消息，页面加载前无法投递）。"""
@@ -1726,7 +1870,8 @@ class ControlWindow(WebWindow):
                 "thresholds": load_thresholds(),
                 "battle": load_battle_actions(),
                 "group_check_team": {"xiuluo": load_xiuluo_check_team(),
-                                     "wubei": load_wubei_check_team()},
+                                     "wubei": load_wubei_check_team(),
+                                     "zhongzu": load_zhongzu_check_team()},
                 "xiuluo": load_xiuluo_settings(),
                 "wuhuan_vitality_continue": load_wuhuan_vitality_continue(),
                 "xiuluo_hezi": load_xiuluo_hezi(),
@@ -1753,6 +1898,14 @@ class ControlWindow(WebWindow):
                           "repair_interval": load_wubei_repair_interval(),
                           "kuimulang": load_wubei_kuimulang_switch(),
                           "tab_group": load_wubei_tab_group()},
+                "zhongzu": {"check_team": load_zhongzu_check_team(),
+                            "auto_create_team": load_zhongzu_auto_create_team(),
+                            "auto_rejoin": load_zhongzu_auto_rejoin(),
+                            "auto_wuyi": load_zhongzu_auto_wuyi(),
+                            "wuyi_interval": load_zhongzu_wuyi_interval(),
+                            "auto_repair": load_zhongzu_auto_repair(),
+                            "repair_interval": load_zhongzu_repair_interval(),
+                            "tab_group": load_zhongzu_tab_group()},
                 "xiuluo_shout": load_xiuluo_shout_switch(),
                 "battle_only_auto_rejoin": load_battle_only_auto_rejoin(),
                 "auto_famen": load_auto_famen(),
@@ -1896,13 +2049,14 @@ class ControlWindow(WebWindow):
     def get_group_state(self):
         """组号侧边栏入口显隐状态（页面 1.5s 轮询，任务未运行也生效）：
 
-        show = 组号开关开（修罗/五倍任一）且任务启动检查曾识别到组号
+        show = 组号开关开（修罗/五倍/种族比武任一）且任务启动检查曾识别到组号
         （group_detected）且当前窗口已登录 Tab ≥2（实时枚举，账号变化
         即时反映——tab2 角色不在队伍不算组号，用户 2026-11-07 定义）。
         group_detected 由任务进程写入当前角色 state.json，主进程每次
         直读文件（跨进程可见）。
         """
-        switch_on = load_xiuluo_tab_group() or load_wubei_tab_group()
+        switch_on = (load_xiuluo_tab_group() or load_wubei_tab_group()
+                     or load_zhongzu_tab_group())
         detected = bool(app_utils.role_state_get(_GROUP_DETECTED_KEY, False))
         if not detected and not user_data.is_migrated():
             detected = bool(app_utils.kv_read_fresh(_GROUP_DETECTED_KEY, False))
@@ -2035,6 +2189,38 @@ class ControlWindow(WebWindow):
     def save_wubei_tab_group(self, on):
         """五倍设置变更：保存组号专用开关状态。"""
         return save_wubei_tab_group(on)
+
+    def save_zhongzu_check_team(self, on):
+        """种族比武设置变更：保存检查队伍开关状态。"""
+        return save_zhongzu_check_team(on)
+
+    def save_zhongzu_auto_create_team(self, on):
+        """种族比武设置变更：保存自动创建队伍开关状态。"""
+        return save_zhongzu_auto_create_team(on)
+
+    def save_zhongzu_auto_rejoin(self, on):
+        """种族比武设置变更：保存自动归队开关状态。"""
+        return save_zhongzu_auto_rejoin(on)
+
+    def save_zhongzu_auto_wuyi(self, on):
+        """种族比武设置变更：保存自动巫医开关状态。"""
+        return save_zhongzu_auto_wuyi(on)
+
+    def save_zhongzu_wuyi_interval(self, value):
+        """种族比武设置变更：保存自动巫医间隔（轮）。"""
+        return save_zhongzu_wuyi_interval(value)
+
+    def save_zhongzu_auto_repair(self, on):
+        """种族比武设置变更：保存自动修理装备开关状态。"""
+        return save_zhongzu_auto_repair(on)
+
+    def save_zhongzu_repair_interval(self, value):
+        """种族比武设置变更：保存自动修理间隔（场战斗）。"""
+        return save_zhongzu_repair_interval(value)
+
+    def save_zhongzu_tab_group(self, on):
+        """种族比武设置变更：保存组号专用开关状态。"""
+        return save_zhongzu_tab_group(on)
 
     def save_xiuluo_shout_switch(self, on):
         """修罗设置变更：保存缺人自动喊话开关状态。"""
@@ -2523,6 +2709,53 @@ class ControlWindow(WebWindow):
                 ok_js = "true" if ok else "false"
                 self.webview_instance.evaluate_js(
                     f"if(window.onWubeiClaimVerifyResult){{window.onWubeiClaimVerifyResult({ok_js}, {json.dumps(info)});}}")
+            except Exception:
+                pass
+
+    def verify_zhongzu_claim(self):
+        """诊断页-种族比武-测试领取任务按钮：走位到长安领取点 → 点击
+        领取 NPC 打开对话框 → 绿色领取选项仅定位不点击（点击即领取）
+        → 点屏幕中间关闭对话框。不领取任务、不检查队伍（单人可验证），
+        与修罗/五倍领取验证同模式。"""
+        if self._tm.is_running():
+            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if self._verifying:
+            return {"status": "error", "msg": "验证进行中，请稍候"}
+        win = game.find_main_window()
+        if win is None:
+            return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
+        if not _game_window_clickable(win):
+            return {"status": "error", "msg": "游戏窗口被其他窗口遮挡，请将游戏窗口置于前台后再验证"}
+        self._verifying = True
+        threading.Thread(target=self._run_zhongzu_claim_verify, args=(win,),
+                         daemon=True, name="zhongzu-claim-verify").start()
+        return {"status": "success",
+                "msg": "验证已开始：走位到长安领取点 → 领取 NPC → "
+                       "选项仅定位不点击 → 关对话框（不领取）"}
+
+    def _run_zhongzu_claim_verify(self, win):
+        """种族比武领取测试线程体：选项悬停代替点击，结果回推页面与日志窗。"""
+        from . import zhongzu  # 延迟导入：zhongzu 反向导入本模块（避免循环）
+        try:
+            self.add_logs(["[验证] 开始测试种族比武领取"
+                           "（选项仅定位不点击，最后关闭对话框）..."])
+            ok, info = zhongzu.verify_claim_flow(win)
+        except Exception as e:
+            ok, info = False, f"验证异常: {e}"
+        try:
+            self.add_logs([f"[验证] 结果: {info}"])
+        except Exception:
+            pass
+        self._notify_zhongzu_claim_verify_result(ok, info)
+        self._verifying = False
+
+    def _notify_zhongzu_claim_verify_result(self, ok, info):
+        """种族比武领取测试结果回推页面（诊断页-种族比武链路结果文案）。"""
+        if self.webview_instance:
+            try:
+                ok_js = "true" if ok else "false"
+                self.webview_instance.evaluate_js(
+                    f"if(window.onZhongzuClaimVerifyResult){{window.onZhongzuClaimVerifyResult({ok_js}, {json.dumps(info)});}}")
             except Exception:
                 pass
 

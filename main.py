@@ -13,6 +13,7 @@ Runtime.wait 驻留线程防止程序自行退出（托盘「彻底退出」→ 
 - src/kezhan.py          客栈任务自动化（洛阳客栈找掌柜、领取、跟踪循环）
 - src/xiuluo.py          修罗任务自动化（灵兽村领取、跟踪、返程循环）
 - src/wubei.py           五倍任务自动化（宝象国领取、队伍检查，战斗由战斗监控线程操作）
+- src/zhongzu.py         种族比武任务自动化（长安领取、比武大会跟踪、助威令返程）
 - src/task_manager.py    任务子进程管理（启停、升级强杀、日志回流）
 - src/control_window.py  网页控制窗口（启动/停止/重置、任务多选与次数、总进度条、内嵌日志）
 - src/schemes.py         配置方案管理（多套设置快照一键切换 + 导入导出）
@@ -95,6 +96,7 @@ from src import wuhuan  # 五环任务自动化
 from src import kezhan  # 客栈任务自动化
 from src import team  # 组队功能（任务前置退队）
 from src import xiuluo  # 修罗任务自动化
+from src import zhongzu  # 种族比武任务自动化
 from src import wubei  # 五倍任务自动化
 from src import status_bars  # 人物/召唤兽血蓝条检测
 from src import debug_overlay  # 调试信息悬浮层（游戏窗口上绘制任务/配置/进度）
@@ -238,6 +240,8 @@ def _run_task_mode(win, mode):
         return xiuluo.run_loop(win)
     if mode == "五倍":
         return wubei.run_loop(win)
+    if mode == "种族比武":
+        return zhongzu.run_loop(win)
     if mode == "名望":
         return mingwang.run_loop(win)
     # 其余模式：暂无自动化实现

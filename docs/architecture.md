@@ -383,6 +383,7 @@ flowchart LR
 | 客栈 | 前置 | 始终 | 退队/解散单人执行 |
 | 客栈 | 判定 | 追踪无任务 | 隔 2s 复核一次，防瞬时漏读 |
 | 客栈 | 跟踪 | 任务要求大理寺/比武场 | 手动寻路（带 REDO_INTERVAL 节流） |
+| 客栈 | 跟踪 | 追踪出现智戏成空三封印链接 | 按 风吟印→炎阳印→水镜印 顺序点链接（进度键「封印N」+ 下划线定位；三处全开文案「封印已经全部开启」，同三才） |
 | 客栈 | 跟踪 | 出现「你输了/平局」 | 关对话 → 重新点任务绿字推进 |
 | 客栈 | 跟踪 | 奇遇对话框 | 多选项恒点第一个 |
 | 客栈 | 跟踪 | 音律小游戏入口被点击后 | 检测窗口横幅 → 辨八音演奏 15 次 |
@@ -1278,6 +1279,7 @@ flowchart LR
 | `src/control_window.py` | 控制面板、配置读写、诊断/验证按钮、看板 | `ControlWindow`、`ApiBridge`、`start_task`、`verify_*` |
 | `src/wubei.py` | 五倍任务 | `run_loop`、`_claim_task`、`_handle_follow_extras`、`_return_to_npc` |
 | `src/xiuluo.py` | 修罗任务 | `run_loop`、`_claim_task`、`_keep_alive`、`_return_to_npc` |
+| `src/zhongzu.py` | 种族比武任务（队伍 5 人；巫医链路待实现） | `run_loop`、`_claim_task`、`_handle_task_dialog`、`_keep_alive`、`_return_to_npc` |
 | `src/kezhan.py` | 客栈任务 | `run_loop`、`run_cycle`、`_claim_task`、`_handle_follow_extras` |
 | `src/wuhuan.py` | 五环任务 | `run_loop`、`_prepare`、`_claim_task`、`_handle_submit_dialog` |
 | `src/xuanshu.py` | 玄枢轶闻 + 共享 `follow_task` | `run_loop`、`run_cycle`、`follow_task`、`navigate_to_task` |

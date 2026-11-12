@@ -249,9 +249,9 @@ def test_sancai_locate_three_keywords():
     """三个关键词分别定位到各自下划线（文案阅读序≠点击序，按词定位）。"""
     f = _frame(underlines=SANCAI_UNDERLINES)
     items = list(SANCAI_INITIAL_ITEMS)
-    assert kezhan._sancai_locate_link(items, f, "引灯阵法") == (53, 302)
-    assert kezhan._sancai_locate_link(items, f, "镇煞阵法") == (173, 285)
-    assert kezhan._sancai_locate_link(items, f, "定魂阵法") == (128, 302)
+    assert kezhan._locate_panel_link(items, f, "引灯阵法") == (53, 302)
+    assert kezhan._locate_panel_link(items, f, "镇煞阵法") == (173, 285)
+    assert kezhan._locate_panel_link(items, f, "定魂阵法") == (128, 302)
 
 
 def test_sancai_count_progress_states():
@@ -332,6 +332,167 @@ def test_order_progress_key_sancai_priority():
     assert kezhan._order_progress_key(items, None) == "1"
 
 
+# ---- 智戏成空任务（凤巢：风吟印→炎阳印→水镜印 依次开启三处封印）----
+# 初始布局取自用户 2026-11-12 截图实测（截图 1.5x 放大，此处为 1378x831
+# 窗口坐标）：关键词行「水镜印、风吟印、炎阳印三处」(23,285)-(219,305)，
+# 三个链接下划线 y=304 x24-68 / 84-128 / 144-188——阅读序（水镜→风吟→
+# 炎阳）≠ 点击序（风吟→炎阳→水镜，任务原文「按风火水三相轮回之序开启」）。
+ZHIXI_INITIAL_ITEMS = [
+    ("任务追踪", (84, 205, 167, 225), 1.0),
+    ("智戏成空[客栈任务]", (21, 232, 161, 251), 1.0),
+    ("根据客栈掌柜所示，前往凤巢", (23, 251, 219, 271), 1.0),
+    ("按风火水三相轮回之序开启", (23, 269, 220, 288), 1.0),
+    ("水镜印、风吟印、炎阳印三处", (23, 285, 219, 305), 0.99),
+    ("封印。", (21, 302, 67, 323), 1.0),
+]
+ZHIXI_UNDERLINES = ((304, 24, 68), (304, 84, 128), (304, 144, 188))
+# 阶段 1/2 的文案排版未实机标定，按「剩余链接重新成行」建模：定位按
+# 关键词 + 最近下划线实线段，与具体折行布局无关（同一函数亦服务三才）
+ZHIXI_STAGE1_ITEMS = [
+    ("智戏成空[客栈任务]", (21, 232, 161, 251), 1.0),
+    ("第一处封印已开启，再去开启", (23, 251, 219, 271), 1.0),
+    ("炎阳印、水镜印两处封印。", (23, 269, 219, 289), 1.0),
+]
+ZHIXI_STAGE2_ITEMS = [
+    ("智戏成空[客栈任务]", (21, 232, 161, 251), 1.0),
+    ("第二处封印已开启，再去开启", (23, 251, 219, 271), 1.0),
+    ("水镜印一处封印。", (23, 269, 219, 289), 1.0),
+]
+ZHIXI_DONE_ITEMS = [
+    ("智戏成空[客栈任务]", (21, 232, 161, 251), 1.0),
+    ("封印已经全部开启", (23, 251, 219, 271), 1.0),
+    ("回去告知掌柜", (23, 269, 160, 289), 1.0),
+]
+
+
+def test_zhixi_stage_and_count_initial():
+    items = list(ZHIXI_INITIAL_ITEMS)
+    assert kezhan._zhixi_stage(items) is True
+    assert kezhan._zhixi_count(items) is None  # 未开启 → 进度键 封印0
+    assert kezhan._zhixi_progress_key(items, None) == "封印0"
+
+
+def test_zhixi_locate_three_links():
+    """三个关键词按词定位到各自下划线（阅读序≠点击序，按词不按序）。"""
+    f = _frame(underlines=ZHIXI_UNDERLINES)
+    items = list(ZHIXI_INITIAL_ITEMS)
+    assert kezhan._locate_panel_link(items, f, "水镜印") == (46, 302)
+    assert kezhan._locate_panel_link(items, f, "风吟印") == (106, 302)
+    assert kezhan._locate_panel_link(items, f, "炎阳印") == (166, 302)
+
+
+def test_zhixi_picker_initial_clicks_fengyin():
+    """0 处已开启 → 点风吟印（阅读序第二，点击序第一）。"""
+    f = _frame(underlines=ZHIXI_UNDERLINES)
+    assert kezhan._zhixi_picker(list(ZHIXI_INITIAL_ITEMS), f) == (106, 302)
+    # 调度器同点（智戏成空优先于三才/四象逻辑）
+    assert kezhan._pick_task_green(list(ZHIXI_INITIAL_ITEMS), f) == (106, 302)
+
+
+def test_zhixi_count_progress_states():
+    """「第N处封印已开启」计数与全开文案：1/2/3 与数字、空格变体。"""
+    for n, txt in ((1, "第一处封印已开启"), (2, "第 2 处 封印 已 开启")):
+        items = [("智戏成空[客栈任务]", (21, 232, 161, 251), 1.0),
+                 (txt, (23, 251, 219, 271), 1.0),
+                 ("炎阳印、水镜印两处封印。", (23, 269, 219, 289), 1.0)]
+        assert kezhan._zhixi_count(items) == n
+        assert kezhan._zhixi_progress_key(items, None) == f"封印{n}"
+    items = list(ZHIXI_DONE_ITEMS)
+    assert kezhan._zhixi_count(items) == 3
+    assert kezhan._zhixi_progress_key(items, None) == "封印3"
+    # 全开文案变体：OCR 把「已」读成「己」也必须判为 3（短键「全部开启」）
+    items = [("智戏成空[客栈任务]", (21, 232, 161, 251), 1.0),
+             ("封印己经全部开启", (23, 251, 219, 271), 1.0)]
+    assert kezhan._zhixi_count(items) == 3
+
+
+def test_zhixi_picker_second_stage_targets_yanyang():
+    """1 处已开启 → 点炎阳印（点击序第二）。"""
+    f = _frame(underlines=((288, 24, 68), (288, 84, 128)))
+    pt = kezhan._zhixi_picker(list(ZHIXI_STAGE1_ITEMS), f)
+    assert pt == (46, 286)
+
+
+def test_zhixi_picker_third_stage_targets_shuijing():
+    """2 处已开启 → 点水镜印（点击序第三）。"""
+    f = _frame(underlines=((288, 24, 68),))
+    assert kezhan._zhixi_picker(list(ZHIXI_STAGE2_ITEMS), f) == (46, 286)
+
+
+def test_zhixi_picker_handles_relayout_and_reorder():
+    """追踪文案变化导致链接换行、剩余链接阅读序调换：按关键词逐帧定位。
+
+    用户 2026-11-12 提醒：每点一处追踪文案即改写，三个链接位置随之变化。
+    定位不缓存坐标（每帧按关键词在行内位置比例 + 最近下划线实线段重定位），
+    换行/换位/阅读序变化均不影响。
+    """
+    items = [("智戏成空[客栈任务]", (21, 232, 161, 251), 1.0),
+             ("第一处封印已开启，再去开启", (23, 251, 219, 271), 1.0),
+             # 剩余链接换行且阅读序调换（炎阳印在后）
+             ("水镜印、炎阳印两处封印。", (23, 269, 219, 289), 1.0)]
+    f = _frame(underlines=((288, 24, 68), (288, 84, 128)))
+    assert kezhan._zhixi_picker(items, f) == (106, 286)  # 第二段下划线=炎阳印
+
+
+def test_zhixi_picker_handles_keyword_split_across_lines():
+    """关键词被折行拆开（「…开启炎阳」/「印、水镜印…」）→ 跨行兜底点击。
+
+    主路径单行 find 两行都落空；按「行尾后缀+下一行行首前缀」匹配到
+    后缀所在行行底上方 2px（追踪文案变化会改变折行位置，逐帧重算）。
+    """
+    items = [("智戏成空[客栈任务]", (21, 232, 161, 251), 1.0),
+             ("第一处封印已开启，按风火", (23, 251, 219, 271), 1.0),
+             ("水三相轮回之序开启炎阳", (23, 269, 220, 288), 1.0),
+             ("印、水镜印两处封印。", (21, 285, 160, 305), 1.0)]
+    assert kezhan._zhixi_picker(items, _frame()) == (202, 286)
+
+
+def test_sancai_picker_handles_keyword_split_across_lines():
+    """跨行兜底为三才/智戏成空共用：镇煞阵法拆到两行也能点。"""
+    items = [("循法固阵[客栈任务]", (16, 229, 159, 252), 1.0),
+             ("第一处阵法已加固完成", (22, 249, 198, 275), 1.0),
+             ("引灯阵法、镇煞", (21, 265, 140, 290), 1.0),
+             ("阵法、定魂阵法三处三才", (21, 283, 200, 305), 1.0)]
+    assert kezhan._sancai_picker(items, _frame()) == (120, 288)
+
+
+def test_zhixi_picker_done_falls_back_to_line_level():
+    """三处全部开启 → 返回 None 交回行级选择（复命链接）。"""
+    assert kezhan._zhixi_count(list(ZHIXI_DONE_ITEMS)) == 3
+    assert kezhan._zhixi_picker(list(ZHIXI_DONE_ITEMS), None) is None
+
+
+def test_zhixi_picker_stage_miss_returns_pick_fail():
+    """阶段内目标无法定位（下划线/字形均无）→ PICK_FAIL 拒绝行级兜底。"""
+    assert kezhan._zhixi_picker(list(ZHIXI_INITIAL_ITEMS),
+                                _frame()) == task_tracker.PICK_FAIL
+
+
+def test_zhixi_stage_excludes_dialog_rows():
+    """居中对话框行含「炎阳印」（领取对话「先破风吟阵，再解炎阳印…」）
+    不算本任务阶段——否则领取对话期间会以 PICK_FAIL 阻塞正常对话。"""
+    items = [("智戏成空[客栈任务]", (21, 232, 161, 251), 1.0),
+             ("先破风吟阵，再解炎阳印，终启水镜界。", (462, 388, 927, 417), 1.0)]
+    assert kezhan._zhixi_stage(items) is False
+    assert kezhan._zhixi_progress_key(items, None) is None
+    assert kezhan._zhixi_picker(items, None) is None
+
+
+def test_zhixi_and_sancai_mutually_exclusive():
+    """智戏成空关键词不触发三才逻辑，反之亦然。"""
+    assert kezhan._sancai_stage(list(ZHIXI_INITIAL_ITEMS)) is False
+    assert kezhan._sancai_picker(list(ZHIXI_INITIAL_ITEMS), None) is None
+    assert kezhan._zhixi_stage(list(SANCAI_INITIAL_ITEMS)) is False
+    assert kezhan._zhixi_picker(list(SANCAI_INITIAL_ITEMS), None) is None
+
+
+def test_order_progress_key_zhixi_priority():
+    """_order_progress_key：智戏成空阶段返回「封印N」键。"""
+    assert kezhan._order_progress_key(list(ZHIXI_INITIAL_ITEMS), None) == "封印0"
+    assert kezhan._order_progress_key(list(ZHIXI_STAGE1_ITEMS), None) == "封印1"
+    assert kezhan._order_progress_key(list(ZHIXI_DONE_ITEMS), None) == "封印3"
+
+
 # ---- 破除封印小游戏闭环：刻度映射与填充边缘测量（7.png 标定 2026-11-09）----
 def test_pochu_tick_mapping():
     """窗口 x → 1~10 刻度：435→0、992→10，中点 713.5→5。"""
@@ -366,17 +527,21 @@ def test_pochu_fill_edge_finds_right_edge():
 
 
 def test_play_pochufengyin_delegates_shared_module(monkeypatch):
-    """破除封印闭环调用共享模块，标题模板/日志前缀与名称由客栈传入。"""
+    """破除封印闭环调用共享模块，标题模板/日志前缀与名称由客栈传入。
+
+    必须开冲刺连点（mash=True）：同款「点击」窗口单击推进仅 ~0.1 刻度，
+    三档拟人节奏到不了目标带（2026-11-12 实机日志 13 击 P=1.38 失败）。
+    """
     seen = {}
 
-    def _play(win, icon, prefix="客栈", label="破除封印"):
-        seen.update(icon=icon, prefix=prefix, label=label)
+    def _play(win, icon, prefix="客栈", label="破除封印", mash=False):
+        seen.update(icon=icon, prefix=prefix, label=label, mash=mash)
         return True, "破除封印结束"
 
     monkeypatch.setattr(kezhan._pochu_minigame, "play_pochufengyin", _play)
     assert kezhan._play_pochufengyin(object()) == (True, "破除封印结束")
     assert seen == {"icon": "kezhan_pochufengyin.png",
-                    "prefix": "客栈", "label": "破除封印"}
+                    "prefix": "客栈", "label": "破除封印", "mash": True}
 
 
 # ---- 诊断页找阿旺验证（2026-11-10）----

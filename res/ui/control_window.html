@@ -876,6 +876,69 @@
                     </label>
                 </div>
             </div>
+            <div class="task-card" data-mode="种族比武">
+                <div class="task-card-main">
+                    <span class="task-order"></span>
+                    <span class="task-name">种族比武</span>
+                        <button class="task-expand" data-mode="种族比武" title="种族比武专属设置">▾</button>
+                    <div class="task-count">
+                        <button class="th-btn" onclick="count('种族比武', -1)">−</button>
+                        <span class="th-val" id="cnt-种族比武">10</span>
+                        <button class="th-btn" onclick="count('种族比武', 1)">＋</button>
+                    </div>
+                </div>
+                <!-- 种族比武设置手风琴：队伍任务固定 5 人 + 巫医（链路待实现）+ 修理 + 组号 -->
+                <div class="task-accordion">
+                    <div class="group-title">种族比武设置</div>
+                    <label class="switch-row">
+                        <input type="checkbox" id="zhongzu-check-team">
+                        <span class="switch-track"></span>
+                        <span>检查队伍（队伍固定 5 人，缺人自动补）</span>
+                    </label>
+                    <label class="switch-row">
+                        <input type="checkbox" id="zhongzu-auto-create-team">
+                        <span class="switch-track"></span>
+                        <span>自动创建队伍（任务开始时无队伍自动创建，默认开启）</span>
+                    </label>
+                    <label class="switch-row">
+                        <input type="checkbox" id="zhongzu-auto-rejoin">
+                        <span class="switch-track"></span>
+                        <span>自动归队（非队长死亡落轮回司自动点归队，默认开启）</span>
+                    </label>
+                    <label class="switch-row">
+                        <input type="checkbox" id="zhongzu-tab-group">
+                        <span class="switch-track"></span>
+                        <span>组号专用（一窗口多账号：队员自动挂战斗/巫医/补血蓝，非队长停止任务；默认开启，单号不激活）</span>
+                    </label>
+                    <label class="switch-row">
+                        <input type="checkbox" id="zhongzu-auto-wuyi">
+                        <span class="switch-track"></span>
+                        <span>自动巫医（每 N 轮一次，默认开启；链路待标定 NPC 后实现）</span>
+                    </label>
+                    <div class="group-row">
+                        <span class="group-label">巫医间隔</span>
+                        <div class="group-ctrl">
+                            <button class="th-btn" onclick="zhongzuWuyiInterval(-1)">−</button>
+                            <span class="th-val" id="zhongzu-wuyi-interval">5</span>
+                            <button class="th-btn" onclick="zhongzuWuyiInterval(1)">＋</button>
+                        </div>
+                    </div>
+                    <label class="switch-row">
+                        <input type="checkbox" id="zhongzu-auto-repair">
+                        <span class="switch-track"></span>
+                        <span>自动修理装备（每 N 场战斗一次，默认开启）</span>
+                    </label>
+                    <div class="group-row" id="zhongzu-repair-interval-row">
+                        <span class="group-label">修理间隔（场）</span>
+                        <div class="group-ctrl">
+                            <button class="th-btn" onclick="zhongzuRepairInterval(-1)">−</button>
+                            <span class="th-val" id="zhongzu-repair-interval">30</span>
+                            <button class="th-btn" onclick="zhongzuRepairInterval(1)">＋</button>
+                        </div>
+                    </div>
+                    <div class="group-hint">领取点（长安 286,159）与助威令模板已标定；巫医链路暂未实现（设置保留，首次轮到提示后跳过）。</div>
+                </div>
+            </div>
             <div class="task-card" data-mode="玄枢轶闻">
                 <div class="task-card-main">
                     <span class="task-order"></span>
@@ -919,20 +982,20 @@
                 </div>
                 <div class="task-zone-empty" id="task-available-empty" style="display:none">全部任务已选择</div>
             </div>
-            <div class="group-hint">点击「待选任务」卡片加入已选（按加入顺序排列）；「已选任务」按顺序依次执行，拖动「≡」手柄或点 ↑↓ 调整顺序，点卡片移回待选。「仅战斗」与其它任务互斥：选中后仅运行战斗监控（自动战斗/补血蓝/巫医，不做任务操作；仅保留自动归队——死亡落轮回司自动点归队，开关默认开启），持续运行至手动停止。「名望」当前为第一阶段：启动时追踪已有「山河名望」任务则跳过领取直接续跑跟踪；否则种族判定（人物属性面板）→ 魔族前往大唐边境 → 点击逆天魔 → 对话选「开启山河名望志」→ 打开山河名望面板 → 按 高级>中级>初级 优先级 + 卡片顺序领取已实现任务（蛟魔复仇/沙海迷踪/蛟魔探秘/五庄封印/沙都修罗）→ 关闭领取对话框 → 复用 follow_task 跟踪至任务完成（任务对话按 DIALOG_OPTION_MAP 处理；沙海迷踪入口确认后识别「开始」按钮点击进入战斗，战斗结束即完成；蛟魔探秘入口确认后识别钓鱼窗口标题，复用 pochufengyin 点击冲刺连点闭环（mash：连点冲刺+维持泵点击率伺服（位置与持续点击率正相关，停手约 1 秒即回退），不按倒计时停手））→ 回去领取下一轮，直到次数上限（仙族与其它任务执行流程待补充）。全部完成后自动结束。</div>
+            <div class="group-hint">点击「待选任务」卡片加入已选（按加入顺序排列）；「已选任务」按顺序依次执行，拖动「≡」手柄或点 ↑↓ 调整顺序，点卡片移回待选。「仅战斗」与其它任务互斥：选中后仅运行战斗监控（自动战斗/补血蓝/巫医，不做任务操作；仅保留自动归队——死亡落轮回司自动点归队，开关默认开启），持续运行至手动停止。「种族比武」为队伍任务（固定 5 人）：长安领取 → 任务追踪绿字寻路 → 对话命中「进入战斗/开始战斗/开始采集/开始开采/开始训练」任一即点击 → 任务从追踪面板消失即完成 → 助威令返程；领取人数不足时任务不会出现（无独立弹窗），自动复查队伍并进入补人循环；巫医链路暂未实现（设置保留）。「名望」当前为第一阶段：启动时追踪已有「山河名望」任务则跳过领取直接续跑跟踪；否则种族判定（人物属性面板）→ 魔族前往大唐边境 → 点击逆天魔 → 对话选「开启山河名望志」→ 打开山河名望面板 → 按 高级>中级>初级 优先级 + 卡片顺序领取已实现任务（蛟魔复仇/沙海迷踪/蛟魔探秘/五庄封印/沙都修罗）→ 关闭领取对话框 → 复用 follow_task 跟踪至任务完成（任务对话按 DIALOG_OPTION_MAP 处理；沙海迷踪入口确认后识别「开始」按钮点击进入战斗，战斗结束即完成；蛟魔探秘入口确认后识别钓鱼窗口标题，复用 pochufengyin 点击冲刺连点闭环（mash：连点冲刺+维持泵点击率伺服（位置与持续点击率正相关，停手约 1 秒即回退），不按倒计时停手））→ 回去领取下一轮，直到次数上限（仙族与其它任务执行流程待补充）。全部完成后自动结束。</div>
         </div>
         <!-- ============ 组号页（队伍成员检查 + 按账号战斗动作设置） ============ -->
         <div class="page" id="page-group">
             <div class="group-box">
                 <div class="group-title">组号设置</div>
-                <div class="group-hint">组号模式（修罗/五倍任务设置里的「组号专用」开关）要求已开启「检查队伍」。本页枚举当前窗口已登录 Tab 中在队伍内的队员，为每个队员单独设置战斗动作；队长使用通用战斗设置或其账号的组号设置。启动任务时未设置的队员会停止任务并提示先设置。</div>
+                <div class="group-hint">组号模式（修罗/五倍/种族比武任务设置里的「组号专用」开关）要求已开启「检查队伍」。本页枚举当前窗口已登录 Tab 中在队伍内的队员，为每个队员单独设置战斗动作；队长使用通用战斗设置或其账号的组号设置。启动任务时未设置的队员会停止任务并提示先设置。</div>
                 <div class="group-row">
                     <span class="group-label">队伍检查</span>
                     <button class="btn" id="btn-group-check" onclick="groupCheckTeam()">检查当前队伍</button>
                     <span class="group-sub" id="group-check-msg"></span>
                 </div>
                 <div class="group-row" id="group-switch-warn" style="display:none">
-                    <span class="group-sub" style="color:var(--danger)">注意：修罗/五倍「检查队伍」开关未开启，组号模式启动会停止任务。</span>
+                    <span class="group-sub" style="color:var(--danger)">注意：修罗/五倍/种族比武「检查队伍」开关未开启，组号模式启动会停止任务。</span>
                 </div>
                 <div class="group-row" id="group-leader-row" style="display:none">
                     <span class="group-label" id="group-leader-name">-</span>
@@ -1312,6 +1375,14 @@
                     <div class="group-hint">与实际流程一致、时序无额外延时，且不改变任务状态：领取=走位到宝象国领取点 → 点击领取入口（领取任务按钮/降魔侍卫）打开对话框 → 选项「除魔卫国，义不容辞」仅定位不点击 → 点拒绝选项「事态严重，我等退散」关闭对话框；回程=定位回城符不点击（回城符模板待提供，缺失时报模板未提供）；巫医=走位到巫医 NPC、定位后点击打开对话框（医治选项由验证流程自行点击，与任务进程中战斗线程点击行为等效）；修理=走位到洛阳城修理 NPC、点击打开对话框（两套弹窗按文案→选项映射，选项由验证流程自行点击）；组号修理=修理完整链路后逐个切换队员 Tab 点击其修理对话框并切回队长（需 ≥2 个已登录 Tab）；白龙马模板=按任务流程实际点击候选（找全部候选→逐一真实点击→误点对话框自动关闭→开打对话出现即停止并停留，请手动关闭对话框）。任务运行中不可验证。</div>
                 </div>
                 <div class="group-box">
+                    <div class="group-title">种族比武链路</div>
+                    <div class="verify-row">
+                        <button id="btn-verify-zhongzu-claim" class="btn" onclick="verifyZhongzuClaim()">测试领取任务</button>
+                        <span class="verify-result" id="zhongzu-claim-verify-result"></span>
+                    </div>
+                    <div class="group-hint">与实际流程一致、时序无额外延时，且不改变任务状态：走位到长安领取点（286,159）→ 点击领取 NPC 打开对话框 → 绿色领取选项仅定位不点击（点击即领取）→ 点屏幕中间关闭对话框。不检查队伍、不领取任务（单人也可验证）。成功后对话框停留，请手动关闭。任务运行中不可验证。</div>
+                </div>
+                <div class="group-box">
                     <div class="group-title">五环链路</div>
                     <div class="verify-row">
                         <button id="btn-verify-wuhuan-cloth" class="btn" onclick="verifyWuhuanCloth()">测试进入布店</button>
@@ -1526,9 +1597,9 @@
     let runtimeStatus = null;   // 任务运行状态（get_runtime_status 轮询，看板展示）
     let progressData = null;    // 任务进度汇总（get_task_progress 轮询）
     let verifying = false;      // 验证请求在途标记（防连点，回程/领取/巫医共用）
-    const TASK_MODES = ['五环', '客栈', '修罗', '五倍', '玄枢轶闻', '名望', '仅战斗'];
+    const TASK_MODES = ['五环', '客栈', '修罗', '五倍', '种族比武', '玄枢轶闻', '名望', '仅战斗'];
     const BATTLE_ONLY = '仅战斗';   // 与其它任务互斥：勾选时禁用其它，勾选其它时禁用本项
-    const COUNT_MAX = {'五环': 2, '客栈': 20, '玄枢轶闻': 5, '名望': 5};
+    const COUNT_MAX = {'五环': 2, '客栈': 20, '种族比武': 100, '玄枢轶闻': 5, '名望': 5};
     // 印章动效：移动类阶段（左右轻摆走路节奏；其余按战斗/对话/默认分档）
     const WALK_PHASES = ['寻路中', '前往领取点', '前往客栈', '返程',
                          '大理寺寻路', '比武场寻路', '准备阶段'];
@@ -1576,6 +1647,15 @@
     const wubeiWuyiIntervalEl = document.getElementById('wubei-wuyi-interval');
     const wubeiAutoRepair = document.getElementById('wubei-auto-repair');
     const wubeiRepairIntervalEl = document.getElementById('wubei-repair-interval');
+    const zhongzuCheckTeam = document.getElementById('zhongzu-check-team');
+    const zhongzuAutoCreateTeam = document.getElementById('zhongzu-auto-create-team');
+    const zhongzuAutoRejoin = document.getElementById('zhongzu-auto-rejoin');
+    const zhongzuAutoWuyi = document.getElementById('zhongzu-auto-wuyi');
+    const zhongzuWuyiIntervalEl = document.getElementById('zhongzu-wuyi-interval');
+    const zhongzuAutoRepair = document.getElementById('zhongzu-auto-repair');
+    const zhongzuRepairIntervalEl = document.getElementById('zhongzu-repair-interval');
+    const zhongzuRepairIntervalRow = document.getElementById('zhongzu-repair-interval-row');
+    const zhongzuTabGroup = document.getElementById('zhongzu-tab-group');
     const wubeiRepairIntervalRow = document.getElementById('wubei-repair-interval-row');
     const wubeiKuimulang = document.getElementById('wubei-kuimulang');
     const wubeiTabGroup = document.getElementById('wubei-tab-group');
@@ -1613,6 +1693,8 @@
     const silentReturnVerifyResultEl = document.getElementById('silent-return-verify-result');
     const btnVerifyWubeiClaim = document.getElementById('btn-verify-wubei-claim');
     const wubeiClaimVerifyResultEl = document.getElementById('wubei-claim-verify-result');
+    const btnVerifyZhongzuClaim = document.getElementById('btn-verify-zhongzu-claim');
+    const zhongzuClaimVerifyResultEl = document.getElementById('zhongzu-claim-verify-result');
     const btnVerifyWubeiReturn = document.getElementById('btn-verify-wubei-return');
     const wubeiReturnVerifyResultEl = document.getElementById('wubei-return-verify-result');
     const btnVerifyWubeiWuyi = document.getElementById('btn-verify-wubei-wuyi');
@@ -2032,7 +2114,7 @@
     }
 
     /* ================= 成就页（累计产出 + 效率 + 7 日趋势） ================= */
-    const STATS_MODES = ['五环', '客栈', '修罗', '五倍', '玄枢轶闻', '名望', '仅战斗'];
+    const STATS_MODES = ['五环', '客栈', '修罗', '五倍', '种族比武', '玄枢轶闻', '名望', '仅战斗'];
     const STATS_WINDOW_DAYS = 7;
     const pageStats = document.getElementById('page-stats');
     const statBody = document.getElementById('stat-body');
@@ -2955,12 +3037,34 @@
         if (r && r.status === 'success') el.innerText = r.interval;
     }
 
+    async function zhongzuWuyiInterval(delta) {
+        const el = zhongzuWuyiIntervalEl;
+        const cur = parseInt(el.innerText);
+        const val = Math.min(90, Math.max(1, cur + delta));
+        if (val === cur) return;
+        const r = await callPython('save_zhongzu_wuyi_interval', val);
+        if (r && r.status === 'success') el.innerText = r.interval;
+    }
+
+    async function zhongzuRepairInterval(delta) {
+        const el = zhongzuRepairIntervalEl;
+        const cur = parseInt(el.innerText);
+        const val = Math.min(999, Math.max(1, cur + delta));
+        if (val === cur) return;
+        const r = await callPython('save_zhongzu_repair_interval', val);
+        if (r && r.status === 'success') el.innerText = r.interval;
+    }
+
     function applyXiuluoRepairVisibility() {
         xiuluoRepairIntervalRow.style.display = xiuluoAutoRepair.checked ? '' : 'none';
     }
 
     function applyWubeiRepairVisibility() {
         wubeiRepairIntervalRow.style.display = wubeiAutoRepair.checked ? '' : 'none';
+    }
+
+    function applyZhongzuRepairVisibility() {
+        zhongzuRepairIntervalRow.style.display = zhongzuAutoRepair.checked ? '' : 'none';
     }
 
     /* ================= 各开关变更：立即保存 ================= */
@@ -3025,6 +3129,25 @@
     });
     xiuluoTabGroup.addEventListener('change', () => {
         callPython('save_xiuluo_tab_group', xiuluoTabGroup.checked);
+    });
+    zhongzuCheckTeam.addEventListener('change', () => {
+        callPython('save_zhongzu_check_team', zhongzuCheckTeam.checked);
+    });
+    zhongzuAutoCreateTeam.addEventListener('change', () => {
+        callPython('save_zhongzu_auto_create_team', zhongzuAutoCreateTeam.checked);
+    });
+    zhongzuAutoRejoin.addEventListener('change', () => {
+        callPython('save_zhongzu_auto_rejoin', zhongzuAutoRejoin.checked);
+    });
+    zhongzuAutoWuyi.addEventListener('change', () => {
+        callPython('save_zhongzu_auto_wuyi', zhongzuAutoWuyi.checked);
+    });
+    zhongzuAutoRepair.addEventListener('change', () => {
+        applyZhongzuRepairVisibility();
+        callPython('save_zhongzu_auto_repair', zhongzuAutoRepair.checked);
+    });
+    zhongzuTabGroup.addEventListener('change', () => {
+        callPython('save_zhongzu_tab_group', zhongzuTabGroup.checked);
     });
     highPerf.addEventListener('change', () => {
         callPython('save_high_perf', highPerf.checked);
@@ -3286,10 +3409,12 @@
         applyDevTools();  // 调试信息开关：控制「诊断」导航入口显隐
         xiuluoHezi.checked = !!info.xiuluo_hezi;
         xiuluoCheckTeam.checked = !!info.xiuluo_check_team;
-        // 组号设置页：修罗/五倍「检查队伍」未开启时提示（组号模式要求必须开启）
+        // 组号设置页：修罗/五倍/种族比武「检查队伍」未开启时提示（组号模式要求必须开启）
         if (info.group_check_team) {
-            const bothOn = info.group_check_team.xiuluo && info.group_check_team.wubei;
-            groupSwitchWarn.style.display = bothOn ? 'none' : 'flex';
+            const allOn = info.group_check_team.xiuluo
+                && info.group_check_team.wubei
+                && info.group_check_team.zhongzu;
+            groupSwitchWarn.style.display = allOn ? 'none' : 'flex';
         }
         xiuluoAutoCreateTeam.checked = !!info.xiuluo_auto_create_team;
         xiuluoAutoRejoin.checked = !!info.xiuluo_auto_rejoin;
@@ -3355,6 +3480,19 @@
         }
         wubeiKuimulang.checked = !!(info.wubei && info.wubei.kuimulang);
         wubeiTabGroup.checked = !!(info.wubei && info.wubei.tab_group);
+        zhongzuCheckTeam.checked = !!(info.zhongzu && info.zhongzu.check_team);
+        zhongzuAutoCreateTeam.checked = !!(info.zhongzu && info.zhongzu.auto_create_team);
+        zhongzuAutoRejoin.checked = !!(info.zhongzu && info.zhongzu.auto_rejoin);
+        zhongzuAutoWuyi.checked = !!(info.zhongzu && info.zhongzu.auto_wuyi);
+        if (info.zhongzu && info.zhongzu.wuyi_interval) {
+            zhongzuWuyiIntervalEl.innerText = info.zhongzu.wuyi_interval;
+        }
+        zhongzuAutoRepair.checked = !!(info.zhongzu && info.zhongzu.auto_repair);
+        applyZhongzuRepairVisibility();
+        if (info.zhongzu && info.zhongzu.repair_interval !== undefined) {
+            zhongzuRepairIntervalEl.innerText = info.zhongzu.repair_interval;
+        }
+        zhongzuTabGroup.checked = !!(info.zhongzu && info.zhongzu.tab_group);
         xiuluoShout.checked = !!info.xiuluo_shout;
         wuhuanVitalityContinue.checked = !!info.wuhuan_vitality_continue;
         const ths = info.thresholds || {};
@@ -3889,6 +4027,35 @@
         btnVerifyWubeiClaim.disabled = false;
         wubeiClaimVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
         wubeiClaimVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+    };
+
+    // 种族比武领取测试：走位 → 领取 NPC → 选项仅定位不点击 → 关对话框
+    async function verifyZhongzuClaim() {
+        if (verifying) return;
+        verifying = true;
+        btnVerifyZhongzuClaim.disabled = true;
+        zhongzuClaimVerifyResultEl.style.color = 'var(--text)';
+        zhongzuClaimVerifyResultEl.innerText = '验证中...';
+        try {
+            const r = await callPython('verify_zhongzu_claim');
+            if (!r || r.status !== 'success') {
+                zhongzuClaimVerifyResultEl.style.color = 'var(--danger)';
+                zhongzuClaimVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
+                verifying = false;
+                btnVerifyZhongzuClaim.disabled = false;
+            }
+        } catch (e) {
+            zhongzuClaimVerifyResultEl.style.color = 'var(--danger)';
+            zhongzuClaimVerifyResultEl.innerText = '验证请求异常';
+            verifying = false;
+            btnVerifyZhongzuClaim.disabled = false;
+        }
+    }
+    window.onZhongzuClaimVerifyResult = function (ok, info) {
+        verifying = false;
+        btnVerifyZhongzuClaim.disabled = false;
+        zhongzuClaimVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        zhongzuClaimVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
     // 五倍回程验证：与修罗回程验证同模式，结果经 onWubeiReturnVerifyResult 异步回推
