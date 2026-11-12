@@ -2310,69 +2310,9 @@ def test_handle_dialog_options_calls_jiamo(monkeypatch):
     assert mingwang._handle_dialog_options(object(), [], None) is True
 
 
-# ---- 去领取点飞行（用户 2026-11-11 规则：去接任务必须飞起来）----
-def _patch_claim_flight(monkeypatch, fly_results, land_results=(True, "已降落")):
-    """飞行驭器替换：起飞/降落按序返回结果，记录调用与关面板次数。"""
-    state = {"fly": [], "land": [], "close": 0, "fly_results": list(fly_results)}
-    if isinstance(land_results, list):
-        state["land_results"] = list(land_results)
-    else:
-        state["land_results"] = [land_results]
-
-    def _fly(win):
-        state["fly"].append(1)
-        if state["fly_results"]:
-            return state["fly_results"].pop(0)
-        return True, "已在飞行中（无需起飞）"
-
-    def _land(win):
-        state["land"].append(1)
-        if state["land_results"]:
-            return state["land_results"].pop(0)
-        return True, "已降落"
-
-    def _close(win):
-        state["close"] += 1
-        return True, "飞行驭器面板已关闭"
-
-    monkeypatch.setattr(mingwang.zuoqi, "ensure_flying", _fly)
-    monkeypatch.setattr(mingwang.zuoqi, "ensure_landed", _land)
-    monkeypatch.setattr(mingwang.zuoqi, "close_feixingyuqi_panel", _close)
-    return state
-
-
-def test_claim_fly_up_success(monkeypatch):
-    """去领取点前起飞：一次成功即返回，起飞后关面板。"""
-    state = _patch_claim_flight(monkeypatch, [(True, "已起飞")])
-    ok, info = mingwang._claim_fly_up(object())
-    assert ok and "已起飞" in info
-    assert len(state["fly"]) == 1 and state["close"] == 1
-
-
-def test_claim_fly_up_retries_then_fails(monkeypatch):
-    """起飞失败按 CLAIM_FLY_ATTEMPTS 重试，全失败返回 False（硬前置）。"""
-    state = _patch_claim_flight(
-        monkeypatch, [(False, "面板未出现")] * mingwang.CLAIM_FLY_ATTEMPTS)
-    monkeypatch.setattr(mingwang.time, "sleep", lambda s: None)
-    ok, info = mingwang._claim_fly_up(object())
-    assert not ok and "面板未出现" in info
-    assert len(state["fly"]) == mingwang.CLAIM_FLY_ATTEMPTS
-    assert state["close"] == mingwang.CLAIM_FLY_ATTEMPTS
-
-
-def test_claim_land_retries(monkeypatch):
-    """到达领取点降落：首次失败重试成功；关面板次数与尝试一致。"""
-    state = _patch_claim_flight(
-        monkeypatch, [],
-        land_results=[(False, "面板内未定位到降落按钮"), (True, "已降落")])
-    monkeypatch.setattr(mingwang.time, "sleep", lambda s: None)
-    ok, info = mingwang._claim_land(object())
-    assert ok and "已降落" in info
-    assert len(state["land"]) == 2 and state["close"] == 2
-
-
-def _patch_navigate(monkeypatch, pos, fly_ok=(True, "已起飞")):
-    """navigate_to_claim_point 环境替换：位置/地图/点击/到达/飞行。"""
+# ---- 领取链不做起飞/降落（2026-11-12 用户规则：领取链飞行逻辑已去掉）----
+def _patch_navigate(monkeypatch, pos):
+    """navigate_to_claim_point 环境替换：位置/地图/点击/到达。"""
     order = []
     monkeypatch.setattr(mingwang, "is_in_battle", lambda w: False)
     monkeypatch.setattr(mingwang, "close_scene_panels",
@@ -2390,50 +2330,37 @@ def _patch_navigate(monkeypatch, pos, fly_ok=(True, "已起飞")):
     monkeypatch.setattr(mingwang, "wait_arrive",
                         lambda w, c: (True, "已到达领取点附近"))
     monkeypatch.setattr(mingwang.time, "sleep", lambda s: None)
-
-    def _fly(win):
-        order.append("fly")
-        return fly_ok
-
-    monkeypatch.setattr(mingwang, "_claim_fly_up", _fly)
     return order
 
 
-def test_navigate_claim_point_flys_before_travel(monkeypatch):
-    """不在领取点 → 先起飞再经世界地图寻路（起飞失败本轮不前往）。"""
+def test_navigate_claim_point_travels_by_world_map(monkeypatch):
+    """不在领取点 → 经世界地图寻路到小地图领取点（不做起飞）。"""
     claim = mingwang.CLAIM_POINTS["魔族"]
     order = _patch_navigate(monkeypatch, ("长安城", 88, 40))
     ok, _info = mingwang.navigate_to_claim_point(object(), claim)
     assert ok
-    assert order.index("fly") < order.index("world_map")
+    assert "world_map" in order
     assert ("click", claim["mini_click"][0], claim["mini_click"][1]) in order
 
-    order2 = _patch_navigate(monkeypatch, ("长安城", 88, 40),
-                             fly_ok=(False, "面板未出现"))
-    ok, info = mingwang.navigate_to_claim_point(object(), claim)
-    assert not ok and "起飞失败" in info
-    assert "world_map" not in order2 and order2.count("fly") == 1
 
-
-def test_navigate_claim_point_at_point_skips_fly(monkeypatch):
-    """已在领取点 → 无行程不要求起飞（降落由 _open_claim_panel 统一处理）。"""
+def test_navigate_claim_point_at_point_skips_travel(monkeypatch):
+    """已在领取点 → 直接返回，不开地图、不点击。"""
     claim = mingwang.CLAIM_POINTS["魔族"]
     order = _patch_navigate(monkeypatch, (claim["map"], claim["target"][0],
                                           claim["target"][1]))
     ok, info = mingwang.navigate_to_claim_point(object(), claim)
     assert ok and "已在领取点" in info
-    assert "fly" not in order
+    assert "world_map" not in order and "mini_map" not in order
+    assert not any(isinstance(step, tuple) for step in order)
 
 
-def test_open_claim_panel_lands_before_alt4(monkeypatch):
-    """到达领取点：先降落再 Alt+4 清屏、再点 NPC（顺序不得调换）。"""
+def test_open_claim_panel_alt4_then_claim(monkeypatch):
+    """到达领取点：不降落，直接 Alt+4 清屏、再点 NPC。"""
     order = []
     monkeypatch.setattr(mingwang, "is_in_battle", lambda w: False)
     monkeypatch.setattr(mingwang, "_find_panel_anchor", lambda bgr: None)
     monkeypatch.setattr(mingwang, "navigate_to_claim_point",
                         lambda w, c: order.append("nav") or (True, "已到达"))
-    monkeypatch.setattr(mingwang, "_claim_land",
-                        lambda w: order.append("land") or (True, "已降落"))
     monkeypatch.setattr(mingwang, "_press_alt4_clear",
                         lambda w: order.append("alt4"))
     monkeypatch.setattr(mingwang, "_claim_and_open_panel",
@@ -2443,4 +2370,4 @@ def test_open_claim_panel_lands_before_alt4(monkeypatch):
     win = _FakeWin([_pil(_noise_bgr(seed=21))])
     ok, info = mingwang._open_claim_panel(win, "魔族")
     assert ok and "面板" in info
-    assert order == ["nav", "land", "alt4", "claim"]
+    assert order == ["nav", "alt4", "claim"]

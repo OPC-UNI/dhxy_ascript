@@ -95,6 +95,28 @@ def test_best_match_np_double_template():
     assert (cx, cy) == (50 + tpl.shape[1] // 2, 100 + tpl.shape[0] // 2)
 
 
+def test_best_match_multi_np_two_templates():
+    """同帧多模板取分（一次灰度转换）：命中模板返回中心，未命中低分。"""
+    tpl = _tpl("fashu.png")
+    frame = paste_template(make_bgr_frame(), tpl, 300, 600)
+    res = game_map.best_match_multi_np(frame, ("fashu.png", "fangyu.png"))
+    score, (cx, cy) = res["fashu.png"]
+    assert score >= 0.9
+    assert (cx, cy) == (300 + tpl.shape[1] // 2, 600 + tpl.shape[0] // 2)
+    assert res["fangyu.png"][0] < 0.9
+
+
+def test_best_match_multi_np_region_and_missing():
+    """条带限定（不回退全帧）与模板缺失（0 分）。"""
+    tpl = _tpl("fashu.png")
+    frame = paste_template(make_bgr_frame(), tpl, 300, 600)
+    res = game_map.best_match_multi_np(frame, ("fashu.png",),
+                                       region=(0, 0, 200, 200))
+    assert res["fashu.png"][0] < 0.9
+    res = game_map.best_match_multi_np(frame, ("no_such_icon.png",))
+    assert res["no_such_icon.png"] == (0.0, (0, 0))
+
+
 # ---- 模板缓存 ----
 
 def test_load_template_cache_identity():

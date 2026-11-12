@@ -442,6 +442,37 @@ def best_match_np(img_np, icon, region=None):
     return float(max_val), (ox + max_loc[0] + w // 2, oy + max_loc[1] + h // 2)
 
 
+def best_match_multi_np(img_np, icons, region=None):
+    """同一 BGR 帧上批量取各模板的全局最高分，返回 {icon: (score, (x, y))}。
+
+    与 best_match_np 同语义（TM_CCOEFF_NORMED 灰度、返回匹配中心），但帧
+    只做一次灰度转换、模板走缓存——供多模板同帧比分数/记录最高匹配度的
+    热路径使用（如客栈拍毒虫：15 张毒虫模板逐个匹配小候选框）。region 为
+    所有模板共用的搜索条带（未命中不回退全帧，条带由调用方标定）；模板
+    缺失/大于搜索区按 0 分处理。
+    """
+    gray = cv2.cvtColor(img_np, cv2.COLOR_BGR2GRAY)
+    ox = oy = 0
+    if region is not None:
+        l, t, r, b = region
+        gray = gray[max(0, t):min(gray.shape[0], b),
+                    max(0, l):min(gray.shape[1], r)]
+        ox, oy = max(0, l), max(0, t)
+    result = {}
+    for icon in icons:
+        tpl = _load_template(icon)
+        if tpl is None or tpl.shape[0] > gray.shape[0] \
+                or tpl.shape[1] > gray.shape[1]:
+            result[icon] = (0.0, (0, 0))
+            continue
+        res = cv2.matchTemplate(gray, tpl, cv2.TM_CCOEFF_NORMED)
+        _, max_val, _, max_loc = cv2.minMaxLoc(res)
+        h, w = tpl.shape[:2]
+        result[icon] = (float(max_val),
+                        (ox + max_loc[0] + w // 2, oy + max_loc[1] + h // 2))
+    return result
+
+
 def match_frame_all(img_np, icon, threshold=0.8, region=None):
     """在 BGR numpy 帧上取模板全部匹配中心，返回 [(score, x, y), ...]
     按分数降序。多实例场景用（如白龙马任务按钮同屏多处相似图案，

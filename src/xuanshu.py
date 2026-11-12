@@ -84,8 +84,7 @@ from .dialog_common import (DAILY_LIMIT_TEXT, DAILY_LIMIT_INFO,
                             DIALOG_LOSE_TEXTS, DIALOG_SKIP_CLICKS,
                             SCREEN_CENTER_POS,
                             dialog_ocr_skip, clear_blocking_dialog,
-                            StoryDialogDismisser,
-                            dialog_frame_score, DIALOG_FRAME_THRESHOLD)
+                            StoryDialogDismisser)
 # 每日任务次数已满的对话文案（出现即结束任务循环）
 # 需要点击屏幕中间跳过的对话框文案 → 点击次数（出现则连点屏幕中间推进
 # 对话，同 kezhan.DIALOG_SKIP_TEXTS）；不同文案要推进的屏数不同，次数
@@ -1300,19 +1299,20 @@ def _task_gone_occluded(img, bgr=None):
     """面板缺席判完成前的遮挡负条件：其它面板在场 → 本帧不判任务消失。
 
     追踪面板标题条未命中不止「游戏收起面板/用户手动关闭」一种原因——
-    背包、世界/小地图、队伍/申请加入面板、标准对话框打开时同样会盖住
-    面板，单看「面板缺席+条带无任务」会把「被盖住」误判成完成。
-    命中任一已知遮挡即推迟本轮判定，等对应面板被处理（extras/队伍
-    线程关闭）后复查。只在面板缺席、证据已足的判定帧调用（每轮任务
-    完成一次），实测成本：单人模式 ~0.1s（对话框模板 ~10ms、背包/
-    地图模板各 ~30ms）；组号模式 ~0.55s（另加队伍面板判定 ~0.44s：
-    标志模板 0.436~0.683 随成员数退化，须 OCR 兜底，2026-11-12 实测）
-    ——只影响完成判定帧，不在轮询热路径。
+    背包、世界/小地图、队伍/申请加入面板打开时会盖住面板，单看「面板
+    缺席+条带无任务」会把「被盖住」误判成完成。命中任一已知遮挡即推迟
+    本轮判定，等对应面板被处理（extras/队伍线程关闭）后复查。只在面板
+    缺席、证据已足的判定帧调用（每轮任务完成一次），实测成本：单人模式
+    ~0.1s（背包/地图模板各 ~30ms）；组号模式 ~0.55s（另加队伍面板判定
+    ~0.44s：标志模板 0.436~0.683 随成员数退化，须 OCR 兜底，2026-11-12
+    实测）——只影响完成判定帧，不在轮询热路径。
+
+    标准对话框不在遮挡名单（用户 2026-11-12 确认）：对话框不会盖住任务
+    追踪面板（15:03 实测对话框在场时面板仍可读），面板缺席+对话框在场
+    即任务完成——把对话框当遮挡会让已完成的任务卡在确认循环里空转。
     """
     if bgr is None:
         bgr = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
-    if dialog_frame_score(bgr) >= DIALOG_FRAME_THRESHOLD:
-        return True
     from . import bag  # 函数内导入防循环：bag→battle→…→xuanshu 环
     for icon in (bag.BAG_BOX_ICON, game_map.WORLD_MAP_OPEN_ICON,
                  game_map.MINI_MAP_OPEN_ICON):
@@ -1330,23 +1330,6 @@ def _task_gone_occluded(img, bgr=None):
     return False
 
 
-def _standard_dialog_present(img_np):
-    """帧内是否有标准对话框（与 _task_gone_occluded 同一判定）。
-
-    img_np 可为 ocr_regions 的区域掩码帧（对话区像素已贴回，模板特征
-    块在 DIALOG_REGION 内时与整帧同分）或整帧；None/异常按无对话框
-    处理。用于「面板缺席但对话框在场」时先走对话框处理链，再判任务
-    消失——遮挡负条件以对话框在场推迟完成判定，对话框不处理就永远
-    无法收敛（2026-11-12 玄枢轶闻找垂钓老者实测）。
-    """
-    if img_np is None:
-        return False
-    try:
-        return dialog_frame_score(np.asarray(img_np)) >= DIALOG_FRAME_THRESHOLD
-    except Exception:
-        return False
-
-
 def _confirm_task_gone(win, title, fallback_texts=(), first_img=None,
                        polls=TASK_GONE_CONFIRM_POLLS, check_occluders=True):
     """确认任务确实从追踪面板消失（连续轮询未见且无战斗遮挡）。
@@ -1361,11 +1344,13 @@ def _confirm_task_gone(win, title, fallback_texts=(), first_img=None,
     修罗/五倍的任务完成由战斗驱动（战斗结束返程），不走此判定；
     战斗线程仍在战斗时的缺席帧不计证据（战斗 UI 会盖住面板）。
 
-    遮挡负条件：面板缺席、证据已足的判定帧先查背包/地图/队伍/
-    对话框等大面板（见 _task_gone_occluded），在场则推迟本轮判定
-    ——否则「被面板盖住」会被当成任务完成。check_occluders=False
-    跳过该检查（战斗结束返程快路径：此时不可能有背包/地图面板，
-    对话由 _task_gone_dialog_guard 兜底，省 ~0.1s，组号模式 ~0.55s）。
+    遮挡负条件：面板缺席、证据已足的判定帧先查背包/地图/队伍等大面板
+    （见 _task_gone_occluded），在场则推迟本轮判定——否则「被面板盖住」
+    会被当成任务完成。标准对话框不在遮挡名单（用户 2026-11-12 确认：
+    对话框不会盖住追踪面板；完成瞬间的收尾剧情对话不阻塞完成判定）。
+    check_occluders=False 跳过该检查（战斗结束返程快路径：此时不可能
+    有背包/地图面板，对话由 _task_gone_dialog_guard 兜底，省 ~0.1s，
+    组号模式 ~0.55s）。
 
     first_img：调用方本轮已截取的帧（PIL）——战斗结束转换帧上的首个
     确认轮询跳过截图直接 OCR（返程链路上省一次截窗 ~0.3s）。
@@ -1578,11 +1563,9 @@ def _handle_dialogs(win, items, img_np, img, title=TASK_TITLE, prefix="",
     """follow 轮询的内置对话框处理链，返回是否已处理。
 
     顺序：特定对话框指定绿字 → 点屏幕中间跳过 → 已知绿字选项 → 无选项
-    剧情对话点屏兜底。面板在场的正常轮询与「面板缺席但标准对话框在场」
-    的消失确认前处理共用本函数——后者必须先把对话框处理掉：任务消失
-    确认的遮挡负条件以「标准对话框在场」推迟完成判定，而对话框若不
-    处理就永远不会消失，判定永远收敛不了（2026-11-12 玄枢轶闻找垂钓
-    老者实测：面板已消失、剧情对话在场，确认窗口连续空转 2 分钟以上）。
+    剧情对话点屏兜底。任务面板在场时的正常轮询调用（面板缺席即任务
+    结束，走消失确认，不做对话框处理——对话框不挡追踪面板，用户
+    2026-11-12 确认）。
     """
     handled = False
     for dtxt, opt in DIALOG_OPTION_MAP.items():
@@ -1824,20 +1807,6 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
             task_tracker.group_tasks(items, task_tracker.panel_row_xmax(img_np)),
             title)
         if task is None:
-            # 面板缺席但标准对话框在场：先走对话框处理链再判任务消失。
-            # 任务消失确认的遮挡负条件以「对话框在场」推迟判定，而对话框
-            # 不处理就永远不会消失（2026-11-12 玄枢轶闻找垂钓老者实测：
-            # 面板已消失、剧情对话框在场，确认窗口空转 2 分钟以上）
-            if _standard_dialog_present(img_np):
-                _handle_dialogs(win, items, img_np, img, title=title,
-                                prefix=prefix, story_gate=story_gate,
-                                green_order=green_order,
-                                green_picker=green_picker,
-                                fallback_keywords=fallback_keywords,
-                                require_coord=require_coord,
-                                skip_texts=skip_texts)
-                time.sleep(FOLLOW_POLL_INTERVAL)
-                continue
             # 战斗刚结束的首个非战斗轮：面板缺席按任务消失处理（用户
             # 2026-11-11 确认）——否则要空等 6s 后不判定（战斗结束
             # 返程慢 10s）
@@ -2009,12 +1978,6 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                         items, task_tracker.panel_row_xmax(img_np)),
                     title)
                 if task2 is None:
-                    if _standard_dialog_present(img):
-                        # 面板缺席但标准对话框在场：回退正常轮询，由对话框
-                        # 处理链推进（本帧只 OCR 了追踪面板区，无对话行可
-                        # 用）；遮挡负条件会在对话框关闭前持续推迟消失判定
-                        changed_once = False
-                        continue
                     if _confirm_task_gone(win, title, fallback_keywords,
                         first_img=img, polls=_gone_polls()):
                         if _task_gone_dialog_guard(win, extra_dialog_handler,
@@ -2159,20 +2122,6 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                                          task_tracker.panel_row_xmax(img_np)),
                 title)
             if task2 is None:
-                # 面板缺席但标准对话框在场：先按对话框处理链推进（点选项/
-                # 剧情点屏），关闭后再判任务消失——任务消失确认的遮挡负
-                # 条件以对话框在场推迟判定，不处理对话框就永远收敛不了
-                # （2026-11-12 玄枢轶闻找垂钓老者实测空转 2 分钟以上）
-                if _standard_dialog_present(img_np):
-                    _handle_dialogs(win, items, img_np, img, title=title,
-                                    prefix=prefix, story_gate=story_gate,
-                                    green_order=green_order,
-                                    green_picker=green_picker,
-                                    fallback_keywords=fallback_keywords,
-                                    require_coord=require_coord,
-                                    skip_texts=skip_texts)
-                    changed_once = False
-                    continue
                 if _confirm_task_gone(win, title, fallback_keywords,
                     first_img=img, polls=_gone_polls()):
                     if _task_gone_dialog_guard(win, extra_dialog_handler,

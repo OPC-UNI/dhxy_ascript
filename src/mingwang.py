@@ -10,11 +10,9 @@
    （仙族部分角色名不含「仙」）→ 仙族。其他种族（人/鬼/龙/神巫）
    暂不识别（后续 TODO）。识别后关闭面板（右键标题牌 → 再点按钮 →
    Esc 三级兜底）。
-2. 领取点（种族配置化，见 CLAIM_POINTS）：
-   **前往领取点前必须先用飞行驭器起飞**（用户 2026-11-11 规则：去接
-   任务必须飞起来；复用 zuoqi.ensure_flying，起飞后关面板；起飞失败
-   本轮不前往、按主循环重试）；到达领取点后降落再点 NPC（飞行状态
-   地面 NPC 不可见——客栈阿旺同款实测，不降落会点不到逆天魔/武尊神）。
+2. 领取点（种族配置化，见 CLAIM_POINTS）；直接寻路，不做起飞/降落
+   （2026-11-12 用户规则：领取链的「去接任务必须起飞」「到达领取点
+   后降落」已去掉）。
    - 魔族：大唐边境 (477,180) 附近，NPC 逆天魔。
      已在大唐边境 → 打开小地图点击 (985,384)；不在 → 世界地图点击
      「大唐边境」（shijie_datangbianjing.png）打开该地图小地图 →
@@ -182,14 +180,6 @@ CLAIM_NPC_THRESHOLD = 0.75             # NPC 默认匹配阈值（NPC 待机动�
                                        # 种族可用 npc_threshold 覆盖，如仙族 0.7）
 CLAIM_NPC_BAND = (200, 120, 1180, 750)  # NPC 搜索条带（世界区域，排除 HUD/追踪面板）
 CLAIM_NPC_FULL_INTERVAL = 3.0          # 条带未命中时的全帧兜底最小间隔（秒）
-# ---- 去领取点飞行（用户 2026-11-11 规则：去接任务必须飞起来）----
-# 前往领取点（大唐边境/天宫）前复用飞行驭器起飞（zuoqi.ensure_flying：
-# 面板识别飞行状态，未飞行点「飞行」；高性能模式 Alt+U 直开面板），
-# 飞行赶路；到达领取点后降落再点 NPC（飞行状态地面 NPC 不可见）。
-# 起飞是硬前置：起飞未确认本轮不前往领取点，返回失败由主循环下一轮
-# 重试（每轮最多 CLAIM_FLY_ATTEMPTS 次，避免单轮里长时间卡住）。
-CLAIM_FLY_ATTEMPTS = 2       # 起飞尝试次数（面板/按键瞬态重试）
-CLAIM_LAND_ATTEMPTS = 2      # 到达领取点后的降落尝试次数
 CLAIM_POINTS = {
     "魔族": {
         "map": "大唐边境",
@@ -1006,61 +996,12 @@ def wait_arrive(win, claim, timeout=ARRIVE_TIMEOUT):
     return False, f"等待寻路完成超时（{timeout}s）"
 
 
-def _claim_fly_up(win):
-    """前往领取点前确保飞行中（用户 2026-11-11 规则：去接任务必须飞起来）。
-
-    复用飞行驭器已有能力 zuoqi.ensure_flying（面板识别飞行状态——
-    已在飞行中无操作；未飞行点「飞行」按钮起飞；高性能模式 Alt+U
-    直开面板），每次尝试后关面板防遮挡小地图/世界地图点击。起飞是
-    硬前置：CLAIM_FLY_ATTEMPTS 次仍失败返回 False，本轮不前往领取点
-    （主循环下一轮重试），绝不静默改走地面寻路。
-    返回 (是否飞行中, 描述)。
-    """
-    info = ""
-    for attempt in range(1, CLAIM_FLY_ATTEMPTS + 1):
-        ok, info = zuoqi.ensure_flying(win)
-        zuoqi.close_feixingyuqi_panel(win)
-        if ok:
-            log(f"[名望] 去领取点前已起飞（{info}），飞行赶路", "SYS")
-            return True, info
-        log(f"[名望] 起飞失败（第 {attempt}/{CLAIM_FLY_ATTEMPTS} 次）：{info}",
-            "WARN")
-        if attempt < CLAIM_FLY_ATTEMPTS:
-            time.sleep(1.0)
-    return False, info
-
-
-def _claim_land(win):
-    """到达领取点后降落（飞行状态地面 NPC 不可见，不降落点不到 NPC）。
-
-    与客栈阿旺同款实测教训：飞行中地面 NPC 模板不出现。复用飞行驭器
-    zuoqi.ensure_landed（已在地面时无操作），每次尝试后关面板；失败只
-    告警不阻断——领取链的 NPC 点击重试与下一轮领取都会再次尝试降落。
-    返回 (是否已降落, 描述)。
-    """
-    info = ""
-    for attempt in range(1, CLAIM_LAND_ATTEMPTS + 1):
-        ok, info = zuoqi.ensure_landed(win)
-        zuoqi.close_feixingyuqi_panel(win)
-        if ok:
-            log(f"[名望] 到达领取点已降落（{info}）", "SYS")
-            return True, info
-        log(f"[名望] 领取点降落失败（第 {attempt}/{CLAIM_LAND_ATTEMPTS} 次）："
-            f"{info}", "WARN")
-        if attempt < CLAIM_LAND_ATTEMPTS:
-            time.sleep(1.0)
-    return False, info
-
-
 def navigate_to_claim_point(win, claim):
     """寻路到种族领取点（目标坐标附近）。
 
     已在领取地图 → 打开小地图点击 mini_click；不在 → 世界地图点击
     种族地图标签打开该地图小地图再点击。到达后返回成功。
-    **前往前必须起飞**（用户 2026-11-11 规则）：不在领取点时先
-    _claim_fly_up 飞起来再打开地图点击目的地；起飞未确认本轮失败，
-    由主循环重试。已在领取点时不飞（无行程），降落由 _open_claim_panel
-    统一处理。
+    不做起飞/降落（2026-11-12 用户规则：领取链飞行逻辑已去掉）。
     返回 (是否成功, 描述)。
     """
     if is_in_battle(win):
@@ -1079,10 +1020,6 @@ def navigate_to_claim_point(win, claim):
     if _at_claim_point(pos, claim):
         log(f"[名望] 已在领取点附近（{loc}），跳过寻路", "SYS")
         return True, f"已在领取点附近（{loc}）"
-
-    ok, fly_info = _claim_fly_up(win)
-    if not ok:
-        return False, f"去领取点前起飞失败（{fly_info}），本轮不前往"
 
     if pos is not None and pos[0].strip() == map_name:
         ok, info = game_map.open_mini_map(win)
@@ -3601,10 +3538,6 @@ def _open_claim_panel(win, race):
     ok, info = navigate_to_claim_point(win, claim)
     if not ok:
         return False, info
-    # 到达领取点先降落（含「已在领取点」跳寻路的路径）：飞行状态地面
-    # NPC 不可见，不降落会点不到逆天魔/武尊神（客栈阿旺同款实测）。
-    # 必须在 Alt+4 清屏前完成（清屏后面板/托盘隐藏，无法再操作飞行驭器）。
-    _claim_land(win)
     # 到达坐标后、领取前：Alt+4 完全清屏（静默/物理模式都执行）
     _press_alt4_clear(win)
     debug_overlay.set_phase("领取任务")

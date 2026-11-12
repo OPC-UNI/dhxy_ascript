@@ -28,10 +28,16 @@
 智戏成空（前往凤巢）按 风吟印→炎阳印→水镜印 依次点击开启三处封印
 （同三才结构：阅读序 水镜印、风吟印、炎阳印 ≠ 点击序，按「第N处封印
 已开启」计数选下一个关键词，三处全开文案「封印已经全部开启」）；
+拍毒虫小游戏（药圃除害：面板按钮模板命中即完整处理——点开始/重新开始
+→ 30s 倒计时内帧间差分找虫、毒虫模板命中即点（只拍三种毒虫，蜻蜓/
+七星虫不点）→ 每局结束面板重现，任务追踪签名未变就继续重开，签名
+变化/任务消失即完成）；
 音律小游戏（辨八音：对话「来吧，我还怕了你不成？」→ 窗口横幅
 kezhan_yinlv.png 出现 → 记住五编钟位置 → 点开始演奏 → 按序点击
 5 1 4 5 1 1 5 5 1 5 4 3 2 3 5（15 次；首个 3.4s、间隔 1.45s，
-用户 2026-11-03 实测节奏）→ 横幅消失结束）；
+用户 2026-11-03 实测节奏）→ 横幅消失结束；每次点击前检查横幅，
+消失即停止点击——未点完就消失 = 演奏失败，重新点击任务追踪绿字
+寻路回 NPC 重开一局（2026-11-12 用户规则））；
 破除封印小游戏（灵兔封印：对话「看来这就是那困住灵兔的封印了」→
 选项「消耗灵气，破除封印」→ 窗口标题 kezhan_pochufengyin.png 出现 →
 闭环控制：target 模板定位目标高亮区间 [L,R,C]（≈1 刻度宽）、HSV 金掩码
@@ -43,6 +49,7 @@ kezhan_yinlv.png 出现 → 记住五编钟位置 → 点开始演奏 → 按序
 倒计时与按钮文字走差分门区域 OCR）；
 提交物品/无跟踪两类特殊任务后续单独处理。
 """
+import difflib
 import re
 import time
 
@@ -50,6 +57,7 @@ import cv2
 import numpy as np
 from ascript.windows.hardware.keyboard import Keyboard
 from ascript.windows.system import R
+from ascript.windows.window.Window import WindowCaptureFormat
 
 from .app_utils import log, human_click, move_away, norm_text
 from . import app_utils  # 高性能模式共享设施（固定位置缓存点击）
@@ -243,7 +251,7 @@ DIALOG_OPTION_MAP = {
     "少侠将锦盒置于西侧玉案即可。":"将锦盒放到西侧玉案上",
     "有些事，知道的多了反而对自己没有好处，少侠切记。":"你说啥是啥吧，告辞！",
     "宝象国近日来了个叫阿拉普的乐师，整日鼓吹西域音律冠绝天下，还放话我":"西域乐师也敢在我大唐放肆？这便去会会他。",
-    "不瞒少侠，我三岁便能辨八音，五岁可奏《婆罗门曲》。少侠若是不信，不": YINLV_ENTRY_OPTION,
+    "我三岁便能辨八音": YINLV_ENTRY_OPTION,
     "嘿嘿，若少侠不服，我便让你一步，今日算是咱俩打个平手，日后再决胜负":"日后等你把吹牛的功夫分一半到琴艺上再说，告辞。",
     "花果山的小猴精贪玩不小心摔到了筋骨，陶小桃为此特地向孙神医要了几副":"包在我身上。",
     "切记叮嘱陶小桃一—药膏凝前需轻揉伤处，活其气血。":"孙神医仁心，我定会转达。",
@@ -273,7 +281,11 @@ DIALOG_OPTION_MAP = {
     "少侠看着面生啊……":"长安余庆轩有喜，掌柜托我送帖。",
     "朋友，买香料？三百文一两。":"我是替长安余庆轩送请柬的。",
     "哦！我的老朋友！我们宝象国规矩，喜气要闪金光一一到时我就把祖传的西":"离成亲还有些日子，你慢慢准备，我先告辞。",
-    "此中玄机嘛……你且记好：先破风吟阵，再解炎阳印，终启水镜界。这三重":"风火水三相轮回...妙极！我这便去试试。"
+    "此中玄机嘛……你且记好：先破风吟阵，再解炎阳印，终启水镜界。这三重":"风火水三相轮回...妙极！我这便去试试。",
+    "方才玉面狐狸差人传话":"好说，包在我身上。",
+    "我狐族曾被降下天雷之罚":"客栈任务",
+    "嘿嘿，少侠有所不知，这可是西域秘方，最是大补！":"听着有点奇怪，希望牛魔王喝了没事……",
+    "少侠若是不信":"来吧，我还怕了你不成？"
 
 }
 # 需要点击屏幕中间跳过的对话框文案 → 点击次数（出现则连点屏幕中间推进
@@ -290,6 +302,8 @@ DIALOG_SKIP_TEXTS = {""
     "老夫手中这封密信关系重大，须即刻面呈太上老君。此事非比寻常，还望少":2,
     "贫道观少侠龙行虎步，眉间隐现祥瑞之气一一莫非是要求问仕途姻缘？不瞒":4,
     "洛阳首富贾大财为给独女生辰宴添彩，特地重金聘了位西域厨神。可那道招":1,
+    "音律之道，首重五音十二律，宫商角徵羽各安其位。我游历大唐数月，尚未":2,
+    "少侠来得巧！我这十全大补汤就差这两味药引了。":2,
     "阁下这张嘴，倒是比你的琴技更胜一筹。":1,
     "此物辛辣之气冲鼻，确是西域厨子爱的烈味。":1,
     "少侠真乃神速！小女自幼畏寒，西域厨子说这道菜以极热配极寒，可调和体":1,
@@ -526,19 +540,61 @@ ZHIXI_PROGRESS_RE = re.compile(r"第\s*([一二三四五1-5])\s*处\s*封印\s*�
 # 三处全开文案「封印已经全部开启」（用户 2026-11-12 提供）；匹配只用短键
 # 「全部开启」——抗「已/己」OCR 混淆，且该四字组合在本任务之外不出现。
 ZHIXI_ALL_OPEN_TEXT = "全部开启"
-# ---- 拍毒虫小游戏（入口对话框 → 开始 → 拍虫） ----
-BUG_START_TEXT = "请在游戏开始后拍打毒虫，不要误伤蜻蜓和七星虫哦"  # 入口对话框文案
-BUG_START_ICON = "bug_start.png"       # 开始按钮模板（38.png 实测素材）
-DUCHONG_ICONS = ["duchong1.png", "duchong2.png", "duchong3.png"]  # 三种毒虫模板
-BUG_CHECK_INTERVAL = 0.14              # 毒虫检索间隔（秒，用户指定 140ms）
-BUG_TIMEOUT = 60                       # 小游戏总超时（秒）
-BUG_IDLE_END = 5.0                     # 连续无虫出现达到该时长视为游戏结束（秒）
+# ---- 拍毒虫小游戏（药圃除害：面板 → 开始/重新开始 → 拍虫多局） ----
+# 2026-11-12 实机录制整局实测（253 帧 @~120ms，用户确认流程）：每局 30s
+# 倒计时，结束后面板重现、按钮变「重新开始」；任务追踪签名不变就继续
+# 重开（用户规则），签名变化/任务消失即完成。虫子随机出（三种毒虫
+# 幼年+4/成年+5/彩翼+6 分 vs 银翼蜻蜓 -5/七星虫 -3 分），每只悬停约
+# 1~1.5s 后飞走——只拍三种毒虫，蜻蜓/七星虫坚决不点。
+# 面板文案「请在游戏开始后拍打毒虫，不要误伤蜻蜓和七星虫哦」不是标准
+# 对话框（dialog_tpl_gate 会跳过其 OCR），入口只按按钮模板触发。
+# 毒虫模板为飞行精灵实测裁剪（15 张覆盖三种毒虫全部姿态；判据为任何
+# 一张命中即拍，不做双模板比分数——2026-11-12 录制整局交叉验证：三种
+# 毒虫每段悬停内最高分 ≥0.81，蜻蜓/七星虫 ≤0.47、平台花丛误配 ≤0.69，
+# 阈值 0.75 两端余量充足）。
+BUG_START_ICON = "bug_start.png"             # 「开始」按钮（首次进入面板）
+BUG_RESTART_ICON = "kezhan_bug_restart.png"  # 「重新开始」按钮（每局结束后面板）
+BUG_BUTTON_REGION = (590, 520, 800, 595)     # 按钮搜索条带（实测按钮 (624,541)-(737,566)）
+BUG_BUTTON_THRESHOLD = 0.72                  # 按钮模板阈值（实测命中 0.87~1.00）
+DUCHONG_ICONS = (                            # 三种毒虫飞行精灵模板（实测裁剪）
+    "kezhan_duchong_young1.png", "kezhan_duchong_young2.png",
+    "kezhan_duchong_young3.png", "kezhan_duchong_young4.png",
+    "kezhan_duchong_young5.png", "kezhan_duchong_young6.png",
+    "kezhan_duchong_young7.png",
+    "kezhan_duchong_adult1.png", "kezhan_duchong_adult2.png",
+    "kezhan_duchong_adult3.png", "kezhan_duchong_adult4.png",
+    "kezhan_duchong_adult5.png", "kezhan_duchong_adult6.png",
+    "kezhan_duchong_color1.png", "kezhan_duchong_color2.png",
+)
+DUCHONG_THRESHOLD = 0.75               # 毒虫阈值（实测：真虫每段悬停内必有一帧 ≥0.81，
+                                       # 逐帧命中率 57~76%，一局多轮询足够补足；蜻蜓/七星虫
+                                       # ≤0.47、平台花丛误配 ≤0.69 全部拒掉）
+BUG_REGION = (380, 190, 1020, 630)     # 拍虫搜索区（实测全部落点 + 挥拍/黄圈特效范围）
+BUG_POLL_INTERVAL = 0.14               # 拍虫轮询间隔（秒，用户指定 140ms）
+BUG_DIFF_THRESHOLD = 40                # 帧间差分阈值（场景静态，只有虫/特效在动）
+BUG_CANDIDATE_PAD = 30                 # 差分候选框外扩（变化区 → 完整精灵搜索窗）
+BUG_MIN_AREA = 120                     # 差分候选最小面积（像素）
+BUG_MAX_DIM = 160                      # 差分候选最大边长（超过视为场景动画/UI）
+BUG_CLICK_COOLDOWN = 0.8               # 两次点击最小间隔（秒；一只虫点一次，防重复拍）
+BUG_ROUND_TIMEOUT = 40                 # 单局兜底超时（正常倒计时 30s）
+BUG_TOTAL_TIMEOUT = 200                # 整个小游戏（可多局）总超时（秒）
+BUG_PANEL_WAIT = 8                     # 每局结束后等待面板重现的时限（秒）
+BUG_FIRST_PANEL_WAIT = 5               # 进入时等待开始按钮的时限（秒）
+BUG_PANEL_CONFIRM = 2                  # 按钮连续命中次数判面板重现/消失（防抖）
+BUG_IDLE_END = 6.0                     # 连续无真虫命中且无面板 → 判定回合结束（秒）
+BUG_SIG_RATIO = 0.8                    # 任务签名相似阈值（同 follow_task，过滤 OCR 抖动）
+DUCHONG_FINISHED_TTL = 300             # 判定完成后抑制重进的窗口（秒）
+DUCHONG_RETRY_GAP = 10                 # 拍虫失败后的重进退避（秒，防连点）
+_duchong_finished = None               # (任务签名, 时间)：已完成的小游戏状态
+_duchong_next_try = 0.0                # 下次允许进入拍毒虫小游戏的时间戳
 # ---- 音律小游戏（辨八音：与西域乐师阿拉普比试编钟演奏） ----
 # 流程：对话「来吧，我还怕了你不成？」→ 小游戏窗口出现（kezhan_yinlv.png
 # 横幅命中）→ 记住五个编钟位置 → 点「开始演奏」（kezhan_kaishiyanzou.png，
 # 点后倒计时 3s 正式开始）→ 按固定节奏点击编钟（首个 3.4s、间隔 1.45s，
 # 用户实测）→ 窗口横幅消失即小游戏结束。编钟 1-5 对应宫商角徵羽
 # （模板 OCR：2=商 3=角 4=徵）。
+# 2026-11-12 用户规则：演奏中横幅消失就停止点击（剩余点击会落进世界
+# 画面取消寻路/误点）；没点完就消失 = 失败 → 重新点击寻路重开一局。
 YINLV_WINDOW_ICON = "kezhan_yinlv.png"       # 小游戏窗口横幅（出现=窗口已开，消失=结束）
 YINLV_START_ICON = "kezhan_kaishiyanzou.png"  # 「开始演奏」按钮
 YINLV_BELLS = ("kezhan_bianzhong1_ring.png",   # 五个编钟模板（点开始前记住位置）
@@ -570,6 +626,20 @@ YINLV_CLICK_INTERVAL = 1.45         # 编钟点击间隔（秒，用户实测 1s
 YINLV_END_TIMEOUT = 120             # 小游戏总超时（秒）
 YINLV_END_MISSES = 3                # 窗口横幅连续未命中次数即判结束（0.5s×3=1.5s
                                     # 防抖窗口，防单帧误判结束）
+# 演奏中窗口检查（每次点击前）：横幅消失 = 小游戏已结束/失败，剩余
+# 点击会落进世界画面（取消寻路/误点），必须立即停点。检查安排在点击
+# 时刻前 YINLV_CHECK_LEAD 秒，检查耗时从间隔中扣除后再补睡到点击
+# 时刻——点击节奏（相对间隔）不受检查耗时影响
+YINLV_CHECK_LEAD = 0.3              # 点击前提前检查窗口的提前量（秒）
+YINLV_CHECK_MISSES = 2              # 检查连续未命中次数判消失（单帧误判
+                                    # 会把仍在进行的演奏误判为失败）
+YINLV_CHECK_CONFIRM_WAIT = 0.15     # 检查未命中后的复查间隔（秒）
+YINLV_BAND_MARGIN = 60              # 窗口横幅搜索条带相对检测点的余量（px）
+# _play_yinlv 返回状态（三态）：定位失败（窗口仍在）与演奏中途失败
+# （窗口已消失，须重新寻路）对调用方的后续动作要求不同
+YINLV_DONE = "done"                 # 正常结束（横幅消失）
+YINLV_RETRY = "retry"               # 开始按钮/编钟定位超时：保持 armed 下轮重试
+YINLV_FAILED = "failed"             # 演奏未点完横幅就消失：已停点，重新点击寻路
 _yinlv_last_check = 0.0             # 上次 extras 窗口检测时间（限频）
 _yinlv_armed_at = 0.0               # 音律入口选项点击时间；>0 且未超时=检测开启
 # ---- 破除封印小游戏（灵兔封印：点对话框选项「消耗灵气，破除封印」后出现）----
@@ -613,9 +683,6 @@ AWANG_ARRIVE_TIMEOUT = 20                     # 走近等待超时（秒；点�
 # NPC 名字 OCR 兜底查找的排除区（任务追踪面板；面板内文案如「找阿旺。」不可点）。
 # 静态兜底；运行时由 _track_panel_region 按标题条模板动态推导（面板漂移跟随）
 TRACK_PANEL_REGION = (0, 200, 260, 600)
-# 任务追踪面板顶部小区域（标题行；客栈任务恒为面板首个任务，拍虫时快速检查用）。
-# 静态兜底；运行时由 _track_title_region 动态推导（面板漂移跟随）
-TRACK_TITLE_REGION = (0, 200, 260, 330)
 
 
 def _track_panel_region(img_np):
@@ -629,21 +696,6 @@ def _track_panel_region(img_np):
         return TRACK_PANEL_REGION
     return task_tracker.track_content_region(img_np) or TRACK_PANEL_REGION
 
-
-def _track_title_region(img_np):
-    """任务追踪面板顶部小区域（标题行，动态）。
-
-    静态 TRACK_TITLE_REGION=(0,200,260,330) 相对内容区顶（标题条底
-    ≈227）的偏移：top-27、bottom+103。模板未命中（含 img_np 为
-    None）回退静态。
-    """
-    if img_np is None:
-        return TRACK_TITLE_REGION
-    region = task_tracker.track_content_region(img_np)
-    if region is None:
-        return TRACK_TITLE_REGION
-    l, t, r, _b = region
-    return (l, max(0, t - 27), r, min(img_np.shape[0], t + 103))
 _awang_missing_logged = False                 # 模板缺失仅记录一次，避免刷日志
 _order_mismatch_logged = False                # 四象文本词/绿色词簇数不一致仅记录一次
 _dali_last_done = 0.0                         # 上次大理寺寻路完成时间（防重复触发）
@@ -1513,80 +1565,239 @@ def _pick_task_green(items, img_np):
     return _pick_order_green(items, img_np)
 
 
-def _find_duchong(win, threshold=0.75):
-    """一次截图同时检索三种毒虫模板，返回首个命中的 (x, y) 窗口坐标。
+def _bug_sig_similar(a, b, ratio=BUG_SIG_RATIO):
+    """任务签名相似判定（同 follow_task 的 0.8 阈值，过滤 OCR 单字抖动）。"""
+    return difflib.SequenceMatcher(None, a, b).ratio() >= ratio
 
-    返回模板匹配中心（与 FindImages 约定一致）。每轮只截图一次、
-    三个模板连续匹配，接近 140ms 的检索节奏。
-    """
+
+def _bug_task_state(win):
+    """当前客栈任务签名（追踪面板区域 OCR）；任务不在面板返回 ""，
+    截图/OCR 失败返回 None（调用方不得据此判定变化）。"""
     img = win.capture(force_activate=False)
     if img is None:
         return None
-    scene = np.asarray(img)[:, :, :3]
-    for icon in DUCHONG_ICONS:
-        tmpl = cv2.imread(R.img(icon))
-        if tmpl is None:
-            log(f"[客栈] 毒虫模板不可用: {icon}", "WARN")
-            continue
-        res = cv2.matchTemplate(scene, tmpl, cv2.TM_CCOEFF_NORMED)
-        _, maxv, _, maxl = cv2.minMaxLoc(res)
-        if maxv >= threshold:
-            h, w = tmpl.shape[:2]
-            return maxl[0] + w // 2, maxl[1] + h // 2
-    return None
+    img_np = np.asarray(img)
+    try:
+        items, _ = task_tracker.ocr_track(img)
+    except Exception as e:  # OCR 异常不应打断拍虫流程
+        log(f"[客栈] 拍毒虫任务追踪 OCR 失败: {e}", "WARN")
+        return None
+    task = task_tracker.find_task(
+        task_tracker.group_tasks(items, task_tracker.panel_row_xmax(img_np)),
+        TASK_TITLE)
+    if task is None:
+        return ""
+    return task_tracker.task_signature(task)
 
 
-def _has_task_fast(win):
-    """快速检查任务追踪中是否仍有客栈任务（仅 OCR 追踪面板顶部一小块，
-    客栈任务恒为面板首个任务；避免全窗 OCR 拖慢拍虫节奏）。
-    截图失败时返回 True（不判定结束）。"""
-    img = win.capture(force_activate=False)
-    if img is None:
+def _bug_task_advanced(state, sig0):
+    """任务追踪消失或签名相对 sig0 变化 → 小游戏完成/任务已推进
+    （2026-11-12 用户规则：连续重开直到任务追踪变化）。state 为
+    _bug_task_state 的返回值：None（读不到）不判、"" 为任务已消失。"""
+    if state is None:
+        return False
+    if not state:
         return True
-    items, _ = game_map.ocr_region(img, _track_title_region(np.asarray(img)))
-    return task_tracker.find_task(
-        task_tracker.group_tasks(items,
-                                 task_tracker.panel_row_xmax(np.asarray(img))),
-        TASK_TITLE) is not None
+    return bool(sig0) and not _bug_sig_similar(state, sig0)
+
+
+def _bug_capture(win):
+    """拍虫轮询截帧：BGR 数组（OpenCV 格式），force_activate=False 不抢焦点。"""
+    return win.capture(force_activate=False,
+                       format=WindowCaptureFormat.OPENCV)
+
+
+def _bug_button_pt(bgr):
+    """小游戏面板按钮中心（「重新开始」/「开始」），不在面板返回 None。
+
+    条带内两模板同帧取最高分（一次灰度转换），任一达阈值即命中；条带
+    由真实按钮位置标定（BUG_BUTTON_REGION），不做全帧兜底。
+    """
+    res = game_map.best_match_multi_np(
+        bgr, (BUG_RESTART_ICON, BUG_START_ICON), region=BUG_BUTTON_REGION)
+    best = None
+    for _, (score, pt) in res.items():
+        if score >= BUG_BUTTON_THRESHOLD and (best is None or score > best[0]):
+            best = (score, pt)
+    return None if best is None else best[1]
+
+
+def _bug_candidates(prev_bgr, cur_bgr):
+    """帧间差分候选框（整帧坐标），返回 [(x, y, w, h), ...]。
+
+    小游戏场景静态（实测整局除虫/挥拍/黄圈外像素一致），移动的只有虫子
+    和特效——差分即可低成本圈出候选，毒虫模板匹配只在小窗口内做
+    （性能规则 3 的有限条带思路，避免每轮全帧×15 模板）。
+    """
+    l, t, r, b = BUG_REGION
+    d = cv2.absdiff(cur_bgr[t:b, l:r], prev_bgr[t:b, l:r]).max(axis=2)
+    mask = (d > BUG_DIFF_THRESHOLD).astype(np.uint8) * 255
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
+    n, _, stats, _ = cv2.connectedComponentsWithStats(mask, 8)
+    out = []
+    for k in range(1, n):
+        x, y, w, h, area = (int(v) for v in stats[k][:5])
+        if area < BUG_MIN_AREA or w > BUG_MAX_DIM or h > BUG_MAX_DIM:
+            continue
+        out.append((l + x, t + y, w, h))
+    return out
+
+
+def _match_duchong(cur_bgr, boxes):
+    """候选框内匹配全部毒虫模板，返回全局最高 (score, (x, y), icon)。
+
+    双模板比分数不适用于本场景（毒虫与蜻蜓/七星虫形态差异大，实测负样本
+    最高分 0.47），任何一张毒虫模板命中即视为毒虫。
+    """
+    best = (0.0, None, None)
+    l, t, r, b = BUG_REGION
+    pad = BUG_CANDIDATE_PAD
+    for (x, y, w, h) in boxes:
+        x0, y0 = max(l, x - pad), max(t, y - pad)
+        x1, y1 = min(r, x + w + pad), min(b, y + h + pad)
+        crop = cur_bgr[y0:y1, x0:x1]
+        if crop.size == 0:
+            continue
+        for icon, (score, pt) in game_map.best_match_multi_np(
+                crop, DUCHONG_ICONS).items():
+            if score > best[0]:
+                best = (score, (x0 + pt[0], y0 + pt[1]), icon)
+    return best
+
+
+def _swat_round(win, deadline, ignore_panel_until=0.0):
+    """单局拍虫（阻塞到面板重现/长时间无虫/超时）。
+
+    每次轮询固定顺序：截帧 → 面板按钮检查（连续 BUG_PANEL_CONFIRM 次
+    命中判回合结束，ignore_panel_until 内跳过——点开始后的面板淡出帧
+    会误命中）→ 帧间差分候选 → 毒虫模板匹配 → 命中点击（全局点击冷却
+    BUG_CLICK_COOLDOWN，一只虫点一次）。返回 (状态, 本局点击数)：
+    "panel"（面板重现）/ "idle"（长时间无真虫命中）/ "timeout"。
+    """
+    clicks = 0
+    last_click = 0.0
+    last_hit = time.time()
+    panel_hits = 0
+    prev = None
+    while time.time() < deadline:
+        t0 = time.time()
+        img = _bug_capture(win)
+        if img is None:
+            time.sleep(BUG_POLL_INTERVAL)
+            continue
+        if time.time() > ignore_panel_until and _bug_button_pt(img) is not None:
+            panel_hits += 1
+            if panel_hits >= BUG_PANEL_CONFIRM:
+                return "panel", clicks
+            time.sleep(0.15)  # 隔帧复查（面板淡入淡出单帧不判）
+            prev = None       # 面板帧不参与差分（画面整体变化会污染候选）
+            continue
+        panel_hits = 0
+        if prev is not None and prev.shape == img.shape:
+            boxes = _bug_candidates(prev, img)
+            if boxes:
+                score, pt, icon = _match_duchong(img, boxes)
+                if pt is not None and score >= DUCHONG_THRESHOLD \
+                        and time.time() - last_click >= BUG_CLICK_COOLDOWN:
+                    human_click(win, pt[0], pt[1])
+                    clicks += 1
+                    last_click = time.time()
+                    last_hit = last_click
+                    log(f"[客栈] 拍中第 {clicks} 只毒虫 @({pt[0]},{pt[1]})"
+                        f"（{icon} {score:.2f}）", "SYS")
+        if time.time() - last_hit > BUG_IDLE_END:
+            return "idle", clicks
+        prev = img
+        dt = BUG_POLL_INTERVAL - (time.time() - t0)
+        if dt > 0:
+            time.sleep(dt)
+    return "timeout", clicks
 
 
 def _play_duchong(win):
-    """拍毒虫小游戏：点击开始按钮 → 循环检索三种毒虫并点击。
+    """拍毒虫小游戏完整流程（多局，阻塞执行）。
 
-    开始后每 BUG_CHECK_INTERVAL（140ms）检索一次毒虫模板（三种类型，
-    每次只会出现一只），命中即点击。结束条件（满足其一）：
-    1. 任务追踪中客栈任务消失（任务完成，每 2 秒快速检查一次）
-    2. 连续 BUG_IDLE_END 秒无虫出现
-    3. BUG_TIMEOUT 总超时兜底
-    返回 (是否成功, 描述)。
+    2026-11-12 用户确认流程：点「开始」→ 30s 倒计时内只拍三种毒虫
+    （蜻蜓/七星虫不点）→ 面板重现（按钮变「重新开始」）→ 任务追踪
+    签名未变就继续点「重新开始」重玩，签名变化/任务消失即完成。
+    结束条件：任务签名变化（含消失）/ 总超时 / 连续快速回面板
+    （点击未进入小游戏，防连点）。返回 (是否成功, 描述)。
     """
-    pt = game_map.find_template(win, BUG_START_ICON, threshold=0.75)
-    if pt is not None:
+    global _duchong_finished, _duchong_next_try
+    now = time.time()
+    if _duchong_finished is not None \
+            and now - _duchong_finished[1] <= DUCHONG_FINISHED_TTL:
+        sig = _bug_task_state(win)
+        done_sig = _duchong_finished[0]
+        if sig is not None and (
+                (not sig and not done_sig)
+                or (sig and done_sig and _bug_sig_similar(sig, done_sig))):
+            # 已完成后的残留面板：不重开，退避期内不再进入（防日志刷屏）
+            _duchong_next_try = time.time() + DUCHONG_RETRY_GAP
+            return True, "拍毒虫已完成（本轮不再重进）"
+    deadline_all = time.time() + BUG_TOTAL_TIMEOUT
+    sig0 = None          # 首次开拍前的任务签名基线
+    rounds = 0
+    clicks_total = 0
+    quick_panels = 0     # 点击后 3s 内即回面板的连击计数
+    panel_wait = BUG_FIRST_PANEL_WAIT
+    while time.time() < deadline_all:
+        # ---- 面板阶段：等开始/重新开始按钮出现 ----
+        pt = None
+        wait_until = time.time() + panel_wait
+        while time.time() < wait_until:
+            img = _bug_capture(win)
+            if img is not None:
+                pt = _bug_button_pt(img)
+                if pt is not None:
+                    break
+            time.sleep(0.2)
+        if pt is None:
+            state = _bug_task_state(win)
+            if rounds == 0:
+                return False, "拍毒虫：未检测到开始按钮（未进入小游戏）"
+            if _bug_task_advanced(state, sig0):
+                _duchong_finished = (state, time.time())
+                return True, (f"拍毒虫完成（任务已推进，共 {rounds} 局，"
+                              f"拍中 {clicks_total} 只）")
+            return True, (f"拍毒虫结束（未见面板，共 {rounds} 局，"
+                          f"拍中 {clicks_total} 只）")
+        if rounds > 0:
+            # 不再盲目重开：先确认任务追踪是否已变化
+            state = _bug_task_state(win)
+            if _bug_task_advanced(state, sig0):
+                _duchong_finished = (state, time.time())
+                return True, (f"拍毒虫完成（任务已推进，共 {rounds} 局，"
+                              f"拍中 {clicks_total} 只）")
+        else:
+            sig0 = _bug_task_state(win)
+        # ---- 点击开始/重新开始 ----
         human_click(win, pt[0], pt[1])
-        log("[客栈] 已点击毒虫小游戏开始", "SYS")
-        time.sleep(0.5)  # 等待游戏开始动画
-    deadline = time.time() + BUG_TIMEOUT
-    clicked = 0
-    last_hit = time.time()
-    last_task_check = 0.0
-    while time.time() < deadline:
-        pt = _find_duchong(win)
-        if pt is not None:
-            human_click(win, pt[0], pt[1])
-            clicked += 1
-            last_hit = time.time()
-            log(f"[客栈] 拍中第 {clicked} 只毒虫 @({pt[0]},{pt[1]})", "SYS")
-        elif time.time() - last_hit > BUG_IDLE_END:
-            return True, f"拍毒虫结束（共拍 {clicked} 只）"
-        # 客栈任务从追踪中消失即任务完成，结束小游戏。仅在无虫间歇检查
-        # （游戏仅约 20 秒，OCR 检查约 1.1s，拍虫正忙时不做检查）
-        now = time.time()
-        if now - last_hit > 2.0 and now - last_task_check > 4.0:
-            last_task_check = now
-            if not _has_task_fast(win):
-                return True, f"拍毒虫结束（共拍 {clicked} 只，客栈任务已消失）"
-        time.sleep(BUG_CHECK_INTERVAL)
-    return True, f"拍毒虫超时结束（共拍 {clicked} 只）"
+        rounds += 1
+        round_start = time.time()
+        log(f"[客栈] 拍毒虫第 {rounds} 局开始（按钮 @({pt[0]},{pt[1]})）", "SYS")
+        status, clicks = _swat_round(
+            win, round_start + BUG_ROUND_TIMEOUT,
+            ignore_panel_until=round_start + 1.0)
+        clicks_total += clicks
+        panel_wait = BUG_PANEL_WAIT
+        if status == "panel" and clicks == 0 \
+                and time.time() - round_start < 3.0:
+            quick_panels += 1
+            if quick_panels >= 3:
+                return False, ("拍毒虫：点击开始后面板未消失"
+                               "（点击未进入小游戏）")
+            continue
+        quick_panels = 0
+        if status == "idle":
+            # 长时间无真虫命中：可能面板已不出现（任务完成/自动关闭）
+            state = _bug_task_state(win)
+            if _bug_task_advanced(state, sig0):
+                _duchong_finished = (state, time.time())
+                return True, (f"拍毒虫完成（任务已推进，共 {rounds} 局，"
+                              f"拍中 {clicks_total} 只）")
+    return False, (f"拍毒虫总超时结束（{rounds} 局，"
+                   f"拍中 {clicks_total} 只）")
 
 
 def _yinlv_locate_bells(bgr):
@@ -1599,10 +1810,52 @@ def _yinlv_locate_bells(bgr):
     return res
 
 
-def _yinlv_window_gone(win, timeout=3.0):
+def _yinlv_window_band(banner_pt):
+    """以入口检测到的横幅中心推导窗口检查条带。
+
+    小游戏窗口在演奏期间固定不动（横幅检测点 2026-11-09/11-12 两次
+    实测均为 (677,262)，匹配度 1.00），条带只需覆盖检测点邻域，
+    免每帧全帧匹配（性能规则 3）。模板缺失/无检测点时退回
+    YINLV_WINDOW_REGION（当前为 None = 全帧）。条带未命中时
+    match_frame_np 仍会全帧兜底（窗口被拖动等布局漂移保险）。
+    """
+    size = game_map.template_size(YINLV_WINDOW_ICON)
+    if banner_pt is None or size is None:
+        return YINLV_WINDOW_REGION
+    w, h = size
+    m = YINLV_BAND_MARGIN
+    return (banner_pt[0] - w // 2 - m, banner_pt[1] - h // 2 - m,
+            banner_pt[0] + w // 2 + m, banner_pt[1] + h // 2 + m)
+
+
+def _yinlv_window_alive(win, band=None):
+    """窗口横幅是否仍在（演奏中每次点击前的停止信号）。
+
+    连续 YINLV_CHECK_MISSES 帧未命中才判消失（单帧误判会让仍在进行
+    的小游戏被误判失败、提前放弃整局）；截图失败视为仍在（宁可多点
+    一次也不误停）。返回 True=仍在 / False=已消失。
+    """
+    misses = 0
+    while misses < YINLV_CHECK_MISSES:
+        img = win.capture(force_activate=False)
+        if img is None:
+            return True
+        bgr = cv2.cvtColor(np.asarray(img)[:, :, :3], cv2.COLOR_RGB2BGR)
+        if game_map.match_frame_np(bgr, YINLV_WINDOW_ICON,
+                                   threshold=YINLV_THRESHOLD,
+                                   region=band) is not None:
+            return True
+        misses += 1
+        if misses < YINLV_CHECK_MISSES:
+            time.sleep(YINLV_CHECK_CONFIRM_WAIT)
+    return False
+
+
+def _yinlv_window_gone(win, timeout=3.0, region=None):
     """音律小游戏结束判定：窗口横幅连续 YINLV_END_MISSES 次轮询未命中
     （0.5s 间隔，1.5s 防抖窗口，防单帧误判）。最多观察 timeout 秒，
-    未确认消失返回 False（窗口仍在）。"""
+    未确认消失返回 False（窗口仍在）。region：窗口横幅搜索条带
+    （见 _yinlv_window_band，未命中仍全帧兜底）。"""
     misses = 0
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -1612,7 +1865,8 @@ def _yinlv_window_gone(win, timeout=3.0):
             continue
         bgr = cv2.cvtColor(np.asarray(img)[:, :, :3], cv2.COLOR_RGB2BGR)
         if game_map.match_frame_np(bgr, YINLV_WINDOW_ICON,
-                                   threshold=YINLV_THRESHOLD) is None:
+                                   threshold=YINLV_THRESHOLD,
+                                   region=region) is None:
             misses += 1
             if misses >= YINLV_END_MISSES:
                 return True
@@ -1621,17 +1875,24 @@ def _yinlv_window_gone(win, timeout=3.0):
     return False
 
 
-def _play_yinlv(win):
-    """音律小游戏完整流程（阻塞执行到窗口横幅消失）。返回 (是否完成, 描述)。
+def _play_yinlv(win, banner_pt=None):
+    """音律小游戏完整流程（阻塞执行到窗口横幅消失）。
+
+    返回 (状态, 描述)，状态为 YINLV_DONE / YINLV_RETRY / YINLV_FAILED。
 
     1. 同帧定位「开始演奏」按钮与五个编钟（编钟位置在点开始前记住；
        点开始后倒计时期间画面会变化，不能点后再定位）
     2. 点开始 → 按用户实测节奏点击（2026-11-03）：第一个编钟在点开始
        后 YINLV_FIRST_INTERVAL 秒，其后每个间隔 YINLV_CLICK_INTERVAL 秒。
        时间基准步进调度（t_next 绝对时刻），点击自身耗时（移动
-       40-90ms+点击）不累积漂移——点击落地间隔恒为 YINLV_CLICK_INTERVAL
+       40-90ms+点击）不累积漂移——点击落地间隔恒为 YINLV_CLICK_INTERVAL。
+       每次点击前检查窗口横幅（2026-11-12 用户规则）：消失立即停止
+       点击（剩余点击会落进世界画面），未点完就消失 = 演奏失败 →
+       YINLV_FAILED（调用方重新点击寻路重开一局）
     3. 等窗口横幅连续 YINLV_END_MISSES 次未命中即结束
+    banner_pt：extras 检测到的横幅中心，用于推导窗口检查条带。
     """
+    band = _yinlv_window_band(banner_pt)
     # 阶段一：定位开始按钮与全部编钟（小游戏窗口内，帧间位置稳定）
     deadline = time.time() + YINLV_LOCATE_TIMEOUT
     start_pt = None
@@ -1652,7 +1913,7 @@ def _play_yinlv(win):
             break
         time.sleep(0.3)
     if start_pt is None or bells is None:
-        return False, "音律小游戏：定位开始按钮/编钟超时（模板未命中，待校准阈值）"
+        return YINLV_RETRY, "音律小游戏：定位开始按钮/编钟超时（模板未命中，待校准阈值）"
     log(f"[客栈] 音律小游戏：已定位 5 个编钟，点击开始演奏 "
         f"@({start_pt[0]},{start_pt[1]})，首个编钟间隔 {YINLV_FIRST_INTERVAL}s", "SYS")
     # 时间基准取点开始点击前一刻：点击落地（移动 40-90ms 后）约在
@@ -1660,30 +1921,41 @@ def _play_yinlv(win):
     # 该落地延迟，从 t0 起算即可
     t0 = time.time()
     human_click(win, start_pt[0], start_pt[1])
-    # 阶段二：按固定节奏点击编钟（点击节奏优先，中途不截帧）。
-    # 序列为单轮 15 次（用户提供），点完交阶段三等结束；窗口在演奏
-    # 期间恒在，不会中途消失，故不在点击间做窗口检查
+    # 阶段二：按固定节奏点击编钟，每次点击前检查窗口横幅。
+    # 检查提前 YINLV_CHECK_LEAD 秒开始，耗时从间隔里扣除，点击仍落在
+    # t_next（节奏不变）；横幅消失立即停点——未点完消失=失败。
     deadline = time.time() + YINLV_END_TIMEOUT
     if not YINLV_CLICK_SEQ:
         log("[客栈] 音律点击顺序未配置（YINLV_CLICK_SEQ 为空），跳过点击直接等结束", "WARN")
     else:
         t_next = t0 + YINLV_FIRST_INTERVAL
         clicked = 0
+        window_gone = False
         for icon in YINLV_CLICK_SEQ:
             delay = t_next - time.time()
             if delay > 0:
-                time.sleep(delay)
+                time.sleep(max(0.0, delay - YINLV_CHECK_LEAD))
+            if not _yinlv_window_alive(win, band):
+                window_gone = True
+                break
+            # 补足检查耗时：点击落在 t_next（相对节奏不受检查影响）
+            rest = t_next - time.time()
+            if rest > 0:
+                time.sleep(rest)
             pt = bells.get(icon)
             if pt is not None:
                 human_click(win, pt[0], pt[1])
                 clicked += 1
             t_next += YINLV_CLICK_INTERVAL
         log(f"[客栈] 音律小游戏：已点击编钟 {clicked}/{len(YINLV_CLICK_SEQ)} 次", "SYS")
+        if window_gone:
+            return YINLV_FAILED, (f"音律小游戏失败：窗口横幅在点击 {clicked}/"
+                                  f"{len(YINLV_CLICK_SEQ)} 次后消失，重新寻路")
     # 阶段三：等窗口横幅消失（连续 YINLV_END_MISSES 次未命中）
     while time.time() < deadline:
-        if _yinlv_window_gone(win, timeout=5.0):
-            return True, "音律小游戏结束（窗口横幅消失）"
-    return True, f"音律小游戏超时结束（{YINLV_END_TIMEOUT}s）"
+        if _yinlv_window_gone(win, timeout=5.0, region=band):
+            return YINLV_DONE, "音律小游戏结束（窗口横幅消失）"
+    return YINLV_DONE, f"音律小游戏超时结束（{YINLV_END_TIMEOUT}s）"
 
 
 # 小游戏闭环实现见共享模块 pochufengyin（玄枢「钓鱼」复用同款窗口，
@@ -1840,6 +2112,7 @@ def _handle_follow_extras(win, items, img_np):
     返回是否已处理。
     """
     global _dali_last_done, _biwu_last_done, _baoxiang_last_done
+    global _duchong_next_try
     task = task_tracker.find_task(
         task_tracker.group_tasks(items, task_tracker.panel_row_xmax(img_np)),
         TASK_TITLE)
@@ -1848,11 +2121,17 @@ def _handle_follow_extras(win, items, img_np):
     # 特殊步骤分支各自重截；给与面板检测无帧时跳过（见 _handle_give_panel）
     bgr = _kj_frame(win, items)
     if bgr is None or not is_in_battle_frame(bgr):
-        # 拍毒虫小游戏暂不处理（毒虫模板未匹配成功，先人工操作）：
-        # 模板就绪后恢复此段即可自动开始并拍虫
-        if False and _norm_dialog_present(items, BUG_START_TEXT):
+        # 拍毒虫小游戏（药圃除害）：面板在场（开始/重新开始按钮模板命中）
+        # 即完整处理并阻塞到多局结束/任务推进。入口不许按面板文案触发
+        # ——面板不是标准对话框，dialog_tpl_gate 会跳过对话区 OCR，
+        # items 里根本没有该文案（2026-11-12 实测）。失败退避
+        # _duchong_next_try 防止点击未生效时每轮询重进连点。
+        if bgr is not None and time.time() >= _duchong_next_try \
+                and _bug_button_pt(bgr) is not None:
             ok, info = _play_duchong(win)
             log(f"[客栈] {info}", "SYS" if ok else "WARN")
+            if not ok:
+                _duchong_next_try = time.time() + DUCHONG_RETRY_GAP
             return True
         # 音律小游戏（辨八音）：仅入口选项被点击后（armed 门控）才检测
         # 窗口横幅，其他任务阶段零开销、零误配；窗口出现即完整处理
@@ -1870,12 +2149,28 @@ def _handle_follow_extras(win, items, img_np):
             if wpt is not None and score >= YINLV_THRESHOLD:
                 log(f"[客栈] 检测到音律小游戏窗口 @({wpt[0]},{wpt[1]})"
                     f"（匹配度 {score:.2f}）", "SYS")
-                ok, info = _play_yinlv(win)
-                if ok:
-                    # 小游戏结束 → 关闭检测（任务未进小游戏/处理失败的
-                    # 情况保持 armed，窗口仍在时下轮询重试）
+                status, info = _play_yinlv(win, banner_pt=wpt)
+                if status == YINLV_DONE:
+                    # 小游戏正常结束 → 关闭检测（定位失败的情况保持
+                    # armed，窗口仍在时下轮询重试）
                     _yinlv_armed_at = 0.0
-                log(f"[客栈] {info}", "SYS" if ok else "WARN")
+                elif status == YINLV_FAILED:
+                    # 演奏没点完横幅就消失 = 失败（_play_yinlv 内已停止
+                    # 点击）→ 重新点击任务追踪绿字寻路，回 NPC 重开一局。
+                    # armed 保持：重进时入口选项点击会刷新时限，窗口若
+                    # 仍在（检查误判）也仍有检测兜底
+                    log(f"[客栈] {info}", "WARN")
+                    time.sleep(0.3)  # 等小游戏窗口完全关闭、世界画面恢复
+                    ok3, info3 = task_tracker.track_task(
+                        win, TASK_TITLE, green_order=GREEN_CLICK_ORDER,
+                        green_picker=_pick_task_green)
+                    if ok3:
+                        log("[客栈] 音律小游戏失败，已重新点击任务绿字寻路", "SYS")
+                    else:
+                        log(f"[客栈] 音律小游戏失败，重新寻路点击失败: {info3}", "WARN")
+                    return True
+                else:  # YINLV_RETRY：窗口仍在，保持 armed 下轮询重试
+                    log(f"[客栈] {info}", "WARN")
                 return True
         # 破除封印小游戏（灵兔封印）：入口选项「消耗灵气，破除封印」点击后
         # （armed 门控）检测窗口标题；出现即完整处理（阻塞到标题消失）。

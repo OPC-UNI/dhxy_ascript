@@ -8,6 +8,8 @@
 追踪点嵌描述行内（镇煞阵法 y271-284/x145-203、引灯阵法 y288-301/x26-82、
 定魂阵法 y288-301/x99-158，下划线各自 y287/y304），文案阅读序≠点击序。
 """
+import time
+
 from src import kezhan
 from src import task_tracker
 
@@ -753,3 +755,413 @@ def test_near_luoyang_single_target_still_works():
     assert kezhan._near_luoyang(("洛阳城", 223, 205),
                                 kezhan.DALI_TARGET_POS) is False
 
+
+# ---- 音律小游戏：演奏中横幅消失即停点/失败重开（2026-11-12 用户规则）----
+class _YinlvWin:
+    """最小窗口桩：capture 返回固定形状 np 帧（_play_yinlv 只做转换）。"""
+
+    def __init__(self):
+        import numpy as np
+        self.frame = np.zeros((20, 20, 3), np.uint8)
+
+    def capture(self, force_activate=False):
+        return self.frame
+
+
+def _patch_yinlv(monkeypatch, window_hits, clicks, seq_len=5,
+                 locate_timeout=5.0):
+    """给 _play_yinlv 装模板桩：开始按钮+编钟必中；窗口横幅前
+    window_hits 次检查命中、之后消失（检查一次未命中还会复查一帧，
+    故消失判定消耗 2 次调用）。sleep 置空，节奏常量为 0 免真等待。"""
+    bells = {icon: (100 + i, 200)
+             for i, icon in enumerate(kezhan.YINLV_BELLS)}
+    monkeypatch.setattr(kezhan, "YINLV_CLICK_SEQ",
+                        tuple(kezhan.YINLV_BELLS)[:seq_len])
+    monkeypatch.setattr(kezhan, "YINLV_FIRST_INTERVAL", 0.0)
+    monkeypatch.setattr(kezhan, "YINLV_CLICK_INTERVAL", 0.0)
+    monkeypatch.setattr(kezhan, "YINLV_LOCATE_TIMEOUT", locate_timeout)
+    monkeypatch.setattr(kezhan.time, "sleep", lambda s: None)
+    monkeypatch.setattr(kezhan, "is_in_battle_frame", lambda bgr: False)
+    monkeypatch.setattr(kezhan, "_yinlv_locate_bells", lambda bgr: bells)
+    monkeypatch.setattr(kezhan, "human_click",
+                        lambda win, x, y, **k: clicks.append((x, y)))
+    monkeypatch.setattr(kezhan, "log", lambda *a, **k: None)
+    state = {"checks": 0}
+
+    def fake_match(bgr, icon, threshold=0.8, region=None, fallback=True):
+        if icon == kezhan.YINLV_START_ICON:
+            return (668, 552)
+        if icon == kezhan.YINLV_WINDOW_ICON:
+            state["checks"] += 1
+            return (677, 262) if state["checks"] <= window_hits else None
+        return None
+
+    monkeypatch.setattr(kezhan.game_map, "match_frame_np", fake_match)
+    return state
+
+
+def test_play_yinlv_stops_clicking_when_banner_gone(monkeypatch):
+    """横幅在点完序列前消失：立即停点（不再点剩余编钟），判失败。"""
+    clicks = []
+    _patch_yinlv(monkeypatch, window_hits=2, clicks=clicks, seq_len=5)
+    status, info = kezhan._play_yinlv(_YinlvWin(), banner_pt=None)
+    assert status == kezhan.YINLV_FAILED
+    assert "2/5" in info
+    # 开始按钮 1 次 + 编钟 2 次；第 3 个编钟前的检查发现消失 → 停点
+    assert clicks[0] == (668, 552)
+    assert len(clicks) == 3
+
+
+def test_play_yinlv_done_when_banner_stays(monkeypatch):
+    """横幅在点击期间全程在：点完整个序列 → 阶段三确认消失 → 正常结束。"""
+    clicks = []
+    _patch_yinlv(monkeypatch, window_hits=5, clicks=clicks, seq_len=5)
+    status, info = kezhan._play_yinlv(_YinlvWin(), banner_pt=None)
+    assert status == kezhan.YINLV_DONE
+    assert len(clicks) == 6  # 开始 1 + 编钟 5
+
+
+def test_play_yinlv_retry_when_locate_timeout(monkeypatch):
+    """开始按钮/编钟定位超时（窗口仍在）：返回 retry 交给调用方保持
+    armed 重试，不触发重新寻路。"""
+    clicks = []
+    _patch_yinlv(monkeypatch, window_hits=0, clicks=clicks,
+                 locate_timeout=0.0)
+    status, info = kezhan._play_yinlv(_YinlvWin(), banner_pt=None)
+    assert status == kezhan.YINLV_RETRY
+    assert clicks == []
+
+
+def test_yinlv_window_band_from_banner_pt(monkeypatch):
+    """检查条带按检测点+模板尺寸+余量推导；无检测点退回全帧常量。"""
+    monkeypatch.setattr(kezhan.game_map, "template_size",
+                        lambda icon: (302, 28))
+    assert kezhan._yinlv_window_band((677, 262)) == (
+        677 - 151 - kezhan.YINLV_BAND_MARGIN,
+        262 - 14 - kezhan.YINLV_BAND_MARGIN,
+        677 + 151 + kezhan.YINLV_BAND_MARGIN,
+        262 + 14 + kezhan.YINLV_BAND_MARGIN)
+    assert kezhan._yinlv_window_band(None) is kezhan.YINLV_WINDOW_REGION
+
+
+def _patch_extras_for_yinlv(monkeypatch, play_result, tracks):
+    """给 _handle_follow_extras 装桩：armed 命中 → _play_yinlv 返回
+    play_result；记录重新寻路的 track_task 调用。"""
+    monkeypatch.setattr(kezhan.task_tracker, "find_task",
+                        lambda tasks, title: None)
+    monkeypatch.setattr(kezhan.task_tracker, "group_tasks",
+                        lambda items, xmax=None: [])
+    monkeypatch.setattr(kezhan.task_tracker, "panel_row_xmax",
+                        lambda img: None)
+    monkeypatch.setattr(kezhan, "_kj_frame", lambda win, items: object())
+    monkeypatch.setattr(kezhan, "_bug_button_pt", lambda bgr: None)
+    monkeypatch.setattr(kezhan, "is_in_battle_frame", lambda bgr: False)
+    monkeypatch.setattr(kezhan.game_map, "best_match_np",
+                        lambda bgr, icon, region=None: (1.0, (677, 262)))
+    monkeypatch.setattr(kezhan, "_play_yinlv",
+                        lambda win, banner_pt=None: play_result)
+    monkeypatch.setattr(kezhan.task_tracker, "track_task",
+                        lambda win, title, **k: tracks.append(k) or (True, "ok"))
+    monkeypatch.setattr(kezhan.time, "sleep", lambda s: None)
+    monkeypatch.setattr(kezhan, "log", lambda *a, **k: None)
+    monkeypatch.setattr(kezhan, "_yinlv_armed_at", time.time())
+    monkeypatch.setattr(kezhan, "_yinlv_last_check", 0.0)
+
+
+def test_yinlv_failure_reclicks_track_link(monkeypatch):
+    """演奏中途失败 → 重新点击任务追踪绿字寻路；armed 保持（重进
+    时入口选项点击会刷新时限）。"""
+    tracks = []
+    _patch_extras_for_yinlv(
+        monkeypatch, (kezhan.YINLV_FAILED, "窗口横幅在点击 2/15 次后消失"),
+        tracks)
+    assert kezhan._handle_follow_extras(object(), [], None) is True
+    assert len(tracks) == 1
+    assert tracks[0]["green_order"] == kezhan.GREEN_CLICK_ORDER
+    assert kezhan._yinlv_armed_at > 0  # 失败不关闭检测
+
+
+def test_yinlv_done_disarms_and_skips_repath(monkeypatch):
+    """正常结束 → 关闭 armed 检测，不重新点击寻路。"""
+    tracks = []
+    _patch_extras_for_yinlv(
+        monkeypatch, (kezhan.YINLV_DONE, "音律小游戏结束"), tracks)
+    assert kezhan._handle_follow_extras(object(), [], None) is True
+    assert tracks == []
+    assert kezhan._yinlv_armed_at == 0.0
+
+
+# ---- 拍毒虫小游戏（药圃除害，2026-11-12 实机录制标定） ----
+
+def test_bug_button_pt_prefers_higher_score(monkeypatch):
+    seen = {}
+
+    def fake_match(img, icons, region=None):
+        seen["icons"] = tuple(icons)
+        seen["region"] = region
+        return {kezhan.BUG_RESTART_ICON: (0.90, (680, 553)),
+                kezhan.BUG_START_ICON: (0.85, (681, 553))}
+
+    monkeypatch.setattr(kezhan.game_map, "best_match_multi_np", fake_match)
+    assert kezhan._bug_button_pt(object()) == (680, 553)
+    assert seen["icons"] == (kezhan.BUG_RESTART_ICON, kezhan.BUG_START_ICON)
+    assert seen["region"] == kezhan.BUG_BUTTON_REGION
+
+
+def test_bug_button_pt_below_threshold_returns_none(monkeypatch):
+    monkeypatch.setattr(
+        kezhan.game_map, "best_match_multi_np",
+        lambda img, icons, region=None: {
+            kezhan.BUG_RESTART_ICON: (0.60, (680, 553)),
+            kezhan.BUG_START_ICON: (0.55, (681, 553))})
+    assert kezhan._bug_button_pt(object()) is None
+
+
+def test_bug_candidates_diff_finds_moving_blob():
+    import numpy as np
+    l, t, _, _ = kezhan.BUG_REGION
+    prev = np.zeros((831, 1378, 3), np.uint8)
+    cur = prev.copy()
+    cur[t + 100:t + 150, l + 200:l + 260] = 255
+    boxes = kezhan._bug_candidates(prev, cur)
+    assert boxes == [(l + 200, t + 100, 60, 50)]
+
+
+def test_bug_candidates_ignores_static_scene():
+    import numpy as np
+    frame = np.zeros((831, 1378, 3), np.uint8)
+    assert kezhan._bug_candidates(frame, frame.copy()) == []
+
+
+def test_match_duchong_returns_best_with_full_frame_offset(monkeypatch):
+    import numpy as np
+
+    def fake_match(crop, icons):
+        assert tuple(icons) == kezhan.DUCHONG_ICONS
+        return {kezhan.DUCHONG_ICONS[0]: (0.66, (10, 12)),
+                kezhan.DUCHONG_ICONS[1]: (0.90, (30, 20))}
+
+    monkeypatch.setattr(kezhan.game_map, "best_match_multi_np", fake_match)
+    l, t, _, _ = kezhan.BUG_REGION
+    score, pt, icon = kezhan._match_duchong(
+        np.zeros((831, 1378, 3), np.uint8), [(l + 100, t + 100, 40, 40)])
+    assert score == 0.90
+    assert icon == kezhan.DUCHONG_ICONS[1]
+    # 候选框外扩 BUG_CANDIDATE_PAD 后的裁剪原点再叠加模板中心
+    assert pt == (l + 70 + 30, t + 70 + 20)
+
+
+def test_bug_task_advanced_states():
+    assert kezhan._bug_task_advanced(None, "sig") is False  # 读不到不判
+    assert kezhan._bug_task_advanced("", "sig") is True     # 任务已消失
+    base = "客栈任务|和阿翠一起前往药圃"
+    assert kezhan._bug_task_advanced(base + "。", base) is False  # 单字抖动
+    assert kezhan._bug_task_advanced("客栈任务|回到女儿村找阿翠", base) is True
+    assert kezhan._bug_task_advanced(base, None) is False   # 无基线不判
+
+
+def test_bug_task_state_capture_failure():
+    class W:
+        def capture(self, **kwargs):
+            return None
+    assert kezhan._bug_task_state(W()) is None
+
+
+def test_swat_round_clicks_once_and_reports_panel(monkeypatch):
+    import numpy as np
+    clicks = []
+    monkeypatch.setattr(kezhan, "human_click",
+                        lambda win, x, y, **k: clicks.append((x, y)))
+    monkeypatch.setattr(kezhan, "log", lambda *a, **k: None)
+    monkeypatch.setattr(kezhan.time, "sleep", lambda s: None)
+    monkeypatch.setattr(kezhan, "_bug_candidates",
+                        lambda prev, cur: [(400, 300, 40, 40)])
+    monkeypatch.setattr(kezhan, "_match_duchong",
+                        lambda img, boxes: (0.9, (500, 400), "tpl"))
+    state = {"n": -1}
+
+    def fake_capture(win):
+        state["n"] += 1
+        return np.zeros((10, 10, 3), np.uint8)
+
+    monkeypatch.setattr(kezhan, "_bug_capture", fake_capture)
+    # 前 4 帧无面板（可拍虫），第 5/6 帧连续命中面板按钮
+    monkeypatch.setattr(kezhan, "_bug_button_pt",
+                        lambda img: (680, 553) if state["n"] >= 4 else None)
+    status, clicks_n = kezhan._swat_round(object(), time.time() + 2.0)
+    assert status == "panel"
+    assert clicks_n == 1          # 全局点击冷却 0.8s 内只点一次
+    assert clicks == [(500, 400)]
+
+
+def test_swat_round_idle_returns(monkeypatch):
+    import numpy as np
+    monkeypatch.setattr(kezhan, "_bug_capture",
+                        lambda win: np.zeros((10, 10, 3), np.uint8))
+    monkeypatch.setattr(kezhan, "_bug_button_pt", lambda img: None)
+    monkeypatch.setattr(kezhan, "_bug_candidates", lambda prev, cur: [])
+    monkeypatch.setattr(kezhan, "BUG_IDLE_END", 0.0)
+    monkeypatch.setattr(kezhan.time, "sleep", lambda s: None)
+    status, clicks = kezhan._swat_round(object(), time.time() + 1.0)
+    assert status == "idle" and clicks == 0
+
+
+def test_swat_round_ignores_below_threshold_match(monkeypatch):
+    """候选有动但模板分不足（蜻蜓/特效/花丛误配）→ 不点击。"""
+    import numpy as np
+
+    class W:
+        def __init__(self):
+            self.n = 0
+
+        def capture(self, **kwargs):
+            self.n += 1
+            return np.zeros((10, 10, 3), np.uint8)
+
+    clicks = []
+    monkeypatch.setattr(kezhan, "human_click",
+                        lambda win, x, y, **k: clicks.append((x, y)))
+    monkeypatch.setattr(kezhan, "log", lambda *a, **k: None)
+    monkeypatch.setattr(kezhan.time, "sleep", lambda s: None)
+    monkeypatch.setattr(kezhan, "_bug_button_pt", lambda img: None)
+    monkeypatch.setattr(kezhan, "_bug_candidates",
+                        lambda prev, cur: [(400, 300, 40, 40)])
+    monkeypatch.setattr(kezhan, "_match_duchong",
+                        lambda img, boxes: (0.5, (500, 400), "tpl"))
+    monkeypatch.setattr(kezhan, "BUG_IDLE_END", 0.0)
+    status, clicks_n = kezhan._swat_round(W(), time.time() + 1.0)
+    assert status == "idle" and clicks_n == 0
+    assert clicks == []
+
+
+def _patch_duchong_play(monkeypatch, states, swat_results, clicks,
+                        button_pt=(680, 553)):
+    """给 _play_duchong 装桩：固定面板按钮、可编排任务签名与单局结果。"""
+    import numpy as np
+    monkeypatch.setattr(kezhan, "_duchong_finished", None)
+    monkeypatch.setattr(kezhan, "_duchong_next_try", 0.0)
+    monkeypatch.setattr(kezhan.time, "sleep", lambda s: None)
+    monkeypatch.setattr(kezhan, "log", lambda *a, **k: None)
+    monkeypatch.setattr(kezhan, "_bug_capture",
+                        lambda win: np.zeros((10, 10, 3), np.uint8))
+    monkeypatch.setattr(kezhan, "_bug_button_pt", lambda img: button_pt)
+    monkeypatch.setattr(
+        kezhan, "_swat_round",
+        lambda win, deadline, ignore_panel_until=0.0: swat_results.pop(0))
+    monkeypatch.setattr(kezhan, "human_click",
+                        lambda win, x, y, **k: clicks.append((x, y)))
+    state_iter = iter(states)
+    monkeypatch.setattr(kezhan, "_bug_task_state",
+                        lambda win: next(state_iter, states[-1]))
+
+
+def test_play_duchong_stops_when_task_advanced(monkeypatch):
+    clicks = []
+    _patch_duchong_play(monkeypatch, ["sigA", "sigB"], [("panel", 2)], clicks)
+    ok, info = kezhan._play_duchong(object())
+    assert ok and "任务已推进" in info
+    assert clicks == [(680, 553)]  # 只点了一次「开始」，任务推进后不再重开
+
+
+def test_play_duchong_restarts_until_task_changes(monkeypatch):
+    clicks = []
+    _patch_duchong_play(monkeypatch, ["sigA", "sigA", "sigB"],
+                        [("panel", 1), ("panel", 2)], clicks)
+    ok, info = kezhan._play_duchong(object())
+    assert ok and "任务已推进" in info
+    assert clicks == [(680, 553), (680, 553)]  # 开始 + 重新开始
+    assert "2 局" in info
+
+
+def test_play_duchong_quick_panel_guard(monkeypatch):
+    clicks = []
+    _patch_duchong_play(monkeypatch, ["sigA"] * 10,
+                        [("panel", 0), ("panel", 0), ("panel", 0)], clicks)
+    ok, info = kezhan._play_duchong(object())
+    assert ok is False and "面板未消失" in info
+    assert len(clicks) == 3  # 连续 3 次点击未进入小游戏即放弃
+
+
+def test_play_duchong_skips_when_already_finished(monkeypatch):
+    clicks = []
+    _patch_duchong_play(monkeypatch, ["sigA"], [], clicks)
+    monkeypatch.setattr(kezhan, "_duchong_finished",
+                        ("sigA", time.time()))
+    ok, info = kezhan._play_duchong(object())
+    assert ok and "不再重进" in info
+    assert clicks == []
+
+
+def test_play_duchong_without_panel_returns_false(monkeypatch):
+    clicks = []
+    _patch_duchong_play(monkeypatch, ["sigA"], [], clicks, button_pt=None)
+    monkeypatch.setattr(kezhan, "BUG_FIRST_PANEL_WAIT", 0.0)
+    ok, info = kezhan._play_duchong(object())
+    assert ok is False and "未检测到开始按钮" in info
+    assert clicks == []
+
+
+def test_extras_enters_duchong_on_panel_button(monkeypatch):
+    import numpy as np
+    monkeypatch.setattr(kezhan, "_kj_frame",
+                        lambda win, items: np.zeros((10, 10, 3), np.uint8))
+    monkeypatch.setattr(kezhan, "is_in_battle_frame", lambda bgr: False)
+    monkeypatch.setattr(kezhan, "_bug_button_pt", lambda bgr: (680, 553))
+    monkeypatch.setattr(kezhan, "_duchong_next_try", 0.0)
+    monkeypatch.setattr(kezhan, "log", lambda *a, **k: None)
+    calls = []
+    monkeypatch.setattr(kezhan, "_play_duchong",
+                        lambda win: calls.append(1) or (True, "拍毒虫完成"))
+    monkeypatch.setattr(kezhan.task_tracker, "find_task",
+                        lambda tasks, title: None)
+    monkeypatch.setattr(kezhan.task_tracker, "group_tasks",
+                        lambda items, xmax=None: [])
+    monkeypatch.setattr(kezhan.task_tracker, "panel_row_xmax",
+                        lambda img: None)
+    assert kezhan._handle_follow_extras(object(), [], None) is True
+    assert calls == [1]
+
+
+def test_extras_duchong_failure_sets_retry_gap(monkeypatch):
+    import numpy as np
+    monkeypatch.setattr(kezhan, "_kj_frame",
+                        lambda win, items: np.zeros((10, 10, 3), np.uint8))
+    monkeypatch.setattr(kezhan, "is_in_battle_frame", lambda bgr: False)
+    monkeypatch.setattr(kezhan, "_bug_button_pt", lambda bgr: (680, 553))
+    monkeypatch.setattr(kezhan, "_duchong_next_try", 0.0)
+    monkeypatch.setattr(kezhan, "log", lambda *a, **k: None)
+    monkeypatch.setattr(kezhan, "_play_duchong", lambda win: (False, "fail"))
+    monkeypatch.setattr(kezhan.task_tracker, "find_task",
+                        lambda tasks, title: None)
+    monkeypatch.setattr(kezhan.task_tracker, "group_tasks",
+                        lambda items, xmax=None: [])
+    monkeypatch.setattr(kezhan.task_tracker, "panel_row_xmax",
+                        lambda img: None)
+    before = time.time()
+    kezhan._handle_follow_extras(object(), [], None)
+    assert kezhan._duchong_next_try >= before + kezhan.DUCHONG_RETRY_GAP - 1.0
+
+
+def test_extras_duchong_skip_during_retry_gap(monkeypatch):
+    import numpy as np
+    monkeypatch.setattr(kezhan, "_kj_frame",
+                        lambda win, items: np.zeros((10, 10, 3), np.uint8))
+    monkeypatch.setattr(kezhan, "is_in_battle_frame", lambda bgr: False)
+    monkeypatch.setattr(kezhan, "_bug_button_pt", lambda bgr: (680, 553))
+    monkeypatch.setattr(kezhan, "_duchong_next_try", time.time() + 60)
+    monkeypatch.setattr(kezhan, "log", lambda *a, **k: None)
+    calls = []
+    monkeypatch.setattr(kezhan, "_play_duchong",
+                        lambda win: calls.append(1) or (True, "ok"))
+    monkeypatch.setattr(kezhan.task_tracker, "find_task",
+                        lambda tasks, title: None)
+    monkeypatch.setattr(kezhan.task_tracker, "group_tasks",
+                        lambda items, xmax=None: [])
+    monkeypatch.setattr(kezhan.task_tracker, "panel_row_xmax",
+                        lambda img: None)
+    # 退避期内继续走后续 extras 链：给与面板/对话处理装桩
+    monkeypatch.setattr(kezhan, "_handle_give_panel", lambda win, bgr: False)
+    monkeypatch.setattr(kezhan, "_handle_dialog_options",
+                        lambda *a, **k: False)
+    kezhan._handle_follow_extras(object(), [], None)
+    assert calls == []

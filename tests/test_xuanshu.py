@@ -561,20 +561,23 @@ def test_run_cycle_uses_shared_confirm_rule(monkeypatch):
 
 
 # ---- 面板缺席时的遮挡负条件（用户 2026-11-12 规则配套） ----
-def test_task_gone_occluded_dialog_and_team_panels(monkeypatch):
-    """标准对话框命中即判遮挡（背包/地图/队伍由帧内模板判定）。"""
+def test_task_gone_occluded_dialog_not_occluder(monkeypatch):
+    """标准对话框不算遮挡（用户 2026-11-12 确认：对话框不挡追踪面板）。
+
+    对话框在场时面板照样可读，面板缺席即任务结束——把对话框当遮挡会
+    让已完成任务卡在消失确认循环里空转（15:03 实测空转到 300s 超时）。
+    遮挡名单只剩背包/世界地图/小地图/组号队伍面板。
+    """
     calls = []
-    monkeypatch.setattr(xuanshu, "dialog_frame_score",
-                        lambda frame: 0.99)
     monkeypatch.setattr(xuanshu.game_map, "match_frame_np",
                         lambda img, icon, **k: calls.append(icon) or None)
-    assert xuanshu._task_gone_occluded(Image.new("RGB", (1378, 831))) is True
-    assert calls == []  # 对话框先命中：不再做模板匹配
+    monkeypatch.setattr(xuanshu.tab_group, "active", lambda: False)
+    assert xuanshu._task_gone_occluded(Image.new("RGB", (1378, 831))) is False
+    assert len(calls) == 3  # 仅查背包/世界地图/小地图三个模板
 
 
 def test_task_gone_occluded_no_occluder(monkeypatch):
     """无遮挡面板 → False（继续按面板缺席判完成）。"""
-    monkeypatch.setattr(xuanshu, "dialog_frame_score", lambda frame: 0.3)
     monkeypatch.setattr(xuanshu.game_map, "match_frame_np",
                         lambda img, icon, **k: None)
     monkeypatch.setattr(xuanshu.tab_group, "active", lambda: False)
@@ -584,7 +587,6 @@ def test_task_gone_occluded_no_occluder(monkeypatch):
 
 def test_task_gone_occluded_bag_panel(monkeypatch):
     """背包面板标志模板命中 → 判遮挡。"""
-    monkeypatch.setattr(xuanshu, "dialog_frame_score", lambda frame: 0.3)
     monkeypatch.setattr(xuanshu.game_map, "match_frame_np",
                         lambda img, icon, **k: (1, 1) if "bag_box" in icon
                         else None)
@@ -600,7 +602,6 @@ def test_task_gone_occluded_team_only_in_tab_group_mode(monkeypatch):
     """
     import src.team as team_mod
     calls = []
-    monkeypatch.setattr(xuanshu, "dialog_frame_score", lambda frame: 0.3)
     monkeypatch.setattr(xuanshu.game_map, "match_frame_np",
                         lambda img, icon, **k: None)
     monkeypatch.setattr(team_mod, "panel_visible_in",
@@ -618,20 +619,6 @@ def test_task_gone_occluded_team_only_in_tab_group_mode(monkeypatch):
     assert calls == [1]
 
 
-# ---- 面板缺席 + 标准对话框：先处理对话框再判消失（2026-11-12 实测） ----
-def test_standard_dialog_present_none_is_false():
-    """无掩码帧（None）按无对话框处理，不得抛异常。"""
-    assert xuanshu._standard_dialog_present(None) is False
-
-
-def test_standard_dialog_present_uses_frame_score(monkeypatch):
-    """命中判定与遮挡负条件同一阈值（dialog_frame_score）。"""
-    monkeypatch.setattr(xuanshu, "dialog_frame_score", lambda frame: 0.9)
-    assert xuanshu._standard_dialog_present(Image.new("RGB", (40, 40))) is True
-    monkeypatch.setattr(xuanshu, "dialog_frame_score", lambda frame: 0.3)
-    assert xuanshu._standard_dialog_present(Image.new("RGB", (40, 40))) is False
-
-
 def test_handle_dialogs_option_click(monkeypatch):
     """共享对话框处理链：DIALOG_OPTION_MAP 命中 → 点绿字选项即已处理。"""
     dtxt, opt = next(iter(xuanshu.DIALOG_OPTION_MAP.items()))
@@ -644,14 +631,12 @@ def test_handle_dialogs_option_click(monkeypatch):
     assert clicks == [opt]
 
 
-def test_follow_task_dialog_occlusion_handles_dialog_first(monkeypatch):
-    """面板缺席但标准对话框在场：先处理对话框，不直接进消失确认。
+def test_follow_task_dialog_present_does_not_block_gone(monkeypatch):
+    """面板缺席 + 标准对话框在场 → 直接判任务完成，不等对话框推进。
 
-    回归 2026-11-12 玄枢轶闻找垂钓老者（15:03~15:05）：任务完成后面板
-    已自动收起，屏幕上残留剧情对话框——消失确认的遮挡负条件因此持续
-    推迟判定，而剧情对话点屏只在任务面板在场的分支里运行，形成死循
-    环（每 6s 空转「面板不在场但其它面板在场，不判定任务消失」）。
-    修复后对话框先被处理，关闭后才进入消失确认。
+    用户 2026-11-12 确认对话框不挡追踪面板：修复前遮挡负条件把对话框
+    当遮挡，任务完成后要等收尾剧情对话点完（多页时白等 10s+）甚至
+    空转到 300s 超时。现在对话框不参与完成判定。
     """
     events = []
     confirms = []
@@ -662,15 +647,11 @@ def test_follow_task_dialog_occlusion_handles_dialog_first(monkeypatch):
         confirms.append(kwargs)
         return True
 
-    dialog_states = [True, False]  # 首轮对话框在场，处理后续消失
     monkeypatch.setattr(xuanshu, "_confirm_task_gone", _confirm)
-    monkeypatch.setattr(xuanshu, "_standard_dialog_present",
-                        lambda img_np: dialog_states.pop(0)
-                        if dialog_states else False)
     monkeypatch.setattr(xuanshu, "_handle_dialogs",
                         lambda *a, **k: events.append("dialog") or False)
 
     ok, _info = xuanshu.follow_task(win, "常规玩法", timeout=30)
     assert ok is False  # 任务从未出现：假完成防护（原语义）
-    assert events == ["dialog", "confirm"]  # 先处理对话框，再确认消失
+    assert events == ["confirm"]  # 不因对话框推迟完成判定
 
