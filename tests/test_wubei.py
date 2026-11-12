@@ -635,3 +635,4 @@ def test_claim_task_replace_allows_existing_task(monkeypatch):
     ok, info, frame = wubei._claim_task(_FakeWin(), allow_existing=True)
     assert ok is False and info == "入口失败"
     assert called == [1]  # 已进入领取入口流程
+

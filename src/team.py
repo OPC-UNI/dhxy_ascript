@@ -684,6 +684,21 @@ def _is_panel_open(win):
     return _panel_open_in(win.capture(force_activate=False))
 
 
+def panel_visible_in(img):
+    """帧内判定队伍相关面板（队伍面板/申请加入面板）是否在场。
+
+    供 follow 任务消失确认的遮挡负条件复用：这些面板打开时会盖住
+    任务追踪面板（2026-11-11 实测残留队伍面板盖住追踪面板），标题条
+    模板未命中但任务其实仍在。复用调用方已截帧，不重新截窗。
+    """
+    if img is None:
+        return False
+    if _panel_open_in(img):
+        return True
+    return game_map.find_template_in(img, ZUDUI_SHENQINGJIARU_ICON,
+                                     _TEMPLATE_THRESHOLD) is not None
+
+
 def _wait_panel(win):
     """等待队伍面板打开（duiwumianban 模板）。"""
     for _ in range(_PANEL_WAIT_TRIES):

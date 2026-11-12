@@ -1622,6 +1622,8 @@ def _follow_to_done(win, first_items=None):
     t0 = time.time()
     # chuyijuebao_check=False：锄遗聚宝是玄枢轶闻专属小游戏，修罗流程
     # 不会出现——逐轮询全帧模板匹配（~30ms/0.5s）纯白耗（2026-11-09）
+    # 任务完成由战斗驱动（用户 2026-11-12）：看打进入战斗 → 战斗结束
+    # → 战斗结束路径判定任务消失 → 回城符返程领任务
     ok, info = follow_task(win, TASK_TITLE, prefix="修罗",
                            extra_dialog_handler=_handle_fight_dialog,
                            fallback_keywords=TASK_FALLBACK_TEXTS,

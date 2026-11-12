@@ -192,3 +192,37 @@ def test_click_screen_center_single_click_no_capture(monkeypatch):
     monkeypatch.setattr(dialog_common.time, "sleep", lambda s: None)
     dialog_common._click_screen_center(_Win(), times=1, prefix="测试")
     assert calls == []
+
+
+# ---- MoveWatch：人物移动直接信号（任务消失确认共用，2026-11-12） ----
+def test_move_watch_static_then_standing(monkeypatch):
+    """位置区像素不变：首帧建基线（按移动），连续不变后判站定。"""
+    import numpy as np
+    monkeypatch.setattr(dialog_common.app_utils,
+                        "track_walk_idle_seconds", lambda: 1e9)
+    frame = np.zeros((831, 1378, 3), np.uint8)
+    watch = dialog_common.MoveWatch()
+    assert watch.walking(None, frame) is True   # 首帧无基线：偏移动
+    assert watch.walking(None, frame) is False  # 连续不变=站定
+
+
+def test_move_watch_moving_detected(monkeypatch):
+    """位置区像素变化 → 移动（阈值 0.3，站立 ≤0.26 / 行走 ≥0.50 标定）。"""
+    import numpy as np
+    monkeypatch.setattr(dialog_common.app_utils,
+                        "track_walk_idle_seconds", lambda: 1e9)
+    monkeypatch.setattr(dialog_common, "STORY_MOVE_BACKOFF", 0.0)
+    watch = dialog_common.MoveWatch()
+    frame = np.zeros((831, 1378, 3), np.uint8)
+    assert watch.walking(None, frame) is True
+    frame2 = np.zeros_like(frame)
+    frame2[60:90, 45:222] = 200  # 地图位置文字区域变化（坐标刷新）
+    assert watch.walking(None, frame2) is True
+
+
+def test_move_watch_unknown_without_frame(monkeypatch):
+    """无帧可查返回 None（调用方自定默认方向，本类不猜测）。"""
+    monkeypatch.setattr(dialog_common.app_utils,
+                        "track_walk_idle_seconds", lambda: 1e9)
+    watch = dialog_common.MoveWatch()
+    assert watch.walking(None, None) is None

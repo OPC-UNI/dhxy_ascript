@@ -2557,12 +2557,6 @@ def _follow_kezhan(win):
                            green_order=GREEN_CLICK_ORDER,
                            progress_key=_order_progress_key,
                            green_picker=_pick_task_green,
-                           # 客栈任务在即追踪面板必在（无任务时游戏自动
-                           # 收起面板）：任务完成瞬间面板消失若仍要求
-                           # 面板在场，任务消失确认永远不判定、空转到
-                           # 跟踪超时才去领取（2026-11-11 16:29/16:33
-                           # 实测各卡 2~3 分钟）；面板缺席按完成处理
-                           task_gone_require_panel=False,
                            # 模板门控：标准对话框模板或奇遇横幅模板任一命中
                            # 才做对话区 OCR（奇遇无标准边框，用 kezhan_qiyu.png
                            # 补门——两模板都未命中即跳过 OCR，高配模式省

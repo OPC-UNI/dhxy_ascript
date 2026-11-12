@@ -407,28 +407,9 @@ def test_verify_find_awang_delegates_to_walk_to_dali(monkeypatch):
     assert ok is True and info == "已点击阿旺"
 
 
-# ---- 任务消失确认：客栈允许面板缺席（2026-11-11 16:29/16:33 实测） ----
-def test_follow_kezhan_disables_panel_requirement(monkeypatch):
-    """客栈 follow_task 必须传 task_gone_require_panel=False。
-
-    游戏在无追踪任务时会把「任务追踪」面板自动收起（只剩左缘小箭头）：
-    客栈任务在交付对话点完的瞬间面板即消失，若仍要求面板在场，任务
-    消失确认永远不判定、空转到跟踪超时（300s）才去领取（实测卡 2~3
-    分钟）。客栈任务在即面板必在，面板没了即完成。
-    """
-    seen = {}
-
-    def _fake_follow(win, title, **kwargs):
-        seen["title"] = title
-        seen.update(kwargs)
-        return True, "任务已从任务追踪中消失"
-
-    monkeypatch.setattr(kezhan, "follow_task", _fake_follow)
-    status, info = kezhan._follow_kezhan(object())
-    assert status == "done"
-    assert seen["task_gone_require_panel"] is False
-    assert seen["prefix"] == "客栈"
-
+# ---- 任务消失判定：面板缺席处理已统一到 xuanshu._confirm_task_gone
+#      （2026-11-12 用户规则：缺席+站定=完成、缺席+寻路中=任务仍在），
+#      客栈不再传 per-task 参数 ----
 
 # ---- 阿旺走近点按屏幕左右侧取侧（2026-11-11 用户规则） ----
 class _AwangWin:

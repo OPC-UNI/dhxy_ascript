@@ -83,7 +83,8 @@ from .dialog_common import (DAILY_LIMIT_TEXT, DAILY_LIMIT_INFO,
                             DIALOG_LOSE_TEXTS, DIALOG_SKIP_CLICKS,
                             SCREEN_CENTER_POS,
                             dialog_ocr_skip, clear_blocking_dialog,
-                            StoryDialogDismisser)
+                            StoryDialogDismisser,
+                            dialog_frame_score, DIALOG_FRAME_THRESHOLD)
 # 每日任务次数已满的对话文案（出现即结束任务循环）
 # 需要点击屏幕中间跳过的对话框文案 → 点击次数（出现则连点屏幕中间推进
 # 对话，同 kezhan.DIALOG_SKIP_TEXTS）；不同文案要推进的屏数不同，次数
@@ -120,6 +121,7 @@ DIALOG_OPTION_MAP = {
     # 与领取对话框的「玄枢轶闻」选项 (490,427) 共用一键、互相覆写，
     # 领取缓存点击必现点偏 2026-10-25）
     "少侠有什么事吗？": "玄闻辨真（玄枢轶闻）",
+    "凤姑娘":"玄枢轶闻",
     "太阳的别称是什么":"金乌",
     "浑天仪":"观测星星的位置",
     "大唐的都城":"长安",
@@ -251,10 +253,10 @@ TASK_GONE_GATE_POLL_INTERVAL = 0.2 # 证据已足时等战斗线程确认门的�
 # （判错任务消失 → 复查发现仍在 → 跳过返程继续跟踪，~2s 自愈）。
 # 静态值为标定基准；运行时由 _task_gone_region 按内容区位置动态推导
 # （内容区顶=标题条底≈227：条带 top=内容区顶-18≈210、bottom=+242≈470，
-# 与标定值一致，面板漂移时跟随）。标题条未命中（面板被关闭/折叠）
-# 时 _task_gone_region 返回 None，该帧不计任务消失证据，不回退
-# 静态条带——面板不在场时条带 OCR 必然为空，回退会把「面板关闭」
-# 误判成「任务消失」（2026-11-11 用户实机）。
+# 与标定值一致，面板漂移时跟随）。标题条未命中时 _task_gone_region
+# 返回 None，_confirm_task_gone 回退本静态条带采集证据——游戏在无
+# 追踪任务时自动收起面板（任务追踪消失=任务结束，用户 2026-11-12），
+# 并查遮挡负条件防「其它面板盖住追踪面板」误判。
 TASK_GONE_REGION = (0, 210, 400, 470)
 
 
@@ -264,9 +266,8 @@ def _task_gone_region(img_np):
     相对标定 TASK_GONE_REGION=(0,210,400,470) 与内容区顶（标题条底）
     的偏移：top=内容区顶-18、bottom=内容区顶+242；横向取内容区左右缘
     （标题/链接行均在区内，右侧收窄同时减少 OCR 面积）。标题条模板
-    未命中返回 None——此时追踪面板不在场（被手动关闭/折叠或遮挡），
-    面板内任务列表整体不可见，_confirm_task_gone 不得据此判定任务
-    消失（2026-11-11 用户实机教训）。
+    未命中返回 None——追踪面板不在场（游戏无任务自动收起/手动关闭/
+    遮挡），调用方回退静态条带并查遮挡负条件。
     """
     region = task_tracker.track_content_region(img_np)
     if region is None:
@@ -1290,8 +1291,42 @@ def _frames_equal(a, b):
 
 
 
+def _task_gone_occluded(img, bgr=None):
+    """面板缺席判完成前的遮挡负条件：其它面板在场 → 本帧不判任务消失。
+
+    追踪面板标题条未命中不止「游戏收起面板/用户手动关闭」一种原因——
+    背包、世界/小地图、队伍/申请加入面板、标准对话框打开时同样会盖住
+    面板，单看「面板缺席+条带无任务」会把「被盖住」误判成完成。
+    命中任一已知遮挡即推迟本轮判定，等对应面板被处理（extras/队伍
+    线程关闭）后复查。只在面板缺席、证据已足的判定帧调用（每轮任务
+    完成一次），实测成本：单人模式 ~0.1s（对话框模板 ~10ms、背包/
+    地图模板各 ~30ms）；组号模式 ~0.55s（另加队伍面板判定 ~0.44s：
+    标志模板 0.436~0.683 随成员数退化，须 OCR 兜底，2026-11-12 实测）
+    ——只影响完成判定帧，不在轮询热路径。
+    """
+    if bgr is None:
+        bgr = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
+    if dialog_frame_score(bgr) >= DIALOG_FRAME_THRESHOLD:
+        return True
+    from . import bag  # 函数内导入防循环：bag→battle→…→xuanshu 环
+    for icon in (bag.BAG_BOX_ICON, game_map.WORLD_MAP_OPEN_ICON,
+                 game_map.MINI_MAP_OPEN_ICON):
+        if game_map.match_frame_np(bgr, icon, threshold=0.8,
+                                   fallback=False) is not None:
+            return True
+    # 队伍/申请加入面板只在组号模式检查（用户 2026-11-12 确认）：单人
+    # 模式下队伍面板只在领取阶段开、用完即关，跟随轮询期间不会残留
+    # 在前台；该检查含 OCR 兜底 ~0.44s，跳过把遮挡检查从 ~0.55s 压到
+    # ~0.1s。组号模式（战斗线程切 Tab 做队伍操作/补人）保留检查——
+    # 残留队伍面板会盖住追踪面板（2026-11-11 实测）
+    if tab_group.active():
+        from . import team  # 函数内导入防循环
+        return team.panel_visible_in(img)
+    return False
+
+
 def _confirm_task_gone(win, title, fallback_texts=(), first_img=None,
-                       polls=TASK_GONE_CONFIRM_POLLS, require_panel=True):
+                       polls=TASK_GONE_CONFIRM_POLLS, check_occluders=True):
     """确认任务确实从追踪面板消失（连续轮询未见且无战斗遮挡）。
 
     OCR 偶发漏读（标题误读、面板瞬时遮挡）会误判任务消失——五环实测
@@ -1299,14 +1334,16 @@ def _confirm_task_gone(win, title, fallback_texts=(), first_img=None,
     面板时 OCR 必然读不到任务，战斗中不计入确认窗口（延长窗口等战斗
     结束后再观察）。返回 True=确认消失（任务完成）。
 
-    require_panel：追踪面板（renwuzhuizong.png 标题条）不在场时是否
-    拒绝判定完成。True（默认，非战斗轮询）：面板被用户手动关闭/折叠
-    时任务列表整体不可见，读不到任务不能当作任务消失（2026-11-11
-    用户实机寻路中关面板被误判完成）；False（战斗结束后的确认路径、
-    客栈）：面板缺席按消失处理，回退静态条带按原逻辑采集证据。
-    游戏在无追踪任务时会把面板自动收起（只剩左缘小箭头）——客栈
-    任务完成瞬间面板即消失，此处若仍要求面板在场会一直空转到跟踪
-    超时（2026-11-11 16:29/16:33 实测）。
+    面板缺席（标题条模板未命中）：按任务结束判定——游戏在无追踪任务
+    时把面板自动收起（用户 2026-11-12 规则：任务追踪消失=任务结束）。
+    修罗/五倍的任务完成由战斗驱动（战斗结束返程），不走此判定；
+    战斗线程仍在战斗时的缺席帧不计证据（战斗 UI 会盖住面板）。
+
+    遮挡负条件：面板缺席、证据已足的判定帧先查背包/地图/队伍/
+    对话框等大面板（见 _task_gone_occluded），在场则推迟本轮判定
+    ——否则「被面板盖住」会被当成任务完成。check_occluders=False
+    跳过该检查（战斗结束返程快路径：此时不可能有背包/地图面板，
+    对话由 _task_gone_dialog_guard 兜底，省 ~0.1s，组号模式 ~0.55s）。
 
     first_img：调用方本轮已截取的帧（PIL）——战斗结束转换帧上的首个
     确认轮询跳过截图直接 OCR（返程链路上省一次截窗 ~0.3s）。
@@ -1330,8 +1367,10 @@ def _confirm_task_gone(win, title, fallback_texts=(), first_img=None,
     # 等战斗结束后重新确认），避免长时间遮挡下误判完成
     hard_deadline = time.time() + TASK_GONE_CONFIRM_TIMEOUT * 4
     gone_polls = 0
-    panel_seen = False       # 确认窗口内是否见过追踪面板（标题条模板命中）
+    panel_seen = False       # 确认窗口内是否采集到消失证据（条带 OCR）
     panel_missing_logged = False
+    occluded_logged = False  # 遮挡负条件命中日志（限一次）
+    occluded_by_panel = False  # 最近一次判定因遮挡被推迟（窗口耗尽时不得视为完成）
     while time.time() < deadline and time.time() < hard_deadline:
         img = first_img if first_img is not None else win.capture(force_activate=False)
         first_img = None
@@ -1348,32 +1387,25 @@ def _confirm_task_gone(win, title, fallback_texts=(), first_img=None,
             deadline = time.time() + TASK_GONE_CONFIRM_TIMEOUT
             time.sleep(2.0)
             continue
+        gone_absent = False  # 本帧证据是否来自面板缺席回退条带（判完成前查遮挡）
         gone_region = _task_gone_region(np.asarray(img))
         if gone_region is None:
-            if require_panel:
-                # 任务追踪面板不在场（renwuzhuizong.png 标题条模板未命中）
-                # 且不是战斗结束路径：面板被手动关闭/折叠时任务列表整体
-                # 不可见，OCR 读不到任务 ≠ 任务消失，不能作为完成证据
-                # （2026-11-11 用户实机：寻路中手动关闭追踪面板，2s 内
-                # 被误判任务完成、返程重新领取必失败）。本帧不计证据、
-                # 也不延长窗口：窗口耗尽返回 False 交回正常轮询（战斗
-                # 中延长窗口由上面的战斗帧分支负责）——正常轮询会处理
-                # 被遮挡期间弹出的对话框（如驿站付费框）
-                if not panel_missing_logged:
-                    panel_missing_logged = True
-                    log("[任务追踪] 追踪面板标题条未命中（被遮挡或已关闭），"
-                        "本帧不计任务消失证据", "INFO")
+            # 战斗线程仍在战斗（动画间隙帧）：战斗 UI 会遮住追踪面板，
+            # 面板缺席不能作为消失证据（任务仍在战斗途中）。战斗结束
+            # 路径以战斗线程确认结束为前提，此检查对它是空操作
+            if battle_watch_in_battle():
+                gone_polls = 0
                 time.sleep(TASK_GONE_POLL_INTERVAL)
                 continue
-            # 战斗结束路径（require_panel=False）：用户确认战斗结束后
-            # 任务追踪会消失、随即应返程——面板缺席按消失处理，回退
-            # 静态条带按原逻辑采集证据（静态条带读不到任务即确认完成，
-            # 主循环下轮 has_task 会复查兜住非收尾战斗的误判）
+            # 面板缺席按任务结束判定（用户 2026-11-12 规则：游戏在无
+            # 追踪任务时自动收起面板，任务追踪消失=任务结束）。回退
+            # 静态条带采集证据（条带读不到任务即确认完成，主循环下轮
+            # has_task 会复查兜住非收尾战斗的误判）
             gone_region = TASK_GONE_REGION
+            gone_absent = True
             if not panel_missing_logged:
                 panel_missing_logged = True
-                log("[任务追踪] 追踪面板不在场，按任务消失判定"
-                    "（调用方允许面板缺席：战斗结束路径/客栈）", "INFO")
+                log("[任务追踪] 追踪面板不在场，按任务消失判定", "INFO")
         panel_seen = True
         items, img_np = game_map.ocr_regions(img, (gone_region,))
         if task_tracker.find_task(
@@ -1408,6 +1440,19 @@ def _confirm_task_gone(win, title, fallback_texts=(), first_img=None,
             time.sleep(TASK_GONE_POLL_INTERVAL)
             continue
         if gone_polls >= polls:
+            if gone_absent and check_occluders and _task_gone_occluded(img):
+                # 面板缺席但其它大面板在场（背包/地图/队伍/对话框盖住
+                # 追踪面板）：标题条同样未命中，任务其实可能还在——
+                # 放弃本轮证据，等面板被处理后再判（本帧识别成本高
+                # 约 0.55s，只在证据已足的判定帧做，不在轮询热路径）
+                gone_polls = 0
+                occluded_by_panel = True
+                if not occluded_logged:
+                    occluded_logged = True
+                    log("[任务追踪] 追踪面板不在场但其它面板在场"
+                        "（被遮挡），不判定任务消失", "INFO")
+                time.sleep(TASK_GONE_POLL_INTERVAL)
+                continue
             return True
         time.sleep(TASK_GONE_POLL_INTERVAL)
     if time.time() >= hard_deadline:
@@ -1422,11 +1467,12 @@ def _confirm_task_gone(win, title, fallback_texts=(), first_img=None,
         # 检查等战斗结束后重新确认）
         log("[任务追踪] 任务消失确认：窗口耗尽但战斗未结束，不判定消失", "WARN")
         return False
-    if not panel_seen:
-        # 整窗未见追踪面板：无从判断任务是否存在，按未完成处理
-        # （面板长时间遮挡/关闭时本函数会被周期性重入，INFO 免刷屏；
-        # 用户关闭面板的持续状态由主循环的 WARN 提示一次）
-        log("[任务追踪] 任务消失确认：追踪面板未在场，本次不判定任务消失", "INFO")
+    if not panel_seen or occluded_by_panel:
+        # 整窗未采集到消失证据（面板一直缺席且人物移动/被遮挡），或
+        # 最近一次判定被遮挡推迟：按未完成处理，交回外层正常轮询
+        # （本函数会被周期性重入）
+        log("[任务追踪] 任务消失确认：追踪面板未在场或其它面板在场，"
+            "本次不判定任务消失", "INFO")
         return False
     return True  # 确认窗口内始终未见任务：视为完成
 
@@ -1509,7 +1555,7 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 signature_key=None, ignore_empty_key=False, skip_texts=None,
                 pre_click_handler=None, require_coord=False,
                 post_track_handler=None, signature_ratio=0.8,
-                task_gone_polls=None, task_gone_require_panel=True,
+                task_gone_polls=None,
                 dialog_tpl_gate=True, dialog_extra_gate=None,
                 chuyijuebao_check=True, battle_extras_tpl_gate=False,
                 story_dialog_dismiss=True, story_known_texts=None):
@@ -1569,14 +1615,10 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
     求值——五倍非黄袍怪轮次传 1（该轮次战斗均为任务最终战斗，任务消失
     即完成；误判由主循环 has_task 复查兜住自愈），黄袍怪多杀轮次保持 2
     （两场战斗之间面板瞬时为空，1 轮会误判完成触发 4s 复查窗口）。
-    task_gone_require_panel：任务消失确认是否要求追踪面板（标题条模板）
-    在场。True（默认）：面板被手动关闭/折叠时列表整体不可见，读不到
-    任务不能当作消失（2026-11-11 手关面板误判教训，修罗等保留）；
-    False：面板缺席即按任务消失判定——游戏在无追踪任务时会把面板
-    自动收起（只剩左缘小箭头），客栈任务完成瞬间面板即消失、随后
-    脚本一直「面板未在场，不判定消失」空转到跟踪超时（2026-11-11
-    16:29/16:33 实测两轮各卡 2~3 分钟才由超时兜底去领取）。客栈
-    调用方传 False（用户确认：客栈任务在即面板必在，面板没了=完成）。
+    面板缺席判定（2026-11-12 用户规则，见 _confirm_task_gone）：游戏
+    在无追踪任务时会把面板自动收起（只剩左缘小箭头）——追踪面板消失
+    即任务结束。修罗/五倍的任务完成由战斗驱动（目标战斗结束后返程），
+    不走面板缺席判定；「看打！」进入战斗后战斗结束 → 返程领任务。
     dialog_tpl_gate：高性能模式下用对话框模板门控对话区 OCR（未命中
     模板即跳过，实测匹配 ~9ms vs OCR 470~930ms）。标准对话框
     （巫医/修罗/客栈/五倍领取与开打等）均命中；无标准边框的例外
@@ -1692,12 +1734,11 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
             task_tracker.group_tasks(items, task_tracker.panel_row_xmax(img_np)),
             title)
         if task is None:
-            # 战斗刚结束的首个非战斗轮：与内层战斗结束路径同语义——面板
-            # 缺席按任务消失处理（用户 2026-11-11 确认），不走严格面板
-            # 门控空等 6s 后不判定（旧行为：战斗结束返程慢 10s）
+            # 战斗刚结束的首个非战斗轮：面板缺席按任务消失处理（用户
+            # 2026-11-11 确认）——否则要空等 6s 后不判定（战斗结束
+            # 返程慢 10s）
             if _confirm_task_gone(win, title, fallback_keywords,
-                first_img=img, polls=_gone_polls(),
-                require_panel=(not just_battle_ended) and task_gone_require_panel):
+                first_img=img, polls=_gone_polls()):
                 if _task_gone_dialog_guard(win, extra_dialog_handler,
                     tpl_gate=dialog_tpl_gate,
                     extra_gate=dialog_extra_gate):
@@ -1865,8 +1906,7 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                     title)
                 if task2 is None:
                     if _confirm_task_gone(win, title, fallback_keywords,
-                        first_img=img, polls=_gone_polls(),
-                        require_panel=task_gone_require_panel):
+                        first_img=img, polls=_gone_polls()):
                         if _task_gone_dialog_guard(win, extra_dialog_handler,
                             tpl_gate=dialog_tpl_gate,
                             extra_gate=dialog_extra_gate):
@@ -1934,10 +1974,11 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 last_poll_items = None
                 last_poll_img = None
                 # 战斗结束路径：面板消失即视为任务消失（用户 2026-11-11
-                # 确认：战斗结束后任务追踪会消失，随即应打开背包返程），
-                # 不要求标题条模板在场
+                # 确认：战斗结束后任务追踪会消失，随即应打开背包返程）；
+                # 跳过遮挡检查（返程快路径，对话由 _task_gone_dialog_guard
+                # 兜底，省 ~0.55s）
                 if _confirm_task_gone(win, title, fallback_keywords,
-                    first_img=img, polls=_gone_polls(), require_panel=False):
+                    first_img=img, polls=_gone_polls(), check_occluders=False):
                     if _task_gone_dialog_guard(win, extra_dialog_handler,
                         tpl_gate=dialog_tpl_gate,
                         extra_gate=dialog_extra_gate):
@@ -2009,8 +2050,7 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 title)
             if task2 is None:
                 if _confirm_task_gone(win, title, fallback_keywords,
-                    first_img=img, polls=_gone_polls(),
-                    require_panel=task_gone_require_panel):
+                    first_img=img, polls=_gone_polls()):
                     if _task_gone_dialog_guard(win, extra_dialog_handler,
                         tpl_gate=dialog_tpl_gate,
                         extra_gate=dialog_extra_gate):
@@ -2124,6 +2164,10 @@ def run_cycle(win):
     """执行一轮玄枢轶闻检查：有任务则跟踪到完成，无任务则领取。
 
     领取成功后立即开始跟踪（不等轮次间隔，缩短领取后首次点击延迟）。
+
+    任务消失判定走全局规则（2026-11-12 用户确认）：任务追踪消失即
+    任务结束——游戏在无追踪任务时把面板自动收起（锄遗聚宝完成后
+    面板即消失），不再需要按任务传参（旧 task_gone_require_panel）。
 
     Args:
         win: 游戏主窗口 Window 对象

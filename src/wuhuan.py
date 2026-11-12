@@ -923,6 +923,28 @@ def _wuhuan_text_key(items, img_np):
     return "|".join([norm_text(task["title"])] + sorted(set(parts)))
 
 
+def _follow_wuhuan(win):
+    """五环 follow_task 统一参数调用（领取/跟踪主链路，见参数注释）。
+
+    signature_key：链接行归一签名（碎片行翻转不再引起重复点击）
+    ignore_empty_key：到达 NPC 链接变暗的过渡帧不作变化信号
+    green_picker：碎片合并后按链接标记精确定位（替身行/剩余时间行
+    不可点）；require_coord：标题/内容漏检时的关键词兜底也须含坐标
+    """
+    return follow_task(win, WUHUAN_TITLE, prefix="五环",
+                       timeout=WUHUAN_FOLLOW_TIMEOUT,
+                       extra_dialog_handler=_handle_submit_dialog,
+                       fallback_keywords=WUHUAN_SUB_KEYWORDS,
+                       progress_key=_wuhuan_progress_key,
+                       signature_key=_wuhuan_text_key,
+                       green_picker=_wuhuan_link_picker,
+                       ignore_empty_key=True,
+                       skip_texts={},
+                       require_coord=True,
+                       signature_ratio=WUHUAN_SIG_RATIO,
+                       story_dialog_dismiss=False)
+
+
 def run_loop(win, cycle_interval=3.0):
     """五环主循环：领取任务 → 跟踪到完成 → 回云游大师领取下一次。
 
@@ -998,26 +1020,12 @@ def run_loop(win, cycle_interval=3.0):
                 time.sleep(cycle_interval)
                 continue
             log(f"[五环] {info}", "SYS")
-        # 提交装备步骤：由 follow_task 的附加对话处理回调接管
-        # signature_key：链接行归一签名（碎片行翻转不再引起重复点击）
-        # ignore_empty_key：到达 NPC 链接变暗的过渡帧不作变化信号
-        # green_picker：碎片合并后按链接标记精确定位（替身行/剩余时间行
-        # 不可点）；require_coord：标题/内容漏检时的关键词兜底也须含坐标
+        # 提交装备步骤：由 follow_task 的附加对话处理回调接管（参数见
+        # _follow_wuhuan）；剧情对话点屏走 _handle_submit_dialog 内实例
+        # （带给与窗口抑制）
         _congrats_seen_this_follow = False  # 每轮跟踪前复位完成信号
         try:
-            ok, info = follow_task(win, WUHUAN_TITLE, prefix="五环",
-                                   timeout=WUHUAN_FOLLOW_TIMEOUT,
-                                   extra_dialog_handler=_handle_submit_dialog,
-                                   fallback_keywords=WUHUAN_SUB_KEYWORDS,
-                                   progress_key=_wuhuan_progress_key,
-                                   signature_key=_wuhuan_text_key,
-                                   green_picker=_wuhuan_link_picker,
-                                   ignore_empty_key=True,
-                                   skip_texts={},
-                                   require_coord=True,
-                                   signature_ratio=WUHUAN_SIG_RATIO,
-                                   story_dialog_dismiss=False)  # 剧情对话点屏
-                                   # 走 _handle_submit_dialog 内实例（带给与窗口抑制）
+            ok, info = _follow_wuhuan(win)
         except MissingEquipment as e:
             log(f"[五环] {MISSING_EQUIPMENT_INFO}（{e}），结束任务", "SYS")
             return f"{MISSING_EQUIPMENT_INFO}，结束五环任务（已完成 {done} 次）"

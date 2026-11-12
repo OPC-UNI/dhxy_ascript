@@ -396,6 +396,59 @@ def _position_crop(img):
     return arr[t:b, l:r].astype(np.int16)
 
 
+class MoveWatch:
+    """人物移动/站定检测（地图位置文字区像素差分，零 OCR，直接信号）。
+
+    标定与用法见上方 STORY_MOVE_* 常量（2026-11-11 45 对真实帧）。
+    walking(win=None, img=None) → True 移动 / False 站定 / None 无法判断
+    （无帧或位置区裁切失败）。无法判断时的默认方向由调用方决定：
+    剧情点屏按站定放行（旧行为），任务消失确认按移动处理（偏安全）。
+    一个判定场景一个实例（状态随实例重置，不跨场景泄漏）。
+    """
+
+    def __init__(self):
+        self._last_crop = None      # 上次位置区像素（寻路判定基线）
+        self._static_polls = 0      # 连续像素不变轮询数
+        self._move_retry_at = 0.0   # 移动中复查退避截止时间
+
+    def reset(self):
+        """重置判定状态（场景切换/对话关闭时调用）。"""
+        self._last_crop = None
+        self._static_polls = 0
+        self._move_retry_at = 0.0
+
+    def walking(self, win=None, img=None):
+        """人物是否仍在移动。
+
+        刚点过任务追踪的 STORY_MOVE_TRACK_GRACE 秒内一律按移动处理
+        （坐标显示有刷新间隔，起步瞬间读不到变化）；检测到移动后退避
+        STORY_MOVE_BACKOFF 秒复查，长距离寻路不逐帧比对。
+        img 为调用方已截帧（优先，免重截）。
+        """
+        import numpy as np
+        now = time.time()
+        if app_utils.track_walk_idle_seconds() < STORY_MOVE_TRACK_GRACE:
+            return True  # 刚点过追踪寻路：位置文字可能尚未刷新
+        if now < self._move_retry_at:
+            return True  # 移动中退避：不重复截帧/比对
+        if img is None and win is not None:
+            img = win.capture(force_activate=False)
+        crop = _position_crop(img)
+        if crop is None:
+            self.reset()
+            return None
+        if self._last_crop is not None and self._last_crop.shape == crop.shape:
+            if float(np.abs(crop - self._last_crop).mean()) \
+                    >= STORY_MOVE_DIFF_THRESHOLD:
+                self._last_crop = crop
+                self._static_polls = 0
+                self._move_retry_at = now + STORY_MOVE_BACKOFF
+                return True
+        self._last_crop = crop
+        self._static_polls += 1
+        return self._static_polls < STORY_MOVE_STATIC_POLLS
+
+
 def dialog_frame_score(frame):
     """对话框模板全局最高分（接受 PIL 或 BGR 帧，条带内匹配）。"""
     import cv2
@@ -499,50 +552,23 @@ class StoryDialogDismisser:
         self.allow_dismiss = allow_dismiss
         self.streak = 0
         self.last_click_at = 0.0
-        self._last_crop = None      # 上次位置区像素（寻路判定基线）
-        self._static_polls = 0      # 连续像素不变轮询数
-        self._move_retry_at = 0.0   # 移动中复查退避截止时间
+        self._move = MoveWatch()    # 寻路判定（位置区像素直接信号）
         self._move_log_at = 0.0     # 寻路抑制日志限频时间戳
 
     def _reset_walk(self):
         """重置寻路判定状态（对话关闭/守卫失败时调用）。"""
-        self._last_crop = None
-        self._static_polls = 0
-        self._move_retry_at = 0.0
+        self._move.reset()
 
     def _walking(self, win, img=None):
         """人物是否仍在寻路（位置区像素仍在变化）。True = 禁止点屏。
 
-        剧情对话不挡路时人物照常自动寻路，此时点屏幕中间会取消寻路
-        （2026-11-11 用户实机：人物停下不再走）——寻路中一律不点，
-        等人物站定（连续 STORY_MOVE_STATIC_POLLS 次像素不变）再推进。
-        位置区像素比对零 OCR（~0.1ms）；检测到移动后退避
-        STORY_MOVE_BACKOFF 秒复查，长距离寻路不逐轮询比对。
-        无帧可查（截窗失败/调用方无窗口）按未寻路放行：保持旧行为，
-        防无坐标场景的剧情对话永不推进（模板/绿字守卫仍在）。
+        判定见 MoveWatch（2026-11-11 用户实机：寻路中点屏幕中间会
+        取消自动寻路，人物停下不再走）。无帧可查（截窗失败/调用方
+        无窗口）按未寻路放行：保持旧行为，防无坐标场景的剧情对话
+        永不推进（模板/绿字守卫仍在）。
         """
-        now = time.time()
-        if app_utils.track_walk_idle_seconds() < STORY_MOVE_TRACK_GRACE:
-            return True  # 刚点过追踪寻路：位置文字可能尚未刷新
-        if now < self._move_retry_at:
-            return True  # 移动中退避：不重复截帧/比对
-        if img is None and win is not None:
-            img = win.capture(force_activate=False)
-        crop = _position_crop(img)
-        if crop is None:
-            self._reset_walk()
-            return False
-        if self._last_crop is not None and self._last_crop.shape == crop.shape:
-            import numpy as np
-            if float(np.abs(crop - self._last_crop).mean()) \
-                    >= STORY_MOVE_DIFF_THRESHOLD:
-                self._last_crop = crop
-                self._static_polls = 0
-                self._move_retry_at = now + STORY_MOVE_BACKOFF
-                return True
-        self._last_crop = crop
-        self._static_polls += 1
-        return self._static_polls < STORY_MOVE_STATIC_POLLS
+        walking = self._move.walking(win, img)
+        return False if walking is None else walking
 
     def try_dismiss(self, win, items, img_np, prefix="", img=None):
         """满足全部守卫时点屏幕中间一次，返回是否已点击。"""

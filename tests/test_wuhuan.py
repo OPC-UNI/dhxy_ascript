@@ -349,3 +349,22 @@ def test_submit_dialog_option_not_rendered_no_story_dismiss(monkeypatch):
     for _ in range(3):
         assert wuhuan._handle_submit_dialog(None, items, _BLANK_FRAME) is False
     assert clicks == []
+
+
+# ---- 任务消失判定：面板缺席处理已统一到 xuanshu._confirm_task_gone
+#      （2026-11-12 用户规则），五环不再传 per-task 参数 ----
+def test_follow_wuhuan_uses_shared_confirm(monkeypatch):
+    """五环 follow_task 走共享引擎（prefix/标题正确，无 per-task 面板参数）。"""
+    seen = {}
+
+    def _fake_follow(win, title, **kwargs):
+        seen["title"] = title
+        seen.update(kwargs)
+        return True, "任务已从任务追踪中消失"
+
+    monkeypatch.setattr(wuhuan, "follow_task", _fake_follow)
+    ok, _info = wuhuan._follow_wuhuan(object())
+    assert ok is True
+    assert seen["title"] == wuhuan.WUHUAN_TITLE
+    assert seen["prefix"] == "五环"
+    assert "task_gone_require_panel" not in seen

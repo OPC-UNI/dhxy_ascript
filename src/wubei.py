@@ -2498,6 +2498,9 @@ def _follow_to_done(win, first_items=None):
                            story_known_texts=WUBEI_STORY_KNOWN_TEXTS,
                            pre_click_handler=_handle_pre_click,
                            post_track_handler=_maybe_tab_bars_pass,
+                           # 任务消失确认轮数：黄袍怪多杀轮次 2 轮（两场
+                           # 战斗之间面板瞬时为空，1 轮会误判完成），其他
+                           # 轮次 1 轮（均为最终战斗，任务消失即完成）
                            task_gone_polls=_hpg_gone_polls,
                            chuyijuebao_check=False,
                            battle_extras_tpl_gate=True)

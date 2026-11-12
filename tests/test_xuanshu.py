@@ -317,7 +317,7 @@ def test_click_green_option_filters_abandon(monkeypatch):
     assert seen["prefix"] == "玄枢轶闻"
 
 
-# ---- 任务消失确认：追踪面板关闭不得判完成（2026-11-11 用户实机） ----
+# ---- 任务消失确认：面板缺席即任务结束（用户 2026-11-12 规则） ----
 class _GoneClock:
     """可控时钟：sleep 推进虚拟时间，time 返回虚拟时间。"""
 
@@ -331,15 +331,21 @@ class _GoneClock:
         self.t += dt
 
 
-def _patch_gone_env(monkeypatch, region):
-    """装配 _confirm_task_gone 依赖：region=None 模拟标题条未命中。"""
+def _patch_gone_env(monkeypatch, region, occluded=False):
+    """装配 _confirm_task_gone 依赖。
+
+    region=None 模拟标题条未命中；occluded 为遮挡负条件桩结果。
+    """
     clock = _GoneClock()
     ocr_calls = []
     logs = []
+
     monkeypatch.setattr(xuanshu, "time", clock)
     monkeypatch.setattr(xuanshu, "is_in_battle_frame", lambda img: False)
     monkeypatch.setattr(xuanshu, "battle_watch_in_battle", lambda: False)
     monkeypatch.setattr(xuanshu, "_task_gone_region", lambda img_np: region)
+    monkeypatch.setattr(xuanshu, "_task_gone_occluded",
+                        lambda img, bgr=None: occluded)
     monkeypatch.setattr(xuanshu.task_tracker, "panel_row_xmax",
                         lambda img_np: 400)
     monkeypatch.setattr(xuanshu.game_map, "ocr_regions",
@@ -349,16 +355,42 @@ def _patch_gone_env(monkeypatch, region):
     return ocr_calls, logs
 
 
-def test_confirm_task_gone_panel_closed_not_done(monkeypatch):
-    """标题条未命中（面板关闭/折叠）时不计证据、不判定任务消失。
+def test_confirm_task_gone_panel_missing_is_done(monkeypatch):
+    """面板缺席即判任务结束（用户 2026-11-12 规则）。
 
-    2026-11-11 用户实机：寻路中手动关闭追踪面板，OCR 读不到任务 →
-    2s 内被误判任务完成、返程重新领取（必然领不到）。
+    「任务追踪消失=任务结束」：游戏在无追踪任务时把面板自动收起（只剩
+    左缘小箭头）——玄枢/五环/名望/客栈均如此；修罗/五倍的任务完成由
+    战斗驱动（战斗结束路径判定），不走这里。
     """
     ocr_calls, logs = _patch_gone_env(monkeypatch, region=None)
+    assert xuanshu._confirm_task_gone(_GuardWin(), "常规玩法") is True
+    assert ocr_calls  # 回退静态条带采集证据
+    assert any("追踪面板不在场，按任务消失判定" in m for m, _ in logs)
+
+
+def test_confirm_task_gone_panel_missing_occluded_not_done(monkeypatch):
+    """面板缺席但其它大面板在场（背包/地图/队伍/对话框）→ 不判完成。
+
+    这些面板打开时会盖住追踪面板，标题条同样未命中——不排除遮挡会把
+    「被盖住」误判成任务完成。证据帧照常 OCR，遮挡只在判定帧检查。
+    """
+    ocr_calls, logs = _patch_gone_env(monkeypatch, region=None, occluded=True)
     assert xuanshu._confirm_task_gone(_GuardWin(), "常规玩法") is False
-    assert ocr_calls == []  # 面板不在场：不做面板 OCR，只用模板判在场
-    assert any("标题条未命中" in m for m, _ in logs)
+    assert ocr_calls  # 证据帧照常 OCR
+    assert any("被遮挡" in m for m, _ in logs)
+
+
+def test_confirm_task_gone_absent_during_battle_gap_not_done(monkeypatch):
+    """战斗线程仍在战斗（动画间隙帧）+面板缺席 → 不采集证据、不判完成。
+
+    战斗 UI 会遮住追踪面板，面板缺席不能当作消失证据（任务仍在战斗
+    途中）。
+    """
+    ocr_calls, logs = _patch_gone_env(monkeypatch, region=None)
+    monkeypatch.setattr(xuanshu, "battle_watch_in_battle", lambda: True)
+    assert xuanshu._confirm_task_gone(_GuardWin(), "常规玩法") is False
+    assert ocr_calls == []
+    assert any("窗口耗尽但战斗未结束" in m for m, _ in logs)
 
 
 def test_confirm_task_gone_panel_visible_no_task_is_done(monkeypatch):
@@ -369,15 +401,15 @@ def test_confirm_task_gone_panel_visible_no_task_is_done(monkeypatch):
 
 
 def test_confirm_task_gone_post_battle_panel_missing_is_done(monkeypatch):
-    """战斗结束路径（require_panel=False）：面板消失按任务消失判定。
+    """战斗结束路径：面板缺席即判任务消失、跳过遮挡检查（返程快路径）。
 
-    用户 2026-11-11 确认：战斗结束后任务追踪会消失，此时应打开背包
-    返程（非战斗轮询路径仍要求面板在场，防手动关面板误判）。客栈
-    任务完成同理（面板被游戏自动收起），共用该路径。
+    用户 2026-11-11 确认：战斗结束后任务追踪会消失、随即打开背包返程
+    ——返程快路径不查遮挡（对话由 _task_gone_dialog_guard 兜底），
+    省 ~0.55s。
     """
-    ocr_calls, logs = _patch_gone_env(monkeypatch, region=None)
+    ocr_calls, logs = _patch_gone_env(monkeypatch, region=None, occluded=True)
     assert xuanshu._confirm_task_gone(_GuardWin(), "常规玩法",
-                                      require_panel=False) is True
+                                      check_occluders=False) is True
     assert ocr_calls  # 回退静态条带采集证据（原逻辑）
     assert any("追踪面板不在场，按任务消失判定" in m for m, _ in logs)
 
@@ -387,11 +419,11 @@ def test_confirm_task_gone_post_battle_panel_missing_is_done(monkeypatch):
 def test_follow_battle_gap_keeps_battle_end_fastpath(monkeypatch):
     """战斗线程确认在战斗中的动画间隙帧（操作条/回合横幅单帧漏匹配）
     必须仍按战斗处理：不消费 was_battle、不进任务消失确认；线程确认
-    结束后的首个非战斗帧走 require_panel=False 快路径。
+    结束后的首个非战斗帧走 check_occluders=False 快路径。
 
     回归 2026-11-11 13:49/13:52：间隙帧消费 was_battle 后，真战斗结束
-    退回 require_panel=True 严格路径空等 6s 并「不判定消失」，返程
-    慢 10s（黄袍怪那次连烧 3 个 6s 窗口）。
+    退回严格路径空等 6s 并「不判定消失」，返程慢 10s（黄袍怪那次连烧
+    3 个 6s 窗口）。
     """
     clock = _GoneClock()
     battle_states = [False,              # 外层循环战斗门
@@ -414,8 +446,8 @@ def test_follow_battle_gap_keeps_battle_end_fastpath(monkeypatch):
                         lambda img: frames.pop(0) if frames else False)
 
     def _confirm(win, title, fb=(), first_img=None, polls=2,
-                 require_panel=True):
-        confirms.append(require_panel)
+                 check_occluders=True):
+        confirms.append(check_occluders)
         confirm_at.append(clock.t)
         return True
 
@@ -445,20 +477,20 @@ def test_follow_battle_gap_keeps_battle_end_fastpath(monkeypatch):
     assert ok is True
     # 间隙帧（线程确认仍在战斗）不得触发确认、不得消费 was_battle：
     # 确认只发生在战斗线程确认结束后的第 4 拍（t=2.0），且走快路径
+    # （check_occluders=False）
     assert confirms == [False]
     assert confirm_at == [2.0]
 
 
-# ---- 任务消失确认：面板缺席门可配置（客栈 2026-11-11 实测） ----
+# ---- 任务消失确认：面板缺席即任务结束（用户 2026-11-12 规则） ----
 def _patch_follow_minimal(monkeypatch, confirms):
     """装配 follow_task 最小环境：任务从未出现在面板，首个确认即返回。"""
     class _Win:
         def capture(self, force_activate=False):
             return object()
 
-    def _confirm(win, title, fb=(), first_img=None, polls=2,
-                 require_panel=True):
-        confirms.append(require_panel)
+    def _confirm(win, title, fb=(), first_img=None, polls=2, **kwargs):
+        confirms.append(kwargs)
         return True
 
     monkeypatch.setattr(xuanshu, "log", lambda *a, **k: None)
@@ -481,23 +513,103 @@ def _patch_follow_minimal(monkeypatch, confirms):
     return _Win()
 
 
-def test_follow_task_gone_require_panel_false_passthrough(monkeypatch):
-    """task_gone_require_panel=False（客栈）透传到确认函数。
-
-    游戏无追踪任务时自动收起面板：客栈交付完成瞬间面板消失，确认
-    必须按「面板缺席=完成」处理，否则空转到跟踪超时（实测卡 2~3 分钟）。
-    """
+def test_follow_task_confirm_no_per_task_flags(monkeypatch):
+    """面板缺席判定不带任何 per-task 参数（用户 2026-11-12 全局规则）。"""
     confirms = []
     win = _patch_follow_minimal(monkeypatch, confirms)
-    ok, _info = xuanshu.follow_task(win, "客栈任务", timeout=30,
-                                    task_gone_require_panel=False)
+    ok, _info = xuanshu.follow_task(win, "常规玩法", timeout=30)
     assert ok is False  # 任务从未出现：假完成防护生效，回主循环重试
-    assert confirms == [False]
+    assert "require_standing" not in confirms[0]
+    assert "task_gone_require_standing" not in confirms[0]
 
 
-def test_follow_task_gone_require_panel_default_true(monkeypatch):
-    """默认仍要求面板在场（修罗等手关面板防误判，2026-11-11 上午教训）。"""
-    confirms = []
-    win = _patch_follow_minimal(monkeypatch, confirms)
-    xuanshu.follow_task(win, "常规玩法", timeout=30)
-    assert confirms == [True]
+# ---- 玄枢轶闻：全部任务共用一条面板缺席规则（用户 2026-11-12） ----
+def test_run_cycle_uses_shared_confirm_rule(monkeypatch):
+    """玄枢轶闻两条 follow 路径都不传 per-task 面板参数。
+
+    面板缺席判定统一在 _confirm_task_gone（任务追踪消失=任务结束）：
+    续跑跟踪与领取后跟踪两个调用点行为一致。
+    """
+    seen = []
+    monkeypatch.setattr(xuanshu, "is_in_battle", lambda win: False)
+    monkeypatch.setattr(xuanshu.debug_overlay, "set_phase", lambda *a: None)
+
+    def _fake_follow(win, title=xuanshu.TASK_TITLE, **kwargs):
+        seen.append(kwargs)
+        return True, "任务已从任务追踪中消失"
+
+    monkeypatch.setattr(xuanshu, "follow_task", _fake_follow)
+
+    # 路径 1：任务已在追踪面板，直接续跑跟踪
+    monkeypatch.setattr(xuanshu.task_tracker, "has_task",
+                        lambda win, title: True)
+    status, _info = xuanshu.run_cycle(object())
+    assert status == "done"
+    assert "task_gone_require_panel" not in seen[0]
+
+    # 路径 2：无任务 → 领取后紧接跟踪
+    monkeypatch.setattr(xuanshu.task_tracker, "has_task",
+                        lambda win, title: False)
+    monkeypatch.setattr(xuanshu, "navigate_to_task",
+                        lambda win: (True, "已领取玄枢轶闻任务", ([], None)))
+    status, _info = xuanshu.run_cycle(object())
+    assert status == "done"
+    assert "task_gone_require_panel" not in seen[1]
+
+
+# ---- 面板缺席时的遮挡负条件（用户 2026-11-12 规则配套） ----
+def test_task_gone_occluded_dialog_and_team_panels(monkeypatch):
+    """标准对话框命中即判遮挡（背包/地图/队伍由帧内模板判定）。"""
+    calls = []
+    monkeypatch.setattr(xuanshu, "dialog_frame_score",
+                        lambda frame: 0.99)
+    monkeypatch.setattr(xuanshu.game_map, "match_frame_np",
+                        lambda img, icon, **k: calls.append(icon) or None)
+    assert xuanshu._task_gone_occluded(Image.new("RGB", (1378, 831))) is True
+    assert calls == []  # 对话框先命中：不再做模板匹配
+
+
+def test_task_gone_occluded_no_occluder(monkeypatch):
+    """无遮挡面板 → False（继续按面板缺席判完成）。"""
+    monkeypatch.setattr(xuanshu, "dialog_frame_score", lambda frame: 0.3)
+    monkeypatch.setattr(xuanshu.game_map, "match_frame_np",
+                        lambda img, icon, **k: None)
+    monkeypatch.setattr(xuanshu.tab_group, "active", lambda: False)
+    frame = Image.new("RGB", (1378, 831))
+    assert xuanshu._task_gone_occluded(frame) is False
+
+
+def test_task_gone_occluded_bag_panel(monkeypatch):
+    """背包面板标志模板命中 → 判遮挡。"""
+    monkeypatch.setattr(xuanshu, "dialog_frame_score", lambda frame: 0.3)
+    monkeypatch.setattr(xuanshu.game_map, "match_frame_np",
+                        lambda img, icon, **k: (1, 1) if "bag_box" in icon
+                        else None)
+    assert xuanshu._task_gone_occluded(Image.new("RGB", (1378, 831))) is True
+
+
+def test_task_gone_occluded_team_only_in_tab_group_mode(monkeypatch):
+    """队伍面板检查只在组号模式跑（用户 2026-11-12：单人省 ~0.36s）。
+
+    单人模式队伍面板不会在跟随期间残留前台，跳过含 OCR 兜底的队伍
+    检查（遮挡检查 ~0.55s → ~0.19s）；组号模式保留（战斗线程做队伍
+    操作时残留面板会盖住追踪面板）。
+    """
+    import src.team as team_mod
+    calls = []
+    monkeypatch.setattr(xuanshu, "dialog_frame_score", lambda frame: 0.3)
+    monkeypatch.setattr(xuanshu.game_map, "match_frame_np",
+                        lambda img, icon, **k: None)
+    monkeypatch.setattr(team_mod, "panel_visible_in",
+                        lambda img: calls.append(1) or True)
+    frame = Image.new("RGB", (1378, 831))
+
+    # 单人模式：不调用队伍面板检查
+    monkeypatch.setattr(xuanshu.tab_group, "active", lambda: False)
+    assert xuanshu._task_gone_occluded(frame) is False
+    assert calls == []
+
+    # 组号模式：调用队伍面板检查（命中即遮挡）
+    monkeypatch.setattr(xuanshu.tab_group, "active", lambda: True)
+    assert xuanshu._task_gone_occluded(frame) is True
+    assert calls == [1]

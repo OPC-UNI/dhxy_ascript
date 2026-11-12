@@ -319,3 +319,4 @@ def test_claim_task_skips_when_task_reappeared(monkeypatch):
     ok, info, frame = xiuluo._claim_task(_FakeWin())
     assert ok is False and "续跑跟踪" in info and frame is None
     assert called == []  # 不进入领取入口流程
+

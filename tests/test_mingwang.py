@@ -463,6 +463,9 @@ def test_follow_task_uses_mingwang_dialog_map(monkeypatch):
     assert calls["skip_texts"] is mingwang.DIALOG_SKIP_TEXTS
     assert calls["chuyijuebao_check"] is False
     assert calls["story_known_texts"] is mingwang.DIALOG_OPTION_MAP
+    # 面板缺席判定统一在 xuanshu._confirm_task_gone（2026-11-12 全局规则），
+    # 名望不再传 per-task 参数
+    assert "task_gone_require_panel" not in calls
 
 
 def test_dialog_skip_texts_config():
