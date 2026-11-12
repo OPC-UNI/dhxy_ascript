@@ -1,9 +1,13 @@
-"""pochufengyin.py：破除封印（点击）/钓鱼（长按）共用闭环控制。
+"""pochufengyin.py：破除封印（点击）/钓鱼·开采石头（长按）共用闭环控制。
 
-覆盖两种推进方式的控制语义：
-- 长按：按住后进入目标区间也继续按住（游戏锁定游标，松手回退脱钩），
-  仅冲出右缘余量才松开回落、回到 L 以下再按住；结束/战斗打断必须抬起
+覆盖各推进方式的控制语义：
+- 纯长按（锁定持握）：按住后进入目标区间也继续按住（假定游戏锁定
+  游标），仅冲出右缘余量才松开回落、回到 L 以下再按住；结束/战斗
+  打断必须抬起
+- 长按运输 + 短段长按维持（hold_catch，钓鱼/开采石头）：长按推过带上缘
+  →松手回落→回 C 后短段长按/松手围绕 C 保持到窗口结束，倒计时 ≤3s 不停手
 - 点击：走 human_click 连点，绝不使用长按通道
+- 冲刺连点（mash）：rapid_click_burst 按每击推进量冲进目标带后维持泵
 """
 import numpy as np
 
@@ -355,60 +359,115 @@ def test_mash_ignored_in_hold_mode(monkeypatch):
     assert _Hold.events and _Hold.events[0][0] == "start"
 
 
-# ---- 长按运输 + 点按维持（hold_catch；开采石头 2026-11-10 用户技巧）----
+# ---- 长按运输 + 短段长按维持（hold_catch；开采石头 2026-11-10、
+# 钓鱼 2026-11-12 用户技巧）----
 def _install_catch(monkeypatch, *, p_values, title_frames):
-    """开采石头仿真：脚本化填充位置 + 伪时钟（维持泵积分器可测）。
+    """hold_catch 仿真：脚本化填充位置 + 伪时钟 + MouseHold 事件记录。
 
-    记录 rapid_click_burst 点按批次 [(捕获轮次, 次数)]；目标带同 _install
-    （C≈8.49、L≈7.97、R≈9.01）；CATCH_MIN_GAP 置 0 便于脚本轮询驱动
-    重点运输。
+    目标带同 _install（C≈8.49、L≈7.97、R≈9.01）；CATCH_MIN_GAP 置 0
+    便于脚本轮询驱动重运输/维持按住；维持段按住与松手都走 MouseHold
+    （_Hold.events 记录，与运输段同一通道——不再用 rapid_click_burst，
+    静默连点会丢 UP 把按钮卡在按下状态，2026-11-12 实机教训）。
     """
     win = _install(monkeypatch, p_values=p_values, title_frames=title_frames)
-    clicks = []
-    monkeypatch.setattr(pochufengyin, "rapid_click_burst",
-                        lambda w, x, y, times=1, press=0.02:
-                        clicks.append((win.n, times)))
     monkeypatch.setattr(pochufengyin, "time", _FakeClock())
     monkeypatch.setattr(pochufengyin, "POCHU_CATCH_MIN_GAP", 0.0)
-    return win, clicks
+    return win
 
 
-def test_hold_catch_transport_release_then_pump(monkeypatch):
-    """长按推过带上缘（R+0.2）松手 → 回落至 C 切换点按维持 → 命中区间。"""
+def test_hold_catch_transport_release_then_maintain(monkeypatch):
+    """长按推过带上缘（R+0.2）松手 → 回落至 C 切换短段长按维持：
+    P≤C-LO 按住、P≥C-HI 松手，围绕 C 振荡 → 命中区间。"""
     _Hold.events = []
-    win, clicks = _install_catch(
+    win = _install_catch(
         monkeypatch,
-        p_values=[0.0, 8.0, 9.5, 9.0, 8.3] + [8.3] * 15,
-        title_frames=20)
+        p_values=[0.0, 9.5, 9.0, 8.3, 8.2, 8.45, 8.2, 8.45],
+        title_frames=9)
     ok, info = pochufengyin.play_pochufengyin(
         win, "title", prefix="名望", label="开采石头",
         hold=True, action_icon="action", hold_catch=True)
     assert ok and "命中区间" in info
-    assert [e[0] for e in _Hold.events] == ["start", "stop"]
+    assert [e[0] for e in _Hold.events] == \
+        ["start", "stop", "start", "stop", "start", "stop"]
     assert _Hold.events[0] == ("start", 2, 950, 600)
-    assert _Hold.events[1] == ("stop", 4)      # P=9.5 ≥ R+0.2 松手等回落
-    assert clicks and clicks[0][0] >= 6        # 回落至 C 之后才开始点按
+    assert _Hold.events[1] == ("stop", 3)      # P=9.5 ≥ R+0.2 松手等回落
+    assert _Hold.events[2][0] == "start" and _Hold.events[2][1] >= 5
+    # 维持按住只走 MouseHold，不再用连点脉冲
+    assert _Hold.events[3] == ("stop", 7)
 
 
 def test_hold_catch_repress_when_falls_below_band(monkeypatch):
-    """回落越过带下（伺服未接管）→ 重新长按运输（限次），再回落捕捉。"""
+    """维持段谷值跌破带下 → 放弃维持、重新长按运输（限次），再回落捕捉。"""
     _Hold.events = []
-    win, clicks = _install_catch(
+    win = _install_catch(
         monkeypatch,
-        p_values=[0.0, 9.5, 7.0, 9.5, 8.3] + [8.3] * 12,
-        title_frames=17)
+        p_values=[0.0, 9.5, 8.3, 7.5, 7.5, 9.5, 8.3, 8.2, 8.45],
+        title_frames=9)
     ok, info = pochufengyin.play_pochufengyin(
         win, "title", prefix="名望", label="开采石头",
         hold=True, action_icon="action", hold_catch=True)
     assert ok and "命中区间" in info
-    assert [e[0] for e in _Hold.events] == ["start", "stop", "start", "stop"]
-    assert clicks
+    # 运输 → 松手 → 掉出带下 → 重新运输 → 松手 → 维持按住
+    assert [e[0] for e in _Hold.events] == \
+        ["start", "stop", "start", "stop", "start", "stop"]
+    assert _Hold.events[2][1] == 6              # 第 2 次运输按住
+
+
+def test_hold_catch_maintain_adapts_lo_after_below_band(monkeypatch):
+    """掉出带下 → 维持按住阈值 LO 减小（在更高位置提前按住）：
+    8.31 高于初始阈值 C-0.20=8.29，只有自适应后 C-0.17=8.32 才会按住。"""
+    _Hold.events = []
+    win = _install_catch(
+        monkeypatch,
+        p_values=[0.0, 9.5, 8.3, 7.5, 7.5, 9.5, 8.3, 8.31, 8.45],
+        title_frames=9)
+    ok, info = pochufengyin.play_pochufengyin(
+        win, "title", prefix="玄枢轶闻", label="钓鱼",
+        hold=True, action_icon="action", hold_catch=True)
+    assert ok
+    # r9 p=8.31 在自适应阈值（C-0.17）下按住
+    assert ("start", 9, 950, 600) in _Hold.events
+
+
+def test_hold_catch_maintain_releases_at_aim(monkeypatch):
+    """维持段松手阈值 = C-HI（提前松手补偿动作滞后）：P=8.40 时松手，
+    说明没有等到 R 才松（否则峰值会冲过带上缘）。"""
+    _Hold.events = []
+    win = _install_catch(
+        monkeypatch,
+        p_values=[0.0, 9.5, 8.3, 8.2, 8.40, 8.2, 8.45],
+        title_frames=7)
+    ok, info = pochufengyin.play_pochufengyin(
+        win, "title", prefix="玄枢轶闻", label="钓鱼",
+        hold=True, action_icon="action", hold_catch=True)
+    assert ok
+    # 维持按住（r5）后，在 r6 测得 8.40 ≥ C-0.10=8.39 即松手
+    assert ("start", 5, 950, 600) in _Hold.events
+    assert ("stop", 6) in _Hold.events
+
+
+def test_hold_catch_ignores_countdown_stop(monkeypatch):
+    """倒计时 ≤3s 不得停手（钓鱼 2026-11-12）：填充会回退，停手必然
+    掉出目标带——回落途中倒计时已 ≤3s 仍须建立维持并保持到窗口结束
+    （与冲刺模式同理）。"""
+    _Hold.events = []
+    win = _install_catch(
+        monkeypatch,
+        p_values=[0.0, 9.5, 8.3, 8.2, 8.45],
+        title_frames=5)
+    monkeypatch.setattr(pochufengyin, "_pochu_countdown", lambda *a, **k: 2)
+    ok, info = pochufengyin.play_pochufengyin(
+        win, "title", prefix="玄枢轶闻", label="钓鱼",
+        hold=True, action_icon="action", hold_catch=True)
+    assert ok and "命中区间" in info
+    # 倒计时 2s 仍回落捕捉并维持按住（未按倒计时停手）
+    assert ("start", 5, 950, 600) in _Hold.events
 
 
 def test_hold_catch_releases_on_window_end(monkeypatch):
     """窗口在长按运输中断（标题消失）→ finally 必须抬手，不卡按下状态。"""
     _Hold.events = []
-    win, _clicks = _install_catch(
+    win = _install_catch(
         monkeypatch, p_values=[0.0, 8.0, 8.2], title_frames=4)
     ok, info = pochufengyin.play_pochufengyin(
         win, "title", prefix="名望", label="开采石头",

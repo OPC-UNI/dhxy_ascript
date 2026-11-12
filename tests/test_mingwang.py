@@ -1164,7 +1164,7 @@ def test_claim_panel_task_claims_shadu(monkeypatch):
     assert clicks == [(487, 423, "primary")]
 
 
-# ---- 沙都修罗（高级）：追踪文案触发 → 蟠桃园四路点找 NPC → 点名字上方 ----
+# ---- 沙都修罗（高级）：追踪文案触发 → 蟠桃园五路点找 NPC → 点名字上方 ----
 def test_shadu_trigger_phrases():
     """触发词：完整文案/短词精确命中；短词 1 字 OCR 误读仍触发。"""
     assert mingwang._shadu_trigger(
@@ -1239,19 +1239,19 @@ def test_shadu_search_clicks_npc_at_first_waypoint(monkeypatch):
 
 
 def test_shadu_search_falls_back_through_waypoints(monkeypatch):
-    """前三个点未找到 → 依次走到第四个点找到并点击。"""
+    """前四个点未找到 → 依次走到第五个点（2026-11-12 新增）找到并点击。"""
     calls = []
     _patch_shadu_search(monkeypatch, calls)
-    scans = iter([None, None, None, (600, 200)])
+    scans = iter([None, None, None, None, (600, 200)])
 
     def fake_scan(w):
         pt = next(scans)
         return pt, ("找到" if pt else "未找到")
     monkeypatch.setattr(mingwang, "_shadu_scan_npc", fake_scan)
     ok, info = mingwang._shadu_search_npc(object())
-    assert ok and "第 4 个搜索点" in info
+    assert ok and "第 5 个搜索点" in info
     assert calls == [(739, 588), (623, 476), (541, 428), (552, 310),
-                     (600, 200)]
+                     (710, 393), (600, 200)]
 
 
 def test_shadu_search_enters_map_via_world_icon(monkeypatch):
@@ -1305,14 +1305,14 @@ def test_shadu_handler_dialog_blocks_search(monkeypatch):
 
 
 def test_shadu_handler_failure_limited_retry(monkeypatch):
-    """四路点全失败 → 按 SHADU_RETRY_AFTER 限频，不每轮询重跑。"""
+    """全部路点失败 → 按 SHADU_RETRY_AFTER 限频，不每轮询重跑。"""
     monkeypatch.setattr(mingwang, "_shadu_next_try_at", 0.0)
     monkeypatch.setattr(mingwang, "_shadu_click_until", 0.0)
     monkeypatch.setattr(mingwang, "_shadu_absent", 0)
     monkeypatch.setattr(mingwang, "dialog_frame_score", lambda img: 0.1)
     runs = []
     monkeypatch.setattr(mingwang, "_shadu_search_npc",
-                        lambda w: runs.append(1) or (False, "四点均未找到"))
+                        lambda w: runs.append(1) or (False, "全部路点均未找到"))
     items = [("蟠桃园残像", [100, 300, 300, 320], 0.95)]
     win = _shadu_win()
     assert mingwang._handle_shadu_xiuluo(win, items, None) is False

@@ -7,7 +7,8 @@
    「不知道这里有没有那条锦鲤鱼」→ 选项「先钓一下再说！」→ 窗口标题
    xuanshu_diaoyu.png 出现，闭环处理与客栈破除封印完全一致（共享
    pochufengyin 模块；仅标题模板与推进方式不同——钓鱼开始后按钮为
-   「长按」，须按住不放才能推进，破除封印为「点击」连点））
+   「长按」，打法为长按运输 + 短段长按维持：长按推过目标带上缘→
+   松手回落→回 C 后反复短按保持在 C 附近，破除封印为「点击」冲刺连点））
 2. 没有任务时，寻路到任务位置（洛阳城 93,125）并领取任务：
    - 位置识别失败一律当不在目标坐标（不按 Alt+C 重试），直接寻路
    - 已在任务位置 5px 内 → 跳过寻路
@@ -213,9 +214,12 @@ QI_RAPID_PRESS = 0.02      # 批量连点每击按压时长（秒，20ms 保守�
 # 选项「先钓一下再说！」点击后出现）----
 # 与客栈破除封印同一款进度条对准小游戏：闭环实现、开始按钮、目标高亮带、
 # 进度条测量区域完全共用（pochufengyin 共享模块），仅窗口标题模板与
-# 推进方式不同（用户 2026-11-10 提供）：钓鱼开始后按钮变为「长按」
-# （xuanshu_diaoyu_changan.png），须按住不放才能推进进度；破除封印为
-# 「点击」连点推进。
+# 推进方式不同：钓鱼开始后按钮变为「长按」（xuanshu_diaoyu_changan.png），
+# 破除封印为「点击」冲刺连点。**钓鱼虽为长按按钮，但进带不锁定**——
+# 按住会一路冲过目标带（2026-11-12 日志：P 3.03→4.34 越过带上缘、
+# 松手回落至带下判失败）。用户 2026-11-12 技巧：长按进入 C 附近即
+# 改为反复短按、保持在 C 附近——复用开采石头同款 hold_catch（长按推过
+# 带上缘→松手回落→回 C 后短段长按/松手 bang-bang 围绕 C 到窗口结束）。
 DIAOYU_ENTRY_OPTION = "先钓一下再说！"          # 入口对话框选项（点击后小游戏窗口出现）
 DIAOYU_TITLE_ICON = "xuanshu_diaoyu.png"        # 窗口标题「钓鱼」（消失=任务完成）
 DIAOYU_HOLD_ICON = "xuanshu_diaoyu_changan.png"  # 「长按」按钮（开始后出现；按住推进进度）
@@ -1235,10 +1239,11 @@ def _diaoyu_window_check(win, img, prefix="玄枢轶闻"):
     入口选项「先钓一下再说！」被点击后（_arm_diaoyu_check）才在
     POCHU_REGION 内匹配窗口标题 xuanshu_diaoyu.png（搜索条带/阈值与
     客栈破除封印完全一致）；窗口出现即阻塞执行完整闭环（共享实现
-    pochufengyin.play_pochufengyin，长按模式：开始后按钮为「长按」，
-    按住才推进），标题消失（结束）或战斗打断后返回。检测限频
-    DIAOYU_CHECK_INTERVAL（条带匹配 ~10ms）；未 armed/限频未到/
-    未命中均返回 False，热路径零成本。
+    pochufengyin.play_pochufengyin，长按运输 + 短段长按维持：hold=True +
+    hold_catch=True，长按推过目标带上缘→松手回落→回 C 后反复短按保持在
+    C 附近到窗口结束，2026-11-12 用户技巧），标题消失（结束）或战斗
+    打断后返回。检测限频 DIAOYU_CHECK_INTERVAL（条带匹配 ~10ms）；
+    未 armed/限频未到/未命中均返回 False，热路径零成本。
     """
     global _diaoyu_last_check, _diaoyu_armed_at
     if _diaoyu_armed_at <= 0 \
@@ -1257,7 +1262,7 @@ def _diaoyu_window_check(win, img, prefix="玄枢轶闻"):
         f"（匹配度 {score:.2f}）", "SYS")
     ok, info = _pochu_minigame.play_pochufengyin(
         win, DIAOYU_TITLE_ICON, prefix=prefix, label="钓鱼",
-        hold=True, action_icon=DIAOYU_HOLD_ICON)
+        hold=True, action_icon=DIAOYU_HOLD_ICON, hold_catch=True)
     if ok:
         # 小游戏完成 → 关闭检测（处理失败保持 armed，窗口仍在时
         # 下轮询重试）
@@ -1323,6 +1328,23 @@ def _task_gone_occluded(img, bgr=None):
         from . import team  # 函数内导入防循环
         return team.panel_visible_in(img)
     return False
+
+
+def _standard_dialog_present(img_np):
+    """帧内是否有标准对话框（与 _task_gone_occluded 同一判定）。
+
+    img_np 可为 ocr_regions 的区域掩码帧（对话区像素已贴回，模板特征
+    块在 DIALOG_REGION 内时与整帧同分）或整帧；None/异常按无对话框
+    处理。用于「面板缺席但对话框在场」时先走对话框处理链，再判任务
+    消失——遮挡负条件以对话框在场推迟完成判定，对话框不处理就永远
+    无法收敛（2026-11-12 玄枢轶闻找垂钓老者实测）。
+    """
+    if img_np is None:
+        return False
+    try:
+        return dialog_frame_score(np.asarray(img_np)) >= DIALOG_FRAME_THRESHOLD
+    except Exception:
+        return False
 
 
 def _confirm_task_gone(win, title, fallback_texts=(), first_img=None,
@@ -1549,6 +1571,74 @@ def _maybe_sheyaoxiang(win):
         log(f"[摄妖香] 寻路期续用异常: {e}", "WARN")
 
 
+def _handle_dialogs(win, items, img_np, img, title=TASK_TITLE, prefix="",
+                    story_gate=None, green_order=None, green_picker=None,
+                    fallback_keywords=None, require_coord=False,
+                    skip_texts=None):
+    """follow 轮询的内置对话框处理链，返回是否已处理。
+
+    顺序：特定对话框指定绿字 → 点屏幕中间跳过 → 已知绿字选项 → 无选项
+    剧情对话点屏兜底。面板在场的正常轮询与「面板缺席但标准对话框在场」
+    的消失确认前处理共用本函数——后者必须先把对话框处理掉：任务消失
+    确认的遮挡负条件以「标准对话框在场」推迟完成判定，而对话框若不
+    处理就永远不会消失，判定永远收敛不了（2026-11-12 玄枢轶闻找垂钓
+    老者实测：面板已消失、剧情对话在场，确认窗口连续空转 2 分钟以上）。
+    """
+    handled = False
+    for dtxt, opt in DIALOG_OPTION_MAP.items():
+        if _dialog_text_present(items, dtxt):
+            if _click_green_option_once(win, items, img_np, opt):
+                handled = True
+                _arm_diaoyu_check(opt)  # 钓鱼入口点击 → 开启窗口检测
+                break
+            # 选项未被 OCR 识别（如单字选项）：按序号点击兜底
+            idx = DIALOG_OPTION_INDEX_MAP.get(dtxt)
+            if idx and _click_dialog_option_by_index(win, items, img_np,
+                                                     dtxt, idx):
+                handled = True
+                _arm_diaoyu_check(opt)  # 同上（序号兜底路径）
+                break
+    if not handled and any(_dialog_text_present(items, t)
+                           for t in DIALOG_LOSE_TEXTS):
+        # 战斗失败/平局对话框：继续点击任务追踪的绿色文案推进任务
+        # （复用本轮 OCR 结果，省一次截图+OCR）
+        ok3, info3 = task_tracker.track_task(win, title, green_order=green_order,
+                                             green_picker=green_picker,
+                                             fallback_keywords=fallback_keywords,
+                                             pre_items=(items, img_np),
+                                             require_coord=require_coord)
+        if ok3:
+            log(f"[{prefix}] 检测到「你输了/平局」对话，继续点击任务绿字推进", "SYS")
+            handled = True
+        else:
+            log(f"[{prefix}] 「你输了/平局」对话中任务绿字点击失败: {info3}", "WARN")
+    if not handled:
+        for dtxt, clicks in (DIALOG_SKIP_TEXTS.items()
+                             if skip_texts is None
+                             else skip_texts.items()):
+            if _dialog_text_present(items, dtxt):
+                # 命中即按文案对应次数连点推进（多屏对话无需枚举
+                # 后续文案，漏推进由下一轮询 OCR 自愈）；命中文案
+                # 打日志便于排查
+                log(f"[{prefix}] 跳过对话命中文案「{dtxt}」，连点 {clicks} 次", "SYS")
+                _dc_click_screen_center(win, times=clicks, prefix=prefix)
+                handled = True
+                break
+    if not handled:
+        for opt in DIALOG_OPTIONS:
+            if _click_green_option_once(win, items, img_np, opt, prefix=prefix):
+                debug_overlay.set_phase("任务对话")  # 看板阶段
+                handled = True
+                break
+    # 无选项剧情对话兜底：点屏幕中间推进/关闭（不处理会常驻屏幕，
+    # 对话门每轮命中、对话区 OCR 每 0.5s 空烧，2026-11-10 实测）
+    # img 为本轮已截帧（复用 OCR 结果时为 None，寻路判定内部补截）：
+    # 寻路中点屏会取消自动寻路，人物停下不走（2026-11-11 用户实机）
+    if not handled and story_gate is not None:
+        story_gate.try_dismiss(win, items, img_np, prefix=prefix, img=img)
+    return handled
+
+
 def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶闻",
                 extra_dialog_handler=None, green_order=None, progress_key=None,
                 green_picker=None, fallback_keywords=None, first_items=None,
@@ -1734,6 +1824,20 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
             task_tracker.group_tasks(items, task_tracker.panel_row_xmax(img_np)),
             title)
         if task is None:
+            # 面板缺席但标准对话框在场：先走对话框处理链再判任务消失。
+            # 任务消失确认的遮挡负条件以「对话框在场」推迟判定，而对话框
+            # 不处理就永远不会消失（2026-11-12 玄枢轶闻找垂钓老者实测：
+            # 面板已消失、剧情对话框在场，确认窗口空转 2 分钟以上）
+            if _standard_dialog_present(img_np):
+                _handle_dialogs(win, items, img_np, img, title=title,
+                                prefix=prefix, story_gate=story_gate,
+                                green_order=green_order,
+                                green_picker=green_picker,
+                                fallback_keywords=fallback_keywords,
+                                require_coord=require_coord,
+                                skip_texts=skip_texts)
+                time.sleep(FOLLOW_POLL_INTERVAL)
+                continue
             # 战斗刚结束的首个非战斗轮：面板缺席按任务消失处理（用户
             # 2026-11-11 确认）——否则要空等 6s 后不判定（战斗结束
             # 返程慢 10s）
@@ -1905,6 +2009,12 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                         items, task_tracker.panel_row_xmax(img_np)),
                     title)
                 if task2 is None:
+                    if _standard_dialog_present(img):
+                        # 面板缺席但标准对话框在场：回退正常轮询，由对话框
+                        # 处理链推进（本帧只 OCR 了追踪面板区，无对话行可
+                        # 用）；遮挡负条件会在对话框关闭前持续推迟消失判定
+                        changed_once = False
+                        continue
                     if _confirm_task_gone(win, title, fallback_keywords,
                         first_img=img, polls=_gone_polls()):
                         if _task_gone_dialog_guard(win, extra_dialog_handler,
@@ -2028,8 +2138,8 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 continue
             # 钓鱼小游戏（玄枢轶闻专属）：入口选项「先钓一下再说！」点击
             # 后（armed 门控）检测窗口标题 xuanshu_diaoyu.png；窗口出现
-            # 即完整执行闭环（与客栈破除封印同一实现；钓鱼为长按模式，
-            # 开始后按钮为「长按」，按住才推进）
+            # 即完整执行闭环（与客栈破除封印同一实现；钓鱼为长按按钮，
+            # 长按运输 + 短段长按维持——进带不锁定，须回落至 C 后短按保持）
             if _diaoyu_window_check(win, img, prefix):
                 continue
             # 封印机关破解：提示对话框出现则完整处理（点击关闭 → 降落 →
@@ -2049,6 +2159,20 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                                          task_tracker.panel_row_xmax(img_np)),
                 title)
             if task2 is None:
+                # 面板缺席但标准对话框在场：先按对话框处理链推进（点选项/
+                # 剧情点屏），关闭后再判任务消失——任务消失确认的遮挡负
+                # 条件以对话框在场推迟判定，不处理对话框就永远收敛不了
+                # （2026-11-12 玄枢轶闻找垂钓老者实测空转 2 分钟以上）
+                if _standard_dialog_present(img_np):
+                    _handle_dialogs(win, items, img_np, img, title=title,
+                                    prefix=prefix, story_gate=story_gate,
+                                    green_order=green_order,
+                                    green_picker=green_picker,
+                                    fallback_keywords=fallback_keywords,
+                                    require_coord=require_coord,
+                                    skip_texts=skip_texts)
+                    changed_once = False
+                    continue
                 if _confirm_task_gone(win, title, fallback_keywords,
                     first_img=img, polls=_gone_polls()):
                     if _task_gone_dialog_guard(win, extra_dialog_handler,
@@ -2103,58 +2227,11 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
             # 防止回调点击后的陈旧帧继续命中内置表造成同帧双点（审计契约问题 1）
             if extras_handled:
                 continue
-            handled = False
-            for dtxt, opt in DIALOG_OPTION_MAP.items():
-                if _dialog_text_present(items, dtxt):
-                    if _click_green_option_once(win, items, img_np, opt):
-                        handled = True
-                        _arm_diaoyu_check(opt)  # 钓鱼入口点击 → 开启窗口检测
-                        break
-                    # 选项未被 OCR 识别（如单字选项）：按序号点击兜底
-                    idx = DIALOG_OPTION_INDEX_MAP.get(dtxt)
-                    if idx and _click_dialog_option_by_index(win, items, img_np,
-                                                             dtxt, idx):
-                        handled = True
-                        _arm_diaoyu_check(opt)  # 同上（序号兜底路径）
-                        break
-            if not handled and any(_dialog_text_present(items, t)
-                                   for t in DIALOG_LOSE_TEXTS):
-                # 战斗失败/平局对话框：继续点击任务追踪的绿色文案推进任务
-                # （复用本轮 OCR 结果，省一次截图+OCR）
-                ok3, info3 = task_tracker.track_task(win, title, green_order=green_order,
-                                                     green_picker=green_picker,
-                                                     fallback_keywords=fallback_keywords,
-                                                     pre_items=(items, img_np),
-                                                     require_coord=require_coord)
-                if ok3:
-                    log(f"[{prefix}] 检测到「你输了/平局」对话，继续点击任务绿字推进", "SYS")
-                    handled = True
-                else:
-                    log(f"[{prefix}] 「你输了/平局」对话中任务绿字点击失败: {info3}", "WARN")
-            if not handled:
-                for dtxt, clicks in (DIALOG_SKIP_TEXTS.items()
-                                     if skip_texts is None
-                                     else skip_texts.items()):
-                    if _dialog_text_present(items, dtxt):
-                        # 命中即按文案对应次数连点推进（多屏对话无需枚举
-                        # 后续文案，漏推进由下一轮询 OCR 自愈）；命中文案
-                        # 打日志便于排查
-                        log(f"[{prefix}] 跳过对话命中文案「{dtxt}」，连点 {clicks} 次", "SYS")
-                        _dc_click_screen_center(win, times=clicks, prefix=prefix)
-                        handled = True
-                        break
-            if not handled:
-                for opt in DIALOG_OPTIONS:
-                    if _click_green_option_once(win, items, img_np, opt, prefix=prefix):
-                        debug_overlay.set_phase("任务对话")  # 看板阶段
-                        handled = True
-                        break
-            # 无选项剧情对话兜底：点屏幕中间推进/关闭（不处理会常驻屏幕，
-            # 对话门每轮命中、对话区 OCR 每 0.5s 空烧，2026-11-10 实测）
-            # img 为本轮已截帧（复用 OCR 结果时为 None，寻路判定内部补截）：
-            # 寻路中点屏会取消自动寻路，人物停下不走（2026-11-11 用户实机）
-            if not handled and story_gate is not None:
-                story_gate.try_dismiss(win, items, img_np, prefix=prefix, img=img)
+            _handle_dialogs(win, items, img_np, img, title=title, prefix=prefix,
+                            story_gate=story_gate, green_order=green_order,
+                            green_picker=green_picker,
+                            fallback_keywords=fallback_keywords,
+                            require_coord=require_coord, skip_texts=skip_texts)
         else:
             return False, f"第 {rounds} 轮跟踪后任务信息无变化（超时）"
     return False, f"跟踪任务超时（{timeout}s）"
