@@ -526,6 +526,72 @@ def test_follow_task_confirm_no_per_task_flags(monkeypatch):
     assert "task_gone_require_standing" not in confirms[0]
 
 
+# ---- follow 点击尝试失败但任务已完成：按完成返回（2026-11-13） ----
+def _patch_follow_track_fail(monkeypatch, gone_ok):
+    """装配 follow_task：任务在面板 → track_task 失败（完成过渡帧标题/
+    内容仍在、绿字链接已消失，点不到绿字）→ _confirm_task_gone 结论由
+    gone_ok 决定。"""
+    class _Win:
+        def capture(self, force_activate=False):
+            return object()
+
+    task = {"title": "常规玩法", "lines": [("前往大理寺墙外附近寻", None)],
+            "text": "常规玩法"}
+    calls = {"confirm": 0}
+    monkeypatch.setattr(xuanshu, "log", lambda *a, **k: None)
+    monkeypatch.setattr(xuanshu, "battle_watch_in_battle", lambda: False)
+    monkeypatch.setattr(xuanshu, "is_in_battle", lambda win: False)
+    monkeypatch.setattr(xuanshu, "is_in_battle_frame", lambda img: False)
+    monkeypatch.setattr(xuanshu, "tab_group", type(
+        "T", (), {"pass_active": False, "active": staticmethod(lambda: False)}))
+    monkeypatch.setattr(xuanshu.task_tracker, "ocr_follow",
+                        lambda img: ([("常规玩法[每日]", [10, 240, 180, 258],
+                                       0.99)], None))
+    monkeypatch.setattr(xuanshu.task_tracker, "group_tasks",
+                        lambda items, xmax=0: items)
+    monkeypatch.setattr(xuanshu.task_tracker, "panel_row_xmax",
+                        lambda img_np: 400)
+    monkeypatch.setattr(xuanshu.task_tracker, "find_task",
+                        lambda tasks, title: task)
+    monkeypatch.setattr(xuanshu.task_tracker, "task_signature",
+                        lambda t: "常规玩法|前往大理寺墙外附近寻")
+    monkeypatch.setattr(xuanshu.task_tracker, "track_task",
+                        lambda win, title, **k:
+                        (False, "任务追踪中未找到「常规玩法」"))
+
+    def _confirm(*a, **k):
+        calls["confirm"] += 1
+        return gone_ok
+
+    monkeypatch.setattr(xuanshu, "_confirm_task_gone", _confirm)
+    monkeypatch.setattr(xuanshu, "_task_gone_dialog_guard",
+                        lambda *a, **k: False)
+    return _Win(), calls
+
+
+def test_follow_task_track_fail_after_completion_is_done(monkeypatch):
+    """track_task 点不到绿字但任务消失确认命中 → 按完成返回。
+
+    回归 2026-11-13 客栈第 20 次完成记漏：进度变化确认落在完成瞬间
+    （确认前对话框/extras 持续复位 changed_once），确认后补的那次
+    track_task 点不到绿字返回失败，整轮 fail 使完成次数少记 1。
+    """
+    win, calls = _patch_follow_track_fail(monkeypatch, gone_ok=True)
+    ok, info = xuanshu.follow_task(win, "常规玩法", timeout=30)
+    assert ok is True
+    assert "任务已从任务追踪中消失" in info
+    assert calls["confirm"] == 1
+
+
+def test_follow_task_track_fail_task_present_is_fail(monkeypatch):
+    """track_task 失败且任务消失确认未通过（任务仍在/未决）：保持失败。"""
+    win, calls = _patch_follow_track_fail(monkeypatch, gone_ok=False)
+    ok, info = xuanshu.follow_task(win, "常规玩法", timeout=30)
+    assert ok is False
+    assert info == "任务追踪中未找到「常规玩法」"
+    assert calls["confirm"] == 1
+
+
 # ---- 玄枢轶闻：全部任务共用一条面板缺席规则（用户 2026-11-12） ----
 def test_run_cycle_uses_shared_confirm_rule(monkeypatch):
     """玄枢轶闻两条 follow 路径都不传 per-task 面板参数。

@@ -1977,6 +1977,22 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                                            pre_items=(items, img_np),
                                            require_coord=require_coord)
         if not ok:
+            # 任务可能恰在本次点击尝试前完成：面板过渡帧标题/内容仍在但
+            # 绿字链接已消失，track_task 找不到可点击绿字返回失败。变化
+            # 确认落在完成瞬间时必然走到这里（2026-11-13 客栈第 20 次
+            # 完成记漏：进度键确认前对话框/extras 持续复位 changed_once，
+            # 确认后才补这次多余点击，点不到绿字 → 整轮 fail 少记 1 次）。
+            # 先做任务消失确认：确认消失即按完成返回（用户规则：任务追踪
+            # 消失=任务结束），任务仍在才保持原失败。
+            if _confirm_task_gone(win, title, fallback_keywords,
+                                  polls=_gone_polls()):
+                if _task_gone_dialog_guard(win, extra_dialog_handler,
+                    tpl_gate=dialog_tpl_gate,
+                    extra_gate=dialog_extra_gate):
+                    continue  # 弹窗仍在：先处理，下一轮再确认
+                if not task_seen:
+                    return False, info
+                return True, f"任务已从任务追踪中消失（本轮跟踪 {rounds} 次点击）"
             return False, info
         last_clicked_sig = sig
         rounds += 1
