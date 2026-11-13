@@ -681,3 +681,108 @@ def test_task_gone_dialog_guard_off_leader_skips(monkeypatch):
     ok = xuanshu._task_gone_dialog_guard(
         win, lambda w, items, img: called.append("handler") or True)
     assert ok is False and called == []
+
+
+# ---- 领取链路的「世界点击」防护（2026-11-13 用户实机） ----
+# 现象：玄枢轶闻回到领取点附近后又走到 [117,136]、本轮领取失败，下一轮
+# 走回领取点才领到。原因是寻路未停稳时点领取按钮/缓存选项，点击落到游戏
+# 世界（既重新指定目的地又把对话框关掉）。两道门：站定确认 + 缓存选项
+# 点击前同帧对话框模板复检。
+
+def _pos_frame(offset):
+    """位置文字区带白色方块的地图帧（offset 变化=人物在走）。"""
+    import numpy as np
+    arr = np.zeros((831, 1378, 3), dtype="uint8")
+    l, t = 45, 60
+    arr[t:t + 20, l + (offset % 150):l + (offset % 150) + 10] = 255
+    return Image.fromarray(arr)
+
+
+class _MoveWin:
+    """按序返回帧的假窗口（帧序列代表位置区像素变化）。"""
+
+    def __init__(self, frames):
+        self.frames = frames
+        self.i = 0
+
+    def capture(self, force_activate=False):
+        img = self.frames[min(self.i, len(self.frames) - 1)]
+        self.i += 1
+        return img
+
+
+def test_wait_option_visible_requires_dialog_frame(monkeypatch):
+    """无对话框时世界里的同文案文字（NPC 头顶浮标/任务浮字）不算选项：
+    对话框边框模板未命中 → 不判「选项已出现」（否则缓存坐标点到世界）。"""
+    clock = _GoneClock()
+    monkeypatch.setattr(xuanshu, "time", clock)
+    monkeypatch.setattr(xuanshu, "dialog_frame_score", lambda frame: 0.5)
+    ocr_calls = []
+    monkeypatch.setattr(
+        xuanshu.game_map, "ocr_regions",
+        lambda img, regions: ocr_calls.append(1)
+        or ([("玄枢轶闻", (490, 427, 600, 447), 0.99)], None))
+    assert xuanshu._wait_option_visible(_GuardWin(), "玄枢轶闻", None) is False
+    assert not ocr_calls  # 模板未命中连 OCR 都不做
+
+
+def test_wait_option_visible_with_dialog_frame(monkeypatch):
+    """对话框模板在场 + 选项行可见 → 判定选项已渲染。"""
+    clock = _GoneClock()
+    monkeypatch.setattr(xuanshu, "time", clock)
+    monkeypatch.setattr(xuanshu, "dialog_frame_score", lambda frame: 0.98)
+    monkeypatch.setattr(
+        xuanshu.game_map, "ocr_regions",
+        lambda img, regions: ([("玄枢轶闻", (490, 427, 600, 447), 0.99)], None))
+    assert xuanshu._wait_option_visible(_GuardWin(), "玄枢轶闻", None) is True
+
+
+def test_cached_option_click_blocked_when_dialog_closed(monkeypatch):
+    """渲染等待（0.3s）内对话框关闭：点击前复检不通过 → 不点缓存坐标
+    （同一点击会落在游戏世界把人物带走），清缓存回退识别路径。"""
+    clock = _GoneClock()
+    monkeypatch.setattr(xuanshu, "time", clock)
+    monkeypatch.setattr(xuanshu.app_utils, "high_perf_on", lambda: True)
+    monkeypatch.setattr(xuanshu.app_utils, "fixed_pos_get",
+                        lambda key, win: (490, 427))
+    cleared = []
+    monkeypatch.setattr(xuanshu.app_utils, "fixed_pos_clear",
+                        lambda key: cleared.append(key))
+    monkeypatch.setattr(xuanshu, "_wait_option_visible", lambda *a, **k: True)
+    monkeypatch.setattr(xuanshu, "_dialog_option_visible_now",
+                        lambda win, text: False)
+    clicks = []
+    monkeypatch.setattr(xuanshu, "human_click",
+                        lambda *a, **k: clicks.append(a))
+    monkeypatch.setattr(xuanshu.game_map, "ocr_regions",
+                        lambda img, regions: ([], None))
+    logs = []
+    monkeypatch.setattr(xuanshu, "log",
+                        lambda msg, level="INFO": logs.append((msg, level)))
+
+    ok, _info = xuanshu._click_dialog_green_option(_GuardWin(), "玄枢轶闻")
+    assert ok is False
+    assert clicks == []                      # 没有点到世界
+    assert cleared == ["option_玄枢轶闻"]     # 缓存作废，下轮回退识别
+    assert any("复检" in m for m, _ in logs)
+
+
+def test_wait_claim_still_true_when_static(monkeypatch):
+    """位置区像素连续不变 → 站定，放行领取按钮点击。"""
+    clock = _GoneClock()
+    monkeypatch.setattr(xuanshu, "time", clock)
+    monkeypatch.setattr(xuanshu.app_utils, "track_walk_idle_seconds",
+                        lambda: 100.0)
+    ok, info = xuanshu._wait_claim_still(_MoveWin([_pos_frame(0)]))
+    assert ok is True and info == "人物已站定"
+
+
+def test_wait_claim_still_false_while_walking(monkeypatch):
+    """位置区像素持续变化（寻路未停）→ 超时返回 False，本轮不点领取。"""
+    clock = _GoneClock()
+    monkeypatch.setattr(xuanshu, "time", clock)
+    monkeypatch.setattr(xuanshu.app_utils, "track_walk_idle_seconds",
+                        lambda: 100.0)
+    frames = [_pos_frame(i * 20) for i in range(60)]
+    ok, info = xuanshu._wait_claim_still(_MoveWin(frames))
+    assert ok is False and "站定" in info

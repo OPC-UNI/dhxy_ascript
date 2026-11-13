@@ -58,6 +58,18 @@ ARRIVE_TIMEOUT = 90                 # 等待寻路完成的超时（秒）
 DIALOG_OPTION_XUANSHU = "玄枢轶闻"
 DIALOG_OPTION_LINGQU = "领取玄枢轶闻"
 DIALOG_TIMEOUT = 10                 # 等待对话框出现的超时（秒）
+# 领取链路的「会落到世界画面的点击」前置门（2026-11-13 用户实机教训：
+# 已回到领取点附近却又走开到 [117,136]、下一轮才领到）。寻路未完全停稳
+# 就点领取按钮/缓存选项时，点击会落到游戏世界画面：既重新指定目的地把
+# 人物带走，又把刚渲染的领取对话框关掉，领取必失败。两道门：
+#  ① 到达后先确认人物站定（位置文字区像素比对，零 OCR，机制与标定同
+#     剧情点屏的 STORY_MOVE_*：45 对真实帧，站立帧差 ≤0.26/行走 ≥0.50）；
+#  ② 缓存选项点击前**同一帧**必须命中对话框边框模板——世界画面里的同
+#     文案文字（NPC 头顶浮标、任务变化浮字）同样以选项文案开头出现在
+#     对话框区 OCR 里，只看文字会把「没开对话框」判成「选项已出现」；
+#     点击前再复检一次，防 0.3s 渲染等待内对话框关闭。
+CLAIM_STILL_POLL_INTERVAL = 0.3     # 站定轮询间隔（秒）
+CLAIM_STILL_TIMEOUT = 6.0           # 站定等待上限（秒）；超时按本轮失败返回
 # 任务过程中出现的对话框绿色选项（跟踪期间检测到则点击，按顺序）
 DIALOG_OPTIONS = ["注入玄蕴试试看"]
 # ---- 监天盘子任务（追踪文案「使用监天盘寻找石妖踪迹」出现即触发）----
@@ -85,8 +97,8 @@ from .dialog_common import (DAILY_LIMIT_TEXT, DAILY_LIMIT_INFO,
                             SCREEN_CENTER_POS,
                             DIALOG_FRAME_THRESHOLD,
                             dialog_ocr_skip, dialog_frame_score,
-                            clear_blocking_dialog, PositionStillness,
-                            StoryDialogDismisser)
+                            clear_blocking_dialog, MoveWatch,
+                            PositionStillness, StoryDialogDismisser)
 # 每日任务次数已满的对话文案（出现即结束任务循环）
 # 需要点击屏幕中间跳过的对话框文案 → 点击次数（出现则连点屏幕中间推进
 # 对话，同 kezhan.DIALOG_SKIP_TEXTS）；不同文案要推进的屏数不同，次数
@@ -349,6 +361,28 @@ def wait_arrive(win, timeout=ARRIVE_TIMEOUT):
     return False, f"等待寻路完成超时（{timeout}s）"
 
 
+def _wait_claim_still(win, timeout=CLAIM_STILL_TIMEOUT):
+    """到达领取点后等待人物站定。返回 (是否站定, 描述)。
+
+    位置文字区像素比对（MoveWatch，零 OCR，~0.1ms/次）：寻路刚结束或
+    仍在移动时点领取按钮，点击会落到游戏世界重新指定目的地——人物被
+    带走、领取对话框随之关闭（2026-11-13 实机：回到领取点后又走开到
+    [117,136]，下一轮才领到）。判据与剧情点屏推进同一套（位置区连续
+    不变轮询数 STORY_MOVE_STATIC_POLLS）。
+
+    超时返回 False，调用方按本轮失败处理——下一轮重读位置坐标后正常
+    寻路/领取，自愈且不会把人物带走（比「边移动边点」安全）。
+    """
+    watch = MoveWatch()
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        img = win.capture(force_activate=False)
+        if img is not None and watch.walking(win, img) is False:
+            return True, "人物已站定"
+        time.sleep(CLAIM_STILL_POLL_INTERVAL)
+    return False, "到达后人物仍未站定（寻路未停），本轮不点击领取以免被带走"
+
+
 def _jiantianpan_active(items):
     """追踪面板是否出现监天盘子任务文案（跨行拼接后模糊匹配）。"""
     panel_txt = "".join(t for t, r, _ in items if r[0] < task_tracker.PANEL_MAX_X)
@@ -491,13 +525,37 @@ def _option_present(items, text):
                for t, r, s in items)
 
 
+def _dialog_option_visible_now(win, text):
+    """单帧复检：对话框边框模板在场且选项行可见。
+
+    缓存坐标点击的最后一道门（见 CLAIM_* 注释）：只有真的开着对话框，
+    (490,427) 这类缓存坐标才是选项；没有对话框时同一点击落在游戏世界。
+    """
+    img = win.capture(force_activate=False)
+    if img is None:
+        return False
+    if dialog_frame_score(img) < DIALOG_FRAME_THRESHOLD:
+        return False
+    items, _ = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
+    return _option_present(items, text)
+
+
 def _wait_option_visible(win, text, abort_text, timeout=4.0):
-    """等对话框渲染出选项行（以 text 开头）；期间出现 abort_text 返回 False。"""
+    """等对话框渲染出选项行（以 text 开头）；期间出现 abort_text 返回 False。
+
+    同帧必须命中对话框边框模板（dialog_frame_score）：世界画面里的同文案
+    文字（NPC 头顶浮标、任务变化浮字）在对话框区 OCR 里同样以该文案开头，
+    只看文字会把「对话框没开」判成「选项已出现」，随后的缓存坐标点击就
+    落到游戏世界（2026-11-13 实机：人物被带走 26 格、领取失败）。
+    """
     deadline = time.time() + timeout
     while time.time() < deadline:
         img = win.capture(force_activate=False)
         if img is None:
             time.sleep(0.5)
+            continue
+        if dialog_frame_score(img) < DIALOG_FRAME_THRESHOLD:
+            time.sleep(0.5)  # 无标准对话框：画面文字不算选项，继续等
             continue
         items, _ = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
         if abort_text and _dialog_text_present(items, abort_text):
@@ -537,12 +595,19 @@ def _click_dialog_green_option(win, text, timeout=DIALOG_TIMEOUT, abort_text=Non
         if pos is not None:
             if _wait_option_visible(win, text, abort_text):
                 time.sleep(0.3)  # 渲染稳定
-                human_click(win, pos[0], pos[1])
-                log(f"[玄枢轶闻][高性能] 已按缓存坐标点击「{text}」 ({pos[0]}, {pos[1]})", "SYS")
-                if _option_gone(win, text):
-                    return True, f"已按缓存坐标点击对话框绿色选项「{text}」"
-                app_utils.fixed_pos_clear(f"option_{text}")
-                log(f"[玄枢轶闻][高性能] 缓存坐标点击「{text}」未生效，清缓存回退识别", "WARN")
+                # 点击前复检（同帧对话框模板 + 选项行）：渲染等待期间对话框
+                # 关闭时，缓存坐标会落到游戏世界把人物带走（2026-11-13 实机）
+                if not _dialog_option_visible_now(win, text):
+                    app_utils.fixed_pos_clear(f"option_{text}")
+                    log(f"[玄枢轶闻][高性能] 点击前复检对话框/选项已消失"
+                        f"（对话框关闭或状态已变），清缓存回退识别", "WARN")
+                else:
+                    human_click(win, pos[0], pos[1])
+                    log(f"[玄枢轶闻][高性能] 已按缓存坐标点击「{text}」 ({pos[0]}, {pos[1]})", "SYS")
+                    if _option_gone(win, text):
+                        return True, f"已按缓存坐标点击对话框绿色选项「{text}」"
+                    app_utils.fixed_pos_clear(f"option_{text}")
+                    log(f"[玄枢轶闻][高性能] 缓存坐标点击「{text}」未生效，清缓存回退识别", "WARN")
             else:
                 app_utils.fixed_pos_clear(f"option_{text}")
                 log(f"[玄枢轶闻][高性能] 点击前选项「{text}」未出现"
@@ -619,6 +684,13 @@ def navigate_to_task(win):
         return False, info, None
     log(f"[玄枢轶闻] {info}", "SYS")
 
+    # 站定门（2026-11-13 实机）：寻路未完全停稳就点领取按钮，点击会落到
+    # 游戏世界重新指定目的地——人物被带走、领取对话框关闭，本轮必失败
+    ok, info = _wait_claim_still(win)
+    if not ok:
+        log(f"[玄枢轶闻] {info}", "WARN")
+        return False, info, None
+
     # 领取任务（按钮随站位渲染位置变化，必须识图定位，不缓存）
     pt = game_map.find_template(win, TASK_LINGQU_ICON)
     if pt is None:
@@ -632,7 +704,9 @@ def navigate_to_task(win):
     if pt is None:
         return False, "已到达但未找到领取任务按钮", None
     human_click(win, pt[0], pt[1])
-    log("[玄枢轶闻] 已点击领取任务", "SYS")
+    # 记录按钮坐标：站位偏远时「任务」浮标仍可命中，点它会把人带走
+    # （2026-11-13 排查用，正常应在人物附近）
+    log(f"[玄枢轶闻] 已点击领取任务 @({pt[0]},{pt[1]})", "SYS")
 
     # 对话框 1：点击绿色选项「玄枢轶闻」（每日次数已满时出现「请明天再来」文案）
     ok, info = _click_dialog_green_option(win, DIALOG_OPTION_XUANSHU,
