@@ -9,8 +9,12 @@
     data/<角色ID>/task_stats.json       # 该角色的成就统计
     data/<角色ID>/high_perf_cache.json  # 该角色的高性能坐标缓存
 
-角色 ID 取窗口标题「（ID：数字）」；取不到退窗口绑定记录；再退
-_default。角色在启动时确定，切换账号需要重启（绑定在启动阶段完成）。
+角色 ID 取窗口绑定记录的账号 ID（「这个窗口的这个角色」语义）；未绑定时
+退实时窗口标题「（ID：数字）」；再退 _default。绑定优先而非标题优先：
+组号（一窗口多 Tab）模式下窗口标题随选中 Tab 变化，pass 切到队员 Tab
+时标题 ID 会短暂变成队员账号，按标题解析会让角色在 pass 期间漂移到
+队员数据目录（2026-11-13 修复）。角色在启动时确定，切换账号需要重启
+（绑定在启动阶段完成/任务启动时对齐启动所在 Tab）。
 
 旧版数据迁移：根目录 config.json / schemes.json / task_stats.json 原样
 保留（回滚安全），按角色把字段复制到 data/ 下——只复制不移动，
@@ -80,17 +84,27 @@ def role_id_from_char_key(ckey):
 
 
 def _probe_role_id():
-    """实时解析角色 ID：当前游戏窗口标题 → 绑定记录。异常返回 None。"""
+    """实时解析角色 ID：绑定记录 → 当前窗口标题。异常返回 None。
+
+    2026-11-13：绑定记录优先（此前标题优先）。组号（一窗口多 Tab）模式
+    下窗口标题随选中 Tab 变化，pass 切到队员 Tab 时标题账号 ID 变成队员
+    ——按标题解析会让控制窗口/任务进程在 30s 缓存周期内整段切到队员角色
+    目录（面板任务进度归零、成就页空态、统计/缓存写串到队员目录）。
+    绑定记录是「这个窗口的这个角色」的权威身份：启动与任务启动时都会
+    对齐实际 Tab（main._ensure_window_binding / ControlWindow.
+    _sync_start_tab_binding），pass 期间不变。未绑定时退回标题解析
+    （首次运行/登录界面/绑定丢失）。
+    """
     try:
         from . import game
-        win = game.find_main_window()
-        rid = role_id_from_text(getattr(win, "title", "") if win is not None else "")
-        if rid:
-            return rid
         raw = game.bound_window_id()
         if isinstance(raw, dict):
             raw = raw.get("id")
-        return role_id_from_text(raw)
+        rid = role_id_from_text(raw)
+        if rid:
+            return rid
+        win = game.find_main_window()
+        return role_id_from_text(getattr(win, "title", "") if win is not None else "")
     except Exception:
         return None
 
@@ -101,6 +115,15 @@ def current_role_id(refresh=False):
     if not refresh and _ROLE_CACHE["id"] and now - _ROLE_CACHE["ts"] < _ROLE_TTL:
         return _ROLE_CACHE["id"]
     rid = _probe_role_id() or DEFAULT_ROLE
+    old = _ROLE_CACHE["id"]
+    if old and old != rid:
+        # 运行中角色变化只应发生在换号（需重启）等显式场景；组号 pass 切
+        # Tab 不应再触发（绑定优先）。保留日志便于回归定位。
+        try:
+            from .app_utils import log
+            log(f"[数据] 角色解析变化: {old} → {rid}", "WARN")
+        except Exception:
+            pass
     _ROLE_CACHE["id"] = rid
     _ROLE_CACHE["ts"] = now
     return rid

@@ -83,7 +83,9 @@ _jiantianpan_last_done = 0.0                      # 上次流程执行时间戳
 from .dialog_common import (DAILY_LIMIT_TEXT, DAILY_LIMIT_INFO,
                             DIALOG_LOSE_TEXTS, DIALOG_SKIP_CLICKS,
                             SCREEN_CENTER_POS,
-                            dialog_ocr_skip, clear_blocking_dialog,
+                            DIALOG_FRAME_THRESHOLD,
+                            dialog_ocr_skip, dialog_frame_score,
+                            clear_blocking_dialog, PositionStillness,
                             StoryDialogDismisser)
 # 每日任务次数已满的对话文案（出现即结束任务循环）
 # 需要点击屏幕中间跳过的对话框文案 → 点击次数（出现则连点屏幕中间推进
@@ -232,6 +234,17 @@ FOLLOW_POLL_INTERVAL = 0.5          # 任务信息变化轮询间隔（秒）；
                                     # 静止帧轮询几乎零成本，动画帧周期由 OCR 主导
 CONFIRM_POLL_INTERVAL = 0.2         # 变化确认轮询间隔（秒）；OCR 本身约 1.2s，
                                     # 确认轮询只需极短间隔留出渲染稳定余量
+# 寻路停滞看门狗（2026-11-13 玄枢轶闻实测，仅点徐卿卿这一腿开启）：
+# 点「再去找徐卿卿接受他的考验」链接后寻路偶发起步即卡住（人物原地
+# 不动、无对话框、任务签名不变），follow 只能空等到 300s 超时——
+# 11-08/11-13 同一腿各一次，11-13 超时重试后 23s 即到达，属偶发卡点。
+# 位置文字区逐轮像素比对（复用 STORY_MOVE_DIFF_THRESHOLD，~0.1ms/次），
+# 静止 ≥6s 才做对话框模板检查（~9ms/次，只在疑似停滞时付）：对话框在
+# 场按「站定正常」重新计时；无对话框且静止 ≥15s 时补点一次任务链接。
+STALL_RECHECK_TARGET = "徐卿卿"     # 仅该腿开启（用户 2026-11-13：只发现这一腿卡）
+STALL_RECHECK_SECONDS = 15.0        # 允许补点的连续静止时长（秒）
+STALL_DIALOG_CHECK_SECONDS = 6.0    # 静止超过该时长才查对话框模板（省热路径开销）
+STALL_RECHECK_MAX = 3               # 每轮跟踪最多补点次数（防紧循环）
 # 任务消失确认（过滤 OCR 偶发漏读/战斗遮挡导致的误判完成——五环实测
 # 误判「任务消失」导致完成次数虚增、任务提前结束）：任务从追踪面板
 # 消失后连续若干轮询未见、且期间无战斗遮挡面板，才判定任务完成。
@@ -1379,6 +1392,12 @@ def _confirm_task_gone(win, title, fallback_texts=(), first_img=None,
     occluded_logged = False  # 遮挡负条件命中日志（限一次）
     occluded_by_panel = False  # 最近一次判定因遮挡被推迟（窗口耗尽时不得视为完成）
     while time.time() < deadline and time.time() < hard_deadline:
+        # 屏幕已不是队长 Tab（用户手动切走 / pass 中途开始）：队员屏本来
+        # 就没有任务追踪，面板缺席不构成完成证据——放弃本次确认，交回
+        # 外层轮询（follow 的队长屏护栏会暂停识别，切回后重新确认）。
+        if not tab_group.on_leader_screen(win):
+            log("[任务追踪] 屏幕已不是队长 Tab，本次不判定任务消失", "INFO")
+            return False
         img = first_img if first_img is not None else win.capture(force_activate=False)
         first_img = None
         if img is None:
@@ -1499,7 +1518,9 @@ def _confirm_guard_dialog(win, img, extra_dialog_handler, tpl_gate=True,
     """
     if extra_dialog_handler is None:
         return False
-    if tpl_gate and dialog_ocr_skip(img) \
+    if not tab_group.on_leader_screen(win):
+        return False  # 屏幕已不是队长 Tab（pass/用户手动切走）：不处理对话框
+    if tpl_gate and dialog_ocr_skip(img, win) \
             and not (extra_gate is not None and extra_gate(img)):
         return False  # 高性能+标准模板未命中且无补充门：无对话框，跳过 OCR 与 extras
     try:
@@ -1523,11 +1544,13 @@ def _task_gone_dialog_guard(win, extra_dialog_handler, tpl_gate=True,
     """
     if extra_dialog_handler is None:
         return False
+    if not tab_group.on_leader_screen(win):
+        return False  # 屏幕已不是队长 Tab（pass/用户手动切走）：不处理对话框
     try:
         img = win.capture(force_activate=False)
         if img is None or is_in_battle_frame(img):
             return False
-        if tpl_gate and dialog_ocr_skip(img) \
+        if tpl_gate and dialog_ocr_skip(img, win) \
                 and not (extra_gate is not None and extra_gate(img)):
             return False  # 高性能+标准模板未命中且无补充门：无对话框，
                           # 跳过 OCR 与 extras（返程链路省截窗后的
@@ -1631,7 +1654,8 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 task_gone_polls=None,
                 dialog_tpl_gate=True, dialog_extra_gate=None,
                 chuyijuebao_check=True, battle_extras_tpl_gate=False,
-                story_dialog_dismiss=True, story_known_texts=None):
+                story_dialog_dismiss=True, story_known_texts=None,
+                stall_recheck=False):
     """循环跟踪任务直到完成（prefix 供其他任务复用，如五环）。
 
     每轮：点击任务当前第一个绿色文案 → 等待任务信息变化（内容更新）
@@ -1725,6 +1749,13 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
     DIALOG_OPTION_MAP）。复用本引擎的任务（名望）传自己的选项表——
     否则本任务的带选项对话不在已知表内、选项未渲染时会被误判为
     无选项剧情对话点屏关闭（2026-11-10）。
+    stall_recheck：寻路停滞看门狗（默认关，其他任务零影响）。点追踪
+    链接后寻路偶发起步即卡住（人物原地不动、无对话框、签名不变），
+    follow 只能空等到 300s 超时（2026-11-08/11-13 玄枢轶闻同一腿实测）。
+    开启后位置文字区逐轮像素比对：非战斗、静止 ≥STALL_RECHECK_SECONDS
+    且无对话框时补点一次任务追踪链接（每轮至多 STALL_RECHECK_MAX 次，
+    补点后重新计时）。仅当本轮签名含 STALL_RECHECK_TARGET 时生效
+    （用户 2026-11-13：只发现「再去找徐卿卿接受他的考验」这一腿会卡）。
     返回 (是否完成, 描述)。
     """
     deadline = time.time() + timeout
@@ -1906,11 +1937,29 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
         last_battle_extras_at = 0.0 # 战斗中 extras 上次对话框 OCR 时间（限频）
         was_battle = False      # 本轮询前处于战斗（战斗结束转换帧直接做任务消失确认）；
                                 # 战斗帧与战斗线程确认状态都会置位，动画间隙不消费
+        # 寻路停滞看门狗状态（每轮跟踪重置）：仅 stall_recheck 且本轮签名
+        # 含 STALL_RECHECK_TARGET（徐卿卿腿）时创建，其他轮次零开销
+        stall_on = stall_recheck and STALL_RECHECK_TARGET in sig
+        stall_watch = PositionStillness() if stall_on else None
+        stall_reclicks = 0
 
         while time.time() < deadline:
-            time.sleep(CONFIRM_POLL_INTERVAL if changed_once else FOLLOW_POLL_INTERVAL)
+            poll_interval = CONFIRM_POLL_INTERVAL if changed_once else FOLLOW_POLL_INTERVAL
+            time.sleep(poll_interval)
             # 组号 pass 进行中：屏幕是队员 Tab，跳过本轮识别（同外层护栏）
             if tab_group.pass_active:
+                if stall_watch is not None:
+                    stall_watch.reset()  # 屏幕是队员 Tab，位置区不可比
+                continue
+            # 用户手动切到队员 Tab（2026-11-13 用户实机）：队员屏没有本
+            # 任务的任务追踪，继续识别会把「面板不在场」判成任务消失；
+            # 队员的对话框也会被当队长对话框处理。暂停识别与点击，切回
+            # 队长 Tab 后继续（暂停期逐轮顺延 deadline，不计入跟踪超时）。
+            if not tab_group.on_leader_screen(win):
+                deadline += poll_interval
+                tab_group.note_off_leader(f"[{prefix}] ")
+                if stall_watch is not None:
+                    stall_watch.reset()
                 continue
             img = win.capture(force_activate=False)
             if img is None:
@@ -1926,6 +1975,8 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
             # 10~30s）
             if is_in_battle_frame(img) or battle_watch_in_battle():
                 was_battle = True
+                if stall_watch is not None:
+                    stall_watch.reset()  # 战斗中位置不可比，战后重新计时
                 # 战斗等待时间不计入超时（与外层 is_in_battle 门同一预算；
                 # 首个非战斗帧处一次性顺延 deadline）
                 if battle_since is None:
@@ -1948,7 +1999,7 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 if extra_dialog_handler is not None \
                         and now - last_battle_extras_at >= BATTLE_EXTRAS_INTERVAL:
                     last_battle_extras_at = now
-                    if battle_extras_tpl_gate and dialog_ocr_skip(img) \
+                    if battle_extras_tpl_gate and dialog_ocr_skip(img, win) \
                             and not (dialog_extra_gate is not None
                                      and dialog_extra_gate(img)):
                         extra_dialog_handler(win, [],
@@ -2072,7 +2123,7 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 # 区域逐轮 OCR（对话随时可能出现，移动世界像素持续变化、
                 # 差分门不适用）
                 track_items = track_gate.ocr(img)
-                if dialog_tpl_gate and dialog_ocr_skip(img) \
+                if dialog_tpl_gate and dialog_ocr_skip(img, win) \
                         and not (dialog_extra_gate is not None
                                  and dialog_extra_gate(img)):
                     # 高性能+模板未命中：跳过对话区 OCR（无对话框空烧
@@ -2097,6 +2148,8 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
                 # 前的陈旧帧，签名变化与对话框判定均不可信，推迟到下一
                 # 轮询（实测 2026-10-13 五环：开场白对话与面板变化同帧，
                 # 若继续用陈旧帧跳出点击任务绿字会误点打开中的对话框）
+                if stall_watch is not None:
+                    stall_watch.reset()  # 本帧有处理动作：静止计时重新开始
                 changed_once = False
                 continue
             # 钓鱼小游戏（玄枢轶闻专属）：入口选项「先钓一下再说！」点击
@@ -2104,18 +2157,24 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
             # 即完整执行闭环（与客栈破除封印同一实现；钓鱼为长按按钮，
             # 长按运输 + 短段长按维持——进带不锁定，须回落至 C 后短按保持）
             if _diaoyu_window_check(win, img, prefix):
+                if stall_watch is not None:
+                    stall_watch.reset()  # 小游戏处理中：静止属正常
                 continue
             # 封印机关破解：提示对话框出现则完整处理（点击关闭 → 降落 →
             # 按序点机关，任务追踪变化即停）
             if _dialog_text_present(items, JIGUAN_DIALOG_TEXT):
                 ok2, info2 = _play_jiguan_puzzle(win, title)
                 log(f"[{prefix}] {info2}", "SYS" if ok2 else "WARN")
+                if stall_watch is not None:
+                    stall_watch.reset()  # 机关处理完：静止计时重新开始
                 continue
             # 锄遗聚宝优先：出现则完整处理（复用本帧模板匹配，不重复截窗）
             if chuyijuebao_check \
                     and game_map.find_template_in(img, CHUYIJUEBAO_ICON) is not None:
                 ok2, info2 = _play_chuyijuebao(win)
                 log(f"[{prefix}] {info2}", "SYS" if ok2 else "WARN")
+                if stall_watch is not None:
+                    stall_watch.reset()  # 小游戏处理完：静止计时重新开始
                 continue
             task2 = task_tracker.find_task(
                 task_tracker.group_tasks(items,
@@ -2176,11 +2235,42 @@ def follow_task(win, title=TASK_TITLE, timeout=FOLLOW_TIMEOUT, prefix="玄枢轶
             # 防止回调点击后的陈旧帧继续命中内置表造成同帧双点（审计契约问题 1）
             if extras_handled:
                 continue
-            _handle_dialogs(win, items, img_np, img, title=title, prefix=prefix,
-                            story_gate=story_gate, green_order=green_order,
-                            green_picker=green_picker,
-                            fallback_keywords=fallback_keywords,
-                            require_coord=require_coord, skip_texts=skip_texts)
+            dlg_handled = _handle_dialogs(
+                win, items, img_np, img, title=title, prefix=prefix,
+                story_gate=story_gate, green_order=green_order,
+                green_picker=green_picker,
+                fallback_keywords=fallback_keywords,
+                require_coord=require_coord, skip_texts=skip_texts)
+            # 寻路停滞看门狗（见 STALL_RECHECK_*）：位置区逐轮像素比对
+            # （~0.1ms）；静止 ≥STALL_DIALOG_CHECK_SECONDS 才查对话框模板
+            # （~9ms/次，只在疑似停滞时付），对话框在场按「站定正常」重新
+            # 计时；无对话框且静止 ≥STALL_RECHECK_SECONDS 补点一次任务
+            # 追踪链接恢复寻路（2026-11-13 徐卿卿腿空等 300s 实测）
+            if stall_watch is not None:
+                if dlg_handled:
+                    stall_watch.reset()  # 本帧有对话动作：静止计时重新开始
+                else:
+                    still = stall_watch.seconds(img)
+                    if still >= STALL_DIALOG_CHECK_SECONDS:
+                        if dialog_frame_score(img) >= DIALOG_FRAME_THRESHOLD:
+                            stall_watch.reset()  # 对话框在场：站定属正常
+                        elif still >= STALL_RECHECK_SECONDS \
+                                and stall_reclicks < STALL_RECHECK_MAX:
+                            ok_s, info_s = task_tracker.track_task(
+                                win, title, green_order=green_order,
+                                green_picker=green_picker,
+                                fallback_keywords=fallback_keywords,
+                                require_coord=require_coord)
+                            stall_reclicks += 1
+                            stall_watch.reset()
+                            if ok_s:
+                                app_utils.mark_track_walk()
+                                log(f"[{prefix}] 寻路停滞 {still:.0f}s"
+                                    f"（无对话框/战斗），已补点任务链接恢复寻路",
+                                    "WARN")
+                            else:
+                                log(f"[{prefix}] 寻路停滞 {still:.0f}s，"
+                                    f"补点任务链接失败: {info_s}", "WARN")
         else:
             return False, f"第 {rounds} 轮跟踪后任务信息无变化（超时）"
     return False, f"跟踪任务超时（{timeout}s）"
@@ -2206,7 +2296,8 @@ def run_cycle(win):
     if task_tracker.has_task(win, TASK_TITLE):
         ok, info = follow_task(win, extra_dialog_handler=_handle_jiantianpan,
                                progress_key=_jiguan_link_progress,
-                               green_picker=_jiguan_link_picker)
+                               green_picker=_jiguan_link_picker,
+                               stall_recheck=True)
         return ("done", info) if ok else ("fail", info)
 
     # 没有任务 → 寻路到任务位置并领取任务
@@ -2219,7 +2310,8 @@ def run_cycle(win):
     ok, info = follow_task(win, first_items=pre_items,
                            extra_dialog_handler=_handle_jiantianpan,
                            progress_key=_jiguan_link_progress,
-                           green_picker=_jiguan_link_picker)
+                           green_picker=_jiguan_link_picker,
+                           stall_recheck=True)
     return ("done", info) if ok else ("fail", info)
 
 

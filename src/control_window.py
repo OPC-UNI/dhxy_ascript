@@ -2378,7 +2378,36 @@ class ControlWindow(WebWindow):
                     pass_line += f"，到期 {info['expire']}"
                 app_utils.log(pass_line, "SYS")
                 self.add_logs([pass_line])
+            self._sync_start_tab_binding()  # 角色目录跟随「任务启动所在 Tab」
+            self.refresh_window_title()     # 绑定变化后刷新标题角色文案
             return self._tm.start()
+
+    def _sync_start_tab_binding(self):
+        """任务启动前把窗口绑定对齐到游戏当前所在 Tab。
+
+        组号（一窗口多 Tab）模式下任务在「启动所在 Tab」执行
+        （tab_group.init_task 以可见 Tab 为队长候选），而角色数据目录以
+        绑定记录为准（user_data._probe_role_id 绑定优先——pass 切到队员
+        Tab 时窗口标题会短暂变成队员账号，不能按标题解析）。启动前两者
+        对齐，避免用户手动切到别的 Tab 后开任务仍读写旧角色目录。
+        未登录（标题无 ID）或窗口未找到时不改绑定。
+        """
+        try:
+            win = game.find_main_window()
+            rid = user_data.role_id_from_text(
+                getattr(win, "title", "") if win is not None else "")
+            if not rid:
+                return
+            raw = game.bound_window_id()
+            bid = raw.get("id") if isinstance(raw, dict) else raw
+            if bid == f"（ID：{rid}）":
+                return
+            game.save_bound_window(win)
+            app_utils.log(f"[绑定] 任务启动 Tab 角色变化，绑定更新: {win.title}", "SYS")
+            # 立即切到新角色目录：面板进度/成就/设置读写不等 30s 缓存
+            user_data.current_role_id(refresh=True)
+        except Exception as e:
+            app_utils.log(f"[绑定] 启动 Tab 对齐失败: {e}", "WARN")
 
     def _set_license_info(self, info):
         """更新授权信息并推送面板（系统页授权信息区 + 侧边栏状态点实时刷新）。"""

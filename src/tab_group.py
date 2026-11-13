@@ -57,6 +57,7 @@ from . import game  # 子窗口枚举（每个 Tab 一个 Win32Window）
 from . import map as game_map  # 模板匹配快速接口
 from . import status_bars  # 血蓝条检测回满（队员 pass 复用）
 from . import task_tracker  # 对话框区域 OCR 与绿色选项定位
+from . import user_data  # 角色解析（窗口标题账号 ID，判别当前是否队长 Tab）
 from .dialog_common import _dialog_text_present  # 巫医对话框文案模糊匹配
 
 # ---- 时序与预算参数（秒） ----
@@ -210,6 +211,45 @@ def ready():
 def leader_id():
     """当前队长账号 ID（组号激活时解析；未激活/单号 None）。"""
     return _leader_id
+
+
+_off_leader_log_at = 0.0  # 「游戏停在队员 Tab」提示限频（30s）
+
+
+def on_leader_screen(win):
+    """当前画面是否属于本任务所在的队长 Tab（组号模式未激活时恒 True）。
+
+    只用 active()（当前任务模式仍是组号模式）判定：组号（一窗口多 Tab）
+    模式下窗口标题随选中 Tab 变化——实测静默 Tab 条点击切换也会同步
+    标题。任务线程/战斗线程的一切识别与点击都假定屏幕是队长 Tab：
+    - 用户手动切到队员 Tab（pass_active 为 False）：队员屏没有本任务
+      的任务追踪（会被判「任务消失」），队员屏的对话框也不是本任务的
+      （会被当队长对话框 OCR/点击）——2026-11-13 用户实机反馈；
+    - pass 进行中（pass_active 为 True）：屏幕本来就是队员 Tab。
+    两种情况都返回 False，调用方按「本轮不做识别/点击」处理，切回
+    队长 Tab / pass 结束后自动继续。标题无账号 ID（未登录/加载中）按
+    不在队长屏处理（保守暂停本轮）。
+
+    非组号任务模式（五环/客栈/玄枢等）不做归属检查：这些模式本来
+    跟随当前画面执行、不管理 Tab，`_leader_id` 可能是上一个组号模式
+    留下的旧值，套用会误暂停。
+    """
+    if not active():
+        return True
+    if pass_active:
+        return False
+    rid = user_data.role_id_from_text(getattr(win, "title", "") or "")
+    return bool(rid) and rid == _leader_id
+
+
+def note_off_leader(prefix=""):
+    """「游戏停在队员 Tab」限频提示（30 秒一次，防每轮询刷屏）。"""
+    global _off_leader_log_at
+    now = time.time()
+    if now - _off_leader_log_at >= 30.0:
+        _off_leader_log_at = now
+        log(f"{prefix}游戏停在队员 Tab（非队长），暂停识别与点击，"
+            f"切回队长 Tab 后自动继续", "WARN")
 
 
 def startup_check(win, create_if_missing=False, prefix="[组号]"):

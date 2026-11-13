@@ -226,3 +226,49 @@ def test_move_watch_unknown_without_frame(monkeypatch):
                         "track_walk_idle_seconds", lambda: 1e9)
     watch = dialog_common.MoveWatch()
     assert watch.walking(None, None) is None
+
+
+# ---- PositionStillness：寻路停滞看门狗的逐轮静止计时（2026-11-13 徐卿卿腿） ----
+
+def test_position_stillness_accumulates_and_move_resets():
+    """位置区不变累计静止秒数；位置文字变化（移动）归零重计。"""
+    import numpy as np
+    watch = dialog_common.PositionStillness()
+    frame = np.zeros((831, 1378, 3), np.uint8)
+    assert watch.seconds(frame, now=100.0) == 0.0  # 首帧建基线
+    assert watch.seconds(frame, now=101.5) == 1.5  # 连续静止：累计
+    moved = frame.copy()
+    moved[60:90, 45:222] = 200                     # 地图位置文字区域变化
+    assert watch.seconds(moved, now=103.0) == 0.0  # 检测到移动：归零
+    assert watch.seconds(moved, now=104.0) == 1.0  # 之后继续累计
+
+
+def test_position_stillness_reset_and_no_frame():
+    """reset()/无帧可查：归零并清基线（下帧从 0 重新累计）。"""
+    import numpy as np
+    watch = dialog_common.PositionStillness()
+    frame = np.zeros((831, 1378, 3), np.uint8)
+    watch.seconds(frame, now=1.0)
+    assert watch.seconds(frame, now=2.0) == 1.0
+    watch.reset()
+    assert watch.seconds(frame, now=3.0) == 0.0
+    assert watch.seconds(None, now=4.0) == 0.0     # 无帧：归零并清基线
+    assert watch.seconds(frame, now=5.0) == 0.0
+
+
+# ---- 对话区 OCR 门控：屏幕归属（2026-11-13 组号 pass/手动切 Tab） ----
+
+def test_dialog_ocr_skip_off_leader_skips(monkeypatch):
+    """当前画面不是队长 Tab（pass 进行中/用户手动切走）时按无对话框
+    跳过：队员屏的对话框不是本任务的，门控放行会让队长侧 OCR/点击。"""
+    from src import app_utils, tab_group
+    monkeypatch.setattr(app_utils, "high_perf_on", lambda: True)
+    monkeypatch.setattr(dialog_common, "dialog_frame_score",
+                        lambda frame: 0.99)  # 模板命中也不放行
+    monkeypatch.setattr(tab_group, "on_leader_screen", lambda win: False)
+    assert dialog_common.dialog_ocr_skip(None, object()) is True
+    # 队长屏：模板命中正常放行
+    monkeypatch.setattr(tab_group, "on_leader_screen", lambda win: True)
+    assert dialog_common.dialog_ocr_skip(None, object()) is False
+    # 不传 win（非组号调用/单测兼容）：不检查归属
+    assert dialog_common.dialog_ocr_skip(None) is False

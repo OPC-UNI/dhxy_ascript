@@ -393,3 +393,30 @@ def test_kv_remove_many_merged(monkeypatch, tmp_path):
     assert removed == 2
     assert json.loads(path.read_text(encoding="utf-8")) == {"b": 2}
     assert KeyValue._data == {"b": 2}
+
+
+# ---- 角色键：绑定窗口优先（2026-11-13 组号 pass 切 Tab 漂移修复） ----
+
+class _HwndWin:
+    def __init__(self, title, hwnd):
+        self.title = title
+        self.hwnd = hwnd
+
+
+def test_char_key_prefers_bound_window_over_live_title(monkeypatch):
+    """窗口标题短暂变成队员账号（组号 pass）时，绑定窗口的角色键仍取
+    绑定记录；非绑定窗口/无句柄假窗口按标题解析。"""
+    from src import game
+    monkeypatch.setattr(
+        game, "bound_window_id",
+        lambda: {"id": "（ID：286958560）", "hwnd": 100,
+                 "title": "服务器 - 队长（ID：286958560）"})
+    # 绑定窗口：标题此时是队员账号，角色键仍为绑定角色
+    assert app_utils.char_key(_HwndWin("服务器 - 队员（ID：214369642）", 100)) \
+        == "（ID：286958560）"
+    # 非绑定窗口：按标题解析
+    assert app_utils.char_key(_HwndWin("服务器 - 队员（ID：214369642）", 200)) \
+        == "（ID：214369642）"
+    # 无 hwnd 的假窗口（单测路径）：按标题解析
+    assert app_utils.char_key(_RoleWin("服务器 - 角色甲（ID：1001）")) \
+        == "（ID：1001）"

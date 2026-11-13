@@ -52,7 +52,12 @@ data/
 5. `user_data.set_last_active_role()` 记录本次角色。
 6. 控制窗口写 `data/<角色>/settings.json`；任务子进程通过
    `role_settings` 直接读当前角色设置（`user_data.current_role_id()`：
-   实时窗口标题 → 绑定记录 → `_default`，30s 缓存）。
+   **绑定记录 → 实时窗口标题 → `_default`**，30s 缓存）。绑定优先
+   （2026-11-13）：组号（一窗口多 Tab）pass 切到队员 Tab 时窗口标题会
+   短暂变成队员账号，按标题解析会让面板/统计在 pass 期间漂移到队员
+   角色目录（任务进度归零、成就页空态）。任务启动时
+   `ControlWindow._sync_start_tab_binding()` 把绑定对齐到启动所在
+   Tab（组号队长候选 = 可见 Tab），保证「启动在哪个 Tab 就是哪个角色」。
 
 **切换账号需要重启**：绑定与方案切换在启动阶段完成；任务运行中换号
 不会自动切目录（避免任务中途设置/统计错位）。

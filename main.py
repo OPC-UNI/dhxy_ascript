@@ -202,6 +202,8 @@ def _sheyaoxiang_idle_fallback(win):
         try:
             if tab_group.pass_active:
                 continue  # pass 进行中（当前可能在队员 Tab）：下分钟再查
+            if not tab_group.on_leader_screen(win):
+                continue  # 用户手动切到队员 Tab：不能在队员身上用摄妖香
             if not app_utils.sheyaoxiang_idle_due(
                     win, _SHEYAOXIANG_IDLE_FALLBACK_MINUTES):
                 continue

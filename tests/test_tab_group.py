@@ -54,6 +54,22 @@ def _no_switch_settle(monkeypatch):
     monkeypatch.setattr(tab_group, "TAB_SWITCH_SETTLE", 0.0)
 
 
+# 模块级组号状态（init_task/pass 直接改写全局变量，不受 monkeypatch 管理）
+_GROUP_STATE_ATTRS = ("_active", "_mode", "_leader_id", "_tab_count",
+                      "_logged_count", "_members", "_team_member_ids",
+                      "_acted_ids", "_no_members_logged", "pass_active",
+                      "_last_bars_pass_at", "_last_rejoin_pass_at",
+                      "_off_leader_log_at")
+
+
+@pytest.fixture(autouse=True)
+def _restore_group_state(monkeypatch):
+    """用例结束后恢复组号模块状态：init_task 会置 _active/_leader_id，
+    泄漏到其他测试文件会改变 on_leader_screen 等判定。"""
+    for name in _GROUP_STATE_ATTRS:
+        monkeypatch.setattr(tab_group, name, getattr(tab_group, name))
+
+
 @pytest.fixture(autouse=True)
 def _silent_mode_off():
     """每个测试结束复位静默开关（防污染其他测试）。"""
@@ -972,3 +988,54 @@ def test_startup_member_check_no_match_distinct_message(monkeypatch):
     assert "面板昵称未识别" not in info
     assert writes.get("group_detected") is False
     assert tab_group._team_member_ids == set()
+
+
+# ---- 队长屏归属判定（2026-11-13 手动切队员 Tab 误判任务消失修复） ----
+
+class _TitleWin:
+    def __init__(self, title):
+        self.title = title
+
+
+def _group_active(monkeypatch, leader="286958560", mode="修罗", pass_on=False):
+    """激活组号模式（active() 需 _mode 与当前任务模式一致）。"""
+    monkeypatch.setattr(tab_group, "_active", True)
+    monkeypatch.setattr(tab_group, "_mode", mode)
+    monkeypatch.setattr(tab_group, "_leader_id", leader)
+    monkeypatch.setattr(tab_group, "pass_active", pass_on)
+    monkeypatch.setattr(app_utils, "_current_task_mode", mode)
+
+
+def test_on_leader_screen_inactive_always_true(monkeypatch):
+    """组号未激活（单号/非组号任务）：不做归属检查，行为不变。"""
+    monkeypatch.setattr(tab_group, "_active", False)
+    assert tab_group.on_leader_screen(
+        _TitleWin("服务器 - 角色（ID：214369642）")) is True
+
+
+def test_on_leader_screen_detects_manual_tab_switch(monkeypatch):
+    """组号激活：标题是队长账号 → True；变成队员账号（pass/手动切 Tab）
+    → False；标题无 ID（未登录/加载中）保守按非队长屏。"""
+    _group_active(monkeypatch)
+    assert tab_group.on_leader_screen(
+        _TitleWin("服务器 - 队长（ID：286958560）")) is True
+    assert tab_group.on_leader_screen(
+        _TitleWin("服务器 - 队员（ID：214369642）")) is False
+    assert tab_group.on_leader_screen(_TitleWin("大话西游2经典版")) is False
+
+
+def test_on_leader_screen_pass_active_false(monkeypatch):
+    """pass 进行中：屏幕是队员 Tab，一律 False（同一护栏）。"""
+    _group_active(monkeypatch, pass_on=True)
+    assert tab_group.on_leader_screen(
+        _TitleWin("服务器 - 队长（ID：286958560）")) is False
+
+
+def test_on_leader_screen_other_mode_no_guard(monkeypatch):
+    """组号会话里切到非组号任务模式（五环等）：不套用队长屏判定——
+    这些模式跟随当前画面执行、不管理 Tab，_leader_id 是上一个组号模式
+    的旧值，套用会把正常画面误判成非队长屏。"""
+    _group_active(monkeypatch, mode="修罗")
+    monkeypatch.setattr(app_utils, "_current_task_mode", "五环")
+    assert tab_group.on_leader_screen(
+        _TitleWin("服务器 - 队员（ID：214369642）")) is True

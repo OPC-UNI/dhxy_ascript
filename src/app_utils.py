@@ -669,7 +669,27 @@ def fixed_pos_clear(key):
 # 摄妖香 1 小时有效期、当天任务完成进度、清屏幂等标记均按角色记录：
 # 键 = 窗口标题中的「（ID：xxx）」（未登录/无 ID 时退完整标题）。
 def char_key(win):
-    """角色键：窗口标题中的账号 ID 片段；无 ID 时回退完整标题。"""
+    """角色键：绑定窗口的账号 ID 优先，其次窗口标题中的账号 ID；无 ID
+    时回退完整标题。
+
+    2026-11-13：组号（一窗口多 Tab）pass 切到队员 Tab 时窗口标题会短暂
+    变成队员账号——按标题取角色会把任务进度/摄妖香/清屏/修理计数等状态
+    写进队员角色目录（与 user_data 角色解析同源问题）。绑定记录
+    （bound_window_id）是「这个窗口的这个角色」的权威身份，仅当传入窗口
+    就是绑定窗口（句柄一致）时采用；未绑定/非绑定窗口仍按标题解析
+    （单测假窗口无 hwnd，自然走标题路径）。
+    """
+    hwnd = int(getattr(win, "hwnd", 0) or 0)
+    if hwnd:
+        try:
+            from . import game  # 延迟导入：game 模块级依赖本模块（防循环导入）
+            raw = game.bound_window_id()
+            if isinstance(raw, dict) and int(raw.get("hwnd") or 0) == hwnd:
+                m = re.search(r"ID：(\d+)", str(raw.get("id") or ""))
+                if m:
+                    return f"（ID：{m.group(1)}）"
+        except Exception:
+            pass
     title = getattr(win, "title", "") or ""
     m = re.search(r"ID：(\d+)", title)
     return f"（ID：{m.group(1)}）" if m else title

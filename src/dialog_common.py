@@ -449,6 +449,41 @@ class MoveWatch:
         return self._static_polls < STORY_MOVE_STATIC_POLLS
 
 
+class PositionStillness:
+    """位置文字区连续静止计时（逐轮像素比对，零 OCR，~0.1ms/次）。
+
+    与 MoveWatch（点屏抑制，带去避与站定计数）不同：每轮都对比上一轮
+    帧、返回「连续静止秒数」，供寻路停滞看门狗使用——点追踪链接后寻路
+    偶发起步即卡住（人物原地不动、无对话框、任务签名不变），follow
+    只能空等到 300s 超时（2026-11-08/11-13 玄枢轶闻同一腿实测；超时
+    重试后 23s 即到达，属偶发卡点）。差值阈值复用 STORY_MOVE_DIFF_THRESHOLD
+    （45 对真实帧标定）。无帧/裁切失败时归零并清基线。
+    """
+
+    def __init__(self):
+        self._last_crop = None
+        self._still_since = None
+
+    def reset(self):
+        self._last_crop = None
+        self._still_since = None
+
+    def seconds(self, img, now=None):
+        """用本帧更新并返回连续静止秒数（刚建基线/检测到移动返回 0）。"""
+        import numpy as np
+        crop = _position_crop(img)
+        if crop is None:
+            self.reset()
+            return 0.0
+        now = time.time() if now is None else now
+        if self._last_crop is None or self._last_crop.shape != crop.shape \
+                or float(np.abs(crop - self._last_crop).mean()) \
+                >= STORY_MOVE_DIFF_THRESHOLD:
+            self._still_since = now
+        self._last_crop = crop
+        return now - self._still_since
+
+
 def dialog_frame_score(frame):
     """对话框模板全局最高分（接受 PIL 或 BGR 帧，条带内匹配）。"""
     import cv2
@@ -464,7 +499,7 @@ _dlg_hit_state = False    # 上一轮询模板命中状态（上升沿日志用�
 _dlg_hit_log_at = 0.0    # 上次命中日志时间（多调用方交错时的去重下限）
 
 
-def dialog_ocr_skip(frame):
+def dialog_ocr_skip(frame, win=None):
     """对话区 OCR 跳过判定：高性能模式下模板未命中即跳过。
 
     方案门控（用户 2026-11-06）：高性能模式才识别模板——普通模式
@@ -475,10 +510,23 @@ def dialog_ocr_skip(frame):
     （2026-11-07 真图，0.8 门曾挡掉战斗线程巫医检查），阈值校准
     为 0.79。
 
+    屏幕归属门控（2026-11-13）：传入 win 且当前画面不是队长 Tab
+    （组号 pass 进行中/用户手动切到队员 Tab）时一律按「无对话框」
+    跳过——队员屏的对话框不是本任务的（巫医/修理/剧情等），门控
+    放行会让队长侧处理器 OCR 并点击队员的对话框。省略 win 时不做
+    归属检查（非组号调用/单测兼容）。
+
     模板命中（上升沿）打一次 INFO 日志便于观察方案生效；多调用方
     （follow/战斗线程/守卫）交错时的重复命中由 2s 下限去重。
     """
     global _dlg_hit_state, _dlg_hit_log_at
+    if win is not None:
+        try:
+            from . import tab_group  # 函数内导入：tab_group 顶层依赖本模块
+            if not tab_group.on_leader_screen(win):
+                return True  # 屏幕不是队长 Tab：按无对话框处理（不 OCR/不点击）
+        except Exception:
+            pass
     if not app_utils.high_perf_on():
         return False
     score = dialog_frame_score(frame)

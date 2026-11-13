@@ -655,3 +655,29 @@ def test_follow_task_dialog_present_does_not_block_gone(monkeypatch):
     assert ok is False  # 任务从未出现：假完成防护（原语义）
     assert events == ["confirm"]  # 不因对话框推迟完成判定
 
+
+
+def test_confirm_task_gone_off_leader_paused(monkeypatch):
+    """屏幕不是队长 Tab（用户手动切到队员 Tab / pass 中途开始）：队员屏
+    本来就没有任务追踪，面板缺席不构成完成证据——放弃本次确认，交回
+    外层轮询（follow 的队长屏护栏会暂停，切回队长后重新确认）。"""
+    ocr_calls, logs = _patch_gone_env(monkeypatch, region=None)
+    monkeypatch.setattr(xuanshu.tab_group, "on_leader_screen",
+                        lambda win: False)
+    assert xuanshu._confirm_task_gone(_GuardWin(), "常规玩法") is False
+    assert not ocr_calls  # 不采集证据（不 OCR 队员屏）
+    assert any("屏幕已不是队长 Tab" in m for m, _ in logs)
+
+
+def test_task_gone_dialog_guard_off_leader_skips(monkeypatch):
+    """任务消失后的对话框复核：屏幕不是队长 Tab 时连截图都不做
+    （护栏在截图/OCR 之前——队员屏的对话框不是本任务的）。"""
+    called = []
+    win = _GuardWin()
+    monkeypatch.setattr(win, "capture",
+                        lambda force_activate=False: called.append("capture"))
+    monkeypatch.setattr(xuanshu.tab_group, "on_leader_screen",
+                        lambda win: False)
+    ok = xuanshu._task_gone_dialog_guard(
+        win, lambda w, items, img: called.append("handler") or True)
+    assert ok is False and called == []

@@ -357,3 +357,45 @@ def test_debug_ui_unlock_save_load(monkeypatch):
     assert r == {"status": "success"}
     assert store[control_window._DEBUG_UI_KEY] is True
     assert control_window.load_debug_ui_unlocked() is True
+
+
+# ---- 任务启动 Tab 对齐绑定（2026-11-13 组号 pass 切 Tab 角色漂移修复） ----
+
+class _TitleWin:
+    def __init__(self, title):
+        self.title = title
+
+
+def _patch_binding_env(monkeypatch, title, bound):
+    from src import app_utils as au, game, user_data
+    saved, refreshed = [], []
+    monkeypatch.setattr(game, "find_main_window", lambda: _TitleWin(title))
+    monkeypatch.setattr(game, "bound_window_id", lambda: bound)
+    monkeypatch.setattr(game, "save_bound_window", lambda win: saved.append(win))
+    monkeypatch.setattr(user_data, "current_role_id",
+                        lambda refresh=False: refreshed.append(refresh))
+    monkeypatch.setattr(au, "log", lambda *args, **kwargs: None)
+    return saved, refreshed
+
+
+def test_start_tab_binding_follows_visible_tab(monkeypatch):
+    """用户手动切到另一个 Tab 后开任务：绑定跟随启动所在 Tab（组号队长
+    候选 = 可见 Tab），并立即刷新角色缓存。"""
+    saved, refreshed = _patch_binding_env(
+        monkeypatch, "服务器 - 队员（ID：214369642）",
+        {"id": "（ID：286958560）", "hwnd": 1})
+    control_window.ControlWindow._sync_start_tab_binding(None)
+    assert len(saved) == 1
+    assert refreshed == [True]
+
+
+def test_start_tab_binding_noop_when_same_role_or_unlogged(monkeypatch):
+    saved, refreshed = _patch_binding_env(
+        monkeypatch, "服务器 - 队员（ID：214369642）",
+        {"id": "（ID：214369642）", "hwnd": 1})
+    control_window.ControlWindow._sync_start_tab_binding(None)
+    assert saved == [] and refreshed == []
+    # 未登录（标题无 ID）：不改绑定
+    saved, refreshed = _patch_binding_env(monkeypatch, "大话西游2经典版", None)
+    control_window.ControlWindow._sync_start_tab_binding(None)
+    assert saved == [] and refreshed == []

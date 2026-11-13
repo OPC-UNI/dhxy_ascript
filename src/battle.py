@@ -860,7 +860,7 @@ def _handle_wuyi_dialog(win, img=None, idle=False):
         img = win.capture(force_activate=False)
     if img is None:
         return False
-    if dialog_common.dialog_ocr_skip(img):
+    if dialog_common.dialog_ocr_skip(img, win):
         return False  # 高性能+模板未命中：无对话框，跳过巫医 OCR
                       # （巫医对话框标准边框模板必命中；差分门/降级
                       # 状态机不依赖被跳过的空检轮询，语义不受影响）
@@ -1097,7 +1097,7 @@ def _handle_repair_dialog(win, img=None):
         img = win.capture(force_activate=False)
     if img is None:
         return False
-    if dialog_common.dialog_ocr_skip(img):
+    if dialog_common.dialog_ocr_skip(img, win):
         return False  # 高性能+模板未命中：无对话框，跳过修理 OCR
     items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
     spec = repair.match_dialog(items)
@@ -1263,6 +1263,14 @@ def watch_loop(win):
         try:
             if tab_group.pass_active:
                 # 任务线程的 pass 进行中：跳过本轮处理（屏幕是队员 Tab）
+                time.sleep(WATCH_POLL_INTERVAL)
+                continue
+            if not tab_group.on_leader_screen(win):
+                # 用户手动切到队员 Tab（2026-11-13 用户实机）：队员屏的
+                # 战斗/对话框判定都不是本任务的（可能误判战斗结束、把
+                # 队员的巫医/修理对话框当队长的处理），跳过本轮，切回
+                # 队长 Tab 后自动继续。
+                tab_group.note_off_leader("[战斗] ")
                 time.sleep(WATCH_POLL_INTERVAL)
                 continue
             # 每轮询只截一帧（性能规则 1）：PIL 帧供巫医 OCR/差分（绿字

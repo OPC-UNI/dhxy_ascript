@@ -15,6 +15,10 @@ import pytest
 
 from src import user_data
 
+# conftest 的 autouse fixture 会把 _probe_role_id 换成固定值；模块导入时
+# 先捕获原函数（角色解析顺序测试需要）。
+_ORIGINAL_PROBE = user_data._probe_role_id
+
 
 @pytest.fixture
 def role_env(tmp_path, monkeypatch):
@@ -348,3 +352,35 @@ def test_archive_keeps_stats_when_role_stats_empty(role_env):
     assert "schemes.json" in result["moved"]
     assert "task_stats.json" not in result["moved"]
     assert (role_env / "task_stats.json").exists()  # 留给成就补导
+
+
+# ---- 角色解析顺序：绑定记录优先（2026-11-13 组号 pass 切 Tab 漂移修复） ----
+
+class _TitleWin:
+    def __init__(self, title):
+        self.title = title
+
+
+def test_probe_role_prefers_binding_over_live_title(monkeypatch):
+    """组号 pass 切到队员 Tab 时窗口标题短暂变成队员账号：角色仍取绑定
+    记录（队长），不随标题漂移；未绑定才退回实时标题。"""
+    from src import game
+    monkeypatch.setattr(
+        game, "bound_window_id",
+        lambda: {"id": "（ID：286958560）", "hwnd": 1,
+                 "title": "服务器 - 队长（ID：286958560）"})
+    monkeypatch.setattr(
+        game, "find_main_window",
+        lambda: _TitleWin("服务器 - 队员（ID：214369642）"))
+    assert _ORIGINAL_PROBE() == "286958560"
+
+    # 未绑定：退回实时标题（首次运行/绑定丢失场景）
+    monkeypatch.setattr(game, "bound_window_id", lambda: None)
+    assert _ORIGINAL_PROBE() == "214369642"
+
+
+def test_probe_role_falls_back_to_default_without_binding_and_title(monkeypatch):
+    from src import game
+    monkeypatch.setattr(game, "bound_window_id", lambda: None)
+    monkeypatch.setattr(game, "find_main_window", lambda: _TitleWin("大话西游2经典版"))
+    assert _ORIGINAL_PROBE() is None  # 由 current_role_id 退 _default
