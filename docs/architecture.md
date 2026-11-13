@@ -137,6 +137,9 @@ flowchart TB
 
     subgraph WORKFLOWS["workflows：跨任务业务流"]
         FOLLOW["follow.py<br/>共享跟踪引擎"]
+        TEAMFLOW["team_flow.py<br/>组队流程编排"]
+        RETFLOW["return_flow.py<br/>返程流程编排"]
+        CLAIMFLOW["claim_flow.py<br/>领取共享子流程"]
     end
 
     subgraph MINIGAMES["minigames：小游戏闭环"]
@@ -709,7 +712,7 @@ flowchart TB
     G3 --> L
 ```
 
-> 五倍与修罗共享 `_keep_alive`（非队长保持模式 + 自动归队）、`_monitor_team_and_fill`、`_claim_task` 的领取校验骨架、返程链路（`_open_task_box → _use_return_talisman → _close_return_panels → _return_to_npc`）与自动巫医链。
+> 五倍/修罗/种族比武的组队与返程流程已下沉 `workflows/team_flow.py`（检查/建队/补人/喊话/非队长保持+归队）与 `workflows/return_flow.py`（开箱/返程道具/清屏/归位）；领取批次的低风险部分已下沉 `workflows/claim_flow.py`（选项/地图门控/校验探针/follow 收尾），任务侧保留薄包装与文案差异。`_claim_task` 主骨架、入口门控与走位到达模型仍待抽取。
 
 ### 4.8 图 4-6：仅战斗（`main._battle_only_loop`）
 
@@ -1210,6 +1213,9 @@ flowchart LR
 | `src/tasks/wuhuan.py` | 五环任务 | `run_loop`、`_prepare`、`_claim_task`、`_handle_submit_dialog` |
 | `src/tasks/xuanshu.py` | 玄枢轶闻任务 | `run_loop`、`run_cycle`、`navigate_to_task`、`_follow_wait_handler` |
 | `src/workflows/follow.py` | 共享任务跟踪引擎（跨任务） | `follow_task`、`_confirm_task_gone`、`_handle_dialogs` |
+| `src/workflows/team_flow.py` | 组队流程编排（五倍/修罗/种族比武） | `TeamFlow.check_team_ready`、`monitor_team_and_fill`、`keep_alive` |
+| `src/workflows/return_flow.py` | 返程流程编排（五倍/修罗/种族比武） | `ReturnFlow.run`、`open_task_box`、`use_return_item` |
+| `src/workflows/claim_flow.py` | 领取共享子流程（选项/地图门控/校验探针/follow 收尾） | `find_claim_option`、`click_claim_option`、`follow_to_done` |
 | `src/device/battle.py` | 战斗监控、血蓝、巫医、盒子、组号队员 pass | `watch_loop`、`handle_battle`、`_handle_wuyi_dialog`、`_handle_hezi` |
 | `src/device/team.py` | 队伍检查、补人、暂离请离、归队、退队 | `check_team_min`、`fill_team`、`maybe_rejoin`、`leave_or_disband_team` |
 | `src/device/tab_group.py` | 组号多 Tab 身份、pass、队员操作 | `init_task`、`startup_check`、`startup_member_check`、`member_*_pass` |

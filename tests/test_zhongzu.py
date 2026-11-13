@@ -16,6 +16,7 @@ from src.app import control_window
 from src.core import schemes
 from src.device import task_tracker
 from src.tasks import zhongzu
+from src.workflows import team_flow
 
 IMG = np.zeros((200, 200, 3), dtype=np.uint8)
 
@@ -372,14 +373,14 @@ def _run_monitor_once(monkeypatch, shout_text, last_at):
             return "waiting", "队伍人数不足（3/5），等待申请人"
         return "ready", "队伍已满"
 
-    monkeypatch.setattr(zhongzu, "_check_team_with_retry", fake_check)
+    monkeypatch.setattr(zhongzu._team_flow, "check_team_with_retry", fake_check)
     monkeypatch.setattr(zhongzu.team, "has_pending_apply", lambda img: False)
-    monkeypatch.setattr(zhongzu, "_shout_recruit",
-                        lambda win: calls.__setitem__("shouts",
-                                                      calls["shouts"] + 1))
-    monkeypatch.setattr(zhongzu, "time", _Clock())
+    monkeypatch.setattr(
+        zhongzu._team_flow, "shout_recruit",
+        lambda win: calls.__setitem__("shouts", calls["shouts"] + 1))
+    monkeypatch.setattr(team_flow, "time", _Clock())
     monkeypatch.setattr(zhongzu, "_shout_text", shout_text)
-    monkeypatch.setattr(zhongzu, "_shout_last_at", last_at)
+    monkeypatch.setattr(zhongzu._team_flow, "_shout_last_at", last_at)
     zhongzu._monitor_team_and_fill(_Win())
     return calls
 

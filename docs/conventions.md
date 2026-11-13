@@ -20,7 +20,7 @@ src/
 ├─ device/      # 感知与执行：game、map、task_tracker、dialog_common、battle、
 │               # bag、status_bars、silent_click、tab_group、zuoqi、clear_screen、
 │               # team（队伍）、repair（修理）
-├─ workflows/   # 跨任务业务流：follow（跟踪引擎）；claim_return/wuyi 待抽取
+├─ workflows/   # 跨任务业务流：follow、team_flow、return_flow、claim_flow（批次 1）；claim 主流程/wuyi 待抽取
 ├─ minigames/   # 独立小游戏：pochufengyin、duchong、yinlv、shahai、jiguan、...
 ├─ tasks/       # 任务编排：xuanshu、wuhuan、kezhan、xiuluo、wubei、
 │               # zhongzu、mingwang
@@ -105,7 +105,7 @@ core  ←  device  ←  workflows  ←  tasks
 3. **兼容期留 shim**：如 `xuanshu.follow_task = workflows.follow.follow_task`
    保留一个提交，调用方全部改完后删除；测试同提交更新。
 4. **每个抽取的模块保留/补齐测试**；提交前 `python -m pytest -q` 全绿
-   （基线：874 passed, 2 deselected）。
+   （基线：902 passed, 2 deselected）。
 5. **涉及任务链路的抽取至少真机跑一轮**对应任务；纯移动/改名可只跑测试。
 6. **打包**：`pyproject.toml` 的 `packages` 必须包含新子包；
    Nuitka `--include-package=src` 会自动跟随，但 pip/ascript 打包不会。
@@ -146,7 +146,7 @@ core  ←  device  ←  workflows  ←  tasks
 | P0 | 本规范 + 导入规则测试 + 3 处反向依赖修复 | ✅ 已完成（2026-11-13） |
 | P1 | `follow_task` 及消失确认/对话框链下沉 `workflows/follow.py` | ✅ 已完成（2026-11-13）：任务互引清零；玄枢专属小游戏改为 `wait_handler` 注入，其他任务不再执行玄枢小游戏检测 |
 | P1 | 小游戏逐个下沉 `src/minigames/` | ✅ 已完成（2026-11-13）：`pochufengyin`、拍毒虫、音律、沙海迷踪、机关、锄遗聚宝的阻塞循环 + 检测/常量已迁移；任务侧只保留薄包装与触发/armed/重置（触发点函数逐字节未变）。钓鱼/破除封印的入口 armed 仍在任务侧，按「改动即搬迁」处理 |
-| P2 | `wubei`/`xiuluo`/`zhongzu` 领取/返程/队伍/巫医流程去重 | 待做 |
+| P2 | `wubei`/`xiuluo`/`zhongzu` 流程去重 | 🚧 部分完成：team/return 已下沉 `workflows/team_flow.py`、`return_flow.py`；claim 批次 1（选项/地图门控/校验探针/follow 收尾）已下沉 `workflows/claim_flow.py`；walk/入口门控/claim 主流程见 `docs/claim-walk-dedup.md` 待做（2026-11-13） |
 | P2 | `settings.py` 从 `control_window` 抽出，启用「禁止依赖 app」检查 | ✅ 已完成（2026-11-13） |
 | P2 | 目录迁移（纯 `git mv` + import 改写） | ✅ 已完成（2026-11-13） |
 | P2 | 重构审查修复（拍毒虫退避状态、updater 路径深度、工具链/CI 路径、导入规则补强） | ✅ 已完成（2026-11-13） |

@@ -37,13 +37,10 @@
 import re
 import random
 import time
-from pathlib import Path
 
 import cv2
 import numpy as np
 from PIL import Image  # 对话框区域 2x 放大重识别（看打选项 OCR 漏检兜底）
-from ascript.windows.system import R  # 资源路由（模板路径）
-from ascript.windows.hardware.keyboard import Keyboard  # Alt+C 飞行/刷新（领取验证兜底）
 
 from ..core.app_utils import human_click, human_move, precise_click, log, move_away, norm_text
 from ..core import app_utils  # 高性能模式共享设施（固定位置缓存点击）
@@ -51,7 +48,6 @@ from ..device import task_tracker  # 任务追踪面板操作
 from ..device import map as game_map  # 地图操作（世界地图/小地图/位置识别）
 from ..device import team  # 组队检查（领取前队伍人数检查，仅队长生效）
 from ..core import debug_overlay  # 调试信息悬浮层（任务进度更新）
-from ..device import bag  # 背包操作（打开/关闭背包、任务储物格）
 from ..device import status_bars  # 血蓝检测（自动巫医前置条件）
 from ..device.battle import is_in_battle, is_in_battle_frame  # 战斗状态判定（统一在 battle.py 中实现）
 from ..device.battle import WUYI_DIALOG_TEXTS  # 巫医对话框文案（自动巫医等待判定）
@@ -69,13 +65,15 @@ from ..core.settings import (load_task_counts, load_xiuluo_settings,
                              load_xiuluo_auto_repair,
                              load_xiuluo_repair_interval,
                              load_xiuluo_tab_group)  # 任务次数上限/修罗设置/自动巫医/自动修理/自动归队/组号开关
-from ..workflows.follow import follow_task  # 任务跟踪（绿字点击寻路/战斗跳过/附加对话处理）
+from ..workflows.team_flow import TeamFlow  # 组队流程编排（检查/建队/补人/喊话/归队）
+from ..workflows import return_flow  # 返程流程编排（开箱/回程道具/清屏/归位）
+from ..workflows import claim_flow  # 领取共享流程（选项/地图门控/校验探针）
 from ..device import tab_group  # 组号模式（一窗口多 Tab）：初始化/队员 pass/抑制标志
 from ..device.dialog_common import (_dialog_text_present, _norm_dialog_present,
                             _click_green_option_once, _fuzzy_contains,
                             SCREEN_CENTER_POS,
-                            dialog_frame_score, DIALOG_FRAME_THRESHOLD,
-                            green_option_center)  # 对话框共享组件
+                            dialog_frame_score,
+                            DIALOG_FRAME_THRESHOLD)  # 对话框共享组件
 
 # 任务模式与追踪面板标题（2026-10-08 日志+截图实测确认）
 TASK_MODE = "修罗"           # 控制面板任务模式名（任务次数配置键）
@@ -113,6 +111,9 @@ LINGSHOU_MAP_POS = (627, 396)                 # 灵兽村小地图上领取点�
 CLAIM_DIALOG_OPTION = "闲来无事，要我帮忙吗"    # 领取对话框绿色选项（游戏内原文，实测用字）
 CLAIM_OPTION_TAIL = "要我帮忙吗"               # 选项换行渲染时的尾部匹配串（实测完整文案
                                               # 永不单行命中，两次全靠尾部/兜底）
+CLAIM_OPTION_NEEDLES = (norm_text(CLAIM_DIALOG_OPTION),
+                        norm_text(CLAIM_OPTION_TAIL),
+                        norm_text("帮忙"))  # 完整→尾部→兜底（供 claim_flow）
 CLAIM_COUNT_TEXT = "今日已完成次数"            # 领取后对话框中的完成次数文案（辅助记录完成次数）
 TEAM_WARNING_TEXT = "修罗的战斗力异常强大，千万要找齐伙伴再一同消灭。"  # 队伍数量小于 3 的提示（实测文案）
 TEAM_CONFIRM_TEXT = "修罗的战斗力异常强大，你当前队伍的人数不足5人，确定要领取任务吗？"  # 领取确认弹窗（实测文案）
@@ -135,10 +136,6 @@ CLAIM_DIALOG_FIXED_WAIT = (0.8, 1.2)          # 高性能缓存点击路径：�
                                               # 指定 0.8~1.2 随机，验证后反馈正确率）。
                                               # 固定等待较轮询信号更合理——轮询信号偶现
                                               # 异常致缓存点击点偏
-CLAIM_VERIFY_POLL_INTERVAL = 0.8              # 校验轮询间隔（秒）。用户 2026-10-26 指定
-                                              # 0.8：OCR 占空比降到 ~50%，CPU 占用极低；
-                                              # 检测粒度由任务块 2x 放大重识别补偿（漏检
-                                              # 时补一次高精度识别，不靠高频轮询）
 TASK_BLOCK_REGION = (0, 225, 400, 310)        # 任务块裁剪区域（面板顶部：标题行 y~230-255
                                               # + 内容链接行 y~260-295，留余量）；2x 放大
                                               # 重识别用（修罗标题徽标漏检 + 插入滑动动画
@@ -189,7 +186,13 @@ TEAM_RECOG_RETRY_INTERVAL = 3   # 成员识别失败（OCR 噪声）时的重试
                                 # 识别失败≠人数不足，等满 10s 纯属空转
 SHOUT_MIN_INTERVAL = 30         # 缺人自动喊话最短间隔（秒，防刷屏）
 _shout_text = ""                # 本轮喊话内容（设置内容，{种族}已替换；空=不喊话）
-_shout_last_at = 0.0            # 上次喊话时间（跨监控调用保持间隔）
+_team_flow = TeamFlow(
+    prefix="[修罗]",
+    min_members=lambda: load_xiuluo_settings()["min_members"],
+    auto_rejoin=load_xiuluo_auto_rejoin, shout_text=lambda: _shout_text,
+    check_retry_interval=TEAM_CHECK_RETRY_INTERVAL,
+    recog_retry_interval=TEAM_RECOG_RETRY_INTERVAL,
+    shout_min_interval=SHOUT_MIN_INTERVAL)
 
 # ---- 对话开打（寻路到达后出现对话面板） ----
 FIGHT_DIALOG_OPTION = "看打！"  # 对话面板绿色选项（点击进入战斗，游戏内原文）
@@ -212,24 +215,17 @@ _returned_last_round = False    # 上一轮返程成功（回城符已使用、�
 #      到 bag.open_bag，各任务模块共用） ----
 _fight_cached_used = False       # 当前这次看打对话框出现已试过缓存点击
 
-# ---- 战斗（战斗操作由 battle.watch_loop 线程负责） ----
-BATTLE_END_POLL = 2.0            # 等待战斗结束的轮询间隔
-
-# ---- 返程（用户流程：背包任务储物格 → 修罗回城符右键 → 回灵兽村） ----
-BOX_TASK_ICON = "box_task.png"                    # 背包任务储物格按钮（未选中态，点击打开）
-BOX_TASK_SELECTED_ICON = "box_task_selected.png"  # 任务储物格已打开（选中态，无需再点击）
+# ---- 返程（任务储物格 → 修罗回城符右键 → 回灵兽村；共享实现在
+#      workflows/return_flow.py） ----
 XIULUO_RETURN_ICON = "xiuluo_huichengfu.png"      # 修罗回城符模板（用户实测素材）
-TASK_BOX_THRESHOLD = 0.8         # 储物格按钮双模板判定阈值（与其他模板一致）
-TASK_BOX_TIMEOUT = 10            # 等待任务储物格打开的超时（点击后渲染/切换）
-RETURN_TALISMAN_TIMEOUT = 15     # 等待回城符在任务储物格中出现的超时
-RETURN_POLL_INTERVAL = 0.5       # 返程轮询间隔（打开动画约 0.4s，实测点击后 1s 内
-                                 # 出现选中态；非防抖判定点，无需更长窗口）
-# 任务储物格按钮相对背包面板标志（bag_box 中心）的偏移与搜索条带：
-# 面板可拖动但内部布局固定，偏移恒定（面板左缘/中部两位置实测
-# +349/+305 与 +353/+305，取均值）；条带留 55px 余量，带区全未命中
-# 才全帧兜底（限频：仅带区未命中时触发）
-TASK_BOX_OFFSET = (351, 305)
-TASK_BOX_BAND_MARGIN = 55
+_return_flow = return_flow.ReturnFlow(
+    prefix="[修罗]", item_icon=XIULUO_RETURN_ICON,
+    item_label="修罗回城符", target_label="灵兽村",
+    success_info="已返回灵兽村",
+    open_box=lambda win: _open_task_box(win),
+    open_box_retries=1, read_position=True, pos_poll_interval=0.5,
+    close_optimized=True, close_failure_detail=True,
+    bag_closed_label="回城符")
 
 # 领取后对话框「今日已完成次数：N」的完成次数解析（OCR 可能把冒号误读，兼容）
 _CLAIM_COUNT_RE = re.compile(re.escape(CLAIM_COUNT_TEXT) + r"\s*[:：]?\s*(\d+)")
@@ -627,21 +623,13 @@ def verify_tab_repair_flow(win):
 
 
 def _near_claim_spot(pos, tolerance):
-    """判断位置是否在灵兽村领取点附近（地名精确匹配，容差抗 OCR 噪声）。"""
-    return game_map.is_at_position(pos, LINGSHOUCUN,
-                                  CLAIM_SPOT[0], CLAIM_SPOT[1], tolerance)
+    """领取点附近判定（共享实现在 workflows/claim_flow.py）。"""
+    return claim_flow.near_claim_spot(pos, LINGSHOUCUN, CLAIM_SPOT, tolerance)
 
 
 def _in_claim_map(pos):
-    """位置是否在领取地图灵兽村（领取按钮模板跨图误命中门控）。
-
-    领取按钮「任务」横幅模板与五环长安云游大师领取按钮等相似横幅
-    同图，其他地图同样会命中（2026-11-11 用户实机：长安步行途中被
-    误判已到领取点，点开错误对话框进战斗）。用户规则：修罗领取必须
-    在灵兽村（五倍必须宝象国）。位置读取失败按不在处理——无法确认
-    在灵兽村时不得采信按钮信号。
-    """
-    return pos is not None and pos[0].strip() == LINGSHOUCUN
+    """领取地图门控（共享实现在 workflows/claim_flow.py）。"""
+    return claim_flow.in_claim_map(pos, LINGSHOUCUN)
 
 
 def _near_shizhe_spot(pos):
@@ -680,27 +668,8 @@ def _wait_claim_entry(win, timeout):
 
 
 def _find_claim_option(items, img_np):
-    """在 OCR 结果中查找领取对话框的绿色选项，返回 (cx, cy, txt, 是否兜底) 或 None。
-
-    选项实测换行渲染：OCR 无单行包含完整文案，完整文案匹配从未命中、
-    两次实测全靠「帮忙」兜底。按优先级依次尝试：完整文案 → 尾部
-    「要我帮忙吗」→ 含「帮忙」。OCR 对中文标点误读常见（如「，」读成
-    「；」），匹配前统一去标点。限定对话框区域（x≥PANEL_MAX_X），
-    避免误点追踪面板的绿字链接。点击与验证（悬停）共用本函数。
-    """
-    needles = (re.sub(r"[^\w]", "", CLAIM_DIALOG_OPTION),  # 完整文案（单行渲染时）
-               norm_text(CLAIM_OPTION_TAIL),             # 尾部（换行渲染时实测命中）
-               norm_text("帮忙"))                        # 最后兜底
-    for needle in needles:
-        for txt, rect, score in items:
-            if score >= 0.55 and needle in re.sub(r"[^\w]", "", txt) \
-                    and rect[0] >= task_tracker.PANEL_MAX_X \
-                    and task_tracker.is_green_text(img_np, rect):
-                # 合并行按比例取选项自身中心（见 dialog_common.green_option_center）
-                ntxt = re.sub(r"[^\w]", "", txt)
-                cx, cy = green_option_center(img_np, rect, len(needle), len(ntxt))
-                return cx, cy, txt, needle == norm_text("帮忙")
-    return None
+    """查找领取绿色选项（共享实现在 workflows/claim_flow.py）。"""
+    return claim_flow.find_claim_option(items, img_np, CLAIM_OPTION_NEEDLES)
 
 
 def _task_block_region(img_np):
@@ -737,47 +706,18 @@ def _task_in_tracker_zoom(img):
 
 
 def _probe_task_block(win):
-    """观测探针（2026-11-10 临时埋点）：新截帧仅 OCR 任务块判定任务是否
-    已渲染，返回 (是否命中, 探针耗时)。
-
-    用于测量任务面板渲染时刻（相对选项点击），决定固定校验间隔能否
-    改成「探到即提前校验」。小块 OCR 本地实测 50~160ms（任务进程内
-    因 OCR 线程争用约 2~3 倍）。数据收集完成后连同 [领取计时] 埋点删除。
-    """
-    t0 = time.time()
-    img = win.capture(force_activate=False)
-    if img is None:
-        return False, time.time() - t0
-    img_np = np.asarray(img)
-    region = _task_block_region(img_np) or TASK_BLOCK_REGION
-    items, _ = game_map.ocr_region(img, region)
-    hit = task_tracker.has_task_in(items, img_np, TASK_TITLE,
-                                   TASK_FALLBACK_TEXTS)
-    return hit, time.time() - t0
+    """任务块探针（共享实现在 workflows/claim_flow.py）。"""
+    return claim_flow.probe_task_block(
+        win, TASK_TITLE, TASK_FALLBACK_TEXTS,
+        lambda img_np: _task_block_region(img_np) or TASK_BLOCK_REGION)
 
 
 def _claim_verify_wait(win, pre_sig, t_opt, polls):
-    """校验轮询等待：先跑任务块探针，命中即跳过等待（自适应）。
-
-    五倍同款链路实测（2026-11-10，7/7 轮第 1 次探针即命中，确认段
-    省 ~0.82s/轮）；修罗确认帧截取时刻（1.96~2.89s）与五倍同构。
-    命中即立即进入下一轮全量校验；未命中照常补足
-    CLAIM_VERIFY_POLL_INTERVAL（wall 与旧版一致）。旧任务残留面板
-    （pre_sig 非空）时跳过探针——旧任务会让探针恒命中。
-
-    [领取计时] 日志与探针本身为 2026-11-10 临时埋点，验证后删除。
-    """
-    if pre_sig is not None:
-        time.sleep(CLAIM_VERIFY_POLL_INTERVAL)
-        return
-    t0 = time.time()
-    hit, probe_dt = _probe_task_block(win)
-    log(f"[修罗][领取计时] 任务块探针{'命中（立即校验）' if hit else '未命中'}"
-        f" @选项点击后 {time.time() - t_opt:.2f}s"
-        f"（第 {polls} 轮校验后，探针耗时 {probe_dt:.2f}s）", "INFO")
-    if hit:
-        return  # 任务已渲染：不等待，下一轮直接全量校验
-    time.sleep(max(0.0, CLAIM_VERIFY_POLL_INTERVAL - (time.time() - t0)))
+    """领取校验等待（共享实现在 workflows/claim_flow.py）。"""
+    return claim_flow.claim_verify_wait(
+        win, pre_sig, t_opt, polls, prefix="[修罗]",
+        interval=claim_flow.CLAIM_VERIFY_POLL_INTERVAL,
+        probe_fn=_probe_task_block)
 
 
 def _team_dialog_zoom(win, img):
@@ -825,21 +765,10 @@ def _team_dialog_zoom(win, img):
 
 
 def _click_claim_option(win, items, img_np):
-    """点击领取对话框中的绿色选项「闲来无事，要我帮忙吗」，成功返回 True。
-
-    识别点击成功即记录选项坐标（高性能模式缓存用；位置漂移时由
-    本路径自然刷新）。
-    """
-    found = _find_claim_option(items, img_np)
-    if found is None:
-        return False
-    cx, cy, txt, fallback = found
-    human_click(win, cx, cy)
-    suffix = "（兜底匹配）" if fallback else ""
-    log(f"[修罗] 已点击绿色选项「{txt}」{suffix}", "SYS")
-    app_utils.fixed_pos_set("claim_option", win, cx, cy)
-    move_away(win)  # 鼠标停留选项上会使其悬停变色，干扰后续绿字判定
-    return True
+    """点击领取绿色选项（共享实现在 workflows/claim_flow.py）。"""
+    return claim_flow.click_claim_option(
+        win, items, img_np, needles=CLAIM_OPTION_NEEDLES,
+        prefix="[修罗]", cache_key="claim_option")
 
 
 def _handle_team_warning(win, items, img_np):
@@ -1468,45 +1397,13 @@ def _claim_task(win, allow_fill=False):
 
 
 def _check_team_ready(win, create_if_missing=False):
-    """领取前队伍检查（修罗设置仅在队长时生效，一次面板开关）。
-
-    队长时按通用设置-修罗设置的最少人数检查（本步不检查种族）。
-    检查结果顺带更新调试悬浮层「队伍」行（身份 + 成员信息）。
-    create_if_missing：自动创建队伍并入本次菜单打开（见 team.check_team_min）。
-    返回 (状态, 描述)；状态见 team.check_xiuluo_team：
-    ready 可领取 / wait 人数不足 / not_leader 非队长或队长无法判定。
-    """
-    settings = load_xiuluo_settings()
-    status, info, members = team.check_team_min(
-        win, min_members=settings["min_members"], allow_kick=True,
-        create_if_missing=create_if_missing, prefix="[修罗][创建队伍]")
-    team.update_overlay_team(status, info, members)
-    return status, info
+    """领取前队伍检查（共享实现在 workflows/team_flow.py）。"""
+    return _team_flow.check_team_ready(win, create_if_missing)
 
 
 def _check_team_with_retry(win, tries=3, create_if_missing=False):
-    """队伍检查带瞬态失败重试（与五倍同款，审计 B5）：截窗失败/面板
-    打不开可能是瞬时问题，一次失败即转非队长保持模式会把队长永久
-    挂起。瞬态类失败短间隔重试，连续 N 次才按 not_leader 处理；
-    明确的非队长判定（面板打开且无解散按钮）与未组队（菜单中无
-    「队伍信息」）不重试——未组队是确定性状态，重试纯空转。
-    create_if_missing：自动创建队伍并入首次菜单打开（调用方保证只消费一次）。"""
-    last = ("not_leader", "队伍检查未执行")
-    for i in range(tries):
-        status, info = _check_team_ready(win, create_if_missing=create_if_missing)
-        last = (status, info)
-        if status != "not_leader":
-            return status, info
-        # 未组队是确定性状态（没组队就没有队长）——注意其提示带
-        # 「队长无法判定」前缀，必须先于瞬态判定短路返回
-        if "未组队" in info:
-            return status, info
-        if "队长无法判定" not in info and "截图失败" not in info:
-            return status, info  # 明确非队长（面板打开且无解散按钮）
-        if i < tries - 1:
-            log(f"[修罗] {info}，瞬态失败重试（{i + 1}/{tries - 1}）", "WARN")
-            time.sleep(2.0)
-    return last
+    """队伍检查带瞬态失败重试（共享实现在 workflows/team_flow.py）。"""
+    return _team_flow.check_team_with_retry(win, tries, create_if_missing)
 
 
 _fight_fb_last_at = 0.0  # 兜底 2x OCR 冷却（防无选项对话框每轮询白耗）
@@ -1606,270 +1503,54 @@ def _handle_fight_dialog(win, items, img_np):
 
 
 def _follow_to_done(win, first_items=None):
-    """寻路 + 对话开打 + 战斗：跟踪任务直到本轮完成。
-
-    复用 workflows.follow.follow_task：绿字点击自动寻路、对话开打走附加对话处理
-    （点击「看打！」进入战斗）、战斗由战斗监控线程操作且跟踪中自动跳过。
-    first_items：领取校验刚确认任务出现的 (items, img_np) 帧，首轮
-    跳过截图+OCR 立即点击追踪绿字（省 ~1.2s）。
-    跟踪失败为「任务内容中未找到绿色文案」（标题可见内容未渲染，
-    实测 2026-10-21 领取完成后偶现）时执行一次补偿：走到领取点后
-    重新跟踪——领取点面板识别可靠。最小影响原则：仅领取后首次跟踪
-    （first_items 存在）且失败发生在跟踪开始 30s 内（首次点击及其
-    重试的窗口）才补偿；跟踪中期的同类失败按原失败返回，交给
-    主循环下轮重试（has_task 续跑，不重新领取）。
-    返回 (是否成功, 描述)。
-    """
-    t0 = time.time()
-    # 引擎不内置任何玄枢专属小游戏检测（原 chuyijuebao_check=False 的
-    # 目的已由 P1 抽取达成：修罗流程不再逐轮询做锄遗聚宝模板匹配）
-    # 任务完成由战斗驱动（用户 2026-11-12）：看打进入战斗 → 战斗结束
-    # → 战斗结束路径判定任务消失 → 回城符返程领任务
-    ok, info = follow_task(win, TASK_TITLE, prefix="修罗",
-                           extra_dialog_handler=_handle_fight_dialog,
-                           fallback_keywords=TASK_FALLBACK_TEXTS,
-                           first_items=first_items,
-                           post_track_handler=_maybe_tab_bars_pass,
-                           battle_extras_tpl_gate=True)
-    if not ok and first_items is not None \
-            and "任务内容中未找到绿色文案" in info \
-            and time.time() - t0 < CLAIM_FOLLOW_RECOVER_WINDOW:
-        log(f"[修罗] {info}，走到领取点补偿重试跟踪（一次）", "WARN")
-        ok2, info2 = _walk_to_claim_spot(win)
-        if not ok2:
-            return False, f"{info}；走到领取点失败: {info2}"
-        ok, info = follow_task(win, TASK_TITLE, prefix="修罗",
-                               extra_dialog_handler=_handle_fight_dialog,
-                               fallback_keywords=TASK_FALLBACK_TEXTS,
-                               post_track_handler=_maybe_tab_bars_pass,
-                               battle_extras_tpl_gate=True)
-    return ok, info
+    """跟踪任务直到完成（共享实现在 workflows/claim_flow.py）。"""
+    return claim_flow.follow_to_done(
+        win, first_items, title=TASK_TITLE, prefix="修罗",
+        extra_dialog_handler=_handle_fight_dialog,
+        fallback_keywords=TASK_FALLBACK_TEXTS,
+        post_track_handler=_maybe_tab_bars_pass,
+        battle_extras_tpl_gate=True, recovery=_walk_to_claim_spot,
+        recovery_window=CLAIM_FOLLOW_RECOVER_WINDOW)
 
 
 def _maybe_tab_bars_pass(win):
-    """组号模式：点完任务追踪（寻路中）检查队员血蓝（tab_group 内 60s 节流）。"""
-    try:
-        if tab_group.active():
-            tab_group.member_bars_pass(win)
-    except Exception as e:
-        log(f"[修罗] 组号队员血蓝 pass 异常: {e}", "WARN")
+    """组号模式队员血蓝 pass（共享实现在 workflows/team_flow.py）。"""
+    return _team_flow.maybe_tab_bars_pass(win)
 
 
-def _wait_battle_end(win, timeout=60):  # 等待战斗结束的超时（调用点均显式传 60）
-    """战斗：等待当前战斗结束（战斗操作由 battle.watch_loop 线程自动完成）。
-
-    轮询 is_in_battle 直到战斗画面消失；超时返回失败防止卡死。
-    返回 (是否成功, 描述)。
-    组号 pass 期间（战斗线程在切队员 Tab）跳过轮询——队员屏幕的
-    战斗判定不可代表队长，防误判结束提前返程。
-    """
-    deadline = time.time() + timeout
-    while True:
-        if tab_group.pass_active:
-            time.sleep(0.3)
-            continue
-        if not is_in_battle(win):
-            return True, "战斗已结束"
-        if time.time() > deadline:
-            return False, f"等待战斗结束超时（{timeout}s）"
-        time.sleep(BATTLE_END_POLL)
+def _wait_battle_end(win, timeout=60):
+    """等待战斗结束（共享实现在 workflows/return_flow.py）。"""
+    return return_flow.wait_battle_end(win, timeout)
 
 
 def _open_task_box(win):
-    """打开背包并确保任务储物格已打开。返回 (是否成功, 描述)。
-
-    用户流程：打开背包 → 检查 box_task_selected（选中态）：存在说明
-    任务储物格已在背包中打开，无需点击；否则点击 box_task 打开。
-    两模板是同一按钮的两种状态、互相弱匹配，双模板比分数判定：
-    各自分数达标且更高者胜（防止未选中按钮被选中态模板误判成已打开，
-    以及已打开时误点未选中态反而把储物格关上）。
-    每轮询只截一帧，双模板批量检测共用一帧；以 bag_box 为锚点的
-    搜索条带限定匹配范围（带区全未命中才全帧兜底）。
-    """
-    if not bag.is_bag_open(win):
-        # 高性能背包按钮缓存已下沉到 bag.open_bag（各任务模块共用）
-        ok, info = bag.open_bag(win)
-        if not ok:
-            return False, f"打开背包失败: {info}"
-    else:
-        log("[修罗] 背包已打开，跳过开包", "INFO")
-    # 以 bag_box（面板标志）为锚点计算任务储物格按钮的搜索条带
-    # （面板可拖动，内部元素相对偏移恒定；未找到锚点则全帧匹配）
-    region = None
-    anchor = bag.find_bag_box(win)
-    if anchor is not None:
-        bx, by = anchor
-        region = (bx + TASK_BOX_OFFSET[0] - TASK_BOX_BAND_MARGIN,
-                  by + TASK_BOX_OFFSET[1] - TASK_BOX_BAND_MARGIN,
-                  bx + TASK_BOX_OFFSET[0] + TASK_BOX_BAND_MARGIN,
-                  by + TASK_BOX_OFFSET[1] + TASK_BOX_BAND_MARGIN)
-    deadline = time.time() + TASK_BOX_TIMEOUT
-    clicked = False
-    while time.time() < deadline:
-        img = win.capture(force_activate=False)
-        if img is None:
-            time.sleep(RETURN_POLL_INTERVAL)
-            continue
-        frame = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
-        sel_score, _ = game_map.best_match_np(frame, BOX_TASK_SELECTED_ICON,
-                                              region=region)
-        task_score, task_pt = game_map.best_match_np(frame, BOX_TASK_ICON,
-                                                     region=region)
-        if sel_score < TASK_BOX_THRESHOLD and task_score < TASK_BOX_THRESHOLD \
-                and region is not None:
-            # 带区全未命中：全帧兜底（限频——仅带区未命中时触发）
-            sel_score, _ = game_map.best_match_np(frame, BOX_TASK_SELECTED_ICON)
-            task_score, task_pt = game_map.best_match_np(frame, BOX_TASK_ICON)
-        if sel_score >= TASK_BOX_THRESHOLD and sel_score > task_score:
-            return True, "任务储物格已在背包中打开"
-        if task_score >= TASK_BOX_THRESHOLD:
-            if not clicked:
-                human_click(win, task_pt[0], task_pt[1])
-                log("[修罗] 已点击任务储物格按钮，等待打开...", "SYS")
-                clicked = True
-            time.sleep(RETURN_POLL_INTERVAL)
-            continue
-        time.sleep(RETURN_POLL_INTERVAL)
-    if clicked:
-        return False, "已点击任务储物格按钮，但未检测到选中态（打开失败）"
-    return False, "背包中未找到任务储物格按钮"
+    """打开背包并确保任务储物格已打开（共享实现在 workflows/return_flow.py）。"""
+    return return_flow.open_task_box(win, "[修罗]")
 
 
 def _find_return_talisman(win):
-    """在已打开的任务储物格中查找修罗回城符，返回 (pt 或 None, 描述)。
-
-    只识别不点击（右键使用由 _use_return_talisman 执行；验证流程
-    复用本函数仅移动鼠标悬停）。模板尚未提供时直接失败并说明
-    （不进入等待循环）。
-    """
-    try:
-        has_tpl = Path(R.img(XIULUO_RETURN_ICON)).exists()
-    except Exception:
-        # R.img 对不存在的模板会打印 ⚠️ 警告，GBK 控制台下 print 抛
-        # UnicodeEncodeError；吞掉按模板缺失处理
-        has_tpl = False
-    if not has_tpl:
-        return None, f"修罗回城符模板未提供（待补充 {XIULUO_RETURN_ICON}）"
-    deadline = time.time() + RETURN_TALISMAN_TIMEOUT
-    while time.time() < deadline:
-        img = win.capture(force_activate=False)
-        if img is None:
-            time.sleep(RETURN_POLL_INTERVAL)
-            continue
-        frame = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
-        pt = game_map.match_frame_np(frame, XIULUO_RETURN_ICON)
-        if pt is not None:
-            return pt, "已在任务储物格中找到修罗回城符"
-        time.sleep(RETURN_POLL_INTERVAL)
-    return None, "任务储物格中未找到修罗回城符"
+    """查找修罗回城符（共享实现在 workflows/return_flow.py）。"""
+    return return_flow.find_return_item(
+        win, XIULUO_RETURN_ICON, "修罗回城符")
 
 
 def _use_return_talisman(win):
-    """在已打开的任务储物格中识别修罗回城符并右键使用，返回灵兽村。
-
-    返回 (是否成功, 描述)。未找到时下一轮领取流程会走世界地图
-    寻路回灵兽村兜底。
-    """
-    pt, info = _find_return_talisman(win)
-    if pt is None:
-        return False, info
-    # 保险：右键前确认背包仍打开（持背包锁下不可达，防未来新流程遗漏锁）
-    if not bag.is_bag_open(win):
-        return False, "右键回城符前背包已被关闭，未使用（下轮重试）"
-    human_click(win, pt[0], pt[1], button="secondary")
-    log(f"[修罗] 已右键使用修罗回城符 ({pt[0]}, {pt[1]})，返回灵兽村", "SYS")
-    time.sleep(1.0)  # 等待传送生效
-    return True, "已右键使用修罗回城符"
+    """右键使用修罗回城符（共享实现在 workflows/return_flow.py）。"""
+    return return_flow.use_return_item(
+        win, XIULUO_RETURN_ICON, "修罗回城符", "灵兽村", "[修罗]",
+        bag_closed_label="回城符")
 
 
 def _close_return_panels(win):
-    """返程收尾：关闭世界地图、小地图、背包（尽力而为，失败仅记日志）。
-
-    先截一帧批量检测三项是否全未打开（常见场景：回城符使用后界面已
-    自行关闭）：全未打开直接返回，1 次截图替代 4~6 次带截图的逐项检测
-    （实测逐项 ~110ms/两项 + 关包检测 ~140ms）。
-    批量帧进一步分流：返程场景地图几乎恒未打开（实测每轮小地图/世界
-    地图双帧确认均「未打开」空转 ~1s）——地图未打开时直接跳过
-    close_maps 的双帧确认，只走关包；确实打开才走既有关闭流程
-    （返程流程不使用地图，批量帧判未打开后不会瞬态再开）。
-    截图失败时走完整关闭流程（各函数自带截图重试），保持原行为。
-    """
-    img = win.capture(force_activate=False)
-    if img is None:
-        game_map.close_maps(win)
-        ok, info = bag.close_bag(win)
-        if ok:
-            log(f"[修罗] {info}", "SYS")
-        else:
-            log(f"[修罗] 背包关闭失败: {info}", "WARN")
-        return
-    frame = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
-    found = game_map.match_frame_multi(
-        frame, (game_map.WORLD_MAP_OPEN_ICON,
-                game_map.MINI_MAP_OPEN_ICON,
-                bag.BAG_BOX_ICON))
-    maps_open = found[game_map.WORLD_MAP_OPEN_ICON] is not None \
-        or found[game_map.MINI_MAP_OPEN_ICON] is not None
-    bag_open = found[bag.BAG_BOX_ICON] is not None
-    if not maps_open and not bag_open:
-        log("[修罗] 世界地图/小地图/背包均未打开，无需关闭", "INFO")
-        return
-    if maps_open:
-        game_map.close_maps(win)
-    if bag_open:
-        ok, info = bag.close_bag(win)
-        if ok:
-            log(f"[修罗] {info}", "SYS")
-        else:
-            log(f"[修罗] 背包关闭失败: {info}", "WARN")
+    """返程收尾关闭面板（共享实现在 workflows/return_flow.py）。"""
+    return return_flow.close_return_panels(
+        win, "[修罗]", optimized=True,
+        failure_detail=True)
 
 
 def _return_to_npc(win):
-    """返程：任务完成后用修罗回城符回灵兽村，准备下一轮领取。返回 (是否成功, 描述)。
-
-    用户流程：
-    1. 战斗结束后打开背包：检查 box_task_selected（选中态），存在说明
-       任务储物格已在背包中打开；否则点击 box_task 打开
-    2. 识别修罗回城符 → 右键使用，返回到灵兽村
-    3. 关闭世界地图、小地图、背包
-    """
-    # 前置：确保战斗已结束（意外遭遇战会遮挡背包按钮）
-    if is_in_battle(win):
-        ok, info = _wait_battle_end(win, timeout=60)
-        if not ok:
-            return False, info
-    # 1~3. 背包整段流程持背包锁：与其他背包流程（摄妖香等）互斥，
-    # 防止交错破坏状态（实测：摄妖香关包后右键回城符点在游戏世界）
-    with app_utils._BAG_LOCK:
-        # 1. 打开背包并确保任务储物格已打开
-        ok, info = _open_task_box(win)
-        if not ok:
-            return False, info
-        # 2. 识别修罗回城符并右键使用（返回灵兽村）
-        ok, info = _use_return_talisman(win)
-        if not ok:
-            # 回城符未使用：也关闭背包与地图保持界面干净；下一轮领取
-            # 会走世界地图寻路回灵兽村兜底
-            _close_return_panels(win)
-            return False, info
-        # 3. 关闭世界地图、小地图、背包（清理界面）
-        _close_return_panels(win)
-    # 传送后位置识别（短时等待加载完成，仅供日志与下一轮领取判断；
-    # 5s 上限为实测校准值——实测加载超 3s 时 3s 时限识别失败，
-    # 且失败后下一轮领取会误走世界地图寻路兜底）。0.5s 轮询：
-    # 加载完成即识别，较 1.0s 最多省 0.5s 空等
-    deadline = time.time() + 5
-    pos = None
-    while time.time() < deadline:
-        pos = game_map.read_map_position(win)
-        if pos is not None:
-            break
-        time.sleep(0.5)
-    if pos is not None:
-        log(f"[修罗] 返程后位置: {pos[0]} {pos[1]},{pos[2]}", "SYS")
-    else:
-        log("[修罗] 返程后位置识别失败（不影响本轮返程）", "INFO")
-    return True, "已返回灵兽村"
+    """返程流程（共享实现在 workflows/return_flow.py）。"""
+    return _return_flow.run(win)
 
 
 def verify_return_flow(win, silent=False):
@@ -1987,191 +1668,28 @@ def _build_shout_text(template=None):
 
 
 def _shout_recruit(win):
-    """缺人自动喊话：Enter 打开聊天输入 → 输入内容（中文自动走剪贴板
-    粘贴，Keyboard.input 内置）→ Enter 发送到当前默认频道。
-
-    与五倍 _shout_recruit 逐字节一致（验证阶段 2026-10-14：修罗
-    日志有喊话但游戏无消息，代码 diff 无区别，差异在游戏侧状态）。
-    """
-    global _shout_last_at
-    # 静默操作：文本经 WM_CHAR 逐字符注入 + 回车 WM_CHAR 发送
-    # （游戏自定义输入系统已实证消费 WM_CHAR，无需前台无需键盘，
-    # 2026-11-03 用户实测有效）；投递失败不记时间戳，下轮重试
-    if app_utils.silent_mode_on():
-        from ..device import silent_click  # 延迟导入：避免模块级循环
-        info = silent_click.send_silent_text(win, _shout_text, end_enter=True)
-        if info is None:
-            log("[修罗] 静默喊话投递失败（窗口不存在）", "WARN")
-            return
-        _shout_last_at = time.time()
-        log(f"[修罗] 已静默喊话: {_shout_text}", "SYS")
-        return
-    # 先激活游戏窗口：键盘事件只进前台窗口（与五倍同款修复——
-    # 偶现喊话静默丢失的头号嫌疑，喊话测试按钮因带激活从不失败）
-    win.activate()
-    time.sleep(0.5)
-    # 游戏聊天输入常驻（无需 Enter 打开）：直接输入 + Enter 发送
-    Keyboard.input(_shout_text)
-    time.sleep(0.8)  # 等待剪贴板粘贴完成（中文走 Ctrl+V 粘贴，需落地时间）
-    Keyboard.key("enter")  # 发送
-    time.sleep(0.5)
-    _shout_last_at = time.time()
-    log(f"[修罗] 已自动喊话: {_shout_text}", "SYS")
+    """缺人自动喊话（共享实现在 workflows/team_flow.py）。"""
+    return _team_flow.shout_recruit(win)
 
 
 def _monitor_team_and_fill(win, create_if_missing=False):
-    """队长缺人监控循环（领取前与「战斗力异常强大」被拒后共用）。
-
-    每轮先看申请人证据（申请面板已开，或组队按钮为 zudui_item2
-    申请待处理态——有人申请时按钮变样且该态即确定性队长）：有则先
-    补人（按最近一次人数检查的缺口一次补满，缺 N 补 N、补满或全
-    失败后清空残留申请列表，2026-11-07 用户结论；立即重查），无则
-    查人数（最少人数按修罗设置）——缺人按间隔重查、人满返回（调用方
-    随即领取）；非队长转保持模式（不返回）。
-
-    先补后查的原因：按钮处于申请态时菜单打不开（点击弹的是申请面板），
-    查人数走菜单路径必失败；补完申请人后按钮恢复普通态，查人数才可用。
-    查人数发现申请待处理态（check_team_min 开面板前查，返回 wait 而非
-    「队长无法判定」）时同样先补人再重查，不空等重查间隔。
-
-    create_if_missing：首次查人数时把自动创建队伍并入同一次菜单打开
-    （仅在「预检被跳过」的首次领取路径传入，补人与被拒路径不传）。
-    间隔：识别失败（OCR 噪声）3s 短重查，缺人无申请人 10s 重查。
-    全链路时序（被拒→补人→重领，含各步间隔）详见
-    docs/xiuluo-team-fill-flow.md。
-    """
-    shortfall = None  # 最近一次人数检查的缺口（缺 N 补 N，2026-11-07 用户结论）；
-                      # 申请态下查不到人数用最近值，None=未知按 1 人保守补
-    while True:
-        img = win.capture(force_activate=False)
-        if img is not None and team.has_pending_apply(img):
-            ok_fill, fill_info = team.fill_team(
-                win, target=load_xiuluo_settings()["min_members"],
-                max_allow=shortfall or 1)
-            log(f"[修罗] 补人: {fill_info}", "SYS" if ok_fill else "INFO")
-            if ok_fill:
-                continue  # 已补人，立即重查
-        status, info = _check_team_with_retry(win,
-                                              create_if_missing=create_if_missing)
-        create_if_missing = False  # 自动创建只在首次检查内执行
-        if status == "not_leader":
-            if team.is_definitive_not_leader(info):
-                _keep_alive(win, info)  # 无限循环，用户手动停止
-            # 瞬态失败（遮挡/加载/按钮未命中等）：不退出监控，按间隔
-            # 持续重查——瞬时问题不应把队长永久降级
-            interval = (TEAM_RECOG_RETRY_INTERVAL if "识别失败" in info
-                        else TEAM_CHECK_RETRY_INTERVAL)
-            log(f"[修罗] {info}（瞬态失败，{interval}s 后重查）", "WARN")
-            time.sleep(interval)
-            continue
-        if status == "ready":
-            return
-        # 人数不足信息里解析缺口（成员识别失败/申请待处理态无人数信息
-        # 时保留旧值）：缺 2 人一次补 2 人，不是每轮只补 1 人
-        m = re.search(r"队伍人数不足（(\d+)/(\d+)", info)
-        if m:
-            shortfall = max(0, int(m.group(2)) - int(m.group(1)))
-        # 等待状态下复查申请人证据：check_team_min 的帧可能比本循环
-        # 首帧更晚拍到申请待处理态（申请人恰在两次截帧间出现），有则
-        # 立即补人不空等重查间隔（2026-11-02 日志教训）
-        img = win.capture(force_activate=False)
-        if img is not None and team.has_pending_apply(img):
-            ok_fill, fill_info = team.fill_team(
-                win, target=load_xiuluo_settings()["min_members"],
-                max_allow=shortfall or 1)
-            log(f"[修罗] 补人: {fill_info}", "SYS" if ok_fill else "INFO")
-            if ok_fill:
-                continue  # 已补人，立即重查
-        interval = (TEAM_RECOG_RETRY_INTERVAL if "识别失败" in info
-                    else TEAM_CHECK_RETRY_INTERVAL)
-        # 缺人自动喊话（间隔限频；有申请人正在补时走上面的补人分支，
-        # 不喊话）
-        if _shout_text and time.time() - _shout_last_at >= SHOUT_MIN_INTERVAL:
-            try:
-                _shout_recruit(win)
-            except Exception as e:
-                log(f"[修罗] 喊话失败: {e}", "WARN")
-        log(f"[修罗] {info}，暂无申请人可补，{interval}s 后重查", "WARN")
-        time.sleep(interval)
+    """队长缺人监控循环（共享实现在 workflows/team_flow.py）。"""
+    return _team_flow.monitor_team_and_fill(win, create_if_missing)
 
 
 def _keep_alive(win, info):
-    """非队长：核心流程不执行，保持任务运行（战斗线程自动操作）。
-
-    用户手动停止时任务进程被回收，无需自行退出。
-    置位 battle.wuyi_fast_idle：队伍共享的巫医对话框由队长点 NPC 触发，
-    本进程不设 wuyi_expected_at——10s 空闲节奏会在队长走远关闭对话框
-    后才赶到、点击失效（2026-10-30 实测），空闲节奏提升到 2s（人物
-    静止，对话框区域差分门有效，OCR 成本可控）。
-    自动归队（设置开关默认开，仅非队长生效——本保持模式即非队长）：
-    战斗中死亡会被送回轮回司，此后仍在队伍（离队状态）但脱离大部队。
-    空闲轮询位置（复用战斗结束的坐标方案），落点轮回司即走
-    team.maybe_rejoin 打开队伍面板点「归队」传送回队长；归队尝试后
-    按 REJOIN_RETRY_INTERVAL 放慢（面板开合 5~7s，防频繁开关）。
-    """
-    log(f"[修罗] {info}，跳过核心流程，仅保持战斗线程运行", "SYS")
-    battle.wuyi_fast_idle = True
-    auto_rejoin = load_xiuluo_auto_rejoin()
-    log(f"[修罗] 自动归队: {'开（死亡落轮回司自动点归队回队长）' if auto_rejoin else '关'}", "SYS")
-    next_rejoin_at = 0.0
-    while True:
-        time.sleep(1)
-        if not auto_rejoin or tab_group.pass_active:
-            continue
-        now = time.time()
-        if now < next_rejoin_at:
-            continue
-        next_rejoin_at = now + team.REJOIN_POLL_INTERVAL
-        # 战斗判定只在轮询到期时执行（is_in_battle 是截窗+模板匹配，
-        # 每秒跑会空烧）；战斗中死亡送回轮回司必在战斗结束后
-        if is_in_battle(win):
-            continue
-        try:
-            handled, desc = team.maybe_rejoin(win, prefix="[修罗][归队]")
-            if handled:
-                log(f"[修罗][归队] {desc}", "SYS" if desc.startswith("已归队") else "WARN")
-                next_rejoin_at = time.time() + team.REJOIN_RETRY_INTERVAL
-        except Exception as e:
-            log(f"[修罗][归队] 归队检查异常: {e}", "WARN")
+    """非队长保持 + 自动归队（共享实现在 workflows/team_flow.py）。"""
+    return _team_flow.keep_alive(win, info)
 
 
 def _auto_create_team_once(win):
-    """执行一次自动创建队伍（开关已确认开启，见 run_loop 门控）。
-
-    未组队时点组队按钮 → 菜单「创建队伍」创建并校验面板；已在队伍中
-    直接返回成功无操作（team.ensure_team_created 内部判定）。异常按
-    失败记日志，不阻断主流程——后续正常队伍检查会把未组队按确定性
-    非队长处理（_keep_alive），下次任务启动再重试创建。
-    """
-    try:
-        ok, info = team.ensure_team_created(win, prefix="[修罗][创建队伍]")
-    except Exception as e:
-        ok, info = False, f"创建队伍异常: {e}"
-    log(f"[修罗][创建队伍] {info}", "SYS" if ok else "WARN")
+    """自动创建队伍一次（共享实现在 workflows/team_flow.py）。"""
+    return _team_flow.auto_create_team_once(win)
 
 
 def _task_state(win):
-    """一次截帧判定续跑状态：追踪面板是否有修罗任务。
-
-    面板不在场（标题条模板未命中）时返回 False——ocr_track 会回退
-    静态区域，世界浮字/对话框文字可能误命中任务文案（2026-11-11
-    实测静态区域读到「消灭修罗」误判任务存在，跟踪空转整轮）。
-    面板门控**只作用于「任务存在」判定，不阻断领取**：面板缺席时
-    按无任务走领取分支（用户 2026-11-11：领取被拒→补人→人数够了
-    必须继续领取，不能被面板缺席阻塞流程）；战斗帧面板被战斗 UI
-    覆盖属正常，同样按无任务放行（走位/跟踪自行按战斗跳过）；
-    截图失败同放行（沿用旧行为）。
-    """
-    img = win.capture(force_activate=False)
-    if img is None:
-        return False
-    if is_in_battle_frame(img):
-        return False
-    if not task_tracker.panel_visible(img=img):
-        return False
-    items, img_np = task_tracker.ocr_track(img)
-    return task_tracker.has_task_in(items, img_np, TASK_TITLE,
-                                    TASK_FALLBACK_TEXTS)
+    """续跑状态判定（共享实现在 workflows/claim_flow.py）。"""
+    return claim_flow.task_state(win, TASK_TITLE, TASK_FALLBACK_TEXTS)
 
 
 def run_loop(win, cycle_interval=1.0):

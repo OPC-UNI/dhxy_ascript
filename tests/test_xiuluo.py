@@ -11,6 +11,7 @@ import pytest
 from PIL import Image
 
 from src.tasks import xiuluo
+from src.workflows import claim_flow
 
 CENTER = xiuluo.SCREEN_CENTER_POS  # (689, 415)
 
@@ -282,7 +283,7 @@ def test_walk_to_claim_spot_button_in_lingshoucun_arrival(monkeypatch):
 
 def test_task_state_panel_closed(monkeypatch):
     """面板不在场：按无任务返回（不阻塞领取），且不得 OCR 静态区域误采信。"""
-    monkeypatch.setattr(xiuluo, "is_in_battle_frame", lambda img: False)
+    monkeypatch.setattr(claim_flow, "is_in_battle_frame", lambda img: False)
     monkeypatch.setattr(xiuluo.task_tracker, "panel_visible", lambda **k: False)
 
     def _boom(img):
@@ -293,7 +294,7 @@ def test_task_state_panel_closed(monkeypatch):
 
 
 def test_task_state_panel_visible_task_found(monkeypatch):
-    monkeypatch.setattr(xiuluo, "is_in_battle_frame", lambda img: False)
+    monkeypatch.setattr(claim_flow, "is_in_battle_frame", lambda img: False)
     monkeypatch.setattr(xiuluo.task_tracker, "panel_visible", lambda **k: True)
     monkeypatch.setattr(xiuluo.task_tracker, "ocr_track",
                         lambda img: ([], None))

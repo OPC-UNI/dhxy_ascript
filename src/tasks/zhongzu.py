@@ -37,14 +37,12 @@
 开关与间隔，任务侧首次轮到巫医时提示「巫医暂无实现，跳过」后静默
 跳过，链路调用点保留 TODO；战斗线程现有的巫医对话框自动处理天然生效。
 """
-import re
 import time
 from pathlib import Path
 
 import cv2
 import numpy as np
 from ascript.windows.system import R  # 资源路由（模板路径）
-from ascript.windows.hardware.keyboard import Keyboard  # 缺人喊话键盘输入
 
 from ..core.app_utils import (human_click, human_move, precise_click, log,
                         move_away, norm_text)
@@ -54,7 +52,6 @@ from ..device import map as game_map
 from ..device import team
 from ..core import debug_overlay
 from ..device import bag
-from ..device import battle
 from ..device.battle import is_in_battle, is_in_battle_frame
 from ..device import repair
 from ..core.settings import (load_task_counts, load_zhongzu_check_team,
@@ -67,7 +64,9 @@ from ..core.settings import (load_task_counts, load_zhongzu_check_team,
                              load_zhongzu_auto_repair,
                              load_zhongzu_repair_interval,
                              load_zhongzu_tab_group)
-from ..workflows.follow import follow_task  # 任务跟踪（绿字点击寻路/战斗跳过/附加对话处理）
+from ..workflows.team_flow import TeamFlow  # 组队流程编排（检查/建队/补人/喊话/归队）
+from ..workflows import return_flow  # 返程流程编排（开箱/返程道具/清屏）
+from ..workflows import claim_flow  # 领取共享流程（选项/地图门控/校验探针）
 from ..device import tab_group  # 组号模式（一窗口多 Tab）：初始化/队员 pass/抑制标志
 from ..device.dialog_common import (SCREEN_CENTER_POS,
                             green_option_center)  # 对话框共享组件
@@ -105,6 +104,9 @@ CLAIM_VERIFY_WAIT = 5                         # 领取后任务进入追踪的�
 CLAIM_DIALOG_OPTION = "我们也可以为服务器的比武大会贡献力量，放心吧。"
 CLAIM_OPTION_TAIL = "贡献力量，放心吧。"      # 换行渲染时的尾部匹配串
 CLAIM_OPTION_SHORT = "贡献力量"               # 最后兜底
+CLAIM_OPTION_NEEDLES = (norm_text(CLAIM_DIALOG_OPTION),
+                        norm_text(CLAIM_OPTION_TAIL),
+                        norm_text(CLAIM_OPTION_SHORT))  # 供 claim_flow
 CLAIM_UNCONFIGURED_INFO = (
     "种族比武领取三件套未就绪（NPC 模板缺失/坐标或小地图点为空），任务结束")
 
@@ -117,20 +119,21 @@ SHOUT_MIN_INTERVAL = 30         # 缺人自动喊话最短间隔（秒，防刷�
 # 保存，见 core.settings.load_zhongzu_shout_text；游戏聊天拦截连续加号，
 # 内容不得带 +）
 _shout_text = ""                # 本轮喊话内容（开关开启时=设置内容；关=空不喊话）
-_shout_last_at = 0.0            # 上次喊话时间（跨监控调用保持间隔）
+_team_flow = TeamFlow(
+    prefix="[种族比武]", min_members=TEAM_MIN_MEMBERS,
+    auto_rejoin=load_zhongzu_auto_rejoin, shout_text=lambda: _shout_text,
+    check_retry_interval=TEAM_CHECK_RETRY_INTERVAL,
+    recog_retry_interval=TEAM_RECOG_RETRY_INTERVAL,
+    shout_min_interval=SHOUT_MIN_INTERVAL)
 
 # ---- 任务对话（寻路到达后出现；用户 2026-11-12 确认五选一） ----
 TASK_DIALOG_OPTIONS = ("进入战斗", "开始战斗", "开始采集", "开始开采", "开始训练")
 _WAIT_POLL_INTERVAL = 0.3      # 领取/对话轮询间隔（非防抖判定点）
 
-# ---- 战斗 ----
-BATTLE_END_POLL = 2.0          # 等待战斗结束的轮询间隔
-
-# ---- 返程（背包任务储物格 → 助威令右键 → 回长安） ----
+# ---- 返程（任务储物格 → 助威令右键 → 回长安；共享实现在
+#      workflows/return_flow.py） ----
 ZHUWEILING_ICON = "zhongzu_zhuweiling.png"   # 助威令模板（用户提供 47x47）
 ZHUWEILING_LABEL = "助威令"
-RETURN_ITEM_TIMEOUT = 15       # 等待助威令在任务储物格中出现的超时
-RETURN_POLL_INTERVAL = 0.5     # 返程轮询间隔
 
 # ---- 自动巫医（能力保留，链路待实现；用户 2026-11-12 确认） ----
 # TODO(巫医链路标定)：以下三件套待用户提供后接入（参考修罗同款字段）
@@ -161,6 +164,23 @@ def _template_exists(icon):
         exists = False
     _TEMPLATE_EXISTS_CACHE[icon] = exists
     return exists
+
+
+def _return_preflight():
+    if not _template_exists(ZHUWEILING_ICON):
+        return f"{ZHUWEILING_LABEL}模板未提供（待补充 {ZHUWEILING_ICON}）"
+    return None
+
+
+_return_flow = return_flow.ReturnFlow(
+    prefix="[种族比武]", item_icon=ZHUWEILING_ICON,
+    item_label=ZHUWEILING_LABEL, target_label="长安",
+    success_info=f"已使用{ZHUWEILING_LABEL}返回长安",
+    open_box=lambda win: bag.open_task_box(win, prefix="种族比武"),
+    read_position=False, post_sleep=1.0,
+    preflight=_return_preflight, template_exists=_template_exists,
+    close_optimized=True, close_failure_detail=False,
+    bag_closed_label=ZHUWEILING_LABEL)
 
 
 _claim_npc_missing_logged = False  # 领取 NPC 模板组缺失告警只记一次
@@ -245,213 +265,50 @@ def _clear_claim_screen(win):
 
 
 def _near_claim_spot(pos, tolerance):
-    """判断位置是否在长安领取点附近（地名精确匹配，容差抗 OCR 噪声）。"""
-    if CLAIM_SPOT is None:
-        return False
-    return game_map.is_at_position(pos, CHANGAN,
-                                  CLAIM_SPOT[0], CLAIM_SPOT[1], tolerance)
+    """领取点附近判定（共享实现在 workflows/claim_flow.py）。"""
+    return claim_flow.near_claim_spot(pos, CHANGAN, CLAIM_SPOT, tolerance)
 
 
 def _in_claim_map(pos):
-    """位置是否在领取地图长安（领取 NPC 模板跨图误命中门控）。
-
-    位置读取失败按不在处理——无法确认在长安时不得采信 NPC 模板信号。
-    """
-    return pos is not None and pos[0].strip() == CHANGAN
+    """领取地图门控（共享实现在 workflows/claim_flow.py）。"""
+    return claim_flow.in_claim_map(pos, CHANGAN)
 
 
 def _task_state(win):
-    """一次截帧判定续跑状态：追踪面板是否有种族比武任务。
-
-    面板不在场（标题条模板未命中）时返回 False——ocr_track 会回退
-    静态区域，世界浮字/对话框文字可能误命中任务文案。面板门控只
-    作用于「任务存在」判定，不阻断领取：面板缺席/战斗帧/截图失败
-    均按无任务放行（走位/跟踪自行处理）。
-    """
-    img = win.capture(force_activate=False)
-    if img is None:
-        return False
-    if is_in_battle_frame(img):
-        return False
-    if not task_tracker.panel_visible(img=img):
-        return False
-    items, img_np = task_tracker.ocr_track(img)
-    return task_tracker.has_task_in(items, img_np, TASK_TITLE,
-                                    TASK_FALLBACK_TEXTS)
+    """续跑状态判定（共享实现在 workflows/claim_flow.py）。"""
+    return claim_flow.task_state(win, TASK_TITLE, TASK_FALLBACK_TEXTS)
 
 
 # ---- 队伍检查（固定 5 人，与修罗同款骨架） ----
 
 def _check_team_ready(win, create_if_missing=False):
-    """领取前队伍检查（一次面板开关，固定 5 人）。
-
-    create_if_missing：自动创建队伍并入本次菜单打开（见
-    team.check_team_min）。返回 (状态, 描述)；状态 ready / wait /
-    not_leader（见 team.check_team_min）。
-    """
-    status, info, members = team.check_team_min(
-        win, min_members=TEAM_MIN_MEMBERS, allow_kick=True,
-        create_if_missing=create_if_missing, prefix="[种族比武][创建队伍]")
-    team.update_overlay_team(status, info, members)
-    return status, info
+    """领取前队伍检查（共享实现在 workflows/team_flow.py）。"""
+    return _team_flow.check_team_ready(win, create_if_missing)
 
 
 def _check_team_with_retry(win, tries=3, create_if_missing=False):
-    """队伍检查带瞬态失败重试（与修罗同款）。
-
-    截窗失败/面板打不开可能是瞬时问题，一次失败即转非队长保持模式
-    会把队长永久挂起。瞬态类失败短间隔重试，连续 N 次才按 not_leader
-    处理；明确的非队长判定与未组队（确定性状态）不重试。
-    """
-    last = ("not_leader", "队伍检查未执行")
-    for i in range(tries):
-        status, info = _check_team_ready(win,
-                                         create_if_missing=create_if_missing)
-        last = (status, info)
-        if status != "not_leader":
-            return status, info
-        # 未组队是确定性状态（没组队就没有队长）——提示带「队长无法
-        # 判定」前缀，必须先于瞬态判定短路返回
-        if "未组队" in info:
-            return status, info
-        if "队长无法判定" not in info and "截图失败" not in info:
-            return status, info  # 明确非队长（面板打开且无解散按钮）
-        if i < tries - 1:
-            log(f"[种族比武] {info}，瞬态失败重试（{i + 1}/{tries - 1}）", "WARN")
-            time.sleep(2.0)
-    return last
+    """队伍检查带瞬态失败重试（共享实现在 workflows/team_flow.py）。"""
+    return _team_flow.check_team_with_retry(win, tries, create_if_missing)
 
 
 def _shout_recruit(win):
-    """缺人自动喊话：输入内容（中文自动走剪贴板粘贴，Keyboard.input
-    内置）→ Enter 发送到游戏当前默认频道（与修罗/五倍链路一致）。
-
-    静默模式（高级设置默认开）走 WM_CHAR 逐字符注入 + 回车发送，无需
-    前台（2026-11-03 用户实测有效）；投递失败不记时间戳，下轮重试。
-    """
-    global _shout_last_at
-    if app_utils.silent_mode_on():
-        from ..device import silent_click  # 延迟导入：避免模块级循环
-        info = silent_click.send_silent_text(win, _shout_text, end_enter=True)
-        if info is None:
-            log("[种族比武] 静默喊话投递失败（窗口不存在）", "WARN")
-            return
-        _shout_last_at = time.time()
-        log(f"[种族比武] 已静默喊话: {_shout_text}", "SYS")
-        return
-    # 先激活游戏窗口：键盘事件只进前台窗口
-    win.activate()
-    time.sleep(0.5)
-    # 游戏聊天输入常驻（无需 Enter 打开）：直接输入 + Enter 发送
-    Keyboard.input(_shout_text)
-    time.sleep(0.8)  # 等待剪贴板粘贴完成（中文走 Ctrl+V 粘贴，需落地时间）
-    Keyboard.key("enter")  # 发送
-    time.sleep(0.5)
-    _shout_last_at = time.time()
-    log(f"[种族比武] 已自动喊话: {_shout_text}", "SYS")
+    """缺人自动喊话（共享实现在 workflows/team_flow.py）。"""
+    return _team_flow.shout_recruit(win)
 
 
 def _monitor_team_and_fill(win, create_if_missing=False):
-    """队长缺人监控循环（领取前共用）。
-
-    每轮先看申请人证据（申请面板已开，或组队按钮为 zudui_item2
-    申请待处理态）：有则先补人（按最近一次人数检查的缺口一次补满，
-    补满或全失败后清空残留申请列表，立即重查），无则查人数——缺人
-    按间隔重查、人满返回（调用方随即领取）；非队长转保持模式（不返回）。
-    缺人等待且无申请人时按 SHOUT_MIN_INTERVAL 限频喊话招募（喊话开关
-    与内容见种族比武设置，仅队长会进入本循环）。
-    """
-    shortfall = None  # 最近一次人数检查的缺口（缺 N 补 N）；None=未知按 1 人补
-    while True:
-        img = win.capture(force_activate=False)
-        if img is not None and team.has_pending_apply(img):
-            ok_fill, fill_info = team.fill_team(
-                win, target=TEAM_MIN_MEMBERS, max_allow=shortfall or 1)
-            log(f"[种族比武] 补人: {fill_info}", "SYS" if ok_fill else "INFO")
-            if ok_fill:
-                continue  # 已补人，立即重查
-        status, info = _check_team_with_retry(
-            win, create_if_missing=create_if_missing)
-        create_if_missing = False  # 自动创建只在首次检查内执行
-        if status == "not_leader":
-            if team.is_definitive_not_leader(info):
-                _keep_alive(win, info)  # 无限循环，用户手动停止
-            interval = (TEAM_RECOG_RETRY_INTERVAL if "识别失败" in info
-                        else TEAM_CHECK_RETRY_INTERVAL)
-            log(f"[种族比武] {info}（瞬态失败，{interval}s 后重查）", "WARN")
-            time.sleep(interval)
-            continue
-        if status == "ready":
-            return
-        # 人数不足信息里解析缺口（成员识别失败/申请待处理态无人数信息
-        # 时保留旧值）：缺 2 人一次补 2 人，不是每轮只补 1 人
-        m = re.search(r"队伍人数不足（(\d+)/(\d+)", info)
-        if m:
-            shortfall = max(0, int(m.group(2)) - int(m.group(1)))
-        # 等待状态下复查申请人证据：check_team_min 的帧可能比本循环
-        # 首帧更晚拍到申请待处理态（申请人恰在两次截帧间出现），
-        # 有则立即补人不空等重查间隔
-        img = win.capture(force_activate=False)
-        if img is not None and team.has_pending_apply(img):
-            ok_fill, fill_info = team.fill_team(
-                win, target=TEAM_MIN_MEMBERS, max_allow=shortfall or 1)
-            log(f"[种族比武] 补人: {fill_info}", "SYS" if ok_fill else "INFO")
-            if ok_fill:
-                continue
-        interval = (TEAM_RECOG_RETRY_INTERVAL if "识别失败" in info
-                    else TEAM_CHECK_RETRY_INTERVAL)
-        # 缺人自动喊话（间隔限频；有申请人正在补时走上面的补人分支，
-        # 不喊话）
-        if _shout_text and time.time() - _shout_last_at >= SHOUT_MIN_INTERVAL:
-            try:
-                _shout_recruit(win)
-            except Exception as e:
-                log(f"[种族比武] 喊话失败: {e}", "WARN")
-        log(f"[种族比武] {info}，暂无申请人可补，{interval}s 后重查", "WARN")
-        time.sleep(interval)
+    """队长缺人监控循环（共享实现在 workflows/team_flow.py）。"""
+    return _team_flow.monitor_team_and_fill(win, create_if_missing)
 
 
 def _keep_alive(win, info):
-    """非队长：核心流程不执行，保持任务运行（战斗线程自动操作）。
-
-    自动归队（设置开关默认开，仅非队长生效——本保持模式即非队长）：
-    战斗死亡落轮回司后自动打开队伍面板点「归队」传送回队长。
-    """
-    log(f"[种族比武] {info}，跳过核心流程，仅保持战斗线程运行", "SYS")
-    battle.wuyi_fast_idle = True
-    auto_rejoin = load_zhongzu_auto_rejoin()
-    log(f"[种族比武] 自动归队: "
-        f"{'开（死亡落轮回司自动点归队回队长）' if auto_rejoin else '关'}", "SYS")
-    next_rejoin_at = 0.0
-    while True:
-        time.sleep(1)
-        if not auto_rejoin or tab_group.pass_active:
-            continue
-        now = time.time()
-        if now < next_rejoin_at:
-            continue
-        next_rejoin_at = now + team.REJOIN_POLL_INTERVAL
-        # 战斗判定只在轮询到期时执行（is_in_battle 是截窗+模板匹配，
-        # 每秒跑会空烧）；战斗中死亡送回轮回司必在战斗结束后
-        if is_in_battle(win):
-            continue
-        try:
-            handled, desc = team.maybe_rejoin(win, prefix="[种族比武][归队]")
-            if handled:
-                log(f"[种族比武][归队] {desc}",
-                    "SYS" if desc.startswith("已归队") else "WARN")
-                next_rejoin_at = time.time() + team.REJOIN_RETRY_INTERVAL
-        except Exception as e:
-            log(f"[种族比武][归队] 归队检查异常: {e}", "WARN")
+    """非队长保持 + 自动归队（共享实现在 workflows/team_flow.py）。"""
+    return _team_flow.keep_alive(win, info)
 
 
 def _auto_create_team_once(win):
-    """执行一次自动创建队伍（开关已确认开启）。"""
-    try:
-        ok, info = team.ensure_team_created(win, prefix="[种族比武][创建队伍]")
-    except Exception as e:
-        ok, info = False, f"创建队伍异常: {e}"
-    log(f"[种族比武][创建队伍] {info}", "SYS" if ok else "WARN")
+    """自动创建队伍一次（共享实现在 workflows/team_flow.py）。"""
+    return _team_flow.auto_create_team_once(win)
 
 
 # ---- 领取点导航（长安） ----
@@ -667,38 +524,15 @@ def _wait_claim_entry(win, timeout):
 
 
 def _find_claim_option(items, img_np):
-    """在 OCR 结果中查找领取对话框绿色选项，返回 (cx, cy, txt, 是否兜底)。
-
-    选项可能换行渲染：按优先级完整文案 → 尾部「贡献力量，放心吧。」
-    → 短兜底「贡献力量」。匹配前去标点；限定对话框区域
-    （x≥PANEL_MAX_X），避免误点追踪面板绿字链接。
-    """
-    needles = (norm_text(CLAIM_DIALOG_OPTION),
-               norm_text(CLAIM_OPTION_TAIL),
-               norm_text(CLAIM_OPTION_SHORT))
-    for idx, needle in enumerate(needles):
-        for txt, rect, score in items:
-            ntxt = norm_text(txt)
-            if score >= 0.55 and needle and needle in ntxt \
-                    and rect[0] >= task_tracker.PANEL_MAX_X \
-                    and task_tracker.is_green_text(img_np, rect):
-                cx, cy = green_option_center(img_np, rect,
-                                             len(needle), len(ntxt))
-                return cx, cy, txt, idx == len(needles) - 1
-    return None
+    """查找领取绿色选项（共享实现在 workflows/claim_flow.py）。"""
+    return claim_flow.find_claim_option(items, img_np, CLAIM_OPTION_NEEDLES)
 
 
 def _click_claim_option(win, items, img_np):
-    """点击领取对话框中的绿色选项，成功返回 True。"""
-    found = _find_claim_option(items, img_np)
-    if found is None:
-        return False
-    cx, cy, txt, fallback = found
-    human_click(win, cx, cy)
-    suffix = "（兜底匹配）" if fallback else ""
-    log(f"[种族比武] 已点击绿色选项「{txt}」{suffix}", "SYS")
-    move_away(win)  # 鼠标停留选项上会使其悬停变色，干扰后续绿字判定
-    return True
+    """点击领取绿色选项（共享实现在 workflows/claim_flow.py）。"""
+    return claim_flow.click_claim_option(
+        win, items, img_np, needles=CLAIM_OPTION_NEEDLES,
+        prefix="[种族比武]", cache_key=None)
 
 
 def _click_entry_ensuring_dialog(win):
@@ -962,141 +796,40 @@ def _handle_task_dialog(win, items, img_np):
 
 
 def _maybe_tab_bars_pass(win):
-    """组号模式：点完任务追踪（寻路中）检查队员血蓝（tab_group 内节流）。"""
-    try:
-        if tab_group.active():
-            tab_group.member_bars_pass(win)
-    except Exception as e:
-        log(f"[种族比武] 组号队员血蓝 pass 异常: {e}", "WARN")
+    """组号模式队员血蓝 pass（共享实现在 workflows/team_flow.py）。"""
+    return _team_flow.maybe_tab_bars_pass(win)
 
 
 def _follow_to_done(win, first_items=None):
-    """寻路 + 任务对话 + 战斗：跟踪任务直到本轮完成。
-
-    复用 workflows.follow.follow_task：绿字点击自动寻路、任务对话走附加对话
-    处理（五选一）、战斗由战斗监控线程操作且跟踪中自动跳过；
-    任务从追踪面板消失即完成。
-    """
-    return follow_task(win, TASK_TITLE, prefix="种族比武",
-                       extra_dialog_handler=_handle_task_dialog,
-                       fallback_keywords=TASK_FALLBACK_TEXTS,
-                       first_items=first_items,
-                       post_track_handler=_maybe_tab_bars_pass,
-                       battle_extras_tpl_gate=True)
+    """跟踪任务直到完成（共享实现在 workflows/claim_flow.py）。"""
+    return claim_flow.follow_to_done(
+        win, first_items, title=TASK_TITLE, prefix="种族比武",
+        extra_dialog_handler=_handle_task_dialog,
+        fallback_keywords=TASK_FALLBACK_TEXTS,
+        post_track_handler=_maybe_tab_bars_pass,
+        battle_extras_tpl_gate=True)
 
 
 # ---- 返程（任务储物格 → 助威令） ----
 
 def _wait_battle_end(win, timeout=60):
-    """等待当前战斗结束（战斗操作由 battle.watch_loop 线程自动完成）。"""
-    deadline = time.time() + timeout
-    while True:
-        if tab_group.pass_active:
-            time.sleep(0.3)
-            continue
-        if not is_in_battle(win):
-            return True, "战斗已结束"
-        if time.time() > deadline:
-            return False, f"等待战斗结束超时（{timeout}s）"
-        time.sleep(BATTLE_END_POLL)
+    """等待战斗结束（共享实现在 workflows/return_flow.py）。"""
+    return return_flow.wait_battle_end(win, timeout)
 
 
-def _find_return_item(win):
-    """在已打开的任务储物格中查找助威令，返回 (pt 或 None, 描述)。
-
-    模板尚未提供时直接失败并说明（不进入等待循环）。
-    """
-    if not _template_exists(ZHUWEILING_ICON):
-        return None, (f"{ZHUWEILING_LABEL}模板未提供（待补充 "
-                      f"{ZHUWEILING_ICON}）")
-    deadline = time.time() + RETURN_ITEM_TIMEOUT
-    while time.time() < deadline:
-        img = win.capture(force_activate=False)
-        if img is None:
-            time.sleep(RETURN_POLL_INTERVAL)
-            continue
-        frame = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
-        pt = game_map.match_frame_np(frame, ZHUWEILING_ICON)
-        if pt is not None:
-            return pt, f"已在任务储物格中找到{ZHUWEILING_LABEL}"
-        time.sleep(RETURN_POLL_INTERVAL)
-    return None, f"任务储物格中未找到{ZHUWEILING_LABEL}"
 
 
-def _use_return_item(win):
-    """识别助威令并右键使用，返回长安。返回 (是否成功, 描述)。"""
-    pt, info = _find_return_item(win)
-    if pt is None:
-        return False, info
-    # 保险：右键前确认背包仍打开
-    if not bag.is_bag_open(win):
-        return False, "右键助威令前背包已被关闭，未使用（下轮重试）"
-    human_click(win, pt[0], pt[1], button="secondary")
-    log(f"[种族比武] 已右键使用{ZHUWEILING_LABEL} ({pt[0]}, {pt[1]})，"
-        f"返回长安", "SYS")
-    time.sleep(1.0)  # 等待传送生效
-    return True, f"已右键使用{ZHUWEILING_LABEL}"
 
 
 def _close_return_panels(win):
-    """返程收尾：关闭世界地图、小地图、背包（尽力而为，失败仅记日志）。
-
-    先截一帧批量检测三项是否全未打开：全未打开直接返回，省去逐项
-    带截图的关闭检测；地图未打开时跳过 close_maps 的双帧确认。
-    """
-    img = win.capture(force_activate=False)
-    if img is None:
-        game_map.close_maps(win)
-        ok, info = bag.close_bag(win)
-        log(f"[种族比武] {info}", "SYS" if ok else "WARN")
-        return
-    frame = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
-    found = game_map.match_frame_multi(
-        frame, (game_map.WORLD_MAP_OPEN_ICON,
-                game_map.MINI_MAP_OPEN_ICON,
-                bag.BAG_BOX_ICON))
-    maps_open = found[game_map.WORLD_MAP_OPEN_ICON] is not None \
-        or found[game_map.MINI_MAP_OPEN_ICON] is not None
-    bag_open = found[bag.BAG_BOX_ICON] is not None
-    if not maps_open and not bag_open:
-        log("[种族比武] 世界地图/小地图/背包均未打开，无需关闭", "INFO")
-        return
-    if maps_open:
-        game_map.close_maps(win)
-    if bag_open:
-        ok, info = bag.close_bag(win)
-        log(f"[种族比武] {info}", "SYS" if ok else "WARN")
+    """返程收尾关闭面板（共享实现在 workflows/return_flow.py）。"""
+    return return_flow.close_return_panels(
+        win, "[种族比武]", optimized=True, failure_detail=False)
 
 
 def _return_to_npc(win):
-    """返程：任务完成后用助威令回长安，准备下一轮领取。
-
-    1. 战斗结束后打开背包并确保任务储物格已打开（bag.open_task_box）
-    2. 识别助威令 → 右键使用，返回长安
-    3. 关闭世界地图、小地图、背包
-    助威令缺失/模板未提供：告警并跳过返程，下一轮领取流程会走
-    世界地图寻路回长安兜底（用户 2026-11-12 确认）。
-    """
-    if is_in_battle(win):
-        ok, info = _wait_battle_end(win, timeout=60)
-        if not ok:
-            return False, info
-    # 模板缺失快速失败：不打开背包空等（素材标定前每轮都会走这里）
-    if not _template_exists(ZHUWEILING_ICON):
-        return False, (f"{ZHUWEILING_LABEL}模板未提供（待补充 "
-                       f"{ZHUWEILING_ICON}）")
-    # 背包整段流程持背包锁：与其他背包流程（摄妖香等）互斥
-    with app_utils._BAG_LOCK:
-        ok, info = bag.open_task_box(win, prefix="种族比武")
-        if not ok:
-            return False, info
-        ok, info = _use_return_item(win)
-        if not ok:
-            _close_return_panels(win)
-            return False, info
-        _close_return_panels(win)
-    time.sleep(1.0)  # 传送加载短等待（下一轮领取会自行处理加载慢场景）
-    return True, f"已使用{ZHUWEILING_LABEL}返回长安"
+    """返程流程（共享实现在 workflows/return_flow.py）。"""
+    return _return_flow.run(win)
 
 
 # ---- 自动巫医（能力保留，链路暂未实现） ----
