@@ -69,12 +69,18 @@ jobs:
       - name: 烙授权应用 ID（生产 23651；本地/未烙默认 24528）
         shell: pwsh
         run: |
-          # src/license_app_id.py 仓库内默认为 24528（本地开发用，不消耗生产
-          # 卡密）；GitHub 打包前覆写为生产 app 23651，随 exe 烙入分发。
+          # src/app/license_app_id.py 仓库内默认为 24528（本地开发用，不消耗
+          # 生产卡密）；GitHub 打包前覆写为生产 app 23651，随 exe 烙入分发。
           # 与版本号烙印同模式：仅改 runner 工作副本，不回写仓库。
+          # 必须先确认文件存在：Set-Content 缺文件时会新建，否则会静默烙到
+          # 一个无人引用的路径，发布 exe 继续用开发 app id。
+          $licenseFile = "src/app/license_app_id.py"
+          if (-not (Test-Path $licenseFile)) {
+            Write-Error "授权模块不存在: $licenseFile"; exit 1
+          }
           $content = 'LICENSE_APP_ID = "23651"' + "`n"
-          Set-Content -Path "src/license_app_id.py" -Value $content -Encoding utf8NoBOM
-          $baked = (Get-Content "src/license_app_id.py" -Raw).Trim()
+          Set-Content -Path $licenseFile -Value $content -Encoding utf8NoBOM
+          $baked = (Get-Content $licenseFile -Raw).Trim()
           if ($baked -notmatch '23651') { Write-Error "授权 app id 烙入失败: $baked"; exit 1 }
           Write-Host "授权 app id 已烙入: $baked"
 

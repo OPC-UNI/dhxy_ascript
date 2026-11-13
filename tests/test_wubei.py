@@ -8,7 +8,7 @@
 import numpy as np
 import pytest
 
-from src import wubei
+from src.tasks import wubei
 
 
 def test_click_track_link_clicks_underline_not_rect_center(monkeypatch):
@@ -97,7 +97,7 @@ def wuyi_chain(monkeypatch):
                         lambda win, icon, *a, **k: NPC_PT)
     monkeypatch.setattr(wubei.game_map, "ocr_regions",
                         lambda img, regions: (list(DIALOG_ITEMS), None))
-    monkeypatch.setattr(wubei, "_find_wuyi_option",
+    monkeypatch.setattr(wubei, "find_wuyi_option",
                         lambda items, img_np: OPTION_PT)
     monkeypatch.setattr(wubei, "WUYI_HANDLE_TIMEOUT", 1.0)  # 单轮即超时
     monkeypatch.setattr(wubei.battle, "last_wuyi_option_at", 0)
@@ -141,7 +141,7 @@ def test_wuyi_chain_timeout_self_click_uses_cached_pos(wuyi_chain, monkeypatch):
     def _boom(*a, **k):
         raise AssertionError("有缓存不应再识别")
 
-    monkeypatch.setattr(wubei, "_find_wuyi_option", _boom)
+    monkeypatch.setattr(wubei, "find_wuyi_option", _boom)
     ok, info = wubei._run_wuyi_chain(_FakeWin())
     assert ok is True
     assert "已自行点击选项" in info
@@ -570,7 +570,7 @@ def test_xj_template_hit_clicks_button_not_reclick(monkeypatch):
 
 def _patch_xj_wuben_env(monkeypatch):
     """装配无本买卖对话框环境（共享选项点击路径的依赖一并替换）。"""
-    from src import dialog_common
+    from src.device import dialog_common
     clicks, logs = [], []
     monkeypatch.setattr(wubei, "battle_watch_in_battle", lambda: False)
     monkeypatch.setattr(wubei, "log",

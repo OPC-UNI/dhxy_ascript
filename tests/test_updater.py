@@ -14,7 +14,7 @@ import zipfile
 
 import pytest
 
-from src import updater
+from src.app import updater
 
 
 # ---------------- 工具 ----------------
@@ -437,3 +437,12 @@ def test_last_result_roundtrip(tmp_path):
     assert data["status"] == "success"
     updater.clear_last_result(install_dir=install)
     assert updater.read_last_result(install_dir=install) is None
+
+
+# ---------------- install_root ----------------
+
+def test_install_root_source_mode_is_repo_root():
+    """源码态取仓库根：迁移到 src/app/ 后不能变成 src/。"""
+    if updater.is_frozen():
+        pytest.skip("冻结态安装目录由 exe 位置决定")
+    assert updater.install_root() == pathlib.Path(__file__).resolve().parents[1]

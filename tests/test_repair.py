@@ -1,7 +1,9 @@
 """自动修理装备（repair.py）单元测试：计数口径、自然日重置、弹窗映射。"""
 import pytest
 
-from src import app_utils, repair, user_data
+from src.core import app_utils
+from src.device import repair
+from src.core import user_data
 
 
 class _FakeWin:

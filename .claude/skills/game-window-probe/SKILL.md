@@ -1,6 +1,6 @@
 ---
 name: game-window-probe
-description: 用项目自身的窗口句柄通道（src.game.find_main_window + win.capture(force_activate=False) + 静默点击）实机观察/操作正在运行的大话西游窗口，摸清新小游戏或 UI 流程后再实现自动化。当用户说「你可以操作窗口看下如何实现」「看下这个小游戏怎么玩」、需要实机取帧/OCR/模板/点击/长按/时序采样时使用。**本项目严禁 windows-mcp / 桌面级键鼠**，本 skill 就是替代通道。
+description: 用项目自身的窗口句柄通道（src.device.game.find_main_window + win.capture(force_activate=False) + 静默点击）实机观察/操作正在运行的大话西游窗口，摸清新小游戏或 UI 流程后再实现自动化。当用户说「你可以操作窗口看下如何实现」「看下这个小游戏怎么玩」、需要实机取帧/OCR/模板/点击/长按/时序采样时使用。**本项目严禁 windows-mcp / 桌面级键鼠**，本 skill 就是替代通道。
 ---
 
 # 游戏窗口探针（窗口句柄通道）
@@ -128,7 +128,7 @@ python .claude/skills/game-window-probe/scripts/probe.py burst 100 0.08 /tmp/bur
 - 探针闭环：0.08s 截帧 → 每钟模板中心 ±45×±40 ROI 数 HSV 金掩码像素 →
   argmax ≥ 阈值（实测亮钟 327-742、噪声 ≤19，取 80）→ 立即静默点击该钟
   （同钟 0.5s 防抖）→ 横幅消失停点。实机 15 音全中成功，任务追踪正常推进。
-- 生产实现见 `src/kezhan.py`：`_yinlv_bell_rois` / `_yinlv_glow_index` /
+- 生产实现见 `src/tasks/kezhan.py`：`_yinlv_bell_rois` / `_yinlv_glow_index` /
   `_play_yinlv`（动态追亮点，取代旧的固定 15 音序列）。横幅消失即按完成
   处理（2026-11-13 用户规则：动态追亮点保证正确性，不再保留按敲击数判
   失败并重新点击的逻辑）。

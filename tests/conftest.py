@@ -24,7 +24,7 @@ def _isolate_role_settings(tmp_path, monkeypatch):
     角色设置按角色缓存（role_settings._CACHE），测试间需清空；具体测试
     需要自定义 config_dir/角色时在自己的 fixture 里覆盖。
     """
-    from src import role_settings, user_data
+    from src.core import role_settings, user_data
     monkeypatch.setattr(user_data, "config_dir", lambda: tmp_path)
     monkeypatch.setattr(user_data, "_probe_role_id", lambda: "999999")
     monkeypatch.setattr(user_data, "_ROLE_CACHE", {"id": None, "ts": 0.0})

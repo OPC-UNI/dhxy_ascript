@@ -12,7 +12,7 @@ import numpy as np
 from PIL import Image
 from ascript.windows.system import R
 
-from src import zuoqi
+from src.device import zuoqi
 
 
 class _FakeWin:
@@ -431,7 +431,7 @@ def test_press_alt_u_silent_exception_returns_false(monkeypatch):
     def boom(win, modifiers, key):
         raise ValueError("不支持的主键: 'u'")
 
-    from src import silent_click as _sc
+    from src.device import silent_click as _sc
     monkeypatch.setattr(_sc, "send_silent_hotkey", boom)
     ok = zuoqi._press_alt_u(_FakeWin())
     assert ok is False

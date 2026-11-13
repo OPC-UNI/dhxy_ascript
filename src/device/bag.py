@@ -1,0 +1,467 @@
+"""背包相关操作：打开背包、物品检测与点击。"""
+import time
+
+import cv2
+import numpy as np
+from ascript.windows.hardware.keyboard import Keyboard
+from ascript.windows.system import R
+from ascript.windows.screen.find_images import FindImages
+from ..core.app_utils import log, human_click
+from ..core import app_utils  # 高性能模式共享设施（high_perf 开关等）
+from . import map as game_map  # 找图能力复用（TRAY_BTN_REGION 按钮条带等）
+
+# 背包按钮模板（res/img/bag.png，34x34，实测匹配度 0.999）
+BAG_ICON = "bag.png"
+# 背包面板标志模板（res/img/bag_box.png，34x170，实测匹配度 1.0）。
+# 背包面板可拖动：模板必须只含面板自身稳定内容（左缘边框+内部上段），
+# 不得混入屏幕背景——旧版 34x265 下段含面板外背景，面板从屏幕左缘
+# 拖到中部后匹配分 0.946→0.698，is_bag_open 误判导致开包流程失败。
+# 新模板已交叉验证：左缘/中部两位置 + 储物格开/关两状态均 ≥0.9。
+BAG_BOX_ICON = "bag_box.png"
+# 摄妖香物品图标模板（res/img/sheyaoxiang.png，49x48，实测匹配度 1.0）
+SHEYAOXIANG_ICON = "sheyaoxiang.png"
+# 摄妖香匹配阈值：0.8 实测漏检（真实图标渲染分数 0.79 起步，见
+# 2026-10-11 10:27 日志），按用户要求降到 0.69（仅摄妖香，其他
+# 物品保持 0.8——给与/购买物品误匹配代价高）
+SHEYAOXIANG_THRESHOLD = 0.69
+# 背包储物格切换按钮模板（res/img/box_one_close.png，26x27）
+BOX_ONE_CLOSE_ICON = "box_one_close.png"
+# 储物格切换的纵向偏移：以 box_one_close 为基准向下 35px 递增，
+# 共 4 个储物格（再往下第 5 个位置已经是任务栏）
+SLOT_OFFSETS = [0, 35, 70, 105]
+
+# ---- 任务储物格（任务道具专用格，与普通储物格切换不同）----
+# 各任务模块共用：打开背包 → 打开任务储物格 → 在格内找任务道具。
+# 修罗回城符、五倍回城符、名望唤风符均在此格（用户 2026-11-10 确认）。
+BOX_TASK_ICON = "box_task.png"                    # 任务储物格按钮（未选中态，点击打开）
+BOX_TASK_SELECTED_ICON = "box_task_selected.png"  # 已打开（选中态，无需再点击）
+TASK_BOX_THRESHOLD = 0.8         # 按钮双模板判定阈值
+TASK_BOX_TIMEOUT = 10            # 等待任务储物格打开的超时（秒）
+TASK_BOX_POLL_INTERVAL = 0.5     # 轮询间隔（打开动画约 0.4s）
+# 按钮相对 bag_box 面板标志中心的偏移与搜索条带（面板可拖动但内部
+# 布局固定，修罗两位置实测 +349/+305、+353/+305，取均值；条带留 55px）
+TASK_BOX_OFFSET = (351, 305)
+TASK_BOX_BAND_MARGIN = 55
+
+
+class _RegionMatch:
+    """区域匹配结果的轻量包装（字段与 MatchResult 对齐：x/y/center/
+    rect/confidence；调用方只用到 x/y/confidence）。"""
+
+    def __init__(self, x, y, rect, confidence):
+        self.x, self.y = x, y
+        self.center = (x, y)
+        self.rect = rect
+        self.confidence = confidence
+
+
+def _match_template(win, icon, threshold=0.8, region=None):
+    """截一帧（不激活窗口）并在帧上匹配模板，返回首个匹配结果或 None。
+
+    FindImages 的 im_source=Window 路径内部调用 win.capture() 且默认
+    force_activate=True——每次匹配都先激活游戏窗口抢前台焦点（激活是
+    耗时操作，且会干扰用户当前正在使用的窗口）。统一改为先截帧再在
+    帧上匹配，与性能规则「轮询截图一律 force_activate=False」一致。
+    region=(l,t,r,b)：限定搜索条带（裁剪后匹配、坐标仍为全图坐标），
+    条带内未命中返回 None 不做全帧兜底——固定位置按钮（背包等）用
+    map.TRAY_BTN_REGION（2026-11-07 用户标定右下角托盘区）。
+    """
+    img = win.capture(force_activate=False)
+    if img is None:
+        return None
+    if region is None:
+        results = FindImages.find_all_template(R.img(icon), im_source=img,
+                                               threshold=threshold)
+        return results[0] if results else None
+    l, t, r, b = region
+    l, t = max(0, int(l)), max(0, int(t))
+    r, b = min(img.size[0], int(r)), min(img.size[1], int(b))
+    crop = img.crop((l, t, r, b))
+    results = FindImages.find_all_template(R.img(icon), im_source=crop,
+                                           threshold=threshold)
+    if not results:
+        return None
+    res = results[0]
+    return _RegionMatch(res.x + l, res.y + t,
+                        [res.rect[0] + l, res.rect[1] + t,
+                         res.rect[2] + l, res.rect[3] + t],
+                        res.confidence)
+
+
+def _match_all_template(win, icon, threshold=0.8):
+    """截一帧（不激活窗口）并匹配模板的全部结果，返回列表（同 _match_template 约束）。"""
+    img = win.capture(force_activate=False)
+    if img is None:
+        return []
+    return FindImages.find_all_template(R.img(icon), im_source=img, threshold=threshold)
+
+
+def find_and_click_bag(win):
+    """在游戏窗口中找到背包按钮并点击打开。
+
+    返回 (是否成功, 描述)。
+    """
+    r = _match_template(win, BAG_ICON, region=game_map.TRAY_BTN_REGION)
+    if r is None:
+        return False, "未找到背包按钮"
+    human_click(win, r.x, r.y)
+    return True, f"匹配度 {r.confidence:.2f}"
+
+
+def _find_bag_box(win):
+    """查找背包面板标志（bag_box），返回首个匹配结果或 None。"""
+    return _match_template(win, BAG_BOX_ICON)
+
+
+def find_bag_box(win):
+    """查找背包面板标志（bag_box）的中心坐标，未找到返回 None。
+
+    供调用方以面板标志为锚点定位面板内元素（面板可拖动，内部元素
+    相对偏移恒定，见修罗回程的搜索条带）。
+    """
+    r = _find_bag_box(win)
+    return (r.x, r.y) if r else None
+
+
+# 开/关背包的轮询参数：点击后轮询面板标志出现/消失（替代固定 1.5s
+# 等待——面板动画约 0.4s 完成，成功路径平均省 ~1s；1.5s 为超时上限）
+_BAG_TOGGLE_POLL = 0.4
+_BAG_TOGGLE_TIMEOUT = 4.0   # 单次点击后的等待窗口：加宽覆盖战斗结束后
+                            # 结算/掉落类弹窗的瞬态遮挡（实测 ~6s 内吞掉
+                            # 点击），同时消除慢开超时后重点把刚打开的
+                            # 背包关掉的自伤；正常打开 <1s 即检测到返回，
+                            # 正常路径零耗时增加
+
+
+def is_bag_open(win):
+    """检测背包是否已打开（是否找到 bag_box 模板）。"""
+    return _find_bag_box(win) is not None
+
+
+def find_item_in_bag(win, icon_name, threshold=0.8):
+    """在游戏窗口中查找指定物品图标（背包打开状态下）。
+
+    threshold：匹配阈值（默认 0.8；摄妖香等渲染分数偏低的物品
+    由调用方按需放宽）。返回匹配结果列表，未找到返回空列表。
+    """
+    return _match_all_template(win, icon_name, threshold=threshold)
+
+
+def find_box_one_close(win):
+    """查找背包储物格切换按钮 box_one_close，返回首个匹配或 None。"""
+    return _match_template(win, BOX_ONE_CLOSE_ICON)
+
+
+def open_task_box(win, prefix=""):
+    """打开背包并确保任务储物格已打开。返回 (是否成功, 描述)。
+
+    通用能力（各任务模块共用，避免任务模块互引）：打开背包 → 检查
+    box_task_selected（选中态）：存在说明任务储物格已打开，无需点击；
+    否则点击 box_task 打开。两模板是同一按钮的两种状态、互相弱匹配，
+    双模板比分数判定（各自达标且更高者胜，防误判/误关）。每轮询只截
+    一帧，双模板共用一帧；以 bag_box 为锚点限定搜索条带（面板可拖动，
+    内部偏移恒定；带区全未命中才全帧兜底）。
+    prefix：日志前缀（如「名望」；空则用「背包」）。
+    """
+    tag = f"[{prefix}] " if prefix else "[背包] "
+    if not is_bag_open(win):
+        ok, info = open_bag(win)
+        if not ok:
+            return False, f"打开背包失败: {info}"
+    else:
+        log(f"{tag}背包已打开，跳过开包", "INFO")
+    region = None
+    anchor = find_bag_box(win)
+    if anchor is not None:
+        bx, by = anchor
+        region = (bx + TASK_BOX_OFFSET[0] - TASK_BOX_BAND_MARGIN,
+                  by + TASK_BOX_OFFSET[1] - TASK_BOX_BAND_MARGIN,
+                  bx + TASK_BOX_OFFSET[0] + TASK_BOX_BAND_MARGIN,
+                  by + TASK_BOX_OFFSET[1] + TASK_BOX_BAND_MARGIN)
+    deadline = time.time() + TASK_BOX_TIMEOUT
+    clicked = False
+    while time.time() < deadline:
+        img = win.capture(force_activate=False)
+        if img is None:
+            time.sleep(TASK_BOX_POLL_INTERVAL)
+            continue
+        frame = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
+        sel_score, _ = game_map.best_match_np(frame, BOX_TASK_SELECTED_ICON,
+                                              region=region)
+        task_score, task_pt = game_map.best_match_np(frame, BOX_TASK_ICON,
+                                                     region=region)
+        if sel_score < TASK_BOX_THRESHOLD \
+                and task_score < TASK_BOX_THRESHOLD and region is not None:
+            # 带区全未命中：全帧兜底（限频——仅带区未命中时触发）
+            sel_score, _ = game_map.best_match_np(frame,
+                                                  BOX_TASK_SELECTED_ICON)
+            task_score, task_pt = game_map.best_match_np(frame,
+                                                         BOX_TASK_ICON)
+        if sel_score >= TASK_BOX_THRESHOLD and sel_score > task_score:
+            return True, "任务储物格已在背包中打开"
+        if task_score >= TASK_BOX_THRESHOLD:
+            if not clicked:
+                human_click(win, task_pt[0], task_pt[1])
+                log(f"{tag}已点击任务储物格按钮，等待打开...", "SYS")
+                clicked = True
+            time.sleep(TASK_BOX_POLL_INTERVAL)
+            continue
+        time.sleep(TASK_BOX_POLL_INTERVAL)
+    if clicked:
+        return False, "已点击任务储物格按钮，但未检测到选中态（打开失败）"
+    return False, "背包中未找到任务储物格按钮"
+
+
+def find_item_with_slots(win, icon_name, label, threshold=0.8):
+    """在背包中查找指定物品，未找到时切换储物格再找。
+
+    threshold：匹配阈值（默认 0.8；摄妖香等渲染分数偏低的物品
+    由调用方按需放宽）。流程：
+    1. 直接检测（命中即返回）
+    2. 未命中：低阈值诊断匹配度并记日志（区分"没检测到"与"匹配度不足"），
+       等待 0.5s 复检一次——背包刚打开时物品图标可能尚未渲染完
+       （实测摄妖香在储物格 4 上首检漏检，遍历一圈回来才 0.84 命中）
+    3. 仍未命中：点击 box_one_close（储物格切换），以 35px 为步长向下
+       点击，最多 4 个储物格；每次操作前等待 100ms
+    返回 (MatchResult 或 None, 过程描述)。
+    """
+    items = find_item_in_bag(win, icon_name, threshold=threshold)
+    if items:
+        return items[0], "直接检测到"
+
+    # 诊断：低阈值再查，看当前储物格上是否只是匹配度不足（日志可见，便于排查）
+    # 并记下最优匹配位置——区分「图标在真实位置但渲染分数低」与
+    # 「图标缺失、低分匹配是画面其他位置的误匹配」（位置判据）
+    near = _match_all_template(win, icon_name, threshold=0.6)
+    best_r = max(near, key=lambda r: r.confidence) if near else None
+    best = best_r.confidence if best_r is not None else 0.0
+    loc = f" @({best_r.x},{best_r.y})" if best_r is not None else ""
+    log(f"[背包] {label}直接检测未命中（低阈值最优匹配度 {best:.2f}{loc}），"
+        f"等待 0.5s 复检", "INFO")
+    time.sleep(0.5)
+    items = find_item_in_bag(win, icon_name, threshold=threshold)
+    if items:
+        return items[0], "复检检测到"
+
+    base = find_box_one_close(win)
+    if base is None:
+        return None, "未找到 box_one_close 储物格按钮"
+
+    for i, offset in enumerate(SLOT_OFFSETS):
+        time.sleep(0.1)  # 每次操作前等待（识别物品的耗时不计入等待）
+        y = base.y + offset
+        log(f"[背包] {label}未检测到，点击储物格 {i + 1}: ({base.x}, {y})"
+            f"（box_one_close 下方 {offset}px）", "INFO")
+        human_click(win, base.x, y)
+        time.sleep(0.1)  # 等待储物格界面切换
+        items = find_item_in_bag(win, icon_name, threshold=threshold)
+        if items:
+            return items[0], f"切换储物格 {i + 1} 后检测到"
+    return None, f"切换 {len(SLOT_OFFSETS)} 个储物格后仍未检测到{label}"
+
+
+def find_sheyaoxiang_with_slots(win):
+    """在背包中查找摄妖香（含储物格切换搜索），返回 (MatchResult 或 None, 描述)。
+
+    阈值 0.69：摄妖香图标实测渲染分数 0.79 起步（2026-10-11 10:27
+    日志），0.8 会漏检（见 SHEYAOXIANG_THRESHOLD）。
+    """
+    return find_item_with_slots(win, SHEYAOXIANG_ICON, "摄妖香",
+                                threshold=SHEYAOXIANG_THRESHOLD)
+
+
+def _press_bag_hotkey(win):
+    """高性能开包：按 Alt+E 快捷键（替代缓存坐标点击，位置漂移免疫）。
+
+    热键经前台窗口送达（Keyboard.key_hot 即 pyautogui）：按键前校验
+    游戏窗口在前台，非前台先激活再校验（同 clear_screen 路径）——
+    任务执行期间游戏保持前台，正常零额外开销。返回 (是否已发送, 描述)。
+    静默操作：Alt+E 走消息投递（游戏窗口无需前台，2026-11-03 实测有效）。
+    """
+    if app_utils.silent_mode_on():
+        from . import silent_click  # 延迟导入：避免模块级循环
+        info = silent_click.send_silent_hotkey(win, ("alt",), "e")
+        if info is None:
+            return False, "静默 Alt+E 投递失败（窗口不存在）"
+        return True, "已静默投递 Alt+E 快捷键"
+    try:
+        import win32gui
+        if win32gui.GetForegroundWindow() != win.hwnd:
+            win.activate()
+            time.sleep(0.3)
+            if win32gui.GetForegroundWindow() != win.hwnd:
+                return False, "游戏窗口未在前台，Alt+E 未发送"
+        Keyboard.key_hot("alt", "e")
+        return True, "已按 Alt+E 快捷键"
+    except Exception as e:
+        return False, f"Alt+E 发送异常: {e}"
+
+
+def open_bag(win):
+    """打开背包并验证打开。
+
+    操作后轮询 bag_box 模板出现：出现=打开成功；未出现=重试（最多
+    3 次、单次等待 4s——覆盖战斗结束后结算/掉落类弹窗的瞬态遮挡，
+    实测 2026-10-12 弹窗 ~6s 内吞掉两次点击、地图 1s 后正常打开）。
+    注意背包是开关切换：若此前已是打开状态，第一次操作会关闭，
+    检测失败后重试即可恢复打开，流程自愈；等待窗口加宽也消除
+    「慢开超时后重点把刚打开的背包关掉」的自伤。
+    高性能：首轮按 Alt+E 快捷键开包（热键与按钮坐标漂移无关，2026-10-22
+    缓存坐标点击失效后按用户要求调整），未打开回退识别点击流程。
+    返回 (是否成功, 描述)。
+    """
+    for attempt in (1, 2, 3):
+        r = None
+        via_hotkey = False
+        if attempt == 1 and app_utils.high_perf_on():
+            sent, desc = _press_bag_hotkey(win)
+            if sent:
+                via_hotkey = True
+                log(f"[背包][高性能] {desc}，等待背包打开...", "SYS")
+            else:
+                log(f"[背包][高性能] {desc}，回退识别点击", "WARN")
+        if not via_hotkey:
+            r = _match_template(win, BAG_ICON, region=game_map.TRAY_BTN_REGION)
+            if r is None:
+                return False, "未找到背包按钮"
+            human_click(win, r.x, r.y)
+        deadline = time.time() + _BAG_TOGGLE_TIMEOUT
+        while time.time() < deadline:
+            if is_bag_open(win):
+                desc = "Alt+E 快捷键" if via_hotkey else f"匹配度 {r.confidence:.2f}"
+                return True, f"第{attempt}次操作成功（{desc}）"
+            time.sleep(_BAG_TOGGLE_POLL)
+        log(f"[背包] 第{attempt}次{'按键' if via_hotkey else '点击'}后未检测到背包面板，重试一次...", "WARN")
+    # 诊断：OCR 屏幕中央区域，记录遮挡物文案（弹窗类型排查用）
+    try:
+        from . import map as _gm
+        img = win.capture(force_activate=False)
+        if img is not None:
+            items, _ = _gm.ocr_regions(img, ((400, 200, 980, 500),))
+            txts = [t for t, _, s in items if s >= 0.55][:4]
+            log(f"[背包] 开包失败诊断，屏幕中央文案: {txts or '(无)'}", "WARN")
+    except Exception:
+        pass
+    return False, "三次尝试后仍未检测到背包面板"
+
+
+def close_bag(win):
+    """右键点击背包面板关闭背包。
+
+    识别到 bag_box 后记录坐标，关闭时移动到该位置右键点击（游戏面板
+    支持右键关闭）。点击后轮询 bag_box 消失：消失=关闭成功；未消失
+    =重试一次（等待窗口同 open_bag，正常关闭 <1s 即返回）。
+    返回 (是否成功, 描述)。
+    """
+    for attempt in (1, 2):
+        box = _find_bag_box(win)
+        if box is None:
+            if not is_bag_open(win):
+                return True, "背包未打开"
+            return False, "未找到背包面板"
+        human_click(win, box.x, box.y, button="secondary")
+        deadline = time.time() + _BAG_TOGGLE_TIMEOUT
+        while time.time() < deadline:
+            if not is_bag_open(win):
+                return True, f"第{attempt}次右键成功关闭（匹配度 {box.confidence:.2f}）"
+            time.sleep(_BAG_TOGGLE_POLL)
+        log(f"[背包] 第{attempt}次右键后背包仍打开，重试一次...", "WARN")
+    return False, "两次尝试后背包仍未关闭"
+
+
+def use_sheyaoxiang(win):
+    """完整执行一次使用摄妖香流程（面向对象视角：背包使用摄妖香）。
+
+    打开背包 → 查找摄妖香（未找到时切换储物格）→ 右键使用 → 关闭背包。
+    注意：已右键使用但关闭背包失败时仍视为成功——重试会造成重复使用。
+    整段持背包流程锁（_BAG_LOCK）：与其他背包流程互斥，防止交错
+    破坏对方状态（见 app_utils._BAG_LOCK 注释的实测事故）。
+    返回 (是否成功, 描述)。
+    """
+    with app_utils._BAG_LOCK:
+        return _use_sheyaoxiang_inner(win)
+
+
+def use_sheyaoxiang_if_due(win):
+    """寻路期摄妖香续用入口：到期才执行完整使用流程。
+
+    替代原任意时机的定时续用线程（每分钟查一次，撞上任务领取/
+    巫医等对话弹框时弹框挡住背包交互——储物格切换点击无效，
+    用户 2026-11-04 实测）：调用方在点击任务追踪成功（进入寻路期、
+    无弹框、窗口空闲）后调用本函数。组号模式下调用方须在队员
+    血蓝 pass 之前调用（顺序：点击寻路 → 摄妖香 → 切 Tab 血蓝）。
+    战斗中跳过（下轮寻路再查）。返回 (是否执行了使用, 描述)。
+    """
+    from . import battle  # 函数内导入：bag→battle→team→dialog_common→bag 环
+    from ..core import settings  # 开关读取（任务子进程同 KeyValue）
+    if not settings.load_use_sheyaoxiang():
+        return False, "开关关闭，跳过"
+    if not app_utils.sheyaoxiang_due(win):
+        return False, "距上次使用不足 1 小时，跳过"
+    if app_utils.sheyaoxiang_skip_nonleader():  # 缺省取当前任务模式
+        return False, "非队长无需使用，跳过"
+    if battle.watch_in_battle() or battle.is_in_battle(win):
+        return False, "战斗中跳过，下轮寻路再查"
+    ok, info = use_sheyaoxiang(win)
+    if ok:
+        app_utils.sheyaoxiang_mark_used(win)
+    return ok, info
+
+
+def _in_battle_any(win):
+    """战斗状态判定（摄妖香使用流程内）：watch 确认状态免费，覆盖
+    战斗 UI 被背包面板遮挡致单帧模板漏检；单帧模板检查覆盖刚开局、
+    watch 确认窗口尚未翻转的间隙（实测 2026-10-19 第 15 场战斗内
+    整段流程执行完——战斗中右键摄妖香不生效，却按成功标记重启
+    1 小时计时，形成空挡遇敌）。"""
+    from . import battle  # 函数内导入：bag→battle→team→dialog_common→bag 环
+    return battle.watch_in_battle() or battle.is_in_battle(win)
+
+
+def _use_sheyaoxiang_inner(win):
+    # 0. 使用前战斗检查：调用方入口检查与本检查之间可能进入战斗
+    #    （战斗开场动画期单帧判定会漏）
+    if _in_battle_any(win):
+        return False, "战斗中跳过（使用前检查），下轮询重试"
+    # 1. 打开背包
+    ok, info = open_bag(win)
+    if not ok:
+        return False, f"打开背包失败: {info}"
+    log(f"[背包] 已打开（{info}）", "SYS")
+    # 1.5 开包后战斗检查：开包期间可能进入战斗（战斗 UI 的物品按钮
+    #     同样能开背包，实测开包成功于战斗进行中）；关包放弃，下轮询重试
+    if _in_battle_any(win):
+        ok2, info2 = close_bag(win)
+        if not ok2:
+            log(f"[背包] 战斗中跳过，关闭背包失败: {info2}", "WARN")
+        return False, "战斗中跳过（背包打开后检测到战斗），下轮询重试"
+
+    # 2. 查找摄妖香（含储物格切换搜索）
+    item, desc = find_sheyaoxiang_with_slots(win)
+    if item is None:
+        log(f"[摄妖香] {desc}", "WARN")
+        ok2, info2 = close_bag(win)  # 未找到也关闭背包，保持界面干净
+        if not ok2:
+            log(f"[背包] {info2}", "WARN")
+        return False, desc
+    # 2.5 使用前最后检查：查找可能耗时数秒（储物格切换搜索），期间
+    #     可能进入战斗；右键前再确认一次，防战斗中误用
+    if _in_battle_any(win):
+        ok2, info2 = close_bag(win)
+        if not ok2:
+            log(f"[背包] 战斗中跳过，关闭背包失败: {info2}", "WARN")
+        return False, "战斗中跳过（右键使用前检测到战斗），下轮询重试"
+
+    # 3. 右键使用
+    log(f"[摄妖香] 背包中存在（{desc}，匹配度 {item.confidence:.2f}）", "SYS")
+    human_click(win, item.x, item.y, button="secondary")
+    log(f"[摄妖香] 已右键点击 ({item.x}, {item.y})", "SYS")
+    time.sleep(0.2)  # 物品使用后短暂等待
+
+    # 4. 关闭背包
+    ok2, info2 = close_bag(win)
+    if ok2:
+        log(f"[背包] 已关闭（{info2}）", "SYS")
+        return True, "使用完成"
+    log(f"[背包] 关闭失败: {info2}", "WARN")
+    return True, "已使用，但关闭背包失败（不再重试，避免重复使用）"

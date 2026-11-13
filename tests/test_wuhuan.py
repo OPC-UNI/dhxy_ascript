@@ -4,8 +4,8 @@ from difflib import SequenceMatcher
 
 import numpy as np
 
-from src import task_tracker
-from src import wuhuan
+from src.device import task_tracker
+from src.tasks import wuhuan
 
 
 def _make(rows):
@@ -179,7 +179,7 @@ def _buy_env(monkeypatch, land_ok=True):
     monkeypatch.setattr(wuhuan, "human_click",
                         lambda win, x, y: clicks.append((x, y)))
 
-    def _click_option(win, option, timeout=4):
+    def _click_option(win, option, timeout=4, prefix=""):
         state["shop_open"] = True  # 点击选项后商店面板开始渲染
         return True, "已点击"
 
@@ -258,7 +258,7 @@ def _story_env(monkeypatch, score=0.99, green=False):
     用例重置。寻路时间戳桩返回从未寻路；无帧可查（win=None）按未寻路
     放行，与旧行为一致。
     """
-    from src import dialog_common
+    from src.device import dialog_common
     clicks = []
     monkeypatch.setattr(dialog_common, "dialog_frame_score", lambda img: score)
     monkeypatch.setattr(wuhuan.task_tracker, "is_green_text",
@@ -351,7 +351,7 @@ def test_submit_dialog_option_not_rendered_no_story_dismiss(monkeypatch):
     assert clicks == []
 
 
-# ---- 任务消失判定：面板缺席处理已统一到 xuanshu._confirm_task_gone
+# ---- 任务消失判定：面板缺席处理已统一到 workflows.follow._confirm_task_gone
 #      （2026-11-12 用户规则），五环不再传 per-task 参数 ----
 def test_follow_wuhuan_uses_shared_confirm(monkeypatch):
     """五环 follow_task 走共享引擎（prefix/标题正确，无 per-task 面板参数）。"""

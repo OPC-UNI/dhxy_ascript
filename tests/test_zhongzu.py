@@ -12,7 +12,10 @@
 """
 import numpy as np
 
-from src import control_window, schemes, task_tracker, zhongzu
+from src.app import control_window
+from src.core import schemes
+from src.device import task_tracker
+from src.tasks import zhongzu
 
 IMG = np.zeros((200, 200, 3), dtype=np.uint8)
 

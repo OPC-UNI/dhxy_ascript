@@ -1,6 +1,6 @@
 ---
 name: ocr-image
-description: 用项目自身的 OCR 引擎识别本地图片并返回文字。当用户附带的截图无法直接查看（Read 返回 Unsupported Image）、或用户要求读取图片中的文字/界面内容（对话框文案、选项、按钮、坐标）时使用。识别引擎与自动化脚本同一套（src/map.py RapidOCR），结果即脚本所见。
+description: 用项目自身的 OCR 引擎识别本地图片并返回文字。当用户附带的截图无法直接查看（Read 返回 Unsupported Image）、或用户要求读取图片中的文字/界面内容（对话框文案、选项、按钮、坐标）时使用。识别引擎与自动化脚本同一套（src/device/map.py RapidOCR），结果即脚本所见。
 ---
 
 # OCR 图片
@@ -14,14 +14,14 @@ description: 用项目自身的 OCR 引擎识别本地图片并返回文字。�
 ## 步骤
 
 1. 从用户消息中取得图片路径（附件路径，形如 `C:\Users\...\Temp\claude\...\images\1.png`）；用户没附图片时先询问路径。
-2. 在项目根目录用 Bash 执行下面的 Python（`cd` 到项目根目录，`sys.path.insert(0, ".")` 加载 src.map）：
+2. 在项目根目录用 Bash 执行下面的 Python（`cd` 到项目根目录，`sys.path.insert(0, ".")` 加载 src.device.map）：
 
 ```python
 python - <<'EOF'
 import sys
 sys.path.insert(0, ".")
 from PIL import Image
-from src import map as game_map
+from src.device import map as game_map
 img = Image.open(r"<图片绝对路径>")
 items, _ = game_map.ocr_regions(img, ((0, 0, img.size[0], img.size[1]),))
 lines = [f"{s:.2f} ({r[0]},{r[1]},{r[2]},{r[3]}) {t}"

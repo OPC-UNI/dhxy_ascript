@@ -10,9 +10,9 @@ import cv2
 import numpy as np
 from ascript.windows.system import R
 
-from src import map as game_map
-from src import xuanshu
-from src.dialog_common import _dialog_text_present
+from src.device import map as game_map
+from src.device.dialog_common import _dialog_text_present
+from src.workflows.follow import DEFAULT_DIALOG_OPTION_MAP
 
 from .conftest import make_bgr_frame, paste_template
 
@@ -52,7 +52,7 @@ def test_dialog_option_map_scan_budget():
     items = [(f"测试文案第{i}行", [400, 300 + i * 30, 700, 330 + i * 30], 0.9)
              for i in range(8)]
     t = min(_timed(lambda: [
-        _dialog_text_present(items, dtxt) for dtxt in xuanshu.DIALOG_OPTION_MAP
+        _dialog_text_present(items, dtxt) for dtxt in DEFAULT_DIALOG_OPTION_MAP
     ]) for _ in range(10))
     assert t < 0.2
 

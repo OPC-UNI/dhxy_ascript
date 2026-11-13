@@ -4,7 +4,7 @@ A 退出、打开 B 后：find_main_window 动态回退到 B（脚本实际就�
 ensure_binding_follows_live_window 负责把绑定记录改绑到 B，角色数据
 （按角色隔离）随新窗口切换；未登录窗口/无窗口不改绑。
 """
-from src import game
+from src.device import game
 
 
 class _Win:

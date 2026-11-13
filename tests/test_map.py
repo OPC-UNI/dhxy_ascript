@@ -3,7 +3,7 @@ import cv2
 import numpy as np
 from ascript.windows.system import R
 
-from src import map as game_map
+from src.device import map as game_map
 
 from .conftest import make_bgr_frame, paste_template
 

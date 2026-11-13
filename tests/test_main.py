@@ -14,7 +14,7 @@ import time
 import pytest
 
 import main
-from src import app_utils
+from src.core import app_utils
 
 
 def _patch_log(monkeypatch):

@@ -122,137 +122,58 @@ flowchart TB
 
 ```mermaid
 flowchart TB
-    subgraph L1["表现 / 控制层"]
-        M_MAIN["main.py"]
-        M_UI["control_window.py"]
-        M_SCHEME["schemes.py"]
-        M_HOTKEY["hotkey.py"]
-        M_SELECT["select_window.py"]
-        M_OVERLAY["debug_overlay.py"]
+    MAIN["main.py<br/>唯一装配入口"]
+
+    subgraph APP["app：外壳 / UI / 生命周期"]
+        UI["control_window.py"]
+        TM["task_manager.py"]
+        UPD["updater.py / update_config.py"]
+        MISC["hotkey.py / select_window.py<br/>env_check.py / capture_diag.py"]
     end
 
-    subgraph L2["任务编排层"]
-        M_TM["task_manager.py"]
-        M_XS["xuanshu.py<br/>玄枢轶闻"]
-        M_WH["wuhuan.py<br/>五环"]
-        M_KZ["kezhan.py<br/>客栈"]
-        M_XL["xiuluo.py<br/>修罗"]
-        M_WB["wubei.py<br/>五倍"]
-        M_MW["mingwang.py<br/>名望（第一阶段）"]
-        M_BATTLE["battle.py<br/>战斗监控"]
-        M_CLEAR["clear_screen.py<br/>启动清屏"]
+    subgraph TASKS["tasks：任务编排"]
+        T1["xuanshu / wuhuan / kezhan / xiuluo<br/>wubei / zhongzu / mingwang"]
     end
 
-    subgraph L3["领域服务层"]
-        M_FOLLOW["xuanshu.follow_task<br/>共享任务跟踪引擎"]
-        M_TEAM["team.py<br/>队伍检查/补人/请离/归队"]
-        M_TAB["tab_group.py<br/>组号多 Tab"]
-        M_BAG["bag.py<br/>背包 / 摄妖香"]
-        M_ZUOQI["zuoqi.py<br/>飞行驭器"]
+    subgraph WORKFLOWS["workflows：跨任务业务流"]
+        FOLLOW["follow.py<br/>共享跟踪引擎"]
     end
 
-    subgraph L4["感知层"]
-        M_MAP["map.py<br/>OCR 引擎 / 模板 / 地图"]
-        M_TRACK["task_tracker.py<br/>追踪面板 / 绿字 / TrackGate"]
-        M_DIALOG["dialog_common.py<br/>对话框通用操作"]
-        M_BARS["status_bars.py<br/>血蓝条"]
+    subgraph MINIGAMES["minigames：小游戏闭环"]
+        MG["pochufengyin / duchong / yinlv<br/>shahai / jiguan / chuyijuebao"]
     end
 
-    subgraph L5["执行层"]
-        M_UTIL["app_utils.py<br/>点击/键盘/锁/持久化"]
-        M_SILENT["silent_click.py<br/>Win32 消息投递"]
-        M_GAME["game.py<br/>窗口/Tab/绑定"]
-        M_ENV["env_check.py / capture_diag.py"]
+    subgraph DEVICE["device：感知与执行"]
+        D1["game / map / task_tracker / dialog_common"]
+        D2["battle / team / tab_group / bag / zuoqi"]
+        D3["silent_click / status_bars / repair<br/>clear_screen"]
     end
 
-    subgraph L6["平台与依赖"]
-        AS["AScript Windows<br/>Window / Mouse / Keyboard / R / FindImages"]
-        WIN["Win32 / UIAutomation"]
-        OCR["RapidOCR + ONNXRuntime"]
-        CV["OpenCV + NumPy"]
+    subgraph CORE["core：纯数据 / 配置 / 工具"]
+        C1["settings / role_settings / schemes"]
+        C2["app_utils / user_data / debug_overlay"]
     end
 
-    M_MAIN --> M_UI
-    M_MAIN --> M_TM
-    M_MAIN --> M_XS
-    M_MAIN --> M_WH
-    M_MAIN --> M_KZ
-    M_MAIN --> M_XL
-    M_MAIN --> M_WB
-    M_MAIN --> M_BATTLE
-    M_MAIN --> M_CLEAR
-    M_MAIN --> M_OVERLAY
-    M_UI --> M_SCHEME
-    M_UI -->|"验证按钮"| M_XS
-    M_UI -->|"验证按钮"| M_WH
-    M_UI -->|"验证按钮"| M_KZ
-    M_UI -->|"验证按钮"| M_XL
-    M_UI -->|"验证按钮"| M_WB
-    M_UI -->|"验证按钮"| M_TEAM
-    M_UI -->|"验证按钮"| M_ZUOQI
-
-    M_XS --> M_FOLLOW
-    M_WH --> M_FOLLOW
-    M_KZ --> M_FOLLOW
-    M_XL --> M_FOLLOW
-    M_WB --> M_FOLLOW
-    M_XS --> M_TRACK
-    M_WH --> M_TRACK
-    M_KZ --> M_TRACK
-    M_XL --> M_TRACK
-    M_WB --> M_TRACK
-    M_XS --> M_MAP
-    M_WH --> M_MAP
-    M_KZ --> M_MAP
-    M_XL --> M_MAP
-    M_WB --> M_MAP
-    M_XS --> M_DIALOG
-    M_WH --> M_DIALOG
-    M_KZ --> M_DIALOG
-    M_XL --> M_DIALOG
-    M_WB --> M_DIALOG
-    M_XL --> M_TEAM
-    M_WB --> M_TEAM
-    M_XL --> M_TAB
-    M_WB --> M_TAB
-    M_KZ --> M_BAG
-    M_WH --> M_BAG
-    M_WH --> M_ZUOQI
-
-    M_BATTLE --> M_BARS
-    M_BATTLE --> M_TAB
-    M_BATTLE --> M_MAP
-    M_BATTLE --> M_DIALOG
-    M_FOLLOW --> M_TRACK
-    M_FOLLOW --> M_MAP
-    M_FOLLOW --> M_DIALOG
-    M_TEAM --> M_MAP
-    M_TEAM --> M_TRACK
-    M_TEAM --> M_GAME
-    M_TAB --> M_TEAM
-    M_TAB --> M_BATTLE
-    M_TAB --> M_GAME
-    M_TAB --> M_SILENT
-    M_TRACK --> M_MAP
-    M_BAG --> M_MAP
-    M_BAG --> M_GAME
-    M_MAP --> M_UTIL
-    M_MAP --> AS
-    M_MAP --> OCR
-    M_MAP --> CV
-    M_TRACK --> M_MAP
-    M_TRACK --> M_UTIL
-    M_DIALOG --> M_TRACK
-    M_DIALOG --> M_MAP
-    M_UTIL --> M_SILENT
-    M_SILENT --> M_GAME
-    M_SILENT --> WIN
-    M_GAME --> AS
-    M_GAME --> WIN
-    M_OVERLAY --> WIN
+    MAIN --> APP
+    MAIN --> TASKS
+    APP --> TASKS
+    APP --> WORKFLOWS
+    APP --> DEVICE
+    APP --> CORE
+    TASKS --> WORKFLOWS
+    TASKS --> MINIGAMES
+    TASKS --> DEVICE
+    TASKS --> CORE
+    WORKFLOWS --> DEVICE
+    WORKFLOWS --> CORE
+    MINIGAMES --> DEVICE
+    MINIGAMES --> CORE
+    DEVICE --> CORE
 ```
 
-> 依赖方向：任务模块只向下依赖感知/执行层；`battle ↔ team/tab_group`、`app_utils ↔ silent_click` 存在反向调用，均通过**函数内延迟导入**打破循环依赖。
+> 依赖方向：`core ← device ← workflows/minigames ← tasks ← app`；`app` 与 `main.py` 是组合根。
+> `core → device` 仅保留 `app_utils` / `user_data` 的历史延迟导入（白名单见 `tests/test_import_rules.py`）。
+> 目录归属与依赖方向规范见 `docs/conventions.md`；任务互引、通用模块→任务、非 app→app、低层→高层、旧路径残留均由测试强制执行。
 
 ---
 
@@ -427,7 +348,7 @@ flowchart LR
 | 名望（第一阶段） | 面板领取 | 面板锚点下方 6 卡（3列×2行） | 逐卡 OCR 级别/标题 → 优先级 高级>中级>初级 + 卡片顺序选已实现任务（蛟魔复仇/沙海迷踪/蛟魔探秘/五庄封印/沙都修罗）→ 卡内点「接取」→ 按钮消失/任务进追踪面板即成功 |
 | 名望（第一阶段） | 面板领取 | 无已实现任务 | 1s 复扫一次，仍无 → 结束并打印当前 6 卡级别/标题 |
 | 名望（第一阶段） | 领取后 | 接取后出现对话框 | 对话框模板门控命中 → 点屏幕中间关闭（多屏复检，最多 3 次） |
-| 名望（第一阶段） | 领取后 | 追踪出现「山河名望」 | 复用 xuanshu.follow_task 跟踪至任务完成（追踪面板标题条模板为门，防面板竖牌同名误判） |
+| 名望（第一阶段） | 领取后 | 追踪出现「山河名望」 | 复用 workflows.follow.follow_task 跟踪至任务完成（追踪面板标题条模板为门，防面板竖牌同名误判） |
 | 名望（第一阶段） | 任务跟踪 | 对话「黑水河深，不如蛟魔之心。」 | 点绿色选项「逆天魔大将派我前来」（DIALOG_OPTION_MAP + extra_dialog_handler；story_known_texts 防误关） |
 | 名望（第一阶段） | 沙海迷踪 | 对话「少侠准备好清理地图了吗？」→「我已经准备好了」→「开始」按钮 | armed 窗口（20s）内识别 mingwang_chenjiuditu_kaishi 点击进入「记住混沌」小游戏：地图卷轴区 363,262-1031,630 检测深黑墨团并按命中累计记录坐标（最大通道<60+面积/形状过滤，排除山体噪点）→ 底部提示含「显形」切换点击阶段 → 逐坐标点两下（第一下显形→间隔 0.2s 第二下净化；因点击被吞导致烟雾残留时 200ms 后补点）→ 中部横条「此处混沌已消散！」确认 → 循环下一批墨团，倒计时耗尽/弹窗关闭/结算文字结束（2026-11-11 实机验证通过） |
 | 名望（第一阶段） | 净化水晶丛林 | 对话「糟糕，水晶丛林竟真被混沌缠上了，得赶快净化这些混沌！」→「马上净化水晶丛林上的混沌。」 | armed 窗口（20s）内识别「开始」按钮 mingwang_qingxishuijing_kaishi 点击进入战斗，战斗结束即完成 |
@@ -1275,29 +1196,44 @@ flowchart LR
 | 文件 | 职责 | 关键入口 |
 |---|---|---|
 | `main.py` | 进程入口、授权门、绑定、模式分发、仅战斗、停止善后 | `task_start`、`_task_start_body`、`_run_task_mode`、`_battle_only_loop`、`task_stop` |
-| `src/task_manager.py` | 任务子进程生命周期、日志回流、窗口看护 | `TaskManager.start/stop/is_running`、`_worker_wrapper`、`_window_watchdog` |
-| `src/control_window.py` | 控制面板、配置读写、诊断/验证按钮、看板 | `ControlWindow`、`ApiBridge`、`start_task`、`verify_*` |
-| `src/wubei.py` | 五倍任务 | `run_loop`、`_claim_task`、`_handle_follow_extras`、`_return_to_npc` |
-| `src/xiuluo.py` | 修罗任务 | `run_loop`、`_claim_task`、`_keep_alive`、`_return_to_npc` |
-| `src/zhongzu.py` | 种族比武任务（队伍 5 人；巫医链路待实现） | `run_loop`、`_claim_task`、`_handle_task_dialog`、`_keep_alive`、`_return_to_npc` |
-| `src/kezhan.py` | 客栈任务 | `run_loop`、`run_cycle`、`_claim_task`、`_handle_follow_extras` |
-| `src/wuhuan.py` | 五环任务 | `run_loop`、`_prepare`、`_claim_task`、`_handle_submit_dialog` |
-| `src/xuanshu.py` | 玄枢轶闻 + 共享 `follow_task` | `run_loop`、`run_cycle`、`follow_task`、`navigate_to_task` |
-| `src/battle.py` | 战斗监控、血蓝、巫医、盒子、组号队员 pass | `watch_loop`、`handle_battle`、`_handle_wuyi_dialog`、`_handle_hezi` |
-| `src/team.py` | 队伍检查、补人、暂离请离、归队、退队 | `check_team_min`、`fill_team`、`maybe_rejoin`、`leave_or_disband_team` |
-| `src/tab_group.py` | 组号多 Tab 身份、pass、队员操作 | `init_task`、`startup_check`、`startup_member_check`、`member_*_pass` |
-| `src/task_tracker.py` | 追踪面板 OCR、绿字/下划线、TrackGate | `ocr_track`、`read_tasks`、`has_task`、`track_task`、`TrackGate` |
-| `src/map.py` | OCR 三引擎、模板匹配、地图开关与坐标 | `ocr_regions`、`match_frame_np`、`read_map_position`、`open_mini_map_city` |
-| `src/dialog_common.py` | 对话框通用：绿字选项、序号点击、连点、面板清理 | `_click_green_option_once`、`_click_dialog_option_by_index`、`close_scene_panels` |
-| `src/app_utils.py` | 点击/键盘/全局锁/静默开关/KeyValue 合并写/进度 | `human_click`、`precise_click`、`high_perf_click`、`kv_*_merged` |
-| `src/silent_click.py` | Win32 消息点击/按键/文本/Tab 条切换 | `send_silent_click`、`send_silent_hotkey`、`send_silent_text`、`send_silent_tab_click` |
-| `src/bag.py` | 背包开合、物品检索、摄妖香 | `open_bag`、`find_item_with_slots`、`use_sheyaoxiang_if_due` |
-| `src/zuoqi.py` | 飞行驭器面板、飞行/降落状态 | `open_feixingyuqi_panel`、`ensure_landed`、`ensure_flying` |
-| `src/clear_screen.py` | 启动清屏 Alt+6 / Alt+5 / 收起侧栏 | `run_clear_screen` |
-| `src/debug_overlay.py` | 悬浮层、运行看板状态、任务统计 | `start`、`shutdown`、`read_runtime_status`、`record_round` |
-| `src/game.py` | 窗口查找、Tab 枚举、登录角色、窗口绑定 | `find_main_window`、`list_tab_windows`、`read_login_tab` |
-| `src/status_bars.py` | 人物/召唤兽血蓝条扫描 | `check_all_bars`、`beast_below_threshold` |
-| `src/schemes.py` | 配置方案快照/切换/导入导出 | `switch_scheme`、`resave_scheme`、`migrate_if_needed` |
+| `src/app/task_manager.py` | 任务子进程生命周期、日志回流、窗口看护 | `TaskManager.start/stop/is_running`、`_worker_wrapper`、`_window_watchdog` |
+| `src/app/control_window.py` | 控制面板、设置项 UI 接线与 re-export、诊断/验证按钮、看板 | `ControlWindow`、`ApiBridge`、`start_task`、`verify_*` |
+| `src/core/settings.py` | 设置访问器/常量（P2-A 从 control_window 抽出） | `load_*`、`save_*`、`build_group_last_scan_payload` |
+| `src/core/role_settings.py` | 当前角色设置（settings.json）进程内缓存与读写 | `get`、`set_value`、`update`、`refresh` |
+| `src/core/user_data.py` | 角色解析、data 路径、state/settings 读写、迁移 | `current_role_id`、`role_dir`、`read_state`、`write_settings` |
+| `src/app/updater.py` | 自动更新清单/下载/覆盖升级/恢复 | `check_for_update`、`prepare_update`、`apply_update_entry`、`install_root` |
+| `scripts/capture_diag.py` | 独立版截屏通道诊断（纯标准库，异机运行，不随包分发） | `main` |
+| `src/tasks/wubei.py` | 五倍任务 | `run_loop`、`_claim_task`、`_handle_follow_extras`、`_return_to_npc` |
+| `src/tasks/xiuluo.py` | 修罗任务 | `run_loop`、`_claim_task`、`_keep_alive`、`_return_to_npc` |
+| `src/tasks/zhongzu.py` | 种族比武任务（队伍 5 人；巫医链路待实现） | `run_loop`、`_claim_task`、`_handle_task_dialog`、`_keep_alive`、`_return_to_npc` |
+| `src/tasks/kezhan.py` | 客栈任务 | `run_loop`、`run_cycle`、`_claim_task`、`_handle_follow_extras` |
+| `src/tasks/wuhuan.py` | 五环任务 | `run_loop`、`_prepare`、`_claim_task`、`_handle_submit_dialog` |
+| `src/tasks/xuanshu.py` | 玄枢轶闻任务 | `run_loop`、`run_cycle`、`navigate_to_task`、`_follow_wait_handler` |
+| `src/workflows/follow.py` | 共享任务跟踪引擎（跨任务） | `follow_task`、`_confirm_task_gone`、`_handle_dialogs` |
+| `src/device/battle.py` | 战斗监控、血蓝、巫医、盒子、组号队员 pass | `watch_loop`、`handle_battle`、`_handle_wuyi_dialog`、`_handle_hezi` |
+| `src/device/team.py` | 队伍检查、补人、暂离请离、归队、退队 | `check_team_min`、`fill_team`、`maybe_rejoin`、`leave_or_disband_team` |
+| `src/device/tab_group.py` | 组号多 Tab 身份、pass、队员操作 | `init_task`、`startup_check`、`startup_member_check`、`member_*_pass` |
+| `src/device/task_tracker.py` | 追踪面板 OCR、绿字/下划线、TrackGate | `ocr_track`、`read_tasks`、`has_task`、`track_task`、`TrackGate` |
+| `src/device/map.py` | OCR 三引擎、模板匹配、地图开关与坐标 | `ocr_regions`、`match_frame_np`、`read_map_position`、`open_mini_map_city` |
+| `src/device/dialog_common.py` | 对话框通用：绿字选项、序号点击、连点、面板清理 | `_click_green_option_once`、`_click_dialog_option_by_index`、`close_scene_panels` |
+| `src/core/app_utils.py` | 点击/键盘/全局锁/静默开关/KeyValue 合并写/进度 | `human_click`、`precise_click`、`high_perf_click`、`kv_*_merged` |
+| `src/device/silent_click.py` | Win32 消息点击/按键/文本/Tab 条切换 | `send_silent_click`、`send_silent_hotkey`、`send_silent_text`、`send_silent_tab_click` |
+| `src/device/bag.py` | 背包开合、物品检索、摄妖香 | `open_bag`、`find_item_with_slots`、`use_sheyaoxiang_if_due` |
+| `src/device/zuoqi.py` | 飞行驭器面板、飞行/降落状态 | `open_feixingyuqi_panel`、`ensure_landed`、`ensure_flying` |
+| `src/device/clear_screen.py` | 启动清屏 Alt+6 / Alt+5 / 收起侧栏 | `run_clear_screen` |
+| `src/device/repair.py` | 自动修理：场次判断、寻路、NPC 对话 | `is_due`、`record_battle`、`auto_repair` |
+| `src/device/binding.py` | 窗口绑定短文案（服务器+角色名） | `bound_short_label`、`bound_label_from_binding` |
+| `src/device/progress.py` | 任务进度汇总（当天次数/上限/百分比） | `task_progress_summary` |
+| `src/core/debug_overlay.py` | 悬浮层、运行看板状态、任务统计 | `start`、`shutdown`、`read_runtime_status`、`record_round` |
+| `src/device/game.py` | 窗口查找、Tab 枚举、登录角色、窗口绑定 | `find_main_window`、`list_tab_windows`、`read_login_tab` |
+| `src/device/status_bars.py` | 人物/召唤兽血蓝条扫描 | `check_all_bars`、`beast_below_threshold` |
+| `src/core/schemes.py` | 配置方案快照/切换/导入导出 | `switch_scheme`、`resave_scheme`、`migrate_if_needed` |
+| `src/minigames/pochufengyin.py` | 破除封印/钓鱼小游戏闭环 | `play_pochufengyin` |
+| `src/minigames/duchong.py` | 拍毒虫小游戏闭环与退避状态 | `play`、`can_enter`、`backoff` |
+| `src/minigames/yinlv.py` | 音律小游戏（动态追亮点） | `play` |
+| `src/minigames/shahai.py` | 沙海迷踪小游戏 | `play_shahai_miyong` |
+| `src/minigames/jiguan.py` | 封印机关破解 | `play` |
+| `src/minigames/chuyijuebao.py` | 锄遗聚宝小游戏 | `play` |
 
 ---
 

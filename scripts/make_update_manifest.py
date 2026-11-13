@@ -36,8 +36,8 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src import update_config  # noqa: E402
-from src.updater import (UpdateError, parse_version,  # noqa: E402
+from src.app import update_config  # noqa: E402
+from src.app.updater import (UpdateError, parse_version,  # noqa: E402
                          validate_manifest)
 
 

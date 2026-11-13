@@ -5,8 +5,8 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from src import task_tracker
-from src import map as game_map
+from src.device import task_tracker
+from src.device import map as game_map
 
 # ---- 任务分组与查找（合成 OCR items） ----
 

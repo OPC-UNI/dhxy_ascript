@@ -19,8 +19,9 @@ import pytest
 from PIL import Image
 from ascript.windows.system import R
 
-from src import map as game_map
-from src import mingwang
+from src.device import map as game_map
+from src.tasks import mingwang
+from src.minigames import shahai
 
 
 @pytest.fixture(autouse=True)
@@ -448,7 +449,7 @@ def test_handle_dialog_options_no_match(monkeypatch):
 
 
 def test_follow_task_uses_mingwang_dialog_map(monkeypatch):
-    """复用 follow_task 时传入本模块对话表/跳过表与关闭玄枢专属检测。"""
+    """复用 follow_task 时传入本模块对话表/跳过表（引擎无玄枢专属检测）。"""
     calls = {}
 
     def fake(win, title, **kw):
@@ -463,9 +464,8 @@ def test_follow_task_uses_mingwang_dialog_map(monkeypatch):
     assert calls["extra_dialog_handler"] is mingwang._handle_dialog_options
     # 无选项多屏剧情台词连点表（不再用空表禁用玄枢文案）
     assert calls["skip_texts"] is mingwang.DIALOG_SKIP_TEXTS
-    assert calls["chuyijuebao_check"] is False
     assert calls["story_known_texts"] is mingwang.DIALOG_OPTION_MAP
-    # 面板缺席判定统一在 xuanshu._confirm_task_gone（2026-11-12 全局规则），
+    # 面板缺席判定统一在 workflows.follow._confirm_task_gone（2026-11-12 全局规则），
     # 名望不再传 per-task 参数
     assert "task_gone_require_panel" not in calls
 
@@ -848,21 +848,21 @@ def shahai_fixtures():
 
 def test_shahai_parse_top_and_stage_hint():
     """顶部轮次/倒计时解析 + 底部提示阶段判定（用户 2026-11-11 文案）。"""
-    assert mingwang._shahai_parse_top("第 2 次地图 剩余 8 秒") == (2, 8)
-    assert mingwang._shahai_parse_top("第1次地图剩余6秒") == (1, 6)
-    assert mingwang._shahai_parse_top("第三次地图 剩余 10 秒") == (3, 10)
-    assert mingwang._shahai_parse_top("") == (None, None)
+    assert shahai._shahai_parse_top("第 2 次地图 剩余 8 秒") == (2, 8)
+    assert shahai._shahai_parse_top("第1次地图剩余6秒") == (1, 6)
+    assert shahai._shahai_parse_top("第三次地图 剩余 10 秒") == (3, 10)
+    assert shahai._shahai_parse_top("") == (None, None)
     memory = "请记住混沌出现的位置，3秒后混沌将侵蚀入地图之中"
     click = "请记住混沌出现的位置，点击令混沌显形，显形后再次点击将其净化！"
-    assert mingwang._shahai_stage_hint(memory) == "memory"
-    assert mingwang._shahai_stage_hint(click) == "click"
-    assert mingwang._shahai_stage_hint("无法识别的乱码") is None
+    assert shahai._shahai_stage_hint(memory) == "memory"
+    assert shahai._shahai_stage_hint(click) == "click"
+    assert shahai._shahai_stage_hint("无法识别的乱码") is None
 
 
 def test_shahai_dot_detection_calibration_images(shahai_fixtures):
     """实测标定图（贴入 1378x831 窗口的标定区域）：
     有黑点帧检出 3 个墨团，无黑点帧零检出（固定山体噪点被过滤）。"""
-    l, t, r, b = mingwang.SHAHAI_GAME_REGION
+    l, t, r, b = shahai.SHAHAI_GAME_REGION
 
     def paste(name):
         img = cv2.imread(str(shahai_fixtures / name))
@@ -870,14 +870,14 @@ def test_shahai_dot_detection_calibration_images(shahai_fixtures):
         frame[t:b, l:r] = cv2.resize(img, (r - l, b - t))
         return frame
 
-    dots = mingwang._shahai_find_dots(paste("shahai_dots.png"))
+    dots = shahai._shahai_find_dots(paste("shahai_dots.png"))
     assert len(dots) == 3, dots
     got = sorted((x, y) for x, y, _a in dots)
     # 2.png 墨团中心 (320,249)/(512,104)/(127,252) 按区域缩放映射
     expected = sorted([(703, 536), (907, 376), (498, 539)])
     for (x, y), (ex, ey) in zip(got, expected):
         assert abs(x - ex) <= 5 and abs(y - ey) <= 5, (got, expected)
-    assert mingwang._shahai_find_dots(paste("shahai_clean.png")) == []
+    assert shahai._shahai_find_dots(paste("shahai_clean.png")) == []
 
 
 def test_shahai_dot_detection_ignores_dark_green_and_specks():
@@ -886,7 +886,7 @@ def test_shahai_dot_detection_ignores_dark_green_and_specks():
     cv2.circle(frame, (200, 200), 14, (30, 70, 50), -1)   # 深绿山体噪点
     cv2.circle(frame, (400, 200), 3, (10, 10, 10), -1)    # 过小墨点
     cv2.circle(frame, (300, 250), 11, (15, 22, 28), -1)   # 真黑点
-    dots = mingwang._shahai_find_dots(frame, region=(50, 50, 650, 350))
+    dots = shahai._shahai_find_dots(frame, region=(50, 50, 650, 350))
     assert len(dots) == 1, dots
     assert abs(dots[0][0] - 300) <= 2 and abs(dots[0][1] - 250) <= 2
 
@@ -894,11 +894,11 @@ def test_shahai_dot_detection_ignores_dark_green_and_specks():
 def test_shahai_dot_tracking_confirm_hits():
     """跨轮询同坐标命中累加；单帧命中按兜底保留。"""
     entries = []
-    mingwang._shahai_track_dots(entries, [(100, 100, 200)], 1.0)
-    assert mingwang._shahai_pick_dots(entries) == [(100, 100)]
-    mingwang._shahai_track_dots(entries, [(102, 101, 180)], 1.3)
+    shahai._shahai_track_dots(entries, [(100, 100, 200)], 1.0)
+    assert shahai._shahai_pick_dots(entries) == [(100, 100)]
+    shahai._shahai_track_dots(entries, [(102, 101, 180)], 1.3)
     assert entries[0]["hits"] == 2
-    assert mingwang._shahai_pick_dots(entries) == [(102, 101)]
+    assert shahai._shahai_pick_dots(entries) == [(102, 101)]
 
 
 def _box_frame(color=(200, 200, 200)):
@@ -910,20 +910,20 @@ def test_shahai_click_dot_two_clicks(monkeypatch):
 
     用户 2026-11-11 机制：两下之间严格 0.2s，之间不做截图/识别。
     """
-    assert mingwang.SHAHAI_PAIR_GAP == 0.20
+    assert shahai.SHAHAI_PAIR_GAP == 0.20
     base = _box_frame()
     win = _FakeWin([_pil(base), _pil(base)])  # 两下后烟雾已消散
     clicks = []
     sleeps = []
-    monkeypatch.setattr(mingwang, "human_click",
+    monkeypatch.setattr(shahai, "human_click",
                         lambda w, x, y, button="primary":
                         clicks.append((x, y)))
-    monkeypatch.setattr(mingwang.time, "sleep", lambda s: sleeps.append(s))
-    monkeypatch.setattr(mingwang, "_shahai_ocr",
+    monkeypatch.setattr(shahai.time, "sleep", lambda s: sleeps.append(s))
+    monkeypatch.setattr(shahai, "_shahai_ocr",
                         lambda img, region: "此处混沌已消散！")
-    rec = mingwang._shahai_click_dot(win, 500, 400)
+    rec = shahai._shahai_click_dot(win, 500, 400)
     assert clicks == [(500, 400), (500, 400)]
-    assert sleeps.count(mingwang.SHAHAI_PAIR_GAP) == 1
+    assert sleeps.count(shahai.SHAHAI_PAIR_GAP) == 1
     assert rec["smoke_left"] is False and rec["ok"] is True
     assert rec["t2"] > rec["t1"] > 0
 
@@ -942,12 +942,12 @@ def test_shahai_click_dot_retries_when_smoke_left(monkeypatch):
         ocr_calls["n"] += 1
         return "此处混沌已消散！" if ocr_calls["n"] >= 2 else None
 
-    monkeypatch.setattr(mingwang, "human_click",
+    monkeypatch.setattr(shahai, "human_click",
                         lambda w, x, y, button="primary":
                         clicks.append((x, y)))
-    monkeypatch.setattr(mingwang.time, "sleep", lambda s: None)
-    monkeypatch.setattr(mingwang, "_shahai_ocr", fake_ocr)
-    rec = mingwang._shahai_click_dot(win, 500, 400)
+    monkeypatch.setattr(shahai.time, "sleep", lambda s: None)
+    monkeypatch.setattr(shahai, "_shahai_ocr", fake_ocr)
+    rec = shahai._shahai_click_dot(win, 500, 400)
     assert clicks == [(500, 400)] * 3
     assert rec["retry"] > 0 and rec["ok"] is True
     assert rec["smoke_left"] is False
@@ -958,13 +958,13 @@ def test_shahai_click_dot_wrong_position(monkeypatch):
     base = _box_frame()
     win = _FakeWin([_pil(base), _pil(base)])
     clicks = []
-    monkeypatch.setattr(mingwang, "human_click",
+    monkeypatch.setattr(shahai, "human_click",
                         lambda w, x, y, button="primary":
                         clicks.append((x, y)))
-    monkeypatch.setattr(mingwang.time, "sleep", lambda s: None)
-    monkeypatch.setattr(mingwang, "_shahai_ocr",
+    monkeypatch.setattr(shahai.time, "sleep", lambda s: None)
+    monkeypatch.setattr(shahai, "_shahai_ocr",
                         lambda img, region: "此处并非混沌所在，请少侠仔细回忆！")
-    rec = mingwang._shahai_click_dot(win, 500, 400)
+    rec = shahai._shahai_click_dot(win, 500, 400)
     assert clicks == [(500, 400), (500, 400)]
     assert rec["ok"] is False and rec["smoke_left"] is False
 
@@ -988,27 +988,27 @@ def test_maybe_play_shahai_detects_and_plays(monkeypatch):
 
 def test_play_shahai_records_dots_and_purifies(monkeypatch):
     """主循环：识别记忆阶段 3 个黑点 → 阶段切换 → 逐个净化 → 弹窗关闭结束。"""
-    monkeypatch.setattr(mingwang, "SHAHAI_TOP_OCR_INTERVAL", 0.0)
-    monkeypatch.setattr(mingwang, "SHAHAI_BOTTOM_OCR_INTERVAL", 0.0)
-    monkeypatch.setattr(mingwang, "SHAHAI_MID_OCR_INTERVAL", 0.0)
-    monkeypatch.setattr(mingwang, "SHAHAI_POLL_INTERVAL", 0.0)
-    monkeypatch.setattr(mingwang, "SHAHAI_MEMORY_MIN_SEC", 0.0)
-    monkeypatch.setattr(mingwang, "SHAHAI_POPUP_MISS_POLLS", 2)
-    monkeypatch.setattr(mingwang.time, "sleep", lambda s: None)
+    monkeypatch.setattr(shahai, "SHAHAI_TOP_OCR_INTERVAL", 0.0)
+    monkeypatch.setattr(shahai, "SHAHAI_BOTTOM_OCR_INTERVAL", 0.0)
+    monkeypatch.setattr(shahai, "SHAHAI_MID_OCR_INTERVAL", 0.0)
+    monkeypatch.setattr(shahai, "SHAHAI_POLL_INTERVAL", 0.0)
+    monkeypatch.setattr(shahai, "SHAHAI_MEMORY_MIN_SEC", 0.0)
+    monkeypatch.setattr(shahai, "SHAHAI_POPUP_MISS_POLLS", 2)
+    monkeypatch.setattr(shahai.time, "sleep", lambda s: None)
     dots = [(400, 400), (500, 450), (600, 500)]
     state = {"frames": 0, "top_calls": 0, "purified": None}
 
     def fake_ocr(img, region):
-        if region == mingwang.SHAHAI_TOP_REGION:
+        if region == shahai.SHAHAI_TOP_REGION:
             state["top_calls"] += 1
             if state["top_calls"] <= 2:
                 return "第 1 次地图 剩余 8 秒"
             return None
         return None
 
-    monkeypatch.setattr(mingwang, "_shahai_ocr", fake_ocr)
+    monkeypatch.setattr(shahai, "_shahai_ocr", fake_ocr)
     monkeypatch.setattr(
-        mingwang, "_shahai_text_gated",
+        shahai, "_shahai_text_gated",
         lambda img, region, cache, force=False:
         "点击令混沌显形，显形后再次点击将其净化！")
 
@@ -1018,7 +1018,7 @@ def test_play_shahai_records_dots_and_purifies(monkeypatch):
             return [(x, y, 200) for x, y in dots]
         return []
 
-    monkeypatch.setattr(mingwang, "_shahai_find_dots", fake_find)
+    monkeypatch.setattr(shahai, "_shahai_find_dots", fake_find)
 
     def fake_purify(win, ds, prefix="名望"):
         state["purified"] = list(ds)
@@ -1027,7 +1027,7 @@ def test_play_shahai_records_dots_and_purifies(monkeypatch):
                  "ok": True}
                 for x, y in ds]
 
-    monkeypatch.setattr(mingwang, "_shahai_purify_dots", fake_purify)
+    monkeypatch.setattr(shahai, "_shahai_purify_dots", fake_purify)
     win = _FakeWin([_pil(_noise_bgr())])
     ok, info = mingwang.play_shahai_miyong(win)
     assert ok and "1 轮" in info

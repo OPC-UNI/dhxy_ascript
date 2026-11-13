@@ -15,7 +15,7 @@ import pytest
 from PIL import Image
 from ascript.windows.system import R
 
-from src import team
+from src.device import team
 
 FRAME_W, FRAME_H = 1378, 831
 
@@ -946,7 +946,7 @@ def test_check_team_min_allow_kick_flag(monkeypatch):
 def test_auto_kick_overdue_excludes_matched_tabs(monkeypatch):
     """todo3 组号：匹配到队员 Tab 的暂离成员不参与超时请离（归队优先），
     未匹配的（路人）照常请离。"""
-    import src.tab_group as tg
+    import src.device.tab_group as tg
     now = time.time()
     team.reset_away_tracking()
     team._away_seen.update({("女人", "甲"): now - 400,
@@ -1360,7 +1360,7 @@ def test_check_team_min_menu_fail_no_pending_evidence(monkeypatch):
 
 def test_find_template_in_region_cropped():
     """条带内命中返回全图坐标；条带外不搜（None）。"""
-    from src import map as game_map
+    from src.device import map as game_map
     frame = _paste_tpl(_frame(), "zudui_item2.png", 1000, 750)
     pt = game_map.find_template_in(frame, team.ZUDUI_ITEM2_ICON,
                                    team.ZUDUI_ITEM2_THRESHOLD,

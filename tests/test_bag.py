@@ -8,7 +8,8 @@
 """
 import pytest
 
-from src import app_utils, bag
+from src.core import app_utils
+from src.device import bag
 
 
 class _FakeWin:
@@ -26,9 +27,9 @@ def _cleanup(monkeypatch):
 def _mock_gates(monkeypatch, switch_on=True, due=True, skip_nonleader=False,
                 in_battle=False):
     """打桩开关/到期/队长/战斗四个门，返回 use 调用记录。"""
-    from src import battle as battle_mod
-    from src import control_window
-    monkeypatch.setattr(control_window, "load_use_sheyaoxiang",
+    from src.device import battle as battle_mod
+    from src.core import settings as core_settings
+    monkeypatch.setattr(core_settings, "load_use_sheyaoxiang",
                         lambda: switch_on)
     monkeypatch.setattr(app_utils, "sheyaoxiang_due", lambda _w: due)
     monkeypatch.setattr(app_utils, "sheyaoxiang_skip_nonleader",
@@ -100,7 +101,7 @@ def test_match_template_region_offsets_coords(monkeypatch):
     rng = np.random.default_rng(20261107)
     frame = Image.fromarray(rng.integers(0, 256, (831, 1378, 3),
                                          dtype=np.uint8))
-    import src.map as game_map
+    import src.device.map as game_map
     frame.paste(Image.open(__import__("ascript.windows.system",
                                       fromlist=["R"]).R.img(bag.BAG_ICON)),
                 (1000, 750))

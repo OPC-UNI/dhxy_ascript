@@ -14,8 +14,8 @@ from ctypes import wintypes
 import numpy as np
 import pytest
 
-from src import silent_click
-from src.silent_click import (MK_LBUTTON, MK_RBUTTON, WM_LBUTTONDOWN, WM_LBUTTONUP,
+from src.device import silent_click
+from src.device.silent_click import (MK_LBUTTON, MK_RBUTTON, WM_LBUTTONDOWN, WM_LBUTTONUP,
                               WM_MOUSEMOVE, WM_RBUTTONDOWN, WM_RBUTTONUP,
                               WM_CHAR, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN,
                               WM_SYSKEYUP)
@@ -372,7 +372,7 @@ def test_send_silent_unichar_sequence(monkeypatch):
 
 
 def test_dump_child_windows_no_hwnd():
-    from src import game as game_mod
+    from src.device import game as game_mod
     assert game_mod.dump_child_windows(type("W", (), {"hwnd": 0})()) == ["窗口句柄无效"]
 
 

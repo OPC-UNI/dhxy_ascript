@@ -10,7 +10,8 @@
 """
 import pytest
 
-from src import app_utils, tab_group
+from src.core import app_utils
+from src.device import tab_group
 
 TAB_HWND = 0x777
 
@@ -83,7 +84,7 @@ def _mock_silent_click(monkeypatch, clicks, tab=None, count=3, cur=0,
 
     names 缺省 = 全部已登录（角色名，!= 游戏标题）。
     """
-    from src import silent_click
+    from src.device import silent_click
     monkeypatch.setattr(silent_click, "tab_control_hwnd", lambda _w: tab)
     monkeypatch.setattr(silent_click, "tab_item_count", lambda _t: count)
     monkeypatch.setattr(silent_click, "tab_current_index", lambda _t: cur)
@@ -122,7 +123,7 @@ def test_switch_next_by_click_wraps_around(monkeypatch):
 def test_switch_next_by_click_retry_same_index_then_success(monkeypatch):
     clicks, invalidates = [], []
     _mock_silent_click(monkeypatch, clicks, tab=TAB_HWND, count=3, cur=0)
-    from src import silent_click
+    from src.device import silent_click
     monkeypatch.setattr(silent_click, "invalidate_tab_items",
                         lambda _w: invalidates.append(True))
     list_tabs, _ = _list_tabs_script([0xA, 0xA, 0xB])
@@ -135,7 +136,7 @@ def test_switch_next_by_click_retry_same_index_then_success(monkeypatch):
 def test_switch_next_by_click_never_switches_returns_none(monkeypatch):
     clicks, invalidates = [], []
     _mock_silent_click(monkeypatch, clicks, tab=TAB_HWND, count=3, cur=0)
-    from src import silent_click
+    from src.device import silent_click
     monkeypatch.setattr(silent_click, "invalidate_tab_items",
                         lambda _w: invalidates.append(True))
     list_tabs, _ = _list_tabs_script([0xA, 0xA, 0xA])
@@ -184,7 +185,7 @@ def test_switch_next_by_click_skips_wraps_to_logged(monkeypatch):
 # ---- _next_logged_index ----
 
 def test_next_logged_index_skip_and_wrap(monkeypatch):
-    from src import silent_click
+    from src.device import silent_click
     g = tab_group.game.GAME_TITLE
     items = [(g, (0, 0, 1, 1)), ("角色1", (0, 0, 1, 1)), (g, (0, 0, 1, 1)),
              ("角色3", (0, 0, 1, 1))]
@@ -196,7 +197,7 @@ def test_next_logged_index_skip_and_wrap(monkeypatch):
 
 
 def test_next_logged_index_fallbacks(monkeypatch):
-    from src import silent_click
+    from src.device import silent_click
     # UIA 不可用 → 回退 (cur+1)%count
     monkeypatch.setattr(silent_click, "tab_items", lambda _w, _c: None)
     assert tab_group._next_logged_index(_FakeWin(), None, 2, 5) == 3
@@ -323,11 +324,11 @@ def test_rejoin_pass_matches_and_rejoins_member(monkeypatch):
         called.append(prefix)
         return True, "已归队（归队按钮已消失）"
 
-    import src.team as team_mod
+    import src.device.team as team_mod
     monkeypatch.setattr(team_mod, "rejoin_from_away", _maybe_rejoin)
     # 战斗判定必须走帧级 is_in_battle_frame（pass_active 期间 is_in_battle
     # 恒 True——误用把轮回司误报战斗跳过归队，2026-11-07 用户日志）
-    from src import battle as battle_mod
+    from src.device import battle as battle_mod
 
     def _boom(win):
         raise AssertionError("pass 内不得调用 is_in_battle（pass_active 恒 True）")
@@ -466,7 +467,7 @@ def test_rejoin_pass_force_bypasses_throttle(monkeypatch):
     # 归队 handler 内帧级战斗判定会调 win.capture：必须用 _CapWin
     # （_FakeWin 无 capture → AttributeError 被 _for_each_member
     # 吞掉记 WARN，2026-11-06 日志噪音教训）
-    import src.team as team_mod
+    import src.device.team as team_mod
     monkeypatch.setattr(team_mod, "rejoin_from_away",
                         lambda win, prefix="[组队]": (True, "已归队（模拟）"))
     # 非 force：节流返回空
@@ -528,7 +529,7 @@ def _scan_env(monkeypatch, children, panel_names, saved=None,
     """
     monkeypatch.setattr(tab_group.game, "list_tab_windows",
                         lambda win: list(children))
-    import src.team as team_mod
+    import src.device.team as team_mod
     monkeypatch.setattr(team_mod, "is_team_panel_open",
                         lambda win: (False, "队伍面板未打开"))
     monkeypatch.setattr(team_mod, "open_team_panel",
@@ -665,8 +666,8 @@ def test_is_noop_actions():
 def test_startup_check_single_panel_open(monkeypatch):
     """启动检查一次开面板完成队长判定+昵称读取（旧链路开 3 次面板的
     回归测试）；判定一次即队长，不重开。"""
-    import src.team as team_mod
-    import src.battle as battle_mod
+    import src.device.team as team_mod
+    import src.device.battle as battle_mod
     monkeypatch.setattr(battle_mod, "is_in_battle", lambda win: False)
     monkeypatch.setattr(team_mod, "clear_pending_apply",
                         lambda win: (False, "无申请待处理态"))
@@ -689,8 +690,8 @@ def test_startup_check_single_panel_open(monkeypatch):
 def test_startup_check_forwards_create_flag(monkeypatch):
     """自动创建并入启动检查：create_if_missing/prefix 原样传给队长判定
     （2026-11-11 组号逻辑优化：不再先单独开菜单查是否组队）。"""
-    import src.team as team_mod
-    import src.battle as battle_mod
+    import src.device.team as team_mod
+    import src.device.battle as battle_mod
     seen = {}
     monkeypatch.setattr(battle_mod, "is_in_battle", lambda win: False)
     monkeypatch.setattr(team_mod, "clear_pending_apply",
@@ -723,8 +724,8 @@ def test_startup_team_count_lower_bound():
 def test_startup_check_unclear_rechecks_without_reopen(monkeypatch):
     """分类不明 3s 后同面板重判一次（classify 复用已开面板，不重新
     开面板）。"""
-    import src.team as team_mod
-    import src.battle as battle_mod
+    import src.device.team as team_mod
+    import src.device.battle as battle_mod
     import time as time_mod
     monkeypatch.setattr(battle_mod, "is_in_battle", lambda win: False)
     monkeypatch.setattr(team_mod, "clear_pending_apply",
@@ -749,8 +750,8 @@ def test_startup_check_unclear_rechecks_without_reopen(monkeypatch):
 def test_startup_check_clears_pending_apply_first(monkeypatch):
     """启动检查先清申请待处理态再判队长（2026-11-07 22:03 教训：
     item2 命中即确定性队长，不清空则菜单打不开、判定必失败停任务）。"""
-    import src.team as team_mod
-    import src.battle as battle_mod
+    import src.device.team as team_mod
+    import src.device.battle as battle_mod
     order = []
     monkeypatch.setattr(battle_mod, "is_in_battle", lambda win: False)
     monkeypatch.setattr(team_mod, "clear_pending_apply",
@@ -941,8 +942,8 @@ def test_member_auto_pass_skips_without_confirmed_members(monkeypatch):
 def test_startup_check_merges_name_reread(monkeypatch):
     """面板昵称部分区域 OCR 漏检：同面板重截一帧重读合并，真实队员
     不因单帧漏检被误判「不在队伍」。"""
-    import src.team as team_mod
-    import src.battle as battle_mod
+    import src.device.team as team_mod
+    import src.device.battle as battle_mod
     import time as time_mod
     monkeypatch.setattr(battle_mod, "is_in_battle", lambda win: False)
     monkeypatch.setattr(team_mod, "clear_pending_apply",

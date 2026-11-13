@@ -5,20 +5,20 @@
 Runtime.wait 驻留线程防止程序自行退出（托盘「彻底退出」→ Runtime.stop 清理退出）。
 
 模块划分（main.py 之外的代码均在 src/ 下）：
-- src/app_utils.py       通用工具（日志、拟人化鼠标操作）
-- src/game.py            游戏窗口操作（窗口查找、登录 Tab 监听）
-- src/bag.py             背包操作（打开背包、物品检测与点击）
-- src/battle.py          战斗自动化（战斗监控与人物/召唤兽操作）
-- src/wuhuan.py          五环任务自动化（购装备、领取、跟踪循环）
-- src/kezhan.py          客栈任务自动化（洛阳客栈找掌柜、领取、跟踪循环）
-- src/xiuluo.py          修罗任务自动化（灵兽村领取、跟踪、返程循环）
-- src/wubei.py           五倍任务自动化（宝象国领取、队伍检查，战斗由战斗监控线程操作）
-- src/zhongzu.py         种族比武任务自动化（长安领取、比武大会跟踪、助威令返程）
-- src/task_manager.py    任务子进程管理（启停、升级强杀、日志回流）
-- src/control_window.py  网页控制窗口（启动/停止/重置、任务多选与次数、总进度条、内嵌日志）
-- src/schemes.py         配置方案管理（多套设置快照一键切换 + 导入导出）
-- src/hotkey.py          全局老板键（默认 F8 一键启动/停止任务）
-- src/select_window.py   多开窗口绑定选择弹窗（启动时多开且无有效绑定时弹出）
+- src/core/app_utils.py       通用工具（日志、拟人化鼠标操作）
+- src/device/game.py            游戏窗口操作（窗口查找、登录 Tab 监听）
+- src/device/bag.py             背包操作（打开背包、物品检测与点击）
+- src/device/battle.py          战斗自动化（战斗监控与人物/召唤兽操作）
+- src/tasks/wuhuan.py          五环任务自动化（购装备、领取、跟踪循环）
+- src/tasks/kezhan.py          客栈任务自动化（洛阳客栈找掌柜、领取、跟踪循环）
+- src/tasks/xiuluo.py          修罗任务自动化（灵兽村领取、跟踪、返程循环）
+- src/tasks/wubei.py           五倍任务自动化（宝象国领取、队伍检查，战斗由战斗监控线程操作）
+- src/tasks/zhongzu.py         种族比武任务自动化（长安领取、比武大会跟踪、助威令返程）
+- src/app/task_manager.py    任务子进程管理（启停、升级强杀、日志回流）
+- src/app/control_window.py  网页控制窗口（启动/停止/重置、任务多选与次数、总进度条、内嵌日志）
+- src/core/schemes.py         配置方案管理（多套设置快照一键切换 + 导入导出）
+- src/app/hotkey.py          全局老板键（默认 F8 一键启动/停止任务）
+- src/app/select_window.py   多开窗口绑定选择弹窗（启动时多开且无有效绑定时弹出）
 """
 import multiprocessing  # freeze_support：冻结打包下 spawn 子进程（任务/悬浮层）用
 import os
@@ -40,14 +40,14 @@ if os.path.isdir(os.path.join(_HERE, "src")):
 # 只依赖标准库，快速进入「等主进程退出 → 覆盖 → 重启」流程。
 # 放在 __main__ 守卫内：spawn 任务子进程重导入本模块（__mp_main__）时不执行。
 if __name__ == '__main__' and "--apply-update" in sys.argv:
-    from src.updater import apply_update_entry
+    from src.app.updater import apply_update_entry
     sys.exit(apply_update_entry(sys.argv))
 
 # ---- 启动恢复：处理断电/强杀导致的中断更新（只在主进程执行）----
 _UPDATE_RECOVERY = None
 if __name__ == '__main__':
     try:
-        from src import updater as _updater_boot
+        from src.app import updater as _updater_boot
         from src import __version__ as _boot_version
         _UPDATE_RECOVERY = _updater_boot.recover_if_needed(_boot_version)
         if _UPDATE_RECOVERY:
@@ -70,40 +70,41 @@ import webview  # GUI 消息循环（窗口已在 ControlWindow.prepare 创建�
 from ascript.windows.system import R  # 程序上下文与资源路由
 from ascript.windows.system import Runtime  # 生命周期驻留（防止程序自行退出）
 from ascript.windows.ui import LicenseWindow  # 安全验证组件
-from src.task_manager import TaskManager  # 任务子进程管理（启停/强杀/日志回流）
-from src.control_window import (ControlWindow, bound_short_label,
-                                BATTLE_ONLY_MODE,
-                                load_selected_modes,
-                                load_task_counts,
-                                load_use_sheyaoxiang,
-                                load_debug_overlay,
-                                load_battle_actions,
-                                load_high_perf,
-                                load_auto_refill,
-                                load_clear_screen,
-                                load_silent_mode,
-                                load_battle_only_auto_rejoin)  # 网页控制窗口（启动/停止/重置、配置持久化）
-from src import app_utils  # 通用工具（日志、高性能模式共享设施）
-from src.app_utils import log, log_file_path  # 日志
-from src import game  # 游戏窗口操作
-from src import user_data  # 角色数据目录（data/<角色ID>/）
-from src import bag  # 背包操作
-from src import battle  # 战斗自动化（战斗监控与人物/召唤兽操作）
-from src import xuanshu  # 玄枢轶闻任务自动化
-from src import mingwang  # 名望任务自动化（第一阶段：魔族领取入口）
-from src import task_tracker  # 任务追踪面板操作（启动时判断是否已有跟踪中的任务）
-from src import wuhuan  # 五环任务自动化
-from src import kezhan  # 客栈任务自动化
-from src import team  # 组队功能（任务前置退队）
-from src import xiuluo  # 修罗任务自动化
-from src import zhongzu  # 种族比武任务自动化
-from src import wubei  # 五倍任务自动化
-from src import status_bars  # 人物/召唤兽血蓝条检测
-from src import debug_overlay  # 调试信息悬浮层（游戏窗口上绘制任务/配置/进度）
-from src import clear_screen  # 启动清屏（Alt+6 屏蔽玩家 + Alt+5 屏蔽摊位）
-from src import map as game_map  # 地图操作（OCR 引擎预热等）
-from src import env_check  # 启动环境自检（DPI/屏幕/首帧统计，远程机排障）
-from src.license_app_id import LICENSE_APP_ID  # 授权 app：本地 24528 / GitHub 打包烙入 23651
+from src.app.task_manager import TaskManager  # 任务子进程管理（启停/强杀/日志回流）
+from src.app.control_window import ControlWindow  # 网页控制窗口（启动/停止/重置）
+from src.device.binding import bound_short_label  # 绑定角色短文案
+from src.core.settings import (BATTLE_ONLY_MODE,  # 设置读取（非 UI 层）
+                               load_selected_modes,
+                               load_task_counts,
+                               load_use_sheyaoxiang,
+                               load_debug_overlay,
+                               load_battle_actions,
+                               load_high_perf,
+                               load_auto_refill,
+                               load_clear_screen,
+                               load_silent_mode,
+                               load_battle_only_auto_rejoin)
+from src.core import app_utils  # 通用工具（日志、高性能模式共享设施）
+from src.core.app_utils import log, log_file_path  # 日志
+from src.device import game  # 游戏窗口操作
+from src.core import user_data  # 角色数据目录（data/<角色ID>/）
+from src.device import bag  # 背包操作
+from src.device import battle  # 战斗自动化（战斗监控与人物/召唤兽操作）
+from src.tasks import xuanshu  # 玄枢轶闻任务自动化
+from src.tasks import mingwang  # 名望任务自动化（第一阶段：魔族领取入口）
+from src.device import task_tracker  # 任务追踪面板操作（启动时判断是否已有跟踪中的任务）
+from src.tasks import wuhuan  # 五环任务自动化
+from src.tasks import kezhan  # 客栈任务自动化
+from src.device import team  # 组队功能（任务前置退队）
+from src.tasks import xiuluo  # 修罗任务自动化
+from src.tasks import zhongzu  # 种族比武任务自动化
+from src.tasks import wubei  # 五倍任务自动化
+from src.device import status_bars  # 人物/召唤兽血蓝条检测
+from src.core import debug_overlay  # 调试信息悬浮层（游戏窗口上绘制任务/配置/进度）
+from src.device import clear_screen  # 启动清屏（Alt+6 屏蔽玩家 + Alt+5 屏蔽摊位）
+from src.device import map as game_map  # 地图操作（OCR 引擎预热等）
+from src.app import env_check  # 启动环境自检（DPI/屏幕/首帧统计，远程机排障）
+from src.app.license_app_id import LICENSE_APP_ID  # 授权 app：本地 24528 / GitHub 打包烙入 23651
 
 
 def _setup_tray(icon_path, control_win):
@@ -143,7 +144,7 @@ def _ensure_window_binding():
     绑定延续匹配、不再弹框（2026-11-05 用户反馈——此前单窗口
     直接返回不保存，下次多开又弹框）。
     """
-    from src.select_window import SelectWindow  # 弹框按需导入
+    from src.app.select_window import SelectWindow  # 弹框按需导入
     wins = game.list_main_windows()
     if not wins:
         return  # 游戏未启动，无窗口可绑定
@@ -195,12 +196,12 @@ def _sheyaoxiang_idle_fallback(win):
 
     每 60 秒检查：到期且距上次点击追踪寻路 ≥ 10 分钟时走完整门控
     使用流程（bag.use_sheyaoxiang_if_due：开关/到期/非队长/战斗四重
-    门，成功记时间）。与寻路期续用（xuanshu._maybe_sheyaoxiang）双
+    门，成功记时间）。与寻路期续用（workflows.follow._maybe_sheyaoxiang）双
     通道互补：寻路期覆盖常规轮次、空闲期兜底覆盖无寻路窗口。
     pass 期间跳过（队员 Tab 切换中，下分钟再查）。失败静默，
     下分钟重试。
     """
-    from src import tab_group  # 延迟导入：pass_active 抑制
+    from src.device import tab_group  # 延迟导入：pass_active 抑制
     while True:
         time.sleep(60)
         try:
@@ -288,7 +289,7 @@ def _battle_only_loop(win):
     auto_rejoin = load_battle_only_auto_rejoin()
     log(f"[任务] 仅战斗自动归队: "
         f"{'开（死亡落轮回司自动点归队回队长）' if auto_rejoin else '关'}", "SYS")
-    from src import tab_group  # 延迟导入：pass_active 抑制（与 162 行同款）
+    from src.device import tab_group  # 延迟导入：pass_active 抑制（与 162 行同款）
     battle_thread = threading.Thread(target=battle.watch_loop,
                                      args=(win,), daemon=True,
                                      name="battle-watch")
@@ -488,7 +489,7 @@ def _task_start_body():
                     log(f"[摄妖香] {info}", "WARN")
         # 3.5 摄妖香持续续用双通道：①寻路期——任务每轮点击任务追踪后
         #     （寻路期安全窗口，无弹框遮挡）到期自动补用，见
-        #     xuanshu._maybe_sheyaoxiang；②空闲期兜底——任务运行但
+        #     workflows.follow._maybe_sheyaoxiang；②空闲期兜底——任务运行但
         #     10 分钟无寻路（连续回城符/地图赶路、流程卡顿）时到期补用。
         #     替代原任意时机的定时续用线程（任务领取/巫医弹框阶段
         #     背包交互被挡住、储物格切换无效，用户 2026-11-04）
@@ -628,7 +629,7 @@ if __name__ == '__main__':
     # （见 debug_overlay._spawn_helper，exe 不支持解释器 -c 方式），
     # 跳过授权门直接进入绘制循环
     if "--overlay-helper" in sys.argv:
-        from src.debug_overlay import _helper_main
+        from src.core.debug_overlay import _helper_main
         _helper_main()
         sys.exit(0)
 
@@ -680,7 +681,7 @@ if __name__ == '__main__':
     _ensure_window_binding()
 
     # ---- 角色数据目录迁移 + 按角色切换方案（2026-11-11） ----
-    from src import schemes
+    from src.core import schemes
     migration = {"migrated": False, "role": user_data.DEFAULT_ROLE,
                  "last_active_role": None}
     try:
@@ -783,7 +784,7 @@ if __name__ == '__main__':
     # ---- 老板键：全局热键一键启动/停止任务（默认 F11，专用消息泵线程） ----
     # 状态/日志反馈复用 TaskManager 回调链（sync_status/add_logs 已跨线程
     # 工作），面板按钮与启动/停止状态自动同步
-    from src import hotkey
+    from src.app import hotkey
 
     # 切换冷却（秒）：泵线程内回调执行期间按键会滞留队列（hotkey.py 已
     # 清队列），冷却再兜一层——3 秒内重复触发直接忽略，防连按/键盘粘连

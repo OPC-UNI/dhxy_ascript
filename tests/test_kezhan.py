@@ -10,8 +10,9 @@
 """
 import time
 
-from src import kezhan
-from src import task_tracker
+from src.tasks import kezhan
+from src.device import task_tracker
+from src.minigames import duchong, pochufengyin, yinlv
 
 
 # 截图实测 OCR 行（txt, rect, score）；对话框区域行（x≥400）
@@ -498,11 +499,11 @@ def test_order_progress_key_zhixi_priority():
 # ---- 破除封印小游戏闭环：刻度映射与填充边缘测量（7.png 标定 2026-11-09）----
 def test_pochu_tick_mapping():
     """窗口 x → 1~10 刻度：435→0、992→10，中点 713.5→5。"""
-    assert kezhan._pochu_tick(435) == 0.0
-    assert kezhan._pochu_tick(992) == 10.0
-    assert abs(kezhan._pochu_tick(713.5) - 5.0) < 1e-9
-    assert abs(kezhan._pochu_tick(492) - 1.023) < 0.01   # 7.png 实测填充边缘
-    assert abs(kezhan._pochu_tick(908) - 8.49) < 0.01    # 7.png 实测目标带中心
+    assert pochufengyin.pochu_tick(435) == 0.0
+    assert pochufengyin.pochu_tick(992) == 10.0
+    assert abs(pochufengyin.pochu_tick(713.5) - 5.0) < 1e-9
+    assert abs(pochufengyin.pochu_tick(492) - 1.023) < 0.01   # 7.png 实测填充边缘
+    assert abs(pochufengyin.pochu_tick(908) - 8.49) < 0.01    # 7.png 实测目标带中心
 
 
 def test_pochu_fill_edge_finds_right_edge():
@@ -511,21 +512,21 @@ def test_pochu_fill_edge_finds_right_edge():
     import cv2
     import numpy as np
     frame = np.zeros((828, 1376, 3), np.uint8)          # 暗背景
-    l, t, r, b = kezhan.POCHU_BAR_REGION
-    y0, y1 = kezhan.POCHU_BAR_Y
+    l, t, r, b = pochufengyin.POCHU_BAR_REGION
+    y0, y1 = pochufengyin.POCHU_BAR_Y
     # 填充：BGR 金色（HSV H≈21 S≈133 V≈176）→ BGR (84,131,176)
     frame[y0:y1, 433:601] = (84, 131, 176)
     # 目标带括号：白金色 (164,208,215)（H36 S61 V215），位置 x879~881/934~936
     frame[y0 - 2:y1 + 2, 879:882] = (164, 208, 215)
     frame[y0 - 2:y1 + 2, 934:937] = (164, 208, 215)
-    assert kezhan._pochu_fill_edge(frame) == 600
+    assert pochufengyin.pochu_fill_edge(frame) == 600
     # 无填充 → None
-    assert kezhan._pochu_fill_edge(np.zeros_like(frame)) is None
+    assert pochufengyin.pochu_fill_edge(np.zeros_like(frame)) is None
     # 填充与括号间隔断开（缺口>POCHU_FILL_GAP）：连通段仍止于填充右缘
     frame2 = np.zeros((828, 1376, 3), np.uint8)
     frame2[y0:y1, 433:600] = (84, 131, 176)
     frame2[y0 - 2:y1 + 2, 700:703] = (164, 208, 215)
-    assert kezhan._pochu_fill_edge(frame2) == 599
+    assert pochufengyin.pochu_fill_edge(frame2) == 599
 
 
 def test_play_pochufengyin_delegates_shared_module(monkeypatch):
@@ -574,7 +575,7 @@ def test_verify_find_awang_delegates_to_walk_to_dali(monkeypatch):
     assert ok is True and info == "已点击阿旺"
 
 
-# ---- 任务消失判定：面板缺席处理已统一到 xuanshu._confirm_task_gone
+# ---- 任务消失判定：面板缺席处理已统一到 workflows.follow._confirm_task_gone
 #      （2026-11-12 用户规则：缺席+站定=完成、缺席+寻路中=任务仍在），
 #      客栈不再传 per-task 参数 ----
 
@@ -775,32 +776,32 @@ def _patch_yinlv(monkeypatch, clicks, glows, window_hits,
     glows 为逐轮询的高亮钟下标（耗尽后恒无高亮）。sleep/轮询/防抖
     置零免真等待。"""
     bells = {icon: (100 + i, 200)
-             for i, icon in enumerate(kezhan.YINLV_BELLS)}
-    monkeypatch.setattr(kezhan, "YINLV_LOCATE_TIMEOUT", locate_timeout)
-    monkeypatch.setattr(kezhan, "YINLV_GLOW_POLL", 0.0)
-    monkeypatch.setattr(kezhan, "YINLV_GLOW_COOLDOWN", 0.0)
-    monkeypatch.setattr(kezhan.time, "sleep", lambda s: None)
-    monkeypatch.setattr(kezhan, "is_in_battle_frame", lambda bgr: False)
-    monkeypatch.setattr(kezhan, "_yinlv_locate_bells", lambda bgr: bells)
-    monkeypatch.setattr(kezhan, "human_click",
+             for i, icon in enumerate(yinlv.YINLV_BELLS)}
+    monkeypatch.setattr(yinlv, "YINLV_LOCATE_TIMEOUT", locate_timeout)
+    monkeypatch.setattr(yinlv, "YINLV_GLOW_POLL", 0.0)
+    monkeypatch.setattr(yinlv, "YINLV_GLOW_COOLDOWN", 0.0)
+    monkeypatch.setattr(yinlv.time, "sleep", lambda s: None)
+    monkeypatch.setattr(yinlv, "is_in_battle_frame", lambda bgr: False)
+    monkeypatch.setattr(yinlv, "_yinlv_locate_bells", lambda bgr: bells)
+    monkeypatch.setattr(yinlv, "human_click",
                         lambda win, x, y, **k: clicks.append((x, y)))
-    monkeypatch.setattr(kezhan, "log", lambda *a, **k: None)
+    monkeypatch.setattr(yinlv, "log", lambda *a, **k: None)
     state = {"checks": 0, "glow": list(glows)}
 
     def fake_glow(bgr, rois):
         return state["glow"].pop(0) if state["glow"] else None
 
-    monkeypatch.setattr(kezhan, "_yinlv_glow_index", fake_glow)
+    monkeypatch.setattr(yinlv, "_yinlv_glow_index", fake_glow)
 
     def fake_match(bgr, icon, threshold=0.8, region=None, fallback=True):
-        if icon == kezhan.YINLV_START_ICON:
+        if icon == yinlv.YINLV_START_ICON:
             return (668, 552)
         if icon == kezhan.YINLV_WINDOW_ICON:
             state["checks"] += 1
             return (677, 262) if state["checks"] <= window_hits else None
         return None
 
-    monkeypatch.setattr(kezhan.game_map, "match_frame_np", fake_match)
+    monkeypatch.setattr(yinlv.game_map, "match_frame_np", fake_match)
     return state
 
 
@@ -838,7 +839,7 @@ def test_play_yinlv_retry_when_locate_timeout(monkeypatch):
     _patch_yinlv(monkeypatch, clicks=clicks, glows=[],
                  window_hits=0, locate_timeout=0.0)
     status, info = kezhan._play_yinlv(_YinlvWin(), banner_pt=None)
-    assert status == kezhan.YINLV_RETRY
+    assert status == yinlv.YINLV_RETRY
     assert clicks == []
 
 
@@ -847,27 +848,27 @@ def test_yinlv_glow_index_picks_golden_bell():
     import cv2
     import numpy as np
     bells = {icon: (100 + i * 50, 150)
-             for i, icon in enumerate(kezhan.YINLV_BELLS)}
-    rois = kezhan._yinlv_bell_rois(bells)
+             for i, icon in enumerate(yinlv.YINLV_BELLS)}
+    rois = yinlv._yinlv_bell_rois(bells)
     hsv = np.zeros((300, 400, 3), np.uint8)
     cv2.circle(hsv, (250, 150), 30, (22, 200, 220), -1)  # 3 号钟金色光晕
-    assert kezhan._yinlv_glow_index(cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR),
+    assert yinlv._yinlv_glow_index(cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR),
                                     rois) == 3
     empty = cv2.cvtColor(np.zeros((300, 400, 3), np.uint8),
                          cv2.COLOR_HSV2BGR)
-    assert kezhan._yinlv_glow_index(empty, rois) is None
+    assert yinlv._yinlv_glow_index(empty, rois) is None
 
 
 def test_yinlv_window_band_from_banner_pt(monkeypatch):
     """检查条带按检测点+模板尺寸+余量推导；无检测点退回全帧常量。"""
     monkeypatch.setattr(kezhan.game_map, "template_size",
                         lambda icon: (302, 28))
-    assert kezhan._yinlv_window_band((677, 262)) == (
-        677 - 151 - kezhan.YINLV_BAND_MARGIN,
-        262 - 14 - kezhan.YINLV_BAND_MARGIN,
-        677 + 151 + kezhan.YINLV_BAND_MARGIN,
-        262 + 14 + kezhan.YINLV_BAND_MARGIN)
-    assert kezhan._yinlv_window_band(None) is kezhan.YINLV_WINDOW_REGION
+    assert yinlv._yinlv_window_band((677, 262)) == (
+        677 - 151 - yinlv.YINLV_BAND_MARGIN,
+        262 - 14 - yinlv.YINLV_BAND_MARGIN,
+        677 + 151 + yinlv.YINLV_BAND_MARGIN,
+        262 + 14 + yinlv.YINLV_BAND_MARGIN)
+    assert yinlv._yinlv_window_band(None) is kezhan.YINLV_WINDOW_REGION
 
 
 def _patch_extras_for_yinlv(monkeypatch, play_result, tracks):
@@ -912,54 +913,54 @@ def test_bug_button_pt_prefers_higher_score(monkeypatch):
     def fake_match(img, icons, region=None):
         seen["icons"] = tuple(icons)
         seen["region"] = region
-        return {kezhan.BUG_RESTART_ICON: (0.90, (680, 553)),
-                kezhan.BUG_START_ICON: (0.85, (681, 553))}
+        return {duchong.BUG_RESTART_ICON: (0.90, (680, 553)),
+                duchong.BUG_START_ICON: (0.85, (681, 553))}
 
     monkeypatch.setattr(kezhan.game_map, "best_match_multi_np", fake_match)
     assert kezhan._bug_button_pt(object()) == (680, 553)
-    assert seen["icons"] == (kezhan.BUG_RESTART_ICON, kezhan.BUG_START_ICON)
-    assert seen["region"] == kezhan.BUG_BUTTON_REGION
+    assert seen["icons"] == (duchong.BUG_RESTART_ICON, duchong.BUG_START_ICON)
+    assert seen["region"] == duchong.BUG_BUTTON_REGION
 
 
 def test_bug_button_pt_below_threshold_returns_none(monkeypatch):
     monkeypatch.setattr(
         kezhan.game_map, "best_match_multi_np",
         lambda img, icons, region=None: {
-            kezhan.BUG_RESTART_ICON: (0.60, (680, 553)),
-            kezhan.BUG_START_ICON: (0.55, (681, 553))})
+            duchong.BUG_RESTART_ICON: (0.60, (680, 553)),
+            duchong.BUG_START_ICON: (0.55, (681, 553))})
     assert kezhan._bug_button_pt(object()) is None
 
 
 def test_bug_candidates_diff_finds_moving_blob():
     import numpy as np
-    l, t, _, _ = kezhan.BUG_REGION
+    l, t, _, _ = duchong.BUG_REGION
     prev = np.zeros((831, 1378, 3), np.uint8)
     cur = prev.copy()
     cur[t + 100:t + 150, l + 200:l + 260] = 255
-    boxes = kezhan._bug_candidates(prev, cur)
+    boxes = duchong._bug_candidates(prev, cur)
     assert boxes == [(l + 200, t + 100, 60, 50)]
 
 
 def test_bug_candidates_ignores_static_scene():
     import numpy as np
     frame = np.zeros((831, 1378, 3), np.uint8)
-    assert kezhan._bug_candidates(frame, frame.copy()) == []
+    assert duchong._bug_candidates(frame, frame.copy()) == []
 
 
 def test_match_duchong_returns_best_with_full_frame_offset(monkeypatch):
     import numpy as np
 
     def fake_match(crop, icons):
-        assert tuple(icons) == kezhan.DUCHONG_ICONS
-        return {kezhan.DUCHONG_ICONS[0]: (0.66, (10, 12)),
-                kezhan.DUCHONG_ICONS[1]: (0.90, (30, 20))}
+        assert tuple(icons) == duchong.DUCHONG_ICONS
+        return {duchong.DUCHONG_ICONS[0]: (0.66, (10, 12)),
+                duchong.DUCHONG_ICONS[1]: (0.90, (30, 20))}
 
     monkeypatch.setattr(kezhan.game_map, "best_match_multi_np", fake_match)
-    l, t, _, _ = kezhan.BUG_REGION
-    score, pt, icon = kezhan._match_duchong(
+    l, t, _, _ = duchong.BUG_REGION
+    score, pt, icon = duchong._match_duchong(
         np.zeros((831, 1378, 3), np.uint8), [(l + 100, t + 100, 40, 40)])
     assert score == 0.90
-    assert icon == kezhan.DUCHONG_ICONS[1]
+    assert icon == duchong.DUCHONG_ICONS[1]
     # 候选框外扩 BUG_CANDIDATE_PAD 后的裁剪原点再叠加模板中心
     assert pt == (l + 70 + 30, t + 70 + 20)
 
@@ -983,13 +984,13 @@ def test_bug_task_state_capture_failure():
 def test_swat_round_clicks_once_and_reports_panel(monkeypatch):
     import numpy as np
     clicks = []
-    monkeypatch.setattr(kezhan, "human_click",
+    monkeypatch.setattr(duchong, "human_click",
                         lambda win, x, y, **k: clicks.append((x, y)))
-    monkeypatch.setattr(kezhan, "log", lambda *a, **k: None)
-    monkeypatch.setattr(kezhan.time, "sleep", lambda s: None)
-    monkeypatch.setattr(kezhan, "_bug_candidates",
+    monkeypatch.setattr(duchong, "log", lambda *a, **k: None)
+    monkeypatch.setattr(duchong.time, "sleep", lambda s: None)
+    monkeypatch.setattr(duchong, "_bug_candidates",
                         lambda prev, cur: [(400, 300, 40, 40)])
-    monkeypatch.setattr(kezhan, "_match_duchong",
+    monkeypatch.setattr(duchong, "_match_duchong",
                         lambda img, boxes: (0.9, (500, 400), "tpl"))
     state = {"n": -1}
 
@@ -997,9 +998,9 @@ def test_swat_round_clicks_once_and_reports_panel(monkeypatch):
         state["n"] += 1
         return np.zeros((10, 10, 3), np.uint8)
 
-    monkeypatch.setattr(kezhan, "_bug_capture", fake_capture)
+    monkeypatch.setattr(duchong, "_bug_capture", fake_capture)
     # 前 4 帧无面板（可拍虫），第 5/6 帧连续命中面板按钮
-    monkeypatch.setattr(kezhan, "_bug_button_pt",
+    monkeypatch.setattr(duchong, "_bug_button_pt",
                         lambda img: (680, 553) if state["n"] >= 4 else None)
     status, clicks_n = kezhan._swat_round(object(), time.time() + 2.0)
     assert status == "panel"
@@ -1009,12 +1010,12 @@ def test_swat_round_clicks_once_and_reports_panel(monkeypatch):
 
 def test_swat_round_idle_returns(monkeypatch):
     import numpy as np
-    monkeypatch.setattr(kezhan, "_bug_capture",
+    monkeypatch.setattr(duchong, "_bug_capture",
                         lambda win: np.zeros((10, 10, 3), np.uint8))
-    monkeypatch.setattr(kezhan, "_bug_button_pt", lambda img: None)
-    monkeypatch.setattr(kezhan, "_bug_candidates", lambda prev, cur: [])
-    monkeypatch.setattr(kezhan, "BUG_IDLE_END", 0.0)
-    monkeypatch.setattr(kezhan.time, "sleep", lambda s: None)
+    monkeypatch.setattr(duchong, "_bug_button_pt", lambda img: None)
+    monkeypatch.setattr(duchong, "_bug_candidates", lambda prev, cur: [])
+    monkeypatch.setattr(duchong, "BUG_IDLE_END", 0.0)
+    monkeypatch.setattr(duchong.time, "sleep", lambda s: None)
     status, clicks = kezhan._swat_round(object(), time.time() + 1.0)
     assert status == "idle" and clicks == 0
 
@@ -1032,16 +1033,16 @@ def test_swat_round_ignores_below_threshold_match(monkeypatch):
             return np.zeros((10, 10, 3), np.uint8)
 
     clicks = []
-    monkeypatch.setattr(kezhan, "human_click",
+    monkeypatch.setattr(duchong, "human_click",
                         lambda win, x, y, **k: clicks.append((x, y)))
-    monkeypatch.setattr(kezhan, "log", lambda *a, **k: None)
-    monkeypatch.setattr(kezhan.time, "sleep", lambda s: None)
-    monkeypatch.setattr(kezhan, "_bug_button_pt", lambda img: None)
-    monkeypatch.setattr(kezhan, "_bug_candidates",
+    monkeypatch.setattr(duchong, "log", lambda *a, **k: None)
+    monkeypatch.setattr(duchong.time, "sleep", lambda s: None)
+    monkeypatch.setattr(duchong, "_bug_button_pt", lambda img: None)
+    monkeypatch.setattr(duchong, "_bug_candidates",
                         lambda prev, cur: [(400, 300, 40, 40)])
-    monkeypatch.setattr(kezhan, "_match_duchong",
+    monkeypatch.setattr(duchong, "_match_duchong",
                         lambda img, boxes: (0.5, (500, 400), "tpl"))
-    monkeypatch.setattr(kezhan, "BUG_IDLE_END", 0.0)
+    monkeypatch.setattr(duchong, "BUG_IDLE_END", 0.0)
     status, clicks_n = kezhan._swat_round(W(), time.time() + 1.0)
     assert status == "idle" and clicks_n == 0
     assert clicks == []
@@ -1051,21 +1052,21 @@ def _patch_duchong_play(monkeypatch, states, swat_results, clicks,
                         button_pt=(680, 553)):
     """给 _play_duchong 装桩：固定面板按钮、可编排任务签名与单局结果。"""
     import numpy as np
-    monkeypatch.setattr(kezhan, "_duchong_finished", None)
-    monkeypatch.setattr(kezhan, "_duchong_next_try", 0.0)
-    monkeypatch.setattr(kezhan.time, "sleep", lambda s: None)
-    monkeypatch.setattr(kezhan, "log", lambda *a, **k: None)
-    monkeypatch.setattr(kezhan, "_bug_capture",
+    monkeypatch.setattr(duchong, "_duchong_finished", None)
+    monkeypatch.setattr(duchong, "_duchong_next_try", 0.0)
+    monkeypatch.setattr(duchong.time, "sleep", lambda s: None)
+    monkeypatch.setattr(duchong, "log", lambda *a, **k: None)
+    monkeypatch.setattr(duchong, "_bug_capture",
                         lambda win: np.zeros((10, 10, 3), np.uint8))
-    monkeypatch.setattr(kezhan, "_bug_button_pt", lambda img: button_pt)
+    monkeypatch.setattr(duchong, "_bug_button_pt", lambda img: button_pt)
     monkeypatch.setattr(
-        kezhan, "_swat_round",
+        duchong, "_swat_round",
         lambda win, deadline, ignore_panel_until=0.0: swat_results.pop(0))
-    monkeypatch.setattr(kezhan, "human_click",
+    monkeypatch.setattr(duchong, "human_click",
                         lambda win, x, y, **k: clicks.append((x, y)))
     state_iter = iter(states)
-    monkeypatch.setattr(kezhan, "_bug_task_state",
-                        lambda win: next(state_iter, states[-1]))
+    monkeypatch.setattr(duchong, "_bug_task_state",
+                        lambda win, task_title=None: next(state_iter, states[-1]))
 
 
 def test_play_duchong_stops_when_task_advanced(monkeypatch):
@@ -1098,17 +1099,34 @@ def test_play_duchong_quick_panel_guard(monkeypatch):
 def test_play_duchong_skips_when_already_finished(monkeypatch):
     clicks = []
     _patch_duchong_play(monkeypatch, ["sigA"], [], clicks)
-    monkeypatch.setattr(kezhan, "_duchong_finished",
+    monkeypatch.setattr(duchong, "_duchong_finished",
                         ("sigA", time.time()))
+    before = time.time()
     ok, info = kezhan._play_duchong(object())
     assert ok and "不再重进" in info
     assert clicks == []
+    # 退避必须写回 minigame 模块的共享状态（任务侧 can_enter 读同一份）
+    assert duchong._duchong_next_try >= \
+        before + duchong.DUCHONG_RETRY_GAP - 1.0
+
+
+def test_play_duchong_expired_finished_state_cleared(monkeypatch):
+    """完成态 TTL 过期后必须清空，不能长期驻留在模块全局。"""
+    clicks = []
+    _patch_duchong_play(monkeypatch, ["sigA"], [], clicks, button_pt=None)
+    monkeypatch.setattr(duchong, "BUG_FIRST_PANEL_WAIT", 0.0)
+    monkeypatch.setattr(
+        duchong, "_duchong_finished",
+        ("sigA", time.time() - duchong.DUCHONG_FINISHED_TTL - 1))
+    ok, info = kezhan._play_duchong(object())
+    assert ok is False and "未检测到开始按钮" in info
+    assert duchong._duchong_finished is None
 
 
 def test_play_duchong_without_panel_returns_false(monkeypatch):
     clicks = []
     _patch_duchong_play(monkeypatch, ["sigA"], [], clicks, button_pt=None)
-    monkeypatch.setattr(kezhan, "BUG_FIRST_PANEL_WAIT", 0.0)
+    monkeypatch.setattr(duchong, "BUG_FIRST_PANEL_WAIT", 0.0)
     ok, info = kezhan._play_duchong(object())
     assert ok is False and "未检测到开始按钮" in info
     assert clicks == []
@@ -1120,7 +1138,7 @@ def test_extras_enters_duchong_on_panel_button(monkeypatch):
                         lambda win, items: np.zeros((10, 10, 3), np.uint8))
     monkeypatch.setattr(kezhan, "is_in_battle_frame", lambda bgr: False)
     monkeypatch.setattr(kezhan, "_bug_button_pt", lambda bgr: (680, 553))
-    monkeypatch.setattr(kezhan, "_duchong_next_try", 0.0)
+    monkeypatch.setattr(duchong, "_duchong_next_try", 0.0)
     monkeypatch.setattr(kezhan, "log", lambda *a, **k: None)
     calls = []
     monkeypatch.setattr(kezhan, "_play_duchong",
@@ -1141,7 +1159,7 @@ def test_extras_duchong_failure_sets_retry_gap(monkeypatch):
                         lambda win, items: np.zeros((10, 10, 3), np.uint8))
     monkeypatch.setattr(kezhan, "is_in_battle_frame", lambda bgr: False)
     monkeypatch.setattr(kezhan, "_bug_button_pt", lambda bgr: (680, 553))
-    monkeypatch.setattr(kezhan, "_duchong_next_try", 0.0)
+    monkeypatch.setattr(duchong, "_duchong_next_try", 0.0)
     monkeypatch.setattr(kezhan, "log", lambda *a, **k: None)
     monkeypatch.setattr(kezhan, "_play_duchong", lambda win: (False, "fail"))
     monkeypatch.setattr(kezhan.task_tracker, "find_task",
@@ -1152,7 +1170,8 @@ def test_extras_duchong_failure_sets_retry_gap(monkeypatch):
                         lambda img: None)
     before = time.time()
     kezhan._handle_follow_extras(object(), [], None)
-    assert kezhan._duchong_next_try >= before + kezhan.DUCHONG_RETRY_GAP - 1.0
+    assert duchong._duchong_next_try >= \
+        before + duchong.DUCHONG_RETRY_GAP - 1.0
 
 
 def test_extras_duchong_skip_during_retry_gap(monkeypatch):
@@ -1161,7 +1180,7 @@ def test_extras_duchong_skip_during_retry_gap(monkeypatch):
                         lambda win, items: np.zeros((10, 10, 3), np.uint8))
     monkeypatch.setattr(kezhan, "is_in_battle_frame", lambda bgr: False)
     monkeypatch.setattr(kezhan, "_bug_button_pt", lambda bgr: (680, 553))
-    monkeypatch.setattr(kezhan, "_duchong_next_try", time.time() + 60)
+    monkeypatch.setattr(duchong, "_duchong_next_try", time.time() + 60)
     monkeypatch.setattr(kezhan, "log", lambda *a, **k: None)
     calls = []
     monkeypatch.setattr(kezhan, "_play_duchong",

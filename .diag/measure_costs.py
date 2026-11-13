@@ -7,8 +7,8 @@ sys.path.insert(0, r"C:\Users\Wang\Desktop\ascript\dhxy2")
 from ascript.windows.system import R as _R
 _R._BASE_DIR = Path(r"C:\Users\Wang\Desktop\ascript\dhxy2")
 from ascript.windows.window.Window import WindowCaptureFormat
-from src import game, map as game_map
-from src import battle, task_tracker
+from src.device import game, map as game_map
+from src.device import battle, task_tracker
 
 win = game.find_main_window()
 if win is None:
@@ -23,7 +23,7 @@ for fmt, label, n in ((None, "PIL(默认)", 5), (WindowCaptureFormat.OPENCV, "OP
     wall = (time.perf_counter() - t0) / n; cpu = (time.process_time() - c0) / n
     print(f"capture[{label}]: wall {wall*1000:.0f}ms  cpu {cpu*1000:.0f}ms  (n={n}, ok={img is not None})")
 
-# 2. 双区域 OCR（follow 轮询主成本）：区域与 xuanshu.FOLLOW_OCR_REGIONS 一致
+# 2. 双区域 OCR（follow 轮询主成本）：区域与 task_tracker.OCR_REGIONS 一致
 img_pil = win.capture(force_activate=False)
 t0 = time.perf_counter(); c0 = time.process_time()
 items, _ = game_map.ocr_regions(img_pil, task_tracker.OCR_REGIONS)

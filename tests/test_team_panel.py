@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from src import team
+from src.device import team
 
 REGIONS = team._member_regions((326, 305, 358, 450))
 EXPECTED_REGIONS = [

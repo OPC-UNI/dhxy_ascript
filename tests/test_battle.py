@@ -4,7 +4,7 @@ import numpy as np
 from PIL import Image
 from ascript.windows.system import R
 
-from src import battle
+from src.device import battle
 
 from .conftest import make_bgr_frame, paste_template
 
@@ -142,7 +142,7 @@ def test_find_wuyi_option():
     # 选项绿字块（x≥PANEL_MAX_X 的对话框区域）
     img_np[400:440, 500:800] = (0, 186, 0)
     items = [("全部医治和修复", [500, 400, 800, 440], 0.96)]
-    cx, cy = battle._find_wuyi_option(items, img_np)
+    cx, cy = battle.find_wuyi_option(items, img_np)
     assert 500 <= cx <= 800 and 400 <= cy <= 440
 
 
@@ -151,7 +151,7 @@ def test_find_wuyi_option_rejects_panel_side():
     img_np = np.zeros((831, 1378, 3), dtype=np.uint8)
     img_np[400:440, 10:300] = (0, 186, 0)
     items = [("全部医治和修复", [10, 400, 300, 440], 0.96)]
-    assert battle._find_wuyi_option(items, img_np) is None
+    assert battle.find_wuyi_option(items, img_np) is None
 
 
 # ---- 巫医检查节奏 ----
@@ -230,7 +230,7 @@ def test_wuyi_noise_streak_degrades_and_recovers(monkeypatch):
                         lambda img, regions: (ocr_n.__setitem__(0, ocr_n[0] + 1)
                                               or (list(items_slot[0]), None)))
     # 命中后选项定位与点击打桩：只验证降级恢复，不实际点击
-    monkeypatch.setattr(battle, "_find_wuyi_option", lambda items, img_np: None)
+    monkeypatch.setattr(battle, "find_wuyi_option", lambda items, img_np: None)
     seed = [0]
 
     def check():
@@ -283,7 +283,7 @@ def test_wuyi_click_degrades_immediately(monkeypatch):
                             [("我是超级巫医，可以帮你医治召唤兽",
                               [500, 300, 900, 340], 0.96)], None))
     # 选项定位打桩（真实定位另有 test_find_wuyi_option 覆盖）
-    monkeypatch.setattr(battle, "_find_wuyi_option",
+    monkeypatch.setattr(battle, "find_wuyi_option",
                         lambda items, img_np: (650, 420))
     assert battle._handle_wuyi_dialog(object(), img=_make_noisy_pil(1)) is True
     assert clicks == [(650, 420)]           # 选项中心被点击
@@ -324,7 +324,7 @@ def test_wuyi_click_uses_cached_position(monkeypatch):
     def _boom(*a, **k):
         raise AssertionError("有缓存不应再识别选项")
 
-    monkeypatch.setattr(battle, "_find_wuyi_option", _boom)
+    monkeypatch.setattr(battle, "find_wuyi_option", _boom)
     assert battle._handle_wuyi_dialog(object(), img=_make_noisy_pil(1)) is True
     assert clicks == [(534, 408)]
 
@@ -347,7 +347,7 @@ def test_wuyi_click_cross_dialog_cache_not_reused(monkeypatch):
                         lambda img, regions: (
                             [(WUYI_TEXT_WUBEI, [500, 300, 900, 340], 0.96)],
                             img_np))
-    monkeypatch.setattr(battle, "_find_wuyi_option",
+    monkeypatch.setattr(battle, "find_wuyi_option",
                         lambda items, np_img: (650, 420))
     assert battle._handle_wuyi_dialog(object(), img=_make_noisy_pil(1)) is True
     assert clicks == [(650, 420)]               # 走识别流程，未复用修罗坐标
@@ -403,7 +403,7 @@ def test_wuyi_click_cache_green_check_still_guards(monkeypatch):
                         lambda img, regions: (
                             [(WUYI_TEXT_XIULUO, [500, 300, 900, 340], 0.96)],
                             img_np))
-    monkeypatch.setattr(battle, "_find_wuyi_option",
+    monkeypatch.setattr(battle, "find_wuyi_option",
                         lambda items, np_img: (650, 420))
     assert battle._handle_wuyi_dialog(object(), img=_make_noisy_pil(1)) is True
     assert clicks == [(650, 420)]  # 绿字校验拦截缓存直点，识别结果被点击

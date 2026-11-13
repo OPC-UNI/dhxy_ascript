@@ -156,12 +156,13 @@ data/
 
 | 模块 | 职责 |
 |------|------|
-| `src/user_data.py` | 角色解析、data 路径、state/settings 读写、高性能缓存、迁移、旧 config 字段清理、旧版文件归档 |
-| `src/role_settings.py` | 当前角色生效设置（settings.json）的进程内缓存与读写 |
-| `src/app_utils.py` | 角色状态/任务进度/摄妖香/清屏/高性能缓存的读写封装；`kv_remove_many_merged` |
-| `src/debug_overlay.py` | 成就文件路径 `data/<角色>/task_stats.json` |
-| `src/schemes.py` | 按角色方案文件、方案切换写 settings.json、迁移后 bootstrap |
-| `src/control_window.py` | 角色设置 load/save 走 role_settings；进度/组号状态读当前角色；成就页返回 role 信息 |
+| `src/core/user_data.py` | 角色解析、data 路径、state/settings 读写、高性能缓存、迁移、旧 config 字段清理、旧版文件归档 |
+| `src/core/role_settings.py` | 当前角色生效设置（settings.json）的进程内缓存与读写 |
+| `src/core/app_utils.py` | 角色状态/任务进度/摄妖香/清屏/高性能缓存的读写封装；`kv_remove_many_merged` |
+| `src/core/debug_overlay.py` | 成就文件路径 `data/<角色>/task_stats.json` |
+| `src/core/schemes.py` | 按角色方案文件、方案切换写 settings.json、迁移后 bootstrap |
+| `src/core/settings.py` | 角色设置 load/save（从 control_window 抽出）；进度/组号状态读当前角色 |
+| `src/app/control_window.py` | 设置项 UI 接线与 re-export；成就页返回 role 信息 |
 | `main.py` | 绑定后执行迁移 + 角色设置建立 + 两次启动后的旧 config 字段清理 |
 
 ## 7. 测试

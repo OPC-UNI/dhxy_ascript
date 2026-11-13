@@ -9,7 +9,7 @@
 import pytest
 from pydirectinput import FailSafeException
 
-from src import app_utils
+from src.core import app_utils
 
 
 class _FakeMouse:
@@ -114,7 +114,7 @@ def test_silent_clicks_context_restores_flag():
 def test_human_click_silent_mode_delegates(monkeypatch):
     monkeypatch.setattr(app_utils, "_SILENT_CLICK", True)
     calls = []
-    monkeypatch.setattr("src.silent_click.send_silent_click",
+    monkeypatch.setattr("src.device.silent_click.send_silent_click",
                         lambda w, x=None, y=None, button="primary":
                         calls.append((w, x, y, button)))
     fake_mouse = _FakeMouse()
@@ -129,7 +129,7 @@ def test_human_click_silent_mode_delegates(monkeypatch):
 def test_precise_click_silent_mode_repeats(monkeypatch):
     monkeypatch.setattr(app_utils, "_SILENT_CLICK", True)
     calls = []
-    monkeypatch.setattr("src.silent_click.send_silent_click",
+    monkeypatch.setattr("src.device.silent_click.send_silent_click",
                         lambda w, x=None, y=None, button="primary": calls.append((x, y)))
     monkeypatch.setattr(app_utils, "Mouse", _FakeMouse())
     app_utils.precise_click(_FakeWin(), 10, 20, times=2, interval=0)
@@ -154,10 +154,10 @@ def test_rapid_click_burst_silent_delegates(monkeypatch):
     monkeypatch.setattr(app_utils, "_SILENT_CLICK", True)
     calls = []
     monkeypatch.setattr(
-        "src.silent_click.send_silent_click_burst",
+        "src.device.silent_click.send_silent_click_burst",
         lambda w, x=None, y=None, times=1, press=0.02, interval=0.0:
             calls.append((x, y, times, press)))
-    monkeypatch.setattr("src.silent_click.send_silent_click",
+    monkeypatch.setattr("src.device.silent_click.send_silent_click",
                         lambda *a, **k: (_ for _ in ()).throw(
                             AssertionError("不应逐击投递")))
     app_utils.rapid_click_burst(_FakeWin(), 10, 20, times=5, press=0.03)
@@ -193,11 +193,11 @@ def test_mouse_hold_physical_press_release(monkeypatch, fake_mouse):
 def test_mouse_hold_silent_channel(monkeypatch):
     monkeypatch.setattr(app_utils, "_SILENT_CLICK", True)
     calls = []
-    monkeypatch.setattr("src.silent_click.begin_silent_hold",
+    monkeypatch.setattr("src.device.silent_click.begin_silent_hold",
                         lambda w, x=None, y=None, button="primary":
                         calls.append(("begin", x, y, button))
                         or {"button": button})
-    monkeypatch.setattr("src.silent_click.end_silent_hold",
+    monkeypatch.setattr("src.device.silent_click.end_silent_hold",
                         lambda info: calls.append(("end", info["button"])))
     hold = app_utils.MouseHold(_FakeWin(), 10, 20)
     assert hold.start() is True
@@ -212,7 +212,7 @@ def test_mouse_hold_silent_channel(monkeypatch):
 def test_mouse_hold_start_failure_releases_lock(monkeypatch):
     """静默长按按下失败（窗口坐标不可用）：不保持状态且不泄漏输入锁。"""
     monkeypatch.setattr(app_utils, "_SILENT_CLICK", True)
-    monkeypatch.setattr("src.silent_click.begin_silent_hold",
+    monkeypatch.setattr("src.device.silent_click.begin_silent_hold",
                         lambda *a, **k: None)
     hold = app_utils.MouseHold(_FakeWin(), 10, 20)
     assert hold.start() is False
@@ -223,13 +223,13 @@ def test_mouse_hold_start_failure_releases_lock(monkeypatch):
 def test_mouse_hold_stop_error_still_releases_lock(monkeypatch):
     """抬起投递异常：finally 仍释放输入锁（防后续点击全部饿死）。"""
     monkeypatch.setattr(app_utils, "_SILENT_CLICK", True)
-    monkeypatch.setattr("src.silent_click.begin_silent_hold",
+    monkeypatch.setattr("src.device.silent_click.begin_silent_hold",
                         lambda *a, **k: {"button": "primary"})
 
     def _boom(info):
         raise RuntimeError("抬起投递失败")
 
-    monkeypatch.setattr("src.silent_click.end_silent_hold", _boom)
+    monkeypatch.setattr("src.device.silent_click.end_silent_hold", _boom)
     hold = app_utils.MouseHold(_FakeWin(), 10, 20)
     assert hold.start() is True
     with pytest.raises(RuntimeError):
@@ -347,7 +347,7 @@ class _RoleWin:
 
 def _patch_role_data(monkeypatch, tmp_path):
     from ascript.windows.system.key_value import KeyValue
-    from src import user_data
+    from src.core import user_data
     monkeypatch.setattr(user_data, "config_dir", lambda: tmp_path)
     monkeypatch.setattr(user_data, "_probe_role_id", lambda: "1001")
     monkeypatch.setattr(user_data, "_ROLE_CACHE", {"id": None, "ts": 0.0})
@@ -406,7 +406,7 @@ class _HwndWin:
 def test_char_key_prefers_bound_window_over_live_title(monkeypatch):
     """窗口标题短暂变成队员账号（组号 pass）时，绑定窗口的角色键仍取
     绑定记录；非绑定窗口/无句柄假窗口按标题解析。"""
-    from src import game
+    from src.device import game
     monkeypatch.setattr(
         game, "bound_window_id",
         lambda: {"id": "（ID：286958560）", "hwnd": 100,

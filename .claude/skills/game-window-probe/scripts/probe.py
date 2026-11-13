@@ -35,11 +35,11 @@ except Exception:
 
 
 def _find_repo_root() -> Path:
-    """从脚本位置向上找仓库根（含 src/map.py 的目录）。"""
+    """从脚本位置向上找仓库根（含 src/device/map.py 的目录）。"""
     for p in Path(__file__).resolve().parents:
-        if (p / "src" / "map.py").exists():
+        if (p / "src" / "device" / "map.py").exists():
             return p
-    raise SystemExit("未找到仓库根（向上找不到 src/map.py）")
+    raise SystemExit("未找到仓库根（向上找不到 src/device/map.py）")
 
 
 REPO = _find_repo_root()
@@ -51,9 +51,9 @@ from ascript.windows.system import R  # noqa: E402
 # 否则 res/img 模板与 res/models OCR 模型全部找不到
 R._BASE_DIR = REPO
 
-from src import game  # noqa: E402
-from src import app_utils  # noqa: E402
-from src import silent_click  # noqa: E402
+from src.device import game  # noqa: E402
+from src.core import app_utils  # noqa: E402
+from src.device import silent_click  # noqa: E402
 
 app_utils.set_silent_mode(True)  # 静默通道：不动鼠标、不抢前台
 
@@ -106,7 +106,7 @@ def main(argv):
         print(f"saved {out} size={img.size}")
         return 0
     if cmd == "ocr":
-        from src import map as game_map
+        from src.device import map as game_map
         img = win.capture(force_activate=False)
         if img is None:
             print("CAPTURE_FAIL")
@@ -121,7 +121,7 @@ def main(argv):
                   f"({(r[0] + r[2]) // 2},{(r[1] + r[3]) // 2})\t{t}")
         return 0
     if cmd == "match":
-        from src import map as game_map
+        from src.device import map as game_map
         icon = argv[2]
         region = tuple(int(v) for v in argv[3:7]) if len(argv) >= 7 else None
         img = win.capture(force_activate=False)

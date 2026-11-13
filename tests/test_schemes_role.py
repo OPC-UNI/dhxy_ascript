@@ -10,7 +10,7 @@ import json
 
 import pytest
 
-from src import schemes, user_data
+from src.core import schemes, user_data
 
 
 @pytest.fixture
@@ -71,7 +71,7 @@ def test_activate_role_new_role_gets_defaults(scheme_env):
 
 def test_apply_writes_role_settings(scheme_env):
     """方案应用写当前角色 settings.json（不再写 config.json）。"""
-    from src import role_settings
+    from src.core import role_settings
     schemes._apply({"task_modes": ["修罗"], "use_sheyaoxiang": False})
     assert role_settings.get("task_modes") == ["修罗"]
     assert role_settings.get("use_sheyaoxiang") is False

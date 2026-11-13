@@ -1,4 +1,4 @@
-"""pochufengyin.py：破除封印（点击）/钓鱼·开采石头（长按）共用闭环控制。
+"""minigames/pochufengyin.py：破除封印（点击）/钓鱼·开采石头（长按）共用闭环控制。
 
 覆盖各推进方式的控制语义：
 - 纯长按（锁定持握）：按住后进入目标区间也继续按住（假定游戏锁定
@@ -11,7 +11,7 @@
 """
 import numpy as np
 
-from src import pochufengyin
+from src.minigames import pochufengyin
 
 
 class _Hold:

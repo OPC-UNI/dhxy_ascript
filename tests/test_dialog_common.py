@@ -1,6 +1,6 @@
 """dialog_common.py 与 app_utils.norm_text：对话文案匹配（原文不"纠正"）。"""
-from src import dialog_common
-from src.app_utils import norm_text
+from src.device import dialog_common
+from src.core.app_utils import norm_text
 
 
 def _item(txt, x=500, y=400, score=0.95):
@@ -261,7 +261,8 @@ def test_position_stillness_reset_and_no_frame():
 def test_dialog_ocr_skip_off_leader_skips(monkeypatch):
     """当前画面不是队长 Tab（pass 进行中/用户手动切走）时按无对话框
     跳过：队员屏的对话框不是本任务的，门控放行会让队长侧 OCR/点击。"""
-    from src import app_utils, tab_group
+    from src.core import app_utils
+    from src.device import tab_group
     monkeypatch.setattr(app_utils, "high_perf_on", lambda: True)
     monkeypatch.setattr(dialog_common, "dialog_frame_score",
                         lambda frame: 0.99)  # 模板命中也不放行

@@ -13,7 +13,7 @@ import json
 
 import pytest
 
-from src import user_data
+from src.core import user_data
 
 # conftest 的 autouse fixture 会把 _probe_role_id 换成固定值；模块导入时
 # 先捕获原函数（角色解析顺序测试需要）。
@@ -177,7 +177,7 @@ def test_default_adopted_by_first_real_role(role_env, monkeypatch):
 
 def test_prune_legacy_config_backs_up_and_removes(role_env, monkeypatch):
     """两阶段清理：迁移后 config 旧键备份到 data/_legacy_config.json 再删除。"""
-    from src import app_utils
+    from src.core import app_utils
     _legacy(role_env)
     user_data.migrate_if_needed()
     cfg = json.loads((role_env / "config.json").read_text(encoding="utf-8"))
@@ -254,7 +254,7 @@ def test_stats_import_not_repeated_after_clear(role_env):
 
 
 def _patch_remove(monkeypatch, root):
-    from src import app_utils
+    from src.core import app_utils
 
     def fake(keys):
         data = json.loads((root / "config.json").read_text(encoding="utf-8"))
@@ -364,7 +364,7 @@ class _TitleWin:
 def test_probe_role_prefers_binding_over_live_title(monkeypatch):
     """组号 pass 切到队员 Tab 时窗口标题短暂变成队员账号：绑定窗口仍在，
     角色仍取绑定记录（队长），不随标题漂移；未绑定才退回实时标题。"""
-    from src import game
+    from src.device import game
     monkeypatch.setattr(
         game, "bound_window_id",
         lambda: {"id": "（ID：286958560）", "hwnd": 1,
@@ -386,7 +386,7 @@ def test_probe_role_prefers_binding_over_live_title(monkeypatch):
 def test_probe_role_follows_live_window_when_bound_window_closed(monkeypatch):
     """绑定窗口已关闭（A 退出、打开 B）：绑定记录不再代表实际操作角色，
     跟随实时窗口标题解析（2026-11-13 面板方案/设置停在旧角色修复）。"""
-    from src import game
+    from src.device import game
     monkeypatch.setattr(
         game, "bound_window_id",
         lambda: {"id": "（ID：111）", "hwnd": 1,
@@ -400,7 +400,7 @@ def test_probe_role_follows_live_window_when_bound_window_closed(monkeypatch):
 
 def test_probe_role_keeps_binding_without_any_game_window(monkeypatch):
     """游戏窗口全部关闭（重启客户端间隙）：沿用绑定记录，不落到 _default。"""
-    from src import game
+    from src.device import game
     monkeypatch.setattr(
         game, "bound_window_id",
         lambda: {"id": "（ID：111）", "hwnd": 1,
@@ -411,7 +411,7 @@ def test_probe_role_keeps_binding_without_any_game_window(monkeypatch):
 
 
 def test_probe_role_falls_back_to_default_without_binding_and_title(monkeypatch):
-    from src import game
+    from src.device import game
     monkeypatch.setattr(game, "bound_window_id", lambda: None)
     monkeypatch.setattr(game, "find_bound_window", lambda: None)
     monkeypatch.setattr(game, "find_main_window", lambda: _TitleWin("大话西游2经典版"))

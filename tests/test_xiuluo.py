@@ -10,7 +10,7 @@
 import pytest
 from PIL import Image
 
-from src import xiuluo
+from src.tasks import xiuluo
 
 CENTER = xiuluo.SCREEN_CENTER_POS  # (689, 415)
 
@@ -195,7 +195,7 @@ def wuyi_chain(monkeypatch):
                         lambda img, regions: (list(DIALOG_ITEMS), None))
     monkeypatch.setattr(xiuluo, "_find_wuyi_npc",
                         lambda win: (NPC_PT, ""))
-    monkeypatch.setattr(xiuluo, "_find_wuyi_option",
+    monkeypatch.setattr(xiuluo, "find_wuyi_option",
                         lambda items, img_np: OPTION_PT)
     monkeypatch.setattr(xiuluo, "WUYI_HANDLE_TIMEOUT", 1.0)  # 单轮即超时
     monkeypatch.setattr(xiuluo.battle, "last_wuyi_option_at", 0)
@@ -240,7 +240,7 @@ def test_wuyi_chain_timeout_self_click_uses_cached_pos(wuyi_chain, monkeypatch):
     def _boom(*a, **k):
         raise AssertionError("有缓存不应再识别")
 
-    monkeypatch.setattr(xiuluo, "_find_wuyi_option", _boom)
+    monkeypatch.setattr(xiuluo, "find_wuyi_option", _boom)
     ok, info = xiuluo._run_wuyi_chain(_FakeWin())
     assert ok is True
     assert "已自行点击选项" in info

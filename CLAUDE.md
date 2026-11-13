@@ -85,6 +85,7 @@ Auxiliary waits, swipes, and helper functions do not need heavyweight preconditi
 - 任务模块 `xiuluo.py` / `wubei.py` / `mingwang.py` / `kezhan.py`（以及以后新增的任何任务模块）之间**禁止相互 import 或调用**；一个任务的实现不得作为另一个任务的依赖。
 - 通用能力下沉到工具模块并在那里扩展：背包/任务储物格 → `bag.py`；地图/坐标 → `map.py`；任务追踪面板 → `task_tracker.py`；对话框/绿字选项 → `dialog_common.py`；输入/全局锁 → `app_utils.py`。
 - 本规则作用于本次及以后新增逻辑（既有 `xuanshu.follow_task` 跨任务共享跟踪引擎的调用保持现状，不视为任务间引用；新增共享能力一律进工具模块，不得再复制到任务模块间互引）。
+- 目录归属、分层依赖方向、新代码落位与重构纪律见 `docs/conventions.md`；该规范由 `tests/test_import_rules.py` 强制执行，白名单只减不增。
 
 ## Selector Rules
 
@@ -120,7 +121,7 @@ Do not write `FindImages.find("some/path.png")` for a template that does not exi
 
 ## Anti-Patterns
 
-- **Using `windows-mcp` in this project — strictly forbidden** (user rule 2026-11-13): no desktop-level screenshots, mouse, or keyboard input; they interfere with the running game and the automation. Operate the game window through the project's own handle channel instead — see the `game-window-probe` skill (`src.game.find_main_window` + `win.capture(force_activate=False)` + silent click).
+- **Using `windows-mcp` in this project — strictly forbidden** (user rule 2026-11-13): no desktop-level screenshots, mouse, or keyboard input; they interfere with the running game and the automation. Operate the game window through the project's own handle channel instead — see the `game-window-probe` skill (`src.device.game.find_main_window` + `win.capture(force_activate=False)` + silent click).
 - Guessing AScript APIs from memory instead of calling `search_api`.
 - Guessing text, id, desc, or class names from a screenshot.
 - Clicking coordinates when selectors are available.

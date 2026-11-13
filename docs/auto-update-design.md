@@ -51,7 +51,7 @@
 - **程序目录 = exe 目录**：`main.py` 用 `os.path.dirname(sys.executable)` 定位
   `pylibs/`；`res/` 由 AScript `R` 的冻结分支按 exe 目录解析。
 - **子进程同样锁定 exe**：任务子进程通过 multiprocessing spawn 启动；调试悬浮层
-  绘制进程用 `sys.executable --overlay-helper` 启动（`src/debug_overlay.py`）。
+  绘制进程用 `sys.executable --overlay-helper` 启动（`src/core/debug_overlay.py`）。
   升级前这些进程必须全部退出，否则 exe / pylibs DLL 被占用无法替换。
 - **没有单实例限制**：当前允许多开；升级时必须检测并拒绝「还有其它实例在跑」，
   否则覆盖到一半会失败或让其它实例崩溃。
@@ -97,9 +97,9 @@
 
 | 模块 | 职责 |
 | --- | --- |
-| `src/update_config.py` | 编译期常量：清单地址、渠道、超时、包名 |
-| `src/updater.py` | 版本比较、清单拉取/校验、下载、解压、应用更新、helper 入口、回滚 |
-| `src/control_window.py` | 暴露 `check_update` / `start_update` / `skip_update` 等桥接方法 |
+| `src/app/update_config.py` | 编译期常量：清单地址、渠道、超时、包名 |
+| `src/app/updater.py` | 版本比较、清单拉取/校验、下载、解压、应用更新、helper 入口、回滚 |
+| `src/app/control_window.py` | 暴露 `check_update` / `start_update` / `skip_update` 等桥接方法 |
 | `res/ui/control_window.html` | 系统页「关于」内嵌更新区、进度与结果回调 |
 | `scripts/make_update_manifest.py` | CI/本地生成并校验 `update.json` |
 | `.github/workflows/build-exe.yml` | 拆包、算哈希、生成清单、上传 OSS/COS、保留内部 Release |
@@ -142,14 +142,14 @@ Release 归档（workflow 附产物）。
 不会请求历史版本；上一版留作兜底——客户端可能已拉到旧清单、下载尚未完成，
 此时旧 zip 仍需可下载。清理失败不影响发布，历史版本以 GitHub Release 归档为准。
 
-当前客户端清单地址（编译期常量 `src/update_config.py`）：
+当前客户端清单地址（编译期常量 `src/app/update_config.py`）：
 
 ```
 https://dhxy-ascript-new.oss-cn-beijing.aliyuncs.com/zhuomuniao/stable/update.json
 ```
 
 后续若绑定稳定域名（如 `update.example.com`），改 DNS/回源并把仓库 Variable
-`UPDATE_BASE_URL` 与 `src/update_config.py` 同步即可；客户端不依赖 bucket 内部布局。
+`UPDATE_BASE_URL` 与 `src/app/update_config.py` 同步即可；客户端不依赖 bucket 内部布局。
 
 **bucket 公共读策略（示例）**：bucket 保持私有，仅对更新前缀开放匿名 GetObject：
 
@@ -457,8 +457,8 @@ available → downloading → ready → applying → restarting
    让托盘、webview、热键线程干净结束。
 
 `main.py` 必须在**导入 ascript / webview / uiautomation 等重依赖之前**识别
-`--apply-update`，直接进入 `src.updater.apply_update_entry()`，不创建任何 GUI、
-不走授权门。`src/updater.py` 本身只依赖标准库。
+`--apply-update`，直接进入 `src.app.updater.apply_update_entry()`，不创建任何 GUI、
+不走授权门。`src/app/updater.py` 本身只依赖标准库。
 
 ### 8.5 helper 执行步骤
 
@@ -581,7 +581,7 @@ available → downloading → preparing（解压）→ stopping → applying →
 
 ### 9.3 桥接方法（已实现）
 
-`src/control_window.py`：
+`src/app/control_window.py`：
 
 | 方法 | 作用 |
 | --- | --- |
@@ -692,20 +692,20 @@ available → downloading → preparing（解压）→ stopping → applying →
 | --- | --- | --- |
 | Phase 0 | 开通 OSS/COS bucket、RAM 子账号、Secrets、稳定域名（可选） | CI 能上传测试对象 |
 | Phase 1 | 拆包 + `make_update_manifest.py` + CI 生成/上传 `update.json` | 手工能通过 URL 下载清单与两个 zip，哈希一致 |
-| Phase 2 | `src/updater.py` 检查逻辑 + 系统页 UI + 配置项 | 面板能检查、显示更新日志、跳过版本 |
+| Phase 2 | `src/app/updater.py` 检查逻辑 + 系统页 UI + 配置项 | 面板能检查、显示更新日志、跳过版本 |
 | Phase 3 | 下载/解压/停任务/helper/备份/覆盖/重启/回滚 | 真机完成 13.3 全流程 |
 | Phase 4 | 可选：Ed25519 签名、`pylibs` 内容寻址优化、镜像、断点续传 | 按需 |
 
 预计新增/修改文件：
 
 ```
-新增  src/updater.py
-新增  src/update_config.py
+新增  src/app/updater.py
+新增  src/app/update_config.py
 新增  scripts/make_update_manifest.py
 新增  tests/test_updater.py
 新增  docs/auto-update-design.md（本文）
 修改  main.py                       # --apply-update 早期分支 + 启动检查 + 结果回显
-修改  src/control_window.py         # 桥接方法 + 初始化状态
+修改  src/app/control_window.py         # 桥接方法 + 初始化状态
 修改  res/ui/control_window.html    # 关于区内嵌更新区 + 进度
 修改  .github/workflows/build-exe.yml
 修改  .gitignore                    # update/
@@ -729,10 +729,10 @@ available → downloading → preparing（解压）→ stopping → applying →
 
 ## 16. 实现状态
 
-- ✅ `src/updater.py`：版本比较、清单校验、分片下载/sha256、安全解压、
+- ✅ `src/app/updater.py`：版本比较、清单校验、分片下载/sha256、安全解压、
   helper 覆盖/备份/回滚、journal 启动恢复。
-- ✅ `src/update_config.py`：OSS 地址、渠道、超时、节流参数。
-- ✅ `src/control_window.py` + `res/ui/control_window.html`：关于区检查/进度/
+- ✅ `src/app/update_config.py`：OSS 地址、渠道、超时、节流参数。
+- ✅ `src/app/control_window.py` + `res/ui/control_window.html`：关于区检查/进度/
   跳过/自动检查开关、状态回调、升级结果展示。
 - ✅ `main.py`：`--apply-update` 早期分支、启动恢复、自动检查调度。
 - ✅ `scripts/make_update_manifest.py`：清单生成/校验。

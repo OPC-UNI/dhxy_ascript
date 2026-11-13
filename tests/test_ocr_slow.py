@@ -7,7 +7,7 @@
 import numpy as np
 import pytest
 
-from src import map as game_map
+from src.device import map as game_map
 
 
 @pytest.mark.slow

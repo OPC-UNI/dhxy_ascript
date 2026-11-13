@@ -9,8 +9,8 @@
 import inspect
 import re
 
-from src import control_window
-from src.control_window import (BATTLE_ONLY_MODE, TASK_MODES, _sanitize_modes,
+from src.app import control_window
+from src.app.control_window import (BATTLE_ONLY_MODE, TASK_MODES, _sanitize_modes,
                                 _COUNT_KEYS, TASK_COUNT_DEFAULTS)
 
 
@@ -63,12 +63,22 @@ def test_sanitize_single_mode_each_valid():
 def test_settings_spec_covers_all_task_modes():
     """方案快照按 _COUNT_KEYS 展开时不得缺键——「仅战斗」加入
     TASK_MODES 后 TASK_COUNT_DEFAULTS 漏键导致切换方案 KeyError
-    （2026-11-04 面板报错）的回归测试。"""
-    from src import schemes
+    （2026-11-04 面板报错）的回归测试。
+
+    默认次数用独立字面量锁定：若直接与实现同源的 TASK_COUNT_DEFAULTS
+    比较，测试恒真，抓不到表漏键/串键。
+    """
+    from src.core import schemes
+    expected = {
+        "五环": 2, "客栈": 20, "修罗": 90, "五倍": 100,
+        "种族比武": 10, "玄枢轶闻": 5, "名望": 5, "仅战斗": 0,
+    }
+    assert set(TASK_COUNT_DEFAULTS) == set(TASK_MODES)
     spec = schemes._settings_spec()
-    for mode, key in _COUNT_KEYS.items():
+    for mode in TASK_MODES:
+        key = _COUNT_KEYS[mode]
         assert key in spec
-        assert spec[key] == TASK_COUNT_DEFAULTS[mode]
+        assert spec[key] == expected[mode]
 
 
 def _patch_kv_empty(monkeypatch):
@@ -82,8 +92,8 @@ def test_settings_spec_rejoin_and_check_team_defaults(monkeypatch):
     """自动归队与检查队伍键在方案快照默认值表中存在且默认开启
     （load_* 首次默认与 _settings_spec 必须一致，否则方案对比/
     导入导出把默认值判成脏值）。"""
-    from src import schemes
-    from src.control_window import (_WUBEI_AUTO_REJOIN_KEY, _XIULUO_AUTO_REJOIN_KEY,
+    from src.core import schemes
+    from src.app.control_window import (_WUBEI_AUTO_REJOIN_KEY, _XIULUO_AUTO_REJOIN_KEY,
                                     _BATTLE_ONLY_AUTO_REJOIN_KEY,
                                     _WUBEI_CHECK_TEAM_KEY, _XIULUO_CHECK_TEAM_KEY,
                                     load_wubei_auto_rejoin, load_xiuluo_auto_rejoin,
@@ -107,8 +117,8 @@ def test_settings_spec_auto_create_team_defaults(monkeypatch):
     """自动创建队伍键在方案快照默认值表中存在且默认开启（修罗/五倍
     各一开关；load_* 首次默认与 _settings_spec 必须一致，2026-11-12
     用户改为默认开）。"""
-    from src import schemes
-    from src.control_window import (_WUBEI_AUTO_CREATE_TEAM_KEY,
+    from src.core import schemes
+    from src.app.control_window import (_WUBEI_AUTO_CREATE_TEAM_KEY,
                                     _XIULUO_AUTO_CREATE_TEAM_KEY,
                                     load_wubei_auto_create_team,
                                     load_xiuluo_auto_create_team)
@@ -128,8 +138,8 @@ def test_settings_spec_shout_and_tab_group_defaults(monkeypatch):
     关、老角色缺键实际开），本次统一为开；种族比武喊话同日加入；
     组号专用默认开（已登录 Tab <2 的单号不激活，行为与关闭一致）。
     """
-    from src import schemes
-    from src.control_window import (
+    from src.core import schemes
+    from src.app.control_window import (
         _XIULUO_SHOUT_SWITCH_KEY, _WUBEI_SHOUT_SWITCH_KEY,
         _ZHONGZU_SHOUT_SWITCH_KEY,
         _XIULUO_TAB_GROUP_KEY, _WUBEI_TAB_GROUP_KEY,
@@ -153,8 +163,8 @@ def test_settings_spec_shout_and_tab_group_defaults(monkeypatch):
 def test_shout_text_settings_defaults_and_save():
     """喊话内容设置（2026-11-12 用户要求可修改保存）：三任务默认内容与
     方案快照一致；保存去首尾空白、空内容恢复默认、超长截断。"""
-    from src import schemes
-    from src.control_window import (
+    from src.core import schemes
+    from src.app.control_window import (
         _XIULUO_SHOUT_TEXT_KEY, _WUBEI_SHOUT_TEXT_KEY, _ZHONGZU_SHOUT_TEXT_KEY,
         XIULUO_SHOUT_TEXT_DEFAULT, WUBEI_SHOUT_TEXT_DEFAULT,
         ZHONGZU_SHOUT_TEXT_DEFAULT, SHOUT_TEXT_MAX_LEN,
@@ -192,7 +202,7 @@ def _patch_kv_store(monkeypatch, data=None):
     """KeyValue 内存存储打桩：get 读 store、kv_save_merged 写 store
     （save_group_actions 的合并写路径）。"""
     from ascript.windows.system.key_value import KeyValue
-    from src import control_window
+    from src.app import control_window
     store = dict(data or {})
     monkeypatch.setattr(KeyValue, "get",
                         lambda key, default=None: store.get(key, default))
@@ -203,8 +213,8 @@ def _patch_kv_store(monkeypatch, data=None):
 
 def _patch_role_store(monkeypatch, data=None):
     """角色 state.json 存储打桩：组号动作/快照按角色隔离（2026-11-11）。"""
-    from src import control_window
-    from src import user_data
+    from src.app import control_window
+    from src.core import user_data
     store = dict(data or {})
     monkeypatch.setattr(control_window.app_utils, "role_state_get",
                         lambda key, default=None: store.get(key, default))
@@ -217,7 +227,7 @@ def _patch_role_store(monkeypatch, data=None):
 def test_save_group_actions_merges_without_pruning(monkeypatch):
     """保存合并写入：已有账号条目保留（队员换队长/队伍变动后旧设置
     不丢，2026-11-07 需求——CDE 第一天设置、第二天直接读出）。"""
-    from src import control_window
+    from src.app import control_window
     store = _patch_role_store(monkeypatch, {
         "group_member_actions": {
             "oldA": {"char": "防御", "beast": "无"}}})
@@ -237,7 +247,7 @@ def test_save_group_actions_merges_without_pruning(monkeypatch):
 
 def test_save_group_actions_rejects_invalid(monkeypatch):
     """任一值非法拒绝整单（UI 下拉只出合法值，此为双保险）。"""
-    from src import control_window
+    from src.app import control_window
     store = _patch_role_store(monkeypatch)
     r = control_window.save_group_actions({
         "idB": {"char": "乱写", "beast": "攻击"}})
@@ -252,7 +262,7 @@ def test_save_group_actions_rejects_invalid(monkeypatch):
 def test_load_group_actions_filters_bad_entries(monkeypatch):
     """读取过滤非法条目（旧数据/手工改坏文件自愈），账号 ID 归一为
     字符串。"""
-    from src import control_window
+    from src.app import control_window
     _patch_role_store(monkeypatch, {
         "group_member_actions": {
             12345: {"char": "攻击", "beast": "防御"},
@@ -270,7 +280,7 @@ def test_load_group_actions_filters_bad_entries(monkeypatch):
 def test_save_group_last_scan_keeps_only_in_team(monkeypatch):
     """快照只存队长与确认在队伍中的队员（不在队伍账号即使设置过动作
     也不进快照）；面板没读到（panel_read=False）不覆盖上次快照。"""
-    from src import control_window
+    from src.app import control_window
     store = _patch_role_store(monkeypatch)
     data = {"panel_read": True,
             "leader": {"id": "idL", "name": "队长甲"},
@@ -291,14 +301,15 @@ def test_save_group_last_scan_keeps_only_in_team(monkeypatch):
 def test_build_group_last_scan_payload_merges_actions(monkeypatch):
     """组号页打开自动展示载荷：只含快照内（在队伍）的队员，战斗动作
     按账号 ID 实时读 group_member_actions。"""
-    from src import control_window
+    from src.app import control_window
     snap = {"ts": 1762800000.0,
             "leader": {"id": "idL", "name": "队长甲"},
             "members": [{"id": "idM1", "name": "队员乙"}]}
     _patch_role_store(monkeypatch, {
         "group_member_actions": {
             "idM1": {"char": "攻击", "beast": "防御"}}})
-    monkeypatch.setattr(control_window, "load_group_last_scan", lambda: snap)
+    from src.core import settings as core_settings
+    monkeypatch.setattr(core_settings, "load_group_last_scan", lambda: snap)
     r = control_window.build_group_last_scan_payload()
     assert r["ok"] and r["data"]["leader"]["id"] == "idL"
     assert r["data"]["leader"]["char"] is None
@@ -308,7 +319,7 @@ def test_build_group_last_scan_payload_merges_actions(monkeypatch):
     assert r["data"]["snapshot_ts"] == snap["ts"]
     assert "上次检查" in r["info"]
     # 无快照：ok=False 引导手动检查
-    monkeypatch.setattr(control_window, "load_group_last_scan", lambda: None)
+    monkeypatch.setattr(core_settings, "load_group_last_scan", lambda: None)
     r2 = control_window.build_group_last_scan_payload()
     assert r2["status"] == "success" and r2["ok"] is False
     assert r2["data"] is None
@@ -320,16 +331,16 @@ def test_build_group_last_scan_payload_merges_actions(monkeypatch):
 def test_settings_spec_excludes_debug_overlay():
     """调试信息开关放 config.json、不随方案走：切换方案不得改变
     「诊断」导航与悬浮层显隐，方案白名单不得包含该键。"""
-    from src import schemes
-    from src.control_window import _DEBUG_OVERLAY_KEY
+    from src.core import schemes
+    from src.app.control_window import _DEBUG_OVERLAY_KEY
     assert _DEBUG_OVERLAY_KEY not in schemes._settings_spec()
 
 
 def test_snapshot_excludes_debug_globals(monkeypatch):
     """方案快照（切换/保存时写回）同样不得携带调试全局键，
     否则旧方案里残留的 debug_overlay 会随快照再次混入。"""
-    from src import schemes
-    from src.control_window import _DEBUG_OVERLAY_KEY, _DEBUG_UI_KEY
+    from src.core import schemes
+    from src.app.control_window import _DEBUG_OVERLAY_KEY, _DEBUG_UI_KEY
     _patch_kv_empty(monkeypatch)
     snap = schemes._snapshot_current()
     assert _DEBUG_OVERLAY_KEY not in snap
@@ -339,8 +350,8 @@ def test_snapshot_excludes_debug_globals(monkeypatch):
 def test_theme_is_global_not_in_scheme(monkeypatch):
     """界面主题为全局设置（2026-11-11 用户确认）：不进方案白名单/
     快照，切账号/切方案不改主题。"""
-    from src import schemes
-    from src.control_window import _UI_THEME_KEY
+    from src.core import schemes
+    from src.app.control_window import _UI_THEME_KEY
     assert _UI_THEME_KEY not in schemes._settings_spec()
     _patch_kv_empty(monkeypatch)
     snap = schemes._snapshot_current()
@@ -350,7 +361,7 @@ def test_theme_is_global_not_in_scheme(monkeypatch):
 def test_debug_ui_unlock_save_load(monkeypatch):
     """「显示与调试」卡片解锁标记：默认关闭、保存后读回开启
     （全局键，写入 config.json）。"""
-    from src import control_window
+    from src.app import control_window
     store = _patch_kv_store(monkeypatch)
     assert control_window.load_debug_ui_unlocked() is False
     r = control_window.save_debug_ui_unlocked(True)
@@ -367,7 +378,9 @@ class _TitleWin:
 
 
 def _patch_binding_env(monkeypatch, title, bound):
-    from src import app_utils as au, game, user_data
+    from src.core import app_utils as au
+    from src.device import game
+    from src.core import user_data
     saved, refreshed = [], []
     monkeypatch.setattr(game, "find_main_window", lambda: _TitleWin(title))
     monkeypatch.setattr(game, "bound_window_id", lambda: bound)
@@ -413,7 +426,9 @@ class _LogStub:
 
 def test_sync_role_binding_refreshes_role_after_rebind(monkeypatch):
     """绑定自动改绑成功后立即刷新角色缓存（不等 30s），并写面板/文件日志。"""
-    from src import app_utils as au, game, user_data
+    from src.core import app_utils as au
+    from src.device import game
+    from src.core import user_data
     win = _TitleWin("服务器 - B（ID：222）")
     logs = []
     monkeypatch.setattr(game, "ensure_binding_follows_live_window",
@@ -429,7 +444,9 @@ def test_sync_role_binding_refreshes_role_after_rebind(monkeypatch):
 
 def test_sync_role_binding_noop_without_rebind(monkeypatch):
     """绑定窗口仍在：不刷新角色缓存、不打日志。"""
-    from src import app_utils as au, game, user_data
+    from src.core import app_utils as au
+    from src.device import game
+    from src.core import user_data
     calls = []
     monkeypatch.setattr(game, "ensure_binding_follows_live_window",
                         lambda: (_TitleWin("服务器 - A（ID：111）"), False))
@@ -444,7 +461,7 @@ def test_sync_role_binding_noop_without_rebind(monkeypatch):
 def test_get_role_info_returns_id_and_label(monkeypatch):
     """页面轮询契约：get_role_info 返回 {id,label}（与 get_init_data.role
     基线比对，变化时页面全量重同步方案/设置）。"""
-    from src import user_data
+    from src.core import user_data
 
     class _Stub:
         def _sync_role_binding(self):
