@@ -1409,6 +1409,7 @@ class ControlWindow(WebWindow):
         self.expose(self.group_last_scan)
         self.expose(self.group_save_actions)
         self.expose(self.get_group_state)
+        self.expose(self.get_role_info)
         self.expose(self.save_high_perf)
         self.expose(self.save_auto_refill)
         self.expose(self.save_clear_screen)
@@ -1510,6 +1511,43 @@ class ControlWindow(WebWindow):
         # 任务状态/日志回流接线：TaskManager → 主窗口状态 + 日志窗口
         self._tm.set_callbacks(on_status=self.sync_status, on_log=self.add_logs)
 
+    def _sync_role_binding(self):
+        """绑定窗口已关闭、脚本回退操作其他游戏窗口时，把绑定记录对齐到
+        实际操作窗口并立即刷新角色缓存。返回是否发生了改绑。
+
+        find_main_window 在绑定窗口消失后动态回退（任务/验证实际就操作
+        回退窗口），但不改绑会让方案/设置/成就读写停在旧角色——A 退出、
+        打开 B 后面板仍显示 A（2026-11-13 用户反馈）。组号 pass 期间绑定
+        窗口仍在，本函数不触发（绑定记录优先于标题的防漂移语义不变）。
+        """
+        try:
+            win, rebound = game.ensure_binding_follows_live_window()
+        except Exception as e:
+            app_utils.log(f"[绑定] 自动改绑检测失败: {e}", "WARN")
+            return False
+        if not rebound:
+            return False
+        line = f"[绑定] 绑定窗口已关闭，自动改绑实际操作窗口: {win.title}"
+        app_utils.log(line, "SYS")
+        try:
+            self.add_logs([line])
+        except Exception:
+            pass
+        # 立即切到新角色目录：面板进度/方案/成就读写不等 30s 缓存
+        user_data.current_role_id(refresh=True)
+        return True
+
+    def get_role_info(self):
+        """当前角色信息（页面 5s 轮询）：检测运行期换号并驱动页面刷新。
+
+        绑定窗口关闭后打开其他游戏窗口时先自动改绑（_sync_role_binding），
+        角色随之切换；页面把返回的 id 与 get_init_data.role 比对，变化时
+        全量重同步方案下拉/设置/顶部角色文案（按角色隔离数据）。
+        """
+        self._sync_role_binding()
+        return {"id": user_data.current_role_id(),
+                "label": bound_short_label() or ""}
+
     def get_env_info(self):
         """使用环境信息（系统页-使用环境展示）：适配主题/分辨率、
         当前游戏窗口分辨率、绑定窗口（含短角色文案 bound_short，
@@ -1519,8 +1557,11 @@ class ControlWindow(WebWindow):
         兜底：已登录窗口优先），并同步刷新窗口标题角色文案——防
         标题显示旧绑定角色而任务实际跑在自动选择窗口上。无绑定但
         存在窗口（自动选择生效）时同样直接展示该窗口标题，与标题
-        栏角色一致（单游戏窗口首次启动即此场景）。
+        栏角色一致（单游戏窗口首次启动即此场景）。绑定窗口已关闭时
+        先把绑定记录改绑到实际操作窗口（_sync_role_binding），角色
+        数据随实际窗口切换。
         """
+        self._sync_role_binding()
         cur = "未检测到游戏窗口"
         win = game.find_main_window()
         if win is not None:
@@ -1933,7 +1974,10 @@ class ControlWindow(WebWindow):
         各条阈值、战斗动作、修罗/五倍/种族比武设置与调试信息开关。
 
         首次回调即页面首屏就绪：置位后就绪标记并补投启动阶段的暂存日志
-        （授权校验结果等主进程启动消息，页面加载前无法投递）。"""
+        （授权校验结果等主进程启动消息，页面加载前无法投递）。
+        读设置前先对齐绑定/角色（绑定窗口已关闭时改绑实际窗口），保证
+        整包数据与 role 属于同一角色（页面据此建立角色切换检测基线）。"""
+        self._sync_role_binding()
         self._panel_ready = True
         if self._pending_logs:
             pending, self._pending_logs = self._pending_logs, []
@@ -1999,6 +2043,7 @@ class ControlWindow(WebWindow):
                 "debug_ui_unlocked": load_debug_ui_unlocked(),
                 "license": self._license_info,
                 "env": self.get_env_info(),
+                "role": user_data.current_role_id(),  # 角色基线（页面换号检测）
                 "version": __version__,
                 "schemes": schemes.list_schemes(),
                 "boss_hotkey": hotkey.load_hotkey(),

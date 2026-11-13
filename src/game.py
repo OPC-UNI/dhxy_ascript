@@ -65,17 +65,13 @@ def clear_bound_window():
     return {"status": "success", "msg": "已解除窗口绑定，下次启动重新选择"}
 
 
-def find_bound_window():
-    """返回绑定的窗口（未绑定或已不存在时返回 None）。
+def _bound_match(raw, wins):
+    """在窗口列表里匹配绑定记录（调用方持 wins，避免重复枚举）。
 
     匹配顺序：句柄精确命中（会话内句柄稳定、同账号多窗口时唯一
     区分）→ 账号 ID 命中标题（重启后句柄失效的延续匹配）。旧版
     纯 ID 字符串绑定按 ID 匹配。
     """
-    raw = bound_window_id()
-    if not raw:
-        return None
-    wins = list_main_windows()
     bid = raw.get("id") if isinstance(raw, dict) else raw
     bh = raw.get("hwnd") if isinstance(raw, dict) else None
     if bh:
@@ -89,24 +85,68 @@ def find_bound_window():
     return None
 
 
+def find_bound_window():
+    """返回绑定的窗口（未绑定或已不存在时返回 None）。"""
+    raw = bound_window_id()
+    if not raw:
+        return None
+    return _bound_match(raw, list_main_windows())
+
+
+def _pick_main_window(wins, raw=None):
+    """从窗口列表选实际操作窗口（find_main_window 的纯函数部分）。
+
+    多个主窗口并存时（多开客户端）：优先绑定窗口；绑定缺失时优先
+    已登录窗口（标题含 $Revision），否则取第一个。
+    """
+    if raw:
+        bound = _bound_match(raw, wins)
+        if bound is not None:
+            return bound
+    for w in wins:
+        if "$Revision" in w.title:
+            return w
+    return wins[0] if wins else None
+
+
 def find_main_window():
     """查找游戏主窗口。
 
     游戏存在多个同进程可见窗口（如聊天窗口 xychildwindow），
-    用类名 MAIN_WINDOW_CLASS 精确定位主窗口。游戏最小化时返回 None。
-    多个主窗口并存时（多开客户端）：优先返回绑定的窗口；无绑定时
-    优先已登录窗口（标题含 $Revision），否则取第一个。
+    用类名 MAIN_WINDOW_CLASS 精确定位主窗口；无可见主窗口时返回
+    None。多个主窗口并存时（多开客户端）：优先返回绑定的窗口；
+    绑定窗口已不存在时回退到已登录窗口（标题含 $Revision），否则
+    取第一个。
     """
+    return _pick_main_window(list_main_windows(), bound_window_id())
+
+
+def ensure_binding_follows_live_window():
+    """绑定窗口已关闭时，把绑定记录对齐到实际回退操作的游戏窗口。
+
+    find_main_window 在绑定窗口消失后动态回退到其他游戏窗口（脚本
+    实际就操作它），但绑定记录若不改写，按角色隔离的数据目录
+    （user_data._probe_role_id 绑定优先）会停在旧角色——A 退出、打开
+    B 后面板方案/设置/成就仍显示 A（2026-11-13 用户反馈）。控制窗口
+    轮询本函数完成改绑，改绑后角色解析随新窗口。
+
+    未登录窗口（标题无账号 ID）不改绑：save_bound_window 会退用完整
+    标题作 ID，那是任意游戏窗口标题的公共子串，多开时会误匹配。
+    返回 (win, rebound)：win 为当前操作窗口（可能 None），rebound 表示
+    本次是否写入了新绑定。
+    """
+    raw = bound_window_id()
     wins = list_main_windows()
-    if not wins:
-        return None
-    bound = find_bound_window()
+    if not raw:
+        return _pick_main_window(wins), False  # 无绑定：交给启动/任务启动绑定
+    bound = _bound_match(raw, wins)
     if bound is not None:
-        return bound
-    for w in wins:
-        if "$Revision" in w.title:
-            return w
-    return wins[0]
+        return bound, False
+    win = _pick_main_window(wins)
+    if win is None or not _ID_IN_TITLE_RE.search(win.title or ""):
+        return win, False
+    save_bound_window(win)
+    return win, True
 
 
 def read_login_tab(win):

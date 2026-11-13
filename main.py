@@ -154,9 +154,13 @@ def _ensure_window_binding():
         title_id = user_data.role_id_from_text(getattr(bound, "title", ""))
         raw = game.bound_window_id()
         bid = raw.get("id") if isinstance(raw, dict) else raw
-        if title_id and bid and bid != f"（ID：{title_id}）":
+        # 旧版纯 ID 绑定（无句柄）升级为「句柄 + 账号 ID」：组号 pass 切
+        # 到队员 Tab 时标题短暂变成队员账号，按 ID 匹配会失配——角色解析
+        # 判定「绑定窗口是否仍在」依赖句柄匹配（2026-11-13 运行期换号）。
+        legacy = not isinstance(raw, dict) or not raw.get("hwnd")
+        if (title_id and bid and bid != f"（ID：{title_id}）") or legacy:
             game.save_bound_window(bound)
-            log(f"[绑定] 检测到账号变化，更新绑定: {bound.title}", "SYS")
+            log(f"[绑定] 更新绑定（账号变化/旧格式升级）: {bound.title}", "SYS")
     if len(wins) == 1:
         if game.find_bound_window() is None and "（ID：" in wins[0].title:
             # 单窗口自动保存绑定（无选择歧义）。仅限已登录窗口：

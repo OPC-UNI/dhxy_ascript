@@ -13,8 +13,13 @@
 退实时窗口标题「（ID：数字）」；再退 _default。绑定优先而非标题优先：
 组号（一窗口多 Tab）模式下窗口标题随选中 Tab 变化，pass 切到队员 Tab
 时标题 ID 会短暂变成队员账号，按标题解析会让角色在 pass 期间漂移到
-队员数据目录（2026-11-13 修复）。角色在启动时确定，切换账号需要重启
-（绑定在启动阶段完成/任务启动时对齐启动所在 Tab）。
+队员数据目录（2026-11-13 修复）。
+
+绑定窗口已关闭、脚本回退操作其他游戏窗口时（find_main_window 动态
+回退），绑定记录不再代表实际操作角色：此时跟随实时窗口标题解析，
+控制窗口轮询 game.ensure_binding_follows_live_window 完成改绑，方案/
+设置/成就随新窗口切换，无需重启（2026-11-13）。完全无游戏窗口时仍
+沿用绑定记录（游戏重启间隙不落到 _default）。
 
 旧版数据迁移：根目录 config.json / schemes.json / task_stats.json 原样
 保留（回滚安全），按角色把字段复制到 data/ 下——只复制不移动，
@@ -92,19 +97,26 @@ def _probe_role_id():
     目录（面板任务进度归零、成就页空态、统计/缓存写串到队员目录）。
     绑定记录是「这个窗口的这个角色」的权威身份：启动与任务启动时都会
     对齐实际 Tab（main._ensure_window_binding / ControlWindow.
-    _sync_start_tab_binding），pass 期间不变。未绑定时退回标题解析
+    _sync_start_tab_binding），pass 期间不变。
+
+    2026-11-13 补充：绑定窗口已关闭（A 退出、打开 B）时脚本实际操作的
+    是 find_main_window 回退窗口，绑定记录不再代表真实角色——此时跟随
+    实时窗口标题解析（控制窗口轮询会先改绑，两者结果一致）。绑定窗口
+    存在时仍用绑定记录（保留 pass 防漂移）；完全无游戏窗口时沿用绑定
+    记录（游戏重启间隙不落到 _default）。未绑定时退回标题解析
     （首次运行/登录界面/绑定丢失）。
     """
     try:
         from . import game
         raw = game.bound_window_id()
-        if isinstance(raw, dict):
-            raw = raw.get("id")
-        rid = role_id_from_text(raw)
-        if rid:
-            return rid
+        bound_rid = role_id_from_text(
+            raw.get("id") if isinstance(raw, dict) else raw)
+        if bound_rid and game.find_bound_window() is not None:
+            return bound_rid
         win = game.find_main_window()
-        return role_id_from_text(getattr(win, "title", "") if win is not None else "")
+        live_rid = role_id_from_text(
+            getattr(win, "title", "") if win is not None else "")
+        return live_rid or bound_rid
     except Exception:
         return None
 

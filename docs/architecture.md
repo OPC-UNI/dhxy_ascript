@@ -1232,7 +1232,7 @@ flowchart LR
 
 **KeyValue 注意**：`_load_data` 不刷新内存快照；任务子进程写配置必须走 `kv_save_merged` / `kv_update_merged` / `kv_remove_merged`，否则会覆盖主进程写入的运行时状态。
 
-**角色数据注意**：`data/` 下的设置/方案/成就/进度/高性能缓存按角色隔离；角色在启动阶段确定（`user_data.current_role_id`：绑定记录 → 实时窗口标题 → `_default`；绑定优先——组号 pass 切到队员 Tab 时窗口标题会短暂变成队员账号，按标题解析会让面板/统计漂移到队员目录，2026-11-13），切换账号需重启。`config.json` 在两阶段清理后只保留软件全局设置。旧版数据迁移与回滚规则见 docs/user-data-layout.md。
+**角色数据注意**：`data/` 下的设置/方案/成就/进度/高性能缓存按角色隔离；角色解析绑定优先（`user_data.current_role_id`：绑定记录 → 实时窗口标题 → `_default`——组号 pass 切到队员 Tab 时窗口标题会短暂变成队员账号，按标题解析会让面板/统计漂移到队员目录，2026-11-13）。绑定窗口关闭后程序动态回退操作其他游戏窗口（`game.find_main_window`），控制窗口 5s 轮询 `get_role_info` 自动改绑到实际窗口并驱动页面全量重同步，A 退出、打开 B 后方案/设置/成就随 B 切换，无需重启（2026-11-13）。`config.json` 在两阶段清理后只保留软件全局设置。旧版数据迁移与回滚规则见 docs/user-data-layout.md。
 
 ---
 

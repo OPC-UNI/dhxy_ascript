@@ -2126,6 +2126,31 @@
         } catch (e) { /* 桥接未就绪时忽略 */ }
     }
 
+    /* ================= 角色切换检测 ================= */
+    // 绑定窗口关闭后程序回退操作其他游戏窗口（A 退出、打开 B）：Python
+    // 侧 get_role_info 自动改绑并返回新角色 ID，与 get_init_data.role
+    // 基线比对，变化时全量重同步方案下拉/设置页/顶部角色文案（数据全部
+    // 按角色隔离，不能停在旧角色的渲染结果上）。
+    async function refreshRoleInfo() {
+        if (roleSyncing) return;
+        try {
+            const r = await callPython('get_role_info');
+            if (!r || !r.id) return;
+            if (currentRoleId === null) { currentRoleId = r.id; return; }
+            if (r.id === currentRoleId) return;
+            roleSyncing = true;
+            addPanelLogs(['[角色] 已切换到 ' + (r.label || r.id) + '，方案与设置已刷新']);
+            const ok = await syncInitData();
+            if (!ok) return;  // 同步失败：基线不动，下轮重试
+            currentRoleId = r.id;  // 兜底推进基线（syncInitData 已按 info.role 设置）
+            refreshStats();  // 成就也按角色隔离：切角色后刷新当前角色数据
+        } catch (e) {
+            /* 桥接未就绪/窗口枚举失败：忽略，下轮再试 */
+        } finally {
+            roleSyncing = false;
+        }
+    }
+
     /* ================= 看板日志抽屉 ================= */
     const MAX_PANEL_LOG_LINES = 300;
     function addPanelLogs(lines) {
@@ -2491,6 +2516,8 @@
     /* ================= 配置方案（顶部下拉一键切换 + 系统页管理区） ================= */
     let schemeNames = [];
     let schemeActive = '';
+    let currentRoleId = null;   // 角色基线（来自 get_init_data.role；换号检测用）
+    let roleSyncing = false;    // 角色切换全量重同步进行中（防重入）
     function renderSchemes(info) {
         if (!info) return;
         schemeNames = info.names || [];
@@ -2903,6 +2930,7 @@
     function pollGroupTick() {
         if (document.visibilityState === 'hidden') return;
         refreshGroupState();  // 导航入口全局可见，慢节奏兜底（启停已即时刷新）
+        refreshRoleInfo();    // 换号检测：绑定窗口关闭后自动跟随实际窗口
     }
     setInterval(pollStatusTick, 1500);     // 看板状态 / 成就页 1.5s
     setInterval(pollProgressTick, 2500);   // 看板进度 2.5s
@@ -2917,6 +2945,7 @@
             refreshStats();
         }
         refreshGroupState();
+        refreshRoleInfo();
     });
 
     /* ================= 使用环境（系统页，打开时刷新） ================= */
@@ -3475,6 +3504,7 @@
         if (!info) return;
         applyTheme(info.theme === 'light' ? 'light' : 'dark');
         if (info.schemes) renderSchemes(info.schemes);  // 顶部方案下拉
+        if (info.role) currentRoleId = info.role;  // 本包数据的角色基线
         bossHotkey = info.boss_hotkey || '';  // 老板键名（按钮文案提示）
         if (info.modes) {
             selModes = [...info.modes];  // 保存顺序 = 选择顺序（后端按保存顺序返回）
@@ -3629,6 +3659,7 @@
         update();  // 应用老板键文案（启动/停止按钮后缀）
         await refreshProgress();
         refreshGroupState();  // 组号入口首屏即时刷新（其后 5s 兜底轮询）
+        return true;
     }
 
     /* ================= Python 侧回调入口（名称与语义必须与后端一致） ================= */

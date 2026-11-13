@@ -399,3 +399,59 @@ def test_start_tab_binding_noop_when_same_role_or_unlogged(monkeypatch):
     saved, refreshed = _patch_binding_env(monkeypatch, "大话西游2经典版", None)
     control_window.ControlWindow._sync_start_tab_binding(None)
     assert saved == [] and refreshed == []
+
+
+# ---- 运行期换号：绑定窗口关闭后跟随实际窗口（2026-11-13） ----
+
+class _LogStub:
+    def __init__(self):
+        self.lines = []
+
+    def add_logs(self, lines):
+        self.lines.extend(lines)
+
+
+def test_sync_role_binding_refreshes_role_after_rebind(monkeypatch):
+    """绑定自动改绑成功后立即刷新角色缓存（不等 30s），并写面板/文件日志。"""
+    from src import app_utils as au, game, user_data
+    win = _TitleWin("服务器 - B（ID：222）")
+    logs = []
+    monkeypatch.setattr(game, "ensure_binding_follows_live_window",
+                        lambda: (win, True))
+    monkeypatch.setattr(user_data, "current_role_id",
+                        lambda refresh=False: logs.append(("role", refresh)))
+    monkeypatch.setattr(au, "log", lambda *args, **kwargs: None)
+    stub = _LogStub()
+    assert control_window.ControlWindow._sync_role_binding(stub) is True
+    assert ("role", True) in logs
+    assert any("自动改绑" in line for line in stub.lines)
+
+
+def test_sync_role_binding_noop_without_rebind(monkeypatch):
+    """绑定窗口仍在：不刷新角色缓存、不打日志。"""
+    from src import app_utils as au, game, user_data
+    calls = []
+    monkeypatch.setattr(game, "ensure_binding_follows_live_window",
+                        lambda: (_TitleWin("服务器 - A（ID：111）"), False))
+    monkeypatch.setattr(user_data, "current_role_id",
+                        lambda refresh=False: calls.append(refresh))
+    monkeypatch.setattr(au, "log", lambda *args, **kwargs: None)
+    stub = _LogStub()
+    assert control_window.ControlWindow._sync_role_binding(stub) is False
+    assert calls == [] and stub.lines == []
+
+
+def test_get_role_info_returns_id_and_label(monkeypatch):
+    """页面轮询契约：get_role_info 返回 {id,label}（与 get_init_data.role
+    基线比对，变化时页面全量重同步方案/设置）。"""
+    from src import user_data
+
+    class _Stub:
+        def _sync_role_binding(self):
+            return False
+
+    monkeypatch.setattr(user_data, "current_role_id", lambda refresh=False: "222")
+    monkeypatch.setattr(control_window, "bound_short_label",
+                        lambda: "一生所爱「长相思」")
+    assert control_window.ControlWindow.get_role_info(_Stub()) == {
+        "id": "222", "label": "一生所爱「长相思」"}
