@@ -6,13 +6,14 @@
     python .claude/skills/release-tag/scripts/release.py check <X.Y.Z>
     python .claude/skills/release-tag/scripts/release.py bump  <X.Y.Z>
     python .claude/skills/release-tag/scripts/release.py precommit
+    python .claude/skills/release-tag/scripts/release.py tagcheck <X.Y.Z>
     python .claude/skills/release-tag/scripts/release.py test
 
 封装发版/提交流程中确定性、易错的机械步骤；判断性步骤（提交信息撰写、
 git commit/push/tag）仍由执行者按 SKILL.md 手动完成：
 
   check  发版前核对：版本格式 → tag 序列递增且未占用 → 双文件版本同步
-         → 目标版本不低于当前（等于=已 bump 完成，提示即可）→ 列出
+         → 目标版本不低于当前（等于=已 bump 完成，跳过 bump）→ 列出
          git add -A 将提交的全部改动；未跟踪文件命中疑似运行时数据
          名单时警告（先决定是否进 .gitignore 再提交）
   bump   原子更新 src/__init__.py 与 pyproject.toml 两处版本号：
@@ -21,6 +22,10 @@ git commit/push/tag）仍由执行者按 SKILL.md 手动完成：
   precommit  仅提交推送（不打 tag、不 bump）的提交前核对：列出 git add -A
          将提交的全部改动 + 未跟踪运行时数据警告（同 check 的清单部分，
          不做版本/tag 校验）
+  tagcheck   仅打 tag（不 bump、不提交）的前核对：版本格式 → tag 序列
+         递增且未占用 → 双文件版本号互相同步（不要求等于目标；CI 构建
+         时会把 tag 版本号烙进产物，滞后仅提示）→ 工作区干净 → 本地
+         HEAD 已推送（无上游时仅提示）
   test   全量测试 python -m pytest -q，退出码透传（未全绿不得发版/提交）
 
 版本参数可带可不带 v 前缀（tag 名仍以用户请求原文为准，脚本只校验数字）。
@@ -99,7 +104,7 @@ def _read_versions():
     proj = _extract(PYPROJECT, _PYPROJ_RE, "version")
     if init != proj:
         _fail(f"两处版本号不一致：__init__.py={init}，pyproject.toml={proj}，"
-              f"请先手动对齐再发版")
+              f"请先手动对齐")
     return _parse(init)
 
 
@@ -163,13 +168,58 @@ def do_check(args):
     else:
         print(f"通过：双文件版本同步（当前 {'.'.join(map(str, cur))}）")
     _list_changes()
-    print("通过：发版前核对完成（下一步 bump）")
+    if ver == cur:
+        print("通过：发版前核对完成（版本号已是目标，跳过 bump："
+              "测试 → 提交推送 → 打 tag）")
+    else:
+        print("通过：发版前核对完成（下一步 bump）")
 
 
 def do_precommit(_args):
     """仅提交推送（不打 tag、不 bump）的提交前核对。"""
     _list_changes()
     print("通过：提交前核对完成（仅提交推送：不 bump 版本、不打 tag）")
+
+
+def do_tagcheck(args):
+    """仅打 tag（不 bump、不提交）的前核对：当前 HEAD 是否可直接打 tag。"""
+    ver = _parse(args.version)
+    vstr = ".".join(map(str, ver))
+    latest = _latest_tag()
+    if latest is not None and _parse(latest) >= ver:
+        _fail(f"版本未递增：已有最大 tag 为 {latest}，目标 {args.version} 不大于它")
+    tags = set(_git("tag").splitlines())
+    for cand in (f"v{vstr}", vstr):
+        if cand in tags:
+            _fail(f"tag {cand} 已存在")
+    cur = _read_versions()  # 只要求两处互相同步，不要求等于目标
+    cur_str = ".".join(map(str, cur))
+    if cur != ver:
+        print(f"注意：两处版本号当前为 {cur_str}，与目标 v{vstr} 不一致"
+              f"（不要求 bump：CI 构建时会把 tag 版本号烙进构建产物，"
+              f"源码版本下次发版再对齐）")
+    changed = [l for l in _git("status", "--porcelain").splitlines() if l.strip()]
+    if changed:
+        _fail(f"工作区有 {len(changed)} 项未提交改动：tag 必须指向已提交"
+              f"状态，先提交或还原后再打 tag")
+    try:
+        ahead = int(_git("rev-list", "--count", "@{u}..HEAD").strip() or "0")
+    except subprocess.CalledProcessError:
+        pushed = "HEAD 推送状态未校验（无上游跟踪分支）"
+        print("注意：当前分支无上游跟踪分支，跳过「HEAD 已推送」校验，"
+              "打 tag 前请确认已 git push")
+    else:
+        if ahead:
+            _fail(f"本地 HEAD 领先上游 {ahead} 个提交（未推送）："
+                  f"先 git push 再打 tag")
+        pushed = "HEAD 已推送"
+    suffix = "" if cur == ver else f"（≠ 目标 v{vstr}，仅提示）"
+    print(f"通过：版本序列校验（目标 v{vstr} > 已有最大 tag "
+          f"{latest or '（无）'}，tag 未占用）")
+    print(f"通过：两处版本号互相同步为 {cur_str}{suffix}")
+    print(f"通过：工作区干净、{pushed}")
+    print(f"通过：打 tag 前核对完成（下一步 git tag {args.version} && "
+          f"git push origin {args.version}）")
 
 
 def do_bump(args):
@@ -211,9 +261,11 @@ def main(argv=None):
                             ("bump", do_bump, "原子更新两处版本号"),
                             ("precommit", do_precommit,
                              "仅提交推送的提交前核对（改动清单）"),
+                            ("tagcheck", do_tagcheck,
+                             "仅打 tag 前核对（不 bump、不提交）"),
                             ("test", do_test, "全量测试 pytest -q")):
         p = sub.add_parser(name, help=help_)
-        if name in ("check", "bump"):
+        if name in ("check", "bump", "tagcheck"):
             p.add_argument("version", help="目标版本号（vX.Y.Z 或 X.Y.Z）")
         p.set_defaults(fn=fn)
     args = parser.parse_args(argv)
