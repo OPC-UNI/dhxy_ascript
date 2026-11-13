@@ -175,7 +175,7 @@ RACE_CACHE_KEY = "mingwang_race"
 # **两族都必须坐标到达领取点才能点 NPC**（用户 2026-11-10 明确：魔族也
 # 必须在大唐边境 477,180 附近）；远处 NPC 模板可见但点击不生效（仙族
 # 实机 166,136 连点 12 次无对话）——不使用「位置稳定+看到 NPC」兜底。
-CLAIM_POS_TOLERANCE = 7               # 到达容差（寻路落点附近即可）
+CLAIM_POS_TOLERANCE = 5               # 到达容差（寻路落点附近即可）
 CLAIM_NPC_THRESHOLD = 0.75             # NPC 默认匹配阈值（NPC 待机动画抖动，留余量；
                                        # 种族可用 npc_threshold 覆盖，如仙族 0.7）
 CLAIM_NPC_BAND = (200, 120, 1180, 750)  # NPC 搜索条带（世界区域，排除 HUD/追踪面板）
@@ -184,7 +184,7 @@ CLAIM_POINTS = {
     "魔族": {
         "map": "大唐边境",
         "target": (474, 185),
-        "mini_click": (987, 372),
+        "mini_click": (988, 372),
         "world_icon": "shijie_datangbianjing.png",  # 世界地图标签（19.png）
         "npc_icon": "mingwang_nitianmo.png",        # NPC 逆天魔（20.png，43×44）
         # 第二造型模板（用户 2026-11-10 提供，62×47）：逆天魔可能以不同

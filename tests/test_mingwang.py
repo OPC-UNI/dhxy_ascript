@@ -185,23 +185,25 @@ def test_race_strip_rect():
 def test_at_claim_point():
     mozu = mingwang.CLAIM_POINTS["魔族"]
     xian = mingwang.CLAIM_POINTS["仙族"]
-    # 坐标按领取点配置动态取值（用户会按实机标定微调，测试不写死）
+    tol = mingwang.CLAIM_POS_TOLERANCE
+    # 坐标/容差按领取点配置动态取值（用户会按实机标定微调，测试不写死）
     mx, my = mozu["target"]
     assert mingwang._at_claim_point(("大唐边境", mx, my), mozu)
-    assert mingwang._at_claim_point(("大唐边境", mx - 7, my + 7), mozu)  # ±7 内
-    assert not mingwang._at_claim_point(("大唐边境", mx - 7, my + 9), mozu)  # y 超 7
-    assert not mingwang._at_claim_point(("大唐边境", mx - 9, my + 7), mozu)  # x 超 7
+    assert mingwang._at_claim_point(("大唐边境", mx - tol, my + tol), mozu)  # 容差边界内
+    assert not mingwang._at_claim_point(("大唐边境", mx - tol, my + tol + 2), mozu)  # y 超容差
+    assert not mingwang._at_claim_point(("大唐边境", mx - tol - 2, my + tol), mozu)  # x 超容差
     assert not mingwang._at_claim_point(("大唐边境", mx - 18, my), mozu)
     assert not mingwang._at_claim_point(("长安", mx, my), mozu)
     assert not mingwang._at_claim_point(None, mozu)
-    # 仙族：天宫 190,122（±7 容差）
-    assert mingwang._at_claim_point(("天宫", 190, 120), xian)  # 2px 差在容差内
-    assert mingwang._at_claim_point(("天宫", 185, 129), xian)  # dx5 dy7
-    assert not mingwang._at_claim_point(("天宫", 190, 130), xian)  # dy8
-    assert not mingwang._at_claim_point(("天宫", 170, 120), xian)
+    # 仙族：坐标同取配置
+    xx, xy = xian["target"]
+    assert mingwang._at_claim_point(("天宫", xx + 2, xy), xian)  # 2px 差在容差内
+    assert mingwang._at_claim_point(("天宫", xx - tol, xy + tol), xian)  # 容差边界内
+    assert not mingwang._at_claim_point(("天宫", xx, xy + tol + 1), xian)  # 超容差
+    assert not mingwang._at_claim_point(("天宫", xx - 20, xy), xian)
     # 同坐标不同地图不互认
     assert not mingwang._at_claim_point(("大唐边境", mx, my), xian)
-    assert not mingwang._at_claim_point(("天宫", 190, 120), mozu)
+    assert not mingwang._at_claim_point(("天宫", xx, xy), mozu)
 
 
 def test_find_attr_rect_skips_button_area():
