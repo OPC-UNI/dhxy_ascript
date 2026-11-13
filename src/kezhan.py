@@ -32,12 +32,13 @@
 → 30s 倒计时内帧间差分找虫、毒虫模板命中即点（只拍三种毒虫，蜻蜓/
 七星虫不点）→ 每局结束面板重现，任务追踪签名未变就继续重开，签名
 变化/任务消失即完成）；
-音律小游戏（辨八音：对话「来吧，我还怕了你不成？」→ 窗口横幅
-kezhan_yinlv.png 出现 → 记住五编钟位置 → 点开始演奏 → 按序点击
-5 1 4 5 1 1 5 5 1 5 4 3 2 3 5（15 次；首个 3.4s、间隔 1.45s，
-用户 2026-11-03 实测节奏）→ 横幅消失结束；每次点击前检查横幅，
-消失即停止点击——未点完就消失 = 演奏失败，重新点击任务追踪绿字
-寻路回 NPC 重开一局（2026-11-12 用户规则））；
+音律小游戏（编钟演奏，辨八音/指导音律同款窗口：对话入口 →
+窗口横幅 kezhan_yinlv.png 出现 → 记住五编钟位置 → 点开始演奏 →
+动态追亮点：游戏按随机顺序逐个点亮编钟（金色光晕 + 白色音符字），
+点亮哪一个就敲哪一个（2026-11-13 实机验证；旧实现固定 15 音序列
+只适用于辨八音固定曲谱，指导音律曲目随机必须动态跟随）→ 横幅
+消失即停止点击并结束，按完成处理（2026-11-12 规则：消失立即停点；
+2026-11-13 规则：动态追亮点保证正确性，不再按敲击数判失败重开））；
 破除封印小游戏（灵兔封印：对话「看来这就是那困住灵兔的封印了」→
 选项「消耗灵气，破除封印」→ 窗口标题 kezhan_pochufengyin.png 出现 →
 闭环控制：target 模板定位目标高亮区间 [L,R,C]（≈1 刻度宽）、HSV 金掩码
@@ -113,7 +114,12 @@ DIALOG_TIMEOUT = 10                  # 等待对话框出现的超时（秒）
 # 音律小游戏入口选项：点击后开启小游戏窗口检测（armed 门控——只有这对话
 # 被点过才检测 kezhan_yinlv.png，其他任务阶段零检测开销、零误配）。
 # 必须先于 DIALOG_OPTION_MAP 定义；其余音律常量见下方 YINLV_* 区块。
+# 两处入口共用同一款编钟窗口：
+#   - 辨八音（西域乐师阿拉普）：「来吧，我还怕了你不成？」；
+#   - 凤眠艺·指导音律（晴姑娘，2026-11-13）：「好说，看我的。」
 YINLV_ENTRY_OPTION = "来吧，我还怕了你不成？"
+YINLV_ENTRY_OPTION2 = "好说，看我的。"
+YINLV_ENTRY_OPTIONS = (YINLV_ENTRY_OPTION, YINLV_ENTRY_OPTION2)
 DIALOG_OPTION_MAP = {
     "瑶池近日要办迎仙大会，宴上那道琉璃映月羹": YAOCHI_DIALOG_OPTION,
     "少侠有什么事吗": "客栈任务",
@@ -193,6 +199,9 @@ DIALOG_OPTION_MAP = {
     "这群刁民……好汉不吃眼前亏，我先溜了！":"下次再用这种小伎俩行骗定要好好收拾他一顿……",
     "指导姑娘们的演奏，劳烦少侠跑一趟。":"指导音律我在行，这便去那边瞧瞧。",
     "少侠，我们等你好久啦！赶紧帮我们打个样如何？":"好说，看我的。",
+    # 指导音律成功（2026-11-13 实测）：编钟动态追亮点 15 音全中 → 晴姑娘
+    # 致谢，点选项推进；随后玩家/掌柜两屏无选项对话走 DIALOG_SKIP_TEXTS
+    "多谢少侠指导，听完少侠这一曲，感觉自己的音律技艺也提升了不少呢！":"不错不错，看来你对音律一事颇有天赋。",
     "少侠慢走，改日记得到云来酒店喝酒！":"没问题，告辞。",
     "那本是个痴情女子，因心上人久出不归便寻了短见。如今化作冤魂归来":"好，我这便去长寿村会会那厉鬼。",
     "连你也嫌我面目可憎？好！好！你们这些薄情之人，都该千刀万剐！":"我不是那意思，别动手啊！",
@@ -298,6 +307,8 @@ DIALOG_SKIP_TEXTS = {""
     "嗯...封印完好，墨迹未改...少侠一路护送周全，倒是费心了。":4,
     "音律之道，首重五音十二律，宫商角徵羽各安其位。我游历大唐数月，尚未":2,
     "少侠技艺确实令人耳目一新！不过若论对曲谱音律的领悟，恐怕还稍逊在下":2,
+    # 指导音律成功后的玩家自白（无选项，点一次屏幕中间推进到掌柜送客）
+    "晴姑娘说笑了，那你们先练着，我便不打扰姑娘们了。":1,
     "少侠是为那小猴来的？它这是胫骨裂隙，幸未伤及经脉。这续骨膏需以晨露":1,
     "老夫手中这封密信关系重大，须即刻面呈太上老君。此事非比寻常，还望少":2,
     "贫道观少侠龙行虎步，眉间隐现祥瑞之气一一莫非是要求问仕途姻缘？不瞒":4,
@@ -587,14 +598,20 @@ DUCHONG_FINISHED_TTL = 300             # 判定完成后抑制重进的窗口（
 DUCHONG_RETRY_GAP = 10                 # 拍虫失败后的重进退避（秒，防连点）
 _duchong_finished = None               # (任务签名, 时间)：已完成的小游戏状态
 _duchong_next_try = 0.0                # 下次允许进入拍毒虫小游戏的时间戳
-# ---- 音律小游戏（辨八音：与西域乐师阿拉普比试编钟演奏） ----
-# 流程：对话「来吧，我还怕了你不成？」→ 小游戏窗口出现（kezhan_yinlv.png
+# ---- 音律小游戏（编钟演奏：辨八音/指导音律同款窗口） ----
+# 流程：入口对话点击后（armed 门控）→ 小游戏窗口出现（kezhan_yinlv.png
 # 横幅命中）→ 记住五个编钟位置 → 点「开始演奏」（kezhan_kaishiyanzou.png，
-# 点后倒计时 3s 正式开始）→ 按固定节奏点击编钟（首个 3.4s、间隔 1.45s，
-# 用户实测）→ 窗口横幅消失即小游戏结束。编钟 1-5 对应宫商角徵羽
-# （模板 OCR：2=商 3=角 4=徵）。
-# 2026-11-12 用户规则：演奏中横幅消失就停止点击（剩余点击会落进世界
-# 画面取消寻路/误点）；没点完就消失 = 失败 → 重新点击寻路重开一局。
+# 点后倒计时约 3s 正式开始）→ 动态追亮点：游戏按随机顺序逐个点亮编钟
+# （金色光晕，同一时刻只有一个钟亮；上方另飘白色音符字），点亮哪一个
+# 就立即敲哪一个 → 窗口横幅消失即结束，判正常完成（2026-11-13 用户
+# 规则：动态追亮点已保证正确性，删去旧的「敲击数 <15 判失败 + 重新
+# 点击追踪绿字重开」特殊处理；真失败时任务步骤未推进，follow 的常规
+# 追踪点击会自己回到 NPC 重新触发对话）。
+# 2026-11-13 用户规则 + 实机验证：曲目不固定（旧的固定 15 音序列只适用
+# 于辨八音固定曲谱，指导音律随机曲目点不中），必须按高亮动态点击；
+# 同一动态实现覆盖两处入口（辨八音固定曲谱同样可用，见 _play_yinlv）。
+# 2026-11-12 用户规则保留：演奏中横幅消失立即停止点击（剩余点击会落进
+# 世界画面取消寻路/误点）。
 YINLV_WINDOW_ICON = "kezhan_yinlv.png"       # 小游戏窗口横幅（出现=窗口已开，消失=结束）
 YINLV_START_ICON = "kezhan_kaishiyanzou.png"  # 「开始演奏」按钮
 YINLV_BELLS = ("kezhan_bianzhong1_ring.png",   # 五个编钟模板（点开始前记住位置）
@@ -609,37 +626,22 @@ YINLV_CHECK_INTERVAL = 3.0          # extras 链窗口横幅检测限频（秒�
                                     # 性能规则 3——带区待真实截图标定后收紧）
 YINLV_WINDOW_REGION = None          # 窗口横幅搜索条带 (l,t,r,b)；TODO 真实截图标定
 YINLV_LOCATE_TIMEOUT = 15           # 点开始前定位按钮+全部编钟的超时（秒）
-# 点击节奏（用户实测 2026-11-03）：点开始 → 第一个编钟间隔 3s400ms；
-# 之后每个编钟间隔 1s450ms。调度为时间基准步进（t_next 绝对时刻），
-# 点击自身耗时不计入间隔，落地间隔恒定（见 _play_yinlv 阶段二）
-YINLV_FIRST_INTERVAL = 3.4          # 点开始→第一个编钟的间隔（秒）
-# 点击序列（用户提供 2026-11-03）：5 1 4 5 1 1 5 5 1 5 4 3 2 3 5 共 15 次
-YINLV_CLICK_SEQ = ("kezhan_bianzhong5_ring.png", "kezhan_bianzhong1_ring.png",
-                   "kezhan_bianzhong4_ring.png", "kezhan_bianzhong5_ring.png",
-                   "kezhan_bianzhong1_ring.png", "kezhan_bianzhong1_ring.png",
-                   "kezhan_bianzhong5_ring.png", "kezhan_bianzhong5_ring.png",
-                   "kezhan_bianzhong1_ring.png", "kezhan_bianzhong5_ring.png",
-                   "kezhan_bianzhong4_ring.png", "kezhan_bianzhong3_ring.png",
-                   "kezhan_bianzhong2_ring.png", "kezhan_bianzhong3_ring.png",
-                   "kezhan_bianzhong5_ring.png")
-YINLV_CLICK_INTERVAL = 1.45         # 编钟点击间隔（秒，用户实测 1s450ms）
+# 动态追亮点（2026-11-13 实测标定）：每轮轮询截一帧，在每钟模板中心
+# ROI 内数金色光晕像素（HSV 金掩码），最多的钟且达阈值即当前高亮钟，
+# 立即点击该钟。实测真机（指导音律）：亮钟 327-742 像素、带内噪声
+# ≤19、相邻钟无串扰（ROI 以模板中心 ±45×±40 裁切，钟间距约 95px）。
+YINLV_GLOW_POLL = 0.1               # 追亮点轮询周期（秒；截图+HSV+5 ROI，性能规则 1/10）
+YINLV_GLOW_THRESHOLD = 80           # 高亮判定金色像素阈值（单钟实测 ≥327，留余量）
+YINLV_GLOW_COOLDOWN = 0.5           # 同钟点击防抖（高亮残影/回放帧防连点；音符间隔实测 ≥1s）
+YINLV_BELL_ROI_HALF = (45, 40)      # 高亮检测 ROI 半宽/半高（相对编钟模板中心）
 YINLV_END_TIMEOUT = 120             # 小游戏总超时（秒）
-YINLV_END_MISSES = 3                # 窗口横幅连续未命中次数即判结束（0.5s×3=1.5s
-                                    # 防抖窗口，防单帧误判结束）
-# 演奏中窗口检查（每次点击前）：横幅消失 = 小游戏已结束/失败，剩余
-# 点击会落进世界画面（取消寻路/误点），必须立即停点。检查安排在点击
-# 时刻前 YINLV_CHECK_LEAD 秒，检查耗时从间隔中扣除后再补睡到点击
-# 时刻——点击节奏（相对间隔）不受检查耗时影响
-YINLV_CHECK_LEAD = 0.3              # 点击前提前检查窗口的提前量（秒）
-YINLV_CHECK_MISSES = 2              # 检查连续未命中次数判消失（单帧误判
-                                    # 会把仍在进行的演奏误判为失败）
-YINLV_CHECK_CONFIRM_WAIT = 0.15     # 检查未命中后的复查间隔（秒）
+YINLV_END_MISSES = 5                # 窗口横幅连续未命中轮询数即判结束（0.1s×5=0.5s 防抖）
 YINLV_BAND_MARGIN = 60              # 窗口横幅搜索条带相对检测点的余量（px）
-# _play_yinlv 返回状态（三态）：定位失败（窗口仍在）与演奏中途失败
-# （窗口已消失，须重新寻路）对调用方的后续动作要求不同
+# _play_yinlv 返回状态（二态）：横幅消失 = 完成（不再做失败判定——
+# 2026-11-13 用户规则，动态追亮点保证正确性）；仅定位超时（窗口仍在）
+# 返回 retry 保持 armed 下轮重试
 YINLV_DONE = "done"                 # 正常结束（横幅消失）
 YINLV_RETRY = "retry"               # 开始按钮/编钟定位超时：保持 armed 下轮重试
-YINLV_FAILED = "failed"             # 演奏未点完横幅就消失：已停点，重新点击寻路
 _yinlv_last_check = 0.0             # 上次 extras 窗口检测时间（限频）
 _yinlv_armed_at = 0.0               # 音律入口选项点击时间；>0 且未超时=检测开启
 # ---- 破除封印小游戏（灵兔封印：点对话框选项「消耗灵气，破除封印」后出现）----
@@ -1828,68 +1830,54 @@ def _yinlv_window_band(banner_pt):
             banner_pt[0] + w // 2 + m, banner_pt[1] + h // 2 + m)
 
 
-def _yinlv_window_alive(win, band=None):
-    """窗口横幅是否仍在（演奏中每次点击前的停止信号）。
+def _yinlv_bell_rois(bells):
+    """五个编钟的金色高亮检测 ROI（相对模板中心 ±YINLV_BELL_ROI_HALF）。
 
-    连续 YINLV_CHECK_MISSES 帧未命中才判消失（单帧误判会让仍在进行
-    的小游戏被误判失败、提前放弃整局）；截图失败视为仍在（宁可多点
-    一次也不误停）。返回 True=仍在 / False=已消失。
+    与 YINLV_BELLS 顺序一致；ROI 只在钟身附近，避免相邻钟光晕串扰
+    （实测钟间距约 95px，ROI 宽 90px）。
     """
-    misses = 0
-    while misses < YINLV_CHECK_MISSES:
-        img = win.capture(force_activate=False)
-        if img is None:
-            return True
-        bgr = cv2.cvtColor(np.asarray(img)[:, :, :3], cv2.COLOR_RGB2BGR)
-        if game_map.match_frame_np(bgr, YINLV_WINDOW_ICON,
-                                   threshold=YINLV_THRESHOLD,
-                                   region=band) is not None:
-            return True
-        misses += 1
-        if misses < YINLV_CHECK_MISSES:
-            time.sleep(YINLV_CHECK_CONFIRM_WAIT)
-    return False
+    hw, hh = YINLV_BELL_ROI_HALF
+    rois = []
+    for icon in YINLV_BELLS:
+        cx, cy = bells[icon]
+        rois.append((cx - hw, cy - hh, cx + hw, cy + hh))
+    return rois
 
 
-def _yinlv_window_gone(win, timeout=3.0, region=None):
-    """音律小游戏结束判定：窗口横幅连续 YINLV_END_MISSES 次轮询未命中
-    （0.5s 间隔，1.5s 防抖窗口，防单帧误判）。最多观察 timeout 秒，
-    未确认消失返回 False（窗口仍在）。region：窗口横幅搜索条带
-    （见 _yinlv_window_band，未命中仍全帧兜底）。"""
-    misses = 0
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        time.sleep(0.5)
-        img = win.capture(force_activate=False)
-        if img is None:
-            continue
-        bgr = cv2.cvtColor(np.asarray(img)[:, :, :3], cv2.COLOR_RGB2BGR)
-        if game_map.match_frame_np(bgr, YINLV_WINDOW_ICON,
-                                   threshold=YINLV_THRESHOLD,
-                                   region=region) is None:
-            misses += 1
-            if misses >= YINLV_END_MISSES:
-                return True
-        else:
-            misses = 0
-    return False
+def _yinlv_glow_index(bgr, rois):
+    """当前高亮编钟下标（金色光晕像素最多且达阈值的钟）；无高亮返回 None。
+
+    金色光晕判定用 HSV 金掩码（H 15-40 / S>120 / V>150），逐钟 ROI 计数。
+    实测（2026-11-13 真机）：亮钟 327-742 像素、带内噪声 ≤19。
+    """
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    mask = ((hsv[:, :, 0] > 15) & (hsv[:, :, 0] < 40)
+            & (hsv[:, :, 1] > 120) & (hsv[:, :, 2] > 150))
+    best_i, best_n = None, 0
+    for i, (l, t, r, b) in enumerate(rois):
+        n = int(mask[t:b, l:r].sum())
+        if n > best_n:
+            best_i, best_n = i, n
+    return best_i if best_n >= YINLV_GLOW_THRESHOLD else None
 
 
 def _play_yinlv(win, banner_pt=None):
     """音律小游戏完整流程（阻塞执行到窗口横幅消失）。
 
-    返回 (状态, 描述)，状态为 YINLV_DONE / YINLV_RETRY / YINLV_FAILED。
+    返回 (状态, 描述)，状态为 YINLV_DONE / YINLV_RETRY。
 
+    动态追亮点实现（2026-11-13 用户规则 + 实机验证）：点「开始演奏」
+    后游戏按随机顺序逐个点亮编钟（金色光晕，同一时刻只有一个钟亮，
+    上方另飘白色音符字），点亮哪一个就敲哪一个——旧的固定 15 音序列
+    只适用于辨八音（阿拉普）的固定曲谱，凤眠艺·指导音律同款窗口但
+    曲目随机，固定序列点不中。流程：
     1. 同帧定位「开始演奏」按钮与五个编钟（编钟位置在点开始前记住；
        点开始后倒计时期间画面会变化，不能点后再定位）
-    2. 点开始 → 按用户实测节奏点击（2026-11-03）：第一个编钟在点开始
-       后 YINLV_FIRST_INTERVAL 秒，其后每个间隔 YINLV_CLICK_INTERVAL 秒。
-       时间基准步进调度（t_next 绝对时刻），点击自身耗时（移动
-       40-90ms+点击）不累积漂移——点击落地间隔恒为 YINLV_CLICK_INTERVAL。
-       每次点击前检查窗口横幅（2026-11-12 用户规则）：消失立即停止
-       点击（剩余点击会落进世界画面），未点完就消失 = 演奏失败 →
-       YINLV_FAILED（调用方重新点击寻路重开一局）
-    3. 等窗口横幅连续 YINLV_END_MISSES 次未命中即结束
+    2. 点开始 → 按 YINLV_GLOW_POLL 轮询截图：先确认窗口横幅仍在
+       （消失立即停点，2026-11-12 用户规则），再检测金色高亮编钟 →
+       立即点击该钟（同钟 YINLV_GLOW_COOLDOWN 防抖）
+    3. 窗口横幅连续 YINLV_END_MISSES 次未命中即结束 = 完成（2026-11-13
+       用户规则：动态追亮点保证正确性，不再按敲击数判失败重新点击）
     banner_pt：extras 检测到的横幅中心，用于推导窗口检查条带。
     """
     band = _yinlv_window_band(banner_pt)
@@ -1915,47 +1903,50 @@ def _play_yinlv(win, banner_pt=None):
     if start_pt is None or bells is None:
         return YINLV_RETRY, "音律小游戏：定位开始按钮/编钟超时（模板未命中，待校准阈值）"
     log(f"[客栈] 音律小游戏：已定位 5 个编钟，点击开始演奏 "
-        f"@({start_pt[0]},{start_pt[1]})，首个编钟间隔 {YINLV_FIRST_INTERVAL}s", "SYS")
-    # 时间基准取点开始点击前一刻：点击落地（移动 40-90ms 后）约在
-    # t0+70ms，游戏在此刻注册开始——首个间隔 3.4s 按用户实测值包含
-    # 该落地延迟，从 t0 起算即可
-    t0 = time.time()
+        f"@({start_pt[0]},{start_pt[1]})，动态追亮点（{YINLV_GLOW_POLL}s 轮询）", "SYS")
     human_click(win, start_pt[0], start_pt[1])
-    # 阶段二：按固定节奏点击编钟，每次点击前检查窗口横幅。
-    # 检查提前 YINLV_CHECK_LEAD 秒开始，耗时从间隔里扣除，点击仍落在
-    # t_next（节奏不变）；横幅消失立即停点——未点完消失=失败。
+    # 阶段二：动态追亮点。每轮先确认横幅仍在（消失立即停点——剩余点击
+    # 会落进世界画面），再检测高亮钟并立即点击；同钟 0.5s 防抖。
+    rois = _yinlv_bell_rois(bells)
     deadline = time.time() + YINLV_END_TIMEOUT
-    if not YINLV_CLICK_SEQ:
-        log("[客栈] 音律点击顺序未配置（YINLV_CLICK_SEQ 为空），跳过点击直接等结束", "WARN")
-    else:
-        t_next = t0 + YINLV_FIRST_INTERVAL
-        clicked = 0
-        window_gone = False
-        for icon in YINLV_CLICK_SEQ:
-            delay = t_next - time.time()
-            if delay > 0:
-                time.sleep(max(0.0, delay - YINLV_CHECK_LEAD))
-            if not _yinlv_window_alive(win, band):
-                window_gone = True
-                break
-            # 补足检查耗时：点击落在 t_next（相对节奏不受检查影响）
-            rest = t_next - time.time()
-            if rest > 0:
-                time.sleep(rest)
-            pt = bells.get(icon)
-            if pt is not None:
-                human_click(win, pt[0], pt[1])
-                clicked += 1
-            t_next += YINLV_CLICK_INTERVAL
-        log(f"[客栈] 音律小游戏：已点击编钟 {clicked}/{len(YINLV_CLICK_SEQ)} 次", "SYS")
-        if window_gone:
-            return YINLV_FAILED, (f"音律小游戏失败：窗口横幅在点击 {clicked}/"
-                                  f"{len(YINLV_CLICK_SEQ)} 次后消失，重新寻路")
-    # 阶段三：等窗口横幅消失（连续 YINLV_END_MISSES 次未命中）
+    clicked = 0
+    misses = 0
+    ended = False
+    last_click = {}
+    t_next = time.time()
     while time.time() < deadline:
-        if _yinlv_window_gone(win, timeout=5.0, region=band):
-            return YINLV_DONE, "音律小游戏结束（窗口横幅消失）"
-    return YINLV_DONE, f"音律小游戏超时结束（{YINLV_END_TIMEOUT}s）"
+        now = time.time()
+        if now < t_next:
+            time.sleep(t_next - now)
+        t_next = time.time() + YINLV_GLOW_POLL
+        img = win.capture(force_activate=False)
+        if img is None:
+            continue  # 截图失败不算消失（宁可少点一次也不误停）
+        bgr = cv2.cvtColor(np.asarray(img)[:, :, :3], cv2.COLOR_RGB2BGR)
+        if game_map.match_frame_np(bgr, YINLV_WINDOW_ICON,
+                                   threshold=YINLV_THRESHOLD,
+                                   region=band) is None:
+            misses += 1
+            if misses >= YINLV_END_MISSES:
+                ended = True
+                break
+            continue
+        misses = 0
+        idx = _yinlv_glow_index(bgr, rois)
+        if idx is None:
+            continue
+        now = time.time()
+        if now - last_click.get(idx, -1e9) < YINLV_GLOW_COOLDOWN:
+            continue  # 高亮残影 / 回放帧：同钟防抖
+        icon = YINLV_BELLS[idx]
+        pt = bells[icon]
+        human_click(win, pt[0], pt[1])
+        last_click[idx] = now
+        clicked += 1
+    log(f"[客栈] 音律小游戏：已敲击编钟 {clicked} 次", "SYS")
+    if not ended:
+        return YINLV_DONE, f"音律小游戏超时结束（{YINLV_END_TIMEOUT}s）"
+    return YINLV_DONE, "音律小游戏结束（窗口横幅消失）"
 
 
 # 小游戏闭环实现见共享模块 pochufengyin（玄枢「钓鱼」复用同款窗口，
@@ -2154,23 +2145,7 @@ def _handle_follow_extras(win, items, img_np):
                     # 小游戏正常结束 → 关闭检测（定位失败的情况保持
                     # armed，窗口仍在时下轮询重试）
                     _yinlv_armed_at = 0.0
-                elif status == YINLV_FAILED:
-                    # 演奏没点完横幅就消失 = 失败（_play_yinlv 内已停止
-                    # 点击）→ 重新点击任务追踪绿字寻路，回 NPC 重开一局。
-                    # armed 保持：重进时入口选项点击会刷新时限，窗口若
-                    # 仍在（检查误判）也仍有检测兜底
-                    log(f"[客栈] {info}", "WARN")
-                    time.sleep(0.3)  # 等小游戏窗口完全关闭、世界画面恢复
-                    ok3, info3 = task_tracker.track_task(
-                        win, TASK_TITLE, green_order=GREEN_CLICK_ORDER,
-                        green_picker=_pick_task_green)
-                    if ok3:
-                        log("[客栈] 音律小游戏失败，已重新点击任务绿字寻路", "SYS")
-                    else:
-                        log(f"[客栈] 音律小游戏失败，重新寻路点击失败: {info3}", "WARN")
-                    return True
-                else:  # YINLV_RETRY：窗口仍在，保持 armed 下轮询重试
-                    log(f"[客栈] {info}", "WARN")
+                log(f"[客栈] {info}", "SYS" if status == YINLV_DONE else "WARN")
                 return True
         # 破除封印小游戏（灵兔封印）：入口选项「消耗灵气，破除封印」点击后
         # （armed 门控）检测窗口标题；出现即完整处理（阻塞到标题消失）。
@@ -2706,14 +2681,15 @@ def _clear_qiyu_popup(win, max_rounds=3):
 def _arm_yinlv_check(opt):
     """音律入口选项被点击 → 开启小游戏窗口检测（armed 门控）。
 
-    只有「来吧，我还怕了你不成？」被实际点击后才检测 kezhan_yinlv.png
-    横幅，其他任务阶段不跑这个模板匹配（无开销、无误配）。重复点击
-    入口选项会刷新时限；窗口处理完成或超时后检测自动关闭。
+    只有音律入口选项（辨八音「来吧，我还怕了你不成？」/指导音律
+    「好说，看我的。」）被实际点击后才检测 kezhan_yinlv.png 横幅，
+    其他任务阶段不跑这个模板匹配（无开销、无误配）。重复点击入口
+    选项会刷新时限；窗口处理完成或超时后检测自动关闭。
     """
     global _yinlv_armed_at
-    if opt == YINLV_ENTRY_OPTION:
+    if opt in YINLV_ENTRY_OPTIONS:
         _yinlv_armed_at = time.time()
-        log(f"[客栈] 已点击音律入口选项，开启小游戏窗口检测"
+        log(f"[客栈] 已点击音律入口选项「{opt}」，开启小游戏窗口检测"
             f"（{YINLV_ARM_TIMEOUT}s 内有效）", "SYS")
 
 

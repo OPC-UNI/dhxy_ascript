@@ -756,7 +756,7 @@ def test_near_luoyang_single_target_still_works():
                                 kezhan.DALI_TARGET_POS) is False
 
 
-# ---- 音律小游戏：演奏中横幅消失即停点/失败重开（2026-11-12 用户规则）----
+# ---- 音律小游戏：动态追亮点（2026-11-13 用户规则 + 实机验证） ----
 class _YinlvWin:
     """最小窗口桩：capture 返回固定形状 np 帧（_play_yinlv 只做转换）。"""
 
@@ -768,25 +768,29 @@ class _YinlvWin:
         return self.frame
 
 
-def _patch_yinlv(monkeypatch, window_hits, clicks, seq_len=5,
+def _patch_yinlv(monkeypatch, clicks, glows, window_hits,
                  locate_timeout=5.0):
-    """给 _play_yinlv 装模板桩：开始按钮+编钟必中；窗口横幅前
-    window_hits 次检查命中、之后消失（检查一次未命中还会复查一帧，
-    故消失判定消耗 2 次调用）。sleep 置空，节奏常量为 0 免真等待。"""
+    """给 _play_yinlv 装桩：开始按钮+编钟必中；窗口横幅前 window_hits
+    次检查命中、之后消失（连续 YINLV_END_MISSES 次未命中才停）；
+    glows 为逐轮询的高亮钟下标（耗尽后恒无高亮）。sleep/轮询/防抖
+    置零免真等待。"""
     bells = {icon: (100 + i, 200)
              for i, icon in enumerate(kezhan.YINLV_BELLS)}
-    monkeypatch.setattr(kezhan, "YINLV_CLICK_SEQ",
-                        tuple(kezhan.YINLV_BELLS)[:seq_len])
-    monkeypatch.setattr(kezhan, "YINLV_FIRST_INTERVAL", 0.0)
-    monkeypatch.setattr(kezhan, "YINLV_CLICK_INTERVAL", 0.0)
     monkeypatch.setattr(kezhan, "YINLV_LOCATE_TIMEOUT", locate_timeout)
+    monkeypatch.setattr(kezhan, "YINLV_GLOW_POLL", 0.0)
+    monkeypatch.setattr(kezhan, "YINLV_GLOW_COOLDOWN", 0.0)
     monkeypatch.setattr(kezhan.time, "sleep", lambda s: None)
     monkeypatch.setattr(kezhan, "is_in_battle_frame", lambda bgr: False)
     monkeypatch.setattr(kezhan, "_yinlv_locate_bells", lambda bgr: bells)
     monkeypatch.setattr(kezhan, "human_click",
                         lambda win, x, y, **k: clicks.append((x, y)))
     monkeypatch.setattr(kezhan, "log", lambda *a, **k: None)
-    state = {"checks": 0}
+    state = {"checks": 0, "glow": list(glows)}
+
+    def fake_glow(bgr, rois):
+        return state["glow"].pop(0) if state["glow"] else None
+
+    monkeypatch.setattr(kezhan, "_yinlv_glow_index", fake_glow)
 
     def fake_match(bgr, icon, threshold=0.8, region=None, fallback=True):
         if icon == kezhan.YINLV_START_ICON:
@@ -800,36 +804,58 @@ def _patch_yinlv(monkeypatch, window_hits, clicks, seq_len=5,
     return state
 
 
-def test_play_yinlv_stops_clicking_when_banner_gone(monkeypatch):
-    """横幅在点完序列前消失：立即停点（不再点剩余编钟），判失败。"""
+def test_play_yinlv_follows_glow_and_done_when_banner_gone(monkeypatch):
+    """点亮哪个敲哪个；横幅消失即停点，并按完成处理（2026-11-13 用户
+    规则：不再按敲击数判失败重新点击）。"""
     clicks = []
-    _patch_yinlv(monkeypatch, window_hits=2, clicks=clicks, seq_len=5)
+    _patch_yinlv(monkeypatch, clicks=clicks, glows=[0, 1, 2],
+                 window_hits=2)
     status, info = kezhan._play_yinlv(_YinlvWin(), banner_pt=None)
-    assert status == kezhan.YINLV_FAILED
-    assert "2/5" in info
-    # 开始按钮 1 次 + 编钟 2 次；第 3 个编钟前的检查发现消失 → 停点
+    assert status == kezhan.YINLV_DONE
+    assert "窗口横幅消失" in info
+    # 开始按钮 1 次 + 高亮钟 2 次；第 3 轮起横幅已消失 → 停点
     assert clicks[0] == (668, 552)
     assert len(clicks) == 3
 
 
-def test_play_yinlv_done_when_banner_stays(monkeypatch):
-    """横幅在点击期间全程在：点完整个序列 → 阶段三确认消失 → 正常结束。"""
+def test_play_yinlv_follows_glow_and_succeeds(monkeypatch):
+    """横幅在场期间逐个跟随高亮钟点击；横幅消失 → DONE。"""
     clicks = []
-    _patch_yinlv(monkeypatch, window_hits=5, clicks=clicks, seq_len=5)
+    _patch_yinlv(monkeypatch, clicks=clicks, glows=[4, 0, 3, 2, 1],
+                 window_hits=5)
     status, info = kezhan._play_yinlv(_YinlvWin(), banner_pt=None)
     assert status == kezhan.YINLV_DONE
     assert len(clicks) == 6  # 开始 1 + 编钟 5
+    # 点击落在对应编钟模板中心（编钟 i 中心 (100+i, 200)）
+    assert clicks[1:] == [(104, 200), (100, 200), (103, 200),
+                          (102, 200), (101, 200)]
 
 
 def test_play_yinlv_retry_when_locate_timeout(monkeypatch):
     """开始按钮/编钟定位超时（窗口仍在）：返回 retry 交给调用方保持
-    armed 重试，不触发重新寻路。"""
+    armed 重试。"""
     clicks = []
-    _patch_yinlv(monkeypatch, window_hits=0, clicks=clicks,
-                 locate_timeout=0.0)
+    _patch_yinlv(monkeypatch, clicks=clicks, glows=[],
+                 window_hits=0, locate_timeout=0.0)
     status, info = kezhan._play_yinlv(_YinlvWin(), banner_pt=None)
     assert status == kezhan.YINLV_RETRY
     assert clicks == []
+
+
+def test_yinlv_glow_index_picks_golden_bell():
+    """金色光晕落在哪个钟 ROI 就是哪个钟高亮；无高亮返回 None。"""
+    import cv2
+    import numpy as np
+    bells = {icon: (100 + i * 50, 150)
+             for i, icon in enumerate(kezhan.YINLV_BELLS)}
+    rois = kezhan._yinlv_bell_rois(bells)
+    hsv = np.zeros((300, 400, 3), np.uint8)
+    cv2.circle(hsv, (250, 150), 30, (22, 200, 220), -1)  # 3 号钟金色光晕
+    assert kezhan._yinlv_glow_index(cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR),
+                                    rois) == 3
+    empty = cv2.cvtColor(np.zeros((300, 400, 3), np.uint8),
+                         cv2.COLOR_HSV2BGR)
+    assert kezhan._yinlv_glow_index(empty, rois) is None
 
 
 def test_yinlv_window_band_from_banner_pt(monkeypatch):
@@ -866,19 +892,6 @@ def _patch_extras_for_yinlv(monkeypatch, play_result, tracks):
     monkeypatch.setattr(kezhan, "log", lambda *a, **k: None)
     monkeypatch.setattr(kezhan, "_yinlv_armed_at", time.time())
     monkeypatch.setattr(kezhan, "_yinlv_last_check", 0.0)
-
-
-def test_yinlv_failure_reclicks_track_link(monkeypatch):
-    """演奏中途失败 → 重新点击任务追踪绿字寻路；armed 保持（重进
-    时入口选项点击会刷新时限）。"""
-    tracks = []
-    _patch_extras_for_yinlv(
-        monkeypatch, (kezhan.YINLV_FAILED, "窗口横幅在点击 2/15 次后消失"),
-        tracks)
-    assert kezhan._handle_follow_extras(object(), [], None) is True
-    assert len(tracks) == 1
-    assert tracks[0]["green_order"] == kezhan.GREEN_CLICK_ORDER
-    assert kezhan._yinlv_armed_at > 0  # 失败不关闭检测
 
 
 def test_yinlv_done_disarms_and_skips_repath(monkeypatch):

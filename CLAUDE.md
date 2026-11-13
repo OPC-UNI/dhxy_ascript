@@ -120,6 +120,7 @@ Do not write `FindImages.find("some/path.png")` for a template that does not exi
 
 ## Anti-Patterns
 
+- **Using `windows-mcp` in this project — strictly forbidden** (user rule 2026-11-13): no desktop-level screenshots, mouse, or keyboard input; they interfere with the running game and the automation. Operate the game window through the project's own handle channel instead — see the `game-window-probe` skill (`src.game.find_main_window` + `win.capture(force_activate=False)` + silent click).
 - Guessing AScript APIs from memory instead of calling `search_api`.
 - Guessing text, id, desc, or class names from a screenshot.
 - Clicking coordinates when selectors are available.
