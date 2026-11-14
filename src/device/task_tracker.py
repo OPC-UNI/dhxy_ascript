@@ -738,6 +738,25 @@ def has_task(win, title, fallback_texts=(), fast_absent=False):
     return has_task_in(items, img_np, title, fallback_texts)
 
 
+def task_absent_in_frame(img, title, fallback_texts=()):
+    """单帧判定追踪面板已无指定任务（任务消失确认方向，fast_absent 语义）。
+
+    标题条模板未命中且无背包/地图遮挡面板 → 视为任务已消失（与
+    has_task(fast_absent=True) 同一早退规则）；模板命中则只 OCR 内容区。
+    只用于「确认任务消失」，不得用于「False 触发重试/重领」方向的判定。
+    供战斗失败判定复用调用方已截帧（修罗/五倍，2026-11-14）。
+    返回 (是否无任务, OCR 行)；被遮挡面板覆盖、无法确认时返回 (False, None)。
+    """
+    img_np = np.asarray(img)
+    region = track_content_region(img_np)
+    if region is None:
+        if panel_occluded(img):
+            return False, None
+        return True, None
+    items, _ = game_map.ocr_region(img, region)
+    return (not has_task_in(items, img_np, title, fallback_texts)), items
+
+
 def find_task(tasks, title):
     """在任务列表中查找指定任务（标题优先，其次拼接后的内容）。
 

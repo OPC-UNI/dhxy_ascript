@@ -489,6 +489,63 @@ def test_follow_battle_gap_keeps_battle_end_fastpath(monkeypatch):
     assert confirm_at == [2.0]
 
 
+# ---- follow 战斗结束回调：须先于任务消失确认（修罗战斗失败，2026-11-14） ----
+
+def test_follow_battle_end_handler_aborts_before_gone_check(monkeypatch):
+    """battle_end_handler 返回 True：follow 立即失败返回，不进入任务
+    消失确认——死亡落轮回司时面板被收起，若先确认会把战败误判成完成。"""
+    clock = _GoneClock()
+    frames = [True, False]  # 内层：战斗帧 → 战斗结束首帧
+    confirms, handler_calls = [], []
+
+    class _Win:
+        def capture(self, force_activate=False):
+            return object()
+
+    task = {"title": "常规玩法", "lines": [("前往龙窟五层消灭修罗", None)],
+            "text": "常规玩法"}
+    monkeypatch.setattr(engine, "time", clock)
+    monkeypatch.setattr(engine, "log", lambda *a, **k: None)
+    monkeypatch.setattr(engine, "battle_watch_in_battle", lambda: False)
+    monkeypatch.setattr(engine, "is_in_battle", lambda win: False)
+    monkeypatch.setattr(engine, "is_in_battle_frame",
+                        lambda img: frames.pop(0) if frames else False)
+    monkeypatch.setattr(
+        engine, "_confirm_task_gone",
+        lambda *a, **k: confirms.append(1) or True)
+    monkeypatch.setattr(engine, "_task_gone_dialog_guard",
+                        lambda *a, **k: False)
+    monkeypatch.setattr(engine, "_maybe_sheyaoxiang", lambda win: None)
+    monkeypatch.setattr(engine.app_utils, "mark_track_walk", lambda: None)
+    monkeypatch.setattr(engine.debug_overlay, "set_phase", lambda *a: None)
+    monkeypatch.setattr(engine.tab_group, "pass_active", False)
+    monkeypatch.setattr(engine.tab_group, "active", lambda: False)
+    monkeypatch.setattr(engine.task_tracker, "ocr_follow",
+                        lambda img: ([("常规玩法", [10, 240, 180, 258], 0.99)],
+                                     None))
+    monkeypatch.setattr(engine.task_tracker, "group_tasks",
+                        lambda items, xmax=0: [])
+    monkeypatch.setattr(engine.task_tracker, "panel_row_xmax",
+                        lambda img_np: 400)
+    monkeypatch.setattr(engine.task_tracker, "find_task",
+                        lambda tasks, title: task)
+    monkeypatch.setattr(engine.task_tracker, "task_signature",
+                        lambda t: "常规玩法|前往龙窟五层消灭修罗")
+    monkeypatch.setattr(engine.task_tracker, "track_task",
+                        lambda win, title, **k: (True, "已点击"))
+
+    def _handler(win, img):
+        handler_calls.append(clock.t)
+        return True
+
+    ok, info = engine.follow_task(_Win(), "常规玩法", timeout=30,
+                                  battle_end_handler=_handler)
+    assert ok is False
+    assert info == "战斗结束判定为战斗失败"
+    assert handler_calls  # 战斗结束首帧调用一次
+    assert confirms == []  # 回调先于任务消失确认，确认不得执行
+
+
 # ---- 任务消失确认：面板缺席即任务结束（用户 2026-11-12 规则） ----
 def _patch_follow_minimal(monkeypatch, confirms):
     """装配 follow_task 最小环境：任务从未出现在面板，首个确认即返回。"""

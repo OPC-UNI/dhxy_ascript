@@ -383,3 +383,377 @@ def test_task_still_tracked_before_return_false(monkeypatch):
     monkeypatch.setattr(xiuluo.task_tracker, "has_task",
                         lambda win, title, fallback, **kwargs: False)
     assert xiuluo._task_still_tracked_before_return(_FakeWin()) is False
+
+
+# ---- 取消任务（2026-11-14 用户指定：流程同领取，选项「我想取消任务」） ----
+
+def test_cancel_task_skips_when_no_task(monkeypatch):
+    """无追踪任务：不进入取消流程（入口不出现，防误点其他对话框选项）。"""
+    monkeypatch.setattr(xiuluo, "is_in_battle", lambda w: False)
+    monkeypatch.setattr(xiuluo.task_tracker, "has_task",
+                        lambda *a, **k: False)
+    walked = []
+    monkeypatch.setattr(xiuluo, "_walk_to_claim_spot",
+                        lambda w: walked.append(1) or (True, ""))
+    ok, info = xiuluo._cancel_task(_FakeWin())
+    assert ok is False and "无需取消" in info
+    assert walked == []
+
+
+def test_cancel_task_happy_path(monkeypatch):
+    """走位→点入口模板→点「我想取消任务」→连续 2 轮无任务确认成功。"""
+    clock = _FakeClock()
+    monkeypatch.setattr(xiuluo, "time", clock)
+    monkeypatch.setattr(xiuluo, "is_in_battle", lambda w: False)
+    monkeypatch.setattr(xiuluo.task_tracker, "has_task", lambda *a, **k: True)
+    monkeypatch.setattr(xiuluo, "_walk_to_claim_spot", lambda w: (True, ""))
+    captured = {}
+
+    def fake_entry(w, **kwargs):
+        captured.update(kwargs)
+        return True, "ok", "灵兽村使者", (300, 300), ([], None)
+
+    monkeypatch.setattr(xiuluo, "_click_entry_ensuring_dialog", fake_entry)
+    clicks = []
+    monkeypatch.setattr(xiuluo, "_click_cancel_option",
+                        lambda w, items, img_np: clicks.append(1) or True)
+    monkeypatch.setattr(xiuluo, "is_in_battle_frame", lambda img: False)
+    monkeypatch.setattr(xiuluo, "_task_absent_in_frame",
+                        lambda img: (True, []))
+    monkeypatch.setattr(xiuluo, "log", lambda *a, **k: None)
+    ok, info = xiuluo._cancel_task(_FakeWin())
+    assert ok is True and info == "已取消修罗任务"
+    # 入口打开对话框按取消选项判定，且用独立缓存键（不与领取选项共键）
+    assert captured["option_needles"] == xiuluo.CANCEL_OPTION_NEEDLES
+    assert captured["option_cache_key"] == "cancel_option"
+    assert captured["action"] == "取消任务"
+    assert clicks == [1]
+
+
+def test_cancel_task_fails_when_task_remains(monkeypatch):
+    """点中选项但任务仍在面板：超时返回失败并提示残留文案。"""
+    clock = _FakeClock()
+    monkeypatch.setattr(xiuluo, "time", clock)
+    monkeypatch.setattr(xiuluo, "is_in_battle", lambda w: False)
+    monkeypatch.setattr(xiuluo.task_tracker, "has_task", lambda *a, **k: True)
+    monkeypatch.setattr(xiuluo, "_walk_to_claim_spot", lambda w: (True, ""))
+    monkeypatch.setattr(xiuluo, "_click_entry_ensuring_dialog",
+                        lambda w, **k: (True, "ok", "使者", (1, 1), ([], None)))
+    monkeypatch.setattr(xiuluo, "_click_cancel_option",
+                        lambda w, items, img_np: True)
+    monkeypatch.setattr(xiuluo, "is_in_battle_frame", lambda img: False)
+    monkeypatch.setattr(
+        xiuluo, "_task_absent_in_frame",
+        lambda img: (False, [("前往瑶池消灭修罗", (20, 240, 300, 262), 0.9)]))
+    monkeypatch.setattr(xiuluo.game_map, "ocr_regions",
+                        lambda img, regions: ([], None))
+    monkeypatch.setattr(xiuluo, "log", lambda *a, **k: None)
+    ok, info = xiuluo._cancel_task(_FakeWin())
+    assert ok is False
+    assert "仍在追踪面板" in info and "消灭修罗" in info
+    assert clock.t >= xiuluo.CANCEL_VERIFY_WAIT - 0.01
+
+
+def test_click_cancel_option_uses_cancel_needles(monkeypatch):
+    """取消选项匹配串与缓存键独立于领取选项。"""
+    captured = {}
+
+    def fake(win, items, img_np, **kwargs):
+        captured.update(kwargs)
+        return True
+
+    monkeypatch.setattr(claim_flow, "click_claim_option", fake)
+    assert xiuluo._click_cancel_option(_FakeWin(), [], None) is True
+    assert captured["needles"] == xiuluo.CANCEL_OPTION_NEEDLES
+    assert captured["cache_key"] == "cancel_option"
+
+
+def test_verify_cancel_flow_hovers_without_cancelling(monkeypatch):
+    """验证流程只定位取消选项、点屏幕中间关对话框，不真正取消。"""
+    monkeypatch.setattr(xiuluo, "is_in_battle", lambda w: False)
+    monkeypatch.setattr(xiuluo.task_tracker, "has_task", lambda *a, **k: True)
+    monkeypatch.setattr(xiuluo, "_walk_to_claim_spot", lambda w: (True, ""))
+    monkeypatch.setattr(
+        xiuluo, "_click_entry_ensuring_dialog",
+        lambda w, **k: (True, "ok", "使者", (1, 1), ([], None)))
+    monkeypatch.setattr(
+        xiuluo, "_find_claim_option",
+        lambda items, img_np, needles=None: (600, 310, "我想取消任务", False))
+    clicks = []
+    monkeypatch.setattr(xiuluo, "human_click",
+                        lambda w, x, y, **k: clicks.append((x, y)))
+    monkeypatch.setattr(xiuluo, "log", lambda *a, **k: None)
+    ok, info = xiuluo.verify_cancel_flow(_FakeWin(), silent=True)
+    assert ok is True and "验证通过" in info
+    assert clicks == [xiuluo.SCREEN_CENTER_POS]
+
+
+# ---- 取消校验的单帧消失判定（fast_absent 语义） ----
+
+def test_task_absent_in_frame_panel_missing(monkeypatch):
+    """追踪面板缺席且无遮挡面板：按任务消失（免 OCR 内容区）。"""
+    monkeypatch.setattr(xiuluo.task_tracker, "track_content_region",
+                        lambda img_np: None)
+    monkeypatch.setattr(xiuluo.task_tracker, "panel_occluded",
+                        lambda img: False)
+
+    def _boom(*a, **k):
+        raise AssertionError("面板缺席不应 OCR")
+
+    monkeypatch.setattr(xiuluo.game_map, "ocr_region", _boom)
+    assert xiuluo._task_absent_in_frame(_FakeWin().capture()) == (True, None)
+
+
+def test_task_absent_in_frame_occluded_not_confirmed(monkeypatch):
+    """面板被背包/地图遮挡：不能当作任务消失（返回无法确认）。"""
+    monkeypatch.setattr(xiuluo.task_tracker, "track_content_region",
+                        lambda img_np: None)
+    monkeypatch.setattr(xiuluo.task_tracker, "panel_occluded",
+                        lambda img: True)
+    assert xiuluo._task_absent_in_frame(_FakeWin().capture()) == (False, None)
+
+
+def test_task_absent_in_frame_panel_visible_uses_content_ocr(monkeypatch):
+    """面板在场：只 OCR 内容区，按 has_task_in 判定。"""
+    monkeypatch.setattr(xiuluo.task_tracker, "track_content_region",
+                        lambda img_np: (0, 230, 300, 500))
+    ocr_calls = []
+    monkeypatch.setattr(xiuluo.game_map, "ocr_region",
+                        lambda img, region: ocr_calls.append(region) or ([], None))
+    monkeypatch.setattr(xiuluo.task_tracker, "has_task_in",
+                        lambda items, img_np, title, fallback=(): False)
+    assert xiuluo._task_absent_in_frame(_FakeWin().capture()) == (True, [])
+    assert ocr_calls == [(0, 230, 300, 500)]
+
+
+# ---- 战斗失败判定（用户 2026-11-14：战后任务仍在 / 落轮回司） ----
+
+def test_on_battle_end_dead_in_lunhuisi(monkeypatch):
+    """战斗结束位置为轮回司：判定失败（死亡优先于任务消失确认）。"""
+    monkeypatch.setattr(xiuluo, "log", lambda *a, **k: None)
+    monkeypatch.setattr(xiuluo.game_map, "read_map_position",
+                        lambda w, img=None: ("轮回司", 38, 20))
+    monkeypatch.setattr(xiuluo, "_battle_failed_reason", None)
+    monkeypatch.setattr(xiuluo, "_fight_via_kanda", True)
+    assert xiuluo._on_battle_end(_FakeWin(), _FakeWin().capture()) is True
+    assert xiuluo._battle_failed_reason == "dead"
+
+
+def test_on_battle_end_task_present_after_kanda(monkeypatch):
+    """看打战斗结束任务仍在追踪（复核仍在）：判定失败。"""
+    clock = _FakeClock()
+    monkeypatch.setattr(xiuluo, "time", clock)
+    monkeypatch.setattr(xiuluo, "log", lambda *a, **k: None)
+    monkeypatch.setattr(xiuluo.game_map, "read_map_position",
+                        lambda w, img=None: ("长安城东", 100, 120))
+    monkeypatch.setattr(xiuluo, "_battle_failed_reason", None)
+    monkeypatch.setattr(xiuluo, "_fight_via_kanda", True)
+    monkeypatch.setattr(
+        xiuluo, "_task_absent_in_frame",
+        lambda img: (False, [("前往长安城东消灭修罗",
+                              (30, 240, 290, 262), 0.9)]))
+    assert xiuluo._on_battle_end(_FakeWin(), _FakeWin().capture()) is True
+    assert xiuluo._battle_failed_reason == "task"
+    assert clock.t >= 0.5  # 战斗结束首帧后复核一次
+
+
+def test_on_battle_end_task_lingering_row_not_failure(monkeypatch):
+    """完成瞬间任务行仍在退出动画：复核已消失 → 不判失败。"""
+    clock = _FakeClock()
+    monkeypatch.setattr(xiuluo, "time", clock)
+    monkeypatch.setattr(xiuluo, "log", lambda *a, **k: None)
+    monkeypatch.setattr(xiuluo.game_map, "read_map_position",
+                        lambda w, img=None: ("长安城东", 100, 120))
+    monkeypatch.setattr(xiuluo, "_battle_failed_reason", None)
+    monkeypatch.setattr(xiuluo, "_fight_via_kanda", True)
+    seq = [(False, [("前往长安城东消灭修罗", (30, 240, 290, 262), 0.9)]),
+           (True, [])]
+    monkeypatch.setattr(xiuluo, "_task_absent_in_frame",
+                        lambda img: seq.pop(0))
+    assert xiuluo._on_battle_end(_FakeWin(), _FakeWin().capture()) is False
+    assert xiuluo._battle_failed_reason is None
+
+
+def test_on_battle_end_random_battle_task_present_not_failure(monkeypatch):
+    """随机遭遇战结束任务仍在属正常，不按失败处理（看打门控）。"""
+    monkeypatch.setattr(xiuluo, "log", lambda *a, **k: None)
+    monkeypatch.setattr(xiuluo.game_map, "read_map_position",
+                        lambda w, img=None: ("长安城东", 100, 120))
+    monkeypatch.setattr(xiuluo, "_battle_failed_reason", None)
+    monkeypatch.setattr(xiuluo, "_fight_via_kanda", False)
+    monkeypatch.setattr(xiuluo, "_task_absent_in_frame",
+                        lambda img: (False, [("前往长安城东消灭修罗",
+                                              (30, 240, 290, 262), 0.9)]))
+    assert xiuluo._on_battle_end(_FakeWin(), _FakeWin().capture()) is False
+    assert xiuluo._battle_failed_reason is None
+
+
+def test_on_battle_end_position_unreadable_retries(monkeypatch):
+    """战斗结束首帧位置未渲染：补读 2 次（共 ~1s），读不出不判失败。"""
+    clock = _FakeClock()
+    monkeypatch.setattr(xiuluo, "time", clock)
+    monkeypatch.setattr(xiuluo, "log", lambda *a, **k: None)
+    calls = []
+    monkeypatch.setattr(xiuluo.game_map, "read_map_position",
+                        lambda w, img=None: calls.append(1) or None)
+    monkeypatch.setattr(xiuluo, "_battle_failed_reason", None)
+    monkeypatch.setattr(xiuluo, "_fight_via_kanda", True)
+    monkeypatch.setattr(xiuluo, "_task_absent_in_frame", lambda img: (True, None))
+    assert xiuluo._on_battle_end(_FakeWin(), _FakeWin().capture()) is False
+    assert len(calls) == 3
+    assert clock.t >= 1.0
+
+
+def test_on_battle_end_win_task_gone_not_failure(monkeypatch):
+    """战斗胜利任务消失（位置非轮回司）：正常完成，不判失败。"""
+    monkeypatch.setattr(xiuluo, "log", lambda *a, **k: None)
+    monkeypatch.setattr(xiuluo.game_map, "read_map_position",
+                        lambda w, img=None: ("长安城东", 100, 120))
+    monkeypatch.setattr(xiuluo, "_battle_failed_reason", None)
+    monkeypatch.setattr(xiuluo, "_fight_via_kanda", True)
+    monkeypatch.setattr(xiuluo, "_task_absent_in_frame",
+                        lambda img: (True, None))
+    assert xiuluo._on_battle_end(_FakeWin(), _FakeWin().capture()) is False
+    assert xiuluo._battle_failed_reason is None
+
+
+# ---- 战斗失败恢复（取消重领 / 非队长归队） ----
+
+def test_recover_battle_failure_non_leader_keep_alive(monkeypatch):
+    """非队长：不取消/重领，转保持模式并自动归队。"""
+    monkeypatch.setattr(xiuluo, "log", lambda *a, **k: None)
+    monkeypatch.setattr(
+        xiuluo, "_check_team_with_retry",
+        lambda w, **k: ("not_leader", "非队长（队伍面板无解散按钮）"))
+    kept = []
+    monkeypatch.setattr(xiuluo, "_keep_alive",
+                        lambda w, info: kept.append(info))
+    status, info = xiuluo._recover_battle_failure(_FakeWin(), True)
+    assert status == "failed" and "保持模式" in info
+    assert kept and "非队长" in kept[0]
+
+
+def test_recover_battle_failure_canceled_then_reclaim(monkeypatch):
+    """队长取消成功：等 6s 重新领取，并复位队伍检查标记。"""
+    clock = _FakeClock()
+    monkeypatch.setattr(xiuluo, "time", clock)
+    monkeypatch.setattr(xiuluo, "log", lambda *a, **k: None)
+    monkeypatch.setattr(xiuluo, "_check_team_with_retry",
+                        lambda w, **k: ("ready", "队伍满足"))
+    monkeypatch.setattr(xiuluo.game_map, "read_map_position",
+                        lambda w, img=None: ("灵兽村", 117, 95))
+    monkeypatch.setattr(xiuluo, "_cancel_task",
+                        lambda w: (True, "已取消修罗任务"))
+    monkeypatch.setattr(xiuluo, "_team_checked", True)
+    monkeypatch.setattr(xiuluo, "_task_gone_last_round", False)
+    monkeypatch.setattr(xiuluo, "_battle_recovery_pending", True)
+    status, info = xiuluo._recover_battle_failure(_FakeWin(), True)
+    assert status == "canceled" and "重新领取" in info
+    assert clock.t >= xiuluo.CANCEL_RE_CLAIM_DELAY
+    assert xiuluo._team_checked is False
+    assert xiuluo._task_gone_last_round is True
+    assert xiuluo._battle_recovery_pending is False  # 恢复完成：清除重试标记
+
+
+def test_recover_battle_failure_completed_when_task_gone(monkeypatch):
+    """战斗胜利后死亡（任务已消失）：无需取消，按本轮完成处理。"""
+    monkeypatch.setattr(xiuluo, "log", lambda *a, **k: None)
+    monkeypatch.setattr(xiuluo, "time", _FakeClock())
+    monkeypatch.setattr(xiuluo, "_check_team_with_retry",
+                        lambda w, **k: ("ready", "队伍满足"))
+    monkeypatch.setattr(xiuluo.game_map, "read_map_position",
+                        lambda w, img=None: ("灵兽村", 117, 95))
+    monkeypatch.setattr(
+        xiuluo, "_cancel_task",
+        lambda w: (False, "任务追踪中无修罗任务，无需取消"))
+    monkeypatch.setattr(xiuluo, "_task_gone_last_round", False)
+    monkeypatch.setattr(xiuluo, "_battle_recovery_pending", True)
+    status, info = xiuluo._recover_battle_failure(_FakeWin(), True)
+    assert status == "completed" and "按本轮完成" in info
+    assert xiuluo._task_gone_last_round is True
+    assert xiuluo._battle_recovery_pending is False
+
+
+def test_recover_battle_failure_lunhuisi_uses_talisman(monkeypatch):
+    """落轮回司：世界地图不可用，改走修罗回城符返程（2026-11-11 实测）。"""
+    monkeypatch.setattr(xiuluo, "log", lambda *a, **k: None)
+    monkeypatch.setattr(xiuluo, "time", _FakeClock())
+    monkeypatch.setattr(xiuluo.game_map, "read_map_position",
+                        lambda w, img=None: ("轮回司", 38, 20))
+    calls = []
+    monkeypatch.setattr(
+        xiuluo, "_return_to_npc",
+        lambda w: calls.append("talisman") or (True, "已返回灵兽村"))
+    monkeypatch.setattr(
+        xiuluo, "_walk_to_claim_spot",
+        lambda w, **k: (_ for _ in ()).throw(
+            AssertionError("轮回司不应走世界地图")))
+    monkeypatch.setattr(xiuluo, "_cancel_task",
+                        lambda w: (True, "已取消修罗任务"))
+    monkeypatch.setattr(xiuluo, "_team_checked", True)
+    status, _info = xiuluo._recover_battle_failure(_FakeWin(), False)
+    assert status == "canceled" and calls == ["talisman"]
+
+
+def test_recover_battle_failure_return_failed(monkeypatch):
+    """回灵兽村多次失败：报告失败（主循环下轮重试）。"""
+    clock = _FakeClock()
+    monkeypatch.setattr(xiuluo, "time", clock)
+    monkeypatch.setattr(xiuluo, "log", lambda *a, **k: None)
+    monkeypatch.setattr(xiuluo.game_map, "read_map_position",
+                        lambda w, img=None: ("长安", 100, 100))
+    monkeypatch.setattr(xiuluo, "_walk_to_claim_spot",
+                        lambda w, **k: (False, "寻路超时"))
+    monkeypatch.setattr(xiuluo, "_return_to_npc",
+                        lambda w: (False, "背包打开失败"))
+    monkeypatch.setattr(xiuluo, "_battle_recovery_pending", False)
+    status, info = xiuluo._recover_battle_failure(_FakeWin(), False)
+    assert status == "failed" and "回灵兽村失败" in info
+    assert clock.t >= 3 * 3.0  # 3 次重试间隔
+    # 恢复未完成：下一轮先重试恢复，不得回走任务跟踪
+    assert xiuluo._battle_recovery_pending is True
+
+
+def test_recover_battle_failure_cancel_failed_sets_pending(monkeypatch):
+    """取消任务失败：标记待恢复重试（下一轮不回走跟踪）。"""
+    monkeypatch.setattr(xiuluo, "log", lambda *a, **k: None)
+    monkeypatch.setattr(xiuluo, "time", _FakeClock())
+    monkeypatch.setattr(xiuluo, "_check_team_with_retry",
+                        lambda w, **k: ("ready", "队伍满足"))
+    monkeypatch.setattr(xiuluo.game_map, "read_map_position",
+                        lambda w, img=None: ("灵兽村", 117, 95))
+    monkeypatch.setattr(xiuluo, "_cancel_task",
+                        lambda w: (False, "取消对话框未识别到绿色选项「我想取消任务」"))
+    monkeypatch.setattr(xiuluo, "_battle_recovery_pending", False)
+    status, info = xiuluo._recover_battle_failure(_FakeWin(), True)
+    assert status == "failed" and "取消任务失败" in info
+    assert xiuluo._battle_recovery_pending is True
+
+
+def test_recover_battle_failure_transient_identity_sets_pending(monkeypatch):
+    """身份瞬态无法判定：标记待恢复重试，不贸然取消任务。"""
+    monkeypatch.setattr(xiuluo, "log", lambda *a, **k: None)
+    monkeypatch.setattr(xiuluo, "_check_team_with_retry",
+                        lambda w, **k: ("not_leader", "队长无法判定（面板按钮未命中）"))
+    monkeypatch.setattr(xiuluo, "_battle_recovery_pending", False)
+    status, info = xiuluo._recover_battle_failure(_FakeWin(), True)
+    assert status == "failed" and "身份无法判定" in info
+    assert xiuluo._battle_recovery_pending is True
+
+
+def test_follow_to_done_wires_battle_end_handler(monkeypatch):
+    """跟踪起点复位看打标记与失败原因，并注入战斗结束回调。"""
+    captured = {}
+
+    def fake_follow(win, first_items=None, **kwargs):
+        captured.update(kwargs)
+        return True, "完成"
+
+    monkeypatch.setattr(claim_flow, "follow_to_done", fake_follow)
+    monkeypatch.setattr(xiuluo, "_fight_via_kanda", True)
+    monkeypatch.setattr(xiuluo, "_battle_failed_reason", "dead")
+    ok, _info = xiuluo._follow_to_done(_FakeWin())
+    assert ok is True
+    assert captured["battle_end_handler"] is xiuluo._on_battle_end
+    assert xiuluo._fight_via_kanda is False
+    assert xiuluo._battle_failed_reason is None

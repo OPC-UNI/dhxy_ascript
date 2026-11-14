@@ -23,6 +23,10 @@
 3. 对话开打：寻路到达后出现对话面板 → 点击绿色选项「看打！」进入战斗
    （点击成功标记本轮战斗由「看打！」进入）
 4. 战斗：战斗由 battle.watch_loop 线程自动操作；follow_task 战斗中自动跳过识别
+   战斗失败（用户 2026-11-14）：战斗结束任务仍在追踪、或战死落轮回司
+   → 队长回灵兽村（轮回司世界地图不可用，走修罗回城符）→ 点「我想
+   取消任务」→ 6s 后重新领取（重新领取前强制队伍检查：暂离/组号队员
+   归队/超时请离/补人）；非队长不取消/重领，转保持模式并自动归队
 5. 返程：战斗结束后用修罗回城符回灵兽村（仅「看打！」进入的战斗才返程，
    其他方式进入的战斗不自动返程）：返程前 has_task 复查任务确已消失
    （单轮消失确认的兜底）→ 打开背包 → 打开任务储物格
@@ -61,11 +65,13 @@ from ..core.settings import (load_task_counts, load_xiuluo_settings,
                              load_xiuluo_check_team,
                              load_xiuluo_auto_create_team,
                              load_xiuluo_auto_rejoin,
+                             load_xiuluo_auto_kick_away,
+                             load_xiuluo_kick_away_minutes,
                              load_xiuluo_auto_wuyi,
                              load_xiuluo_wuyi_interval,
                              load_xiuluo_auto_repair,
                              load_xiuluo_repair_interval,
-                             load_xiuluo_tab_group)  # 任务次数上限/修罗设置/自动巫医/自动修理/自动归队/组号开关
+                             load_xiuluo_tab_group)  # 任务次数上限/修罗设置/自动巫医/自动修理/自动归队/暂离请离/组号开关
 from ..workflows.team_flow import TeamFlow  # 组队流程编排（检查/建队/补人/喊话/归队）
 from ..workflows import return_flow  # 返程流程编排（开箱/回程道具/清屏/归位）
 from ..workflows import claim_flow  # 领取共享流程（选项/地图门控/校验探针）
@@ -147,6 +153,27 @@ CLAIM_FOLLOW_RECOVER_WINDOW = 30              # 领取后首次跟踪失败的�
                                               # 首次点击及其重试实测 9s、慢 OCR 下 ~20s；
                                               # 窗口外的同类失败视为跟踪中期，不补偿
 
+# ---- 取消任务（用户 2026-11-14 指定：流程与领取一致——先点领取入口
+#      模板打开对话框，取消时改点绿色选项「我想取消任务」） ----
+CANCEL_DIALOG_OPTION = "我想取消任务"          # 取消任务对话框绿色选项（用户给出原文）
+CANCEL_OPTION_TAIL = "取消任务"                # 选项换行渲染时的尾部匹配串（同领取：
+                                              # 完整文案被 OCR 拆行时尾部可命中）
+CANCEL_OPTION_NEEDLES = (norm_text(CANCEL_DIALOG_OPTION),
+                         norm_text(CANCEL_OPTION_TAIL))  # 完整→尾部。杜绝裸「取消」
+                                              # 兜底：取消确认弹窗的「取消」是放弃取消，
+                                              # 裸关键词会把确认点反
+CANCEL_VERIFY_WAIT = 10                       # 取消后等待任务从追踪面板消失的轮询时长
+CANCEL_VERIFY_POLL_INTERVAL = 0.8             # 消失确认轮询间隔（同领取校验 0.8s）
+CANCEL_VERIFY_GONE_POLLS = 2                  # 连续「无任务」确认轮数（防面板重绘
+                                              # 瞬时漏检；与 follow 任务消失确认同思路）
+
+# ---- 战斗失败恢复（用户 2026-11-14 指定）：作为队长，任务战斗失败 →
+#      回灵兽村取消任务 → 6s 后重新领取；人数不足走既有检查暂离/补人流程 ----
+CANCEL_RE_CLAIM_DELAY = 6                     # 取消任务后重新领取的等待（秒，用户指定）
+_lunhuisi_retry_count = 3                     # 战斗失败后回灵兽村的重试次数（回城符
+                                              # 打开任务储物格偶发失败，2026-11-11 日志
+                                              # 死亡后首次打开失败、稍后成功）
+
 # ---- 自动巫医（用户流程：领取后每 N 轮一次，无条件医治——血蓝正常
 #      也照常巫医，2026-10-09 用户确认；对话框处理复用战斗线程逻辑） ----
 WUYI_NPC_ICON = "xiuluo_lingshoucunwuyi.png"  # 巫医 NPC（点击打开医治对话框）
@@ -193,11 +220,24 @@ _team_flow = TeamFlow(
     auto_rejoin=load_xiuluo_auto_rejoin, shout_text=lambda: _shout_text,
     check_retry_interval=TEAM_CHECK_RETRY_INTERVAL,
     recog_retry_interval=TEAM_RECOG_RETRY_INTERVAL,
-    shout_min_interval=SHOUT_MIN_INTERVAL)
+    shout_min_interval=SHOUT_MIN_INTERVAL,
+    # 暂离超时自动请离（修罗设置开关 + 分钟数，默认开/5 分钟）：
+    # 队伍检查时传入 team.check_team_min；关闭时只停请离，组号暂离
+    # 队员归队 pass 仍照常执行
+    kick_overdue=load_xiuluo_auto_kick_away,
+    kick_timeout=lambda: load_xiuluo_kick_away_minutes() * 60)
 
 # ---- 对话开打（寻路到达后出现对话面板） ----
 FIGHT_DIALOG_OPTION = "看打！"  # 对话面板绿色选项（点击进入战斗，游戏内原文）
 _fight_via_kanda = False        # 本轮战斗是否由「看打！」进入（决定战后是否返程）
+_battle_failed_reason = None    # 战斗失败原因（None=未失败；"task"=战后任务仍在
+                                # 追踪；"dead"=战后落轮回司）：follow 的
+                                # battle_end_handler 置位、主循环消费后走
+                                # 队长取消重领 / 非队长归队恢复（用户 2026-11-14）
+_battle_recovery_pending = False  # 战斗失败恢复未完成（回灵兽村/取消任务失败）：
+                                # 下一轮开始先重试恢复，不得回到任务跟踪——
+                                # 旧任务仍在追踪，直接继续跟踪会反复打同一
+                                # 任务（用户 2026-11-14 疑问的缺口）
 _team_checked = False           # 队伍检查已通过（首次领取成功后置位）：
                                 # 后续轮次跳过检查——用户确认每轮回程后开面板
                                 # 检查耗时 5~7s，只需第一次领取前检查一次
@@ -668,9 +708,9 @@ def _wait_claim_entry(win, timeout):
     return None, None
 
 
-def _find_claim_option(items, img_np):
-    """查找领取绿色选项（共享实现在 workflows/claim_flow.py）。"""
-    return claim_flow.find_claim_option(items, img_np, CLAIM_OPTION_NEEDLES)
+def _find_claim_option(items, img_np, needles=CLAIM_OPTION_NEEDLES):
+    """查找领取/取消绿色选项（共享实现在 workflows/claim_flow.py）。"""
+    return claim_flow.find_claim_option(items, img_np, needles)
 
 
 def _task_block_region(img_np):
@@ -770,6 +810,17 @@ def _click_claim_option(win, items, img_np):
     return claim_flow.click_claim_option(
         win, items, img_np, needles=CLAIM_OPTION_NEEDLES,
         prefix="[修罗]", cache_key="claim_option")
+
+
+def _click_cancel_option(win, items, img_np):
+    """点击取消任务绿色选项「我想取消任务」（同领取选项流程）。
+
+    高性能缓存键独立（cancel_option）：取消选项与领取选项在对话框
+    中的位置不同，共键会把领取位置当取消位置点。
+    """
+    return claim_flow.click_claim_option(
+        win, items, img_np, needles=CANCEL_OPTION_NEEDLES,
+        prefix="[修罗]", cache_key="cancel_option")
 
 
 def _handle_team_warning(win, items, img_np):
@@ -1014,11 +1065,17 @@ def _relocate_to_claim_spot(win):
     return False, "重走领取点超时"
 
 
-def _click_entry_ensuring_dialog(win, log_tag="[修罗]", hover_before_click=False):
+def _click_entry_ensuring_dialog(win, log_tag="[修罗]", hover_before_click=False,
+                                 option_needles=CLAIM_OPTION_NEEDLES,
+                                 option_cache_key="claim_option",
+                                 action="领取"):
     """点击领取入口（按钮或使者）并确保对话框出现；未出现判定坐标不对：
     打开小地图点击领取点坐标重定位后重试一次（用户确认的兜底路径）。
 
     hover_before_click：点击前先移动鼠标定位入口（无延时，验证时序与真实流程一致）。
+    option_needles / option_cache_key / action：对话框选项匹配串、高性能
+    缓存键与动作名（领取默认；取消任务传 CANCEL_OPTION_NEEDLES /
+    "cancel_option" / "取消任务"，对话框出现判定按取消选项）。
     返回 (是否成功, 描述, 来源, 坐标, 对话框帧)；成功时对话框已打开
     （选项可见），对话框帧 (items, img_np) 供领取流程同帧点选项——
     免重截+重 OCR（每轮省 ~0.5s）。
@@ -1053,12 +1110,12 @@ def _click_entry_ensuring_dialog(win, log_tag="[修罗]", hover_before_click=Fal
         # 瞬时点击（取消拟人化移动）：走动中镜头随人物移动，拟人化
         # 移动期间点击位置已过期（实测 2026-10-21 偶现点击无效）
         precise_click(win, pt2[0], pt2[1], move_duration=0)
-        log(f"{log_tag} 已点击{src2}（领取）", "SYS")
-        # 高性能：领取选项坐标已缓存 → 固定等待渲染后由 _claim_task
-        # 直接按缓存坐标点选项（点不中由「任务进追踪」校验循环识别
-        # 补点兜底，无 seen 帧返回）
+        log(f"{log_tag} 已点击{src2}（{action}）", "SYS")
+        # 高性能：选项坐标已缓存 → 固定等待渲染后由调用方
+        # 直接按缓存坐标点选项（点不中由后续校验循环识别补点兜底，
+        # 无 seen 帧返回）
         if app_utils.high_perf_on() \
-                and app_utils.fixed_pos_get("claim_option", win) is not None:
+                and app_utils.fixed_pos_get(option_cache_key, win) is not None:
             time.sleep(random.uniform(*CLAIM_DIALOG_FIXED_WAIT))
             dialog_seen = True
             break
@@ -1073,7 +1130,7 @@ def _click_entry_ensuring_dialog(win, log_tag="[修罗]", hover_before_click=Fal
             items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
             if _handle_team_warning(win, items, img_np):
                 return False, "队伍数量小于 3，无法领取（已关闭提示对话框）", None, None, None
-            if _find_claim_option(items, img_np) is not None:
+            if _find_claim_option(items, img_np, option_needles) is not None:
                 dialog_seen = True
                 seen_frame = (items, img_np)
                 break
@@ -1397,6 +1454,95 @@ def _claim_task(win, allow_fill=False):
     return False, "已点击领取选项，但任务追踪中未检测到任务（重走领取点后仍无）", None
 
 
+def _task_absent_in_frame(img):
+    """单帧判定追踪面板已无修罗任务（共享实现在 task_tracker）。"""
+    return task_tracker.task_absent_in_frame(
+        img, TASK_TITLE, TASK_FALLBACK_TEXTS)
+
+
+def _cancel_task(win):
+    """取消当前修罗任务（战斗失败恢复 _recover_battle_failure 调用）。
+
+    用户指定（2026-11-14）：与领取流程一致——先走到灵兽村领取点、
+    点击领取入口模板（领取任务按钮/灵兽村使者）打开对话框，区别是
+    取消时点绿色选项「我想取消任务」，最后校验任务从追踪面板消失。
+
+    前置：任务追踪中已有修罗任务（无任务时领取入口不出现，无取消
+    对象，且防止把其他对话框选项当取消选项点掉）；战斗中跳过。
+    返回 (是否成功, 描述)；「无需取消」表示任务已不存在。
+    """
+    if is_in_battle(win):
+        return False, "战斗中，跳过取消任务"
+    if not task_tracker.has_task(win, TASK_TITLE, TASK_FALLBACK_TEXTS):
+        return False, "任务追踪中无修罗任务，无需取消"
+    # 1. 走位到领取点（与领取流程一致）
+    ok, info = _walk_to_claim_spot(win)
+    if not ok:
+        return False, info
+    # 2. 点击领取入口模板打开对话框：对话框出现判定改用取消选项
+    #    （有任务时领取选项不出现，入口通常是灵兽村使者 NPC 模板）
+    ok, info, _src, _pt, seen = _click_entry_ensuring_dialog(
+        win, option_needles=CANCEL_OPTION_NEEDLES,
+        option_cache_key="cancel_option", action="取消任务")
+    if not ok:
+        return False, info
+    # 3. 点「我想取消任务」：优先复用对话框出现帧；高性能缓存路径
+    #    （seen=None）按缓存坐标直点；未点中走短窗轮询兜底
+    clicked = False
+    if seen is None:
+        clicked = app_utils.high_perf_click(win, "cancel_option",
+                                            "取消任务选项", prefix="[修罗] ")
+    if not clicked and seen is not None:
+        clicked = _click_cancel_option(win, seen[0], seen[1])
+    deadline = time.time() + CLAIM_DIALOG_TIMEOUT
+    while not clicked and time.time() < deadline:
+        img = win.capture(force_activate=False)
+        if img is None:
+            time.sleep(0.3)
+            continue
+        items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
+        clicked = _click_cancel_option(win, items, img_np)
+        if not clicked:
+            time.sleep(0.3)
+    if not clicked:
+        return False, f"取消对话框未识别到绿色选项「{CANCEL_DIALOG_OPTION}」"
+    # 4. 校验任务从追踪面板消失：连续 CANCEL_VERIFY_GONE_POLLS 轮确认
+    #    （单轮漏检可能是面板重绘/滑动动画；战斗帧不构成消失证据）。
+    #    成功后任务已不存在——调用方下一轮按其常规「无任务」路径处理
+    deadline = time.time() + CANCEL_VERIFY_WAIT
+    gone_polls = 0
+    last_lines = ""
+    while time.time() < deadline:
+        img = win.capture(force_activate=False)
+        if img is None:
+            time.sleep(0.3)
+            continue
+        if is_in_battle_frame(img):
+            gone_polls = 0
+            time.sleep(0.5)
+            continue
+        absent, items = _task_absent_in_frame(img)
+        if items:
+            last_lines = " / ".join(tx for tx, _, s in items[:6] if s >= 0.55)
+        gone_polls = gone_polls + 1 if absent else 0
+        if gone_polls >= CANCEL_VERIFY_GONE_POLLS:
+            log("[修罗] 已取消修罗任务（追踪面板已无任务）", "SYS")
+            return True, "已取消修罗任务"
+        time.sleep(CANCEL_VERIFY_POLL_INTERVAL)
+    # 失败排查：读一次对话区文案（如出现取消确认弹窗），只记录不点击
+    try:
+        img = win.capture(force_activate=False)
+        if img is not None:
+            ditem, _ = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
+            lines = [tx for tx, _, s in ditem if s >= 0.55]
+            if lines:
+                log(f"[修罗] 取消后对话区文案: {' / '.join(lines[:8])}", "WARN")
+    except Exception:
+        pass
+    detail = f"（面板残留: {last_lines}）" if last_lines else ""
+    return False, f"已点击「{CANCEL_DIALOG_OPTION}」，但任务仍在追踪面板{detail}"
+
+
 def _check_team_ready(win, create_if_missing=False):
     """领取前队伍检查（共享实现在 workflows/team_flow.py）。"""
     return _team_flow.check_team_ready(win, create_if_missing)
@@ -1503,6 +1649,57 @@ def _handle_fight_dialog(win, items, img_np):
     return False
 
 
+def _on_battle_end(win, img=None):
+    """战斗结束回调（follow_task 注入）：判定任务战斗是否失败。
+
+    用户 2026-11-14 定义的两种失败（任一）：
+    1. 战斗结束后任务仍在追踪面板；
+    2. 战斗结束后落在轮回司（死亡复活点）。
+    条件 2 不限进入战斗的来源（随机遭遇战死亡同样需要恢复）；条件 1
+    仅在确由「看打！」进入战斗（_fight_via_kanda）时判定——随机遭遇
+    战结束后任务当然还在，不能当失败。
+
+    调用点先于任务消失确认：死亡落轮回司时追踪面板可能被游戏收起，
+    「面板消失=任务结束」会把战败误判成完成（2026-11-11 日志实测）。
+    位置在战斗结束首帧可能尚未渲染，短窗补读 2 次（约 1s）。
+    返回 True 表示已判定失败（_battle_failed_reason 记录原因），follow
+    立即退出跟踪，由主循环走取消任务/归队恢复流程。
+    """
+    global _battle_failed_reason
+    if img is None:
+        img = win.capture(force_activate=False)
+    pos = game_map.read_map_position(win, img=img) if img is not None else None
+    for _ in range(2):
+        if pos is not None:
+            break
+        time.sleep(0.5)
+        img2 = win.capture(force_activate=False)
+        if img2 is None:
+            continue
+        img = img2
+        pos = game_map.read_map_position(win, img=img)
+    if pos is not None and team.is_in_lunhuisi(pos):
+        _battle_failed_reason = "dead"
+        log(f"[修罗] 战斗结束落点在轮回司 "
+            f"（{pos[0]}[{pos[1]},{pos[2]}]），判定战斗失败", "WARN")
+        return True
+    if not _fight_via_kanda or img is None:
+        return False
+    absent, items = _task_absent_in_frame(img)
+    if items is not None and not absent:
+        # 战斗结束首帧任务行可能仍在退出动画中：短窗复核一次，仍在才
+        # 判失败（防把即将消失的完成态误判成战败）
+        time.sleep(0.5)
+        img2 = win.capture(force_activate=False)
+        absent2, items2 = _task_absent_in_frame(img2) \
+            if img2 is not None else (absent, items)
+        if items2 is not None and not absent2:
+            _battle_failed_reason = "task"
+            log("[修罗] 战斗结束但任务仍在追踪面板，判定战斗失败", "WARN")
+            return True
+    return False
+
+
 def _follow_to_done(win, first_items=None):
     """跟踪任务直到完成（共享实现在 workflows/claim_flow.py）。
 
@@ -1511,7 +1708,14 @@ def _follow_to_done(win, first_items=None):
     ——多一轮 = 0.5s 轮询间隔 + 条带 OCR）。单轮证据可能被 OCR 偶发
     漏读/面板瞬时遮挡污染，由主循环返程前 has_task 全区域复查兜底
     （_task_still_tracked_before_return），两者不得同时放宽。
+
+    battle_end_handler=_on_battle_end：战斗失败判定（用户 2026-11-14）。
+    _fight_via_kanda 在跟踪起点复位，只反映本轮「看打！」进入的战斗，
+    防上一轮残留值把随机遭遇战当成任务战斗（误取消任务）。
     """
+    global _fight_via_kanda, _battle_failed_reason
+    _fight_via_kanda = False
+    _battle_failed_reason = None
     return claim_flow.follow_to_done(
         win, first_items, title=TASK_TITLE, prefix="修罗",
         extra_dialog_handler=_handle_fight_dialog,
@@ -1519,7 +1723,8 @@ def _follow_to_done(win, first_items=None):
         post_track_handler=_maybe_tab_bars_pass,
         task_gone_polls=1,
         battle_extras_tpl_gate=True, recovery=_walk_to_claim_spot,
-        recovery_window=CLAIM_FOLLOW_RECOVER_WINDOW)
+        recovery_window=CLAIM_FOLLOW_RECOVER_WINDOW,
+        battle_end_handler=_on_battle_end)
 
 
 def _task_still_tracked_before_return(win):
@@ -1535,6 +1740,77 @@ def _task_still_tracked_before_return(win):
     """
     return task_tracker.has_task(win, TASK_TITLE, TASK_FALLBACK_TEXTS,
                                  fast_absent=True)
+
+
+def _recover_battle_failure(win, check_team):
+    """任务战斗失败恢复（用户 2026-11-14 指定流程）。
+
+    1. 身份检查（检查队伍开启时）：非队长不取消/重领——转保持模式 +
+       自动归队（死亡落轮回司点「归队」回队长身边）。
+    2. 回灵兽村：落轮回司时世界地图不可用（2026-11-11 日志实测），
+       走修罗回城符返程；其他地图走地图寻路，寻路失败再用回城符。
+    3. 取消任务：追踪中仍有任务则点「我想取消任务」；任务已消失
+       （战斗胜利后死亡等）按本轮完成处理。
+    4. 取消成功 → 等待 CANCEL_RE_CLAIM_DELAY(6s)，下一轮重新领取；
+       队伍检查标记复位，重新领取前走检查暂离/组号队员归队/补人流程。
+    返回 ("canceled"|"completed"|"failed", 描述)。
+    """
+    global _team_checked, _task_gone_last_round, _returned_last_round, \
+        _battle_recovery_pending
+    # 1. 身份：非队长走归队保持模式（队员不能取消/领取队伍任务）
+    if check_team:
+        status, info = _check_team_with_retry(win)
+        if status == "not_leader":
+            if team.is_definitive_not_leader(info):
+                log(f"[修罗] 战斗失败，非队长：转保持模式并自动归队（{info}）",
+                    "WARN")
+                _keep_alive(win, info)  # 保持模式无限循环，用户手动停止
+                return "failed", f"保持模式异常退出（{info}）"
+            _battle_recovery_pending = True
+            return "failed", f"战斗失败后队伍身份无法判定（{info}）"
+    # 2. 回灵兽村
+    img = win.capture(force_activate=False)
+    pos = game_map.read_map_position(win, img=img) if img is not None else None
+    at_lingshou = pos is not None and pos[0].strip() == LINGSHOUCUN
+    last_info = ""
+    if not at_lingshou:
+        for attempt in range(_lunhuisi_retry_count):
+            if team.is_in_lunhuisi(pos):
+                # 轮回司世界地图不可用：修罗回城符是自动返程通道
+                ok, last_info = _return_to_npc(win)
+            else:
+                ok, last_info = _walk_to_claim_spot(win, just_returned=False)
+                if not ok:
+                    log(f"[修罗] 战斗失败后寻路未成功（{last_info}），"
+                        f"改用修罗回城符返程", "WARN")
+                    ok, last_info = _return_to_npc(win)
+            if ok:
+                break
+            log(f"[修罗] 战斗失败后回灵兽村失败（第 {attempt + 1}/"
+                f"{_lunhuisi_retry_count} 次）：{last_info}", "WARN")
+            time.sleep(3.0)
+            img = win.capture(force_activate=False)
+            pos = game_map.read_map_position(win, img=img) \
+                if img is not None else None
+        else:
+            _battle_recovery_pending = True
+            return "failed", f"战斗失败后回灵兽村失败: {last_info}"
+        _returned_last_round = True
+    # 3. 取消任务（任务已消失 = 本轮其实已完成）
+    ok, info = _cancel_task(win)
+    if ok:
+        _battle_recovery_pending = False
+        _team_checked = False  # 重新领取前强制队伍检查（暂离/组号归队/补人）
+        time.sleep(CANCEL_RE_CLAIM_DELAY)
+        _task_gone_last_round = True
+        return "canceled", (f"战斗失败：{info}，"
+                            f"{CANCEL_RE_CLAIM_DELAY}s 后重新领取")
+    if "无需取消" in info:
+        _battle_recovery_pending = False
+        _task_gone_last_round = True
+        return "completed", f"战斗失败但任务已不在追踪（{info}），按本轮完成处理"
+    _battle_recovery_pending = True
+    return "failed", f"战斗失败后取消任务失败: {info}"
 
 
 def _maybe_tab_bars_pass(win):
@@ -1672,6 +1948,65 @@ def verify_claim_flow(win, silent=False):
     return False, "对话框选项未识别（未领取，已尝试关闭对话框）"
 
 
+def verify_cancel_flow(win, silent=False):
+    """验证取消任务流程（底层验证函数，暂未接入高级设置按钮）。
+
+    与取消流程一致，但在点「我想取消任务」前停止：走位 → 点击领取
+    入口模板打开对话框（点入口不改变任务状态）→ 识别取消绿色选项
+    「我想取消任务」→ 仅移动鼠标定位（不点击）→ 点击屏幕中间关闭
+    对话框。真正的取消由 _cancel_task 执行。
+    前置：任务追踪中已有修罗任务（取消选项仅在有任务时出现）。
+    silent=True：调用方已开 app_utils.silent_clicks()（不移动鼠标）。
+    返回 (是否成功, 描述)。
+    """
+    if is_in_battle(win):
+        ok, info = _wait_battle_end(win, timeout=60)
+        if not ok:
+            return False, info
+    if not task_tracker.has_task(win, TASK_TITLE, TASK_FALLBACK_TEXTS):
+        return False, "任务追踪中无修罗任务，无法验证取消"
+    # 1. 走位到领取点（与实际取消一致）
+    ok, info = _walk_to_claim_spot(win)
+    if not ok:
+        return False, info
+    # 2. 领取入口：点击打开对话框（对话框出现判定按取消选项）
+    ok, info, src2, pt2, frame = _click_entry_ensuring_dialog(
+        win, log_tag="[修罗][验证]", hover_before_click=not silent,
+        option_needles=CANCEL_OPTION_NEEDLES,
+        option_cache_key="cancel_option", action="取消任务")
+    if not ok:
+        return False, info
+    # 3. 识别取消绿色选项：仅移动鼠标悬停，不点击（点击即取消任务）
+    found = _find_claim_option(frame[0], frame[1], CANCEL_OPTION_NEEDLES) \
+        if frame is not None else None
+    deadline = time.time() + CLAIM_DIALOG_TIMEOUT
+    while found is None and time.time() < deadline:
+        img = win.capture(force_activate=False)
+        if img is None:
+            time.sleep(0.3)
+            continue
+        items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
+        found = _find_claim_option(items, img_np, CANCEL_OPTION_NEEDLES)
+        if found is None:
+            time.sleep(0.3)
+    if found is not None:
+        cx, cy, txt, _ = found
+        if silent:
+            log(f"[修罗][验证] 已识别取消选项「{txt}」({cx}, {cy})"
+                f"（静默模式，不移动鼠标）", "SYS")
+        else:
+            human_move(win.rect.left + cx, win.rect.top + cy)
+            log(f"[修罗][验证] 已移动鼠标到取消选项「{txt}」({cx}, {cy})，"
+                f"已定位到（不点击，验证时序与真实流程一致）", "SYS")
+        # 4. 点击屏幕中间关闭对话框（不取消任务）
+        human_click(win, SCREEN_CENTER_POS[0], SCREEN_CENTER_POS[1])
+        log("[修罗][验证] 已点击屏幕中间关闭对话框（未取消任务）", "SYS")
+        return True, f"验证通过：{src2} ({pt2[0]}, {pt2[1]})，选项「{txt}」({cx}, {cy})"
+    # 选项未识别：点击屏幕中间清理后失败
+    human_click(win, SCREEN_CENTER_POS[0], SCREEN_CENTER_POS[1])
+    return False, "取消对话框选项未识别（任务未取消，已尝试关闭对话框）"
+
+
 def _build_shout_text(template=None):
     """缺人喊话内容：读取修罗设置里的喊话内容（默认
     「百次修罗来人，效率队，来{种族}」），把 {种族} 占位符替换为
@@ -1735,8 +2070,8 @@ def run_loop(win, cycle_interval=1.0):
     即返回结束原因、任务随之停止（无其他结束条件）。
     返回结束原因描述。
     """
-    global _fight_via_kanda, _team_checked, _task_gone_last_round, _returned_last_round, \
-        _shout_text
+    global _fight_via_kanda, _battle_failed_reason, _battle_recovery_pending, \
+        _team_checked, _task_gone_last_round, _returned_last_round, _shout_text
     max_rounds = load_task_counts().get(TASK_MODE, 0)
     log(f"[修罗] 任务次数上限: {max_rounds if max_rounds > 0 else '不限'}", "SYS")
     # 高性能模式开关由 main.task_start 按通用设置置位（共享设施）
@@ -1756,6 +2091,10 @@ def run_loop(win, cycle_interval=1.0):
     log(f"[修罗] 自动修理装备: {'开' if auto_repair else '关'}"
         + (f"（每 {repair_interval} 场战斗）" if auto_repair else ""), "SYS")
     log(f"[修罗] 检查队伍: {'开（领取前检查队伍）' if check_team else '关（跳过队伍检查，直接领取）'}", "SYS")
+    auto_kick = load_xiuluo_auto_kick_away()
+    auto_kick_txt = (f"开（{load_xiuluo_kick_away_minutes()} 分钟未归队请离）"
+                     if auto_kick else "关（不自动请离，组号队员归队照常）")
+    log(f"[修罗] 暂离超时自动请离: {auto_kick_txt}", "SYS")
     _shout_text = _build_shout_text() if load_xiuluo_shout_switch() else ""
     if _shout_text:
         log(f"[修罗] 缺人自动喊话: 开（{_shout_text}，最短间隔 {SHOUT_MIN_INTERVAL}s）", "SYS")
@@ -1879,6 +2218,26 @@ def run_loop(win, cycle_interval=1.0):
         elif pending_create and not check_team and not create_defer_logged:
             create_defer_logged = True
             log("[修罗] 战斗中，自动创建队伍顺延至战斗结束", "INFO")
+        # 0. 上一轮战斗失败恢复未完成（回灵兽村/取消任务失败）：本轮先
+        #    重试恢复，不得回到任务跟踪——旧任务仍在追踪，直接继续跟踪
+        #    会反复打同一任务（用户 2026-11-14 疑问的缺口）。战斗中不
+        #    操作（队伍面板/取消对话框都会干扰战斗），顺延到战斗结束
+        if _battle_recovery_pending and not is_in_battle(win):
+            debug_overlay.set_phase("战斗失败恢复")  # 看板阶段
+            status, rinfo = _recover_battle_failure(win, check_team)
+            if status == "canceled":
+                _battle_recovery_pending = False
+                log(f"[修罗] {rinfo}", "SYS")
+                time.sleep(cycle_interval)
+                continue
+            if status == "completed":
+                _battle_recovery_pending = False
+                log(f"[修罗] {rinfo}", "SYS")
+                # 任务已消失：继续本轮领取流程（_task_gone_last_round 已置位）
+            else:
+                log(f"[修罗] {rinfo}", "WARN")
+                time.sleep(cycle_interval)
+                continue
         # 1. 领任务：任务追踪中已有修罗任务（续跑）→ 跳过领取，直接跟踪。
         #    上一轮已确认任务完成（follow_task 以任务消失为完成判据）时，
         #    本轮开始必然无任务——has_task（区域 OCR ~0.9s）只在可能
@@ -2052,29 +2411,66 @@ def run_loop(win, cycle_interval=1.0):
         #     （修理行程后旧帧已过期——重新截帧识别）
         ok, info = _follow_to_done(
             win, first_items=None if repair_round else claim_items)
+        completed_via_failure = False
         if not ok:
-            log(f"[修罗] {info}", "WARN")
-            time.sleep(cycle_interval)
-            continue
-        # 5a. 返程前复查：follow 消失确认只做 1 轮（见 _follow_to_done），
-        #    全区域 has_task 兜住单轮误判——任务仍在则跳过返程继续跟踪
-        #    （下一轮续跑自愈），不得与单轮确认同时放宽
-        if _task_still_tracked_before_return(win):
-            _task_gone_last_round = False  # 恢复跟踪：下一轮 has_task 续跑
-            log("[修罗] 返程前复查任务仍在追踪，跳过返程继续跟踪", "WARN")
-            time.sleep(cycle_interval)
-            continue
-        _task_gone_last_round = True  # 任务消失已确认：下一轮跳过 has_task 检查
-        # 5. 返程：仅「看打！」进入的战斗结束后才返程（背包任务储物格
-        #    右键修罗回城符回灵兽村），其他方式进入的战斗不自动返程
-        if _fight_via_kanda:
-            debug_overlay.set_phase("返程")  # 看板阶段
-            ok, info = _return_to_npc(win)
-            if not ok:
+            failed_by_battle = _battle_failed_reason is not None
+            if not failed_by_battle:
+                # 兜底（用户 2026-11-14 疑问）：非战斗失败返回（如跟踪
+                # 300s 超时）时若人在轮回司，说明战败但战斗结束信号未采到
+                # /判定漏检——同样按战斗失败恢复，避免下一轮对着同一任务
+                # 从轮回司继续跟踪、反复打同一任务
+                img = win.capture(force_activate=False)
+                pos = game_map.read_map_position(win, img=img) \
+                    if img is not None else None
+                if team.is_in_lunhuisi(pos):
+                    _battle_failed_reason = "dead"
+                    log("[修罗] 跟踪失败且人在轮回司，按战斗失败处理", "WARN")
+                    failed_by_battle = True
+            if failed_by_battle:
+                # 任务战斗失败（用户 2026-11-14）：队长回灵兽村取消任务
+                # → 取消后 6s 重新领取（人数不足走检查暂离/补人流程）；
+                # 非队长转保持模式并自动归队（队员不能取消/领取任务）
+                _battle_failed_reason = None
+                debug_overlay.set_phase("战斗失败恢复")  # 看板阶段
+                status, rinfo = _recover_battle_failure(win, check_team)
+                if status == "completed":
+                    # 任务已消失（战斗胜利后死亡等）：返程已在恢复流程内
+                    # 完成，直接按本轮完成收尾
+                    log(f"[修罗] {rinfo}", "SYS")
+                    completed_via_failure = True
+                elif status == "canceled":
+                    # 恢复流程内已等待 CANCEL_RE_CLAIM_DELAY(6s)，这里
+                    # 不再追加间隔，下一轮直接领任务
+                    log(f"[修罗] {rinfo}", "SYS")
+                    continue
+                else:
+                    log(f"[修罗] {rinfo}", "WARN")
+                    time.sleep(cycle_interval)
+                    continue
+            else:
                 log(f"[修罗] {info}", "WARN")
                 time.sleep(cycle_interval)
                 continue
-            _returned_last_round = True  # 下一轮领取：位置失败等加载（见 _walk_to_claim_spot）
+        if not completed_via_failure:
+            # 5a. 返程前复查：follow 消失确认只做 1 轮（见 _follow_to_done），
+            #    全区域 has_task 兜住单轮误判——任务仍在则跳过返程继续跟踪
+            #    （下一轮续跑自愈），不得与单轮确认同时放宽
+            if _task_still_tracked_before_return(win):
+                _task_gone_last_round = False  # 恢复跟踪：下一轮 has_task 续跑
+                log("[修罗] 返程前复查任务仍在追踪，跳过返程继续跟踪", "WARN")
+                time.sleep(cycle_interval)
+                continue
+            _task_gone_last_round = True  # 任务消失已确认：下一轮跳过 has_task 检查
+            # 5. 返程：仅「看打！」进入的战斗结束后才返程（背包任务储物格
+            #    右键修罗回城符回灵兽村），其他方式进入的战斗不自动返程
+            if _fight_via_kanda:
+                debug_overlay.set_phase("返程")  # 看板阶段
+                ok, info = _return_to_npc(win)
+                if not ok:
+                    log(f"[修罗] {info}", "WARN")
+                    time.sleep(cycle_interval)
+                    continue
+                _returned_last_round = True  # 下一轮领取：位置失败等加载（见 _walk_to_claim_spot）
         done += 1
         app_utils.task_progress_add(win, TASK_MODE, done)
         total = max_rounds if max_rounds > 0 else "∞"

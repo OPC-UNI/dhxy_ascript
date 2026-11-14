@@ -68,7 +68,8 @@ from ..core.settings import (
     _WUBEI_AUTO_REPAIR_KEY, _WUBEI_AUTO_WUYI_KEY, _WUBEI_CHECK_TEAM_KEY, _WUBEI_HEZI_KEY,
     _WUBEI_KUIMULANG_KEY, _WUBEI_REPAIR_INTERVAL_KEY, _WUBEI_SHOUT_SWITCH_KEY, _WUBEI_SHOUT_TEXT_KEY,
     _WUBEI_TAB_GROUP_KEY, _WUBEI_WUYI_INTERVAL_KEY, _WUHUAN_VITALITY_CONTINUE_KEY, _WUYI_INTERVAL_MAX,
-    _WUYI_INTERVAL_MIN, _XIULUO_AUTO_CREATE_TEAM_KEY, _XIULUO_AUTO_REJOIN_KEY, _XIULUO_AUTO_REPAIR_KEY,
+    _WUYI_INTERVAL_MIN, _XIULUO_AUTO_CREATE_TEAM_KEY, _XIULUO_AUTO_REJOIN_KEY,
+    _XIULUO_AUTO_KICK_AWAY_KEY, _XIULUO_KICK_AWAY_MINUTES_KEY, _XIULUO_AUTO_REPAIR_KEY,
     _XIULUO_AUTO_WUYI_KEY, _XIULUO_CHECK_TEAM_KEY, _XIULUO_HEZI_KEY, _XIULUO_HIGH_PERF_KEY_OLD,
     _XIULUO_MIN_KEY, _XIULUO_RACES_KEY, _XIULUO_REPAIR_INTERVAL_KEY, _XIULUO_SHOUT_SWITCH_KEY,
     _XIULUO_SHOUT_TEXT_KEY, _XIULUO_TAB_GROUP_KEY, _XIULUO_WUYI_INTERVAL_KEY, _ZHONGZU_AUTO_CREATE_TEAM_KEY,
@@ -86,6 +87,7 @@ from ..core.settings import (
     load_wubei_auto_wuyi, load_wubei_check_team, load_wubei_hezi, load_wubei_kuimulang_switch,
     load_wubei_repair_interval, load_wubei_shout_switch, load_wubei_shout_text, load_wubei_tab_group,
     load_wubei_wuyi_interval, load_wuhuan_vitality_continue, load_xiuluo_auto_create_team, load_xiuluo_auto_rejoin,
+    load_xiuluo_auto_kick_away, load_xiuluo_kick_away_minutes,
     load_xiuluo_auto_repair, load_xiuluo_auto_wuyi, load_xiuluo_check_team, load_xiuluo_hezi,
     load_xiuluo_repair_interval, load_xiuluo_settings, load_xiuluo_shout_switch, load_xiuluo_shout_text,
     load_xiuluo_tab_group, load_xiuluo_wuyi_interval, load_zhongzu_auto_create_team, load_zhongzu_auto_rejoin,
@@ -99,7 +101,8 @@ from ..core.settings import (
     save_wubei_auto_rejoin, save_wubei_auto_repair, save_wubei_auto_wuyi, save_wubei_check_team,
     save_wubei_hezi, save_wubei_kuimulang_switch, save_wubei_repair_interval, save_wubei_shout_switch,
     save_wubei_shout_text, save_wubei_tab_group, save_wubei_wuyi_interval, save_wuhuan_vitality_continue,
-    save_xiuluo_auto_create_team, save_xiuluo_auto_rejoin, save_xiuluo_auto_repair, save_xiuluo_auto_wuyi,
+    save_xiuluo_auto_create_team, save_xiuluo_auto_rejoin, save_xiuluo_auto_kick_away,
+    save_xiuluo_kick_away_minutes, save_xiuluo_auto_repair, save_xiuluo_auto_wuyi,
     save_xiuluo_check_team, save_xiuluo_hezi, save_xiuluo_min, save_xiuluo_races,
     save_xiuluo_repair_interval, save_xiuluo_shout_switch, save_xiuluo_shout_text, save_xiuluo_tab_group,
     save_xiuluo_wuyi_interval, save_zhongzu_auto_create_team, save_zhongzu_auto_rejoin, save_zhongzu_auto_repair,
@@ -199,6 +202,8 @@ class ControlWindow(WebWindow):
         self.expose(self.save_xiuluo_check_team)
         self.expose(self.save_xiuluo_auto_create_team)
         self.expose(self.save_xiuluo_auto_rejoin)
+        self.expose(self.save_xiuluo_auto_kick_away)
+        self.expose(self.save_xiuluo_kick_away_minutes)
         self.expose(self.save_xiuluo_auto_wuyi)
         self.expose(self.save_xiuluo_wuyi_interval)
         self.expose(self.save_xiuluo_auto_repair)
@@ -803,6 +808,8 @@ class ControlWindow(WebWindow):
                 "xiuluo_check_team": load_xiuluo_check_team(),
                 "xiuluo_auto_create_team": load_xiuluo_auto_create_team(),
                 "xiuluo_auto_rejoin": load_xiuluo_auto_rejoin(),
+                "xiuluo_auto_kick_away": load_xiuluo_auto_kick_away(),
+                "xiuluo_kick_away_minutes": load_xiuluo_kick_away_minutes(),
                 "xiuluo_auto_wuyi": load_xiuluo_auto_wuyi(),
                 "xiuluo_wuyi_interval": load_xiuluo_wuyi_interval(),
                 "xiuluo_auto_repair": load_xiuluo_auto_repair(),
@@ -1035,6 +1042,14 @@ class ControlWindow(WebWindow):
     def save_xiuluo_auto_rejoin(self, on):
         """修罗设置变更：保存自动归队开关状态。"""
         return save_xiuluo_auto_rejoin(on)
+
+    def save_xiuluo_auto_kick_away(self, on):
+        """修罗设置变更：保存暂离超时自动请离开关状态。"""
+        return save_xiuluo_auto_kick_away(on)
+
+    def save_xiuluo_kick_away_minutes(self, value):
+        """修罗设置变更：保存暂离超时（分钟）。"""
+        return save_xiuluo_kick_away_minutes(value)
 
     def save_xiuluo_auto_wuyi(self, on):
         """修罗设置变更：保存自动巫医开关状态。"""

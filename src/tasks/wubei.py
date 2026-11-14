@@ -27,6 +27,11 @@
    （选项文案随场景变化，FIGHT_DIALOG_OPTIONS 逐一匹配；点击成功
    标记本轮战斗由对话开打进入）
 4. 战斗：战斗由 battle.watch_loop 线程自动操作；follow_task 战斗中自动跳过识别
+   战斗失败（用户 2026-11-14）：战斗结束任务仍在追踪、或战死落轮回司
+   → 队长回宝象国领取点（轮回司世界地图不可用，走五倍回城符）后
+   **直接重新领取替换**（五倍无需取消任务，游戏允许重领替换；黄袍怪
+   多杀两场之间任务仍在属正常，只按落轮回司判定）；非队长不重领，
+   转保持模式并自动归队；重新领取前强制队伍检查（暂离/组号归队/补人）
 5. 返程（已实现，逻辑与修罗一致）：战斗结束后用五倍回城符回宝象国
    （仅对话开打进入的战斗才返程，其他方式进入的战斗不自动返程）：
    打开背包 → 打开任务储物格（box_task/box_task_selected 双模板比分数
@@ -117,6 +122,11 @@ KUIMULANG_TRACK_TEXT = "奎木狼"
 # 距上次替换领取满 8s 才再次替换——防连续快速重领；普通领取成功
 # 即重置间隔（下一次替换重新视为首次）
 REPLACE_INTERVAL = 8
+
+# ---- 战斗失败重新领取（用户 2026-11-14）：与修罗不同，五倍无需取消
+#      任务（游戏允许重领替换）——回宝象国后直接走领取/替换分支 ----
+_BAOXIANG_RETRY_COUNT = 3       # 战斗失败后回宝象国的重试次数（回城符打开
+                                # 任务储物格偶发失败，与修罗同款）
 
 
 class ReplaceTaskError(Exception):
@@ -481,6 +491,15 @@ _last_replace_at = 0.0          # 上次替换领取成功时刻（0=无连续�
                                 # 重领须距上次替换满 REPLACE_INTERVAL 秒（首次替换
                                 # 立即执行；普通领取成功重置）
 _fight_via_kanda = False        # 本轮战斗是否由「看打！」进入（决定战后是否返程）
+_battle_failed_reason = None    # 战斗失败原因（None=未失败；"task"=战后任务仍在
+                                # 追踪；"dead"=战后落轮回司）：follow 的
+                                # battle_end_handler 置位、主循环消费（用户
+                                # 2026-11-14：五倍不取消任务，直接重新领取替换）
+_battle_failed_reclaim = False  # 战斗失败恢复完成：下一轮强制走领取/替换分支
+                                # （旧任务仍在追踪，不能按续跑继续跟踪）
+_battle_recovery_pending = False  # 战斗失败恢复未完成（回宝象国失败）：下一轮
+                                # 先重试恢复，不得回到任务跟踪（旧任务仍在
+                                # 追踪，继续跟踪会反复打同一任务）
 _team_checked = False           # 队伍检查已通过（首次领取成功后置位）：
                                 # 任务中不再主动开面板检查队伍，直到领取
                                 # 被拒（前途凶险）才重入监控补人循环
@@ -2450,8 +2469,128 @@ def _hpg_gone_polls():
     return 2 if _hpg_task_seen else 1
 
 
+def _on_battle_end(win, img=None):
+    """战斗结束回调（follow_task 注入）：判定任务战斗是否失败。
+
+    用户 2026-11-14 定义（与修罗一致）：
+    1. 战斗结束后任务仍在追踪面板；
+    2. 战斗结束后落在轮回司（死亡复活点）。
+    条件 1 仅限本轮确由对话开打进入战斗（_fight_via_kanda），且排除
+    黄袍怪多杀任务（_hpg_task_seen：两杀之间任务本来就在追踪面板，
+    不能当失败）；条件 2 不限任务。
+
+    调用点先于任务消失确认：死亡落轮回司时追踪面板可能被游戏收起，
+    「面板消失=任务结束」会把战败误判成完成（2026-11-11 修罗日志实测，
+    五倍同款）。返回 True 表示已判定失败（_battle_failed_reason 记录
+    原因），follow 立即退出跟踪，由主循环回宝象国重新领取替换。
+    """
+    global _battle_failed_reason
+    if img is None:
+        img = win.capture(force_activate=False)
+    pos = game_map.read_map_position(win, img=img) if img is not None else None
+    for _ in range(2):
+        if pos is not None:
+            break
+        time.sleep(0.5)
+        img2 = win.capture(force_activate=False)
+        if img2 is None:
+            continue
+        img = img2
+        pos = game_map.read_map_position(win, img=img)
+    if pos is not None and team.is_in_lunhuisi(pos):
+        _battle_failed_reason = "dead"
+        log(f"[五倍] 战斗结束落点在轮回司 "
+            f"（{pos[0]}[{pos[1]},{pos[2]}]），判定战斗失败", "WARN")
+        return True
+    if not _fight_via_kanda or _hpg_task_seen or img is None:
+        return False
+    absent, items = task_tracker.task_absent_in_frame(
+        img, TASK_TITLE, TASK_FALLBACK_TEXTS)
+    if items is not None and not absent:
+        # 战斗结束首帧任务行可能仍在退出动画中：短窗复核一次，仍在才
+        # 判失败（防把即将消失的完成态误判成战败）
+        time.sleep(0.5)
+        img2 = win.capture(force_activate=False)
+        absent2, items2 = task_tracker.task_absent_in_frame(
+            img2, TASK_TITLE, TASK_FALLBACK_TEXTS) \
+            if img2 is not None else (absent, items)
+        if items2 is not None and not absent2:
+            _battle_failed_reason = "task"
+            log("[五倍] 战斗结束但任务仍在追踪面板，判定战斗失败", "WARN")
+            return True
+    return False
+
+
+def _recover_battle_failure(win, check_team):
+    """任务战斗失败恢复（用户 2026-11-14）。
+
+    五倍与修罗的差异：**不需要取消任务**——游戏允许重领替换，回宝象国
+    领取点后直接重新领取即可（旧任务仍在追踪，下一轮走替换领取分支）。
+
+    1. 身份检查（检查队伍开启时）：非队长转保持模式并自动归队。
+    2. 回宝象国：落轮回司时世界地图不可用（2026-11-11 修罗日志实测，
+       同机制），走五倍回城符；其他地图走地图寻路，失败再用回城符。
+    3. 置位 _battle_failed_reclaim 强制下一轮走领取/替换分支，并复位
+       队伍检查标记（重新领取前走检查暂离/组号队员归队/补人流程）。
+    返回 ("reclaim"|"failed", 描述)。
+    """
+    global _battle_failed_reclaim, _battle_recovery_pending, \
+        _team_checked, _returned_last_round
+    # 1. 身份：非队长走归队保持模式（队员不能领取/替换队伍任务）
+    if check_team:
+        status, info = _check_team_with_retry(win)
+        if status == "not_leader":
+            if team.is_definitive_not_leader(info):
+                log(f"[五倍] 战斗失败，非队长：转保持模式并自动归队（{info}）",
+                    "WARN")
+                _keep_alive(win, info)  # 保持模式无限循环，用户手动停止
+                return "failed", f"保持模式异常退出（{info}）"
+            _battle_recovery_pending = True
+            return "failed", f"战斗失败后队伍身份无法判定（{info}）"
+    # 2. 回宝象国
+    img = win.capture(force_activate=False)
+    pos = game_map.read_map_position(win, img=img) if img is not None else None
+    at_baoxiang = pos is not None and pos[0].strip() == BAOXIANGGUO
+    last_info = ""
+    if not at_baoxiang:
+        for attempt in range(_BAOXIANG_RETRY_COUNT):
+            if team.is_in_lunhuisi(pos):
+                # 轮回司世界地图不可用：五倍回城符是自动返程通道
+                ok, last_info = _return_to_npc(win)
+            else:
+                ok, last_info = _walk_to_claim_spot(win, just_returned=False)
+                if not ok:
+                    log(f"[五倍] 战斗失败后寻路未成功（{last_info}），"
+                        f"改用五倍回城符返程", "WARN")
+                    ok, last_info = _return_to_npc(win)
+            if ok:
+                break
+            log(f"[五倍] 战斗失败后回宝象国失败（第 {attempt + 1}/"
+                f"{_BAOXIANG_RETRY_COUNT} 次）：{last_info}", "WARN")
+            time.sleep(3.0)
+            img = win.capture(force_activate=False)
+            pos = game_map.read_map_position(win, img=img) \
+                if img is not None else None
+        else:
+            _battle_recovery_pending = True
+            return "failed", f"战斗失败后回宝象国失败: {last_info}"
+        _returned_last_round = True
+    # 3. 不取消任务：强制下一轮重新领取替换（旧任务仍在追踪）
+    _battle_recovery_pending = False
+    _battle_failed_reclaim = True
+    _team_checked = False  # 重新领取前强制队伍检查（暂离/组号归队/补人）
+    return "reclaim", "战斗失败，已回宝象国，下一轮直接重新领取替换任务"
+
+
 def _follow_to_done(win, first_items=None):
-    """跟踪任务直到完成（共享实现在 workflows/claim_flow.py）。"""
+    """跟踪任务直到完成（共享实现在 workflows/claim_flow.py）。
+
+    battle_end_handler=_on_battle_end：战斗失败判定（用户 2026-11-14）。
+    _fight_via_kanda 在跟踪起点复位，只反映本轮对话开打进入的战斗。
+    """
+    global _fight_via_kanda, _battle_failed_reason
+    _fight_via_kanda = False
+    _battle_failed_reason = None
     return claim_flow.follow_to_done(
         win, first_items, title=TASK_TITLE, prefix="五倍",
         extra_dialog_handler=_handle_follow_extras,
@@ -2459,7 +2598,8 @@ def _follow_to_done(win, first_items=None):
         skip_texts={}, story_known_texts=WUBEI_STORY_KNOWN_TEXTS,
         pre_click_handler=_handle_pre_click,
         post_track_handler=_maybe_tab_bars_pass,
-        task_gone_polls=_hpg_gone_polls, battle_extras_tpl_gate=True)
+        task_gone_polls=_hpg_gone_polls, battle_extras_tpl_gate=True,
+        battle_end_handler=_on_battle_end)
 
 
 def _maybe_tab_bars_pass(win):
@@ -2636,7 +2776,9 @@ def run_loop(win, cycle_interval=1.0):
     结束条件：完成任务次数达到设置的次数上限（通用设置-任务次数）。
     返回结束原因描述。
     """
-    global _fight_via_kanda, _team_checked, _task_gone_last_round, _xj_need_replace, \
+    global _fight_via_kanda, _battle_failed_reason, _battle_failed_reclaim, \
+        _battle_recovery_pending, _team_checked, _task_gone_last_round, \
+        _xj_need_replace, \
         _replace_fail_streak, _hpg_task_seen, _shout_text, _returned_last_round, \
         _kuimulang_on, _last_replace_at
     max_rounds = load_task_counts().get(TASK_MODE, 0)
@@ -2787,6 +2929,21 @@ def run_loop(win, cycle_interval=1.0):
             if pending_create and not check_team:
                 pending_create = False
                 _auto_create_team_once(win)
+            # 0. 上一轮战斗失败恢复未完成（回宝象国失败）：本轮先重试
+            #    恢复，不得回到任务跟踪——旧任务仍在追踪，直接继续跟踪
+            #    会反复打同一任务（用户 2026-11-14 疑问的缺口）
+            if _battle_recovery_pending:
+                debug_overlay.set_phase("战斗失败恢复")  # 看板阶段
+                status, rinfo = _recover_battle_failure(win, check_team)
+                if status == "reclaim":
+                    _battle_recovery_pending = False
+                    log(f"[五倍] {rinfo}", "SYS")
+                    # 已回宝象国：继续本轮（下面消费 _battle_failed_reclaim
+                    # 走领取/替换分支）
+                else:
+                    log(f"[五倍] {rinfo}", "WARN")
+                    time.sleep(cycle_interval)
+                    continue
             # 1. 领任务：任务追踪中已有五倍任务（续跑）→ 跳过领取，直接跟踪。
             #    上一轮已确认任务完成（follow_task 以任务消失为完成判据）时，
             #    本轮开始必然无任务——has_task（区域 OCR ~0.9s）只在可能
@@ -2807,8 +2964,11 @@ def run_loop(win, cycle_interval=1.0):
                 task_exists, suoyaowang, kuimulang = _track_state(win)
             xj_replace = _xj_need_replace
             _xj_need_replace = False  # 消费替换请求（本轮走领取分支）
+            battle_replace = _battle_failed_reclaim
+            _battle_failed_reclaim = False  # 消费战斗失败请求（本轮重新领取）
             kuimulang_replace = kuimulang and not _kuimulang_on
-            need_replace = task_exists and (suoyaowang or kuimulang_replace or xj_replace)
+            need_replace = task_exists and (suoyaowang or kuimulang_replace
+                                            or xj_replace or battle_replace)
             if task_exists and not need_replace:
                 # 续跑：非对话开打进入（契约：仅对话开打战斗结束才返程，
                 # 否则黄袍怪多杀第 2/3 杀遭遇战后会误返程——审计问题 4）
@@ -2831,6 +2991,8 @@ def run_loop(win, cycle_interval=1.0):
                     elif kuimulang_replace:
                         log(f"[五倍] 任务为奎木狼任务（{KUIMULANG_TRACK_TEXT}，"
                             f"领取奎木狼开关关闭），重新领取替换任务", "WARN")
+                    elif battle_replace:
+                        log("[五倍] 战斗失败，重新领取替换任务", "WARN")
                     else:
                         log("[五倍] 显形镜任务按钮点击失败，重新领取替换任务", "WARN")
                 if _task_gone_last_round:
@@ -2947,7 +3109,9 @@ def run_loop(win, cycle_interval=1.0):
                 ok, info, claim_items = _claim_task(win, allow_fill=check_team,
                                                     allow_existing=need_replace)
                 if not ok:
-                    if need_replace:
+                    # 战斗失败重领的领取失败不累计替换失败上限（同普通
+                    # 领取失败：下轮重试，不因连续失败终止整个任务）
+                    if need_replace and not battle_replace:
                         _replace_fail_streak += 1
                         if _replace_fail_streak >= REPLACE_FAIL_LIMIT:
                             return f"替换任务连续失败 {_replace_fail_streak} 次，终止任务（最后信息: {info}）"
@@ -2958,7 +3122,11 @@ def run_loop(win, cycle_interval=1.0):
                 # 下轮仍须替换时距此满 6s 才再次重领；普通领取重置
                 # （下一次替换重新视为首次、免等待）
                 _last_replace_at = time.time() if need_replace else 0.0
-                if need_replace and prev_sig is not None:
+                # 战斗失败重领不做签名变化校验（用户 2026-11-14）：游戏
+                # 可能给出同地点同文案的新任务，签名相同属正常；若领取
+                # 实际未生效，下一轮继续打原任务即可自然重试，不按替换
+                # 失败累计终止。锁妖网/奎木狼/显形镜替换仍严格校验。
+                if need_replace and prev_sig is not None and not battle_replace:
                     t2 = task_tracker.get_task(win, TASK_TITLE)
                     if t2 is not None and task_tracker.task_signature(t2) == prev_sig:
                         log("[五倍] 替换校验：任务签名未变化，替换未生效", "WARN")
@@ -3008,6 +3176,30 @@ def run_loop(win, cycle_interval=1.0):
                 time.sleep(cycle_interval)
                 continue
             if not ok:
+                failed_by_battle = _battle_failed_reason is not None
+                if not failed_by_battle:
+                    # 兜底（用户 2026-11-14 疑问）：非战斗失败返回（如跟踪
+                    # 300s 超时）时若人在轮回司，说明战败但战斗结束信号未
+                    # 采到/判定漏检——同样按战斗失败恢复，避免下一轮对着
+                    # 同一任务从轮回司继续跟踪、反复打同一任务
+                    img = win.capture(force_activate=False)
+                    pos = game_map.read_map_position(win, img=img) \
+                        if img is not None else None
+                    if team.is_in_lunhuisi(pos):
+                        _battle_failed_reason = "dead"
+                        log("[五倍] 跟踪失败且人在轮回司，按战斗失败处理", "WARN")
+                        failed_by_battle = True
+                if failed_by_battle:
+                    # 任务战斗失败（用户 2026-11-14）：五倍不取消任务，
+                    # 回宝象国后下一轮直接重新领取替换；非队长转保持
+                    # 模式并自动归队
+                    _battle_failed_reason = None
+                    debug_overlay.set_phase("战斗失败恢复")  # 看板阶段
+                    status, rinfo = _recover_battle_failure(win, check_team)
+                    log(f"[五倍] {rinfo}",
+                        "SYS" if status == "reclaim" else "WARN")
+                    time.sleep(cycle_interval)
+                    continue
                 log(f"[五倍] {info}", "WARN")
                 time.sleep(cycle_interval)
                 continue

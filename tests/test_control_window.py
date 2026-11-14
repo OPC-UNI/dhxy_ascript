@@ -113,6 +113,29 @@ def test_settings_spec_rejoin_and_check_team_defaults(monkeypatch):
         assert load() == spec[key]
 
 
+def test_settings_spec_kick_away_defaults(monkeypatch):
+    """暂离超时自动请离开关/分钟：方案快照默认开启、默认 5 分钟；
+    load_* 首次默认与 spec 一致；保存越界拒绝。"""
+    from src.core import schemes
+    from src.app.control_window import (
+        _XIULUO_AUTO_KICK_AWAY_KEY, _XIULUO_KICK_AWAY_MINUTES_KEY,
+        load_xiuluo_auto_kick_away, load_xiuluo_kick_away_minutes,
+        save_xiuluo_auto_kick_away, save_xiuluo_kick_away_minutes)
+    spec = schemes._settings_spec()
+    assert spec[_XIULUO_AUTO_KICK_AWAY_KEY] is True
+    assert spec[_XIULUO_KICK_AWAY_MINUTES_KEY] == 5
+    _patch_kv_empty(monkeypatch)
+    assert load_xiuluo_auto_kick_away() == spec[_XIULUO_AUTO_KICK_AWAY_KEY]
+    assert load_xiuluo_kick_away_minutes() == spec[_XIULUO_KICK_AWAY_MINUTES_KEY]
+    assert save_xiuluo_kick_away_minutes(0)["status"] == "error"
+    assert save_xiuluo_kick_away_minutes(61)["status"] == "error"
+    assert save_xiuluo_kick_away_minutes(8) == {"status": "success",
+                                                "interval": 8}
+    assert load_xiuluo_kick_away_minutes() == 8
+    assert save_xiuluo_auto_kick_away(False) == {"status": "success"}
+    assert load_xiuluo_auto_kick_away() is False
+
+
 def test_settings_spec_auto_create_team_defaults(monkeypatch):
     """自动创建队伍键在方案快照默认值表中存在且默认开启（修罗/五倍
     各一开关；load_* 首次默认与 _settings_spec 必须一致，2026-11-12

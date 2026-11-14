@@ -573,7 +573,7 @@ def follow_task(win, title, timeout=FOLLOW_TIMEOUT, prefix="",
                 stall_recheck=False, battle_resume_reclick=False,
                 dialog_option_map=None, dialog_option_index_map=None,
                 known_green_options=None, wait_handler=None,
-                option_click_handler=None):
+                option_click_handler=None, battle_end_handler=None):
     """循环跟踪任务直到完成（prefix 供其他任务复用，如五环）。
 
     每轮：点击任务当前第一个绿色文案 → 等待任务信息变化（内容更新）
@@ -685,6 +685,14 @@ def follow_task(win, title, timeout=FOLLOW_TIMEOUT, prefix="",
     宽限 BATTLE_RECLICK_GRACE 秒等面板更新，仍未变化且人物连续站定
     BATTLE_RECLICK_STILL 秒、本帧无对话动作时补点一次任务链接恢复寻路
     （重新进入战斗），每次战斗结束至多 BATTLE_RECLICK_MAX 次。
+    battle_end_handler：战斗结束回调 (win, img) → 是否已判定失败（默认
+    None 零开销）。在战斗线程确认结束后的首个非战斗帧调用——内层轮询
+    与外层等待两条战斗结束路径都会覆盖；调用点先于任务消失确认：死亡
+    落轮回司时任务追踪面板可能被游戏收起，「面板消失=任务结束」会误判
+    完成为胜利（2026-11-11 修罗日志实测）。返回 True 表示调用方判定本
+    轮战斗失败并接管，follow 立即返回 (False, "战斗结束判定为战斗失败")
+    交回调用方处理（如取消任务后重新领取/归队）；返回 False 继续正常
+    跟踪。回调异常只记日志、不中断跟踪。
     返回 (是否完成, 描述)。
     """
     deadline = time.time() + timeout
@@ -708,6 +716,8 @@ def follow_task(win, title, timeout=FOLLOW_TIMEOUT, prefix="",
                          # 300s 超时后 follow 死于战斗中途，主循环丢失任务完成
                          # 信号——战后不走返程反而误入领取流程走回宝象国；
                          # 战斗是任务推进的外部等待，不应消耗「任务卡死」预算）
+    battle_just_ended = False  # 外层刚刚等待完一场战斗（首个非战斗轮）：
+                               # 供 battle_end_handler 判定战斗失败
     rounds = 0
     task_seen = False  # 本轮跟踪中任务是否曾被识别到：完成须满足
                        # 「无→有→无」——从未出现即确认消失是假完成
@@ -753,6 +763,7 @@ def follow_task(win, title, timeout=FOLLOW_TIMEOUT, prefix="",
         if battle_since is not None:
             deadline += time.time() - battle_since
             battle_since = None
+            battle_just_ended = True  # 本帧为战斗结束后首个非战斗轮
         # 复用最近一次 OCR 结果（内层轮询确认推进时或领取校验命中时），
         # 省一次截图+OCR；该帧同样透传给 track_task 与进度键基线，
         # 点击路径上一共省掉约 3.5s 的重复 OCR
@@ -770,6 +781,17 @@ def follow_task(win, title, timeout=FOLLOW_TIMEOUT, prefix="",
                 time.sleep(FOLLOW_POLL_INTERVAL)
                 continue
             items, img_np = task_tracker.ocr_follow(img)
+        if battle_just_ended:
+            # 战斗结束回调（默认 None 零开销）：须先于任务消失判定——
+            # 死亡落轮回司时追踪面板可能被收起，直接走消失确认会误判
+            # 完成为胜利（2026-11-11 修罗日志实测）
+            battle_just_ended = False
+            if battle_end_handler is not None:
+                try:
+                    if battle_end_handler(win, img):
+                        return False, "战斗结束判定为战斗失败"
+                except Exception as e:
+                    log(f"[{prefix}] battle_end_handler 异常: {e}", "WARN")
         task = task_tracker.find_task(
             task_tracker.group_tasks(items, task_tracker.panel_row_xmax(img_np)),
             title)
@@ -1066,6 +1088,15 @@ def follow_task(win, title, timeout=FOLLOW_TIMEOUT, prefix="",
                 was_battle = False
                 last_poll_items = None
                 last_poll_img = None
+                # 战斗结束回调（默认 None 零开销）：须先于任务消失确认
+                # ——死亡落轮回司时追踪面板可能被游戏收起，直接走消失
+                # 确认会误判本轮完成为胜利（2026-11-11 修罗日志实测）
+                if battle_end_handler is not None:
+                    try:
+                        if battle_end_handler(win, img):
+                            return False, "战斗结束判定为战斗失败"
+                    except Exception as e:
+                        log(f"[{prefix}] battle_end_handler 异常: {e}", "WARN")
                 # 战斗结束路径：面板消失即视为任务消失（用户 2026-11-11
                 # 确认：战斗结束后任务追踪会消失，随即应打开背包返程）；
                 # 跳过遮挡检查（返程快路径，对话由 _task_gone_dialog_guard

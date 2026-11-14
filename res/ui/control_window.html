@@ -755,6 +755,19 @@
                         <span>自动归队</span>
                     </label>
                     <label class="switch-row">
+                        <input type="checkbox" id="xiuluo-auto-kick-away">
+                        <span class="switch-track"></span>
+                        <span>暂离超时自动请离</span>
+                    </label>
+                    <div class="group-row" id="xiuluo-kick-away-row">
+                        <span class="group-label">超时（分钟）</span>
+                        <div class="group-ctrl">
+                            <button class="th-btn" onclick="xiuluoKickAwayMinutes(-1)">−</button>
+                            <span class="th-val" id="xiuluo-kick-away-minutes">5</span>
+                            <button class="th-btn" onclick="xiuluoKickAwayMinutes(1)">＋</button>
+                        </div>
+                    </div>
+                    <label class="switch-row">
                         <input type="checkbox" id="xiuluo-shout">
                         <span class="switch-track"></span>
                         <span>缺人自动喊话</span>
@@ -1663,6 +1676,9 @@
     const xiuluoCheckTeam = document.getElementById('xiuluo-check-team');
     const xiuluoAutoCreateTeam = document.getElementById('xiuluo-auto-create-team');
     const xiuluoAutoRejoin = document.getElementById('xiuluo-auto-rejoin');
+    const xiuluoAutoKickAway = document.getElementById('xiuluo-auto-kick-away');
+    const xiuluoKickAwayMinutesEl = document.getElementById('xiuluo-kick-away-minutes');
+    const xiuluoKickAwayRow = document.getElementById('xiuluo-kick-away-row');
     const xiuluoAutoWuyi = document.getElementById('xiuluo-auto-wuyi');
     const xiuluoTabGroup = document.getElementById('xiuluo-tab-group');
     const highPerf = document.getElementById('high-perf');
@@ -3117,6 +3133,16 @@
         if (r && r.status === 'success') el.innerText = r.interval;
     }
 
+    // 暂离超时自动请离：超时分钟（1~60，默认 5；开关关闭时整行隐藏）
+    async function xiuluoKickAwayMinutes(delta) {
+        const el = xiuluoKickAwayMinutesEl;
+        const cur = parseInt(el.innerText);
+        const val = Math.min(60, Math.max(1, cur + delta));
+        if (val === cur) return;
+        const r = await callPython('save_xiuluo_kick_away_minutes', val);
+        if (r && r.status === 'success') el.innerText = r.interval;
+    }
+
     async function wubeiWuyiInterval(delta) {
         const el = wubeiWuyiIntervalEl;
         const cur = parseInt(el.innerText);
@@ -3161,6 +3187,10 @@
         if (val === cur) return;
         const r = await callPython('save_zhongzu_repair_interval', val);
         if (r && r.status === 'success') el.innerText = r.interval;
+    }
+
+    function applyXiuluoKickAwayVisibility() {
+        xiuluoKickAwayRow.style.display = xiuluoAutoKickAway.checked ? '' : 'none';
     }
 
     function applyXiuluoRepairVisibility() {
@@ -3227,6 +3257,10 @@
     });
     xiuluoAutoRejoin.addEventListener('change', () => {
         callPython('save_xiuluo_auto_rejoin', xiuluoAutoRejoin.checked);
+    });
+    xiuluoAutoKickAway.addEventListener('change', () => {
+        applyXiuluoKickAwayVisibility();
+        callPython('save_xiuluo_auto_kick_away', xiuluoAutoKickAway.checked);
     });
     xiuluoAutoWuyi.addEventListener('change', () => {
         callPython('save_xiuluo_auto_wuyi', xiuluoAutoWuyi.checked);
@@ -3540,6 +3574,8 @@
         }
         xiuluoAutoCreateTeam.checked = !!info.xiuluo_auto_create_team;
         xiuluoAutoRejoin.checked = !!info.xiuluo_auto_rejoin;
+        xiuluoAutoKickAway.checked = !!info.xiuluo_auto_kick_away;
+        applyXiuluoKickAwayVisibility();
         xiuluoAutoWuyi.checked = !!info.xiuluo_auto_wuyi;
         xiuluoAutoRepair.checked = !!info.xiuluo_auto_repair;
         applyXiuluoRepairVisibility();
@@ -3581,6 +3617,9 @@
         envDeviceIdEl.title = envDeviceIdValue;  // 悬停看完整值，点击复制
         if (info.xiuluo_wuyi_interval) {
             xiuluoWuyiIntervalEl.innerText = info.xiuluo_wuyi_interval;
+        }
+        if (info.xiuluo_kick_away_minutes !== undefined) {
+            xiuluoKickAwayMinutesEl.innerText = info.xiuluo_kick_away_minutes;
         }
         if (info.xiuluo_repair_interval !== undefined) {
             xiuluoRepairIntervalEl.innerText = info.xiuluo_repair_interval;

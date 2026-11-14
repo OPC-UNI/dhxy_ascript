@@ -730,3 +730,191 @@ def test_claim_task_replace_allows_existing_task(monkeypatch):
     assert ok is False and info == "入口失败"
     assert called == [1]  # 已进入领取入口流程
 
+
+# ---- 战斗失败重新领取（用户 2026-11-14：五倍不取消任务，直接重领） ----
+
+def test_on_battle_end_dead_in_lunhuisi(monkeypatch):
+    """战斗结束位置为轮回司：判定失败（死亡优先于任务消失确认）。"""
+    monkeypatch.setattr(wubei, "log", lambda *a, **k: None)
+    monkeypatch.setattr(wubei.game_map, "read_map_position",
+                        lambda w, img=None: ("轮回司", 38, 20))
+    monkeypatch.setattr(wubei, "_battle_failed_reason", None)
+    monkeypatch.setattr(wubei, "_fight_via_kanda", True)
+    monkeypatch.setattr(wubei, "_hpg_task_seen", False)
+    assert wubei._on_battle_end(_FakeWin(), _FakeWin().capture()) is True
+    assert wubei._battle_failed_reason == "dead"
+
+
+def test_on_battle_end_task_present_after_dialog_battle(monkeypatch):
+    """对话开打后战斗结束任务仍在（复核仍在）：判定失败。"""
+    clock = _FakeClock()
+    monkeypatch.setattr(wubei, "time", clock)
+    monkeypatch.setattr(wubei, "log", lambda *a, **k: None)
+    monkeypatch.setattr(wubei.game_map, "read_map_position",
+                        lambda w, img=None: (wubei.BAOXIANGGUO, 100, 120))
+    monkeypatch.setattr(wubei, "_battle_failed_reason", None)
+    monkeypatch.setattr(wubei, "_fight_via_kanda", True)
+    monkeypatch.setattr(wubei, "_hpg_task_seen", False)
+    monkeypatch.setattr(
+        wubei.task_tracker, "task_absent_in_frame",
+        lambda img, title, fb=(): (
+            False, [("前往平顶山消灭魔尊", (14, 249, 185, 269), 0.99)]))
+    assert wubei._on_battle_end(_FakeWin(), _FakeWin().capture()) is True
+    assert wubei._battle_failed_reason == "task"
+    assert clock.t >= 0.5  # 战斗结束首帧后复核一次
+
+
+def test_on_battle_end_task_lingering_row_not_failure(monkeypatch):
+    """完成瞬间任务行仍在退出动画：复核已消失 → 不判失败。"""
+    clock = _FakeClock()
+    monkeypatch.setattr(wubei, "time", clock)
+    monkeypatch.setattr(wubei, "log", lambda *a, **k: None)
+    monkeypatch.setattr(wubei.game_map, "read_map_position",
+                        lambda w, img=None: (wubei.BAOXIANGGUO, 100, 120))
+    monkeypatch.setattr(wubei, "_battle_failed_reason", None)
+    monkeypatch.setattr(wubei, "_fight_via_kanda", True)
+    monkeypatch.setattr(wubei, "_hpg_task_seen", False)
+    seq = [(False, [("前往平顶山消灭魔尊", (14, 249, 185, 269), 0.99)]),
+           (True, [])]
+    monkeypatch.setattr(wubei.task_tracker, "task_absent_in_frame",
+                        lambda img, title, fb=(): seq.pop(0))
+    assert wubei._on_battle_end(_FakeWin(), _FakeWin().capture()) is False
+    assert wubei._battle_failed_reason is None
+
+
+def test_on_battle_end_huangpao_multi_kill_not_failure(monkeypatch):
+    """黄袍怪多杀两场之间任务仍在属正常，不看任务存在条件。"""
+    monkeypatch.setattr(wubei, "log", lambda *a, **k: None)
+    monkeypatch.setattr(wubei.game_map, "read_map_position",
+                        lambda w, img=None: (wubei.BAOXIANGGUO, 100, 120))
+    monkeypatch.setattr(wubei, "_battle_failed_reason", None)
+    monkeypatch.setattr(wubei, "_fight_via_kanda", True)
+    monkeypatch.setattr(wubei, "_hpg_task_seen", True)
+    monkeypatch.setattr(
+        wubei.task_tracker, "task_absent_in_frame",
+        lambda *a, **k: (
+            False, [("前往平顶山消灭黄袍怪", (14, 249, 185, 269), 0.99)]))
+    assert wubei._on_battle_end(_FakeWin(), _FakeWin().capture()) is False
+    assert wubei._battle_failed_reason is None
+
+
+def test_on_battle_end_random_battle_not_failure(monkeypatch):
+    """随机遭遇战结束任务仍在属正常（非对话开打门控）。"""
+    monkeypatch.setattr(wubei, "log", lambda *a, **k: None)
+    monkeypatch.setattr(wubei.game_map, "read_map_position",
+                        lambda w, img=None: (wubei.BAOXIANGGUO, 100, 120))
+    monkeypatch.setattr(wubei, "_battle_failed_reason", None)
+    monkeypatch.setattr(wubei, "_fight_via_kanda", False)
+    monkeypatch.setattr(wubei, "_hpg_task_seen", False)
+    monkeypatch.setattr(
+        wubei.task_tracker, "task_absent_in_frame",
+        lambda *a, **k: (
+            False, [("前往平顶山消灭魔尊", (14, 249, 185, 269), 0.99)]))
+    assert wubei._on_battle_end(_FakeWin(), _FakeWin().capture()) is False
+    assert wubei._battle_failed_reason is None
+
+
+def test_recover_battle_failure_reclaim_directly(monkeypatch):
+    """队长已在宝象国：置位重领标记并强制队伍检查；不调用取消任务。"""
+    monkeypatch.setattr(wubei, "log", lambda *a, **k: None)
+    monkeypatch.setattr(wubei, "time", _FakeClock())
+    monkeypatch.setattr(wubei, "_check_team_with_retry",
+                        lambda w, **k: ("ready", "队伍满足"))
+    monkeypatch.setattr(wubei.game_map, "read_map_position",
+                        lambda w, img=None: (wubei.BAOXIANGGUO, 94, 84))
+    cancelled = []
+    monkeypatch.setattr(wubei, "_cancel_task",
+                        lambda w: cancelled.append(1), raising=False)
+    monkeypatch.setattr(wubei, "_battle_failed_reclaim", False)
+    monkeypatch.setattr(wubei, "_battle_recovery_pending", True)
+    monkeypatch.setattr(wubei, "_team_checked", True)
+    status, info = wubei._recover_battle_failure(_FakeWin(), True)
+    assert status == "reclaim" and "重新领取" in info
+    assert wubei._battle_failed_reclaim is True
+    assert wubei._team_checked is False
+    assert wubei._battle_recovery_pending is False  # 恢复完成：清除重试标记
+    assert cancelled == []  # 五倍不取消任务
+
+
+def test_recover_battle_failure_non_leader_keep_alive(monkeypatch):
+    """非队长：不重新领取，转保持模式并自动归队。"""
+    monkeypatch.setattr(wubei, "log", lambda *a, **k: None)
+    monkeypatch.setattr(
+        wubei, "_check_team_with_retry",
+        lambda w, **k: ("not_leader", "非队长（队伍面板无解散按钮）"))
+    kept = []
+    monkeypatch.setattr(wubei, "_keep_alive",
+                        lambda w, info: kept.append(info))
+    status, info = wubei._recover_battle_failure(_FakeWin(), True)
+    assert status == "failed" and "保持模式" in info
+    assert kept and "非队长" in kept[0]
+
+
+def test_recover_battle_failure_lunhuisi_uses_talisman(monkeypatch):
+    """落轮回司：世界地图不可用，走五倍回城符返程。"""
+    monkeypatch.setattr(wubei, "log", lambda *a, **k: None)
+    monkeypatch.setattr(wubei, "time", _FakeClock())
+    monkeypatch.setattr(wubei.game_map, "read_map_position",
+                        lambda w, img=None: ("轮回司", 38, 20))
+    calls = []
+    monkeypatch.setattr(
+        wubei, "_return_to_npc",
+        lambda w: calls.append("talisman") or (True, "已返回宝象国"))
+    monkeypatch.setattr(
+        wubei, "_walk_to_claim_spot",
+        lambda w, **k: (_ for _ in ()).throw(
+            AssertionError("轮回司不应走世界地图")))
+    monkeypatch.setattr(wubei, "_team_checked", True)
+    monkeypatch.setattr(wubei, "_battle_recovery_pending", True)
+    status, _info = wubei._recover_battle_failure(_FakeWin(), False)
+    assert status == "reclaim" and calls == ["talisman"]
+    assert wubei._battle_recovery_pending is False
+
+
+def test_recover_battle_failure_return_failed(monkeypatch):
+    """回宝象国多次失败：报告失败（主循环下轮重试）。"""
+    clock = _FakeClock()
+    monkeypatch.setattr(wubei, "time", clock)
+    monkeypatch.setattr(wubei, "log", lambda *a, **k: None)
+    monkeypatch.setattr(wubei.game_map, "read_map_position",
+                        lambda w, img=None: ("长安", 100, 100))
+    monkeypatch.setattr(wubei, "_walk_to_claim_spot",
+                        lambda w, **k: (False, "寻路超时"))
+    monkeypatch.setattr(wubei, "_return_to_npc",
+                        lambda w: (False, "背包打开失败"))
+    monkeypatch.setattr(wubei, "_battle_recovery_pending", False)
+    status, info = wubei._recover_battle_failure(_FakeWin(), False)
+    assert status == "failed" and "回宝象国失败" in info
+    assert clock.t >= 3 * 3.0
+    # 恢复未完成：下一轮先重试恢复，不得回走任务跟踪
+    assert wubei._battle_recovery_pending is True
+
+
+def test_recover_battle_failure_transient_identity_sets_pending(monkeypatch):
+    """身份瞬态无法判定：标记待恢复重试，不贸然重新领取。"""
+    monkeypatch.setattr(wubei, "log", lambda *a, **k: None)
+    monkeypatch.setattr(wubei, "_check_team_with_retry",
+                        lambda w, **k: ("not_leader", "队长无法判定（面板按钮未命中）"))
+    monkeypatch.setattr(wubei, "_battle_recovery_pending", False)
+    status, info = wubei._recover_battle_failure(_FakeWin(), True)
+    assert status == "failed" and "身份无法判定" in info
+    assert wubei._battle_recovery_pending is True
+
+
+def test_follow_to_done_wires_battle_end_handler(monkeypatch):
+    """跟踪起点复位开打标记与失败原因，并注入战斗结束回调。"""
+    captured = {}
+
+    def fake_follow(win, first_items=None, **kwargs):
+        captured.update(kwargs)
+        return True, "完成"
+
+    monkeypatch.setattr(wubei.claim_flow, "follow_to_done", fake_follow)
+    monkeypatch.setattr(wubei, "_fight_via_kanda", True)
+    monkeypatch.setattr(wubei, "_battle_failed_reason", "dead")
+    ok, _info = wubei._follow_to_done(_FakeWin())
+    assert ok is True
+    assert captured["battle_end_handler"] is wubei._on_battle_end
+    assert wubei._fight_via_kanda is False
+    assert wubei._battle_failed_reason is None
+

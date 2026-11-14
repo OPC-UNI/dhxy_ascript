@@ -117,12 +117,15 @@ def follow_to_done(win, first_items=None, *, title, prefix,
                    skip_texts=_UNSET, story_known_texts=_UNSET,
                    pre_click_handler=_UNSET, post_track_handler=_UNSET,
                    task_gone_polls=_UNSET, battle_extras_tpl_gate=True,
-                   recovery=None, recovery_window=30.0):
+                   recovery=None, recovery_window=30.0,
+                   battle_end_handler=_UNSET):
     """寻路 + 对话开打 + 战斗：跟踪任务直到本轮完成。
 
     可选 recovery(win) -> (ok, info)：仅在首次跟踪（first_items 非空）、
     失败原因为「任务内容中未找到绿色文案」且仍在 recovery_window 内时
     调用一次，用于修罗的领取点补偿重试。
+    battle_end_handler：透传 follow_task 的战斗结束回调（修罗战斗失败
+    判定用），默认不传、其它任务零影响。
     """
     def _kwargs(include_first):
         kwargs = dict(prefix=prefix,
@@ -141,6 +144,8 @@ def follow_to_done(win, first_items=None, *, title, prefix,
             kwargs["post_track_handler"] = post_track_handler
         if task_gone_polls is not _UNSET:
             kwargs["task_gone_polls"] = task_gone_polls
+        if battle_end_handler is not _UNSET:
+            kwargs["battle_end_handler"] = battle_end_handler
         return kwargs
 
     t0 = time.time()

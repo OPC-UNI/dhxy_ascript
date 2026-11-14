@@ -29,7 +29,7 @@ class TeamFlow:
 
     def __init__(self, *, prefix, min_members, auto_rejoin, shout_text,
                  check_retry_interval=10, recog_retry_interval=3,
-                 shout_min_interval=30):
+                 shout_min_interval=30, kick_overdue=None, kick_timeout=None):
         self.prefix = prefix
         self.create_prefix = prefix + "[创建队伍]"
         self.rejoin_prefix = prefix + "[归队]"
@@ -39,24 +39,47 @@ class TeamFlow:
         self.check_retry_interval = check_retry_interval
         self.recog_retry_interval = recog_retry_interval
         self.shout_min_interval = shout_min_interval
+        # 暂离超时自动请离（修罗设置开关/超时）：None = 保持原行为
+        # （始终请离、默认阈值）；callable/常量由任务注入。关闭时组号
+        # 暂离队员归队 pass 仍照常执行（仅不请离）。
+        self._kick_overdue = kick_overdue
+        self._kick_timeout = kick_timeout
         self._shout_last_at = 0.0
 
     def _team_min(self):
         value = self._min_members
         return value() if callable(value) else value
 
+    def _kick_overdue_now(self):
+        value = self._kick_overdue
+        if value is None:
+            return True
+        return bool(value() if callable(value) else value)
+
+    def _kick_timeout_now(self):
+        value = self._kick_timeout
+        return value() if callable(value) else value
+
     def check_team_ready(self, win, create_if_missing=False):
         """领取前队伍检查：一次面板开关，结果顺带更新悬浮层队伍行。"""
         status, info, members = team.check_team_min(
             win, min_members=self._team_min(), allow_kick=True,
-            create_if_missing=create_if_missing, prefix=self.create_prefix)
+            create_if_missing=create_if_missing, prefix=self.create_prefix,
+            kick_timeout=self._kick_timeout_now(),
+            kick_overdue=self._kick_overdue_now())
         team.update_overlay_team(status, info, members)
         return status, info
 
     def check_team_with_retry(self, win, tries=3, create_if_missing=False):
         """队伍检查带瞬态失败重试：截窗失败/面板打不开可能是瞬时问题，
         一次失败即转非队长保持模式会把队长永久挂起。未组队与明确非队长
-        是确定性状态，不重试。"""
+        是确定性状态，不重试。
+
+        已确认队长（team.known_leader() is True）时身份未决（菜单打不开/
+        按钮未命中/截图失败）**不返回「非队长」**：返回 wait 交调用方按
+        队长继续重试（用户 2026-11-14：只有明确证据——菜单无「队伍信息」
+        （duiwuxinxi）或面板打开后无「解散队伍」（jiesanduiwu）——才判
+        非队长；瞬态两三次失败不能把队长降级）。"""
         last = ("not_leader", "队伍检查未执行")
         for i in range(tries):
             status, info = self.check_team_ready(
@@ -64,15 +87,18 @@ class TeamFlow:
             last = (status, info)
             if status != "not_leader":
                 return status, info
-            # 未组队是确定性状态，提示带「队长无法判定」前缀，必须先短路
-            if "未组队" in info:
+            # 确定性非队长（未组队 / 面板打开且无解散按钮）：立即返回
+            if team.is_definitive_not_leader(info):
                 return status, info
-            if "队长无法判定" not in info and "截图失败" not in info:
-                return status, info  # 明确非队长（面板打开且无解散按钮）
             if i < tries - 1:
                 log(f"{self.prefix} {info}，瞬态失败重试"
                     f"（{i + 1}/{tries - 1}）", "WARN")
                 time.sleep(2.0)
+        status, info = last
+        if status == "not_leader" and team.known_leader() is True:
+            # 身份未决但已确认过队长：保持队长状态（wait），调用方继续
+            # 重试/等待，不转保持模式
+            return "wait", f"{info}（已确认队长，保持队长状态重试）"
         return last
 
     def auto_create_team_once(self, win):

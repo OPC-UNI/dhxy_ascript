@@ -919,12 +919,13 @@ def test_kick_one_name_verify_requires_name_gone_and_count_down(monkeypatch):
 
 
 def test_check_team_min_allow_kick_flag(monkeypatch):
-    """allow_kick=True 才执行超时请离（诊断检查不踢人）。"""
+    """allow_kick=True 才执行暂离处理（诊断检查不踢人）；超时与请离
+    开关分别透传（关请离时仍走归队 pass）。"""
     from PIL import Image as _Img
     called = []
 
-    def _noop_kick(win):
-        called.append(1)
+    def _noop_kick(win, timeout=team.KICK_AWAY_TIMEOUT, allow_kick=True):
+        called.append((timeout, allow_kick))
         return 0, ""
 
     frame = _paste_tpl(_frame(), "duiwumianban.png", 500, 260)
@@ -940,7 +941,49 @@ def test_check_team_min_allow_kick_flag(monkeypatch):
     assert status == "ready" and called == []
     status, _info, _members = team.check_team_min(win, min_members=None,
                                                   allow_kick=True)
-    assert status == "ready" and called == [1]
+    assert status == "ready" and called == [(team.KICK_AWAY_TIMEOUT, True)]
+    # 任务设置传入自定义超时（修罗「暂离超时自动请离」分钟数）
+    status, _info, _members = team.check_team_min(
+        win, min_members=None, allow_kick=True, kick_timeout=120)
+    assert status == "ready" and called == [(team.KICK_AWAY_TIMEOUT, True),
+                                            (120, True)]
+    # 请离开关关闭：暂离处理照常执行（组号归队），只是不请离
+    status, _info, _members = team.check_team_min(
+        win, min_members=None, allow_kick=True, kick_overdue=False)
+    assert status == "ready" and called[-1] == (team.KICK_AWAY_TIMEOUT, False)
+
+
+def test_auto_kick_overdue_disabled_keeps_tab_rejoin(monkeypatch):
+    """请离开关关闭：组号暂离队员归队 pass 照常执行，不记账不请离。"""
+    import src.device.tab_group as tg
+    team.reset_away_tracking()
+    calls = []
+
+    monkeypatch.setattr(team, "_away_member_indices",
+                        lambda img: ([(3, "甲", "女人")], None))
+    monkeypatch.setattr(tg, "active", lambda: True)
+    monkeypatch.setattr(tg, "member_rejoin_pass",
+                        lambda win, names: (calls.append(list(names)) or 0,
+                                            "队员归队未成功", {"甲"}))
+    monkeypatch.setattr(team, "_kick_one",
+                        lambda *a: (_ for _ in ()).throw(
+                            AssertionError("关闭请离不得踢人")))
+    monkeypatch.setattr(team, "log", lambda *a, **k: None)
+    n, info = team._auto_kick_overdue(_SeqWin([_frame()]), allow_kick=False)
+    assert n == 0 and info == ""
+    assert calls == [["甲"]]
+    assert team._away_seen == {}  # 不记账
+
+
+def test_overdue_away_custom_timeout():
+    """超时阈值可配：同一账本 5 分钟未到、2 分钟已到。"""
+    now = time.time()
+    team.reset_away_tracking()
+    team._away_seen.update({("女人", "甲"): now - 150})
+    away = [(1, "甲", "女人")]
+    assert team._overdue_away(away, 300) == []
+    assert team._overdue_away(away, 120) == [(1, "甲", "女人")]
+    team.reset_away_tracking()
 
 
 def test_auto_kick_overdue_excludes_matched_tabs(monkeypatch):

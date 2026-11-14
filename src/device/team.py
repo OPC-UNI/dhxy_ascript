@@ -1467,7 +1467,8 @@ def check_team_conditions(win, min_members=None, required_races=None):
 
 
 def check_team_min(win, min_members=None, allow_kick=False,
-                   create_if_missing=False, prefix="[组队]"):
+                   create_if_missing=False, prefix="[组队]",
+                   kick_timeout=None, kick_overdue=True):
     """领取前队伍检查（通用，修罗/五倍等复用）：一次打开队伍面板完成
     队长判定、人数检查与成员信息采集。
 
@@ -1486,10 +1487,14 @@ def check_team_min(win, min_members=None, allow_kick=False,
     （2026-11-05 队长面板单帧误判非队长、核心流程永久挂起的教训）；
     人数与成员信息同帧完成（5 固定区域扫描，首空位截断），不再二次
     截窗与取消选中。
-    allow_kick=True（仅任务流程传入，诊断检查不踢人）：队长且成员
-    扫描稳定时在同一面板打开内执行超时暂离请离（todo2：按名字记账、
-    超 5 分钟未归队从后往前连踢，面板不关闭），踢人后重扫成员——
-    人数判定用最新值。
+    allow_kick=True（仅任务流程传入，诊断检查不处理）：队长且成员
+    扫描稳定时在同一面板打开内处理暂离成员——组号暂离队员先切 Tab
+    归队，再按名字记账、超时未归队从后往前连踢（面板不关闭），踢人
+    后重扫成员——人数判定用最新值。
+    kick_overdue：是否执行超时请离（修罗设置开关，默认 True；关闭时
+    组号暂离队员归队仍照常，只是不再请离超时成员）。
+    kick_timeout：暂离超时阈值（秒），None 用默认 5 分钟；修罗设置
+    页可配（任务流程按设置传入）。
     min_members: 人数下限（含自己），None 不检查
     返回 (状态, 描述, 成员列表)；状态：ready 可领取 / wait 队长但人数
     不足 / not_leader 非队长或队长无法判定。
@@ -1543,9 +1548,12 @@ def check_team_min(win, min_members=None, allow_kick=False,
     # 渲染滞后时内部重截一帧兜底）——不重复开关面板、不取消选中
     ok, members, count = _analyze_panel_frame(win, img)
     if allow_kick and ok:
-        # todo2 超时暂离请离：面板保持打开按名字记账连踢（从后往前），
-        # 踢人后重扫成员——人数判定用最新值（请离后区域平移）
-        kicked, kick_info = _auto_kick_overdue(win)
+        # todo2 暂离处理：组号队员归队 pass +（开关允许时）超时请离。
+        # 面板保持打开按名字记账连踢（从后往前），踢人后重扫成员——
+        # 人数判定用最新值（请离后区域平移）
+        kicked, kick_info = _auto_kick_overdue(
+            win, KICK_AWAY_TIMEOUT if kick_timeout is None else kick_timeout,
+            allow_kick=kick_overdue)
         if kicked:
             log(f"[组队] {kick_info}", "SYS")
         elif kick_info:
@@ -2043,12 +2051,13 @@ def _away_identity_match(scan_name, scan_race, key_name, key_race):
     ).ratio() >= _AWAY_NAME_RATIO
 
 
-def _track_away(away):
+def _track_away(away, timeout=KICK_AWAY_TIMEOUT):
     """按「名字模糊+种族精确」复合身份记账暂离成员。
 
     扫描身份与账本键匹配（_away_identity_match）则沿用原时间戳；
     新身份记首次时间戳；账本中已无匹配者的移除（归队/被请离/离队）。
     无名字成员不记账（后续检查无从匹配）。
+    timeout：超时阈值（秒），仅用于日志展示。
     """
     cur = [(name, race) for _i, name, race in away if name]
     for name, race in cur:
@@ -2060,7 +2069,7 @@ def _track_away(away):
             _away_seen[(race, name)] = time.time()
             race_txt = f"({race})" if race else ""
             log(f"[组队] 首次识别暂离成员「{name}」{race_txt}，开始计时"
-                f"（{int(KICK_AWAY_TIMEOUT)}s 未归队自动请离）", "INFO")
+                f"（{int(timeout)}s 未归队自动请离）", "INFO")
     for key in list(_away_seen):
         kn, kr = key
         if not any(_away_identity_match(name, race, kr, kn)
@@ -2068,7 +2077,7 @@ def _track_away(away):
             _away_seen.pop(key, None)
 
 
-def _overdue_away(away):
+def _overdue_away(away, timeout=KICK_AWAY_TIMEOUT):
     """本次扫描中已超时的暂离成员，按区域序号从后往前排序
     （含名字者才可记账判定；第 1 区域队长自身永不请离）。"""
     overdue = []
@@ -2077,7 +2086,7 @@ def _overdue_away(away):
             continue
         seen = next((v for (kn, kr), v in _away_seen.items()
                      if _away_identity_match(name, race, kr, kn)), None)
-        if seen is not None and time.time() - seen >= KICK_AWAY_TIMEOUT:
+        if seen is not None and time.time() - seen >= timeout:
             overdue.append((i, name, race))
     return overdue
 
@@ -2168,14 +2177,18 @@ def kick_away_member(win):
         close_team_panel(win)
 
 
-def _auto_kick_overdue(win):
-    """面板保持打开：循环请离已超时的暂离成员（任务流程 todo2 接入）。
+def _auto_kick_overdue(win, timeout=KICK_AWAY_TIMEOUT, allow_kick=True):
+    """面板保持打开：处理暂离成员——组号队员归队 +（允许时）超时请离。
 
     每轮重截帧重扫暂离名单（成员移除后面板重渲染；从后往前请离，
-    前方成员区域不随移除平移，序号持续有效）→ 按「名字模糊+种族
-    精确」复合身份记账更新（归队/离队者移除计时）→ 超时者取序号
-    最大（最靠后）先请离 → 成功后移出账本继续下一轮；请离失败即停
-    （识别问题不盲目连踢，下轮检查 10s 后自然重试）。
+    前方成员区域不随移除平移，序号持续有效）→ 组号模式先切到暂离
+    队员 Tab 替其归队 → 允许请离时：按「名字模糊+种族精确」复合身份
+    记账更新（归队/离队者移除计时）→ 超时者取序号最大（最靠后）先
+    请离 → 成功后移出账本继续下一轮；请离失败即停（识别问题不盲目
+    连踢，下轮检查 10s 后自然重试）。
+    allow_kick=False：只做组号暂离队员归队（修罗设置关闭「暂离超时
+    自动请离」），不记账、不请离。
+    timeout：超时阈值（秒），由任务设置传入（修罗可配，默认 5 分钟）。
     返回 (已请离数, 描述)；无超时且无异常返回 (0, "")。
     """
     kicked = 0
@@ -2189,7 +2202,8 @@ def _auto_kick_overdue(win):
         if away is None:
             return kicked, (reason or "召回扫描失败") \
                 if not kicked else f"已请离 {'、'.join(parts)}；重扫失败: {reason}"
-        _track_away(away)
+        if allow_kick:
+            _track_away(away, timeout)
         # todo3 组号处理：暂离队员若是本组号的队员 Tab，切到该 Tab 替其
         # 点「回归队伍」归队（归队成功者离开暂离名单，账本自然移除）；
         # 匹配到的自家队员 Tab 不参与超时请离（归队优先，踢了要重加）
@@ -2203,7 +2217,9 @@ def _auto_kick_overdue(win):
                     log(f"[组队] {pass_info}", "SYS" if done else "WARN")
         except Exception as e:
             log(f"[组队] 组号归队 pass 异常: {e}", "WARN")
-        overdue = [o for o in _overdue_away(away)
+        if not allow_kick:
+            break  # 请离开关关闭：组号归队已执行，本轮结束
+        overdue = [o for o in _overdue_away(away, timeout)
                    if o[1] not in matched_tabs]
         if not overdue:
             break
@@ -2219,7 +2235,7 @@ def _auto_kick_overdue(win):
                     if _away_identity_match(name, race, k[1], k[0])]:
             _away_seen.pop(key, None)
         parts.append(f"「{name}」")
-        log(f"[组队] 暂离成员「{name}」超过 {int(KICK_AWAY_TIMEOUT)}s 未归队，已请离", "SYS")
+        log(f"[组队] 暂离成员「{name}」超过 {int(timeout)}s 未归队，已请离", "SYS")
     if kicked:
         return kicked, f"已请离超时暂离成员: {'、'.join(parts)}"
     return 0, ""
