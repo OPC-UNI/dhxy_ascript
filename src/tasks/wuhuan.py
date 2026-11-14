@@ -458,15 +458,17 @@ def _handle_claim_blockers(win, items, img_np):
 def _wait_tracked(win, timeout):
     """轮询等待任务出现在追踪面板（入口防御点继续选项后确认领取成功）。
 
-    入口防御仅在遗留对话框场景触发，频率可接受（has_task 单次面板
-    区域 OCR 约 0.9s）；战斗中跳过（战斗画面遮挡面板）。
+    入口防御仅在遗留对话框场景触发，频率可接受（has_task 面板在场时
+    区域 OCR 约 0.13~0.19s；fast_absent：标题条模板未命中且无遮挡时
+    直接返回 False，面板未出现阶段每次轮询实测 ~0.12s）；战斗中跳过
+    （战斗画面遮挡面板）。
     """
     deadline = time.time() + timeout
     while time.time() < deadline:
         if is_in_battle(win):
             time.sleep(2.0)
             continue
-        if task_tracker.has_task(win, WUHUAN_TITLE):
+        if task_tracker.has_task(win, WUHUAN_TITLE, fast_absent=True):
             return True
         time.sleep(1.0)
     return False

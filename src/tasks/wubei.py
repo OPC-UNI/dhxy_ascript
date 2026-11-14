@@ -3016,18 +3016,24 @@ def run_loop(win, cycle_interval=1.0):
             #    的消失确认会误判完成——黄袍怪轮次返程前 4s 窗口内连续复查，
             #    任一帧任务仍在即不返程并恢复跟踪。其他任务单次检查
             #    （对齐修罗；无条件 4s 窗口实测拖慢每轮返程 ~4s，
-            #    2026-10-12 按 _hpg_task_seen 门控）
+            #    2026-10-12 按 _hpg_task_seen 门控）。复查用 fast_absent：
+            #    标题条模板未命中且无遮挡面板时跳过区域 OCR（面板缺席
+            #    场景实测 ~0.22s → ~0.12s；命中照常 OCR）——仅确认消失
+            #    方向可用，领取校验类 has_task 不得开启
             if _hpg_task_seen:
                 recheck_deadline = time.time() + 4.0
                 still_tracked = False
                 while time.time() < recheck_deadline:
-                    if task_tracker.has_task(win, TASK_TITLE, TASK_FALLBACK_TEXTS):
+                    if task_tracker.has_task(win, TASK_TITLE,
+                                             TASK_FALLBACK_TEXTS,
+                                             fast_absent=True):
                         still_tracked = True
                         break
                     time.sleep(1.0)
             else:
                 still_tracked = task_tracker.has_task(win, TASK_TITLE,
-                                                      TASK_FALLBACK_TEXTS)
+                                                      TASK_FALLBACK_TEXTS,
+                                                      fast_absent=True)
             if still_tracked:
                 _task_gone_last_round = False  # 恢复跟踪：下一轮 has_task 续跑
                 log("[五倍] 返程前复查任务仍在追踪（多杀任务），跳过返程继续跟踪", "WARN")

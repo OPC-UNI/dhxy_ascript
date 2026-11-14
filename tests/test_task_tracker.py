@@ -546,3 +546,98 @@ def test_panel_visible_true_when_header_found(monkeypatch):
                         lambda img_np, **k: (0, 227, 300, 557))
     assert task_tracker.panel_visible(
         img=Image.new("RGB", (100, 100))) is True
+
+
+# ---- 面板缺席是否被其它大面板遮挡（背包/世界图/小地图） ----
+
+def test_panel_occluded_none(monkeypatch):
+    """三个遮挡模板都未命中 → 不遮挡。"""
+    calls = []
+    monkeypatch.setattr(task_tracker.game_map, "match_frame_np",
+                        lambda img, icon, **k: calls.append(icon) or None)
+    assert task_tracker.panel_occluded(
+        Image.new("RGB", (100, 100))) is False
+    assert len(calls) == 3  # 仅背包/世界地图/小地图
+
+
+def test_panel_occluded_bag(monkeypatch):
+    """背包标志模板命中 → 判遮挡。"""
+    monkeypatch.setattr(task_tracker.game_map, "match_frame_np",
+                        lambda img, icon, **k: (1, 1) if "bag_box" in icon
+                        else None)
+    assert task_tracker.panel_occluded(
+        Image.new("RGB", (100, 100))) is True
+
+
+def test_panel_occluded_team_only_when_requested(monkeypatch):
+    """队伍面板检查只在 include_team=True（组号模式）时执行。"""
+    import src.device.team as team_mod
+    calls = []
+    monkeypatch.setattr(task_tracker.game_map, "match_frame_np",
+                        lambda img, icon, **k: None)
+    monkeypatch.setattr(team_mod, "panel_visible_in",
+                        lambda img: calls.append(1) or True)
+    img = Image.new("RGB", (100, 100))
+    assert task_tracker.panel_occluded(img) is False
+    assert calls == []
+    assert task_tracker.panel_occluded(img, include_team=True) is True
+    assert calls == [1]
+
+
+# ---- has_task 面板缺席早退（fast_absent，2026-11-14） ----
+
+def _fake_has_task_env(monkeypatch, region, occluded, found):
+    """装配 has_task 的外部依赖，返回 OCR 调用记录。"""
+    ocr_calls = []
+    monkeypatch.setattr(task_tracker, "track_content_region",
+                        lambda img_np, **k: region)
+    monkeypatch.setattr(task_tracker, "panel_occluded",
+                        lambda img, **k: occluded)
+    monkeypatch.setattr(
+        task_tracker.game_map, "ocr_region",
+        lambda img, region=None: (ocr_calls.append(region),
+                                  ([], None))[1])
+    monkeypatch.setattr(task_tracker, "has_task_in",
+                        lambda items, img_np, title, fallback=(): found)
+    return ocr_calls
+
+
+def test_has_task_fast_absent_skips_ocr_when_panel_missing(monkeypatch):
+    """标题条未命中且无遮挡 → 直接 False，不触发区域 OCR。"""
+    ocr_calls = _fake_has_task_env(monkeypatch, None, occluded=False,
+                                   found=True)
+    win = _PanelWin(Image.new("RGB", (100, 100)))
+    assert task_tracker.has_task(win, "除魔任务",
+                                 fast_absent=True) is False
+    assert ocr_calls == []
+
+
+def test_has_task_fast_absent_occluded_falls_back_to_ocr(monkeypatch):
+    """标题条未命中但存在遮挡 → 回退静态区域 OCR（不判无任务）。"""
+    ocr_calls = _fake_has_task_env(monkeypatch, None, occluded=True,
+                                   found=True)
+    win = _PanelWin(Image.new("RGB", (100, 100)))
+    assert task_tracker.has_task(win, "除魔任务",
+                                 fast_absent=True) is True
+    assert ocr_calls == [task_tracker.TRACK_REGION]
+
+
+def test_has_task_default_keeps_ocr_when_panel_missing(monkeypatch):
+    """默认 fast_absent=False：面板缺席仍走 OCR（原语义不变）。"""
+    ocr_calls = _fake_has_task_env(monkeypatch, None, occluded=False,
+                                   found=False)
+    win = _PanelWin(Image.new("RGB", (100, 100)))
+    assert task_tracker.has_task(win, "除魔任务") is False
+    assert ocr_calls == [task_tracker.TRACK_REGION]
+
+
+def test_has_task_panel_present_uses_dynamic_region(monkeypatch):
+    """模板命中：照常 OCR 动态内容区，fast_absent 不改变在场路径。"""
+    ocr_calls = _fake_has_task_env(monkeypatch, (0, 227, 300, 557),
+                                   occluded=False, found=True)
+    monkeypatch.setattr(task_tracker, "panel_occluded",
+                        lambda img, **k: pytest.fail("模板命中不应查遮挡"))
+    win = _PanelWin(Image.new("RGB", (100, 100)))
+    assert task_tracker.has_task(win, "除魔任务",
+                                 fast_absent=True) is True
+    assert ocr_calls == [(0, 227, 300, 557)]

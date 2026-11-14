@@ -18,7 +18,6 @@ DEFAULT_KNOWN_GREEN_OPTIONS）是从玄枢轶闻迁移的共享默认值：为�
 import difflib
 import time
 
-import cv2
 import numpy as np
 
 from ..core import app_utils
@@ -235,24 +234,14 @@ def _task_gone_occluded(img, bgr=None):
     标准对话框不在遮挡名单（用户 2026-11-12 确认）：对话框不会盖住任务
     追踪面板（15:03 实测对话框在场时面板仍可读），面板缺席+对话框在场
     即任务完成——把对话框当遮挡会让已完成的任务卡在确认循环里空转。
+
+    模板检查与 task_tracker.panel_occluded 共用；队伍面板只在组号模式
+    检查（单人模式跟随期间队伍面板不会残留前台，跳过含 OCR 兜底的
+    ~0.44s 检查；组号模式战斗线程切 Tab 做队伍操作时残留面板会盖住
+    追踪面板，2026-11-11 实测）。
     """
-    if bgr is None:
-        bgr = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
-    from ..device import bag  # 函数内导入防循环：bag→battle→… 环
-    for icon in (bag.BAG_BOX_ICON, game_map.WORLD_MAP_OPEN_ICON,
-                 game_map.MINI_MAP_OPEN_ICON):
-        if game_map.match_frame_np(bgr, icon, threshold=0.8,
-                                   fallback=False) is not None:
-            return True
-    # 队伍/申请加入面板只在组号模式检查（用户 2026-11-12 确认）：单人
-    # 模式下队伍面板只在领取阶段开、用完即关，跟随轮询期间不会残留
-    # 在前台；该检查含 OCR 兜底 ~0.44s，跳过把遮挡检查从 ~0.55s 压到
-    # ~0.1s。组号模式（战斗线程切 Tab 做队伍操作/补人）保留检查——
-    # 残留队伍面板会盖住追踪面板（2026-11-11 实测）
-    if tab_group.active():
-        from ..device import team  # 函数内导入防循环
-        return team.panel_visible_in(img)
-    return False
+    return task_tracker.panel_occluded(
+        img, bgr=bgr, include_team=tab_group.active())
 
 
 def _confirm_task_gone(win, title, fallback_texts=(), first_img=None,

@@ -346,3 +346,40 @@ def test_build_shout_text_custom_template(monkeypatch):
                         lambda: {"min_members": 5, "races": ["女仙"]})
     assert xiuluo._build_shout_text() == "百次修罗速度队，女仙优先"
     assert xiuluo._build_shout_text("随缘来人") == "随缘来人"
+
+
+# ---- 返程交接对齐五倍（2026-11-14：1 轮消失确认 + 返程前 has_task 复查） ----
+
+def test_follow_to_done_uses_single_gone_poll(monkeypatch):
+    """修罗消失确认只做 1 轮（对齐五倍非黄袍怪轮次，返程交接省 ~0.5s）。"""
+    captured = {}
+
+    def fake_follow(win, first_items=None, **kwargs):
+        captured.update(kwargs)
+        return True, "完成"
+
+    monkeypatch.setattr(claim_flow, "follow_to_done", fake_follow)
+    ok, info = xiuluo._follow_to_done(_FakeWin())
+    assert ok is True and info == "完成"
+    assert captured["task_gone_polls"] == 1
+
+
+def test_task_still_tracked_before_return_true(monkeypatch):
+    """返程前复查命中任务：单轮消失确认被误判，调用方须跳过返程。"""
+    calls = []
+
+    def fake_has_task(win, title, fallback, **kwargs):
+        calls.append((title, fallback, kwargs))
+        return True
+
+    monkeypatch.setattr(xiuluo.task_tracker, "has_task", fake_has_task)
+    assert xiuluo._task_still_tracked_before_return(_FakeWin()) is True
+    assert calls == [(xiuluo.TASK_TITLE, xiuluo.TASK_FALLBACK_TEXTS,
+                      {"fast_absent": True})]
+
+
+def test_task_still_tracked_before_return_false(monkeypatch):
+    """返程前复查确认任务消失：放行返程。"""
+    monkeypatch.setattr(xiuluo.task_tracker, "has_task",
+                        lambda win, title, fallback, **kwargs: False)
+    assert xiuluo._task_still_tracked_before_return(_FakeWin()) is False

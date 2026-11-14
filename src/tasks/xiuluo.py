@@ -24,7 +24,8 @@
    （点击成功标记本轮战斗由「看打！」进入）
 4. 战斗：战斗由 battle.watch_loop 线程自动操作；follow_task 战斗中自动跳过识别
 5. 返程：战斗结束后用修罗回城符回灵兽村（仅「看打！」进入的战斗才返程，
-   其他方式进入的战斗不自动返程）：打开背包 → 打开任务储物格
+   其他方式进入的战斗不自动返程）：返程前 has_task 复查任务确已消失
+   （单轮消失确认的兜底）→ 打开背包 → 打开任务储物格
    （box_task/box_task_selected 双模板比分数判定）→ 右键修罗回城符
    → 关闭世界地图/小地图/背包
 6. 循环往复；达到次数上限时结束任务进程
@@ -1503,14 +1504,37 @@ def _handle_fight_dialog(win, items, img_np):
 
 
 def _follow_to_done(win, first_items=None):
-    """跟踪任务直到完成（共享实现在 workflows/claim_flow.py）。"""
+    """跟踪任务直到完成（共享实现在 workflows/claim_flow.py）。
+
+    task_gone_polls=1：修罗每轮均为单杀任务（任务消失即完成），消失
+    确认从默认 2 轮降到 1 轮（对齐五倍非黄袍怪轮次，返程交接省 ~0.5s
+    ——多一轮 = 0.5s 轮询间隔 + 条带 OCR）。单轮证据可能被 OCR 偶发
+    漏读/面板瞬时遮挡污染，由主循环返程前 has_task 全区域复查兜底
+    （_task_still_tracked_before_return），两者不得同时放宽。
+    """
     return claim_flow.follow_to_done(
         win, first_items, title=TASK_TITLE, prefix="修罗",
         extra_dialog_handler=_handle_fight_dialog,
         fallback_keywords=TASK_FALLBACK_TEXTS,
         post_track_handler=_maybe_tab_bars_pass,
+        task_gone_polls=1,
         battle_extras_tpl_gate=True, recovery=_walk_to_claim_spot,
         recovery_window=CLAIM_FOLLOW_RECOVER_WINDOW)
+
+
+def _task_still_tracked_before_return(win):
+    """返程前复查任务追踪是否仍在（兜住 follow 单轮消失确认的误判）。
+
+    follow 本轮只做 1 轮消失确认（见 _follow_to_done）：单轮证据可能
+    被 OCR 偶发漏读/面板瞬时遮挡污染，误判完成会提前返程丢任务。
+    返程前用全区域 has_task 复查一次（fast_absent：标题条模板未命中
+    且无遮挡面板时跳过区域 OCR，面板缺席场景实测 ~0.22s → ~0.12s
+    （裸进程）；模板命中时照常 OCR，暖机 ~0.18s，任务进程内 OCR 线程
+    争用按 2~3 倍估算），任务仍在 → 跳过返程、恢复跟踪。修罗每轮均为
+    单杀任务，无双杀瞬时为空场景，不需要五倍黄袍怪式的 4s 窗口。
+    """
+    return task_tracker.has_task(win, TASK_TITLE, TASK_FALLBACK_TEXTS,
+                                 fast_absent=True)
 
 
 def _maybe_tab_bars_pass(win):
@@ -2030,6 +2054,14 @@ def run_loop(win, cycle_interval=1.0):
             win, first_items=None if repair_round else claim_items)
         if not ok:
             log(f"[修罗] {info}", "WARN")
+            time.sleep(cycle_interval)
+            continue
+        # 5a. 返程前复查：follow 消失确认只做 1 轮（见 _follow_to_done），
+        #    全区域 has_task 兜住单轮误判——任务仍在则跳过返程继续跟踪
+        #    （下一轮续跑自愈），不得与单轮确认同时放宽
+        if _task_still_tracked_before_return(win):
+            _task_gone_last_round = False  # 恢复跟踪：下一轮 has_task 续跑
+            log("[修罗] 返程前复查任务仍在追踪，跳过返程继续跟踪", "WARN")
             time.sleep(cycle_interval)
             continue
         _task_gone_last_round = True  # 任务消失已确认：下一轮跳过 has_task 检查

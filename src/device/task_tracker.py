@@ -14,6 +14,7 @@ import difflib
 import re
 import time
 
+import cv2
 import numpy as np
 from PIL import Image, ImageEnhance
 
@@ -205,6 +206,33 @@ def panel_visible(img=None, win=None):
         if img is None:
             return False
     return track_content_region(np.asarray(img)) is not None
+
+
+def panel_occluded(img, bgr=None, include_team=False):
+    """任务追踪面板缺席时是否被其它大面板遮挡（背包/世界地图/小地图）。
+
+    标题条模板未命中不止「游戏收起面板/用户手动关闭」一种原因——
+    背包、世界/小地图面板打开时会盖住面板。标准对话框不在遮挡名单
+    （用户 2026-11-12 确认：对话框不挡追踪面板，面板缺席+对话框在场
+    即任务完成）。
+
+    include_team：组号模式追加队伍/申请加入面板检查（含 OCR 兜底
+    ~0.44s，只在组号模式调用；单人模式跟随期间队伍面板不会残留
+    前台）。实测成本：单人 ~0.1s（三个模板各 ~28ms）。供 has_task
+    的 fast_absent 早退与 follow 的任务消失确认共用。
+    """
+    if bgr is None:
+        bgr = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
+    from . import bag  # 函数内导入防循环：bag→battle→… 环
+    for icon in (bag.BAG_BOX_ICON, game_map.WORLD_MAP_OPEN_ICON,
+                 game_map.MINI_MAP_OPEN_ICON):
+        if game_map.match_frame_np(bgr, icon, threshold=0.8,
+                                   fallback=False) is not None:
+            return True
+    if include_team:
+        from . import team  # 函数内导入防循环
+        return team.panel_visible_in(img)
+    return False
 
 
 def task_block_region(img_np, fallback=None):
@@ -685,18 +713,28 @@ def has_task_in(items, img_np, title, fallback_texts=()):
     return False
 
 
-def has_task(win, title, fallback_texts=()):
+def has_task(win, title, fallback_texts=(), fast_absent=False):
     """判断任务追踪中是否存在指定任务。
 
     判定为追踪面板标题：位于窗口左区（x<PANEL_MAX_X）且非绿色链接文案，
     避免把居中对话框里的绿色选项误判为任务。
     fallback_texts：标题 OCR 漏检时的兜底匹配串（见 has_task_in）。
-    只 OCR 追踪面板区域（全窗 2.2s → 区域约 0.9s）。
+    fast_absent：标题条模板未命中且无已知遮挡面板时直接返回 False，
+    跳过区域 OCR（面板缺席场景实测 ~0.22s → ~0.12s，裸进程；任务
+    进程内 OCR 争用下差距更大）。默认 False 保持原语义（未命中回退
+    静态区域 OCR）：领取校验等「False 会触发重试/重领」的调用不得
+    开启；只给确认任务消失方向用（返程前复查、五环等待任务出现）。
     """
     img = win.capture(force_activate=False)
     if img is None:
         return False
-    items, img_np = ocr_track(img)
+    img_np = np.asarray(img)
+    region = track_content_region(img_np)
+    if region is None:
+        if fast_absent and not panel_occluded(img):
+            return False
+        region = TRACK_REGION
+    items, _ = game_map.ocr_region(img, region)
     return has_task_in(items, img_np, title, fallback_texts)
 
 
