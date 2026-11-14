@@ -23,6 +23,7 @@ data/<角色ID>/settings.json）。
 _settings() 惰性获取——与 xiuluo 延迟导入同模式。
 """
 import json
+import os
 import threading
 from pathlib import Path
 
@@ -539,36 +540,120 @@ def unique_name(base):
         i += 1
 
 
-# ---- 系统文件对话框（pywebview 6.2.1 无对话框 API，tkinter 兜底） ----
-# 由调用方在短命线程中执行（每个 Tk root 只服务一次对话框，用完销毁）；
-# 对话框自带消息循环，不阻塞 webview 主线程。
+# ---- 系统文件对话框（原生 Win32 comdlg32） ----
+# 不能用 tkinter：Nuitka 打包版没有 Tcl/Tk 运行库（import tkinter 直接
+# 失败），导出/导入点了没反应（2026-11-14 用户反馈，源码版正常）。
+# comdlg32 是系统 DLL，无打包依赖；对话框在当前线程跑自己的消息循环，
+# 调用方仍在短命线程中执行，不阻塞 webview 主线程。
 
-def pick_save_path(initial_name):
+# Windows 通用对话框标志（winuser.h commdlg.h）
+_OFN_OVERWRITEPROMPT = 0x00000002
+_OFN_NOCHANGEDIR = 0x00000008
+_OFN_PATHMUSTEXIST = 0x00000800
+_OFN_FILEMUSTEXIST = 0x00001000
+_OFN_EXPLORER = 0x00080000
+
+
+def _dialog_owner():
+    """对话框 owner：当前进程的前台窗口；拿不到返回 0（无 owner 也能弹）。"""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.WinDLL("user32")
+        user32.GetForegroundWindow.restype = wintypes.HWND
+        user32.GetWindowThreadProcessId.argtypes = [
+            wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+        user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+        hwnd = user32.GetForegroundWindow()
+        if not hwnd:
+            return 0
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        return int(hwnd) if pid.value == os.getpid() else 0
+    except Exception:
+        return 0
+
+
+def _file_dialog(save, title, initial_name="", owner_hwnd=None):
+    """原生打开/另存为对话框：返回所选路径，取消返回空串。
+
+    字符串指针字段用 c_void_p + addressof：若声明成 LPCWSTR，ctypes 会
+    把带内嵌 NUL 的过滤器串按首个 NUL 截断（过滤器只剩第一段）。
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    class OPENFILENAMEW(ctypes.Structure):
+        _fields_ = [
+            ("lStructSize", wintypes.DWORD),
+            ("hwndOwner", wintypes.HWND),
+            ("hInstance", wintypes.HINSTANCE),
+            ("lpstrFilter", ctypes.c_void_p),
+            ("lpstrCustomFilter", ctypes.c_void_p),
+            ("nMaxCustFilter", wintypes.DWORD),
+            ("nFilterIndex", wintypes.DWORD),
+            ("lpstrFile", ctypes.c_void_p),
+            ("nMaxFile", wintypes.DWORD),
+            ("lpstrFileTitle", ctypes.c_void_p),
+            ("nMaxFileTitle", wintypes.DWORD),
+            ("lpstrInitialDir", ctypes.c_void_p),
+            ("lpstrTitle", ctypes.c_void_p),
+            ("Flags", wintypes.DWORD),
+            ("nFileOffset", wintypes.WORD),
+            ("nFileExtension", wintypes.WORD),
+            ("lpstrDefExt", ctypes.c_void_p),
+            ("lCustData", wintypes.LPARAM),
+            ("lpfnHook", ctypes.c_void_p),
+            ("lpTemplateName", ctypes.c_void_p),
+            ("pvReserved", ctypes.c_void_p),
+            ("dwReserved", wintypes.DWORD),
+            ("FlagsEx", wintypes.DWORD),
+        ]
+
+    # 过滤器格式：显示名\0通配符\0...\0\0（create_unicode_buffer 保留内嵌 NUL）
+    filter_buf = ctypes.create_unicode_buffer(
+        "JSON 文件 (*.json)\0*.json\0所有文件 (*.*)\0*.*\0\0")
+    title_buf = ctypes.create_unicode_buffer(title)
+    defext_buf = ctypes.create_unicode_buffer("json")
+    # 路径缓冲：对话框会写回选择结果；1024 字符兼容长路径
+    file_buf = ctypes.create_unicode_buffer(1024)
+    if save and initial_name:
+        file_buf.value = initial_name
+
+    ofn = OPENFILENAMEW()
+    ofn.lStructSize = ctypes.sizeof(OPENFILENAMEW)
+    ofn.hwndOwner = _dialog_owner() if owner_hwnd is None else owner_hwnd
+    ofn.lpstrFilter = ctypes.addressof(filter_buf)
+    ofn.nFilterIndex = 1
+    ofn.lpstrFile = ctypes.addressof(file_buf)
+    ofn.nMaxFile = len(file_buf)
+    ofn.lpstrTitle = ctypes.addressof(title_buf)
+    ofn.Flags = _OFN_EXPLORER | _OFN_NOCHANGEDIR | _OFN_PATHMUSTEXIST
+    if save:
+        ofn.Flags |= _OFN_OVERWRITEPROMPT
+        ofn.lpstrDefExt = ctypes.addressof(defext_buf)
+    else:
+        ofn.Flags |= _OFN_FILEMUSTEXIST
+
+    commdlg32 = ctypes.WinDLL("comdlg32")
+    commdlg32.CommDlgExtendedError.restype = wintypes.DWORD
+    func = (commdlg32.GetSaveFileNameW if save
+            else commdlg32.GetOpenFileNameW)
+    func.argtypes = [ctypes.POINTER(OPENFILENAMEW)]
+    func.restype = wintypes.BOOL
+    if not func(ctypes.byref(ofn)):
+        err = commdlg32.CommDlgExtendedError()
+        if err:
+            raise OSError(f"文件对话框打开失败（错误码 {err:#x}）")
+        return ""  # 用户取消
+    return file_buf.value
+
+
+def pick_save_path(initial_name, owner_hwnd=None):
     """另存为对话框：返回所选路径或空串（取消）。"""
-    import tkinter as tk
-    from tkinter import filedialog
-    root = tk.Tk()
-    root.withdraw()
-    try:
-        root.attributes("-topmost", True)
-        return filedialog.asksaveasfilename(
-            title="导出配置方案", initialfile=initial_name,
-            defaultextension=".json",
-            filetypes=[("JSON 文件", "*.json"), ("所有文件", "*.*")])
-    finally:
-        root.destroy()
+    return _file_dialog(True, "导出配置方案", initial_name, owner_hwnd)
 
 
-def pick_open_path():
+def pick_open_path(owner_hwnd=None):
     """打开对话框：返回所选文件路径或空串（取消）。"""
-    import tkinter as tk
-    from tkinter import filedialog
-    root = tk.Tk()
-    root.withdraw()
-    try:
-        root.attributes("-topmost", True)
-        return filedialog.askopenfilename(
-            title="导入配置方案",
-            filetypes=[("JSON 文件", "*.json"), ("所有文件", "*.*")])
-    finally:
-        root.destroy()
+    return _file_dialog(False, "导入配置方案", owner_hwnd=owner_hwnd)
