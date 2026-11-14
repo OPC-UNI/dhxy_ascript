@@ -1753,6 +1753,14 @@ def _handle_huangpaoguai(win, items, img_np):
     过渡后重点链接走下一处。任务消失（最后一次杀完）由 follow 的
     消失确认收尾。返回是否已处理（点击了链接）。
 
+    **非黄袍怪任务整机跳过**（2026-11-14 用户要求）：本状态机只服务
+    「前往xxx消灭黄袍怪」多杀任务，普通任务（魔尊/修罗等）本轮追踪里
+    根本不会出现「黄袍」关键词。旧实现照样在每场战斗后武装 15s 等待，
+    任务因战败/异常没结束时打出一条「黄袍怪：重点链接超时」WARN——
+    与实际任务无关且误导（实机：莲花洞魔尊战败后误报）。识别方式：
+    本轮追踪（领取后到当前）出现过「黄袍」关键词才启用；黄袍怪多杀
+    的链接在两次击杀之间持续可见，开打前必然先被识别到。
+
     战斗沿判定必须先于关键词判定：战斗期间任务追踪面板被战斗画面
     遮挡，关键词必然消失——先判关键词会提前返回，_hpg_was_in_battle
     永远置不上 True，战斗结束沿永远检不到（2026-10-11 实测多杀任务
@@ -1766,6 +1774,14 @@ def _handle_huangpaoguai(win, items, img_np):
         # 战斗中：面板隐藏不判关键词，只记战斗状态供结束沿判定
         _hpg_was_in_battle = True
         return False
+    sig = "".join(norm_text(t) for t, r, s in items
+                  if s >= 0.55 and r[0] < task_tracker.PANEL_MAX_X)
+    if not _hpg_task_seen:
+        # 本轮还没见过「黄袍」关键词：普通任务整机跳过——不武装重点
+        # 链接、不计消失轮询、不打误导性超时 WARN（见 docstring）
+        if HUANGPAOGUAI_LINK_KEYWORD not in sig:
+            return False
+        _hpg_task_seen = True  # 本帧起识别为黄袍怪多杀任务
     if _hpg_was_in_battle:
         # 战斗刚结束：重新武装重点链接（点击时机见常量注释）
         _hpg_was_in_battle = False
@@ -1773,8 +1789,6 @@ def _handle_huangpaoguai(win, items, img_np):
         _hpg_battle_end_at = time.time()
         _hpg_clicked_at = 0.0  # 冷却清零：结束沿后的首点不受上次冷却限制
         _hpg_click_tries = 0
-    sig = "".join(norm_text(t) for t, r, s in items
-                  if s >= 0.55 and r[0] < task_tracker.PANEL_MAX_X)
     if HUANGPAOGUAI_LINK_KEYWORD not in sig:
         _hpg_missing += 1
         if not _hpg_need_click:

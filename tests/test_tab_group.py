@@ -60,7 +60,8 @@ _GROUP_STATE_ATTRS = ("_active", "_mode", "_leader_id", "_tab_count",
                       "_logged_count", "_members", "_team_member_ids",
                       "_acted_ids", "_no_members_logged", "pass_active",
                       "_last_bars_pass_at", "_last_rejoin_pass_at",
-                      "_off_leader_log_at")
+                      "_off_leader_log_at", "_switch_fail_streak",
+                      "_switch_fail_alerted")
 
 
 @pytest.fixture(autouse=True)
@@ -227,6 +228,93 @@ def test_switch_next_routes_to_click_when_keyboard_blocked(monkeypatch):
         raise AssertionError("键盘通道不应被调用")
     monkeypatch.setattr(tab_group.Keyboard, "key_hot", _no_keyboard)
     assert tab_group._switch_next(_FakeWin()) == "X"
+
+
+@pytest.fixture(autouse=True)
+def _reset_switch_fail_streak():
+    """每个用例从干净失败链开始（模块级状态，用例内会累加）。"""
+    tab_group._switch_fail_streak = 0
+    tab_group._switch_fail_alerted = False
+
+
+def _fail_switch_env(monkeypatch, results):
+    """切 Tab 失败告警测试环境：静默点击通道返回 results 序列，记录日志。"""
+    logs = []
+    monkeypatch.setattr(tab_group, "log",
+                        lambda msg, level="INFO": logs.append((level, msg)))
+    monkeypatch.setattr(app_utils, "keyboard_ok", lambda _w: False)
+    it = iter(results)
+    monkeypatch.setattr(tab_group, "_switch_next_by_click", lambda _w: next(it))
+    monkeypatch.setattr(tab_group.game, "list_tab_windows",
+                        lambda _w: [{"id": "286958560", "visible": True,
+                                     "hwnd": 0xA, "title": "队长（ID：286958560）"}])
+    monkeypatch.setattr(tab_group, "_tab_count", 2)
+    return logs
+
+
+def test_switch_fail_escalates_to_error_once(monkeypatch):
+    """连续 3 次切 Tab 失败升级一条 ERROR 显眼告警（第 1、2 次不报）；
+    同一失败链只报一次，第 4 次失败不再刷 ERROR。"""
+    logs = _fail_switch_env(monkeypatch, [None, None, None, None])
+    for _ in range(2):
+        assert tab_group._switch_next(_FakeWin()) is None
+    assert not [m for lv, m in logs if lv == "ERROR"]
+    assert tab_group._switch_next(_FakeWin()) is None
+    errs = [m for lv, m in logs if lv == "ERROR"]
+    assert len(errs) == 1
+    assert "连续 3 次切 Tab 失败" in errs[0]
+    assert "启动时窗口内 2 个 Tab，当前已登录 1 个" in errs[0]
+    assert "独立游戏窗口" in errs[0] and "拖回" in errs[0]  # 恢复动作
+    assert tab_group._switch_next(_FakeWin()) is None
+    assert len([m for lv, m in logs if lv == "ERROR"]) == 1
+
+
+def test_switch_fail_streak_resets_on_success(monkeypatch):
+    """成功一次即清零：失败-失败-成功-失败×3 → 成功之后重新升级告警。"""
+    logs = _fail_switch_env(monkeypatch, [None, None, "idB",
+                                          None, None, None, None])
+    for _ in range(3):
+        tab_group._switch_next(_FakeWin())
+    assert not [m for lv, m in logs if lv == "ERROR"]
+    for _ in range(4):
+        tab_group._switch_next(_FakeWin())
+    assert len([m for lv, m in logs if lv == "ERROR"]) == 1
+
+
+def test_fail_detail_level_downgrades(monkeypatch):
+    """失败明细级别：失败链前两条 WARN，之后降为 INFO（不再每轮一条 WARN）。"""
+    monkeypatch.setattr(tab_group, "_switch_fail_streak", 0)
+    assert tab_group._fail_log_level() == "WARN"
+    monkeypatch.setattr(tab_group, "_switch_fail_streak", 1)
+    assert tab_group._fail_log_level() == "WARN"
+    monkeypatch.setattr(tab_group, "_switch_fail_streak", 2)
+    assert tab_group._fail_log_level() == "INFO"
+
+
+def test_for_each_member_fail_summary_downgraded(monkeypatch):
+    """pass 失败汇总行同样降级：首次 WARN、失败链上 INFO。"""
+    logs = []
+    monkeypatch.setattr(tab_group, "log",
+                        lambda msg, level="INFO": logs.append((level, msg)))
+    monkeypatch.setattr(tab_group, "_active", True)
+    monkeypatch.setattr(tab_group, "_tab_count", 2)
+    monkeypatch.setattr(tab_group, "return_to_leader", lambda win: None)
+    monkeypatch.setattr(tab_group, "_switch_next", lambda win: None)
+    tab_group._for_each_member(_FakeWin(), lambda w, t: None, "回血回蓝 pass")
+    monkeypatch.setattr(tab_group, "_switch_fail_streak", 2)
+    tab_group._for_each_member(_FakeWin(), lambda w, t: None, "回血回蓝 pass")
+    levels = [lv for lv, m in logs if "切 Tab 失败，中止" in m]
+    assert levels == ["WARN", "INFO"]
+
+
+def test_init_task_resets_switch_fail_streak(monkeypatch):
+    """新任务重新计失败链：上个任务残留的失败链不带到下个任务。"""
+    monkeypatch.setattr(tab_group, "_switch_fail_streak", 5)
+    monkeypatch.setattr(tab_group, "_switch_fail_alerted", True)
+    monkeypatch.setattr(tab_group.game, "list_tab_windows", lambda win: [])
+    tab_group.init_task(_FakeWin(), "修罗", False)  # 开关关：走重置后提前返回
+    assert tab_group._switch_fail_streak == 0
+    assert tab_group._switch_fail_alerted is False
 
 
 def test_switch_next_keyboard_path_when_ok(monkeypatch):

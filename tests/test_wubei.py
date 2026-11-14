@@ -195,18 +195,43 @@ def test_huangpaoguai_reclick_first_try_triggers_bars_pass_once(monkeypatch):
 
 
 def test_huangpaoguai_no_keyword_no_pass(monkeypatch):
-    """非黄袍怪任务（面板无关键词）：重点链接逻辑不启动，pass 不触发。"""
+    """非黄袍怪任务（面板无「黄袍」关键词）：整机跳过——不武装重点
+    链接、不点链接、不触发 pass，也不打「黄袍怪超时」误导 WARN
+    （2026-11-14 实机：莲花洞魔尊战败后误报）。"""
     clock, passes = _hpg_env(monkeypatch)
+    logs = []
+    monkeypatch.setattr(wubei, "log",
+                        lambda msg, level="INFO": logs.append((level, msg)))
     wubei._hpg_was_in_battle = True
     win = object()
     items = [("前往平顶山消灭魔尊", [14, 249, 185, 269], 0.99)]
     clock.sleep(wubei.HUANGPAOGUAI_RECLICK_MIN + 0.1)
     assert wubei._handle_huangpaoguai(win, items, HPG_FRAME) is False
-    # 待点击期间关键词持续缺失：超时（一次都没点成）放弃并复位，
-    # 不点链接不 pass
+    assert wubei._hpg_need_click is False      # 未武装重点链接
     clock.sleep(wubei.HUANGPAOGUAI_RECLICK_TIMEOUT + 0.1)
     assert wubei._handle_huangpaoguai(win, items, HPG_FRAME) is False
     assert passes == []
+    assert not [m for _lv, m in logs if "黄袍" in m]  # 不再误报
+
+
+def test_huangpaoguai_seen_then_gone_times_out_with_warn(monkeypatch):
+    """黄袍怪多杀任务：关键词识别后链接消失（面板持续无链接）→ 15s
+    超时放弃并告警（原有行为保留，只对真正的黄袍怪任务生效）。"""
+    clock, passes = _hpg_env(monkeypatch)
+    logs = []
+    monkeypatch.setattr(wubei, "log",
+                        lambda msg, level="INFO": logs.append((level, msg)))
+    wubei._hpg_was_in_battle = True
+    win = object()
+    # 战斗结束后首帧链接可见：识别为黄袍怪任务并武装（RECLICK_MIN 内不点）
+    assert wubei._handle_huangpaoguai(win, HPG_ITEMS, HPG_FRAME) is False
+    assert wubei._hpg_task_seen is True
+    assert wubei._hpg_need_click is True
+    # 之后链接持续缺失 → 超时告警并复位
+    items_gone = [("前往平顶山消灭魔尊", [14, 249, 185, 269], 0.99)]
+    clock.sleep(wubei.HUANGPAOGUAI_RECLICK_TIMEOUT + 0.1)
+    assert wubei._handle_huangpaoguai(win, items_gone, HPG_FRAME) is False
+    assert [m for _lv, m in logs if "黄袍怪：重点链接超时" in m]
     assert wubei._hpg_need_click is False
 
 

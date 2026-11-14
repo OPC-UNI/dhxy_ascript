@@ -481,6 +481,8 @@
             color: var(--text); white-space: pre-wrap; word-break: break-all;
         }
         .log-drawer.collapsed #dash-log-box { display: none; }
+        /* ERROR 行显眼告警：红字加粗（[ERROR] 行到达时抽屉自动展开） */
+        #dash-log-box .log-err { color: var(--danger); font-weight: 700; }
         /* ---- 诊断页：双列工具卡 ---- */
         .tools-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: start; }
         .verify-row { display: flex; align-items: center; gap: 8px; }
@@ -2154,15 +2156,22 @@
     /* ================= 看板日志抽屉 ================= */
     const MAX_PANEL_LOG_LINES = 300;
     function addPanelLogs(lines) {
+        let hasError = false;
         for (const ln of lines) {
+            const text = String(ln);
             const div = document.createElement('div');
-            div.textContent = String(ln);  // textContent 防注入
+            div.textContent = text;  // textContent 防注入
+            if (text.includes('[ERROR]')) {  // 显眼告警：红字加粗
+                div.className = 'log-err';
+                hasError = true;
+            }
             logBox.appendChild(div);
         }
         while (logBox.childNodes.length > MAX_PANEL_LOG_LINES) {
             logBox.removeChild(logBox.firstChild);
         }
         logMeta.innerText = logBox.childNodes.length + ' 行';
+        if (hasError) expandLogDrawer();  // ERROR 到达自动展开（折叠态看不见）
         if (!logDrawer.classList.contains('collapsed')) {
             logBox.scrollTop = logBox.scrollHeight;  // 展开态自动跟随
         }
@@ -2176,6 +2185,10 @@
         const collapsed = logDrawer.classList.toggle('collapsed');
         logToggle.innerText = collapsed ? '展 开' : '收 起';
         if (!collapsed) logBox.scrollTop = logBox.scrollHeight;
+    }
+    function expandLogDrawer() {
+        /* 折叠态展开：ERROR 告警到达时调用（已展开无操作） */
+        if (logDrawer.classList.contains('collapsed')) toggleLogDrawer();
     }
 
     /* ================= 成就页（累计产出 + 效率 + 7 日趋势） ================= */

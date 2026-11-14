@@ -29,6 +29,11 @@
 - 护栏：Tab 条区域（窗口相对 y < 60）为鼠标禁入区，pass 点击经
   _guarded_click 过滤；切 Tab 只走 Ctrl+Tab/静默 Tab 条点击，
   普通流程点击永不碰 Tab 条
+- 失败告警：连续 TAB_FAIL_ALERT_STREAK 次切 Tab 失败升级一条 ERROR
+  显眼告警（控制窗口日志抽屉红字 + 自动展开），提示队员 Tab 可能被
+  拖出成独立窗口；明细日志第 2 次失败起降为 INFO，不每轮刷 WARN；
+  成功一次即清零重新计数（2026-11-14 实机：队员 Tab 被鼠标拖出，
+  组号自静静默停摆 40 分钟，日志只有一串 WARN 无人注意）
 - 激活条件（active()）：init_task 时开关开 + 已登录 Tab ≥2 + 启动
   Tab ID 可解析，且当前任务模式仍为修罗/五倍——单号（已登录 Tab
   <2）或开关关闭时全部新代码路径不执行，行为与旧版完全一致。
@@ -66,6 +71,10 @@ TAB_SWITCH_TRIES = 3       # Tab 条点击最大尝试次数（未生效时重�
                            # Tab；每次重试前丢弃矩形缓存重读 UIA——窗口
                            # 移动/布局变化会让缓存坐标过时，2026-11-10）
 TAB_CYCLE_GUARD = 10       # 切回队长/遍历队员的最大切换次数
+TAB_FAIL_ALERT_STREAK = 3  # 连续切 Tab 失败升级告警的阈值（成功一次即清零）：
+                           # 达到后报一条 ERROR 显眼告警（2026-11-14 用户要求，
+                           # 取代每轮一条 WARN——队员 Tab 被拖出成独立窗口时
+                           # 每轮 pass 都会失败，WARN 刷屏且容易被忽略）
 NO_CLICK_ZONE_Y = 60       # Tab 条区域（窗口相对 y<60）：鼠标禁入区
 AUTO_WAIT_FIRST = 5.0      # 首场战斗队员自动按钮等待上限（操作条轮询）
 AUTO_WAIT_ROUTINE = 1.0    # 每 5 场例行队员自动按钮等待上限（多半已挂自动）
@@ -108,6 +117,10 @@ pass_active = False    # pass 进行中：战斗线程/任务线程轮询见此�
 _last_bars_pass_at = 0.0  # 上次队员血蓝 pass 时间（节流）
 _last_rejoin_pass_at = 0.0  # 上次归队 pass 时间（节流）
 _pass_lock = threading.Lock()  # pass 入口互斥：同一时刻至多一个 pass（双线程防撞车）
+_switch_fail_streak = 0    # 连续切 Tab 失败次数（成功一次清零）：失败明细
+                           # 日志据此在第 2 次起降为 INFO，达阈值升级告警
+_switch_fail_alerted = False  # 本失败链是否已升级告警（同一链只报一次，
+                              # 恢复成功后随计数清零重新武装）
 
 
 def _try_enter_pass():
@@ -146,7 +159,8 @@ def init_task(win, mode, switch_on):
     + 名称比对后的结论，激活日志不得提前下结论。
     """
     global _active, _mode, _leader_id, _tab_count, _logged_count, _members, \
-        _team_member_ids, _acted_ids, _no_members_logged
+        _team_member_ids, _acted_ids, _no_members_logged, \
+        _switch_fail_streak, _switch_fail_alerted
     _active = False
     _mode = ""
     _leader_id = None
@@ -156,6 +170,8 @@ def init_task(win, mode, switch_on):
     _team_member_ids = set()
     _acted_ids = set()
     _no_members_logged = False
+    _switch_fail_streak = 0      # 新任务重新计失败链（上任务残留不继承）
+    _switch_fail_alerted = False
     if mode not in ("修罗", "五倍", "种族比武") or not switch_on:
         return
     try:
@@ -546,6 +562,49 @@ def _pass_foreground_ok(win):
     return _ensure_foreground(win)
 
 
+def _fail_log_level():
+    """切 Tab 失败明细日志级别：失败链首两条 WARN，之后降为 INFO。
+
+    连续失败已由 _note_switch_fail 统一升级为 ERROR 告警，明细不再每轮
+    一条 WARN 刷屏（2026-11-14 用户要求：升级告警，而不是每轮一条 WARN）。
+    """
+    return "WARN" if _switch_fail_streak <= 1 else "INFO"
+
+
+def _note_switch_ok():
+    """切 Tab 成功：结束失败链（计数清零、告警重新武装）。"""
+    global _switch_fail_streak, _switch_fail_alerted
+    _switch_fail_streak = 0
+    _switch_fail_alerted = False
+
+
+def _note_switch_fail(win):
+    """切 Tab 失败：累计连续失败次数，达阈值升级一条 ERROR 显眼告警。
+
+    典型场景（2026-11-14 实机）：队员 Tab 被鼠标拖出主窗口成了独立窗口
+    ——游戏容器的 Tab 条拖拽分离（xy2_tab_log.txt 记录 TabbarPanel::
+    deleteAt + viewUpdate + finishDragging），Tab 条只剩 1 项，此后每轮
+    pass 切 Tab 全部失败、组号自动静默停摆，日志里只有一串 WARN 很容
+    易漏看。告警给出降级状态与恢复动作；同一失败链只报一次，切换恢复
+    成功后自动重新计数（拖回 Tab 条即恢复，无需重启任务）。
+    """
+    global _switch_fail_streak, _switch_fail_alerted
+    _switch_fail_streak += 1
+    if _switch_fail_streak < TAB_FAIL_ALERT_STREAK or _switch_fail_alerted:
+        return
+    _switch_fail_alerted = True
+    try:
+        live = len([c for c in game.list_tab_windows(win) if c["id"]])
+        live_txt = f"{live} 个"
+    except Exception:
+        live_txt = "未知"
+    log(f"[组号] ⚠ 连续 {_switch_fail_streak} 次切 Tab 失败（启动时窗口内 "
+        f"{_tab_count} 个 Tab，当前已登录 {live_txt}）：队员 Tab 可能已被拖出"
+        f"主窗口成了独立游戏窗口（或已退出登录）；队员自动/巫医/补血蓝/"
+        f"归队已停用，任务按单号继续。把独立窗口拖回主窗口 Tab 条即可自动"
+        f"恢复（无需重启任务）", "ERROR")
+
+
 def _switch_next(win):
     """切到下一个 Tab（Ctrl+Tab 键盘通道；静默+后台走 Tab 条点击）。
 
@@ -553,7 +612,20 @@ def _switch_next(win):
     None = 切换失败（按键未送达/前台丢失，重试一次后仍失败）。
     静默操作且游戏不在前台：键盘事件只进前台窗口且不允许激活，
     改走 _switch_next_by_click（Tab 条消息点击，无需前台）。
+
+    成功/失败统一记账（_note_switch_ok/_note_switch_fail）：连续失败
+    达 TAB_FAIL_ALERT_STREAK 次升级 ERROR 告警，成功一次即清零。
     """
+    res = _switch_next_raw(win)
+    if res is None:
+        _note_switch_fail(win)
+    else:
+        _note_switch_ok()
+    return res
+
+
+def _switch_next_raw(win):
+    """切 Tab 实际通道（_switch_next 的记账外壳内的原始实现）。"""
     if not app_utils.keyboard_ok(win):
         return _switch_next_by_click(win)
     before_hwnd, _before_id = _current(win)
@@ -626,16 +698,18 @@ def _switch_next_by_click(win):
     from . import silent_click  # 函数内导入：保持模块间依赖单向
     tab = silent_click.tab_control_hwnd(win)
     if not tab:
-        log("[组号] 未找到 Tab 条控件（SysTabControl32），无法静默切 Tab", "WARN")
+        log("[组号] 未找到 Tab 条控件（SysTabControl32），无法静默切 Tab",
+            _fail_log_level())
         return None
     count = silent_click.tab_item_count(tab)
     cur = silent_click.tab_current_index(tab)
     if count <= 0 or cur < 0:
-        log(f"[组号] Tab 条读取失败（总数 {count}、当前 {cur}），无法静默切 Tab", "WARN")
+        log(f"[组号] Tab 条读取失败（总数 {count}、当前 {cur}），无法静默切 Tab",
+            _fail_log_level())
         return None
     next_i = _next_logged_index(win, tab, cur, count)
     if next_i is None:
-        log("[组号] 除当前 Tab 外无已登录 Tab，跳过切换", "WARN")
+        log("[组号] 除当前 Tab 外无已登录 Tab，跳过切换", _fail_log_level())
         return None
 
     def _log_switch_ok(ok_id, info):
@@ -665,11 +739,12 @@ def _switch_next_by_click(win):
             _log_switch_ok(after_id, info)
             return after_id if after_id is not None else ""
     if info is None:
-        log("[组号] 静默切 Tab 点击投递失败（Tab 条不可达），中止本轮", "WARN")
+        log("[组号] 静默切 Tab 点击投递失败（Tab 条不可达），中止本轮",
+            _fail_log_level())
     else:
         log(f"[组号] 静默切 Tab 未生效（点击投递未被消费，Tab {next_i} "
             f"中心 ({info['point'][0]},{info['point'][1]})，已重读缓存"
-            f"重试 {TAB_SWITCH_TRIES} 次），中止本轮", "WARN")
+            f"重试 {TAB_SWITCH_TRIES} 次），中止本轮", _fail_log_level())
     return None
 
 
@@ -685,7 +760,7 @@ def return_to_leader(win):
         if _current_id(win) == _leader_id:
             return
         if _switch_next(win) is None:
-            log("[组号] 切回队长 Tab 失败（身份未确认）", "WARN")
+            log("[组号] 切回队长 Tab 失败（身份未确认）", _fail_log_level())
             return
     log("[组号] 切回队长 Tab 超时（未在循环内命中队长）", "WARN")
 
@@ -792,7 +867,7 @@ def _for_each_member(win, handler, label, force=False, total_deadline=None,
             break
         cur = _switch_next(win)
         if cur is None:
-            log(f"[组号] {label}：切 Tab 失败，中止", "WARN")
+            log(f"[组号] {label}：切 Tab 失败，中止", _fail_log_level())
             break
         if cur == _leader_id:
             break  # 已绕回队长
