@@ -932,6 +932,10 @@ def _follow_wuhuan(win):
     ignore_empty_key：到达 NPC 链接变暗的过渡帧不作变化信号
     green_picker：碎片合并后按链接标记精确定位（替身行/剩余时间行
     不可点）；require_coord：标题/内容漏检时的关键词兜底也须含坐标
+    battle_resume_reclick：战斗（遭遇战/战败）打断寻路后任务签名不变时，
+    战斗结束且人物站定即补点任务链接恢复寻路（重新进入战斗）——
+    2026-11-14 用户规则：正常胜利推进由签名变化点新链接；战败/遭遇战
+    打断后签名不变，需补点链接重新寻路（见 follow 参数说明）
     """
     return follow_task(win, WUHUAN_TITLE, prefix="五环",
                        timeout=WUHUAN_FOLLOW_TIMEOUT,
@@ -944,6 +948,7 @@ def _follow_wuhuan(win):
                        skip_texts={},
                        require_coord=True,
                        signature_ratio=WUHUAN_SIG_RATIO,
+                       battle_resume_reclick=True,
                        story_dialog_dismiss=False)
 
 

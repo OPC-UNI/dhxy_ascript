@@ -368,3 +368,6 @@ def test_follow_wuhuan_uses_shared_confirm(monkeypatch):
     assert seen["title"] == wuhuan.WUHUAN_TITLE
     assert seen["prefix"] == "五环"
     assert "task_gone_require_panel" not in seen
+    # 战斗结束补点恢复开启（用户 2026-11-14：战败/遭遇战打断寻路后
+    # 签名不变，也须补点任务链接重新寻路重新进入战斗）
+    assert seen["battle_resume_reclick"] is True

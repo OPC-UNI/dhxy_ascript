@@ -860,3 +860,141 @@ def test_wait_claim_still_false_while_walking(monkeypatch):
     frames = [_pos_frame(i * 20) for i in range(60)]
     ok, info = xuanshu._wait_claim_still(_MoveWin(frames))
     assert ok is False and "站定" in info
+
+
+# ---- 战斗结束补点恢复（battle_resume_reclick，五环 2026-11-14 用户规则） ----
+# 五环点任务链接发起的自动寻路会被战斗打断：正常情况胜利推进使子目标
+# 链接变化、follow 点新链接；异常情况（战败「你输了」/遭遇战打断后未
+# 恢复）战斗结束但签名不变，旧实现会空等到跟踪超时。开启后战斗线程
+# 确认结束起宽限 BATTLE_RECLICK_GRACE 秒等面板更新，仍未变化且人物
+# 连续站定 BATTLE_RECLICK_STILL 秒时补点任务链接重新寻路（重新进入
+# 战斗），每次战斗结束至多 BATTLE_RECLICK_MAX 次。
+
+class _StaticWin:
+    """固定像素帧的窗口桩（位置区不变 = 人物站定）。"""
+
+    def __init__(self):
+        self.img = _pos_frame(0)
+
+    def capture(self, force_activate=False):
+        return self.img
+
+
+class _MovingWin:
+    """逐次生成位置区移动方块的窗口桩（人物在走，站定计时不累积）。"""
+
+    def __init__(self):
+        self.n = 0
+
+    def capture(self, force_activate=False):
+        self.n += 1
+        return _pos_frame(self.n * 20)
+
+
+def _patch_follow_reclick_env(monkeypatch, battle_seq):
+    """装配 follow_task 战后补点场景：固定任务签名 + 战斗帧序列。
+
+    battle_seq：内层轮询按序消费的战斗帧布尔序列（耗尽后恒 False）。
+    返回 (clock, clicks, state)：clicks 记录 track_task 调用时刻，
+    state["done"] 在第二次点击（补点）后置位，随后 find_task 判任务
+    消失让 follow 走完成路径返回。
+    """
+    import numpy as np
+    clock = _GoneClock()
+    state = {"done": False}
+    clicks = []
+    battle = {"n": 0}
+    task = {"title": "五环[五环]",
+            "lines": [("去找大唐境内(223,21)武痴", None)], "text": "五环"}
+
+    def _is_battle_frame(img):
+        n = battle["n"]
+        battle["n"] += 1
+        return battle_seq[n] if n < len(battle_seq) else False
+
+    def _track(win, title, **k):
+        clicks.append(clock.t)
+        if len(clicks) >= 2:
+            state["done"] = True
+        return True, "已点击"
+
+    monkeypatch.setattr(engine, "time", clock)
+    # PositionStillness 的时间取 dialog_common 模块命名空间（站定计时与
+    # 假时钟同源，否则真实时间差恒 ~0 永不满足站定时长）
+    monkeypatch.setattr(dialog_common, "time", clock)
+    monkeypatch.setattr(engine, "log", lambda *a, **k: None)
+    monkeypatch.setattr(engine, "battle_watch_in_battle", lambda: False)
+    monkeypatch.setattr(engine, "is_in_battle", lambda win: False)
+    monkeypatch.setattr(engine, "is_in_battle_frame", _is_battle_frame)
+    # 组号模块整体打桩（不触发真实的 Tab 枚举/切 Tab 链路）
+    monkeypatch.setattr(engine, "tab_group", type(
+        "T", (), {"pass_active": False,
+                  "active": staticmethod(lambda: False),
+                  "on_leader_screen": staticmethod(lambda win: True),
+                  "note_off_leader": staticmethod(lambda *a: None)}))
+    monkeypatch.setattr(engine.task_tracker, "ocr_follow",
+                        lambda img: ([], None))
+    monkeypatch.setattr(engine.task_tracker, "group_tasks",
+                        lambda items, xmax=0: items)
+    monkeypatch.setattr(engine.task_tracker, "panel_row_xmax",
+                        lambda img_np: 400)
+    monkeypatch.setattr(engine.task_tracker, "find_task",
+                        lambda tasks, title: None if state["done"] else task)
+    monkeypatch.setattr(engine.task_tracker, "task_signature",
+                        lambda t: "五环五环|去找大唐境内武痴")
+    monkeypatch.setattr(engine.task_tracker, "track_task", _track)
+    monkeypatch.setattr(engine.task_tracker, "track_content_region",
+                        lambda img_np: None)
+    monkeypatch.setattr(engine.game_map, "ocr_region",
+                        lambda img, region: ([], np.zeros_like(np.asarray(img))))
+    monkeypatch.setattr(engine, "dialog_ocr_skip", lambda img, win=None: True)
+    monkeypatch.setattr(engine, "_handle_dialogs", lambda *a, **k: False)
+    monkeypatch.setattr(engine, "_confirm_task_gone",
+                        lambda *a, **k: state["done"])
+    monkeypatch.setattr(engine, "_task_gone_dialog_guard",
+                        lambda *a, **k: False)
+    monkeypatch.setattr(engine, "_maybe_sheyaoxiang", lambda win: None)
+    monkeypatch.setattr(engine.app_utils, "mark_track_walk", lambda: None)
+    monkeypatch.setattr(engine.debug_overlay, "set_phase", lambda *a: None)
+    return clock, clicks, state
+
+
+def test_follow_battle_end_reclick_when_task_unchanged(monkeypatch):
+    """战斗结束、任务签名不变且人物站定 → 宽限期后补点任务链接恢复寻路。
+
+    用户 2026-11-14 规则：异常情况（战败/遭遇战打断寻路）战斗结束后
+    寻路没有变，也需要点击重新寻路重新进入战斗。
+    """
+    win = _StaticWin()
+    clock, clicks, _state = _patch_follow_reclick_env(
+        monkeypatch, [True] * 4)
+    ok, info = engine.follow_task(win, "五环", timeout=60,
+                                  prefix="五环", battle_resume_reclick=True)
+    assert ok is True, info
+    assert len(clicks) == 2, f"应补点一次：{clicks}"
+    # 内层首轮 t=0.5 起为战斗帧，4 轮后 t=2.5 战斗线程确认结束；
+    # 补点须在宽限期之后（等胜利推进的面板更新）
+    assert clicks[1] >= 2.5 + engine.BATTLE_RECLICK_GRACE - 1e-9
+
+
+def test_follow_battle_end_no_reclick_while_walking(monkeypatch):
+    """战斗结束后人物仍在移动（寻路正常恢复）→ 不补点：站定才是
+    寻路中断的直接信号，移动中补点会白白重排寻路。"""
+    win = _MovingWin()
+    clock, clicks, _state = _patch_follow_reclick_env(
+        monkeypatch, [True] * 4)
+    ok, info = engine.follow_task(win, "五环", timeout=20,
+                                  prefix="五环", battle_resume_reclick=True)
+    assert ok is False
+    assert "无变化（超时）" in info
+    assert len(clicks) == 1, f"移动中不应补点：{clicks}"
+
+
+def test_follow_battle_reclick_off_by_default(monkeypatch):
+    """默认关（其他任务零影响）：战斗结束站定且签名不变也不补点。"""
+    win = _StaticWin()
+    clock, clicks, _state = _patch_follow_reclick_env(
+        monkeypatch, [True] * 4)
+    ok, info = engine.follow_task(win, "五环", timeout=20, prefix="五环")
+    assert ok is False
+    assert len(clicks) == 1, f"默认不应补点：{clicks}"

@@ -127,6 +127,19 @@ STALL_RECHECK_TARGET = "徐卿卿"     # 仅该腿开启（用户 2026-11-13：�
 STALL_RECHECK_SECONDS = 15.0        # 允许补点的连续静止时长（秒）
 STALL_DIALOG_CHECK_SECONDS = 6.0    # 静止超过该时长才查对话框模板（省热路径开销）
 STALL_RECHECK_MAX = 3               # 每轮跟踪最多补点次数（防紧循环）
+# 战斗结束后的寻路恢复补点（battle_resume_reclick，五环 2026-11-14 用户
+# 规则）：点任务链接发起的自动寻路会被战斗打断——正常情况战斗胜利后
+# 子目标推进、链接行变化，follow 点新链接重新寻路；异常情况（战败
+# 「你输了」/遭遇战打断后寻路未恢复）战斗结束但任务签名不变，follow
+# 只认签名变化，会空等到跟踪超时。签名不变而人物站定即判寻路已断：
+# 战斗线程确认结束后宽限 BATTLE_RECLICK_GRACE 秒等面板更新（胜利推进
+# 实测 ≤2s 检出，留足渲染余量），仍未变化且连续站定
+# BATTLE_RECLICK_STILL 秒、本帧无对话动作时补点一次任务链接恢复寻路
+# （重新进入战斗）。每次战斗结束最多补点 BATTLE_RECLICK_MAX 次，仍未
+# 推进则交回轮询/超时，防紧循环。
+BATTLE_RECLICK_GRACE = 8.0          # 战斗结束后等待任务变化的宽限（秒）
+BATTLE_RECLICK_STILL = 3.0          # 补点前要求人物连续站定的时长（秒）
+BATTLE_RECLICK_MAX = 3              # 每次战斗结束后最多补点次数
 # 任务消失确认（过滤 OCR 偶发漏读/战斗遮挡导致的误判完成——五环实测
 # 误判「任务消失」导致完成次数虚增、任务提前结束）：任务从追踪面板
 # 消失后连续若干轮询未见、且期间无战斗遮挡面板，才判定任务完成。
@@ -568,7 +581,7 @@ def follow_task(win, title, timeout=FOLLOW_TIMEOUT, prefix="",
                 dialog_tpl_gate=True, dialog_extra_gate=None,
                 battle_extras_tpl_gate=False,
                 story_dialog_dismiss=True, story_known_texts=None,
-                stall_recheck=False,
+                stall_recheck=False, battle_resume_reclick=False,
                 dialog_option_map=None, dialog_option_index_map=None,
                 known_green_options=None, wait_handler=None,
                 option_click_handler=None):
@@ -676,6 +689,13 @@ def follow_task(win, title, timeout=FOLLOW_TIMEOUT, prefix="",
     且无对话框时补点一次任务追踪链接（每轮至多 STALL_RECHECK_MAX 次，
     补点后重新计时）。仅当本轮签名含 STALL_RECHECK_TARGET 时生效
     （用户 2026-11-13：只发现「再去找徐卿卿接受他的考验」这一腿会卡）。
+    battle_resume_reclick：战斗结束后的寻路恢复补点（默认关，五环
+    2026-11-14 用户规则）。点任务链接发起的自动寻路被战斗打断后，正常
+    情况胜利推进使签名变化、follow 点新链接；异常情况（战败/遭遇战打断
+    后未恢复）签名不变，follow 会空等到超时。开启后战斗线程确认结束起
+    宽限 BATTLE_RECLICK_GRACE 秒等面板更新，仍未变化且人物连续站定
+    BATTLE_RECLICK_STILL 秒、本帧无对话动作时补点一次任务链接恢复寻路
+    （重新进入战斗），每次战斗结束至多 BATTLE_RECLICK_MAX 次。
     返回 (是否完成, 描述)。
     """
     deadline = time.time() + timeout
@@ -885,6 +905,13 @@ def follow_task(win, title, timeout=FOLLOW_TIMEOUT, prefix="",
         stall_on = stall_recheck and STALL_RECHECK_TARGET in sig
         stall_watch = PositionStillness() if stall_on else None
         stall_reclicks = 0
+        # 战斗结束补点恢复状态（battle_resume_reclick，见常量说明）：
+        # battle_reclick_at 为战斗线程确认结束时刻（None=不在战后窗口），
+        # battle_reclicks 为本次战斗结束以来的补点次数；站定计时用
+        # PositionStillness（位置文字区像素比对，零 OCR）
+        battle_reclick_at = None
+        battle_reclicks = 0
+        reclick_watch = PositionStillness() if battle_resume_reclick else None
 
         while time.time() < deadline:
             poll_interval = CONFIRM_POLL_INTERVAL if changed_once else FOLLOW_POLL_INTERVAL
@@ -920,6 +947,11 @@ def follow_task(win, title, timeout=FOLLOW_TIMEOUT, prefix="",
                 was_battle = True
                 if stall_watch is not None:
                     stall_watch.reset()  # 战斗中位置不可比，战后重新计时
+                # 新一轮战斗：战后补点窗口作废，战斗结束处重新计时
+                battle_reclick_at = None
+                battle_reclicks = 0
+                if reclick_watch is not None:
+                    reclick_watch.reset()
                 # 战斗等待时间不计入超时（与外层 is_in_battle 门同一预算；
                 # 首个非战斗帧处一次性顺延 deadline）
                 if battle_since is None:
@@ -957,6 +989,11 @@ def follow_task(win, title, timeout=FOLLOW_TIMEOUT, prefix="",
                 # 「任务卡死」超时预算，见 battle_since 说明）
                 deadline += time.time() - battle_since
                 battle_since = None
+                if reclick_watch is not None:
+                    # 战斗线程确认结束：战后补点宽限期起点；战斗帧位置
+                    # 不可比，站定计时从本帧重建
+                    battle_reclick_at = time.time()
+                    reclick_watch.reset()
             if changed_once:
                 # 确认轮询：只复查追踪面板区域的任务签名/进度键（区域更小
                 # OCR 更快），跳过对话框处理，最快确认变化。战斗帧已在
@@ -1171,6 +1208,44 @@ def follow_task(win, title, timeout=FOLLOW_TIMEOUT, prefix="",
                 dialog_option_index_map=option_index_map,
                 known_green_options=known_options,
                 option_click_handler=option_click_handler)
+            # 战斗结束补点恢复（battle_resume_reclick，见常量说明）：战斗
+            # 打断点击链接发起的自动寻路后，签名不变而人物站定即判寻路
+            # 已断——宽限期（等胜利推进的面板更新）后补点任务链接恢复
+            # 寻路（重新进入战斗）。本帧有对话动作（如战败「你输了」已由
+            # 内置链点链接/推进对话）时只重置站定计时，不做补点
+            if reclick_watch is not None:
+                if dlg_handled:
+                    reclick_watch.reset()
+                else:
+                    still_r = reclick_watch.seconds(img)
+                    if battle_reclick_at is not None \
+                            and battle_reclicks < BATTLE_RECLICK_MAX \
+                            and time.time() - battle_reclick_at \
+                            >= BATTLE_RECLICK_GRACE \
+                            and still_r >= BATTLE_RECLICK_STILL:
+                        battle_reclick_at = time.time()
+                        battle_reclicks += 1
+                        ok_r, info_r = task_tracker.track_task(
+                            win, title, green_order=green_order,
+                            green_picker=green_picker,
+                            fallback_keywords=fallback_keywords,
+                            pre_items=(items, img_np),
+                            require_coord=require_coord)
+                        reclick_watch.reset()
+                        if ok_r:
+                            app_utils.mark_track_walk()
+                            log(f"[{prefix}] 战斗结束后任务未变化"
+                                f"（站定 {still_r:.0f}s），已补点任务链接恢复寻路"
+                                f"（第 {battle_reclicks}/{BATTLE_RECLICK_MAX} 次）",
+                                "SYS")
+                        else:
+                            log(f"[{prefix}] 战斗结束后任务未变化"
+                                f"（站定 {still_r:.0f}s），补点任务链接失败: "
+                                f"{info_r}（第 {battle_reclicks}/"
+                                f"{BATTLE_RECLICK_MAX} 次）", "WARN")
+                        if stall_watch is not None:
+                            stall_watch.reset()
+                        continue
             # 寻路停滞看门狗（见 STALL_RECHECK_*）：位置区逐轮像素比对
             # （~0.1ms）；静止 ≥STALL_DIALOG_CHECK_SECONDS 才查对话框模板
             # （~9ms/次，只在疑似停滞时付），对话框在场按「站定正常」重新
