@@ -21,6 +21,7 @@ from ascript.windows.system import R
 
 from src.device import map as game_map
 from src.tasks import mingwang
+from src.minigames import moqushendan as moqu
 from src.minigames import shahai
 
 
@@ -30,6 +31,20 @@ def _reset_shahai_state(monkeypatch):
     for name in ("_shahai_armed_at", "_shahai_game_armed_at",
                  "_shahai_game_last_check"):
         monkeypatch.setattr(mingwang, name, 0.0)
+
+
+@pytest.fixture(autouse=True)
+def _reset_tgqy_state(monkeypatch):
+    """天宫奇遇全局状态跨用例隔离（状态机/armed 时间戳）。"""
+    for name, value in (
+            ("_tgqy_phase", 0), ("_tgqy_stable", 0),
+            ("_tgqy_last_pos", None), ("_tgqy_need_move", False),
+            ("_tgqy_walk_from", None), ("_tgqy_move_stuck", 0),
+            ("_tgqy_use_at", 0.0), ("_tgqy_use_retries", 0),
+            ("_tgqy_missing", 0), ("_tgqy_bag_close_at", 0.0),
+            ("_tgqy_link_at", 0.0), ("_tgqy_game_armed_at", 0.0),
+            ("_tgqy_game_last_check", 0.0), ("_tgqy_game_retry_at", 0.0)):
+        monkeypatch.setattr(mingwang, name, value)
 
 # 模板 → 匹配阈值（与 mingwang 常量一致；shijie 标签走 open_mini_map_city
 # 默认 0.8）
@@ -51,6 +66,8 @@ TEMPLATES = (
     (mingwang.SHADU_NPC_ICON, mingwang.SHADU_NPC_THRESHOLD),
     (mingwang.SHAHAI_START_ICON, mingwang.SHAHAI_START_THRESHOLD),
     (mingwang.QINGXI_START_ICON, mingwang.QINGXI_START_THRESHOLD),
+    (mingwang.TGQY_ITEM_ICON, mingwang.TGQY_ITEM_THRESHOLD),
+    (moqu.MOQUSHENDAN_TITLE_ICON, moqu.MOQUSHENDAN_TITLE_THRESHOLD),
 )
 
 MOZU_ITEMS = [
@@ -2373,3 +2390,213 @@ def test_open_claim_panel_alt4_then_claim(monkeypatch):
     ok, info = mingwang._open_claim_panel(win, "魔族")
     assert ok and "面板" in info
     assert order == ["nav", "alt4", "claim"]
+
+
+# ---- 天宫奇遇（仙族·天宫）：导航链接 / 1px 到达 / 偷丹葫芦 / 魔取仙丹 ----
+def test_tgqy_at_target_one_px_tolerance():
+    """到达判定：天宫(13,99) ±1px（用户指定），跨地图不算到达。"""
+    assert mingwang._tgqy_at_target(("天宫", 13, 99))
+    assert mingwang._tgqy_at_target(("天宫 ", 12, 98))
+    assert mingwang._tgqy_at_target(("天宫", 14, 100))
+    assert not mingwang._tgqy_at_target(("天宫", 15, 99))
+    assert not mingwang._tgqy_at_target(("天宫", 13, 97))
+    assert not mingwang._tgqy_at_target(("长安城", 13, 99))
+    assert not mingwang._tgqy_at_target(None)
+
+
+def test_tgqy_trigger_keywords():
+    assert mingwang._tgqy_trigger("前往老君丹房门口，使用偷丹葫芦。")
+    assert mingwang._tgqy_trigger("老君丹房")   # 短词兜底 OCR 截断
+    assert not mingwang._tgqy_trigger("五庄封印火藏之位")
+
+
+def _tgqy_link_frame():
+    """追踪行「前往老君丹房门口，使用偷丹」+ 两段亮绿下划线。
+
+    行框 22..221 共 13 字：老君丹房门口=第 2..7 字，偷丹=第 11..12 字。
+    返回 (RGB 帧, items, 两段下划线起止 x)。
+    """
+    img = np.zeros((320, 400, 3), np.uint8)
+
+    def x(char_idx):
+        return int(22 + (221 - 22) * char_idx / 13)
+
+    img[268:270, x(2):x(8)] = (0, 255, 0)    # 老君丹房门口（可导航）
+    img[268:270, x(11):x(13)] = (0, 255, 0)  # 偷丹（物品说明，不可点）
+    items = [("前往老君丹房门口，使用偷丹", [22, 251, 221, 272], 0.96)]
+    return img, items, x(2), x(8), x(11)
+
+
+def test_tgqy_link_point_prefers_nav_link(monkeypatch):
+    """同行两个绿字：定位「老君丹房门口」，不点「偷丹葫芦」。"""
+    monkeypatch.setattr(mingwang.task_tracker, "panel_row_xmax",
+                        lambda img_np: 400)
+    img, items, l_nav, r_nav, l_item = _tgqy_link_frame()
+    pt = mingwang._tgqy_link_point(items, img)
+    assert pt is not None
+    assert l_nav <= pt[0] <= r_nav
+    assert pt[0] < l_item
+
+
+def test_mingwang_green_picker_includes_tgqy(monkeypatch):
+    """组合 green_picker：五庄/灵力镐未命中时回退到天宫奇遇导航链接。"""
+    monkeypatch.setattr(mingwang.task_tracker, "panel_row_xmax",
+                        lambda img_np: 400)
+    img, items, l_nav, r_nav, _l_item = _tgqy_link_frame()
+    pt = mingwang._mingwang_green_picker(items, img)
+    assert pt is not None and l_nav <= pt[0] <= r_nav
+
+
+def test_handle_tiangong_qiyu_uses_item_after_stable_target(monkeypatch):
+    """已在目标点：连续 3 次稳定 → 任务储物格使用偷丹葫芦 → phase 1。"""
+    monkeypatch.setattr(mingwang, "_seal_pos",
+                        lambda w, items: ("天宫", 13, 99))
+    monkeypatch.setattr(mingwang, "_seal_dialog_blocking",
+                        lambda *a: False)
+    used = []
+    monkeypatch.setattr(mingwang, "_use_toudanhulu",
+                        lambda w: used.append(1) or (True, "已使用偷丹葫芦"))
+    armed = []
+    monkeypatch.setattr(mingwang, "_arm_tgqy_game_check",
+                        lambda: armed.append(1))
+    items = [("前往老君丹房门口，使用偷丹", [22, 251, 221, 272], 0.96),
+             ("葫芦", [23, 271, 59, 285], 0.99)]
+    assert mingwang._handle_tiangong_qiyu(object(), items, None) is False
+    assert mingwang._handle_tiangong_qiyu(object(), items, None) is False
+    assert mingwang._handle_tiangong_qiyu(object(), items, None) is True
+    assert used == [1] and armed == [1]
+    assert mingwang._tgqy_phase == 1
+    assert mingwang._tgqy_use_at > 0
+
+
+def test_handle_tiangong_qiyu_clicks_link_when_not_at_target(monkeypatch):
+    """不在目标点：点「老君丹房门口」导航链接开始寻路（不点物品链接）。"""
+    monkeypatch.setattr(mingwang.task_tracker, "panel_row_xmax",
+                        lambda img_np: 400)
+    monkeypatch.setattr(mingwang, "_seal_pos",
+                        lambda w, items: ("天宫", 190, 122))
+    img, items, l_nav, r_nav, _ = _tgqy_link_frame()
+    clicks = []
+    monkeypatch.setattr(mingwang, "human_click",
+                        lambda w, x, y, button="primary":
+                        clicks.append((x, y)))
+    assert mingwang._handle_tiangong_qiyu(object(), items, img) is True
+    assert len(clicks) == 1 and l_nav <= clicks[0][0] <= r_nav
+    assert mingwang._tgqy_need_move is True
+
+
+def test_maybe_play_tgqy_detects_and_plays(monkeypatch):
+    """armed 窗口命中魔取仙丹标题 → 阻塞游玩；成功 → disarmed + phase 2。"""
+    monkeypatch.setattr(mingwang, "_tgqy_game_armed_at", time.time())
+    monkeypatch.setattr(mingwang, "is_in_battle", lambda w: False)
+    tpl = cv2.imread(R.img(moqu.MOQUSHENDAN_TITLE_ICON), cv2.IMREAD_COLOR)
+    th, tw = tpl.shape[:2]
+    frame = _noise_bgr(seed=20261114)
+    frame[310:310 + th, 700:700 + tw] = tpl
+    win = _FakeWin([_pil(frame)])
+    played = []
+    monkeypatch.setattr(moqu, "play_moqushendan",
+                        lambda w, prefix="名望":
+                        played.append(prefix) or (True, "通过"))
+    assert mingwang._maybe_play_tgqy(win) is True
+    assert played == ["名望"]
+    assert mingwang._tgqy_game_armed_at == 0.0
+    assert mingwang._tgqy_phase == 2
+
+
+def test_maybe_play_tgqy_not_armed_noop(monkeypatch):
+    """未 arm：零操作，不截图。"""
+    monkeypatch.setattr(mingwang, "is_in_battle",
+                        lambda w: (_ for _ in ()).throw(
+                            AssertionError("未 arm 不应检测")))
+    assert mingwang._maybe_play_tgqy(object()) is False
+
+
+# ---- 魔取仙丹小游戏：金色亮起判定 / 演示顺序录制 / 按钮三态 ----
+def _moqu_rgb_frame(lit_names=()):
+    """合成 RGB 帧：指定葫芦 ROI 填金色（亮起），其余暗金（未亮）。"""
+    frame = np.zeros((640, 800, 3), np.uint8)
+    for g in moqu.MOQUSHENDAN_GOURDS:
+        l, t, r, b = g["roi"]
+        frame[t:b, l:r] = ((240, 210, 120) if g["name"] in lit_names
+                           else (120, 110, 90))
+    return frame
+
+
+def test_moqu_gourd_lit_map_gold_threshold():
+    assert not any(moqu.gourd_lit_map(_moqu_rgb_frame()).values())
+    lit = moqu.gourd_lit_map(_moqu_rgb_frame(("右",)))
+    assert lit == {"上": False, "右": True, "左": False, "左下": False}
+
+
+def test_moqu_record_demo_first_lit_order(monkeypatch):
+    """按各葫芦首次亮起记录顺序，全部熄灭即演示结束。"""
+    monkeypatch.setattr(moqu.time, "sleep", lambda s: None)
+    order = ("上", "右", "左", "左下")
+    frames, lit = [], set()
+    for name in order:
+        lit.add(name)
+        frames.append(Image.fromarray(_moqu_rgb_frame(lit)))
+    frames.append(Image.fromarray(_moqu_rgb_frame()))  # 演示结束：全灭
+    win = _FakeWin(frames)
+    seq, info = moqu._record_demo(win)
+    assert seq == list(order), info
+
+
+def test_moqu_record_demo_timeout(monkeypatch):
+    """演示始终未结束（一直亮）→ 返回 None。"""
+    monkeypatch.setattr(moqu.time, "sleep", lambda s: None)
+    monkeypatch.setattr(moqu, "MOQUSHENDAN_DEMO_TIMEOUT", 0.0)
+    win = _FakeWin([Image.fromarray(_moqu_rgb_frame(("上",)))])
+    seq, info = moqu._record_demo(win)
+    assert seq is None and "超时" in info
+
+
+@pytest.mark.parametrize("text,label", (
+    ("观看", "观看"),
+    ("观看中倒计时：99秒", "观看中"),   # 「观看中」优先于子串「观看」
+    ("确认倒计时：94秒", "确认"),
+    ("倒计时：99秒", ""),
+))
+def test_moqu_button_label_three_states(monkeypatch, text, label):
+    monkeypatch.setattr(moqu.game_map, "ocr_region",
+                        lambda img, region:
+                        ([("按钮", [0, 0, 1, 1], 0.9),
+                          (text, [0, 0, 2, 2], 0.99)], None))
+    got, _texts = moqu._button_label(object())
+    assert got == label
+
+
+def test_moqu_template_present_and_absent():
+    tpl = cv2.imread(R.img(moqu.MOQUSHENDAN_TITLE_ICON), cv2.IMREAD_COLOR)
+    th, tw = tpl.shape[:2]
+    frame = _noise_bgr(seed=7)
+    frame[310:310 + th, 700:700 + tw] = tpl
+    assert moqu.moqushendan_present(frame)
+    assert not moqu.moqushendan_present(_noise_bgr(seed=8))
+
+
+def test_play_moqu_click_order(monkeypatch):
+    """一局通过：观看 → 确认 → 按演示顺序点 4 葫芦 → 确认提交。"""
+    monkeypatch.setattr(moqu.time, "sleep", lambda s: None)
+    img = Image.fromarray(_moqu_rgb_frame(
+        ("上", "右", "左", "左下")))
+    win = _FakeWin([img])
+    seq = ["上", "右", "左", "左下"]
+    monkeypatch.setattr(moqu, "_wait_button_label",
+                        lambda w, timeout=moqu.MOQUSHENDAN_BTN_TIMEOUT:
+                        ("观看", img, ""))
+    monkeypatch.setattr(moqu, "_record_demo",
+                        lambda w, prefix="": (seq, "演示顺序 上→右→左→左下"))
+    monkeypatch.setattr(moqu, "_window_closed", lambda w: (True, img))
+    clicks = []
+    monkeypatch.setattr(moqu, "human_click",
+                        lambda w, x, y, button="primary":
+                        clicks.append((x, y)))
+    ok, info = moqu.play_moqushendan(win, prefix="名望")
+    assert ok and "演示顺序" in info
+    expected = [moqu.MOQUSHENDAN_BTN_POS,          # 观看
+                moqu.MOQUSHENDAN_BTN_POS]          # 确认进入输入阶段
+    expected += [moqu._gourd(n)["click"] for n in seq]
+    expected.append(moqu.MOQUSHENDAN_BTN_POS)      # 提交
+    assert clicks == expected

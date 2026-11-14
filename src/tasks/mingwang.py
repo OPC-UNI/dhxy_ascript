@@ -70,6 +70,15 @@
    护法导航绿字链接由 follow 引擎通用绿字点击推进；触发词仍在时按
    间隔限次重试使用（未使用时触发词连续缺失即复位；已使用后状态
    保持到新任务领取，防战斗中面板不可见导致战后重复使用）。
+   天宫奇遇（2026-11-14 用户规则）：任务追踪出现「前往老君丹房门口，
+   使用偷丹葫芦。」→ 点击追踪绿字**老君丹房门口**自动寻路（「偷丹
+   葫芦」是物品说明链接，不得点击）→ 到达天宫 (13,99)（用户指定
+   1px 容差）→ 打开背包任务储物格右键使用偷丹葫芦
+   （mingwang_toudanhulu）→ 出现「魔取仙丹」小游戏窗口：点「观看」
+   记录 4 个封印小葫芦的亮起顺序 → 点「确认」进入输入阶段 → 按序
+   点击 4 个葫芦 → 再点「确认」提交解封；成功后进入战斗（战斗由
+   follow_task/battle 线程托管，任务追踪消失即完成）。小游戏闭环见
+   minigames/moqushendan.py（2026-11-14 实机探针标定并验证通过）。
    蛟魔复仇暗雷战斗（2026-11-11 用户规则）：任务追踪文案含「暗雷战斗」
    （如「仙族兵士逃窜而去，请在女儿村仔细搜查……（暗雷战斗）」）时，
    点击追踪绿字自动寻路到文案中的地图（「请在<地图>仔细搜查」解析）；
@@ -119,6 +128,7 @@ from ..device.map import bgr_frame as _bgr_frame  # PIL→BGR（模板匹配用�
 from ..device import task_tracker  # 任务追踪面板（对话框区域常量）
 from ..device import bag  # 背包操作（五庄封印任务储物格用唤风符）
 from ..device import zuoqi  # 飞行驭器（蛟魔复仇到达目标地图后降落）
+from ..minigames import moqushendan as _moqu_minigame  # 天宫奇遇「魔取仙丹」顺序解封小游戏
 from ..minigames import pochufengyin as _pochu_minigame  # 破除封印/钓鱼共用小游戏（闭环实现）
 from ..minigames import shahai as _shahai_minigame  # 沙海迷踪阻塞循环
 from ..minigames.shahai import (SHAHAI_GAME_ARM_TIMEOUT,
@@ -272,6 +282,7 @@ CLAIM_TASKS = (
     {"title": "蛟魔复仇", "level": "高级"},
     {"title": "沙海迷踪", "level": "高级"},
     {"title": "蛟魔探秘", "level": "高级"},
+    {"title": "天宫奇遇", "level": "高级"},
     {"title": "凿石造像", "level": "中级"},
     {"title": "魔王重聚", "level": "高级"}, # 未完成，需要使用后到某个地图巡逻找到，后续在做
     # 仙族
@@ -303,7 +314,8 @@ DIALOG_OPTION_MAP = {
     "这群手下真是越来越难管了，我让他们凿点石头给俺，这叫凿石头吗？":"是逆天魔遣我过来帮忙的。",
     "总有人和我说火云戈壁里有什么城啥的，俺寻思这也不可能啊，他们一族不":"逆天魔大人派我过来帮忙",
     "有肉咱们一块吃，有酒咱们一块喝。":"牛魔王大人，逆天广大将派我前来见您。",
-    "多么怀念当年俺们七个，还有小白，唉，都是往事了啊，但俺答应过的，俺":"是逆天魔遣我过来帮忙的。"
+    "多么怀念当年俺们七个，还有小白，唉，都是往事了啊，但俺答应过的，俺":"是逆天魔遣我过来帮忙的。",
+    "这天上来的消息应该还挺准的吧，俺也没那么指望吃上，可他们也别想吃上":"是逆天魔遣我过来帮忙的。"
 }
 # ---- 点击屏幕中间推进的对话（同玄枢轶闻/客栈的跳过对话表机制）----
 # 键 = 对话框文案（_dialog_text_present 模糊匹配：逐行 + 全文拼接，抗
@@ -474,6 +486,52 @@ _chuanyin_use_at = 0.0       # 上次使用时间（宽限窗口起点）
 _chuanyin_use_retries = 0    # 使用重试次数
 _chuanyin_missing = 0        # 触发词连续缺失轮询数（≥5 复位）
 _chuanyin_bag_close_at = 0.0 # 上次残留背包检测时间（限频）
+
+# ---- 天宫奇遇（仙族·天宫）：追踪「前往老君丹房门口」→ 天宫(13,99) →
+#      任务储物格用偷丹葫芦 → 「魔取仙丹」顺序解封小游戏 ----
+# 用户 2026-11-14 流程：任务追踪内容为「前往老君丹房门口，使用偷丹
+# 葫芦。」→ 点击追踪绿字**老君丹房门口**自动寻路（「偷丹葫芦」是物品
+# 说明链接，**不得点击**——同灵力镐的蕴灵石头/灵力镐）→ 到达天宫
+# (13,99) 附近（用户指定 1px 容差）→ 打开背包任务储物格右键使用偷丹
+# 葫芦（mingwang_toudanhulu.png，用户素材 图1）→ 出现「魔取仙丹」
+# 小游戏窗口（标题模板 mingwang_moqushendan.png）→ 按演示顺序点击
+# 四个封印小葫芦 → 成功后进入战斗（战斗由 follow_task/battle 线程托管，
+# 战后任务完成）。小游戏实现见 minigames/moqushendan.py。
+TGQY_TASK_KEYWORDS = ("前往老君丹房门口", "老君丹房")  # 追踪触发词（短词兜底 OCR 拆行）
+TGQY_LINK_KEYWORDS = ("老君丹房门口", "老君丹房", "丹房")  # 导航绿字（严禁点「偷丹葫芦」物品链接）
+TGQY_MAP = "天宫"
+TGQY_TARGET = (13, 99)                  # 用户标定到达点
+TGQY_POS_TOLERANCE = 1                  # 到达容差（用户指定 1px）
+TGQY_ARRIVE_POLLS = 3                   # 位置连续稳定轮询数判定到达
+TGQY_MOVE_DELTA = 2                     # 判定寻路已启动的位移阈值（像素）
+TGQY_MOVE_STUCK_MAX = 4                 # 点链接后位置连续不变轮询数 → 重点链接
+TGQY_LINK_RETRY_AFTER = 20.0            # 寻路未启动时重点链接的最小间隔（秒）
+TGQY_USE_GRACE = 3.0                    # 用道具后等待窗口出现的宽限（秒）
+TGQY_USE_RETRY_AFTER = 15.0             # 窗口未出现时的重试用道具间隔（秒）
+TGQY_USE_RETRY_MAX = 2                  # 最多重试用道具次数
+TGQY_GAME_RETRY_AFTER = 15.0            # 小游戏游玩失败后的重试间隔（秒）
+TGQY_ABSENT_RESET = 5                   # phase 0 触发词连续缺失轮询数 → 复位
+TGQY_BAG_CLOSE_INTERVAL = 2.0           # 残留背包检测/关闭最小间隔（秒）
+TGQY_ITEM_ICON = "mingwang_toudanhulu.png"  # 偷丹葫芦（用户素材 图1，49×48）
+TGQY_ITEM_LABEL = "偷丹葫芦"
+TGQY_ITEM_THRESHOLD = 0.8               # 物品图标匹配阈值（静态图标）
+TGQY_ITEM_FIND_TIMEOUT = 10.0           # 任务储物格中查找偷丹葫芦的时限（秒）
+# 状态机（对齐灵力镐）：0=等到达/用道具；1=已用道具等小游戏/任务推进；
+# 2=小游戏已通过（不再重试用道具，等战斗/任务完成由 follow 判定）。
+_tgqy_phase = 0
+_tgqy_stable = 0            # 位置连续稳定轮询数
+_tgqy_last_pos = None       # 上次位置
+_tgqy_need_move = False     # 点链接后须位置先变化才允许到达判定
+_tgqy_walk_from = None      # 点链接时的位置（移动验证起点）
+_tgqy_move_stuck = 0        # 点链接后位置连续不变轮询数
+_tgqy_use_at = 0.0          # 上次用道具时间（宽限窗口起点）
+_tgqy_use_retries = 0       # 用道具重试次数
+_tgqy_missing = 0           # phase 0 触发词连续缺失轮询数（≥5 复位）
+_tgqy_bag_close_at = 0.0    # 上次残留背包检测时间（限频）
+_tgqy_link_at = 0.0         # 上次点击追踪链接时间（重点间隔）
+_tgqy_game_armed_at = 0.0   # 用道具成功时间；>0 且未超时=魔取仙丹窗口检测开启
+_tgqy_game_last_check = 0.0 # 上次窗口检测时间（限频）
+_tgqy_game_retry_at = 0.0   # 小游戏游玩失败后的下次允许游玩时间（冷却）
 
 # ---- 蛟魔复仇（暗雷战斗）：追踪「请在<地图>仔细搜查（暗雷战斗）」→ 到达后降落 ----
 # 用户 2026-11-11 规则：追踪面板任务文案括号内含「暗雷战斗」时，点击
@@ -2380,11 +2438,13 @@ def _pick_green_picker(items, img_np):
 
 
 def _mingwang_green_picker(items, img_np):
-    """名望追踪链接精确点击：五庄封印链接优先，其次蕴灵石头导航链接。"""
-    pt = _seal_green_picker(items, img_np)
-    if pt is not None:
-        return pt
-    return _pick_green_picker(items, img_np)
+    """名望追踪链接精确点击：五庄封印 → 蕴灵石头 → 老君丹房门口。"""
+    for picker in (_seal_green_picker, _pick_green_picker,
+                   _tgqy_green_picker):
+        pt = picker(items, img_np)
+        if pt is not None:
+            return pt
+    return None
 
 
 def _click_pick_link(win, items, img_np):
@@ -2652,6 +2712,267 @@ def _handle_chuanyinshi(win, items, img_np):
     return True
 
 
+# ---- 天宫奇遇执行（追踪「前往老君丹房门口」→ 到达天宫(13,99) →
+#      任务储物格用偷丹葫芦 → 「魔取仙丹」小游戏）----
+def _reset_tgqy_state():
+    """天宫奇遇状态机复位（新任务领取成功/跨任务防残留）。"""
+    global _tgqy_phase, _tgqy_stable, _tgqy_last_pos, _tgqy_need_move, \
+        _tgqy_walk_from, _tgqy_move_stuck, _tgqy_use_at, _tgqy_use_retries, \
+        _tgqy_missing, _tgqy_bag_close_at, _tgqy_link_at, \
+        _tgqy_game_armed_at, _tgqy_game_last_check, _tgqy_game_retry_at
+    _tgqy_phase = 0
+    _tgqy_stable = 0
+    _tgqy_last_pos = None
+    _tgqy_need_move = False
+    _tgqy_walk_from = None
+    _tgqy_move_stuck = 0
+    _tgqy_use_at = 0.0
+    _tgqy_use_retries = 0
+    _tgqy_missing = 0
+    _tgqy_bag_close_at = 0.0
+    _tgqy_link_at = 0.0
+    _tgqy_game_armed_at = 0.0
+    _tgqy_game_last_check = 0.0
+    _tgqy_game_retry_at = 0.0
+
+
+def _tgqy_trigger(sig):
+    """追踪面板文案是否触发天宫奇遇流程（前往老君丹房门口）。"""
+    return any(kw in sig for kw in TGQY_TASK_KEYWORDS)
+
+
+def _tgqy_at_target(pos):
+    """是否到达天宫(13,99)（用户指定 1px 容差）。"""
+    return (pos is not None and pos[0].strip() == TGQY_MAP
+            and abs(pos[1] - TGQY_TARGET[0]) <= TGQY_POS_TOLERANCE
+            and abs(pos[2] - TGQY_TARGET[1]) <= TGQY_POS_TOLERANCE)
+
+
+def _tgqy_link_point(items, img_np):
+    """定位「老君丹房门口」导航绿字，返回点击点或 None。
+
+    实机文案：「前往老君丹房门口，使用偷丹葫芦。」——两处都是亮绿
+    链接，可导航的是**老君丹房门口**；「偷丹葫芦」点开物品说明
+    （同灵力镐的蕴灵石头/灵力镐）。只认导航词，限定追踪面板列
+    （panel_row_xmax，排除居中对话框同名文案），未读出返回 None。
+    """
+    xmax = task_tracker.panel_row_xmax(img_np)
+    panel = [it for it in items
+             if it[2] >= 0.55 and it[1][0] < xmax]
+    for kw in TGQY_LINK_KEYWORDS:
+        pt = _seal_link_point(panel, img_np, kw)
+        if pt is not None:
+            return pt
+    return None
+
+
+def _tgqy_green_picker(items, img_np):
+    """track_task green_picker：天宫奇遇只点「老君丹房门口」导航链接。
+
+    触发词在但链接未读出 → PICK_FAIL 等待重试：引擎行级兜底可能点到
+    同一行的物品链接「偷丹葫芦」（点开物品说明，2026-11-14 用户明确
+    流程），必须拒绝兜底。非天宫奇遇任务返回 None，回退引擎行级选择。
+    """
+    if not _tgqy_trigger(_seal_sig(items)):
+        return None
+    pt = _tgqy_link_point(items, img_np)
+    if pt is None:
+        return task_tracker.PICK_FAIL
+    return pt
+
+
+def _click_tgqy_link(win, items, img_np):
+    """点击「老君丹房门口」导航链接；未识别到返回 False（下轮询重试）。"""
+    global _tgqy_link_at
+    pt = _tgqy_link_point(items, img_np)
+    if pt is None:
+        return False
+    human_click(win, pt[0], pt[1])
+    _tgqy_link_at = time.time()
+    log(f"[名望] 天宫奇遇：已点击「老君丹房门口」追踪链接 "
+        f"@({pt[0]},{pt[1]})", "SYS")
+    return True
+
+
+def _use_toudanhulu(win):
+    """天宫奇遇：任务储物格右键使用偷丹葫芦（见 _use_task_item）。"""
+    return _use_task_item(win, TGQY_ITEM_ICON, TGQY_ITEM_LABEL,
+                          TGQY_ITEM_THRESHOLD, TGQY_ITEM_FIND_TIMEOUT)
+
+
+def _arm_tgqy_game_check():
+    """用道具成功 → 开启「魔取仙丹」窗口检测（armed 门控）。"""
+    global _tgqy_game_armed_at, _tgqy_game_last_check, _tgqy_game_retry_at
+    _tgqy_game_armed_at = time.time()
+    _tgqy_game_last_check = 0.0
+    _tgqy_game_retry_at = 0.0
+    log(f"[名望] 已使用偷丹葫芦，开启魔取仙丹窗口检测"
+        f"（{_moqu_minigame.MOQUSHENDAN_GAME_ARM_TIMEOUT}s 内有效）", "SYS")
+
+
+def _maybe_play_tgqy(win):
+    """armed 窗口内检测魔取仙丹窗口并阻塞游玩，返回是否已处理。
+
+    使用偷丹葫芦成功后在 armed 窗口内按限频匹配窗口标题
+    mingwang_moqushendan.png；窗口出现即阻塞执行
+    moqushendan.play_moqushendan（观看演示→记录顺序→按序点击→提交），
+    窗口关闭即成功。窗口在场但游玩失败冷却中同样返回 True——阻断
+    状态机重试用道具（打开背包会干扰模态小游戏）。未 armed/限频未到/
+    未命中返回 False（热路径零成本）。
+    """
+    global _tgqy_game_armed_at, _tgqy_game_last_check, \
+        _tgqy_game_retry_at, _tgqy_phase
+    if _tgqy_game_armed_at <= 0:
+        return False
+    if time.time() - _tgqy_game_armed_at \
+            > _moqu_minigame.MOQUSHENDAN_GAME_ARM_TIMEOUT:
+        _tgqy_game_armed_at = 0.0
+        log("[名望] 天宫奇遇：魔取仙丹窗口未出现，检测窗口超时", "WARN")
+        return False
+    if is_in_battle(win):
+        return False
+    now = time.time()
+    if now - _tgqy_game_last_check \
+            < _moqu_minigame.MOQUSHENDAN_CHECK_INTERVAL:
+        return False
+    _tgqy_game_last_check = now
+    img = win.capture(force_activate=False)
+    if img is None:
+        return False
+    if not _moqu_minigame.moqushendan_present(_bgr_frame(img)):
+        return False
+    if now < _tgqy_game_retry_at:
+        return True  # 窗口在场但游玩冷却中：本帧按已处理跳过状态机
+    ok, info = _moqu_minigame.play_moqushendan(win, prefix="名望")
+    log(f"[名望] {info}", "SYS" if ok else "WARN")
+    if ok:
+        _tgqy_game_armed_at = 0.0
+        _tgqy_phase = 2  # 已解封：不再重试用道具，等战斗/任务完成
+    else:
+        _tgqy_game_retry_at = time.time() + TGQY_GAME_RETRY_AFTER
+    return True
+
+
+def _tgqy_wait_arrival(win, items, img_np, now):
+    """phase 0：等到达天宫(13,99)（1px）→ 任务储物格用偷丹葫芦。
+
+    到达判定：坐标连续 TGQY_ARRIVE_POLLS 次落在 (13,99)±1 内。点追踪
+    链接后须先见位移（寻路已启动）；位置连续不变达上限则按
+    TGQY_LINK_RETRY_AFTER 间隔重点链接（寻路偶发未启动）。已在目标点
+    （续跑/手动站好）则跳过点击直接走到达判定。
+    """
+    global _tgqy_stable, _tgqy_last_pos, _tgqy_need_move, _tgqy_walk_from, \
+        _tgqy_move_stuck, _tgqy_phase, _tgqy_use_at, _tgqy_link_at
+    pos = _seal_pos(win, items)
+    if pos is None:
+        return False
+    if _tgqy_at_target(pos):
+        if _tgqy_last_pos is not None and pos == _tgqy_last_pos:
+            _tgqy_stable += 1
+        else:
+            _tgqy_stable = 1
+        _tgqy_last_pos = pos
+        _tgqy_need_move = False
+        if _tgqy_stable < TGQY_ARRIVE_POLLS:
+            return False
+        if _seal_dialog_blocking(win, items, img_np):
+            return False  # 对话框在场时不操作背包
+        ok, info = _use_toudanhulu(win)
+        if not ok:
+            _tgqy_stable = 0
+            log(f"[名望] 天宫奇遇：{info}，稍后重试", "WARN")
+            return False
+        _tgqy_phase = 1
+        _tgqy_use_at = time.time()
+        _arm_tgqy_game_check()
+        log(f"[名望] 天宫奇遇：已在{TGQY_MAP}使用偷丹葫芦，等待魔取仙丹窗口",
+            "SYS")
+        return True
+    # 不在目标点：点链接寻路；点过后须先见位移，长时间不动则重点
+    _tgqy_stable = 0
+    _tgqy_last_pos = pos
+    if not _tgqy_need_move:
+        if _click_tgqy_link(win, items, img_np):
+            _tgqy_need_move = True
+            _tgqy_walk_from = pos
+            _tgqy_move_stuck = 0
+            return True
+        return False
+    if _tgqy_walk_from is not None and (
+            abs(pos[1] - _tgqy_walk_from[1]) > TGQY_MOVE_DELTA
+            or abs(pos[2] - _tgqy_walk_from[2]) > TGQY_MOVE_DELTA):
+        _tgqy_need_move = False
+        _tgqy_move_stuck = 0
+        return False
+    _tgqy_move_stuck += 1
+    if _tgqy_move_stuck >= TGQY_MOVE_STUCK_MAX:
+        _tgqy_move_stuck = 0
+        if now - _tgqy_link_at >= TGQY_LINK_RETRY_AFTER \
+                and _click_tgqy_link(win, items, img_np):
+            log("[名望] 天宫奇遇：寻路未启动，已重新点击导航链接", "WARN")
+            _tgqy_walk_from = pos
+    return False
+
+
+def _tgqy_check_outcome(win, items, img_np, now):
+    """phase 1：用道具后等魔取仙丹窗口/任务推进。
+
+    窗口由 _maybe_play_tgqy 检测（窗口在场时本函数不会执行），本函数
+    只在触发词仍在且长时间无窗口时按间隔限次重试用道具（用道具被
+    对话框/背包遮挡吞掉的情况）。小游戏通过后 phase=2，不再重试。
+    """
+    global _tgqy_use_at, _tgqy_use_retries
+    if now - _tgqy_use_at < TGQY_USE_GRACE:
+        return False
+    if now - _tgqy_use_at >= TGQY_USE_RETRY_AFTER \
+            and _tgqy_use_retries < TGQY_USE_RETRY_MAX:
+        if _seal_dialog_blocking(win, items, img_np):
+            return False
+        _tgqy_use_retries += 1
+        ok, info = _use_toudanhulu(win)
+        log(f"[名望] 天宫奇遇：未出现魔取仙丹窗口，重试使用偷丹葫芦"
+            f"（{info}，{_tgqy_use_retries}/{TGQY_USE_RETRY_MAX}）", "WARN")
+        if ok:
+            _tgqy_use_at = now
+            _arm_tgqy_game_check()
+        return ok
+    return False
+
+
+def _handle_tiangong_qiyu(win, items, img_np):
+    """天宫奇遇执行状态机（follow extras 通道，每轮询一次）。
+
+    触发：追踪面板文案含「前往老君丹房门口」（短词兜底「老君丹房」）。
+    流程：点「老君丹房门口」导航链接 → 到达天宫(13,99)±1 → 任务储物格
+    右键使用偷丹葫芦 → 魔取仙丹小游戏（_maybe_play_tgqy 先于本函数
+    调用，窗口在场时本函数不执行）→ 成功后进入战斗。不做战斗判定：
+    战斗由 follow_task/battle 线程托管；任务追踪消失即完成。
+    返回是否已处理（点击链接/使用道具）。
+    """
+    global _tgqy_missing, _tgqy_phase, _tgqy_bag_close_at
+    if _tgqy_phase in (1, 2):
+        # 用道具/小游戏后残留背包限频补关（对话框/模态窗口可能遮挡）
+        now = time.time()
+        if now - _tgqy_bag_close_at >= TGQY_BAG_CLOSE_INTERVAL \
+                and _bag_box_on_frame(win, items):
+            _tgqy_bag_close_at = now
+            log("[名望] 天宫奇遇：检测到残留背包，尝试关闭", "INFO")
+            _close_bag_quiet(win)
+    if not _tgqy_trigger(_seal_sig(items)):
+        if _tgqy_phase == 0:
+            _tgqy_missing += 1
+            if _tgqy_missing >= TGQY_ABSENT_RESET:
+                _reset_tgqy_state()
+        return False
+    _tgqy_missing = 0
+    now = time.time()
+    if _tgqy_phase == 2:
+        return False  # 小游戏已通过：等战斗/任务完成（follow 判定）
+    if _tgqy_phase == 1:
+        return _tgqy_check_outcome(win, items, img_np, now)
+    return _tgqy_wait_arrival(win, items, img_np, now)
+
+
 # ---- 蛟魔复仇（暗雷战斗）：到达文案地图后降落，等待遭遇战斗 ----
 def _reset_jiamo_state():
     """蛟魔复仇暗雷战斗状态机复位（新任务领取/触发词连续缺失）。"""
@@ -2815,13 +3136,16 @@ def _handle_dialog_options(win, items, img_np):
     灵力镐状态机（追踪「前往大唐边境，使用灵力镐」→ 点链接 → 到达 →
     任务储物格用镐；用镐后出现「开采石头」小游戏窗口 → 钓鱼同款
     长按模式闭环）、传音石状态机（追踪「使用传音石找到魔王和魔王护法」
-    → 任务储物格右键使用传音石）、蛟魔复仇暗雷战斗状态机（追踪「请在
+    → 任务储物格右键使用传音石）、天宫奇遇状态机（追踪「前往老君丹房
+    门口」→ 到达天宫(13,99) → 任务储物格用偷丹葫芦 → 「魔取仙丹」
+    顺序解封小游戏）、蛟魔复仇暗雷战斗状态机（追踪「请在
     <地图>仔细搜查（暗雷战斗）」→ 到达目标地图后降落）与沙都修罗搜索
     状态机（追踪文案触发 → 蟠桃园五路点找 NPC）在最前面处理；其余任务
     无对应追踪文案时零操作。
     开采石头窗口检测排在灵力镐状态机之前：窗口在场时须先阻塞执行
-    小游戏，防状态机同时重试用镐（打开背包干扰小游戏）。沙海迷踪
-    小游戏弹窗为模态窗口，检测放在最前（在场时其它处理器零操作）。
+    小游戏，防状态机同时重试用镐（打开背包干扰小游戏）；魔取仙丹
+    窗口检测同理排在天宫奇遇状态机之前。沙海迷踪小游戏弹窗为模态
+    窗口，检测放在最前（在场时其它处理器零操作）。
     返回是否已处理。
     """
     if _maybe_play_shahai(win):
@@ -2833,6 +3157,10 @@ def _handle_dialog_options(win, items, img_np):
     if _handle_lingligao(win, items, img_np):
         return True
     if _handle_chuanyinshi(win, items, img_np):
+        return True
+    if _maybe_play_tgqy(win):
+        return True
+    if _handle_tiangong_qiyu(win, items, img_np):
         return True
     if _handle_jiamo_anlei(win, items, img_np):
         return True
@@ -2936,12 +3264,13 @@ def _post_claim_flow(win):
 
     任务已点击领取，跟踪失败返回 False 由主循环下一轮走续跑分支处理
     （不重走领取链重复接取）。新任务领取成功即复位五庄封印/灵力镐/
-    传音石/蛟魔复仇暗雷战斗状态机，防上一轮状态残留。返回 (是否完成,
-    描述)。
+    传音石/天宫奇遇/蛟魔复仇暗雷战斗状态机，防上一轮状态残留。
+    返回 (是否完成, 描述)。
     """
     _reset_seal_state()
     _reset_pick_state()
     _reset_chuanyin_state()
+    _reset_tgqy_state()
     _reset_jiamo_state()
     dismissed, dinfo = _dismiss_claim_dialog(win)
     log(f"[名望] {dinfo}", "SYS" if dismissed else "INFO")
