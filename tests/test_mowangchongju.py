@@ -189,6 +189,23 @@ def test_no_use_item_callback(monkeypatch):
     assert mw.handle(object(), _items(), None) is False
 
 
+def test_dialog_present_defers_use(monkeypatch):
+    """标准对话框在场 → 暂不使用传音石（交给 follow 引擎推进对话）。
+
+    2026-11-15 实机：牛魔王交付传音石对话常驻时处理器每轮询都被调用，
+    只做零操作等待；须有一行限频日志，否则「卡在对话」无从排查。
+    """
+    st, use = _patch_actions(monkeypatch)
+    logs = []
+    monkeypatch.setattr(mw, "_frame", lambda win, items, fn: (None, "bgr"))
+    monkeypatch.setattr(mw, "dialog_frame_score",
+                        lambda frame: mw.DIALOG_FRAME_THRESHOLD + 0.1)
+    monkeypatch.setattr(mw, "log", lambda msg, level="INFO": logs.append(msg))
+    assert mw.handle(object(), _items(), None, use_item=use) is False
+    assert st["uses"] == 0
+    assert any("对话框在场" in line for line in logs)
+
+
 def test_walk_poll_arrival(monkeypatch):
     """行走轮询：位置连续 3 次稳定 → 到达，清除行走状态。"""
     mw._walk = {"at": time.time(), "last_move_at": time.time(),

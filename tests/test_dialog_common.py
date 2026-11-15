@@ -46,8 +46,10 @@ def _dismiss_env(monkeypatch, score=0.99, green=False, known=(),
     import numpy as np
     clicks = []
     monkeypatch.setattr(dialog_common, "dialog_frame_score", lambda img: score)
-    monkeypatch.setattr(dialog_common.task_tracker, "is_green_text",
-                        lambda img, rect: green)
+    # green 传常量（全部行视为绿字）或真实判定函数（按帧像素判绿，
+    # 供行内高亮/整行选项的区分测试）
+    check = green if callable(green) else (lambda img, rect: green)
+    monkeypatch.setattr(dialog_common.task_tracker, "is_green_text", check)
     monkeypatch.setattr(dialog_common, "_click_screen_center",
                         lambda win, times=1, prefix="": clicks.append(times))
     monkeypatch.setattr(dialog_common, "log", lambda msg, level="INFO": None)
@@ -61,6 +63,17 @@ def _dismiss_env(monkeypatch, score=0.99, green=False, known=(),
 
 def _dismiss(gate, frame, prefix=""):
     return gate.try_dismiss(None, _STORY, frame, prefix=prefix, img=frame)
+
+
+def _paint_rect(frame, rect, color, count, start=0):
+    """在 rect 内从第 start 个像素起涂 count 个 color（逐行铺，控制像素数）。"""
+    x0, y0, x1, y1 = rect
+    w = x1 - x0
+    for i in range(start, start + count):
+        y = y0 + i // w
+        if y >= y1:
+            break
+        frame[y, x0 + i % w] = color
 
 
 def test_story_dismiss_static_polls_then_click(monkeypatch):
@@ -115,11 +128,37 @@ def test_story_dismiss_requires_dialog_frame(monkeypatch):
 
 
 def test_story_dismiss_skips_green_option(monkeypatch):
-    """对话区有绿字选项（有待点的对话）不点屏。"""
-    gate, clicks, frame = _dismiss_env(monkeypatch, green=True)
+    """对话区有整行绿字选项（有待点的对话）不点屏。"""
+    from src.device import task_tracker
+    gate, clicks, frame = _dismiss_env(monkeypatch,
+                                       green=task_tracker.is_green_text)
+    # 整行绿字选项：纯绿色文字、无白色正文（实测选项行正文像素≈0）
+    _paint_rect(frame, _STORY[0][1], (60, 220, 60), 600)
     for _ in range(3):
         assert gate.try_dismiss(None, _STORY, frame) is False
     assert clicks == []
+
+
+def test_story_dismiss_inline_green_highlight_not_option(monkeypatch):
+    """行内绿色高亮（物品名链接混排白色正文）不算选项，剧情对话照常点屏。
+
+    2026-11-15 实机：魔王重聚牛魔王交付传音石台词「来，就是这块传音石，
+    少侠拿好，用它能找到魔王护卫的位置……」整行含「传音石」「魔王护卫」
+    两个绿字链接。旧判定「任一行有绿字即视为选项对话」令点屏兜底永不
+    触发，mowangchongju 又因对话框在场拒绝使用传音石 → 任务卡死。
+    """
+    from src.device import task_tracker
+    gate, clicks, frame = _dismiss_env(monkeypatch,
+                                       green=task_tracker.is_green_text)
+    # 高亮行：绿色链接字 + 大量白色正文同处一个 OCR 行（实测 绿 400 /
+    # 正文 1368）；第二行为纯白叙述
+    _paint_rect(frame, _STORY[0][1], (60, 220, 60), 200)
+    _paint_rect(frame, _STORY[0][1], (255, 255, 255), 900, start=300)
+    _paint_rect(frame, _STORY[1][1], (255, 255, 255), 900)
+    assert _dismiss(gate, frame) is False
+    assert _dismiss(gate, frame) is False
+    assert _dismiss(gate, frame) is True
+    assert clicks == [1]
 
 
 def test_story_dismiss_skips_known_text(monkeypatch):

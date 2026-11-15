@@ -9,8 +9,8 @@
 - open_mini_map：打开当前地图的小地图（点击地图位置区域）
 - open_mini_map_city：打开世界地图并点击指定城市，打开该城市的小地图
 - close_mini_map / close_maps：关闭小地图/世界地图（小地图左键模板位置、
-  世界地图右键模板位置；世界地图带 1s 确认等待，复检仍打开才点击——
-  防关闭动画瞬态误检右键取消寻路）
+  世界地图右键模板位置；两者均带 1s 确认等待，复检仍打开才点击——
+  防关闭/传送动画瞬态误检点击落到游戏世界取消寻路）
 - find_template：模板查找（返回窗口相对坐标）
 
 坐标约定：全部使用窗口相对坐标，由调用方通过 human_click 转屏幕坐标。
@@ -829,14 +829,22 @@ def close_mini_map(win, quiet=False):
     """关闭小地图（若打开）：模板位置左键，无画布兜底（右键会点到
     游戏世界取消寻路）。匹配限定右上区（MINI_MAP_REGION）——小地图
     面板可拖动但限于右上，锄遗聚宝小游戏等面板的相似图标误匹配在
-    屏幕中部时直接忽略。返回 (是否成功, 描述)。"""
+    屏幕中部时直接忽略。返回 (是否成功, 描述)。
+
+    带 1s 确认等待（2026-11-15 对齐世界地图）：跨地图传送时小地图
+    随传送自动关闭，关闭动画期间仍能双帧匹配到渐隐帧——确认等待后
+    复检消失即不点击。否则点击落到游戏世界取消寻路、把人物带走
+    （玄枢轶闻跨地图领取实测：点了关闭的 5 轮全失败、没点的 2 轮全成功）。
+    """
     return close_map_if_open(win, MINI_MAP_OPEN_ICON, "小地图",
                              primary_button="primary",
-                             match_region=MINI_MAP_REGION, quiet=quiet)
+                             match_region=MINI_MAP_REGION,
+                             confirm_wait=1.0, quiet=quiet)
 
 
 def close_maps(win, quiet=False):
-    """关闭打开的地图（小地图在上层，先关）。世界地图关闭带 1s 确认
-    等待（见 close_world_map），只在复检仍打开时点击。"""
+    """关闭打开的地图（小地图在上层，先关）。小地图与世界地图关闭均带
+    1s 确认等待（见 close_mini_map / close_world_map），只在复检仍打开
+    时点击——关闭动画瞬态匹配不点击（点击会落到游戏世界取消寻路）。"""
     close_mini_map(win, quiet=quiet)
     close_world_map(win, quiet=quiet)

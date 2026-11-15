@@ -693,6 +693,55 @@ def clear_blocking_dialog(win, prefix="", max_clicks=3):
     return True, True
 
 
+# ---- 绿字选项行判定（2026-11-15 实机校准）----
+# 剧情对话里的**行内绿色高亮**（物品名/关键人名链接）与白色正文同处
+# 一个 OCR 行：魔王重聚牛魔王交付台词「来，就是这块传音石，少侠拿好，
+# 用它能找到魔王护卫的位置……」整行含「传音石」「魔王护卫」两个绿字
+# 链接。旧的「任一行有绿字即视为选项对话」把该剧情对话判成选项对话：
+# 点屏兜底永不触发，mowangchongju 又因「对话框在场」拒绝使用传音石 →
+# 2026-11-15 实机任务卡死（follow 空转 2 核 CPU、日志完全静默）。
+# 真正的选项行是**整行绿字**（+下划线），行内白色正文像素接近 0；
+# 行内高亮行白色正文像素远多于绿色像素。实测该帧：高亮行 正文字像素
+# 1368 / 绿 400（比值 3.42），纯白叙述行 正文字 1263 / 绿 23，选项行
+# 预期正文≈0。判据 = 正文字像素 ≤ OPTION_ROW_BODY_MAX 且 ≤ 绿 ×
+# OPTION_ROW_BODY_GREEN_MAX。
+OPTION_ROW_BODY_MAX = 200        # 选项行允许的正文（非绿亮字）像素上限
+OPTION_ROW_BODY_GREEN_MAX = 1.0  # 选项行正文/绿色像素比上限（选项行≈0）
+
+
+def green_option_row_present(img_np, region_items):
+    """对话区是否存在独立的绿字选项行（整行绿字，非行内绿字高亮）。
+
+    region_items：对话框区域的 OCR 行 [(txt, rect, score)]（含置信度
+    过滤，调用方已完成）。行内绿色高亮（物品名/人名链接混在白色正文
+    中）不算选项，返回 False——无选项剧情对话的点屏兜底须放行；整行
+    绿字（白色正文像素极少）返回 True，禁止点屏（防选项对话被点屏
+    关闭而丢选项）。标定见上方 OPTION_ROW_* 常量注释。
+    """
+    import numpy as np
+    for _txt, rect, _score in region_items:
+        if not task_tracker.is_green_text(img_np, rect):
+            continue
+        sub = np.asarray(img_np)[rect[1]:rect[3], rect[0]:rect[2]]
+        if sub.size == 0:
+            continue
+        r = sub[:, :, 0].astype(int)
+        g = sub[:, :, 1].astype(int)
+        b = sub[:, :, 2].astype(int)
+        green = ((g > task_tracker.GREEN_MIN_G)
+                 & (g > r + task_tracker.GREEN_DOMINANCE)
+                 & (g > b + task_tracker.GREEN_DOMINANCE))
+        green_px = int(green.sum())
+        if green_px <= 0:
+            continue
+        # 正文像素：任一通道亮于阈值且非绿色（白/浅黄/浅灰正文）
+        body_px = int((((r > 120) | (g > 120) | (b > 120)) & ~green).sum())
+        if body_px <= OPTION_ROW_BODY_MAX \
+                and body_px <= green_px * OPTION_ROW_BODY_GREEN_MAX:
+            return True
+    return False
+
+
 class StoryDialogDismisser:
     """无绿字选项的标准对话框（NPC 剧情台词）点屏幕中间推进/关闭。
 
@@ -711,7 +760,10 @@ class StoryDialogDismisser:
     ④ 对话框模板在场（img_np 为区域 OCR 掩码帧，特征块在 DIALOG_REGION
        内时掩码帧与整帧同分，实测 0.9886）——战斗 UI/背包/商店等无标准
        边框（商店面板实测 0.653 < 0.79）不误点世界；
-    ⑤ 对话区任何行都无绿字（带选项的对话不点）；
+    ⑤ 对话区无独立绿字选项行（带选项的对话不点）；行内绿色高亮
+       （物品名/人名链接与白色正文同一行，如魔王重聚传音石台词）
+       不算选项，照常推进（2026-11-15 实机卡死教训，见
+       green_option_row_present）；
     ⑥ 连续 2 轮询命中（单帧可能是渲染过渡），点击间隔 ≥1s（多屏对话
        逐页推进，防连点）；
     ⑦ 人物已站定（地图位置文字区域像素连续 STORY_MOVE_STATIC_POLLS
@@ -769,7 +821,7 @@ class StoryDialogDismisser:
             self.streak = 0
             self._reset_walk()
             return False
-        if any(task_tracker.is_green_text(img_np, it[1]) for it in region_items):
+        if green_option_row_present(img_np, region_items):
             self.streak = 0  # 有绿字选项：不是无选项剧情对话
             self._reset_walk()
             return False

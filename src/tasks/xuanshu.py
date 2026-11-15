@@ -12,11 +12,13 @@
 2. 没有任务时，寻路到任务位置（洛阳城 93,125）并领取任务：
    - 位置识别失败一律当不在目标坐标（不按 Alt+C 重试），直接寻路
    - 已在任务位置 5px 内 → 跳过寻路
-   - 在洛阳城其他位置 → 打开小地图点击任务点寻路
-   - 不在洛阳城 → 世界地图 → 洛阳城 → 小地图 → 点击任务点寻路
+   - 在洛阳城其他位置 → 打开小地图点击任务点寻路，主动关闭小地图
+   - 不在洛阳城 → 世界地图 → 洛阳城 → 小地图 → 点击任务点寻路（飞行旗
+     传送）；传送期间**不主动关小地图**，等其随传送自动关闭——传送关闭
+     动画里点关闭按钮会落到游戏世界取消寻路、把人物带走（2026-11-15）
    - 寻路完成判定：到达目标坐标附近；或坐标连续两次不变且出现领取按钮
      （距目标过近点击任务点无响应时的兜底）
-   - 寻路前/后清理地图与物品栏，到达后点击领取任务按钮
+   - 寻路前清理地图与物品栏，到达后点击领取任务按钮
    - 对话框 1 点击绿色选项「玄枢轶闻」，对话框 2 点击绿色选项「领取玄枢轶闻」
    - 校验任务追踪中出现玄枢轶闻任务
 3. 任务完成后（追踪中消失）继续返回领取下一轮（run_loop 主循环）；
@@ -56,6 +58,11 @@ MAP_POS_TOLERANCE = 5               # 坐标判定容差（±5 像素）
 MAP_CLICK_POS = (399, 435)          # 小地图上任务位置对应的点击点（窗口相对坐标）
 TASK_LINGQU_ICON = "task_lingqu.png"           # 领取任务按钮模板
 ARRIVE_TIMEOUT = 90                 # 等待寻路完成的超时（秒）
+# 跨地图传送后等小地图自关的上限（秒）。跨地图点任务点后游戏用飞行旗
+# 传送，小地图随传送自动关闭；传送关闭动画期间仍能匹配到关闭模板，
+# 此时主动点关闭按钮会落到游戏世界（取消寻路、人物被带走——2026-11-15
+# 实测：点了关闭的 5 个跨地图轮全失败、没点的 2 轮全成功），只等自关。
+MINI_MAP_AUTOCLOSE_WAIT = 3.0
 # 领取任务对话框中的绿色选项（两步）
 DIALOG_OPTION_XUANSHU = "玄枢轶闻"
 DIALOG_OPTION_LINGQU = "领取玄枢轶闻"
@@ -122,6 +129,41 @@ def _at_target(pos):
     return game_map.is_at_position(pos, LUOYANG_CITY,
                                    TASK_MAP_POS[0], TASK_MAP_POS[1],
                                    MAP_POS_TOLERANCE)
+
+
+def _wait_mini_map_autoclose(win, timeout=MINI_MAP_AUTOCLOSE_WAIT):
+    """等小地图自行关闭（跨地图传送路径用，不主动点击）。返回是否已关闭。
+
+    轮询 is_mini_map_open（每 0.3s 截一帧模板判定）：传送关闭动画期间
+    模板仍会命中（渐隐帧），但此时点击关闭按钮会落到游戏世界——只等
+    它消失，超时由调用方按常规关闭兜底。
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not game_map.is_mini_map_open(win):
+            return True
+        time.sleep(0.3)
+    return False
+
+
+def _close_after_map_click(win, cross_city):
+    """点击小地图任务点后的地图清理。
+
+    城内轮：小地图仍开着，主动关闭安全（关闭点击落在小地图面板上）。
+    跨地图轮：传送期间小地图自行关闭，主动点关闭按钮会落到游戏世界
+    （取消寻路、人物被带走——2026-11-15 实测：点了关闭的 5 个跨地图轮
+    全失败、没点的 2 轮全成功）→ 等它自关；超时仍在场（非传送路径，
+    如位置识别失败误走世界地图）才走带确认等待的 close_mini_map。
+    """
+    if not cross_city:
+        close_scene_panels(win, "玄枢轶闻")
+        return
+    if _wait_mini_map_autoclose(win):
+        log("[玄枢轶闻] 小地图已随传送自动关闭（未主动点击）", "INFO")
+        return
+    log(f"[玄枢轶闻] 小地图 {MINI_MAP_AUTOCLOSE_WAIT:.0f}s 内未自动关闭，"
+        f"按常规关闭", "WARN")
+    game_map.close_mini_map(win)
 
 
 def wait_arrive(win, timeout=ARRIVE_TIMEOUT):
@@ -305,6 +347,8 @@ def navigate_to_task(win):
     1. 场景前置：关闭已打开的小地图/世界地图/物品栏
     2. 识别当前位置（失败一律当不在目标坐标，不重试）
     3. 不在目标附近时寻路：在洛阳城 → 小地图点击任务点；不在 → 世界地图 → 洛阳城 → 小地图
+       （跨地图传送期间不主动关小地图，等其随传送自动关闭——见
+       _close_after_map_click）
     4. 等待寻路完成（到达目标附近；目标非坐标时位置稳定且出现领取按钮）
     5. 点击领取任务按钮 → 对话框 1 点「玄枢轶闻」→ 对话框 2 点「领取玄枢轶闻」
     6. 校验任务追踪中出现玄枢轶闻任务
@@ -330,6 +374,7 @@ def navigate_to_task(win):
         loc = f"{name}[{x},{y}]"
 
     at_target = _at_target(pos)
+    cross_city = False  # 经世界地图跨地图前往（飞行旗传送）
     if at_target:
         log(f"[玄枢轶闻] 已在任务位置附近（{loc}），跳过寻路", "SYS")
     elif name == LUOYANG_CITY:
@@ -341,14 +386,16 @@ def navigate_to_task(win):
         ok, info = game_map.open_mini_map_city(win, game_map.WORLD_MAP_LUOYANG_ICON, "洛阳城")
         if not ok:
             return False, info, None
+        cross_city = True  # 跨地图传送：小地图随传送自关，不能主动点关闭
         log(f"[玄枢轶闻] 不在洛阳城（{loc}），经世界地图前往洛阳城", "SYS")
 
     if not at_target:
         human_click(win, MAP_CLICK_POS[0], MAP_CLICK_POS[1])
         log(f"[玄枢轶闻] 已点击小地图任务点，自动寻路中", "SYS")
-        time.sleep(1.0)  # 等待自动寻路启动
-        # 清理：关闭仍打开的小地图（点击任务点后仍打开）、世界地图（通常已自动关闭）与物品栏
-        close_scene_panels(win, "玄枢轶闻")
+        time.sleep(1.0)  # 等待自动寻路/传送启动
+        # 清理：城内轮主动关闭仍打开的小地图（点击任务点后仍打开）；跨地图
+        # 轮等小地图随传送自动关闭（主动关会点到世界把人带走，2026-11-15）
+        _close_after_map_click(win, cross_city)
 
     # 等待寻路完成
     ok, info = wait_arrive(win)

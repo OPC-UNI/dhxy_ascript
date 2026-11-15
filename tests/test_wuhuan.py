@@ -296,11 +296,22 @@ def test_story_dialog_no_click_without_dialog_frame(monkeypatch):
 
 
 def test_story_dialog_no_click_with_green_option(monkeypatch):
-    """对话区有绿字选项（提交装备/巫医等）不是剧情对话，不点屏。"""
-    clicks = _story_env(monkeypatch, green=True)
+    """对话区有整行绿字选项（提交装备/巫医等）不是剧情对话，不点屏。
+
+    2026-11-15 起选项判定区分「整行绿字」与「行内绿字高亮」：选项行
+    为纯绿字（正文像素≈0），须用真实像素构造（见
+    dialog_common.green_option_row_present）。
+    """
+    from src.device import task_tracker
+    clicks = _story_env(monkeypatch, green=task_tracker.is_green_text)
+    frame = _BLANK_FRAME.copy()
+    l, t, r, b = _STORY_ITEMS[0][1]
+    w = r - l
+    for i in range(600):  # 纯绿字选项行（无白色正文）
+        frame[t + i // w, l + i % w] = (60, 220, 60)
     for _ in range(3):
         assert wuhuan._dismiss_story_dialog(
-            None, _STORY_ITEMS, _BLANK_FRAME) is False
+            None, _STORY_ITEMS, frame) is False
     assert clicks == []
 
 

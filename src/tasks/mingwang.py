@@ -113,8 +113,10 @@
    须高频率连点才能到达目标带；填充条停手会自动回退，进带后持续
    补点维持到窗口结束），标题消失即小游戏结束。
 6. 主循环（同玄枢轶闻）：完成一轮后回去领取下一轮，直到次数上限/
-   每日次数已满/任务栏无当前已实现任务；启动时追踪已有任务则跳过
-   领取直接续跑。返程由领取寻路（世界地图/小地图）兜底。
+   每日次数已满/任务栏无当前已实现任务/**今日任务全部完成**（点击
+   接取后出现「今日还请多加歇息，明日再来吧」→ 关闭山河名望面板后
+   结束，2026-11-15 用户规则）；启动时追踪已有任务则跳过领取直接
+   续跑。返程由领取寻路（世界地图/小地图）兜底。
 """
 import re
 import time
@@ -146,6 +148,7 @@ from ..device.dialog_common import (_click_green_option_once,  # 绿色选项点
                             _fuzzy_contains,           # 任务标题模糊匹配
                             clear_blocking_dialog,     # 对话框门控 + 点屏幕中间关闭
                             dialog_frame_score,        # 对话框模板门控分数
+                            green_option_row_present,  # 独立绿字选项行判定（行内高亮不算）
                             DIALOG_FRAME_THRESHOLD,
                             close_scene_panels)       # 场景面板清理（地图/物品栏）
 from ..workflows.follow import follow_task  # 共享任务跟踪引擎（跨任务零互引）
@@ -269,6 +272,17 @@ PANEL_OPEN_TIMEOUT = 8.0    # 打开面板/等待锚点出现的时限（秒）
 CLAIM_VERIFY_TIMEOUT = 6.0  # 点击接取后等待领取确认信号的时限（秒）
 CLAIM_DIALOG_TIMEOUT = 8.0  # 领取后等待对话框出现的时限（秒）
 TRACK_TASK_TIMEOUT = 12.0   # 领取后等待追踪面板出现「山河名望」的时限（秒）
+# ---- 今日任务全部完成（2026-11-15 用户规则）----
+# 点击接取后出现「今日还请多加歇息，明日再来吧」= 今日山河名望任务已
+# 全部完成：关闭山河名望面板，结束本次任务循环——不计完成次数、不再
+# 重试领取（接取按钮仍在，重试只会反复弹同一句提示）。
+# 该提示与玄枢轶闻「少侠已经完成5次任务，请明天再来吧」同为**非标准
+# 对话框**提示（无标准边框，对话模板门不命中）：须直接 OCR 对话区
+# （同 xuanshu 领取校验的 DAILY_LIMIT_TEXT 检测方式），不得加模板门控
+# （2026-11-15 用户指正）。匹配走 _dialog_text_present 模糊匹配（抗
+# OCR 单字误读/拆行），锚词按游戏原文维护（识别用有辨识度的整句片段，
+# 不要用「明日」这类泛词）。
+DAILY_FULL_TEXTS = ("今日还请多加歇息", "明日再来吧")
 # 期望领取优先级（高→低）：后续实现各任务执行流程后按该顺序选卡
 LEVEL_PRIORITY = ("高级", "中级", "初级")
 LEVEL_OCR_ALIASES = str.maketrans({"級": "级"})  # OCR 常把「级」读成繁体「級」
@@ -318,7 +332,7 @@ DIALOG_OPTION_MAP = {
     "总有人和我说火云戈壁里有什么城啥的，俺寻思这也不可能啊，他们一族不":"逆天魔大人派我过来帮忙",
     "有肉咱们一块吃，有酒咱们一块喝。":"牛魔王大人，逆天广大将派我前来见您。",
     # 魔王重聚（2026-11-15 实机）：魔王护卫战后把传音石交给魔王三大王
-    "那老牛派你过来，想说啥？":"这是牛魔王遣我送来的传音石。",
+    "那老牛派你过来":"这是牛魔王遣我送来的传音石。",
     "多么怀念当年俺们七个，还有小白，唉，都是往事了啊，但俺答应过的，俺":"是逆天魔遣我过来帮忙的。",
     "这天上来的消息应该还挺准的吧，俺也没那么指望吃上，可他们也别想吃上":"是逆天魔遣我过来帮忙的。"
 }
@@ -1329,8 +1343,18 @@ def _card_summary(cards):
 def _verify_claim(win, title, card_rect):
     """点击接取后的确认：接取按钮消失 或 任务进入追踪面板。
 
-    返回 (是否确认, 描述)。两个信号任一出现即成功；超时返回未确认
-    （调用方按已点击处理，避免重复点击接取）。
+    返回 (状态, 描述)；状态：
+    - "claimed"：接取按钮已消失 / 任务已进入追踪面板；
+    - "daily_done"：出现「今日还请多加歇息，明日再来吧」——今日任务
+      已全部完成（用户 2026-11-15 规则）；
+    - "unconfirmed"：超时未确认（调用方按已点击处理，避免重复点击接取）。
+
+    今日全部完成提示与玄枢轶闻「少侠已经完成5次任务，请明天再来吧」
+    同为**非标准对话框提示**（无标准边框，对话模板门不命中）——不能
+    用对话框模板门控，须像玄枢领取校验那样每轮直接区域 OCR 对话区
+    （2026-11-15 用户指正）。提示**先于**接取按钮判定：命中即认定
+    今日全部完成，无需等满确认窗口（面板仍在场时提示叠加在卡片区上，
+    「接取按钮消失=已领取」的信号会被干扰）。
     """
     deadline = time.time() + CLAIM_VERIFY_TIMEOUT
     next_track = 0.0
@@ -1342,11 +1366,18 @@ def _verify_claim(win, title, card_rect):
             time.sleep(0.5)
             continue
         bgr = _bgr_frame(img)
+        # 今日全部完成提示：非标准对话框，直接区域 OCR（同玄枢
+        # DAILY_LIMIT_TEXT 检测，见函数说明）
+        items, _ = game_map.ocr_region(img, task_tracker.DIALOG_REGION)
+        if _daily_full_dialog_present(items):
+            return "daily_done", (f"点击「{title}」接取后出现"
+                                  f"「{DAILY_FULL_TEXTS[0]}，"
+                                  f"{DAILY_FULL_TEXTS[1]}」")
         pt = game_map.match_frame_np(bgr, PANEL_JIEQU_ICON,
                                      threshold=PANEL_JIEQU_THRESHOLD,
                                      region=region, fallback=False)
         if pt is None:
-            return True, "接取按钮已消失"
+            return "claimed", "接取按钮已消失"
         now = time.time()
         if now >= next_track:
             next_track = now + 1.5
@@ -1355,9 +1386,41 @@ def _verify_claim(win, title, card_rect):
             if task_tracker.track_content_region(np.asarray(img)) is not None:
                 items, img_np = task_tracker.ocr_track(img)
                 if task_tracker.has_task_in(items, img_np, title):
-                    return True, "任务已进入追踪面板"
+                    return "claimed", "任务已进入追踪面板"
         time.sleep(0.5)
-    return False, "接取按钮仍在且追踪面板未出现任务"
+    return "unconfirmed", "接取按钮仍在且追踪面板未出现任务"
+
+
+def _daily_full_dialog_present(items):
+    """对话框文案是否为「今日还请多加歇息，明日再来吧」（今日全部完成）。
+
+    items：对话框区域 OCR 行；匹配走 _dialog_text_present（逐行 + 全文
+    拼接的模糊匹配，抗 OCR 单字误读/拆行）。
+    """
+    return any(_dialog_text_present(items, txt) for txt in DAILY_FULL_TEXTS)
+
+
+def _close_after_daily_full(win):
+    """今日全部完成：关闭山河名望面板（用户 2026-11-15 规则）。
+
+    今日全部完成提示是非标准对话框（无标准边框，同玄枢「请明天再来」
+    提示）——先按模板门控清一次标准对话框（若恰有其它标准对话在场），
+    再右键面板标题牌关闭山河名望面板；关闭失败最多重试 2 次（提示
+    漂浮文字可能短暂遮挡/吞点击，_close_shanhe_panel 每次都先复核
+    面板仍在才右键，重试幂等）。返回关闭结果描述。
+    """
+    had, _clicked = clear_blocking_dialog(win, "名望")
+    if had:
+        log("[名望] 今日全部完成：已关闭在场的标准对话框", "SYS")
+    desc = "山河名望面板未打开"
+    for attempt in (1, 2, 3):
+        ok, desc = _close_shanhe_panel(win)
+        if ok:
+            break
+        log(f"[名望] 今日全部完成：{desc}，第 {attempt} 次重试关闭面板", "WARN")
+        clear_blocking_dialog(win, "名望")
+        time.sleep(0.5)
+    return desc
 
 
 def _pick_card(cards):
@@ -1405,8 +1468,10 @@ def claim_panel_task(win):
     6 卡（级别+标题）→ 按 高级>中级>初级 + 卡片顺序选定目标（未找到
     时 1s 后复扫一次，防 OCR 瞬态）→ 在该卡内匹配接取按钮并点击 →
     确认（按钮消失/任务进追踪面板）。
-    返回 (状态, 描述)；状态：claimed 已点击领取 / not_found 无已实现
-    任务 / fail 面板或接取按钮未找到。
+    返回 (状态, 描述)；状态：claimed 已点击领取 / daily_done 今日任务
+    已全部完成（点击接取后出现「今日还请多加歇息，明日再来吧」，已
+    关闭山河名望面板，用户 2026-11-15 规则）/ not_found 无已实现任务 /
+    fail 面板或接取按钮未找到。
     """
     cards, _anchor, img = _scan_panel_cards(win)
     if cards is None:
@@ -1443,8 +1508,14 @@ def claim_panel_task(win):
     human_click(win, pt[0], pt[1])
     log(f"[名望] 已点击{level_desc}任务「{title}」的接取按钮 @({pt[0]},{pt[1]})"
         f"（匹配 {score:.3f}）", "SYS")
-    ok, vinfo = _verify_claim(win, title, card)
-    if ok:
+    vstate, vinfo = _verify_claim(win, title, card)
+    if vstate == "daily_done":
+        # 今日任务已全部完成（用户 2026-11-15 规则）：关闭山河名望
+        # 面板，结束本次任务——不计数、不再重试领取
+        cdesc = _close_after_daily_full(win)
+        log(f"[名望] {vinfo}——今日山河名望任务已全部完成，{cdesc}", "SYS")
+        return "daily_done", f"{vinfo}——今日任务已全部完成（{cdesc}）"
+    if vstate == "claimed":
         return "claimed", f"已领取{level_desc}任务「{title}」（{vinfo}）"
     return "claimed", (f"已点击{level_desc}任务「{title}」的接取按钮，未检测到"
                        f"确认信号（{vinfo}）——按已领取处理，不重复点击")
@@ -2166,7 +2237,7 @@ def _seal_maybe_advance_dialog(win, items, img_np):
     if not region_items:
         _seal_dlg_streak = 0
         return False
-    if any(task_tracker.is_green_text(img_np, it[1]) for it in region_items):
+    if green_option_row_present(img_np, region_items):
         _seal_dlg_streak = 0  # 有绿字选项：交给选项表处理，不点屏
         return False
     _seal_dlg_streak += 1
@@ -3402,8 +3473,9 @@ def run_cycle(win, race=None):
     种族判定在 run_loop 中需要领取时才执行（种族不随轮次变化）。
     race：已判定种族；任务已从追踪面板消失但种族未判定时本轮跳过
     领取（下一轮 run_loop 会重判，不猜测领取点）。
-    返回 (状态, 描述)；状态：done 任务完成 / not_found 无目标任务 /
-    fail 本轮失败。
+    返回 (状态, 描述)；状态：done 任务完成 / daily_done 今日任务已全部
+    完成（提示对话框 + 面板已关闭）/ not_found 无目标任务 / fail 本轮
+    失败。
     """
     # 已有追踪任务：跳过领取直接跟踪到完成（对齐玄枢轶闻 run_cycle）
     if _task_in_tracker(win):
@@ -3417,6 +3489,10 @@ def run_cycle(win, race=None):
         return "fail", info
     debug_overlay.set_phase("领取名望任务")
     status, info = claim_panel_task(win)
+    if status == "daily_done":
+        # 今日任务已全部完成（用户 2026-11-15 规则）：面板已关闭，
+        # 直接结束本次任务（不进入跟踪、不计数）
+        return "daily_done", info
     if status != "claimed":
         return status, info
     # 领取已点击成功：跟踪未完成也按 fail 返回（任务已在追踪面板，
@@ -3522,6 +3598,8 @@ def run_loop(win, cycle_interval=3.0):
     1. 完成任务次数达到设置的次数上限（通用设置-任务次数）
     2. 任务栏不存在当前已实现的任务（如「蛟魔复仇」「五庄封印」「沙都修罗」）
     3. 种族不在已实现领取点内（当前实现魔族/仙族）
+    4. 今日任务全部完成：点击接取后出现「今日还请多加歇息，明日再来吧」
+       （2026-11-15 用户规则，面板已由领取链路关闭）
 
     启动时追踪面板已有「山河名望」→ 跳过种族判定与领取，直接续跑跟踪
     （对齐玄枢轶闻 run_cycle 的已有任务分支）。种族判定按角色持久缓存：
@@ -3569,6 +3647,10 @@ def run_loop(win, cycle_interval=3.0):
             log(f"[名望] {info}（{done}/{total}）", "SYS")
             if 0 < max_rounds <= done:
                 return f"已完成 {done} 次名望任务，达到次数上限 {max_rounds}"
+        elif status == "daily_done":
+            # 今日任务全部完成（用户 2026-11-15 规则）：不再重试领取
+            log(f"[名望] {info}", "SYS")
+            return f"名望今日任务已全部完成：{info}"
         elif status == "not_found":
             # 卡片列表本轮内不会变化（每日刷新），重试无意义
             log(f"[名望] {info}", "WARN")

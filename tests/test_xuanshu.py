@@ -919,6 +919,92 @@ def test_wait_claim_still_false_while_walking(monkeypatch):
     assert ok is False and "站定" in info
 
 
+# ---- 跨地图传送后的地图清理（2026-11-15 用户实机） ----
+# 现象：不在洛阳城时经世界地图 → 洛阳 → 小地图点任务点，游戏用飞行旗
+# 传送、小地图随传送自关；关闭动画期间仍能双帧匹配到渐隐帧，此时主动
+# 点关闭按钮落到游戏世界——取消寻路、把人物从领取点带走 → 站定门超时
+# 或错误位置点到「任务」浮标，领取失败。当日实测：点了关闭的 5 个跨地图
+# 轮全失败、没点（小地图已自关）的 2 轮全成功。修复：跨地图轮只等自关，
+# 城内轮才主动关。
+
+def test_close_after_map_click_cross_city_waits_autoclose(monkeypatch):
+    """跨地图轮：小地图渐隐后消失 → 只等待，不点任何关闭。"""
+    monkeypatch.setattr(xuanshu, "time", _GoneClock())
+    seq = [True, True, False]  # 前两次仍匹配（渐隐帧），随后消失
+    monkeypatch.setattr(xuanshu.game_map, "is_mini_map_open",
+                        lambda win: seq.pop(0) if seq else False)
+    calls = []
+    monkeypatch.setattr(xuanshu.game_map, "close_mini_map",
+                        lambda *a, **k: calls.append("close_mini_map"))
+    monkeypatch.setattr(xuanshu, "close_scene_panels",
+                        lambda *a, **k: calls.append("close_panels"))
+    xuanshu._close_after_map_click(_GuardWin(), cross_city=True)
+    assert calls == []
+
+
+def test_close_after_map_click_cross_city_timeout_falls_back(monkeypatch):
+    """跨地图轮小地图未自关（非传送路径，如位置识别失败误走世界地图）：
+    超时后走带确认等待的常规关闭兜底，不整体清屏。"""
+    monkeypatch.setattr(xuanshu, "time", _GoneClock())
+    monkeypatch.setattr(xuanshu.game_map, "is_mini_map_open",
+                        lambda win: True)
+    calls = []
+    monkeypatch.setattr(xuanshu.game_map, "close_mini_map",
+                        lambda *a, **k: calls.append("close_mini_map"))
+    monkeypatch.setattr(xuanshu, "close_scene_panels",
+                        lambda *a, **k: calls.append("close_panels"))
+    xuanshu._close_after_map_click(_GuardWin(), cross_city=True)
+    assert calls == ["close_mini_map"]
+
+
+def test_close_after_map_click_in_city_closes_panels(monkeypatch):
+    """城内轮：小地图仍开着，主动 close_scene_panels（点击落在面板上安全）。"""
+    calls = []
+    monkeypatch.setattr(xuanshu, "close_scene_panels",
+                        lambda win, prefix="", quiet=False:
+                        calls.append(("panels", prefix, quiet)))
+    monkeypatch.setattr(xuanshu.game_map, "close_mini_map",
+                        lambda *a, **k: calls.append("close_mini_map"))
+    xuanshu._close_after_map_click(_GuardWin(), cross_city=False)
+    assert calls == [("panels", "玄枢轶闻", False)]
+
+
+def _patch_navigate_env(monkeypatch, pos, calls):
+    """装配 navigate_to_task 寻路段依赖（到达桩失败返回，不触达领取段）。"""
+    monkeypatch.setattr(xuanshu, "time", _GoneClock())
+    monkeypatch.setattr(xuanshu, "is_in_battle", lambda win: False)
+    monkeypatch.setattr(xuanshu, "close_scene_panels",
+                        lambda win, *a, **k: calls.append("close_panels"))
+    monkeypatch.setattr(xuanshu, "human_click",
+                        lambda win, x, y: calls.append("click_map_point"))
+    monkeypatch.setattr(xuanshu.game_map, "read_map_position", lambda win: pos)
+    monkeypatch.setattr(xuanshu.game_map, "open_mini_map", lambda win: (True, "ok"))
+    monkeypatch.setattr(xuanshu.game_map, "open_mini_map_city",
+                        lambda *a, **k: (True, "ok"))
+    monkeypatch.setattr(xuanshu.game_map, "is_mini_map_open", lambda win: False)
+    monkeypatch.setattr(xuanshu.game_map, "close_mini_map",
+                        lambda *a, **k: calls.append("close_mini_map"))
+    monkeypatch.setattr(xuanshu, "wait_arrive", lambda win: (False, "到达桩未完成"))
+
+
+def test_navigate_to_task_cross_city_does_not_press_close(monkeypatch):
+    """不在洛阳城：点完任务点不主动关小地图（等传送自关）→ 无关闭点击。"""
+    calls = []
+    _patch_navigate_env(monkeypatch, ("长安", 100, 100), calls)
+    ok, info, pre = xuanshu.navigate_to_task(_GuardWin())
+    assert ok is False and info == "到达桩未完成" and pre is None
+    assert calls == ["close_panels", "click_map_point"]
+
+
+def test_navigate_to_task_in_city_closes_after_click(monkeypatch):
+    """在洛阳城：点完任务点照旧主动清理（close_scene_panels）。"""
+    calls = []
+    _patch_navigate_env(monkeypatch, ("洛阳城", 100, 100), calls)
+    ok, info, pre = xuanshu.navigate_to_task(_GuardWin())
+    assert ok is False and info == "到达桩未完成" and pre is None
+    assert calls == ["close_panels", "click_map_point", "close_panels"]
+
+
 # ---- 战斗结束补点恢复（battle_resume_reclick，五环 2026-11-14 用户规则） ----
 # 五环点任务链接发起的自动寻路会被战斗打断：正常情况胜利推进使子目标
 # 链接变化、follow 点新链接；异常情况（战败「你输了」/遭遇战打断后未

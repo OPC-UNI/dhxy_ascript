@@ -655,6 +655,88 @@ def test_claim_panel_task_claims_jiaomo(monkeypatch):
     assert clicks == [(487, 423, "primary")]
 
 
+def test_daily_full_dialog_present_fuzzy():
+    """「今日还请多加歇息，明日再来吧」识别（抗 OCR 单字误读）。"""
+    assert mingwang._daily_full_dialog_present(
+        [("今日还请多加歇息，明日再来吧", [500, 380, 900, 410], 0.99)])
+    assert mingwang._daily_full_dialog_present(
+        [("今日还请多加唔息，明日再来吧", [500, 380, 900, 410], 0.99)])
+    assert not mingwang._daily_full_dialog_present(
+        [("少侠准备好清理地图了吗？", [500, 380, 900, 410], 0.99)])
+
+
+def test_claim_panel_task_daily_full(monkeypatch):
+    """接取后出现「今日还请多加歇息，明日再来吧」→ daily_done 并关面板。
+
+    2026-11-15 用户规则：今日任务全部完成时接取按钮仍在。该提示与
+    玄枢轶闻「少侠已经完成5次任务」同为**非标准对话框**——对话模板
+    门控不命中（本用例把 dialog_frame_score 桩成 0.1 专门锁住这一点），
+    必须直接区域 OCR 检测；且提示判定须先于「接取按钮消失」判定。
+    """
+    rects = _live_rects()
+
+    def fake_ocr(img, region):
+        if tuple(region) == tuple(mingwang.task_tracker.DIALOG_REGION):
+            return [("今日还请多加歇息，明日再来吧",
+                     [500, 380, 900, 410], 0.99)], np.asarray(img)
+        for key, rect in rects.items():
+            if tuple(region) == tuple(rect):
+                return LIVE_CARD_ITEMS[key], np.asarray(img)
+        return [], np.asarray(img)
+
+    monkeypatch.setattr(mingwang.game_map, "ocr_region", fake_ocr)
+    # 非标准对话框：模板门不命中也要能检测
+    monkeypatch.setattr(mingwang, "dialog_frame_score", lambda img: 0.1)
+    monkeypatch.setattr(mingwang.time, "sleep", lambda s: None)
+    clicks = []
+    monkeypatch.setattr(mingwang, "human_click",
+                        lambda w, x, y, button="primary":
+                        clicks.append((x, y, button)))
+    closed = []
+    monkeypatch.setattr(mingwang, "clear_blocking_dialog",
+                        lambda w, p="": closed.append("dialog") or (True, True))
+    monkeypatch.setattr(mingwang, "_close_shanhe_panel",
+                        lambda w: closed.append("panel")
+                        or (True, "山河名望面板已关闭"))
+    win = _FakeWin([_pil(_live_frame(True))])
+    status, info = mingwang.claim_panel_task(win)
+    assert status == "daily_done"
+    assert "今日任务已全部完成" in info
+    # 接取只点一次；先关提示对话框、再关面板
+    assert clicks == [(487, 423, "primary")]
+    assert closed == ["dialog", "panel"]
+
+
+def test_run_cycle_daily_full(monkeypatch):
+    """领取链路返回 daily_done → run_cycle 直接透传，不进入跟踪。"""
+    monkeypatch.setattr(mingwang, "_task_in_tracker", lambda w: False)
+    monkeypatch.setattr(mingwang, "_open_claim_panel",
+                        lambda w, race: (True, "已打开山河名望任务领取面板"))
+    monkeypatch.setattr(mingwang, "claim_panel_task",
+                        lambda w: ("daily_done", "今日任务已全部完成"))
+    monkeypatch.setattr(mingwang, "_post_claim_flow",
+                        lambda w: (_ for _ in ()).throw(
+                            AssertionError("daily_done 不应进入跟踪")))
+    status, info = mingwang.run_cycle(object(), race="魔族")
+    assert status == "daily_done" and "全部完成" in info
+
+
+def test_run_loop_stops_on_daily_full(monkeypatch):
+    """今日任务全部完成 → 主循环结束（不计次、不重试领取）。"""
+    monkeypatch.setattr(mingwang, "load_task_counts", lambda: {"名望": 5})
+    monkeypatch.setattr(mingwang.app_utils, "task_progress_done",
+                        lambda w, m: 0)
+    monkeypatch.setattr(mingwang.app_utils, "task_progress_add",
+                        lambda w, m, d: (_ for _ in ()).throw(
+                            AssertionError("daily_done 不应计数")))
+    monkeypatch.setattr(mingwang, "_load_cached_race", lambda w: "魔族")
+    monkeypatch.setattr(mingwang, "_task_in_tracker", lambda w: False)
+    monkeypatch.setattr(mingwang, "run_cycle",
+                        lambda w, race=None: ("daily_done", "今日任务已全部完成"))
+    info = mingwang.run_loop(object())
+    assert "今日任务已全部完成" in info and "达到次数上限" not in info
+
+
 def test_dismiss_claim_dialog_uses_frame_gate(monkeypatch):
     """领取后对话框：无已知选项 → 调 clear_blocking_dialog 点屏关闭。"""
     win = _FakeWin([_pil(_noise_bgr(seed=1))])

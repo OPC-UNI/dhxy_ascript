@@ -54,6 +54,11 @@ MOWANG_ABSENT_RESET = 5        # 触发词连续缺失轮询数 → 状态复位
 MOWANG_USE_RETRY_AFTER = 8.0   # 两次使用之间的最小间隔（秒；提示未读出时的
                                # 重试节奏，正常按到达节奏更快）
 MOWANG_USE_MAX = 40            # 单任务使用次数安全上限（实测 7 次收敛）
+MOWANG_DIALOG_WAIT_LOG = 10.0  # 对话框在场等待日志限频（秒）：处理器每轮询
+                               # 都被调用，仅零操作等待（对话由 follow 引擎
+                               # 推进），静默会让「卡在对话」无从排查
+                               # （2026-11-15 实机：点屏兜底误判导致空转，
+                               # 日志完全无迹可寻）
 # 中央提示框（2026-11-15 实机标定：文字两行、x≈455-945、y≈405-470；
 # 区域 OCR 约 0.1-0.2s，最多轮询 MOWANG_HINT_TIMEOUT 秒）
 MOWANG_HINT_REGION = (450, 400, 960, 480)
@@ -101,6 +106,7 @@ _uses = 0              # 已使用次数（安全上限）
 _missing = 0           # 触发词连续缺失轮询数（≥MOWANG_ABSENT_RESET 复位）
 _target_map = None     # 提示给出的目标地图（WORLD_MAP_LABELS 键）
 _hint_misses = 0       # 连续未读出提示次数（日志/告警）
+_dialog_log_at = 0.0   # 对话框在场等待日志上次时间（限频）
 _walk = None           # 行走状态（dict，见 _walk_click/_walk_poll）
 # 共享帧缓存（frame_fn 未注入时的兜底；按 items 对象 id 缓存）
 _FRAME_UNSET = object()
@@ -113,12 +119,13 @@ _frame_pos = _FRAME_UNSET
 def reset():
     """状态复位（新任务领取成功/跨任务防残留）。"""
     global _use_at, _uses, _missing, _target_map, _hint_misses, _walk
-    global _frame_key, _frame_rgb, _frame_bgr, _frame_pos
+    global _dialog_log_at, _frame_key, _frame_rgb, _frame_bgr, _frame_pos
     _use_at = 0.0
     _uses = 0
     _missing = 0
     _target_map = None
     _hint_misses = 0
+    _dialog_log_at = 0.0
     _walk = None
     _frame_key = None
     _frame_rgb = _frame_bgr = None
@@ -448,6 +455,7 @@ def handle(win, items, img_np, frame_fn=None, use_item=None,
     返回是否已处理。
     """
     global _missing, _use_at, _uses, _target_map, _hint_misses, _walk
+    global _dialog_log_at
     sig = _sig(items)
     if not _trigger(sig):
         _missing += 1
@@ -466,7 +474,11 @@ def handle(win, items, img_np, frame_fn=None, use_item=None,
         return False  # 使用最小间隔未到（首次 _use_at=0 立即执行）
     _rgb, bgr = _frame(win, items, frame_fn)
     if bgr is not None and dialog_frame_score(bgr) >= DIALOG_FRAME_THRESHOLD:
-        return False  # 对话框在场：交给引擎对话处理，稍后再用道具
+        # 对话框在场：交给引擎对话处理，稍后再用道具（限频日志，防静默卡死）
+        if now - _dialog_log_at >= MOWANG_DIALOG_WAIT_LOG:
+            _dialog_log_at = now
+            log(f"{prefix}传音石：对话框在场，等对话推进后再使用", "INFO")
+        return False
     if _uses >= MOWANG_USE_MAX:
         if _uses == MOWANG_USE_MAX:
             _uses += 1

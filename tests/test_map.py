@@ -146,3 +146,68 @@ def test_resolve_world_map_name():
     assert game_map.resolve_world_map_name("长安东") == "长安东"
     assert game_map.resolve_world_map_name("不存在的地") is None
     assert game_map.resolve_world_map_name("") is None
+
+
+# ---- 关闭地图：确认等待（动画瞬态不点击，2026-11-15 玄枢轶闻跨地图传送） ----
+# 跨地图传送时小地图随传送自动关闭，关闭动画期间仍能双帧匹配到渐隐帧；
+# 此时点击关闭按钮会落到游戏世界取消寻路、把人物带走（玄枢轶闻实测：
+# 点了关闭的 5 个跨地图轮全失败、没点的 2 轮全成功）→ 关小地图对齐
+# 世界地图，带 1s 确认等待，复检消失即不点击。
+
+class _Clock:
+    """可控时钟：sleep 推进虚拟时间，time 返回虚拟时间。"""
+
+    def __init__(self):
+        self.t = 0.0
+
+    def time(self):
+        return self.t
+
+    def sleep(self, dt):
+        self.t += dt
+
+
+class _FrameWin:
+    """capture 返回固定合成帧的窗口桩（close_map_if_open 只取帧给匹配）。"""
+
+    def __init__(self):
+        self.frame = np.zeros((20, 20, 3), dtype=np.uint8)
+
+    def capture(self, force_activate=False):
+        return self.frame
+
+
+def _patch_close_env(monkeypatch, hits):
+    """装配 close_map_if_open 依赖：match_frame_np 按序返回 hits（None=未命中）。"""
+    monkeypatch.setattr(game_map, "time", _Clock())
+    seq = list(hits)
+
+    def fake_match(frame, icon, region=None, fallback=True):
+        return seq.pop(0) if seq else None
+
+    monkeypatch.setattr(game_map, "match_frame_np", fake_match)
+    monkeypatch.setattr(game_map, "log", lambda *a, **k: None)
+    clicks = []
+
+    def fake_click(win, x, y, button="primary"):
+        clicks.append((x, y, button))
+
+    monkeypatch.setattr(game_map, "human_click", fake_click)
+    return clicks
+
+
+def test_close_mini_map_transient_no_click(monkeypatch):
+    """双帧命中但确认等待后复检消失（传送/关闭动画瞬态）→ 不点击。"""
+    clicks = _patch_close_env(monkeypatch, [(1111, 227), (1111, 227), None])
+    ok, info = game_map.close_mini_map(_FrameWin())
+    assert ok is True and "自动关闭" in info
+    assert clicks == []  # 没有点到世界
+
+
+def test_close_mini_map_still_open_clicks(monkeypatch):
+    """确认等待后仍打开（真开着）→ 点击模板位置，复检消失即关闭。"""
+    clicks = _patch_close_env(monkeypatch,
+                              [(1111, 227), (1111, 227), (1111, 227), None])
+    ok, info = game_map.close_mini_map(_FrameWin())
+    assert ok is True and "关闭" in info
+    assert clicks == [(1111, 227, "primary")]
