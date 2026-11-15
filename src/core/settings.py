@@ -384,6 +384,23 @@ def save_battle_only_auto_rejoin(on):
     return {"status": "success"}
 
 
+# ---- 仅战斗自动抢盒子（UI 开关，角色设置持久化，默认关闭；仅战斗
+#      不判定队伍身份（known_leader 恒为未知），开关开启才在福源广泽盒
+#      出现时点「我需要」——实现见 battle._handle_hezi） ----
+_BATTLE_ONLY_HEZI_KEY = "battle_only_hezi"
+
+
+def load_battle_only_hezi():
+    """读取仅战斗自动抢盒子开关（首次默认关闭）。"""
+    return bool(role_settings.get(_BATTLE_ONLY_HEZI_KEY, False))
+
+
+def save_battle_only_hezi(on):
+    """保存仅战斗自动抢盒子开关，返回操作结果。"""
+    role_settings.set_value(_BATTLE_ONLY_HEZI_KEY, bool(on))
+    return {"status": "success"}
+
+
 # ---- 五倍自动归队（UI 开关，角色设置持久化；默认开启。仅非队长
 #      生效：战斗死亡落轮回司后自动打开队伍面板点「归队」传送回队长，
 #      实现见 team.maybe_rejoin（归队按钮模板待用户提供）） ----

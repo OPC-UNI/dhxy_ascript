@@ -113,6 +113,21 @@ def test_settings_spec_rejoin_and_check_team_defaults(monkeypatch):
         assert load() == spec[key]
 
 
+def test_battle_only_hezi_default_off_and_roundtrip():
+    """仅战斗自动抢盒子（2026-11-15 用户需求）：方案快照注册键、首次
+    默认关闭（与 load_* 一致），保存后可读回。"""
+    from src.core import schemes
+    from src.app.control_window import (_BATTLE_ONLY_HEZI_KEY,
+                                        load_battle_only_hezi, save_battle_only_hezi)
+    spec = schemes._settings_spec()
+    assert spec[_BATTLE_ONLY_HEZI_KEY] is False
+    assert load_battle_only_hezi() is False
+    assert save_battle_only_hezi(True)["status"] == "success"
+    assert load_battle_only_hezi() is True
+    assert save_battle_only_hezi(False)["status"] == "success"
+    assert load_battle_only_hezi() is False
+
+
 def test_settings_spec_kick_away_defaults(monkeypatch):
     """暂离超时自动请离开关/分钟（修罗/五倍各一套）：方案快照默认开启、
     默认 5 分钟；load_* 首次默认与 spec 一致；保存越界拒绝。"""

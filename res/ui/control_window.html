@@ -332,6 +332,15 @@
             padding: 10px 12px 12px; border-top: 1px solid var(--border);
         }
         .task-card.open .task-accordion { display: flex; }
+        /* 任务设置内的角色分组标题（队长/队员/队长执行/组号）：把长设置列表
+           按「谁生效」分区——细分隔线 + 亮色标签 + 灰色说明 */
+        .set-sect {
+            display: flex; align-items: baseline; gap: 8px;
+            padding-top: 6px; border-top: 1px dashed var(--border2);
+            color: var(--accent); font-size: 12px; font-family: "微软雅黑";
+        }
+        .task-accordion .group-title + .set-sect { padding-top: 0; border-top: none; }
+        .set-sect .sect-hint { color: var(--text-dim); font-size: 11px; }
         /* ---- 运行看板 ---- */
         #page-dash { gap: 10px; }
         /* 覆盖 .card 的 column 方向：印章/信息/操作横排 */
@@ -736,9 +745,10 @@
                         <button class="th-btn" onclick="count('修罗', 1)">＋</button>
                     </div>
                 </div>
-                <!-- 修罗设置手风琴：检查队伍 + 最少人数 + 必须种族 + 巫医 + 组号 -->
+                <!-- 修罗设置手风琴：按生效对象分组（队长 / 队员 / 队长执行 / 组号） -->
                 <div class="task-accordion">
                     <div class="group-title">修罗设置</div>
+                    <div class="set-sect"><span>队长</span><span class="sect-hint">检查队伍 / 补人喊话 / 请离 / 人数要求</span></div>
                     <label class="switch-row">
                         <input type="checkbox" id="xiuluo-check-team">
                         <span class="switch-track"></span>
@@ -749,11 +759,26 @@
                         <span class="switch-track"></span>
                         <span>自动创建队伍</span>
                     </label>
+                    <div class="group-row">
+                        <span class="group-label">最少人数</span>
+                        <div class="group-ctrl">
+                            <button class="th-btn" onclick="xiuluoMin(-1)">−</button>
+                            <span class="th-val" id="xiuluo-min">5</span>
+                            <button class="th-btn" onclick="xiuluoMin(1)">＋</button>
+                        </div>
+                    </div>
+                    <div class="group-sub">必须有的种族</div>
+                    <div class="radio-grid race-grid" id="xiuluo-race-grid"></div>
                     <label class="switch-row">
-                        <input type="checkbox" id="xiuluo-auto-rejoin">
+                        <input type="checkbox" id="xiuluo-shout">
                         <span class="switch-track"></span>
-                        <span>自动归队</span>
+                        <span>缺人自动喊话</span>
                     </label>
+                    <div class="group-row shout-row">
+                        <span class="group-label">喊话内容</span>
+                        <input type="text" id="xiuluo-shout-text" class="shout-input"
+                               maxlength="60" placeholder="百次修罗来人，效率队，来{种族}">
+                    </div>
                     <label class="switch-row">
                         <input type="checkbox" id="xiuluo-auto-kick-away">
                         <span class="switch-track"></span>
@@ -767,16 +792,18 @@
                             <button class="th-btn" onclick="xiuluoKickAwayMinutes(1)">＋</button>
                         </div>
                     </div>
+                    <div class="set-sect"><span>队员</span><span class="sect-hint">非队长生效（队长一定自动抢盒子）</span></div>
                     <label class="switch-row">
-                        <input type="checkbox" id="xiuluo-shout">
+                        <input type="checkbox" id="xiuluo-auto-rejoin">
                         <span class="switch-track"></span>
-                        <span>缺人自动喊话</span>
+                        <span>自动归队</span>
                     </label>
-                    <div class="group-row shout-row">
-                        <span class="group-label">喊话内容</span>
-                        <input type="text" id="xiuluo-shout-text" class="shout-input"
-                               maxlength="60" placeholder="百次修罗来人，效率队，来{种族}">
-                    </div>
+                    <label class="switch-row">
+                        <input type="checkbox" id="xiuluo-hezi">
+                        <span class="switch-track"></span>
+                        <span>自动抢盒子</span>
+                    </label>
+                    <div class="set-sect"><span>队长执行</span><span class="sect-hint">仅队长走 NPC，组号队员自动跟随；非队长开关无效</span></div>
                     <label class="switch-row">
                         <input type="checkbox" id="xiuluo-auto-wuyi">
                         <span class="switch-track"></span>
@@ -803,21 +830,7 @@
                             <button class="th-btn" onclick="xiuluoRepairInterval(1)">＋</button>
                         </div>
                     </div>
-                    <div class="group-row">
-                        <span class="group-label">最少人数</span>
-                        <div class="group-ctrl">
-                            <button class="th-btn" onclick="xiuluoMin(-1)">−</button>
-                            <span class="th-val" id="xiuluo-min">5</span>
-                            <button class="th-btn" onclick="xiuluoMin(1)">＋</button>
-                        </div>
-                    </div>
-                    <div class="group-sub">必须有的种族</div>
-                    <div class="radio-grid race-grid" id="xiuluo-race-grid"></div>
-                    <label class="switch-row">
-                        <input type="checkbox" id="xiuluo-hezi">
-                        <span class="switch-track"></span>
-                        <span>自动抢盒子</span>
-                    </label>
+                    <div class="set-sect"><span>组号</span><span class="sect-hint">一窗口多账号</span></div>
                     <label class="switch-row">
                         <input type="checkbox" id="xiuluo-tab-group">
                         <span class="switch-track"></span>
@@ -836,14 +849,10 @@
                         <button class="th-btn" onclick="count('五倍', 1)">＋</button>
                     </div>
                 </div>
-                <!-- 五倍设置手风琴：抢盒子 + 检查队伍（固定 5 人）+ 暂离请离 + 巫医 + 组号 -->
+                <!-- 五倍设置手风琴：按生效对象分组（队长 / 队员 / 队长执行 / 组号） -->
                 <div class="task-accordion">
                     <div class="group-title">五倍设置</div>
-                    <label class="switch-row">
-                        <input type="checkbox" id="wubei-hezi">
-                        <span class="switch-track"></span>
-                        <span>自动抢盒子</span>
-                    </label>
+                    <div class="set-sect"><span>队长</span><span class="sect-hint">检查队伍 / 补人喊话 / 请离 / 任务筛选</span></div>
                     <label class="switch-row">
                         <input type="checkbox" id="wubei-check-team">
                         <span class="switch-track"></span>
@@ -855,10 +864,15 @@
                         <span>自动创建队伍</span>
                     </label>
                     <label class="switch-row">
-                        <input type="checkbox" id="wubei-auto-rejoin">
+                        <input type="checkbox" id="wubei-shout">
                         <span class="switch-track"></span>
-                        <span>自动归队</span>
+                        <span>缺人自动喊话</span>
                     </label>
+                    <div class="group-row shout-row">
+                        <span class="group-label">喊话内容</span>
+                        <input type="text" id="wubei-shout-text" class="shout-input"
+                               maxlength="60" placeholder="百次五倍来人，效率队">
+                    </div>
                     <label class="switch-row">
                         <input type="checkbox" id="wubei-auto-kick-away">
                         <span class="switch-track"></span>
@@ -873,15 +887,27 @@
                         </div>
                     </div>
                     <label class="switch-row">
-                        <input type="checkbox" id="wubei-shout">
+                        <input type="checkbox" id="wubei-kuimulang">
                         <span class="switch-track"></span>
-                        <span>缺人自动喊话</span>
+                        <span>领取奎木狼任务（关闭则自动重领替换）</span>
                     </label>
-                    <div class="group-row shout-row">
-                        <span class="group-label">喊话内容</span>
-                        <input type="text" id="wubei-shout-text" class="shout-input"
-                               maxlength="60" placeholder="百次五倍来人，效率队">
-                    </div>
+                    <label class="switch-row">
+                        <input type="checkbox" id="wubei-suoyaowang" disabled>
+                        <span class="switch-track"></span>
+                        <span>领取锁妖网任务（暂不可用）</span>
+                    </label>
+                    <div class="set-sect"><span>队员</span><span class="sect-hint">非队长生效（队长一定自动抢盒子）</span></div>
+                    <label class="switch-row">
+                        <input type="checkbox" id="wubei-auto-rejoin">
+                        <span class="switch-track"></span>
+                        <span>自动归队</span>
+                    </label>
+                    <label class="switch-row">
+                        <input type="checkbox" id="wubei-hezi">
+                        <span class="switch-track"></span>
+                        <span>自动抢盒子</span>
+                    </label>
+                    <div class="set-sect"><span>队长执行</span><span class="sect-hint">仅队长走 NPC，组号队员自动跟随；非队长开关无效</span></div>
                     <label class="switch-row">
                         <input type="checkbox" id="wubei-auto-wuyi">
                         <span class="switch-track"></span>
@@ -908,16 +934,7 @@
                             <button class="th-btn" onclick="wubeiRepairInterval(1)">＋</button>
                         </div>
                     </div>
-                    <label class="switch-row">
-                        <input type="checkbox" id="wubei-suoyaowang" disabled>
-                        <span class="switch-track"></span>
-                        <span>领取锁妖网任务（暂不可用）</span>
-                    </label>
-                    <label class="switch-row">
-                        <input type="checkbox" id="wubei-kuimulang">
-                        <span class="switch-track"></span>
-                        <span>领取奎木狼任务（关闭则自动重领替换）</span>
-                    </label>
+                    <div class="set-sect"><span>组号</span><span class="sect-hint">一窗口多账号</span></div>
                     <label class="switch-row">
                         <input type="checkbox" id="wubei-tab-group">
                         <span class="switch-track"></span>
@@ -1027,13 +1044,18 @@
                     <span class="badge">持续运行</span>
                     <button class="task-expand" data-mode="仅战斗" title="仅战斗专属设置">▾</button>
                 </div>
-                <!-- 仅战斗设置手风琴：自动归队 -->
+                <!-- 仅战斗设置手风琴：自动归队 / 自动抢盒子 -->
                 <div class="task-accordion">
                     <div class="group-title">仅战斗设置</div>
                     <label class="switch-row">
                         <input type="checkbox" id="battle-only-auto-rejoin">
                         <span class="switch-track"></span>
                         <span>自动归队</span>
+                    </label>
+                    <label class="switch-row">
+                        <input type="checkbox" id="battle-only-hezi">
+                        <span class="switch-track"></span>
+                        <span>自动抢盒子（福源广泽盒出现时点「我需要」）</span>
                     </label>
                 </div>
             </div>
@@ -1147,7 +1169,7 @@
                     <span class="group-label">法术技能</span>
                     <select class="skill-select" id="battle-beast-skill"></select>
                 </div>
-                <label class="switch-row">
+                <label class="switch-row" id="auto-famen-row">
                     <input type="checkbox" id="auto-famen">
                     <span class="switch-track"></span>
                     <span>自动使用法门（每场战斗第 1 回合先点一次法门坐标）</span>
@@ -1699,6 +1721,7 @@
     const clearScreen = document.getElementById('clear-screen');
     const silentMode = document.getElementById('silent-mode');
     const autoFamen = document.getElementById('auto-famen');
+    const autoFamenRow = document.getElementById('auto-famen-row');
     const xiuluoWuyiIntervalEl = document.getElementById('xiuluo-wuyi-interval');
     const xiuluoAutoRepair = document.getElementById('xiuluo-auto-repair');
     const xiuluoRepairIntervalEl = document.getElementById('xiuluo-repair-interval');
@@ -1824,6 +1847,7 @@
     const btnVerifyGroupRejoin = document.getElementById('btn-verify-group-rejoin');
     const groupRejoinVerifyResultEl = document.getElementById('group-rejoin-verify-result');
     const battleOnlyAutoRejoin = document.getElementById('battle-only-auto-rejoin');
+    const battleOnlyHezi = document.getElementById('battle-only-hezi');
     const btnVerifyCaptureDiag = document.getElementById('btn-verify-capture-diag');
     const captureDiagVerifyResultEl = document.getElementById('capture-diag-verify-result');
     const btnVerifySilentClick = document.getElementById('btn-verify-silent-click');
@@ -1888,6 +1912,20 @@
                            beast: ['法术', '攻击', '防御', '逃跑', '无'] };
     const DEFAULT_BATTLE = { char: '技能3-5', beast: '攻击' };
 
+    // 行显隐一律走 style.display：HTML hidden 属性会被 .group-row 的
+    // display:flex 覆盖（作者样式优先于 UA 的 [hidden]{display:none}，
+    // 2026-11-15 实测 skillRow.hidden=true 计算样式仍是 flex、下拉不隐藏）
+    function setRowVisible(el, visible) {
+        el.style.display = visible ? '' : 'none';
+    }
+
+    // 人物动作类型联动：法术技能下拉与「自动使用法门」只在选「法术」时展示
+    // （法门按钮只在施法流程里点，其他动作没有意义）
+    function applyCharFamenVisibility() {
+        const type = charBattle.container.querySelector('input:checked');
+        setRowVisible(autoFamenRow, !!type && type.value === '法术');
+    }
+
     // 动态生成战斗动作类型单选 + 法术技能下拉，变更立即保存
     function buildBattleActions(name, container, skillRow, skillSel, skills, initial) {
         const store = () => {
@@ -1907,7 +1945,8 @@
             }
             input.addEventListener('change', () => {
                 if (!input.checked) return;
-                skillRow.hidden = (t !== '法术');
+                setRowVisible(skillRow, t === '法术');
+                if (name === 'char') applyCharFamenVisibility();
                 store();
             });
             label.appendChild(input);
@@ -1922,7 +1961,7 @@
         });
         if (initial.startsWith('技能')) skillSel.value = initial;  // 监听前赋值不触发
         skillSel.addEventListener('change', store);
-        skillRow.hidden = !initial.startsWith('技能');
+        setRowVisible(skillRow, initial.startsWith('技能'));
         return { container, skillRow, skillSel };
     }
     const charBattle = buildBattleActions('char',
@@ -1935,6 +1974,7 @@
         document.getElementById('battle-beast-skill-row'),
         document.getElementById('battle-beast-skill'), BEAST_SKILLS,
         DEFAULT_BATTLE.beast);
+    applyCharFamenVisibility();  // 首屏默认动作同步法门开关显隐
 
     /* ================= 修罗必须种族多选（12 项，变更立即保存） ================= */
     const XIULUO_RACES = ['男人', '女人', '男鬼', '女鬼', '男仙', '女仙', '男魔', '女魔', '男巫', '女巫', '男龙', '女龙'];
@@ -3368,6 +3408,9 @@
     battleOnlyAutoRejoin.addEventListener('change', () => {
         callPython('save_battle_only_auto_rejoin', battleOnlyAutoRejoin.checked);
     });
+    battleOnlyHezi.addEventListener('change', () => {
+        callPython('save_battle_only_hezi', battleOnlyHezi.checked);
+    });
     wubeiShout.addEventListener('change', () => {
         callPython('save_wubei_shout_switch', wubeiShout.checked);
     });
@@ -3668,6 +3711,7 @@
             wubeiKickAwayMinutesEl.innerText = info.wubei.kick_away_minutes;
         }
         battleOnlyAutoRejoin.checked = !!info.battle_only_auto_rejoin;
+        battleOnlyHezi.checked = !!info.battle_only_hezi;
         wubeiShout.checked = !!(info.wubei && info.wubei.shout);
         if (info.wubei && info.wubei.shout_text !== undefined) {
             wubeiShoutText.value = info.wubei.shout_text;
@@ -3727,9 +3771,10 @@
             const radio = b.container.querySelector('input[value="' + type + '"]');
             if (radio) {
                 radio.checked = true;
-                b.skillRow.hidden = (type !== '法术');
+                setRowVisible(b.skillRow, type === '法术');
             }
         }
+        applyCharFamenVisibility();  // 方案切换后人物动作可能变化，同步法门显隐
         const xl = info.xiuluo || {};
         if (xl.min_members) {
             document.getElementById('xiuluo-min').innerText = xl.min_members;

@@ -54,7 +54,8 @@ from . import status_bars  # 血蓝条检测回满（每场战斗结束后调用
 from . import task_tracker  # 对话框区域与绿色选项定位（巫医对话框）
 from ..core import debug_overlay  # 调试信息悬浮层（战斗场次更新）
 from . import team  # 队伍身份（抢盒子的队长规则）
-from ..core.settings import (load_xiuluo_hezi, load_wubei_hezi,
+from ..core.settings import (BATTLE_ONLY_MODE, load_xiuluo_hezi, load_wubei_hezi,
+                             load_battle_only_hezi,
                              load_auto_famen, load_auto_refill)
 from . import tab_group  # 组号模式（一窗口多 Tab）：pass 抑制标志与队员自动 pass
 from . import dialog_common  # 对话框模板门控（高性能下未命中跳过对话区 OCR）
@@ -1142,12 +1143,14 @@ def _wuyi_check_interval(now, last_battle_end_at, expected_at):
 
 
 def _handle_hezi(win, bgr=None):
-    """修罗/五倍盒子：不在战斗时若出现福源广泽盒，点击「我需要」。
+    """修罗/五倍/仅战斗盒子：不在战斗时若出现福源广泽盒，点击「我需要」。
 
-    开关规则：仅修罗/五倍模式执行；抢盒子开关只在**非队长**时生效，
-    是队长则**一定抢**（队长规则优先）。身份以最近一次队伍检查结果
-    为准（team.known_leader：开队伍检查时 check_team_min 更新；关闭
-    检查队伍时任务寻路/领取成功即记队长）。
+    开关规则：仅修罗/五倍/仅战斗模式执行；抢盒子开关只在**非队长**时
+    生效，是队长则**一定抢**（队长规则优先）。身份以最近一次队伍检查
+    结果为准（team.known_leader：开队伍检查时 check_team_min 更新；关闭
+    检查队伍时任务寻路/领取成功即记队长）。仅战斗模式不做身份判定
+    （known_leader 恒为未知），完全由「仅战斗-自动抢盒子」开关决定，
+    默认关闭（跟队时不抢，队长侧操作不受干扰）。
     性能（见 CLAUDE.md 性能规则）：5 秒节奏单帧检查；两段匹配——先
     盒子后按钮，按钮只有盒子命中才匹配；点击后冷却防重复。
     bgr 传入时复用轮询帧（watch_loop 单帧复用），不再二次截窗。
@@ -1160,6 +1163,8 @@ def _handle_hezi(win, bgr=None):
         enabled = load_xiuluo_hezi()
     elif mode == "五倍":
         enabled = load_wubei_hezi()
+    elif mode == BATTLE_ONLY_MODE:
+        enabled = load_battle_only_hezi()
     else:
         return False
     if not (team.known_leader() is True or enabled):

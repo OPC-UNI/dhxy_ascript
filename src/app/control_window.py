@@ -58,7 +58,7 @@ from ..core.settings import (
     TASK_COUNT_MAX, TASK_MODES, UI_THEMES, WUBEI_SHOUT_TEXT_DEFAULT,
     XIULUO_MIN_DEFAULT, XIULUO_MIN_RANGE, XIULUO_RACES, XIULUO_RACES_DEFAULT,
     XIULUO_SHOUT_TEXT_DEFAULT, ZHONGZU_SHOUT_TEXT_DEFAULT, _AUTO_FAMEN_KEY, _AUTO_REFILL_KEY,
-    _BATTLE_KEYS, _BATTLE_ONLY_AUTO_REJOIN_KEY, _CLEAR_SCREEN_KEY, _COUNT_KEYS,
+    _BATTLE_KEYS, _BATTLE_ONLY_AUTO_REJOIN_KEY, _BATTLE_ONLY_HEZI_KEY, _CLEAR_SCREEN_KEY, _COUNT_KEYS,
     _DEBUG_OVERLAY_KEY, _DEBUG_UI_KEY, _DEFAULT_BATTLE, _DEFAULT_MODES,
     _GROUP_ACTIONS_KEY, _GROUP_DETECTED_KEY, _GROUP_LAST_SCAN_KEY, _HIGH_PERF_KEY,
     _MODES_KEY, _MODE_KEY_OLD, _REPAIR_INTERVAL_DEFAULT, _REPAIR_INTERVAL_MAX,
@@ -80,7 +80,7 @@ from ..core.settings import (
     _kv_remove, _kv_save, _norm_shout_text,
     _sanitize_modes,
     build_group_last_scan_payload, load_auto_famen, load_auto_refill, load_battle_actions,
-    load_battle_only_auto_rejoin, load_clear_screen, load_debug_overlay, load_debug_ui_unlocked,
+    load_battle_only_auto_rejoin, load_battle_only_hezi, load_clear_screen, load_debug_overlay, load_debug_ui_unlocked,
     load_group_actions, load_group_last_scan, load_high_perf, load_selected_modes,
     load_silent_mode, load_task_counts, load_thresholds, load_ui_theme,
     load_update_auto_check, load_update_feed_url, load_update_last_check, load_update_skipped_version,
@@ -96,6 +96,7 @@ from ..core.settings import (
     load_zhongzu_auto_repair, load_zhongzu_auto_wuyi, load_zhongzu_check_team, load_zhongzu_repair_interval,
     load_zhongzu_shout_switch, load_zhongzu_shout_text, load_zhongzu_tab_group, load_zhongzu_wuyi_interval,
     save_auto_famen, save_auto_refill, save_battle_action, save_battle_only_auto_rejoin,
+    save_battle_only_hezi,
     save_clear_screen, save_debug_overlay, save_debug_ui_unlocked, save_group_actions,
     save_group_last_scan, save_high_perf, save_selected_modes, save_silent_mode,
     save_task_count, save_threshold, save_ui_theme, save_update_auto_check,
@@ -228,6 +229,7 @@ class ControlWindow(WebWindow):
         self.expose(self.save_wubei_auto_kick_away)
         self.expose(self.save_wubei_kick_away_minutes)
         self.expose(self.save_battle_only_auto_rejoin)
+        self.expose(self.save_battle_only_hezi)
         self.expose(self.save_wubei_shout_switch)
         self.expose(self.save_wubei_shout_text)
         self.expose(self.save_wubei_auto_wuyi)
@@ -851,6 +853,7 @@ class ControlWindow(WebWindow):
                 "xiuluo_shout": load_xiuluo_shout_switch(),
                 "xiuluo_shout_text": load_xiuluo_shout_text(),
                 "battle_only_auto_rejoin": load_battle_only_auto_rejoin(),
+                "battle_only_hezi": load_battle_only_hezi(),
                 "auto_famen": load_auto_famen(),
                 "debug_overlay": load_debug_overlay(),
                 "debug_ui_unlocked": load_debug_ui_unlocked(),
@@ -1121,6 +1124,10 @@ class ControlWindow(WebWindow):
     def save_battle_only_auto_rejoin(self, on):
         """仅战斗设置变更：保存自动归队开关状态。"""
         return save_battle_only_auto_rejoin(on)
+
+    def save_battle_only_hezi(self, on):
+        """仅战斗设置变更：保存自动抢盒子开关状态。"""
+        return save_battle_only_hezi(on)
 
     def save_wubei_shout_switch(self, on):
         """五倍设置变更：保存缺人自动喊话开关状态。"""

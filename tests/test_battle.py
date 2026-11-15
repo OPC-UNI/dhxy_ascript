@@ -416,3 +416,24 @@ def test_handle_hezi_reuses_frame(monkeypatch):
     monkeypatch.setattr(battle.team, "known_leader", lambda: True)
     monkeypatch.setattr(battle.game_map, "match_frame_np", lambda *a, **k: None)
     assert battle._handle_hezi(object(), bgr=make_bgr_frame()) is False
+
+
+def test_handle_hezi_battle_only_switch_gate(monkeypatch):
+    """仅战斗模式：身份恒为未知，完全由「自动抢盒子」开关决定——
+    关闭（默认）直接返回不匹配，打开才进入盒子识别。"""
+    monkeypatch.setattr(battle, "current_task_mode", lambda: "仅战斗")
+    monkeypatch.setattr(battle.team, "known_leader", lambda: None)
+    state = {"on": False}
+    monkeypatch.setattr(battle, "load_battle_only_hezi", lambda: state["on"])
+    calls = []
+
+    def _match(*a, **k):
+        calls.append(1)
+        return None
+
+    monkeypatch.setattr(battle.game_map, "match_frame_np", _match)
+    assert battle._handle_hezi(object(), bgr=make_bgr_frame()) is False
+    assert calls == []  # 开关关闭：不匹配
+    state["on"] = True
+    assert battle._handle_hezi(object(), bgr=make_bgr_frame()) is False
+    assert calls  # 开关打开：进入盒子识别
