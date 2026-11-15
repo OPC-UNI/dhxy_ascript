@@ -64,12 +64,14 @@
    pochufengyin.play_pochufengyin（**长按运输 + 点按维持**：长按推过
    带上缘 → 松手回落 → 回 C 后点按保持在 [L,R]）；小游戏结束后的
    任务推进由 follow 继续跟踪，触发词消失即状态复位。
-   传音石（2026-11-11 用户规则）：任务追踪出现「使用传音石找到魔王和
-   魔王护法」→ 打开背包任务储物格（与唤风符/灵力镐同格）右键使用
-   传音石（mingwang_chuanyinshi）——用后在追踪面板出现的魔王/魔王
-   护法导航绿字链接由 follow 引擎通用绿字点击推进；触发词仍在时按
-   间隔限次重试使用（未使用时触发词连续缺失即复位；已使用后状态
-   保持到新任务领取，防战斗中面板不可见导致战后重复使用）。
+   传音石（魔王重聚，2026-11-11 初始规则 + 2026-11-15 实机全流程）：
+   任务追踪出现「使用传音石找到魔王和魔王护卫的位置，并在他附近使用
+   传音石」→ 任务储物格右键使用传音石 → 寻人引导（读中央提示找图/
+   按方向收敛、近身触发魔王护卫战斗）由小游戏模块
+   minigames/mowangchongju.py 实现，任务侧只注入道具使用与共享帧；
+   战后追踪变为「请将传音石交给魔王三大王」→ 任务追踪引擎通用绿字
+   点击寻路 → 对话选项「这是牛魔王遣我送来的传音石。」（DIALOG_OPTION
+   _MAP）→ 收尾台词 → 任务完成。
    天宫奇遇（2026-11-14 用户规则）：任务追踪出现「前往老君丹房门口，
    使用偷丹葫芦。」→ 点击追踪绿字**老君丹房门口**自动寻路（「偷丹
    葫芦」是物品说明链接，不得点击）→ 到达天宫 (13,99)（用户指定
@@ -129,6 +131,7 @@ from ..device import task_tracker  # 任务追踪面板（对话框区域常量�
 from ..device import bag  # 背包操作（五庄封印任务储物格用唤风符）
 from ..device import zuoqi  # 飞行驭器（蛟魔复仇到达目标地图后降落）
 from ..minigames import moqushendan as _moqu_minigame  # 天宫奇遇「魔取仙丹」顺序解封小游戏
+from ..minigames import mowangchongju as _mowang_minigame  # 魔王重聚「传音石寻人」引导（读提示找图/按方向收敛）
 from ..minigames import pochufengyin as _pochu_minigame  # 破除封印/钓鱼共用小游戏（闭环实现）
 from ..minigames import shahai as _shahai_minigame  # 沙海迷踪阻塞循环
 from ..minigames.shahai import (SHAHAI_GAME_ARM_TIMEOUT,
@@ -284,7 +287,7 @@ CLAIM_TASKS = (
     {"title": "蛟魔探秘", "level": "高级"},
     {"title": "天宫奇遇", "level": "高级"},
     {"title": "凿石造像", "level": "中级"},
-    {"title": "魔王重聚", "level": "高级"}, # 未完成，需要使用后到某个地图巡逻找到，后续在做
+    {"title": "魔王重聚", "level": "高级"},
     # 仙族
     {"title": "净化水晶", "level": "高级"},
     {"title": "五庄封印", "level": "高级"},
@@ -314,6 +317,8 @@ DIALOG_OPTION_MAP = {
     "这群手下真是越来越难管了，我让他们凿点石头给俺，这叫凿石头吗？":"是逆天魔遣我过来帮忙的。",
     "总有人和我说火云戈壁里有什么城啥的，俺寻思这也不可能啊，他们一族不":"逆天魔大人派我过来帮忙",
     "有肉咱们一块吃，有酒咱们一块喝。":"牛魔王大人，逆天广大将派我前来见您。",
+    # 魔王重聚（2026-11-15 实机）：魔王护卫战后把传音石交给魔王三大王
+    "那老牛派你过来，想说啥？":"这是牛魔王遣我送来的传音石。",
     "多么怀念当年俺们七个，还有小白，唉，都是往事了啊，但俺答应过的，俺":"是逆天魔遣我过来帮忙的。",
     "这天上来的消息应该还挺准的吧，俺也没那么指望吃上，可他们也别想吃上":"是逆天魔遣我过来帮忙的。"
 }
@@ -329,6 +334,9 @@ DIALOG_OPTION_MAP = {
 # 2026-11-10 实机（仙族五庄封印·五庄观 NPC 明月）：风暴封印线索。
 DIALOG_SKIP_TEXTS = {
     "我倒是担心风暴的封印": 1,
+    # 魔王重聚（2026-11-15 实机）：魔王护卫战后台词 + 魔王三大王收尾台词
+    "本事不错，俺家主人愿意见你一面": 1,
+    "哼，不知道老牛吸取了之前失败的教训": 1,
 }
 FOLLOW_TIMEOUT = 300        # 跟踪任务总超时（秒；战斗等待时间不计入，同 xuanshu）
 
@@ -462,30 +470,14 @@ _pick_link_at = 0.0         # 上次点击链接时间（重点间隔）
 _pick_mining_armed_at = 0.0  # 用镐成功时间；>0 且未超时=开采石头窗口检测开启
 _pick_mining_last_check = 0.0  # 上次开采石头窗口检测时间（限频）
 
-# ---- 传音石（追踪「使用传音石找到魔王和魔王护法」→ 任务储物格使用）----
-# 用户 2026-11-11 流程：任务追踪面板出现「使用传音石找到魔王和魔王护
-# （法）」时，打开背包 → 任务储物格（与唤风符/灵力镐同格）→ 右键使用
-# 传音石（mingwang_chuanyinshi.png，用户提供 47×47 图标）。使用后在
-# 追踪面板出现的魔王/魔王护法导航绿字链接由 follow 引擎通用绿字点击
-# 推进，本状态机只负责用道具：触发词仍在时按间隔限次重试（使用可能
-# 被对话框/背包遮挡吞掉）。未使用时触发词连续缺失即复位；已使用后
-# 状态保持到新任务领取（战斗中追踪面板不可见，复位会导致战后重复
-# 使用传音石）。不做战斗判定——战斗由 follow_task/battle 线程托管。
-CHUANYIN_TASK_KEYWORDS = ("传音石", "传音")  # 追踪触发词（短词兜底 OCR 拆行/截断）
+# ---- 传音石（魔王重聚）：任务储物格道具 ----
+# 使用传音石后的寻人引导（读中央提示 → 跨图/按方向收敛 → 近身触发
+# 「魔王护卫」战斗）全部在 minigames/mowangchongju.py，本模块只提供
+# 道具使用能力与战后交付对话配置。实机流程与标定见该小游戏模块。
 CHUANYIN_ITEM_ICON = "mingwang_chuanyinshi.png"  # 传音石（用户素材，47×47）
 CHUANYIN_ITEM_LABEL = "传音石"
 CHUANYIN_ITEM_THRESHOLD = 0.8            # 物品图标匹配阈值（静态图标）
 CHUANYIN_ITEM_FIND_TIMEOUT = 10.0        # 任务储物格中查找传音石的时限（秒）
-CHUANYIN_USE_RETRY_AFTER = 15.0          # 两次使用之间的最小间隔（首次立即执行）
-CHUANYIN_USE_RETRY_MAX = 2               # 最多重试使用次数
-CHUANYIN_ABSENT_RESET = 5                # 触发词连续缺失轮询数 → 状态复位
-CHUANYIN_BAG_CLOSE_INTERVAL = 2.0        # 残留背包检测/关闭最小间隔（秒）
-# 状态机（对齐灵力镐）：0=未使用；1=已使用等任务推进。
-_chuanyin_phase = 0
-_chuanyin_use_at = 0.0       # 上次使用时间（宽限窗口起点）
-_chuanyin_use_retries = 0    # 使用重试次数
-_chuanyin_missing = 0        # 触发词连续缺失轮询数（≥5 复位）
-_chuanyin_bag_close_at = 0.0 # 上次残留背包检测时间（限频）
 
 # ---- 天宫奇遇（仙族·天宫）：追踪「前往老君丹房门口」→ 天宫(13,99) →
 #      任务储物格用偷丹葫芦 → 「魔取仙丹」顺序解封小游戏 ----
@@ -533,7 +525,8 @@ _tgqy_game_armed_at = 0.0   # 用道具成功时间；>0 且未超时=魔取仙�
 _tgqy_game_last_check = 0.0 # 上次窗口检测时间（限频）
 _tgqy_game_retry_at = 0.0   # 小游戏游玩失败后的下次允许游玩时间（冷却）
 
-# ---- 蛟魔复仇（暗雷战斗）：追踪「请在<地图>仔细搜查（暗雷战斗）」→ 到达后降落 ----
+# ---- 蛟魔复仇（暗雷战斗）：追踪「请在<地图>仔细搜查（暗雷战斗）」→
+#      寻路 → 到达目标地图 → 降落 → Alt+D 随机遇敌兜底 ----
 # 用户 2026-11-11 规则：追踪面板任务文案括号内含「暗雷战斗」时，点击
 # 追踪绿字即自动寻路到文案中的地图（实机原文：「仙族兵士逃窜而去，
 # 请在女儿村仔细搜查，可不能让让他就这么走了。（暗雷战斗）」→ 女儿村）；
@@ -543,6 +536,14 @@ _tgqy_game_retry_at = 0.0   # 小游戏游玩失败后的下次允许游玩时�
 # battle 线程托管，本状态机不做特殊处理。已降落标志保持到目标地图
 # 变化（蛟魔复仇多段搜查换图重新降落）或触发词连续缺失复位；新任务
 # 领取时一并复位。
+# 2026-11-15 用户规则调整（先寻路后降落）：追踪文案出现时人物可能已站
+# 在目标地图，旧逻辑会立即确认降落——但引擎点击追踪绿字开始寻路可能
+# 再次起飞，白降落一次。改为先等「位移启动」（寻路已开始），再在目标
+# 地图内位置连续稳定才判到达，到达后才降落。未见位移 JIAMO_MOVE_WAIT
+# 秒（目的地就在脚下/点击未生效）也按到达放行，避免死等。
+# 随机遇敌兜底（2026-11-15 用户规则）：到达稳定后仍长时间未触发战斗且
+# 任务仍在（暗雷战斗文案仍可见）时，按 Alt+D（游戏随机遇敌热键）催发
+# 遭遇战；未触发按间隔重按，战斗开始后由 follow/battle 线程接管。
 JIAMO_ANLEI_KEYWORD = "暗雷战斗"     # 追踪触发词（任务描述括号内）
 # 目标地图解析：「请在<地图>仔细搜查」——地图名 2~8 字非贪婪，锚定在
 # 「仔细/搜查」之前（OCR 形近变体一并收录；_seal_sig 已去标点，直接在
@@ -558,13 +559,29 @@ _JIAMO_ANCHOR_WORDS = ("仔细", "仔佃", "仟细", "行细", "息细",
 JIAMO_POS_CHECK_INTERVAL = 1.0   # 位置地名 OCR 最小间隔（秒；轮询热路径限频）
 JIAMO_LAND_RETRY_AFTER = 5.0     # 降落失败（战斗中/面板未开）后的重试间隔（秒）
 JIAMO_ABSENT_RESET = 5           # 触发词连续缺失轮询数 → 状态复位（空 OCR 帧不计）
-# 状态机：0=等到达；1=已降落等战斗（保持到目标地图变化/复位）。
+# 先寻路后降落：位移启动 → 到达稳定 → 降落（2026-11-15 用户规则）
+JIAMO_MOVE_DELTA = 5             # 判定寻路已启动的位移阈值（像素，同封印/镐）
+JIAMO_MOVE_WAIT = 12.0           # 等待寻路启动时限（秒）——超时未见位移视为已在目的地
+JIAMO_ARRIVE_POLLS = 3           # 到达判定：位置连续稳定轮询数（同封印/镐）
+JIAMO_POS_TOLERANCE = 3          # 到达判定：坐标稳定容差（像素）
+# 随机遇敌兜底（按 Alt+D）：到达稳定后等战斗的时限与重按间隔
+JIAMO_ALT_D_WAIT = 5.0           # 到达稳定后仍未开战多久按 Alt+D（秒）
+JIAMO_ALT_D_INTERVAL = 10.0      # 再次按 Alt+D 的间隔（秒）
+# 状态机：0=等寻路启动/到达/降落；1=已到达并降落，等战斗（Alt+D 兜底；
+# 保持到目标地图变化/复位）。
 _jiamo_phase = 0
 _jiamo_target = None          # 解析出的目标地图名
 _jiamo_missing = 0            # 触发词连续缺失轮询数（≥JIAMO_ABSENT_RESET 复位）
 _jiamo_pos_at = 0.0           # 上次位置地名检测时间（限频）
 _jiamo_land_at = 0.0          # 上次降落尝试时间（重试间隔）
 _jiamo_warned = False         # 目标地图解析失败已告警（每状态实例一次）
+_jiamo_walk_from = None       # 等待寻路启动的起点位置
+_jiamo_move_seen = False      # 已见位移（寻路已启动）或超时放行
+_jiamo_walk_at = 0.0          # 首见文案时间（未见位移超时起点）
+_jiamo_stable = 0             # 位置连续稳定轮询数（到达/Alt+D 共用）
+_jiamo_last_pos = None        # 上次位置
+_jiamo_stable_at = 0.0        # 稳定起点（Alt+D 等待起点；不稳清零）
+_jiamo_alt_d_at = 0.0         # 上次按 Alt+D 时间（重按间隔）
 
 # ---- 沙海迷踪（高级任务）执行入口 ----
 # 入口对话选项「少侠准备好清理地图了吗？」→「我已经准备好了」（在
@@ -1068,6 +1085,25 @@ def _press_alt4_clear(win):
     （名望/种族比武共用能力）。返回描述文案。
     """
     return app_utils.press_alt4_clear(win, prefix="[名望]")
+
+
+def _press_alt_d(win):
+    """按 Alt+D 随机遇敌（蛟魔复仇：到达稳定仍未开战的催战兜底）。
+
+    静默模式走消息投递（游戏窗口无需前台）；非静默走物理热键，按键前
+    校验游戏窗口在前台（keyboard_ok）。失败只记描述不抛异常。
+    返回描述文案。
+    """
+    if app_utils.silent_mode_on():
+        from ..device import silent_click  # 延迟导入（避免模块级循环）
+        info = silent_click.send_silent_hotkey(win, ("alt",), "d")
+        if info is None:
+            return "静默 Alt+D 随机遇敌投递失败（窗口不存在）"
+        return "已静默投递 Alt+D 随机遇敌"
+    if app_utils.keyboard_ok(win):
+        Keyboard.key_hot("alt", "d")
+        return "已按 Alt+D 随机遇敌"
+    return "游戏窗口未在前台（激活失败），Alt+D 未发送"
 
 
 def _click_claim_option(win, items, img_np):
@@ -2637,79 +2673,19 @@ def _handle_lingligao(win, items, img_np):
     return _pick_wait_arrival(win, items, img_np, now)
 
 
-# ---- 传音石执行（追踪「使用传音石找到魔王和魔王护法」→ 任务储物格使用）----
-def _reset_chuanyin_state():
-    """传音石状态机复位（新任务领取成功/跨任务防残留）。"""
-    global _chuanyin_phase, _chuanyin_use_at, _chuanyin_use_retries, \
-        _chuanyin_missing, _chuanyin_bag_close_at
-    _chuanyin_phase = 0
-    _chuanyin_use_at = 0.0
-    _chuanyin_use_retries = 0
-    _chuanyin_missing = 0
-    _chuanyin_bag_close_at = 0.0
-
-
-def _chuanyin_trigger(sig):
-    """追踪面板文案是否触发传音石流程（「使用传音石找到魔王和魔王护法」）。"""
-    return any(kw in sig for kw in CHUANYIN_TASK_KEYWORDS)
-
-
+# ---- 传音石执行（魔王重聚）：引导小游戏在 minigames/mowangchongju ----
 def _handle_chuanyinshi(win, items, img_np):
-    """传音石执行状态机（follow extras 通道，每轮询一次）。
+    """传音石引导（魔王重聚）：委托 minigames/mowangchongju.handle。
 
-    触发：追踪面板文案含「传音石」→ 打开背包 → 任务储物格右键使用
-    传音石（_use_task_item 内含对话框在场跳过与背包锁）。用后等任务
-    推进（追踪文案变化/任务消失由 follow 判定；魔王/魔王护法导航
-    绿字链接由引擎通用绿字点击推进），触发词仍在时按
-    CHUANYIN_USE_RETRY_AFTER 间隔限次重试（用后被吞/任务需再次使用）。
-    使用失败（背包/对话框瞬态）同样按间隔重试，不消耗重试次数。
-    不做战斗判定：战斗由 follow_task 跳过、battle 线程托管。
-    返回是否已处理（成功使用了道具）。
+    任务侧只注入共享帧（_seal_frame，复用同轮询截帧）与道具使用实现
+    （_use_chuanyinshi，任务储物格右键使用 + 对话框门/背包锁）。战后
+    交付阶段（「请将传音石交给魔王三大王」）不命中引导触发词，由
+    follow 引擎绿字点击 + 本模块 DIALOG_OPTION_MAP 处理。
     """
-    global _chuanyin_missing, _chuanyin_phase, _chuanyin_use_at, \
-        _chuanyin_use_retries, _chuanyin_bag_close_at
-    if _chuanyin_phase == 1:
-        # 用后对话框可能遮挡背包导致关闭失败：残留背包限频补关
-        now = time.time()
-        if now - _chuanyin_bag_close_at >= CHUANYIN_BAG_CLOSE_INTERVAL \
-                and _bag_box_on_frame(win, items):
-            _chuanyin_bag_close_at = now
-            log("[名望] 传音石：检测到残留背包，尝试关闭", "INFO")
-            _close_bag_quiet(win)
-    if not _chuanyin_trigger(_seal_sig(items)):
-        # phase 1 不因文案缺失复位（对齐五庄封印）：战斗中追踪面板不可见，
-        # 复位会在战后重复使用传音石；重试配额未用尽时下次触发仍可继续用。
-        if _chuanyin_phase == 0:
-            _chuanyin_missing += 1
-            if _chuanyin_missing >= CHUANYIN_ABSENT_RESET:
-                _reset_chuanyin_state()
-        return False
-    _chuanyin_missing = 0
-    now = time.time()
-    if now - _chuanyin_use_at < CHUANYIN_USE_RETRY_AFTER:
-        return False  # 两次使用的最小间隔未到（首次 _use_at=0 立即执行）
-    if _chuanyin_phase == 1:
-        if _chuanyin_use_retries >= CHUANYIN_USE_RETRY_MAX:
-            return False  # 重试次数用尽：只等任务推进（follow 判定完成）
-        ok, info = _use_chuanyinshi(win)
-        _chuanyin_use_at = now  # 失败也按间隔重排（不消耗重试配额）
-        if ok:
-            _chuanyin_use_retries += 1
-        log(f"[名望] 传音石：任务未推进，重试使用传音石"
-            f"（{info}，{_chuanyin_use_retries}/{CHUANYIN_USE_RETRY_MAX}）",
-            "SYS" if ok else "WARN")
-        return ok
-    if _seal_dialog_blocking(win, items, img_np):
-        return False  # 对话框在场时不操作背包（无选项对话顺带点屏推进）
-    ok, info = _use_chuanyinshi(win)
-    _chuanyin_use_at = time.time()
-    if not ok:
-        log(f"[名望] 传音石：{info}，稍后重试", "WARN")
-        return False
-    _chuanyin_phase = 1
-    _chuanyin_use_retries = 0
-    log("[名望] 传音石：已使用传音石，等待任务推进", "SYS")
-    return True
+    return _mowang_minigame.handle(win, items, img_np,
+                                   frame_fn=_seal_frame,
+                                   use_item=_use_chuanyinshi,
+                                   prefix="[名望] ")
 
 
 # ---- 天宫奇遇执行（追踪「前往老君丹房门口」→ 到达天宫(13,99) →
@@ -2977,13 +2953,41 @@ def _handle_tiangong_qiyu(win, items, img_np):
 def _reset_jiamo_state():
     """蛟魔复仇暗雷战斗状态机复位（新任务领取/触发词连续缺失）。"""
     global _jiamo_phase, _jiamo_target, _jiamo_missing, _jiamo_pos_at, \
-        _jiamo_land_at, _jiamo_warned
+        _jiamo_land_at, _jiamo_warned, _jiamo_walk_from, _jiamo_move_seen, \
+        _jiamo_walk_at, _jiamo_stable, _jiamo_last_pos, _jiamo_stable_at, \
+        _jiamo_alt_d_at
     _jiamo_phase = 0
     _jiamo_target = None
     _jiamo_missing = 0
     _jiamo_pos_at = 0.0
     _jiamo_land_at = 0.0
     _jiamo_warned = False
+    _jiamo_walk_from = None
+    _jiamo_move_seen = False
+    _jiamo_walk_at = 0.0
+    _jiamo_stable = 0
+    _jiamo_last_pos = None
+    _jiamo_stable_at = 0.0
+    _jiamo_alt_d_at = 0.0
+
+
+def _reset_jiamo_arrival():
+    """到达/寻路判定状态清零（目标地图变化时重新等待寻路）。
+
+    降落重试时钟（_jiamo_land_at）不复位——文案 OCR 抖动来回解析成两个
+    地图时不会把重试间隔打穿、每轮询都开面板。
+    """
+    global _jiamo_phase, _jiamo_walk_from, _jiamo_move_seen, \
+        _jiamo_walk_at, _jiamo_stable, _jiamo_last_pos, _jiamo_stable_at, \
+        _jiamo_alt_d_at
+    _jiamo_phase = 0
+    _jiamo_walk_from = None
+    _jiamo_move_seen = False
+    _jiamo_walk_at = 0.0
+    _jiamo_stable = 0
+    _jiamo_last_pos = None
+    _jiamo_stable_at = 0.0
+    _jiamo_alt_d_at = 0.0
 
 
 def _jiamo_target_map(sig):
@@ -3028,21 +3032,127 @@ def _jiamo_arrived(sig, current, target):
     return bool(m) and bool(current) and current in m.group(1)
 
 
+def _jiamo_step_arrival(win, items, now):
+    """phase 0：先等寻路启动，再判到达稳定，到达后降落。
+
+    返回是否已处理（执行了降落）。未见位移 JIAMO_MOVE_WAIT 秒放行
+    （目的地就在脚下/链接点击未生效），避免死等；到达判定须在地图 +
+    位置连续稳定 JIAMO_ARRIVE_POLLS 轮（容差 3px）。
+    """
+    global _jiamo_walk_from, _jiamo_move_seen, _jiamo_walk_at, \
+        _jiamo_stable, _jiamo_last_pos, _jiamo_land_at, _jiamo_phase, \
+        _jiamo_target, _jiamo_stable_at
+    if not _jiamo_move_seen:
+        pos = _seal_pos(win, items)
+        if pos is None:
+            return False  # 位置不可读（加载/飞行过渡帧）：下轮再查
+        if _jiamo_walk_from is None:
+            _jiamo_walk_from = pos
+            _jiamo_walk_at = now
+        moved = (pos[0] != _jiamo_walk_from[0]
+                 or abs(pos[1] - _jiamo_walk_from[1]) > JIAMO_MOVE_DELTA
+                 or abs(pos[2] - _jiamo_walk_from[2]) > JIAMO_MOVE_DELTA)
+        if moved:
+            _jiamo_move_seen = True
+            log("[名望] 蛟魔复仇：寻路已启动，等待到达目标地图后降落",
+                "INFO")
+        elif now - _jiamo_walk_at >= JIAMO_MOVE_WAIT:
+            _jiamo_move_seen = True
+            log("[名望] 蛟魔复仇：未见位移（可能已在目的地），按到达处理",
+                "INFO")
+        else:
+            return False
+    pos = _seal_pos(win, items)
+    if pos is None:
+        return False  # 位置不可读（加载/飞行过渡帧）：下轮再查
+    if not _jiamo_arrived(_seal_sig(items), pos[0], _jiamo_target):
+        # 仍在其它地图寻路中：稳定计数清零，继续等
+        _jiamo_stable = 0
+        _jiamo_last_pos = pos
+        return False
+    last = _jiamo_last_pos
+    if (last is not None and pos[0] == last[0]
+            and abs(pos[1] - last[1]) <= JIAMO_POS_TOLERANCE
+            and abs(pos[2] - last[2]) <= JIAMO_POS_TOLERANCE):
+        _jiamo_stable += 1
+    else:
+        _jiamo_stable = 0
+    _jiamo_last_pos = pos
+    if _jiamo_stable < JIAMO_ARRIVE_POLLS:
+        return False  # 到达但仍在移动：等停下
+    if _jiamo_target is None:
+        _jiamo_target = pos[0]  # 「请在」窗口兜底命中：以当前地名落定目标
+        log(f"[名望] 蛟魔复仇：位置兜底确认目标地图{_jiamo_target}", "INFO")
+    if now - _jiamo_land_at < JIAMO_LAND_RETRY_AFTER:
+        return False  # 降落失败后的重试间隔未到
+    _jiamo_land_at = now
+    log(f"[名望] 蛟魔复仇：已到达{_jiamo_target}并稳定，执行降落", "SYS")
+    ok, info = zuoqi.ensure_landed(win)
+    _closed, cinfo = zuoqi.close_feixingyuqi_panel(win)  # 降落后面板保持打开
+    log(f"[名望] 蛟魔复仇：降落{'成功' if ok else '失败'}：{info}；{cinfo}",
+        "SYS" if ok else "WARN")
+    if not ok:
+        return False  # 战斗中/面板瞬态失败：按间隔重试
+    _jiamo_phase = 1
+    _jiamo_stable_at = 0.0  # 进入等战斗阶段：稳定计时从零开始
+    return True
+
+
+def _jiamo_step_wait_battle(win, items, now):
+    """phase 1：已到达并降落，等暗雷遭遇战斗；稳定久未开战 → Alt+D。
+
+    战斗由 follow_task/battle 线程托管，本步骤不做战斗操作；仅当任务
+    文案仍在（暗雷战斗）、位置稳定且超过 JIAMO_ALT_D_WAIT 未开战时按
+    Alt+D 随机遇敌催发，之后每 JIAMO_ALT_D_INTERVAL 重按。
+    返回是否已处理（按了 Alt+D）。
+    """
+    global _jiamo_stable, _jiamo_last_pos, _jiamo_stable_at, _jiamo_alt_d_at
+    pos = _seal_pos(win, items)
+    if pos is None:
+        return False
+    last = _jiamo_last_pos
+    if (last is not None and pos[0] == last[0]
+            and abs(pos[1] - last[1]) <= JIAMO_POS_TOLERANCE
+            and abs(pos[2] - last[2]) <= JIAMO_POS_TOLERANCE):
+        _jiamo_stable += 1
+    else:
+        _jiamo_stable = 0
+        _jiamo_stable_at = 0.0   # 位置变化：稳定/Alt+D 等待重新计时
+    _jiamo_last_pos = pos
+    if _jiamo_stable < JIAMO_ARRIVE_POLLS:
+        return False  # 仍在移动（自由寻路/被推挤）：不催遇敌
+    if _jiamo_stable_at == 0.0:
+        _jiamo_stable_at = now
+    if now - _jiamo_stable_at < JIAMO_ALT_D_WAIT:
+        return False
+    if now - _jiamo_alt_d_at < JIAMO_ALT_D_INTERVAL:
+        return False
+    _jiamo_alt_d_at = now
+    desc = _press_alt_d(win)
+    log(f"[名望] 蛟魔复仇：到达稳定后仍未触发战斗，{desc}", "SYS")
+    return True
+
+
 def _handle_jiamo_anlei(win, items, img_np):
     """蛟魔复仇暗雷战斗状态机（follow extras 通道，每轮询一次）。
 
     触发：追踪面板文案含「暗雷战斗」——点击追踪绿字由 follow 引擎完成
     （本处理器不点链接，不干涉寻路）。触发后按 JIAMO_POS_CHECK_INTERVAL
-    限频识别当前位置地名，到达文案中的目标地图（如女儿村）后调用
-    飞行驭器降落（zuoqi.ensure_landed，降落后关面板防遮挡），随后
-    等待暗雷遭遇战斗——战斗由 follow_task/battle 线程托管，不做特殊
-    处理。目标地图变化（多段搜查换图）时重新执行到达/降落判定；
+    限频识别当前位置：
+    1. **先寻路后降落**（2026-11-15 用户规则）：追踪文案出现时人物可能
+       已站在目标地图（旧逻辑立即降落），但引擎点链接开始寻路可能再次
+       起飞——先等位移启动（未见位移 JIAMO_MOVE_WAIT 超时放行），再在
+       目标地图内位置连续稳定（JIAMO_ARRIVE_POLLS）判到达，到达后才
+       调用飞行驭器降落（zuoqi.ensure_landed，降落后关面板防遮挡）。
+    2. 到达稳定后等暗雷遭遇战斗（battle 线程托管）；**任务仍在但长时间
+       未开战时按 Alt+D 随机遇敌**催发（JIAMO_ALT_D_WAIT 后首次、之后
+       每 JIAMO_ALT_D_INTERVAL 一次）。
+    目标地图变化（多段搜查换图）时重新执行寻路/到达/降落判定；
     触发词连续 JIAMO_ABSENT_RESET 轮缺失即复位（空 OCR 帧为战斗心跳/
     加载过渡，不计缺失，防战斗中清掉已降落状态导致战后重复降落）。
-    返回是否已处理（执行了降落）。
+    返回是否已处理（执行了降落/按 Alt+D）。
     """
-    global _jiamo_phase, _jiamo_target, _jiamo_missing, _jiamo_pos_at, \
-        _jiamo_land_at, _jiamo_warned
+    global _jiamo_phase, _jiamo_target, _jiamo_missing, _jiamo_pos_at,         _jiamo_land_at, _jiamo_warned
     sig = _seal_sig(items)
     if JIAMO_ANLEI_KEYWORD not in sig:
         if sig:  # 空 OCR 帧不计缺失（战斗中面板不可见，见 docstring）
@@ -3056,45 +3166,28 @@ def _handle_jiamo_anlei(win, items, img_np):
         first = _jiamo_target is None
         _jiamo_target = target
         if not first:
-            # 目标地图变化：重新执行到达/降落判定（已降落标志清零；
-            # 降落重试时钟不复位——文案 OCR 抖动来回解析成两个地图时
-            # 不会把重试间隔打穿、每轮询都开面板）
-            _jiamo_phase = 0
-            log(f"[名望] 蛟魔复仇：目标地图变为{target}，重新等待到达后降落",
+            # 目标地图变化：重新执行寻路/到达/降落判定（寻路/稳定状态
+            # 清零；降落重试时钟不复位——见 _reset_jiamo_arrival）
+            _reset_jiamo_arrival()
+            log(f"[名望] 蛟魔复仇：目标地图变为{target}，重新等待寻路到达后降落",
                 "SYS")
         else:
             log(f"[名望] 蛟魔复仇：目标地图{target}（暗雷战斗），"
-                f"到达后执行降落", "SYS")
+                f"寻路到达并稳定后执行降落", "SYS")
     elif target is None and not _jiamo_warned:
         _jiamo_warned = True
         log("[名望] 蛟魔复仇：追踪文案未解析出目标地图（暗雷战斗），"
             "按「请在」后地名出现判定到达", "WARN")
-    if _jiamo_phase == 1:
-        return False  # 已降落：等待暗雷遭遇战斗（battle 线程托管）
     now = time.time()
+    if _jiamo_phase == 1:
+        if now - _jiamo_pos_at < JIAMO_POS_CHECK_INTERVAL:
+            return False  # 位置 OCR 限频（轮询热路径，规则同 OCR 三原则）
+        _jiamo_pos_at = now
+        return _jiamo_step_wait_battle(win, items, now)
     if now - _jiamo_pos_at < JIAMO_POS_CHECK_INTERVAL:
         return False  # 位置 OCR 限频（轮询热路径，规则同 OCR 三原则）
     _jiamo_pos_at = now
-    pos = _seal_pos(win, items)
-    if pos is None:
-        return False  # 位置不可读（加载/飞行过渡帧）：下轮再查
-    if not _jiamo_arrived(sig, pos[0], _jiamo_target):
-        return False  # 仍在其它地图寻路中
-    if _jiamo_target is None:
-        _jiamo_target = pos[0]  # 「请在」窗口兜底命中：以当前地名落定目标
-        log(f"[名望] 蛟魔复仇：位置兜底确认目标地图{_jiamo_target}", "INFO")
-    if now - _jiamo_land_at < JIAMO_LAND_RETRY_AFTER:
-        return False  # 降落失败后的重试间隔未到
-    _jiamo_land_at = now
-    log(f"[名望] 蛟魔复仇：已到达{_jiamo_target}，执行降落", "SYS")
-    ok, info = zuoqi.ensure_landed(win)
-    _closed, cinfo = zuoqi.close_feixingyuqi_panel(win)  # 降落后面板保持打开
-    log(f"[名望] 蛟魔复仇：降落{'成功' if ok else '失败'}：{info}；{cinfo}",
-        "SYS" if ok else "WARN")
-    if not ok:
-        return False  # 战斗中/面板瞬态失败：按间隔重试
-    _jiamo_phase = 1
-    return True
+    return _jiamo_step_arrival(win, items, now)
 
 
 def _click_known_dialog_option(win, items, img_np):
@@ -3135,13 +3228,13 @@ def _handle_dialog_options(win, items, img_np):
     五庄封印执行状态机（追踪双链接/坐标稳定到达/任务储物格用唤风符）、
     灵力镐状态机（追踪「前往大唐边境，使用灵力镐」→ 点链接 → 到达 →
     任务储物格用镐；用镐后出现「开采石头」小游戏窗口 → 钓鱼同款
-    长按模式闭环）、传音石状态机（追踪「使用传音石找到魔王和魔王护法」
-    → 任务储物格右键使用传音石）、天宫奇遇状态机（追踪「前往老君丹房
-    门口」→ 到达天宫(13,99) → 任务储物格用偷丹葫芦 → 「魔取仙丹」
-    顺序解封小游戏）、蛟魔复仇暗雷战斗状态机（追踪「请在
-    <地图>仔细搜查（暗雷战斗）」→ 到达目标地图后降落）与沙都修罗搜索
-    状态机（追踪文案触发 → 蟠桃园五路点找 NPC）在最前面处理；其余任务
-    无对应追踪文案时零操作。
+    长按模式闭环）、传音石引导（魔王重聚：读中央提示跨图/按方向寻路
+    收敛 → 魔王护卫战斗，实现见 minigames/mowangchongju）、天宫
+    奇遇状态机（追踪「前往老君丹房门口」→ 到达天宫(13,99) → 任务储物格
+    用偷丹葫芦 → 「魔取仙丹」顺序解封小游戏）、蛟魔复仇暗雷战斗状态机
+    （追踪「请在<地图>仔细搜查（暗雷战斗）」→ 到达目标地图后降落）与
+    沙都修罗搜索状态机（追踪文案触发 → 蟠桃园五路点找 NPC）在最前面
+    处理；其余任务无对应追踪文案时零操作。
     开采石头窗口检测排在灵力镐状态机之前：窗口在场时须先阻塞执行
     小游戏，防状态机同时重试用镐（打开背包干扰小游戏）；魔取仙丹
     窗口检测同理排在天宫奇遇状态机之前。沙海迷踪小游戏弹窗为模态
@@ -3269,7 +3362,7 @@ def _post_claim_flow(win):
     """
     _reset_seal_state()
     _reset_pick_state()
-    _reset_chuanyin_state()
+    _mowang_minigame.reset()
     _reset_tgqy_state()
     _reset_jiamo_state()
     dismissed, dinfo = _dismiss_claim_dialog(win)

@@ -15,6 +15,7 @@
 
 坐标约定：全部使用窗口相对坐标，由调用方通过 human_click 转屏幕坐标。
 """
+import difflib
 import re
 import time
 from pathlib import Path
@@ -28,7 +29,7 @@ from ascript.windows.hardware.keyboard import Keyboard
 from ascript.windows.system import R
 from ascript.windows.screen.find_images import FindImages
 
-from ..core.app_utils import human_click, log
+from ..core.app_utils import human_click, log, norm_text
 from ..core import app_utils  # 高性能模式共享设施（固定位置缓存点击）
 
 # 右下角功能按钮托盘搜索条带（组队/座骑/背包按钮固定位置；
@@ -45,6 +46,79 @@ WORLD_MAP_ICON = "item_map_shijie.png"
 # 世界地图上的城市图标（任务模块共用：点击城市打开该城市的小地图）
 WORLD_MAP_LUOYANG_ICON = "shijie_luoyang.png"  # 洛阳城（实测匹配 0.991）
 WORLD_MAP_CHANGAN_ICON = "shijie_changan.png"         # 长安城（五环任务实测）
+# ---- 世界地图标签全表（地图名 → 标签模板，供按名字导航的流程使用）----
+# 2026-11-15 实机从世界地图截图标定（按 OCR 行框裁剪、留 2px 余量），
+# 覆盖世界地图全部 55 个可见地名。全部模板实机自校验：目标世界地图帧
+# ≥0.98 唯一命中，非地图帧 ≤0.46（阈值 0.8 有充分余量）。
+WORLD_MAP_LABELS = {
+    "大唐边境": "shijie_datangbianjing.png",
+    "长安城": "shijie_changan.png",
+    "洛阳城": "shijie_luoyang.png",
+    "宝象国": "shijie_baoxiangguo.png",
+    "火云戈壁": "shijie_huoyungebi.png",
+    "灵兽村": "shijie_lingshoucun.png",
+    "蟠桃园": "shijie_pantaoyuan.png",
+    "天宫": "shijie_tiangong.png",
+    "广寒宫": "shijie_guanghangong.png",
+    "隐林涧": "shijie_yinlinjian.png",
+    "修罗古城": "shijie_xiuluogucheng.png",
+    "龙窟": "shijie_longku.png",
+    "凤巢": "shijie_fengchao.png",
+    "瑶池": "shijie_yaochi.png",
+    "御马监": "shijie_yumajian.png",
+    "女儿村": "shijie_nvercun.png",
+    "北俱芦洲": "shijie_beijuluzhou.png",
+    "傲来国": "shijie_aolaiguo.png",
+    "花果山": "shijie_huaguoshan.png",
+    "方寸后山": "shijie_fangcunhoushan.png",
+    "流洲": "shijie_liuzhou.png",
+    "水帘洞": "shijie_shuiliandong.png",
+    "方寸山": "shijie_fangcunshan.png",
+    "龙宫": "shijie_longgong.png",
+    "蓬莱": "shijie_penlai.png",
+    "长寿村": "shijie_changshoucun.png",
+    "化生寺": "shijie_huashengsi.png",
+    "海底迷宫": "shijie_haidimigong.png",
+    "瀛洲": "shijie_yingzhou.png",
+    "白骨山": "shijie_baigushan.png",
+    "大雁塔": "shijie_dayanta.png",
+    "皇宫": "shijie_huanggong.png",
+    "长寿村外": "shijie_changshoucunwai.png",
+    "平顶山": "shijie_pingdingshan.png",
+    "东海渔村": "shijie_donghaiyucun.png",
+    "五庄观": "shijie_wuzhuangguan.png",
+    "万寿山": "shijie_wanshoushan.png",
+    "方壶": "shijie_fanghu.png",
+    "珊瑚海岛": "shijie_shanhuhaidao.png",
+    "四圣庄": "shijie_sishengzhuang.png",
+    "斧头帮": "shijie_futoubang.png",
+    "蓬莱海渊": "shijie_penlaihaiyuan.png",
+    "长安东": "shijie_changandong.png",
+    "女儿国": "shijie_nverguo.png",
+    "地下鬼岛": "shijie_dixiaguidao.png",
+    "五指山": "shijie_wuzhishan.png",
+    "大唐境内": "shijie_datangjingnei.png",
+    "普陀山": "shijie_putuoshan.png",
+    "狮驼岭": "shijie_shituoling.png",
+    "地狱迷宫": "shijie_diyumigong.png",
+    "轮回司": "shijie_lunhuisi.png",
+    "若木灵境": "shijie_ruomulingjing.png",
+    "黑水河": "shijie_heishuihe.png",
+    "地府": "shijie_difu.png",
+    "兰若寺": "shijie_lanruosi.png",
+}
+# 世界地图标签匹配阈值（实测目标帧 ≥0.98 唯一命中、非地图帧 ≤0.46）
+WORLD_MAP_LABEL_THRESHOLD = 0.8
+# 地图名 OCR 繁体/形近归一（世界地图字体下 OCR 常输出繁体：龍宫/長安城/
+# 瑤池/蓬菜 等，2026-11-15 实测；提示文案同名，解析前先归一）
+WORLD_MAP_OCR_ALIASES = str.maketrans({
+    "龍": "龙", "長": "长", "陽": "阳", "宮": "宫", "瑤": "瑶",
+    "靈": "灵", "獸": "兽", "鳳": "凤", "東": "东", "華": "华",
+    "觀": "观", "萬": "万", "壽": "寿", "寶": "宝", "羅": "罗",
+    "漢": "汉", "陰": "阴", "樓": "楼", "蘭": "兰", "獄": "狱",
+    "輪": "轮", "迴": "回", "菜": "莱", "園": "园", "頂": "顶",
+    "鄉": "乡", "鎮": "镇", "灣": "湾",
+})
 # 世界地图打开标志模板（实测匹配 0.95，右键其位置可关闭）
 # 小地图面板匹配区域（右上区）：面板可拖动但 58 帧实测均在
 # (900-1100, 150-300)；锄遗聚宝小游戏等面板含相似图标，会误匹配到
@@ -108,6 +182,29 @@ _REGION_OCR_PARAMS = {
 _ZOOM_OCR_PARAMS = dict(_REGION_OCR_PARAMS)
 _ZOOM_OCR_PARAMS["Det.limit_side_len"] = 1600
 _zoom_engine = None
+
+
+def resolve_world_map_name(name):
+    """地图名 → WORLD_MAP_LABELS 键（精确 → 繁体归一 → 相似度）。
+
+    地图名来自固定地点表，OCR 误读多为个别字（蓬菜/繁体 龍宫 等）：
+    先做繁体/形近归一（WORLD_MAP_OCR_ALIASES）后精确匹配，再取相似度
+    最高且 ≥0.6 的候选；短名（2 字）也按全名比对，不做部分包含匹配
+    （长安东/长安城 相似度 0.667，取更高者）。未收录返回 None。
+    """
+    if not name:
+        return None
+    name = norm_text(name).translate(WORLD_MAP_OCR_ALIASES)
+    if not name:
+        return None
+    if name in WORLD_MAP_LABELS:
+        return name
+    best, best_ratio = None, 0.0
+    for key in WORLD_MAP_LABELS:
+        ratio = difflib.SequenceMatcher(None, name, key).ratio()
+        if ratio > best_ratio:
+            best, best_ratio = key, ratio
+    return best if best_ratio >= 0.6 else None
 
 
 def bgr_frame(img):

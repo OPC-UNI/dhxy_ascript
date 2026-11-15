@@ -2022,112 +2022,6 @@ def test_pick_mining_armed_on_use(monkeypatch):
     assert mingwang._pick_mining_armed_at > 0
 
 
-# ---- 传音石（追踪「使用传音石找到魔王和魔王护法」→ 任务储物格使用）----
-def test_chuanyin_trigger_keywords():
-    assert mingwang._chuanyin_trigger(
-        "山河名望 使用传音石找到魔王和魔王护")
-    assert mingwang._chuanyin_trigger("山河名望 使用传音")  # 拆行截断短词兜底
-    assert not mingwang._chuanyin_trigger("火藏之位 木藏之位")
-    assert not mingwang._chuanyin_trigger("")
-
-
-def _patch_chuanyin_sm(monkeypatch):
-    """传音石状态机替换：使用记录、对话框门、残留背包检测。"""
-    state = {"use": 0, "ok": True, "dialog": False}
-    monkeypatch.setattr(mingwang, "_seal_sig",
-                        lambda items: "山河名望 使用传音石找到魔王和魔王护")
-    monkeypatch.setattr(mingwang, "_seal_dialog_blocking",
-                        lambda win, items, img: state["dialog"])
-    monkeypatch.setattr(mingwang, "_bag_box_on_frame",
-                        lambda win, items: False)
-
-    def _use(win):
-        state["use"] += 1
-        return state["ok"], "已使用传音石"
-
-    monkeypatch.setattr(mingwang, "_use_chuanyinshi", _use)
-    return state
-
-
-def test_chuanyin_uses_item_then_retries(monkeypatch):
-    """触发 → 用传音石一次；间隔内不重复；到间隔限次重试后只等待。"""
-    state = _patch_chuanyin_sm(monkeypatch)
-    mingwang._reset_chuanyin_state()
-    frame = _pick_frame()
-    assert mingwang._handle_chuanyinshi(object(), [], frame) is True
-    assert state["use"] == 1 and mingwang._chuanyin_phase == 1
-    assert mingwang._handle_chuanyinshi(object(), [], frame) is False
-    assert state["use"] == 1                       # 宽限/间隔内不重试
-    mingwang._chuanyin_use_at = time.time() - mingwang.CHUANYIN_USE_RETRY_AFTER
-    assert mingwang._handle_chuanyinshi(object(), [], frame) is True
-    assert state["use"] == 2
-    mingwang._chuanyin_use_at = time.time() - mingwang.CHUANYIN_USE_RETRY_AFTER
-    assert mingwang._handle_chuanyinshi(object(), [], frame) is True
-    assert state["use"] == 3
-    mingwang._chuanyin_use_at = time.time() - mingwang.CHUANYIN_USE_RETRY_AFTER
-    assert mingwang._handle_chuanyinshi(object(), [], frame) is False
-    assert state["use"] == 3                       # 重试次数用尽只等待
-    assert mingwang._chuanyin_phase == 1
-
-
-def test_chuanyin_use_failure_retried(monkeypatch):
-    """使用失败（背包/对话框瞬态）→ 不进入 phase 1，按间隔重试且不耗配额。"""
-    state = _patch_chuanyin_sm(monkeypatch)
-    state["ok"] = False
-    mingwang._reset_chuanyin_state()
-    frame = _pick_frame()
-    assert mingwang._handle_chuanyinshi(object(), [], frame) is False
-    assert state["use"] == 1 and mingwang._chuanyin_phase == 0
-    mingwang._handle_chuanyinshi(object(), [], frame)   # 间隔内不重试
-    assert state["use"] == 1
-    state["ok"] = True
-    mingwang._chuanyin_use_at = time.time() - mingwang.CHUANYIN_USE_RETRY_AFTER
-    assert mingwang._handle_chuanyinshi(object(), [], frame) is True
-    assert mingwang._chuanyin_phase == 1
-    assert mingwang._chuanyin_use_retries == 0
-
-
-def test_chuanyin_dialog_blocks_bag(monkeypatch):
-    """对话框在场 → 不使用道具（交给对话处理），且不消耗重试间隔。"""
-    state = _patch_chuanyin_sm(monkeypatch)
-    state["dialog"] = True
-    mingwang._reset_chuanyin_state()
-    assert mingwang._handle_chuanyinshi(object(), [], _pick_frame()) is False
-    assert state["use"] == 0 and mingwang._chuanyin_use_at == 0.0
-
-
-def test_chuanyin_reset_when_trigger_gone_before_use(monkeypatch):
-    """未使用时（phase 0）触发词连续消失 → 状态复位。"""
-    state = _patch_chuanyin_sm(monkeypatch)
-    state["ok"] = False
-    mingwang._reset_chuanyin_state()
-    frame = _pick_frame()
-    mingwang._handle_chuanyinshi(object(), [], frame)   # 使用失败置宽限时间
-    assert mingwang._chuanyin_phase == 0
-    assert mingwang._chuanyin_use_at > 0
-    monkeypatch.setattr(mingwang, "_seal_sig",
-                        lambda items: "山河名望 找到魔王")
-    for _ in range(mingwang.CHUANYIN_ABSENT_RESET):
-        mingwang._handle_chuanyinshi(object(), [], frame)
-    assert mingwang._chuanyin_use_at == 0.0
-    assert mingwang._chuanyin_missing == 0
-
-
-def test_chuanyin_phase1_persists_without_trigger(monkeypatch):
-    """已使用后触发词长期缺失（战斗中面板不可见）→ 不复位，防战后重复使用。"""
-    state = _patch_chuanyin_sm(monkeypatch)
-    mingwang._reset_chuanyin_state()
-    frame = _pick_frame()
-    mingwang._handle_chuanyinshi(object(), [], frame)
-    use_at = mingwang._chuanyin_use_at
-    assert mingwang._chuanyin_phase == 1
-    monkeypatch.setattr(mingwang, "_seal_sig", lambda items: "")
-    for _ in range(mingwang.CHUANYIN_ABSENT_RESET * 2):
-        assert mingwang._handle_chuanyinshi(object(), [], frame) is False
-    assert mingwang._chuanyin_phase == 1
-    assert mingwang._chuanyin_use_at == use_at
-
-
 def test_use_chuanyinshi_clicks_task_item(monkeypatch):
     """任务储物格（bag.open_task_box 通用能力）命中传音石 → 右键使用。"""
     win = _FakeWin([_pil(_noise_bgr(seed=13))])
@@ -2201,9 +2095,9 @@ def test_jiamo_map_match():
 
 
 def _patch_jiamo(monkeypatch, sig, pos, land_ok=True):
-    """蛟魔复仇状态机替换：追踪文案、位置读取、降落/关面板记录。"""
+    """蛟魔复仇状态机替换：追踪文案、位置读取、降落/关面板/Alt+D 记录。"""
     state = {"land": 0, "close": 0, "sig": sig, "pos": pos, "ok": land_ok,
-             "pos_reads": 0}
+             "pos_reads": 0, "alt_d": 0}
     monkeypatch.setattr(mingwang, "_seal_sig", lambda items: state["sig"])
 
     def _pos(win, items):
@@ -2221,27 +2115,89 @@ def _patch_jiamo(monkeypatch, sig, pos, land_ok=True):
         state["close"] += 1
         return True, "飞行驭器面板已关闭"
 
+    def _alt_d(win):
+        state["alt_d"] += 1
+        return "已静默投递 Alt+D 随机遇敌"
+
     monkeypatch.setattr(mingwang.zuoqi, "ensure_landed", _land)
     monkeypatch.setattr(mingwang.zuoqi, "close_feixingyuqi_panel", _close)
+    monkeypatch.setattr(mingwang, "_press_alt_d", _alt_d)
     return state
 
 
+def _jiamo_poll(state, pos=None):
+    """绕过位置 OCR 限频跑一轮（可顺带更新桩位置）。"""
+    if pos is not None:
+        state["pos"] = pos
+    mingwang._jiamo_pos_at = 0.0
+    return mingwang._handle_jiamo_anlei(object(), [], None)
+
+
+def _jiamo_seed_stable(pos):
+    """预置「位移已见 + 稳定 2 轮」：再一轮同位置即达 JIAMO_ARRIVE_POLLS。"""
+    mingwang._jiamo_move_seen = True
+    mingwang._jiamo_walk_from = pos
+    mingwang._jiamo_stable = mingwang.JIAMO_ARRIVE_POLLS - 1
+    mingwang._jiamo_last_pos = pos
+
+
+def test_jiamo_waits_move_before_landing(monkeypatch):
+    """先寻路后降落：在目标地图但未见位移 → 不降落；见位移并稳定后才降落。
+
+    回归 2026-11-15 用户实机问题：点击寻路前已在目标地图，旧逻辑立即
+    降落，随后寻路起飞白降落一次。
+    """
+    state = _patch_jiamo(monkeypatch, JIAMO_SIG, ("女儿村", 88, 40))
+    mingwang._reset_jiamo_state()
+    # 已在目标地图但未见位移：不降落（等寻路启动）
+    assert _jiamo_poll(state) is False
+    assert state["land"] == 0 and mingwang._jiamo_phase == 0
+    assert _jiamo_poll(state) is False
+    assert state["land"] == 0
+    # 位移出现（寻路启动）→ 位置稳定 3 轮后降落
+    assert _jiamo_poll(state, ("女儿村", 95, 45)) is False
+    assert mingwang._jiamo_move_seen is True
+    assert _jiamo_poll(state) is False
+    assert _jiamo_poll(state) is False
+    assert state["land"] == 0
+    assert _jiamo_poll(state) is True
+    assert state["land"] == 1 and state["close"] == 1
+    assert mingwang._jiamo_phase == 1
+
+
+def test_jiamo_no_move_timeout_lands(monkeypatch):
+    """始终未见位移（目的地就在脚下）→ JIAMO_MOVE_WAIT 超时放行后到达并降落。"""
+    state = _patch_jiamo(monkeypatch, JIAMO_SIG, ("女儿村", 7, 7))
+    mingwang._reset_jiamo_state()
+    assert _jiamo_poll(state) is False
+    assert state["land"] == 0
+    mingwang._jiamo_walk_at = time.time() - mingwang.JIAMO_MOVE_WAIT - 1
+    assert _jiamo_poll(state) is False          # 放行后开始累计稳定
+    assert mingwang._jiamo_move_seen is True
+    assert _jiamo_poll(state) is False
+    assert _jiamo_poll(state) is False
+    assert _jiamo_poll(state) is True
+    assert state["land"] == 1 and mingwang._jiamo_phase == 1
+
+
 def test_jiamo_waits_until_target_map(monkeypatch):
-    """寻路途中（其它地图）不降落；到达目标地图 → 降落一次并关面板。"""
+    """寻路途中（其它地图）不降落；到达目标地图并稳定后 → 降落一次并关面板。"""
     state = _patch_jiamo(monkeypatch, JIAMO_SIG, ("洛阳城", 144, 41))
     mingwang._reset_jiamo_state()
-    assert mingwang._handle_jiamo_anlei(object(), [], None) is False
+    assert _jiamo_poll(state) is False
+    assert _jiamo_poll(state, ("洛阳城", 150, 45)) is False
     assert state["land"] == 0 and mingwang._jiamo_phase == 0
-    state["pos"] = ("女儿村", 88, 40)
-    mingwang._jiamo_pos_at = 0.0
-    assert mingwang._handle_jiamo_anlei(object(), [], None) is True
+    # 到达目标地图：仍须连续稳定 3 轮
+    assert _jiamo_poll(state, ("女儿村", 88, 40)) is False
+    assert _jiamo_poll(state) is False
+    assert _jiamo_poll(state) is False
+    assert _jiamo_poll(state) is True
     assert state["land"] == 1 and state["close"] == 1
     assert mingwang._jiamo_phase == 1
     # 已降落：后续轮询零动作（位置不可读/战斗心跳也不重复降落）
     state["pos"] = None
-    mingwang._jiamo_pos_at = 0.0
-    assert mingwang._handle_jiamo_anlei(object(), [], None) is False
-    assert state["land"] == 1 and state["pos_reads"] == 2
+    assert _jiamo_poll(state) is False
+    assert state["land"] == 1
 
 
 def test_jiamo_pos_check_throttled(monkeypatch):
@@ -2262,39 +2218,73 @@ def test_jiamo_land_failure_retries(monkeypatch):
     state = _patch_jiamo(monkeypatch, JIAMO_SIG, ("女儿村", 1, 1),
                          land_ok=False)
     mingwang._reset_jiamo_state()
-    assert mingwang._handle_jiamo_anlei(object(), [], None) is False
+    _jiamo_seed_stable(("女儿村", 1, 1))
+    assert _jiamo_poll(state) is False
     assert state["land"] == 1 and state["close"] == 1  # 成败都尝试关面板
     assert mingwang._jiamo_phase == 0
-    mingwang._jiamo_pos_at = 0.0
-    assert mingwang._handle_jiamo_anlei(object(), [], None) is False
+    assert _jiamo_poll(state) is False
     assert state["land"] == 1                      # 重试间隔内不再开面板
-    mingwang._jiamo_pos_at = 0.0
     mingwang._jiamo_land_at = time.time() - mingwang.JIAMO_LAND_RETRY_AFTER
     state["ok"] = True
-    assert mingwang._handle_jiamo_anlei(object(), [], None) is True
+    _jiamo_seed_stable(("女儿村", 1, 1))
+    assert _jiamo_poll(state) is True
     assert state["land"] == 2 and mingwang._jiamo_phase == 1
 
 
 def test_jiamo_new_target_map_relands(monkeypatch):
-    """多段搜查换图：目标地图变化 → 重新到达判定并再次降落。"""
+    """多段搜查换图：目标地图变化 → 重新等待寻路/到达并再次降落。"""
     state = _patch_jiamo(monkeypatch, JIAMO_SIG, ("女儿村", 1, 1))
     mingwang._reset_jiamo_state()
-    assert mingwang._handle_jiamo_anlei(object(), [], None) is True
+    _jiamo_seed_stable(("女儿村", 1, 1))
+    assert _jiamo_poll(state) is True
     assert mingwang._jiamo_phase == 1 and state["land"] == 1
     state["sig"] = "山河名望请在长寿村仔细搜查暗雷战斗"
     state["pos"] = ("长寿村", 5, 6)
-    mingwang._jiamo_pos_at = 0.0
-    mingwang._jiamo_land_at = time.time() - mingwang.JIAMO_LAND_RETRY_AFTER
-    assert mingwang._handle_jiamo_anlei(object(), [], None) is True
+    assert _jiamo_poll(state) is False             # 目标变化：重新等待寻路
+    assert mingwang._jiamo_phase == 0
     assert mingwang._jiamo_target == "长寿村"
+    _jiamo_seed_stable(("长寿村", 5, 6))
+    mingwang._jiamo_land_at = time.time() - mingwang.JIAMO_LAND_RETRY_AFTER
+    assert _jiamo_poll(state) is True
     assert state["land"] == 2 and mingwang._jiamo_phase == 1
+
+
+def test_jiamo_alt_d_after_stable_no_battle(monkeypatch):
+    """到达稳定后仍不开战（任务文案仍在）→ 按 Alt+D 随机遇敌（限频重按）。"""
+    state = _patch_jiamo(monkeypatch, JIAMO_SIG, ("女儿村", 1, 1))
+    mingwang._reset_jiamo_state()
+    _jiamo_seed_stable(("女儿村", 1, 1))
+    assert _jiamo_poll(state) is True              # 降落 → phase 1
+    assert state["alt_d"] == 0
+    # 稳定但未到 Alt+D 等待时限：不按
+    assert _jiamo_poll(state) is False
+    assert state["alt_d"] == 0 and mingwang._jiamo_stable_at > 0
+    # 等待时限到：按 Alt+D
+    mingwang._jiamo_stable_at = time.time() - mingwang.JIAMO_ALT_D_WAIT - 1
+    assert _jiamo_poll(state) is True
+    assert state["alt_d"] == 1
+    # 重按间隔内不重复
+    assert _jiamo_poll(state) is False
+    assert state["alt_d"] == 1
+    # 间隔到：再次按
+    mingwang._jiamo_alt_d_at = (time.time()
+                                - mingwang.JIAMO_ALT_D_INTERVAL - 1)
+    assert _jiamo_poll(state) is True
+    assert state["alt_d"] == 2
+    # 位置变化（仍在移动）→ 稳定清零、不按
+    assert _jiamo_poll(state, ("女儿村", 40, 40)) is False
+    assert mingwang._jiamo_stable_at == 0.0
+    mingwang._jiamo_alt_d_at = 0.0
+    assert _jiamo_poll(state) is False
+    assert state["alt_d"] == 2
 
 
 def test_jiamo_reset_when_trigger_gone(monkeypatch):
     """触发词连续缺失 → 状态复位；空 OCR 帧（战斗心跳）不计缺失。"""
     state = _patch_jiamo(monkeypatch, JIAMO_SIG, ("女儿村", 1, 1))
     mingwang._reset_jiamo_state()
-    assert mingwang._handle_jiamo_anlei(object(), [], None) is True
+    _jiamo_seed_stable(("女儿村", 1, 1))
+    assert _jiamo_poll(state) is True
     # 战斗中 extras 空 items 心跳不计数：已降落状态保持
     state["sig"] = ""
     for _ in range(mingwang.JIAMO_ABSENT_RESET * 2):
@@ -2313,9 +2303,32 @@ def test_jiamo_arrival_fallback_when_unparsed(monkeypatch):
     state = _patch_jiamo(monkeypatch, sig, ("女儿村", 9, 9))
     mingwang._reset_jiamo_state()
     assert mingwang._jiamo_target_map(sig) is None
-    assert mingwang._handle_jiamo_anlei(object(), [], None) is True
+    _jiamo_seed_stable(("女儿村", 9, 9))
+    assert _jiamo_poll(state) is True
     assert mingwang._jiamo_target == "女儿村"
     assert state["land"] == 1 and mingwang._jiamo_phase == 1
+
+
+def test_press_alt_d_silent_and_physical(monkeypatch):
+    """Alt+D 随机遇敌：静默模式走消息投递；非静默需前台（keyboard_ok）。"""
+    calls = []
+
+    def _hotkey(win, mods, key, **kwargs):
+        calls.append((tuple(mods), key))
+        return {"ok": True}
+
+    monkeypatch.setattr(mingwang.app_utils, "silent_mode_on", lambda: True)
+    from src.device import silent_click
+    monkeypatch.setattr(silent_click, "send_silent_hotkey", _hotkey)
+    desc = mingwang._press_alt_d(object())
+    assert "静默" in desc and calls == [(("alt",), "d")]
+    monkeypatch.setattr(silent_click, "send_silent_hotkey",
+                        lambda *a, **k: None)
+    assert "投递失败" in mingwang._press_alt_d(object())
+    # 物理模式：不在前台 → 不发送
+    monkeypatch.setattr(mingwang.app_utils, "silent_mode_on", lambda: False)
+    monkeypatch.setattr(mingwang.app_utils, "keyboard_ok", lambda w: False)
+    assert "未发送" in mingwang._press_alt_d(object())
 
 
 def test_handle_dialog_options_calls_jiamo(monkeypatch):

@@ -1,4 +1,6 @@
 """map.py 纯逻辑与模板匹配快速接口测试（合成帧 + 仓库内真实模板）。"""
+from pathlib import Path
+
 import cv2
 import numpy as np
 from ascript.windows.system import R
@@ -123,3 +125,24 @@ def test_load_template_cache_identity():
     a = game_map._load_template("fashu.png")
     b = game_map._load_template("fashu.png")
     assert a is not None and a is b  # 第二次命中缓存（同一对象）
+
+
+# ---- 世界地图标签全表（按地图名导航用）----
+
+def test_world_map_labels_templates_exist():
+    """WORLD_MAP_LABELS 全部模板文件存在（世界地图标签素材齐备）。"""
+    root = Path(__file__).resolve().parents[1] / "res" / "img"
+    missing = [icon for icon in game_map.WORLD_MAP_LABELS.values()
+               if not (root / icon).exists()]
+    assert missing == []
+    assert len(game_map.WORLD_MAP_LABELS) >= 50
+
+
+def test_resolve_world_map_name():
+    """地图名解析：精确 → 繁体/形近归一 → 相似度兜底；未收录返回 None。"""
+    assert game_map.resolve_world_map_name("大唐边境") == "大唐边境"
+    assert game_map.resolve_world_map_name("龍宫") == "龙宫"
+    assert game_map.resolve_world_map_name("蓬菜") == "蓬莱"
+    assert game_map.resolve_world_map_name("长安东") == "长安东"
+    assert game_map.resolve_world_map_name("不存在的地") is None
+    assert game_map.resolve_world_map_name("") is None
