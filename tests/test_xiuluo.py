@@ -401,7 +401,7 @@ def test_cancel_task_skips_when_no_task(monkeypatch):
 
 
 def test_cancel_task_happy_path(monkeypatch):
-    """走位→点入口模板→点「我想取消任务」→连续 2 轮无任务确认成功。"""
+    """走位→点入口模板→点「我想取消任务」→确认弹窗点「是」→2 轮无任务确认。"""
     clock = _FakeClock()
     monkeypatch.setattr(xiuluo, "time", clock)
     monkeypatch.setattr(xiuluo, "is_in_battle", lambda w: False)
@@ -417,10 +417,16 @@ def test_cancel_task_happy_path(monkeypatch):
     clicks = []
     monkeypatch.setattr(xiuluo, "_click_cancel_option",
                         lambda w, items, img_np: clicks.append(1) or True)
+    confirmed = []
+    monkeypatch.setattr(xiuluo, "_click_cancel_confirm",
+                        lambda w, items, img_np: confirmed.append(1) or True)
+    monkeypatch.setattr(xiuluo.game_map, "ocr_regions",
+                        lambda img, regions: ([], None))
     monkeypatch.setattr(xiuluo, "is_in_battle_frame", lambda img: False)
     monkeypatch.setattr(xiuluo, "_task_absent_in_frame",
                         lambda img: (True, []))
     monkeypatch.setattr(xiuluo, "log", lambda *a, **k: None)
+    monkeypatch.setattr(xiuluo, "_cancel_confirmed_at", None)
     ok, info = xiuluo._cancel_task(_FakeWin())
     assert ok is True and info == "已取消修罗任务"
     # 入口打开对话框按取消选项判定，且用独立缓存键（不与领取选项共键）
@@ -428,10 +434,39 @@ def test_cancel_task_happy_path(monkeypatch):
     assert captured["option_cache_key"] == "cancel_option"
     assert captured["action"] == "取消任务"
     assert clicks == [1]
+    assert confirmed == [1]  # 点「我想取消任务」后必须走二次确认
+    assert xiuluo._cancel_confirmed_at is not None  # 6s 计时起点已记录
 
 
 def test_cancel_task_fails_when_task_remains(monkeypatch):
-    """点中选项但任务仍在面板：超时返回失败并提示残留文案。"""
+    """点中选项且确认「是」但任务仍在面板：超时返回失败并提示残留文案。"""
+    clock = _FakeClock()
+    monkeypatch.setattr(xiuluo, "time", clock)
+    monkeypatch.setattr(xiuluo, "is_in_battle", lambda w: False)
+    monkeypatch.setattr(xiuluo.task_tracker, "has_task", lambda *a, **k: True)
+    monkeypatch.setattr(xiuluo, "_walk_to_claim_spot", lambda w: (True, ""))
+    monkeypatch.setattr(xiuluo, "_click_entry_ensuring_dialog",
+                        lambda w, **k: (True, "ok", "使者", (1, 1), ([], None)))
+    monkeypatch.setattr(xiuluo, "_click_cancel_option",
+                        lambda w, items, img_np: True)
+    monkeypatch.setattr(xiuluo, "_click_cancel_confirm",
+                        lambda w, items, img_np: True)
+    monkeypatch.setattr(xiuluo, "is_in_battle_frame", lambda img: False)
+    monkeypatch.setattr(
+        xiuluo, "_task_absent_in_frame",
+        lambda img: (False, [("前往瑶池消灭修罗", (20, 240, 300, 262), 0.9)]))
+    monkeypatch.setattr(xiuluo.game_map, "ocr_regions",
+                        lambda img, regions: ([], None))
+    monkeypatch.setattr(xiuluo, "log", lambda *a, **k: None)
+    monkeypatch.setattr(xiuluo, "_cancel_confirmed_at", None)
+    ok, info = xiuluo._cancel_task(_FakeWin())
+    assert ok is False
+    assert "仍在追踪面板" in info and "消灭修罗" in info
+    assert clock.t >= xiuluo.CANCEL_VERIFY_WAIT - 0.01
+
+
+def test_cancel_task_confirm_dialog_timeout(monkeypatch):
+    """确认弹窗始终不识别到「是」：返回失败（任务未取消），不进入消失校验。"""
     clock = _FakeClock()
     monkeypatch.setattr(xiuluo, "time", clock)
     monkeypatch.setattr(xiuluo, "is_in_battle", lambda w: False)
@@ -442,16 +477,169 @@ def test_cancel_task_fails_when_task_remains(monkeypatch):
     monkeypatch.setattr(xiuluo, "_click_cancel_option",
                         lambda w, items, img_np: True)
     monkeypatch.setattr(xiuluo, "is_in_battle_frame", lambda img: False)
-    monkeypatch.setattr(
-        xiuluo, "_task_absent_in_frame",
-        lambda img: (False, [("前往瑶池消灭修罗", (20, 240, 300, 262), 0.9)]))
+
+    def _boom(img):
+        raise AssertionError("未确认取消不应进入任务消失校验")
+
+    monkeypatch.setattr(xiuluo, "_task_absent_in_frame", _boom)
     monkeypatch.setattr(xiuluo.game_map, "ocr_regions",
                         lambda img, regions: ([], None))
     monkeypatch.setattr(xiuluo, "log", lambda *a, **k: None)
+    monkeypatch.setattr(xiuluo, "_cancel_confirmed_at", None)
     ok, info = xiuluo._cancel_task(_FakeWin())
-    assert ok is False
-    assert "仍在追踪面板" in info and "消灭修罗" in info
-    assert clock.t >= xiuluo.CANCEL_VERIFY_WAIT - 0.01
+    assert ok is False and "确认" in info
+    assert clock.t >= xiuluo.CANCEL_CONFIRM_TIMEOUT - 0.01
+    assert xiuluo._cancel_confirmed_at is None
+
+
+# ---- 取消二次确认弹窗（2026-11-15 用户实机：你真的要取消任务？→「是」） ----
+
+def _confirm_dialog_items():
+    return [("你真的要取消任务？", [500, 300, 800, 322], 0.95),
+            ("不是", [500, 350, 560, 372], 0.95),
+            ("是", [500, 380, 530, 402], 0.95)]
+
+
+def test_click_cancel_confirm_clicks_exact_yes(monkeypatch):
+    """确认弹窗点「是」：整行等值匹配，点中的是「是」行中心。"""
+    clicked = []
+    monkeypatch.setattr(xiuluo, "human_click",
+                        lambda w, x, y, **k: clicked.append((x, y)))
+    monkeypatch.setattr(xiuluo, "move_away", lambda w: None)
+    monkeypatch.setattr(xiuluo, "log", lambda *a, **k: None)
+    monkeypatch.setattr(xiuluo.task_tracker, "is_green_text",
+                        lambda img, rect: True)
+    monkeypatch.setattr(xiuluo.task_tracker, "green_text_center",
+                        lambda img, rect, prefer_underline=True: (
+                            (rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2))
+    assert xiuluo._click_cancel_confirm(_FakeWin(), _confirm_dialog_items(), None)
+    assert clicked == [(515, 391)]
+
+
+def test_click_cancel_confirm_tolerates_number_prefix(monkeypatch):
+    """选项带数字序号前缀（「1 是」）仍可点中；「2 不是」不参与。"""
+    clicked = []
+    monkeypatch.setattr(xiuluo, "human_click",
+                        lambda w, x, y, **k: clicked.append((x, y)))
+    monkeypatch.setattr(xiuluo, "move_away", lambda w: None)
+    monkeypatch.setattr(xiuluo, "log", lambda *a, **k: None)
+    monkeypatch.setattr(xiuluo.task_tracker, "is_green_text",
+                        lambda img, rect: True)
+    monkeypatch.setattr(xiuluo.task_tracker, "green_text_center",
+                        lambda img, rect, prefer_underline=True: (
+                            (rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2))
+    items = [("你真的要取消任务？", [500, 300, 800, 322], 0.95),
+             ("2 不是", [500, 350, 560, 372], 0.95),
+             ("1 是", [500, 380, 530, 402], 0.95)]
+    assert xiuluo._click_cancel_confirm(_FakeWin(), items, None)
+    assert clicked == [(515, 391)]
+
+
+def test_click_cancel_confirm_ignores_no_option(monkeypatch):
+    """只有「不是」时不点击：子串陷阱（「是」是「不是」的子串）。"""
+    clicked = []
+    monkeypatch.setattr(xiuluo, "human_click",
+                        lambda w, x, y, **k: clicked.append((x, y)))
+    monkeypatch.setattr(xiuluo, "move_away", lambda w: None)
+    monkeypatch.setattr(xiuluo, "log", lambda *a, **k: None)
+    monkeypatch.setattr(xiuluo.task_tracker, "is_green_text",
+                        lambda img, rect: True)
+    items = [("你真的要取消任务？", [500, 300, 800, 322], 0.95),
+             ("不是", [500, 350, 560, 372], 0.95)]
+    assert not xiuluo._click_cancel_confirm(_FakeWin(), items, None)
+    assert clicked == []
+
+
+def test_click_cancel_confirm_requires_dialog_text(monkeypatch):
+    """无确认弹窗文案（世界浮字「是」）时不点击。"""
+    clicked = []
+    monkeypatch.setattr(xiuluo, "human_click",
+                        lambda w, x, y, **k: clicked.append((x, y)))
+    monkeypatch.setattr(xiuluo, "move_away", lambda w: None)
+    monkeypatch.setattr(xiuluo, "log", lambda *a, **k: None)
+    monkeypatch.setattr(xiuluo.task_tracker, "is_green_text",
+                        lambda img, rect: True)
+    assert not xiuluo._click_cancel_confirm(
+        _FakeWin(), [("是", [500, 380, 530, 402], 0.95)], None)
+    assert clicked == []
+
+
+def test_click_cancel_confirm_zoom_maps_and_clicks(monkeypatch):
+    """2x 兜底：对话区裁剪放大识别后 rect 映射回窗口坐标再点「是」。"""
+    crop_sizes = []
+
+    def fake_zoom(crop):
+        crop_sizes.append(crop.size)
+        return ([("你真的要取消任务？", [74, 224, 341, 260], 0.99),
+                 ("是", [72, 262, 106, 303], 1.0),
+                 ("不是", [69, 286, 142, 339], 1.0)], None)
+
+    monkeypatch.setattr(xiuluo.game_map, "ocr_zoom", fake_zoom)
+    clicked = []
+    monkeypatch.setattr(xiuluo, "human_click",
+                        lambda w, x, y, **k: clicked.append((x, y)))
+    monkeypatch.setattr(xiuluo, "move_away", lambda w: None)
+    monkeypatch.setattr(xiuluo, "log", lambda *a, **k: None)
+    monkeypatch.setattr(xiuluo.task_tracker, "is_green_text",
+                        lambda img, rect: True)
+    monkeypatch.setattr(xiuluo.task_tracker, "green_text_center",
+                        lambda img, rect, prefer_underline=True: (
+                            (rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2))
+    l, t, r, b = xiuluo.task_tracker.DIALOG_REGION
+    img = Image.new("RGB", (r + 200, b + 200))
+    assert xiuluo._click_cancel_confirm_zoom(_FakeWin(), img, None)
+    assert crop_sizes == [((r - l) * 2, (b - t) * 2)]
+    # 「是」裁剪坐标 [72,262,106,303] → 窗口坐标 [436,401,453,421] 的中心
+    assert clicked == [(444, 411)]
+
+
+def test_cancel_task_uses_zoom_fallback_for_short_options(monkeypatch):
+    """区域引擎漏检短选项：问题行在场时走 2x 放大兜底确认。"""
+    clock = _FakeClock()
+    monkeypatch.setattr(xiuluo, "time", clock)
+    monkeypatch.setattr(xiuluo, "is_in_battle", lambda w: False)
+    monkeypatch.setattr(xiuluo.task_tracker, "has_task", lambda *a, **k: True)
+    monkeypatch.setattr(xiuluo, "_walk_to_claim_spot", lambda w: (True, ""))
+    monkeypatch.setattr(xiuluo, "_click_entry_ensuring_dialog",
+                        lambda w, **k: (True, "ok", "使者", (1, 1), ([], None)))
+    monkeypatch.setattr(xiuluo, "_click_cancel_option",
+                        lambda w, items, img_np: True)
+    monkeypatch.setattr(xiuluo, "_click_cancel_confirm",
+                        lambda w, items, img_np: False)  # 区域引擎漏检短选项
+    monkeypatch.setattr(xiuluo.game_map, "ocr_regions",
+                        lambda img, regions: (
+                            [("你真的要取消任务？", [435, 377, 572, 403], 1.0)],
+                            None))
+    zoom_calls = []
+    monkeypatch.setattr(xiuluo, "_click_cancel_confirm_zoom",
+                        lambda w, img, img_np: zoom_calls.append(1) or True)
+    monkeypatch.setattr(xiuluo, "is_in_battle_frame", lambda img: False)
+    monkeypatch.setattr(xiuluo, "_task_absent_in_frame",
+                        lambda img: (True, []))
+    monkeypatch.setattr(xiuluo, "log", lambda *a, **k: None)
+    monkeypatch.setattr(xiuluo, "_cancel_confirmed_at", None)
+    ok, info = xiuluo._cancel_task(_FakeWin())
+    assert ok is True and info == "已取消修罗任务"
+    assert zoom_calls == [1]
+
+
+def test_click_cancel_confirm_requires_green_and_dialog_region(monkeypatch):
+    """非绿字或追踪面板区（x<PANEL_MAX_X）的「是」不点击。"""
+    clicked = []
+    monkeypatch.setattr(xiuluo, "human_click",
+                        lambda w, x, y, **k: clicked.append((x, y)))
+    monkeypatch.setattr(xiuluo, "move_away", lambda w: None)
+    monkeypatch.setattr(xiuluo, "log", lambda *a, **k: None)
+    monkeypatch.setattr(xiuluo.task_tracker, "is_green_text",
+                        lambda img, rect: False)
+    assert not xiuluo._click_cancel_confirm(
+        _FakeWin(), _confirm_dialog_items(), None)
+    monkeypatch.setattr(xiuluo.task_tracker, "is_green_text",
+                        lambda img, rect: True)
+    items = [("你真的要取消任务？", [500, 300, 800, 322], 0.95),
+             ("是", [100, 380, 130, 402], 0.95)]
+    assert not xiuluo._click_cancel_confirm(_FakeWin(), items, None)
+    assert clicked == []
 
 
 def test_click_cancel_option_uses_cancel_needles(monkeypatch):
@@ -644,6 +832,7 @@ def test_recover_battle_failure_canceled_then_reclaim(monkeypatch):
                         lambda w, img=None: ("灵兽村", 117, 95))
     monkeypatch.setattr(xiuluo, "_cancel_task",
                         lambda w: (True, "已取消修罗任务"))
+    monkeypatch.setattr(xiuluo, "_cancel_confirmed_at", None)
     monkeypatch.setattr(xiuluo, "_team_checked", True)
     monkeypatch.setattr(xiuluo, "_task_gone_last_round", False)
     monkeypatch.setattr(xiuluo, "_battle_recovery_pending", True)
@@ -653,6 +842,25 @@ def test_recover_battle_failure_canceled_then_reclaim(monkeypatch):
     assert xiuluo._team_checked is False
     assert xiuluo._task_gone_last_round is True
     assert xiuluo._battle_recovery_pending is False  # 恢复完成：清除重试标记
+
+
+def test_recover_battle_failure_reclaim_wait_from_confirm_click(monkeypatch):
+    """6s 间隔从确认弹窗「是」起算：取消校验已耗 4s 时只补 2s。"""
+    clock = _FakeClock()
+    monkeypatch.setattr(xiuluo, "time", clock)
+    monkeypatch.setattr(xiuluo, "log", lambda *a, **k: None)
+    monkeypatch.setattr(xiuluo, "_check_team_with_retry",
+                        lambda w, **k: ("ready", "队伍满足"))
+    monkeypatch.setattr(xiuluo.game_map, "read_map_position",
+                        lambda w, img=None: ("灵兽村", 117, 95))
+    monkeypatch.setattr(xiuluo, "_cancel_task",
+                        lambda w: (True, "已取消修罗任务"))
+    # 虚拟时钟从 0 起：确认点击时间戳 -4 → 已过 4s
+    monkeypatch.setattr(xiuluo, "_cancel_confirmed_at", -4.0)
+    status, _info = xiuluo._recover_battle_failure(_FakeWin(), True)
+    assert status == "canceled"
+    assert clock.t == pytest.approx(xiuluo.CANCEL_RE_CLAIM_DELAY - 4.0)
+    assert xiuluo._cancel_confirmed_at is None  # 计时起点用后清空
 
 
 def test_recover_battle_failure_completed_when_task_gone(monkeypatch):
@@ -690,6 +898,7 @@ def test_recover_battle_failure_lunhuisi_uses_talisman(monkeypatch):
             AssertionError("轮回司不应走世界地图")))
     monkeypatch.setattr(xiuluo, "_cancel_task",
                         lambda w: (True, "已取消修罗任务"))
+    monkeypatch.setattr(xiuluo, "_cancel_confirmed_at", None)
     monkeypatch.setattr(xiuluo, "_team_checked", True)
     status, _info = xiuluo._recover_battle_failure(_FakeWin(), False)
     assert status == "canceled" and calls == ["talisman"]

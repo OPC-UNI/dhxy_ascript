@@ -588,14 +588,37 @@ def save_xiuluo_auto_rejoin(on):
     return {"status": "success"}
 
 
-# ---- 修罗暂离超时自动请离（UI 开关 + 超时分钟，角色设置持久化；默认
-#      开启、默认 5 分钟。仅队长且检查队伍开启时生效：队伍检查扫描到
-#      暂离成员按「名字模糊+种族精确」记账，超时未归队即请离，实现见
-#      team._auto_kick_overdue） ----
-_XIULUO_AUTO_KICK_AWAY_KEY = "xiuluo_auto_kick_away"
-_XIULUO_KICK_AWAY_MINUTES_KEY = "xiuluo_kick_away_minutes"
+# ---- 暂离超时自动请离（修罗/五倍各一套 UI 开关 + 超时分钟，角色设置
+#      持久化；默认开启、默认 5 分钟。仅队长且检查队伍开启时生效：队伍
+#      检查扫描到暂离成员按「名字模糊+种族精确」记账，超时未归队即请离，
+#      实现见 team._auto_kick_overdue） ----
 _KICK_AWAY_MINUTES_MIN = 1
 _KICK_AWAY_MINUTES_MAX = 60
+
+
+def _load_kick_away_minutes(key):
+    """读取暂离超时（分钟，首次默认 5），结果夹取到 1~60。"""
+    try:
+        value = int(role_settings.get(key, 5))
+    except (TypeError, ValueError):
+        value = 5
+    return max(_KICK_AWAY_MINUTES_MIN, min(_KICK_AWAY_MINUTES_MAX, value))
+
+
+def _save_kick_away_minutes(key, value):
+    """保存暂离超时（1~60 分钟），返回操作结果。"""
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        return {"status": "error", "msg": "INVALID_INTERVAL"}
+    if not (_KICK_AWAY_MINUTES_MIN <= value <= _KICK_AWAY_MINUTES_MAX):
+        return {"status": "error", "msg": "OUT_OF_RANGE"}
+    role_settings.set_value(key, value)
+    return {"status": "success", "interval": value}
+
+
+_XIULUO_AUTO_KICK_AWAY_KEY = "xiuluo_auto_kick_away"
+_XIULUO_KICK_AWAY_MINUTES_KEY = "xiuluo_kick_away_minutes"
 
 
 def load_xiuluo_auto_kick_away():
@@ -611,23 +634,37 @@ def save_xiuluo_auto_kick_away(on):
 
 def load_xiuluo_kick_away_minutes():
     """读取修罗暂离超时（分钟，首次默认 5）。"""
-    try:
-        value = int(role_settings.get(_XIULUO_KICK_AWAY_MINUTES_KEY, 5))
-    except (TypeError, ValueError):
-        value = 5
-    return max(_KICK_AWAY_MINUTES_MIN, min(_KICK_AWAY_MINUTES_MAX, value))
+    return _load_kick_away_minutes(_XIULUO_KICK_AWAY_MINUTES_KEY)
 
 
 def save_xiuluo_kick_away_minutes(value):
     """保存修罗暂离超时（1~60 分钟），返回操作结果。"""
-    try:
-        value = int(value)
-    except (TypeError, ValueError):
-        return {"status": "error", "msg": "INVALID_INTERVAL"}
-    if not (_KICK_AWAY_MINUTES_MIN <= value <= _KICK_AWAY_MINUTES_MAX):
-        return {"status": "error", "msg": "OUT_OF_RANGE"}
-    role_settings.set_value(_XIULUO_KICK_AWAY_MINUTES_KEY, value)
-    return {"status": "success", "interval": value}
+    return _save_kick_away_minutes(_XIULUO_KICK_AWAY_MINUTES_KEY, value)
+
+
+_WUBEI_AUTO_KICK_AWAY_KEY = "wubei_auto_kick_away"
+_WUBEI_KICK_AWAY_MINUTES_KEY = "wubei_kick_away_minutes"
+
+
+def load_wubei_auto_kick_away():
+    """读取五倍暂离超时自动请离开关（首次默认开启）。"""
+    return bool(role_settings.get(_WUBEI_AUTO_KICK_AWAY_KEY, True))
+
+
+def save_wubei_auto_kick_away(on):
+    """保存五倍暂离超时自动请离开关，返回操作结果。"""
+    role_settings.set_value(_WUBEI_AUTO_KICK_AWAY_KEY, bool(on))
+    return {"status": "success"}
+
+
+def load_wubei_kick_away_minutes():
+    """读取五倍暂离超时（分钟，首次默认 5）。"""
+    return _load_kick_away_minutes(_WUBEI_KICK_AWAY_MINUTES_KEY)
+
+
+def save_wubei_kick_away_minutes(value):
+    """保存五倍暂离超时（1~60 分钟），返回操作结果。"""
+    return _save_kick_away_minutes(_WUBEI_KICK_AWAY_MINUTES_KEY, value)
 
 
 # ---- 修罗自动巫医（UI 开关+间隔，角色设置持久化；默认开启、每 5 轮

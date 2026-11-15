@@ -918,3 +918,22 @@ def test_follow_to_done_wires_battle_end_handler(monkeypatch):
     assert wubei._fight_via_kanda is False
     assert wubei._battle_failed_reason is None
 
+
+
+# ---- 暂离超时自动请离设置注入（与修罗同款，2026-11-15） ----
+
+def test_team_flow_injects_kick_away_settings(monkeypatch):
+    """五倍队伍检查传入请离开关与超时：不注入时 TeamFlow 走默认
+    （恒请离、固定 5 分钟），五倍设置面板将无法生效。"""
+    from src.workflows import team_flow
+    calls = {}
+
+    def _check(win, **kwargs):
+        calls.update(kwargs)
+        return "ready", "队伍已满", []
+
+    monkeypatch.setattr(team_flow.team, "check_team_min", _check)
+    monkeypatch.setattr(team_flow.team, "update_overlay_team", lambda *a: None)
+    wubei._team_flow.check_team_ready(object())
+    assert calls["kick_overdue"] is True     # 首次默认开启
+    assert calls["kick_timeout"] == 300      # 首次默认 5 分钟

@@ -75,6 +75,8 @@ from ..core.settings import (load_task_counts,  # 任务次数上限
                              load_wubei_check_team,  # 五倍设置：检查队伍开关
                              load_wubei_auto_create_team,  # 五倍设置：自动创建队伍开关
                              load_wubei_auto_rejoin,  # 五倍设置：自动归队开关
+                             load_wubei_auto_kick_away,  # 五倍设置：暂离超时自动请离开关
+                             load_wubei_kick_away_minutes,  # 五倍设置：暂离超时（分钟）
                              load_wubei_shout_switch,  # 五倍设置：缺人自动喊话开关
                              load_wubei_shout_text,  # 五倍设置：缺人喊话内容
                              load_wubei_auto_wuyi,  # 五倍设置：自动巫医开关
@@ -447,7 +449,12 @@ _team_flow = TeamFlow(
     auto_rejoin=load_wubei_auto_rejoin, shout_text=lambda: _shout_text,
     check_retry_interval=TEAM_CHECK_RETRY_INTERVAL,
     recog_retry_interval=TEAM_RECOG_RETRY_INTERVAL,
-    shout_min_interval=SHOUT_MIN_INTERVAL)
+    shout_min_interval=SHOUT_MIN_INTERVAL,
+    # 暂离超时自动请离（五倍设置开关 + 分钟数，默认开/5 分钟，与修罗同款）：
+    # 队伍检查时传入 team.check_team_min；关闭时只停请离，组号暂离
+    # 队员归队 pass 仍照常执行
+    kick_overdue=load_wubei_auto_kick_away,
+    kick_timeout=lambda: load_wubei_kick_away_minutes() * 60)
 
 # ---- 返程（任务储物格 → 五倍回城符右键 → 回宝象国；共享实现在
 #      workflows/return_flow.py，仅道具模板/目标地图不同） ----
@@ -2789,6 +2796,10 @@ def run_loop(win, cycle_interval=1.0):
     # 关闭时跳过全部队伍检查直接领取（可能不是队长，被拒也不补人）
     check_team = load_wubei_check_team()
     log(f"[五倍] 检查队伍: {'开（领取前监控补人）' if check_team else '关（跳过队伍检查）'}", "SYS")
+    auto_kick = load_wubei_auto_kick_away()
+    auto_kick_txt = (f"开（{load_wubei_kick_away_minutes()} 分钟未归队请离）"
+                     if auto_kick else "关（不自动请离，组号队员归队照常）")
+    log(f"[五倍] 暂离超时自动请离: {auto_kick_txt}", "SYS")
     # 自动巫医（通用设置开关，默认开、每 5 轮一次，与修罗一致）：每 N 轮
     # 领取后无条件前往宝象国巫医 NPC 医治，血蓝正常也照常
     # （对话框处理复用战斗线程逻辑）

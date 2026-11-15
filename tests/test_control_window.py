@@ -114,26 +114,36 @@ def test_settings_spec_rejoin_and_check_team_defaults(monkeypatch):
 
 
 def test_settings_spec_kick_away_defaults(monkeypatch):
-    """暂离超时自动请离开关/分钟：方案快照默认开启、默认 5 分钟；
-    load_* 首次默认与 spec 一致；保存越界拒绝。"""
+    """暂离超时自动请离开关/分钟（修罗/五倍各一套）：方案快照默认开启、
+    默认 5 分钟；load_* 首次默认与 spec 一致；保存越界拒绝。"""
     from src.core import schemes
     from src.app.control_window import (
         _XIULUO_AUTO_KICK_AWAY_KEY, _XIULUO_KICK_AWAY_MINUTES_KEY,
+        _WUBEI_AUTO_KICK_AWAY_KEY, _WUBEI_KICK_AWAY_MINUTES_KEY,
         load_xiuluo_auto_kick_away, load_xiuluo_kick_away_minutes,
-        save_xiuluo_auto_kick_away, save_xiuluo_kick_away_minutes)
+        save_xiuluo_auto_kick_away, save_xiuluo_kick_away_minutes,
+        load_wubei_auto_kick_away, load_wubei_kick_away_minutes,
+        save_wubei_auto_kick_away, save_wubei_kick_away_minutes)
     spec = schemes._settings_spec()
-    assert spec[_XIULUO_AUTO_KICK_AWAY_KEY] is True
-    assert spec[_XIULUO_KICK_AWAY_MINUTES_KEY] == 5
+    for switch_key, minutes_key in (
+            (_XIULUO_AUTO_KICK_AWAY_KEY, _XIULUO_KICK_AWAY_MINUTES_KEY),
+            (_WUBEI_AUTO_KICK_AWAY_KEY, _WUBEI_KICK_AWAY_MINUTES_KEY)):
+        assert spec[switch_key] is True
+        assert spec[minutes_key] == 5
     _patch_kv_empty(monkeypatch)
-    assert load_xiuluo_auto_kick_away() == spec[_XIULUO_AUTO_KICK_AWAY_KEY]
-    assert load_xiuluo_kick_away_minutes() == spec[_XIULUO_KICK_AWAY_MINUTES_KEY]
-    assert save_xiuluo_kick_away_minutes(0)["status"] == "error"
-    assert save_xiuluo_kick_away_minutes(61)["status"] == "error"
-    assert save_xiuluo_kick_away_minutes(8) == {"status": "success",
-                                                "interval": 8}
-    assert load_xiuluo_kick_away_minutes() == 8
-    assert save_xiuluo_auto_kick_away(False) == {"status": "success"}
-    assert load_xiuluo_auto_kick_away() is False
+    for load_switch, load_minutes, save_switch, save_minutes in (
+            (load_xiuluo_auto_kick_away, load_xiuluo_kick_away_minutes,
+             save_xiuluo_auto_kick_away, save_xiuluo_kick_away_minutes),
+            (load_wubei_auto_kick_away, load_wubei_kick_away_minutes,
+             save_wubei_auto_kick_away, save_wubei_kick_away_minutes)):
+        assert load_switch() is True
+        assert load_minutes() == 5
+        assert save_minutes(0)["status"] == "error"
+        assert save_minutes(61)["status"] == "error"
+        assert save_minutes(8) == {"status": "success", "interval": 8}
+        assert load_minutes() == 8
+        assert save_switch(False) == {"status": "success"}
+        assert load_switch() is False
 
 
 def test_settings_spec_auto_create_team_defaults(monkeypatch):

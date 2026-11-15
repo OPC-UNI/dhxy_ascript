@@ -25,8 +25,10 @@
 4. 战斗：战斗由 battle.watch_loop 线程自动操作；follow_task 战斗中自动跳过识别
    战斗失败（用户 2026-11-14）：战斗结束任务仍在追踪、或战死落轮回司
    → 队长回灵兽村（轮回司世界地图不可用，走修罗回城符）→ 点「我想
-   取消任务」→ 6s 后重新领取（重新领取前强制队伍检查：暂离/组号队员
-   归队/超时请离/补人）；非队长不取消/重领，转保持模式并自动归队
+   取消任务」→ 二次确认弹窗「你真的要取消任务？」点「是」（用户
+   2026-11-15）→ 从「是」点击起 6s 后重新领取（重新领取前强制队伍检查：
+   暂离/组号队员归队/超时请离/补人）；非队长不取消/重领，转保持模式
+   并自动归队
 5. 返程：战斗结束后用修罗回城符回灵兽村（仅「看打！」进入的战斗才返程，
    其他方式进入的战斗不自动返程）：返程前 has_task 复查任务确已消失
    （单轮消失确认的兜底）→ 打开背包 → 打开任务储物格
@@ -167,9 +169,27 @@ CANCEL_VERIFY_POLL_INTERVAL = 0.8             # 消失确认轮询间隔（同�
 CANCEL_VERIFY_GONE_POLLS = 2                  # 连续「无任务」确认轮数（防面板重绘
                                               # 瞬时漏检；与 follow 任务消失确认同思路）
 
+# ---- 取消任务二次确认（用户 2026-11-15 实机补充）：点「我想取消任务」后
+#      游戏弹出确认「你真的要取消任务？」，选项「是」/「不是」——必须点
+#      「是」才真正取消；6s 重领间隔从点击「是」开始计时 ----
+CANCEL_CONFIRM_TEXT = "你真的要取消任务？"     # 二次确认弹窗文案（用户给出原文；
+                                             # 规范化去标点后模糊匹配）
+CANCEL_CONFIRM_OPTION = "是"                 # 确认选项：整行等值匹配——「是」是
+                                             # 「不是」的子串，子串/模糊匹配会把
+                                             # 确认点成「不是」，取消不生效。
+                                             # 1~2 字短选项区域引擎确定性漏检
+                                             # （2026-11-15 用户真图），需 2x 放大
+                                             # 兜底（见 _click_cancel_confirm_zoom）
+CANCEL_CONFIRM_TIMEOUT = 10                   # 等待确认弹窗并点「是」的时长：弹窗
+                                             # 随取消选项点击即时出现，10s 覆盖
+                                             # OCR 偶发漏检后的下一轮询
+CANCEL_CONFIRM_POLL_INTERVAL = 0.3            # 确认弹窗轮询间隔（同对话框选项轮询）
+
 # ---- 战斗失败恢复（用户 2026-11-14 指定）：作为队长，任务战斗失败 →
 #      回灵兽村取消任务 → 6s 后重新领取；人数不足走既有检查暂离/补人流程 ----
-CANCEL_RE_CLAIM_DELAY = 6                     # 取消任务后重新领取的等待（秒，用户指定）
+CANCEL_RE_CLAIM_DELAY = 6                     # 取消任务后重新领取的等待（秒，用户指定；
+                                              # 从确认弹窗点「是」开始计——取消校验
+                                              # 轮询消耗的时间计入该间隔）
 _lunhuisi_retry_count = 3                     # 战斗失败后回灵兽村的重试次数（回城符
                                               # 打开任务储物格偶发失败，2026-11-11 日志
                                               # 死亡后首次打开失败、稍后成功）
@@ -238,6 +258,9 @@ _battle_recovery_pending = False  # 战斗失败恢复未完成（回灵兽村/�
                                 # 下一轮开始先重试恢复，不得回到任务跟踪——
                                 # 旧任务仍在追踪，直接继续跟踪会反复打同一
                                 # 任务（用户 2026-11-14 疑问的缺口）
+_cancel_confirmed_at = None     # 最近一次点击取消确认弹窗「是」的时间戳：6s 重领
+                                # 间隔的计时起点（用户 2026-11-15 指定从「是」
+                                # 点击完成开始算；None=本次流程尚未点过确认）
 _team_checked = False           # 队伍检查已通过（首次领取成功后置位）：
                                 # 后续轮次跳过检查——用户确认每轮回程后开面板
                                 # 检查耗时 5~7s，只需第一次领取前检查一次
@@ -821,6 +844,67 @@ def _click_cancel_option(win, items, img_np):
     return claim_flow.click_claim_option(
         win, items, img_np, needles=CANCEL_OPTION_NEEDLES,
         prefix="[修罗]", cache_key="cancel_option")
+
+
+def _click_cancel_confirm(win, items, img_np):
+    """点击取消任务二次确认弹窗的「是」（用户 2026-11-15 指定）。
+
+    点「我想取消任务」后游戏弹出「你真的要取消任务？」，选项
+    「是」/「不是」——点「是」才真正取消。选项匹配必须**整行等值**
+    （仅容忍数字序号前缀，如「1 是」）：「是」是「不是」的子串，
+    子串/模糊匹配（如 dialog_common 的选项点击）会把确认点成
+    「不是」，任务取消不掉。其余约束与其他绿色选项一致：先按弹窗
+    文案确认确属本弹窗，再要求绿字 + 对话框区（x≥PANEL_MAX_X），
+    防世界浮字误点。
+    返回是否已点击。
+    """
+    if not _norm_dialog_present(items, CANCEL_CONFIRM_TEXT):
+        return False
+    needle = norm_text(CANCEL_CONFIRM_OPTION)
+    for txt, rect, score in items:
+        ntxt = norm_text(txt)
+        # 整行等值（容忍可能的序号前缀，如「1 是」）：任何子串/模糊匹配
+        # 都会让「不是」同时命中——确认点成放弃
+        if score < 0.55:
+            continue
+        if ntxt != needle and not (
+                ntxt.endswith(needle)
+                and ntxt[:-len(needle)].isdigit()):
+            continue
+        if rect[0] < task_tracker.PANEL_MAX_X:
+            continue
+        if not task_tracker.is_green_text(img_np, rect):
+            continue
+        cx, cy = task_tracker.green_text_center(
+            img_np, rect, prefer_underline=False)
+        human_click(win, cx, cy)
+        move_away(win)  # 鼠标停留选项上会使其悬停变色，干扰后续绿字判定
+        log("[修罗] 已点击取消确认弹窗「是」", "SYS")
+        return True
+    return False
+
+
+def _click_cancel_confirm_zoom(win, img, img_np):
+    """取消确认弹窗的 2x 放大兜底识别并点击「是」。
+
+    实测（2026-11-15 用户真图）：区域快引擎对「是」/「不是」这种
+    1~2 字绿色短选项确定性漏检（白字问题行正常检出 score 1.00），
+    对话区 2x 裁剪后走 ocr_zoom（max/1600 快引擎）两行选项均 1.00
+    检出。rect 映射回窗口坐标后复用 _click_cancel_confirm 的
+    等值/绿字/对话框区约束（img_np 用全帧数组做绿字判定）。
+    返回是否已点击。
+    """
+    l, t, r, b = task_tracker.DIALOG_REGION
+    crop = img.crop((l, t, r, b)).resize(
+        ((r - l) * 2, (b - t) * 2), Image.LANCZOS)
+    items2, _ = game_map.ocr_zoom(crop)
+    items = [(txt, [l + rc[0] // 2, t + rc[1] // 2,
+                    l + rc[2] // 2, t + rc[3] // 2], score)
+             for txt, rc, score in items2]
+    if not _click_cancel_confirm(win, items, img_np):
+        return False
+    log("[修罗] 取消确认选项区域引擎漏检，2x 放大识别补点", "INFO")
+    return True
 
 
 def _handle_team_warning(win, items, img_np):
@@ -1466,11 +1550,14 @@ def _cancel_task(win):
     用户指定（2026-11-14）：与领取流程一致——先走到灵兽村领取点、
     点击领取入口模板（领取任务按钮/灵兽村使者）打开对话框，区别是
     取消时点绿色选项「我想取消任务」，最后校验任务从追踪面板消失。
+    用户 2026-11-15 补充：点「我想取消任务」后还有二次确认弹窗
+    「你真的要取消任务？」，必须点「是」（点「不是」不取消）。
 
     前置：任务追踪中已有修罗任务（无任务时领取入口不出现，无取消
     对象，且防止把其他对话框选项当取消选项点掉）；战斗中跳过。
     返回 (是否成功, 描述)；「无需取消」表示任务已不存在。
     """
+    global _cancel_confirmed_at
     if is_in_battle(win):
         return False, "战斗中，跳过取消任务"
     if not task_tracker.has_task(win, TASK_TITLE, TASK_FALLBACK_TEXTS):
@@ -1506,7 +1593,34 @@ def _cancel_task(win):
             time.sleep(0.3)
     if not clicked:
         return False, f"取消对话框未识别到绿色选项「{CANCEL_DIALOG_OPTION}」"
-    # 4. 校验任务从追踪面板消失：连续 CANCEL_VERIFY_GONE_POLLS 轮确认
+    # 4. 二次确认（用户 2026-11-15）：点「我想取消任务」后游戏弹出
+    #    「你真的要取消任务？」，必须点「是」才真正取消；6s 重领间隔
+    #    从这一点击开始计（_cancel_confirmed_at）。漏点/点成「不是」时
+    #    任务继续存在，由下面的消失校验兜底判失败（下一轮恢复重试）。
+    deadline = time.time() + CANCEL_CONFIRM_TIMEOUT
+    confirmed = False
+    while time.time() < deadline:
+        img = win.capture(force_activate=False)
+        if img is None:
+            time.sleep(0.3)
+            continue
+        items, img_np = game_map.ocr_regions(
+            img, (task_tracker.DIALOG_REGION,))
+        clicked_confirm = _click_cancel_confirm(win, items, img_np)
+        if not clicked_confirm and _norm_dialog_present(
+                items, CANCEL_CONFIRM_TEXT):
+            # 区域引擎对 1~2 字短选项确定性漏检（2026-11-15 用户真图）：
+            # 问题行在场即确认弹窗已开，改走 2x 放大识别兜底
+            clicked_confirm = _click_cancel_confirm_zoom(win, img, img_np)
+        if clicked_confirm:
+            confirmed = True
+            _cancel_confirmed_at = time.time()
+            break
+        time.sleep(CANCEL_CONFIRM_POLL_INTERVAL)
+    if not confirmed:
+        return False, (f"取消确认弹窗未识别到「{CANCEL_CONFIRM_OPTION}」"
+                       f"（任务未取消）")
+    # 5. 校验任务从追踪面板消失：连续 CANCEL_VERIFY_GONE_POLLS 轮确认
     #    （单轮漏检可能是面板重绘/滑动动画；战斗帧不构成消失证据）。
     #    成功后任务已不存在——调用方下一轮按其常规「无任务」路径处理
     deadline = time.time() + CANCEL_VERIFY_WAIT
@@ -1529,7 +1643,7 @@ def _cancel_task(win):
             log("[修罗] 已取消修罗任务（追踪面板已无任务）", "SYS")
             return True, "已取消修罗任务"
         time.sleep(CANCEL_VERIFY_POLL_INTERVAL)
-    # 失败排查：读一次对话区文案（如出现取消确认弹窗），只记录不点击
+    # 失败排查：读一次对话区文案（残留对话框/确认弹窗未被点掉），只记录不点击
     try:
         img = win.capture(force_activate=False)
         if img is not None:
@@ -1540,7 +1654,8 @@ def _cancel_task(win):
     except Exception:
         pass
     detail = f"（面板残留: {last_lines}）" if last_lines else ""
-    return False, f"已点击「{CANCEL_DIALOG_OPTION}」，但任务仍在追踪面板{detail}"
+    return False, (f"已点击「{CANCEL_DIALOG_OPTION}」及确认弹窗"
+                   f"「{CANCEL_CONFIRM_OPTION}」，但任务仍在追踪面板{detail}")
 
 
 def _check_team_ready(win, create_if_missing=False):
@@ -1749,14 +1864,15 @@ def _recover_battle_failure(win, check_team):
        自动归队（死亡落轮回司点「归队」回队长身边）。
     2. 回灵兽村：落轮回司时世界地图不可用（2026-11-11 日志实测），
        走修罗回城符返程；其他地图走地图寻路，寻路失败再用回城符。
-    3. 取消任务：追踪中仍有任务则点「我想取消任务」；任务已消失
-       （战斗胜利后死亡等）按本轮完成处理。
-    4. 取消成功 → 等待 CANCEL_RE_CLAIM_DELAY(6s)，下一轮重新领取；
-       队伍检查标记复位，重新领取前走检查暂离/组号队员归队/补人流程。
+    3. 取消任务：追踪中仍有任务则点「我想取消任务」→ 确认弹窗点「是」；
+       任务已消失（战斗胜利后死亡等）按本轮完成处理。
+    4. 取消成功 → 从确认弹窗点「是」起等满 CANCEL_RE_CLAIM_DELAY(6s)
+       （取消校验轮询已消耗的时间计入间隔），下一轮重新领取；队伍检查
+       标记复位，重新领取前走检查暂离/组号队员归队/补人流程。
     返回 ("canceled"|"completed"|"failed", 描述)。
     """
     global _team_checked, _task_gone_last_round, _returned_last_round, \
-        _battle_recovery_pending
+        _battle_recovery_pending, _cancel_confirmed_at
     # 1. 身份：非队长走归队保持模式（队员不能取消/领取队伍任务）
     if check_team:
         status, info = _check_team_with_retry(win)
@@ -1801,7 +1917,15 @@ def _recover_battle_failure(win, check_team):
     if ok:
         _battle_recovery_pending = False
         _team_checked = False  # 重新领取前强制队伍检查（暂离/组号归队/补人）
-        time.sleep(CANCEL_RE_CLAIM_DELAY)
+        # 6s 重领间隔从点击确认弹窗「是」开始计（用户 2026-11-15 指定）：
+        # 取消校验轮询已消耗其中一部分，这里只补足剩余的秒数；时间戳
+        # 缺失（理论上不会）按完整间隔等待——宁多等不提前领取被拒。
+        elapsed = (time.time() - _cancel_confirmed_at
+                   if _cancel_confirmed_at is not None else 0.0)
+        wait = max(0.0, CANCEL_RE_CLAIM_DELAY - elapsed)
+        if wait > 0:
+            time.sleep(wait)
+        _cancel_confirmed_at = None
         _task_gone_last_round = True
         return "canceled", (f"战斗失败：{info}，"
                             f"{CANCEL_RE_CLAIM_DELAY}s 后重新领取")
@@ -2428,8 +2552,9 @@ def run_loop(win, cycle_interval=1.0):
                     failed_by_battle = True
             if failed_by_battle:
                 # 任务战斗失败（用户 2026-11-14）：队长回灵兽村取消任务
-                # → 取消后 6s 重新领取（人数不足走检查暂离/补人流程）；
-                # 非队长转保持模式并自动归队（队员不能取消/领取任务）
+                # （确认弹窗点「是」，2026-11-15）→ 从「是」起 6s 重新
+                # 领取（人数不足走检查暂离/补人流程）；非队长转保持
+                # 模式并自动归队（队员不能取消/领取任务）
                 _battle_failed_reason = None
                 debug_overlay.set_phase("战斗失败恢复")  # 看板阶段
                 status, rinfo = _recover_battle_failure(win, check_team)
@@ -2439,8 +2564,9 @@ def run_loop(win, cycle_interval=1.0):
                     log(f"[修罗] {rinfo}", "SYS")
                     completed_via_failure = True
                 elif status == "canceled":
-                    # 恢复流程内已等待 CANCEL_RE_CLAIM_DELAY(6s)，这里
-                    # 不再追加间隔，下一轮直接领任务
+                    # 恢复流程内已从确认弹窗「是」起等满
+                    # CANCEL_RE_CLAIM_DELAY(6s)，这里不再追加间隔，
+                    # 下一轮直接领任务
                     log(f"[修罗] {rinfo}", "SYS")
                     continue
                 else:

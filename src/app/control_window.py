@@ -64,7 +64,8 @@ from ..core.settings import (
     _MODES_KEY, _MODE_KEY_OLD, _REPAIR_INTERVAL_DEFAULT, _REPAIR_INTERVAL_MAX,
     _REPAIR_INTERVAL_MIN, _SILENT_MODE_KEY, _TASK_PROGRESS_KEY, _THRESHOLD_KEYS,
     _UI_THEME_KEY, _UPDATE_AUTO_CHECK_KEY, _UPDATE_FEED_KEY, _UPDATE_LAST_CHECK_KEY,
-    _UPDATE_SKIPPED_KEY, _USE_SHEYAOXIANG_KEY, _WUBEI_AUTO_CREATE_TEAM_KEY, _WUBEI_AUTO_REJOIN_KEY,
+    _UPDATE_SKIPPED_KEY, _USE_SHEYAOXIANG_KEY, _WUBEI_AUTO_CREATE_TEAM_KEY,
+    _WUBEI_AUTO_KICK_AWAY_KEY, _WUBEI_KICK_AWAY_MINUTES_KEY, _WUBEI_AUTO_REJOIN_KEY,
     _WUBEI_AUTO_REPAIR_KEY, _WUBEI_AUTO_WUYI_KEY, _WUBEI_CHECK_TEAM_KEY, _WUBEI_HEZI_KEY,
     _WUBEI_KUIMULANG_KEY, _WUBEI_REPAIR_INTERVAL_KEY, _WUBEI_SHOUT_SWITCH_KEY, _WUBEI_SHOUT_TEXT_KEY,
     _WUBEI_TAB_GROUP_KEY, _WUBEI_WUYI_INTERVAL_KEY, _WUHUAN_VITALITY_CONTINUE_KEY, _WUYI_INTERVAL_MAX,
@@ -83,7 +84,8 @@ from ..core.settings import (
     load_group_actions, load_group_last_scan, load_high_perf, load_selected_modes,
     load_silent_mode, load_task_counts, load_thresholds, load_ui_theme,
     load_update_auto_check, load_update_feed_url, load_update_last_check, load_update_skipped_version,
-    load_use_sheyaoxiang, load_wubei_auto_create_team, load_wubei_auto_rejoin, load_wubei_auto_repair,
+    load_use_sheyaoxiang, load_wubei_auto_create_team, load_wubei_auto_kick_away,
+    load_wubei_kick_away_minutes, load_wubei_auto_rejoin, load_wubei_auto_repair,
     load_wubei_auto_wuyi, load_wubei_check_team, load_wubei_hezi, load_wubei_kuimulang_switch,
     load_wubei_repair_interval, load_wubei_shout_switch, load_wubei_shout_text, load_wubei_tab_group,
     load_wubei_wuyi_interval, load_wuhuan_vitality_continue, load_xiuluo_auto_create_team, load_xiuluo_auto_rejoin,
@@ -98,6 +100,7 @@ from ..core.settings import (
     save_group_last_scan, save_high_perf, save_selected_modes, save_silent_mode,
     save_task_count, save_threshold, save_ui_theme, save_update_auto_check,
     save_update_last_check, save_update_skipped_version, save_use_sheyaoxiang, save_wubei_auto_create_team,
+    save_wubei_auto_kick_away, save_wubei_kick_away_minutes,
     save_wubei_auto_rejoin, save_wubei_auto_repair, save_wubei_auto_wuyi, save_wubei_check_team,
     save_wubei_hezi, save_wubei_kuimulang_switch, save_wubei_repair_interval, save_wubei_shout_switch,
     save_wubei_shout_text, save_wubei_tab_group, save_wubei_wuyi_interval, save_wuhuan_vitality_continue,
@@ -222,6 +225,8 @@ class ControlWindow(WebWindow):
         self.expose(self.save_wubei_check_team)
         self.expose(self.save_wubei_auto_create_team)
         self.expose(self.save_wubei_auto_rejoin)
+        self.expose(self.save_wubei_auto_kick_away)
+        self.expose(self.save_wubei_kick_away_minutes)
         self.expose(self.save_battle_only_auto_rejoin)
         self.expose(self.save_wubei_shout_switch)
         self.expose(self.save_wubei_shout_text)
@@ -823,6 +828,8 @@ class ControlWindow(WebWindow):
                           "check_team": load_wubei_check_team(),
                           "auto_create_team": load_wubei_auto_create_team(),
                           "auto_rejoin": load_wubei_auto_rejoin(),
+                          "auto_kick_away": load_wubei_auto_kick_away(),
+                          "kick_away_minutes": load_wubei_kick_away_minutes(),
                           "shout": load_wubei_shout_switch(),
                           "shout_text": load_wubei_shout_text(),
                           "auto_wuyi": load_wubei_auto_wuyi(),
@@ -1102,6 +1109,14 @@ class ControlWindow(WebWindow):
     def save_wubei_auto_rejoin(self, on):
         """五倍设置变更：保存自动归队开关状态。"""
         return save_wubei_auto_rejoin(on)
+
+    def save_wubei_auto_kick_away(self, on):
+        """五倍设置变更：保存暂离超时自动请离开关状态。"""
+        return save_wubei_auto_kick_away(on)
+
+    def save_wubei_kick_away_minutes(self, value):
+        """五倍设置变更：保存暂离超时（分钟）。"""
+        return save_wubei_kick_away_minutes(value)
 
     def save_battle_only_auto_rejoin(self, on):
         """仅战斗设置变更：保存自动归队开关状态。"""

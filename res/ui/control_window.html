@@ -836,7 +836,7 @@
                         <button class="th-btn" onclick="count('五倍', 1)">＋</button>
                     </div>
                 </div>
-                <!-- 五倍设置手风琴：抢盒子 + 检查队伍（固定 5 人）+ 巫医 + 组号 -->
+                <!-- 五倍设置手风琴：抢盒子 + 检查队伍（固定 5 人）+ 暂离请离 + 巫医 + 组号 -->
                 <div class="task-accordion">
                     <div class="group-title">五倍设置</div>
                     <label class="switch-row">
@@ -859,6 +859,19 @@
                         <span class="switch-track"></span>
                         <span>自动归队</span>
                     </label>
+                    <label class="switch-row">
+                        <input type="checkbox" id="wubei-auto-kick-away">
+                        <span class="switch-track"></span>
+                        <span>暂离超时自动请离</span>
+                    </label>
+                    <div class="group-row" id="wubei-kick-away-row">
+                        <span class="group-label">超时（分钟）</span>
+                        <div class="group-ctrl">
+                            <button class="th-btn" onclick="wubeiKickAwayMinutes(-1)">−</button>
+                            <span class="th-val" id="wubei-kick-away-minutes">5</span>
+                            <button class="th-btn" onclick="wubeiKickAwayMinutes(1)">＋</button>
+                        </div>
+                    </div>
                     <label class="switch-row">
                         <input type="checkbox" id="wubei-shout">
                         <span class="switch-track"></span>
@@ -1694,6 +1707,9 @@
     const wubeiCheckTeam = document.getElementById('wubei-check-team');
     const wubeiAutoCreateTeam = document.getElementById('wubei-auto-create-team');
     const wubeiAutoRejoin = document.getElementById('wubei-auto-rejoin');
+    const wubeiAutoKickAway = document.getElementById('wubei-auto-kick-away');
+    const wubeiKickAwayMinutesEl = document.getElementById('wubei-kick-away-minutes');
+    const wubeiKickAwayRow = document.getElementById('wubei-kick-away-row');
     const wubeiShout = document.getElementById('wubei-shout');
     const wubeiAutoWuyi = document.getElementById('wubei-auto-wuyi');
     const wubeiWuyiIntervalEl = document.getElementById('wubei-wuyi-interval');
@@ -3143,6 +3159,16 @@
         if (r && r.status === 'success') el.innerText = r.interval;
     }
 
+    // 五倍暂离超时自动请离：超时分钟（1~60，默认 5；开关关闭时整行隐藏）
+    async function wubeiKickAwayMinutes(delta) {
+        const el = wubeiKickAwayMinutesEl;
+        const cur = parseInt(el.innerText);
+        const val = Math.min(60, Math.max(1, cur + delta));
+        if (val === cur) return;
+        const r = await callPython('save_wubei_kick_away_minutes', val);
+        if (r && r.status === 'success') el.innerText = r.interval;
+    }
+
     async function wubeiWuyiInterval(delta) {
         const el = wubeiWuyiIntervalEl;
         const cur = parseInt(el.innerText);
@@ -3191,6 +3217,10 @@
 
     function applyXiuluoKickAwayVisibility() {
         xiuluoKickAwayRow.style.display = xiuluoAutoKickAway.checked ? '' : 'none';
+    }
+
+    function applyWubeiKickAwayVisibility() {
+        wubeiKickAwayRow.style.display = wubeiAutoKickAway.checked ? '' : 'none';
     }
 
     function applyXiuluoRepairVisibility() {
@@ -3330,6 +3360,10 @@
     });
     wubeiAutoRejoin.addEventListener('change', () => {
         callPython('save_wubei_auto_rejoin', wubeiAutoRejoin.checked);
+    });
+    wubeiAutoKickAway.addEventListener('change', () => {
+        applyWubeiKickAwayVisibility();
+        callPython('save_wubei_auto_kick_away', wubeiAutoKickAway.checked);
     });
     battleOnlyAutoRejoin.addEventListener('change', () => {
         callPython('save_battle_only_auto_rejoin', battleOnlyAutoRejoin.checked);
@@ -3628,6 +3662,11 @@
         wubeiCheckTeam.checked = !!(info.wubei && info.wubei.check_team);
         wubeiAutoCreateTeam.checked = !!(info.wubei && info.wubei.auto_create_team);
         wubeiAutoRejoin.checked = !!(info.wubei && info.wubei.auto_rejoin);
+        wubeiAutoKickAway.checked = !!(info.wubei && info.wubei.auto_kick_away);
+        applyWubeiKickAwayVisibility();
+        if (info.wubei && info.wubei.kick_away_minutes !== undefined) {
+            wubeiKickAwayMinutesEl.innerText = info.wubei.kick_away_minutes;
+        }
         battleOnlyAutoRejoin.checked = !!info.battle_only_auto_rejoin;
         wubeiShout.checked = !!(info.wubei && info.wubei.shout);
         if (info.wubei && info.wubei.shout_text !== undefined) {
