@@ -1197,3 +1197,59 @@ def test_extras_duchong_skip_during_retry_gap(monkeypatch):
                         lambda *a, **k: False)
     kezhan._handle_follow_extras(object(), [], None)
     assert calls == []
+
+
+# ---- 除异觉宝小游戏（玄石探秘分支，2026-11-16 实机复现：点入口选项
+# 「注入玄蕴试试看」后面板干等，从未点「开始」）----
+def _patch_extras_for_chuyijuebao(monkeypatch, score, play_result, calls):
+    import numpy as np
+    monkeypatch.setattr(kezhan, "_kj_frame",
+                        lambda win, items: np.zeros((831, 1378, 3), np.uint8))
+    monkeypatch.setattr(kezhan, "is_in_battle_frame", lambda bgr: False)
+    monkeypatch.setattr(kezhan, "_bug_button_pt", lambda bgr: None)
+    monkeypatch.setattr(kezhan, "_yinlv_armed_at", 0.0)
+    monkeypatch.setattr(kezhan, "_pochu_armed_at", 0.0)
+    monkeypatch.setattr(kezhan, "_chuyijuebao_last_check", 0.0)
+    monkeypatch.setattr(kezhan.task_tracker, "find_task",
+                        lambda tasks, title: None)
+    monkeypatch.setattr(kezhan.task_tracker, "group_tasks",
+                        lambda items, xmax=None: [])
+    monkeypatch.setattr(kezhan.task_tracker, "panel_row_xmax",
+                        lambda img: None)
+    monkeypatch.setattr(kezhan.game_map, "best_match_np",
+                        lambda bgr, icon, region=None: (score, (712, 720)))
+    monkeypatch.setattr(kezhan, "_play_chuyijuebao",
+                        lambda win: calls.append(1) or play_result)
+    monkeypatch.setattr(kezhan, "log", lambda *a, **k: None)
+
+
+def test_extras_enters_chuyijuebao_on_panel_title(monkeypatch):
+    """面板标题命中 → 阻塞执行小游戏并返回已处理（修复面板干等）。"""
+    calls = []
+    _patch_extras_for_chuyijuebao(monkeypatch, 0.95, (True, "结束"), calls)
+    assert kezhan._handle_follow_extras(object(), [], None) is True
+    assert calls == [1]
+    assert kezhan._chuyijuebao_last_check > 0.0
+
+
+def test_extras_skips_chuyijuebao_below_threshold(monkeypatch):
+    """模板分低于阈值（无面板）→ 不进入小游戏，继续后续对话处理。"""
+    calls = []
+    _patch_extras_for_chuyijuebao(monkeypatch, 0.5, (True, "结束"), calls)
+    monkeypatch.setattr(kezhan, "_handle_give_panel", lambda win, bgr: False)
+    monkeypatch.setattr(kezhan, "_handle_dialog_options",
+                        lambda *a, **k: False)
+    assert kezhan._handle_follow_extras(object(), [], None) is False
+    assert calls == []
+
+
+def test_extras_chuyijuebao_rate_limited(monkeypatch):
+    """限频窗口内不重复检测（1s 内第二帧不匹配模板、不重进小游戏）。"""
+    calls = []
+    _patch_extras_for_chuyijuebao(monkeypatch, 0.95, (True, "结束"), calls)
+    monkeypatch.setattr(kezhan, "_chuyijuebao_last_check", time.time())
+    monkeypatch.setattr(kezhan, "_handle_give_panel", lambda win, bgr: False)
+    monkeypatch.setattr(kezhan, "_handle_dialog_options",
+                        lambda *a, **k: False)
+    assert kezhan._handle_follow_extras(object(), [], None) is False
+    assert calls == []

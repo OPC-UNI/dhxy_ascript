@@ -1,8 +1,9 @@
 """锄遗聚宝（红色杂气）小游戏的纯检测逻辑与常量。
 
-触发（点击「注入玄蕴试试看」）与阻塞点击循环 `_play_chuyijuebao`
-仍在 xuanshu 任务侧；本模块只做红色团块检测、超面积拆分与点击
-无效观察，import 期零副作用。
+触发（点击「注入玄蕴试试看」后的面板标题检测）与阻塞点击循环
+`_play_chuyijuebao` 在任务侧（玄枢轶闻 / 客栈玄石探秘）；本模块做
+面板标题条带检测、红色团块检测、超面积拆分与点击无效观察，
+import 期零副作用。
 """
 import os
 import time
@@ -24,6 +25,15 @@ CHUYIJUEBAO_TIMEOUT = 60                        # 小游戏总超时（秒）
 CHUYIJUEBAO_DEBUG = False                       # 调试开关：True 时不点击鼠标，
                                                 # 只标注检测结果截图供人工核对
 CHUYIJUEBAO_DEBUG_DIR = "qi_debug"              # 标注截图输出目录（相对程序工作目录）
+# ---- 面板标题检测（extras 链热路径：条带匹配 + 调用方限频）----
+# 标题「除异觉宝」位于窗口底部居中固定 UI（与破除封印/钓鱼等小游戏窗口
+# 同区）。2026-11-16 实机帧标定：全帧最佳 0.954 @(712,720)，条带外最高
+# 0.197；条带在标题 bbox (649,708)-(775,732) 外留 ≥50px 余量，条带匹配
+# 0.8ms（全帧 ~32ms）。条带是标定资产：不在条带内即面板未开，不做全帧
+# 兜底（目标位置固定，见性能规则 3）。
+CHUYIJUEBAO_TITLE_REGION = (599, 658, 825, 782)
+CHUYIJUEBAO_TITLE_THRESHOLD = 0.8       # 同 find_template 默认阈值（实测 0.954）
+CHUYIJUEBAO_CHECK_INTERVAL = 1.0        # extras 链面板检测限频（秒，条带 <1ms）
 # 红色杂气检测参数（游戏说明：点击红色杂气将其清除）
 QI_RED_MIN = 120        # R 通道最低亮度
 QI_RED_DOMINANCE = 30   # R 须高出 G/B 的差值
@@ -182,6 +192,24 @@ def _capture_qi_region(win):
     if full is None:
         return None
     return full[t:b, l:r]
+
+def panel_present(bgr):
+    """面板标题「除异觉宝」是否在场（BGR 帧条带匹配），返回 (是否在场, 匹配分)。
+
+    标题模板出现即小游戏面板已打开（点击开始 + 消除红色杂气由 play
+    完成，标题消失即结束）。条带是标定资产：标题固定在窗口底部居中，
+    条带内未命中不做全帧兜底（性能规则 3），条带匹配 ~0.8ms；extras
+    链调用方按 CHUYIJUEBAO_CHECK_INTERVAL 限频。
+    """
+    if bgr is None:
+        return False, 0.0
+    _l, _t, r, b = CHUYIJUEBAO_TITLE_REGION
+    h, w = bgr.shape[:2]
+    if h < b or w < r:
+        return False, 0.0  # 帧小于条带（异常帧/测试桩）：按未命中
+    score, _ = game_map.best_match_np(bgr, CHUYIJUEBAO_ICON,
+                                      region=CHUYIJUEBAO_TITLE_REGION)
+    return score >= CHUYIJUEBAO_TITLE_THRESHOLD, float(score)
 
 def play(win, timeout=CHUYIJUEBAO_TIMEOUT,
          prefix="玄枢轶闻"):

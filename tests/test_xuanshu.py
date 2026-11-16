@@ -224,6 +224,42 @@ def test_play_chuyijuebao_single_target_uses_precise(monkeypatch):
     assert clicks == ["precise"]  # 仅 1 击（后续轮次被 2s 防抖拦住）
 
 
+# ---- 面板标题条带检测（客栈玄石探秘入口，2026-11-16 实机标定） ----
+def _frame_with_title(x, y, w=1378, h=831, seed=7):
+    """噪声背景帧上贴入真实标题模板（返回 (帧, 模板左上角坐标)）。"""
+    import cv2
+    import numpy as np
+    from ascript.windows.system import R
+    frame = np.random.default_rng(seed).integers(0, 256, (h, w, 3),
+                                                 dtype=np.uint8)
+    tpl = cv2.imdecode(np.fromfile(R.img(chuyijuebao.CHUYIJUEBAO_ICON),
+                                   dtype=np.uint8), cv2.IMREAD_COLOR)
+    frame[y:y + tpl.shape[0], x:x + tpl.shape[1]] = tpl
+    return frame
+
+
+def test_panel_present_title_in_band():
+    """真实标题模板落在实测位置 (649,708) → 条带命中（分数 ≥0.9）。"""
+    frame = _frame_with_title(649, 708)  # 2026-11-16 实机标题 bbox 左上角
+    present, score = chuyijuebao.panel_present(frame)
+    assert present and score >= 0.9
+
+
+def test_panel_present_title_outside_band_not_detected():
+    """标题出现在条带外 → 不命中（条带是标定资产，不做全帧兜底）。"""
+    frame = _frame_with_title(649, 300)
+    present, _score = chuyijuebao.panel_present(frame)
+    assert not present
+
+
+def test_panel_present_small_frame_graceful():
+    """异常帧小于条带 → 按未命中返回，不抛 cv2 异常（测试桩 10x10 帧）。"""
+    import numpy as np
+    present, score = chuyijuebao.panel_present(np.zeros((10, 10, 3), np.uint8))
+    assert not present and score == 0.0
+    assert chuyijuebao.panel_present(None) == (False, 0.0)
+
+
 # ---- 钓鱼小游戏（2026-11-10：与客栈破除封印同款窗口，仅标题模板不同）----
 def test_diaoyu_template_exists():
     """标题/长按按钮模板必须真实存在于 res/img（禁止引用不存在的模板）。"""

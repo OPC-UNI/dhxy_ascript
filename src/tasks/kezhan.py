@@ -65,6 +65,8 @@ from ..minigames import pochufengyin as _pochu_minigame  # 破除封印/钓鱼�
 from ..minigames import duchong as _duchong_minigame  # 拍毒虫阻塞循环
 from ..minigames.duchong import _bug_button_pt  # 拍毒虫面板按钮定位
 from ..minigames import yinlv as _yinlv_minigame  # 音律阻塞循环
+from ..minigames import chuyijuebao as _chuyijuebao_minigame  # 除异觉宝阻塞循环
+from ..minigames.chuyijuebao import CHUYIJUEBAO_CHECK_INTERVAL  # 面板检测限频
 from ..minigames.yinlv import (YINLV_ARM_TIMEOUT, YINLV_CHECK_INTERVAL,
                               YINLV_DONE, YINLV_THRESHOLD,
                               YINLV_WINDOW_ICON,
@@ -598,6 +600,14 @@ POCHU_THRESHOLD = _pochu_minigame.POCHU_THRESHOLD
 POCHU_ARM_TIMEOUT = _pochu_minigame.POCHU_ARM_TIMEOUT
 POCHU_CHECK_INTERVAL = _pochu_minigame.POCHU_CHECK_INTERVAL
 _pochu_armed_at = 0.0                  # 破除封印入口选项点击时间；>0 且未超时=检测开启
+# ---- 除异觉宝小游戏（玄石探秘分支：点入口选项「注入玄蕴试试看」后出现面板）----
+# 面板不是标准对话框（dialog_frame_score 实测 0.70 < 0.79 门限），
+# dialog_tpl_gate 会跳过对话区 OCR、items 里没有面板文案——只能按面板
+# 标题模板触发（2026-11-16 实机：客栈点入口选项后无人点「开始」，面板
+# 干等、绿色选项被反复重击）。闭环（点开始 + 消除红色杂气）与玄枢轶闻
+# 共用 minigames/chuyijuebao.py；检测限频 CHUYIJUEBAO_CHECK_INTERVAL
+# （条带匹配 <1ms）。标题仅在小游戏进行中出现，无需 armed 门控。
+_chuyijuebao_last_check = 0.0          # 上次 extras 面板检测时间（限频）
 _pochu_last_check = 0.0                # 上次 extras 窗口检测时间（限频）
 CLAIM_CHAIN_TIMEOUT = 30             # 整条领取对话链（含接取与任务对话）的总超时（秒）
 # ---- 特殊任务步骤：前往洛阳城大理寺墙外（追踪文案出现时手动寻路） ----
@@ -1528,6 +1538,11 @@ def _play_yinlv(win, banner_pt=None):
 # 仅标题模板不同）。
 
 
+def _play_chuyijuebao(win):
+    """除异觉宝小游戏闭环（实现在 minigames/chuyijuebao.py）。"""
+    return _chuyijuebao_minigame.play(win, prefix="客栈")
+
+
 def _play_pochufengyin(win):
     """破除封印小游戏闭环（共享实现在 pochufengyin）。返回 (是否完成, 描述)。
 
@@ -1759,6 +1774,24 @@ def _handle_follow_extras(win, items, img_np):
                     # 小游戏完成 → 关闭检测（处理失败保持 armed，窗口
                     # 仍在时下轮询重试）
                     _pochu_armed_at = 0.0
+                log(f"[客栈] {info}", "SYS" if ok else "WARN")
+                return True
+        # 除异觉宝小游戏（玄石探秘分支）：面板标题模板在场即完整处理
+        # （点开始 + 消除红色杂气到标题消失）。入口不许按面板文案触发
+        # ——面板不是标准对话框（模板分 0.70 < 0.79），dialog_tpl_gate
+        # 会跳过对话区 OCR，items 里没有该文案（2026-11-16 实机复现：
+        # 点「注入玄蕴试试看」后面板干等，从未点「开始」）。检测限频
+        # CHUYIJUEBAO_CHECK_INTERVAL（条带匹配 <1ms）。
+        global _chuyijuebao_last_check
+        if bgr is not None \
+                and time.time() - _chuyijuebao_last_check \
+                >= CHUYIJUEBAO_CHECK_INTERVAL:
+            _chuyijuebao_last_check = time.time()
+            present, score = _chuyijuebao_minigame.panel_present(bgr)
+            if present:
+                log(f"[客栈] 检测到除异觉宝面板（匹配度 {score:.2f}），"
+                    f"开始小游戏", "SYS")
+                ok, info = _play_chuyijuebao(win)
                 log(f"[客栈] {info}", "SYS" if ok else "WARN")
                 return True
         if _task_needs_dali_walk(task) \
