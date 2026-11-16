@@ -1030,21 +1030,11 @@
                     <span class="task-order"></span>
                     <span class="task-name">名望</span>
                     <span class="badge">第一阶段</span>
-                        <button class="task-expand" data-mode="名望" title="名望专属设置">▾</button>
                     <div class="task-count">
                         <button class="th-btn" onclick="count('名望', -1)">−</button>
                         <span class="th-val" id="cnt-名望">5</span>
                         <button class="th-btn" onclick="count('名望', 1)">＋</button>
                     </div>
-                </div>
-                <!-- 名望设置手风琴：小地图快捷领取 -->
-                <div class="task-accordion">
-                    <div class="group-title">名望设置</div>
-                    <label class="switch-row">
-                        <input type="checkbox" id="mingwang-map-claim">
-                        <span class="switch-track"></span>
-                        <span>小地图快捷领取（勾选「任务」筛选后点黄色任务 NPC 名，默认开启）</span>
-                    </label>
                 </div>
             </div>
             <div class="task-card" data-mode="仅战斗">
@@ -1774,7 +1764,6 @@
     const zhongzuShout = document.getElementById('zhongzu-shout');
     const zhongzuShoutText = document.getElementById('zhongzu-shout-text');
     const wuhuanVitalityContinue = document.getElementById('wuhuan-vitality-continue');
-    const mingwangMapClaim = document.getElementById('mingwang-map-claim');
     // 组号设置页
     const navGroup = document.getElementById('nav-group');
     const btnGroupCheck = document.getElementById('btn-group-check');
@@ -3397,9 +3386,6 @@
     zhongzuTabGroup.addEventListener('change', () => {
         callPython('save_zhongzu_tab_group', zhongzuTabGroup.checked);
     });
-    mingwangMapClaim.addEventListener('change', () => {
-        callPython('save_mingwang_map_claim', mingwangMapClaim.checked);
-    });
     highPerf.addEventListener('change', () => {
         callPython('save_high_perf', highPerf.checked);
     });
@@ -3770,7 +3756,6 @@
             zhongzuRepairIntervalEl.innerText = info.zhongzu.repair_interval;
         }
         zhongzuTabGroup.checked = !!(info.zhongzu && info.zhongzu.tab_group);
-        mingwangMapClaim.checked = !!(info.mingwang && info.mingwang.map_claim);
         xiuluoShout.checked = !!info.xiuluo_shout;
         if (info.xiuluo_shout_text !== undefined) {
             xiuluoShoutText.value = info.xiuluo_shout_text;

@@ -34,12 +34,6 @@ def _reset_shahai_state(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _reset_map_claim_state(monkeypatch):
-    """小地图快捷领取回退标志跨用例隔离。"""
-    monkeypatch.setattr(mingwang, "_map_claim_dialog_failed", False)
-
-
-@pytest.fixture(autouse=True)
 def _reset_tgqy_state(monkeypatch):
     """天宫奇遇全局状态跨用例隔离（状态机/armed 时间戳）。"""
     for name, value in (
@@ -58,11 +52,6 @@ TEMPLATES = (
     (mingwang.RENWUSHUXING_ICON, mingwang.ATTR_TEMPLATE_THRESHOLD),
     (mingwang.CLAIM_POINTS["魔族"]["world_icon"], 0.8),
     (mingwang.CLAIM_POINTS["仙族"]["world_icon"], 0.8),
-    (mingwang.CLAIM_POINTS["魔族"]["npc_icon"], mingwang.CLAIM_NPC_THRESHOLD),
-    (mingwang.CLAIM_POINTS["仙族"]["npc_icon"],
-     mingwang.CLAIM_POINTS["仙族"]["npc_threshold"]),
-    (mingwang.CLAIM_POINTS["仙族"]["npc_icon2"],
-     mingwang.CLAIM_POINTS["仙族"]["npc_threshold"]),
     (mingwang.CLAIM_SHANHE_ICON, mingwang.CLAIM_SHANHE_THRESHOLD),
     (mingwang.SEAL_ITEM_ICON, mingwang.SEAL_ITEM_THRESHOLD),
     (mingwang.PICK_ITEM_ICON, mingwang.PICK_ITEM_THRESHOLD),
@@ -174,27 +163,20 @@ def test_race_from_items_xianzu_role_name_without_xian():
 
 
 def test_claim_points_config():
-    """种族领取点配置完整，模板文件存在可解码。"""
+    """种族领取点配置完整（小地图快捷领取：地图/黄字点/筛选点），
+    模板文件存在可解码。"""
     assert set(mingwang.CLAIM_POINTS) == {"魔族", "仙族"}
     for race, claim in mingwang.CLAIM_POINTS.items():
         assert claim["map"] and claim["npc_name"], race
-        assert len(claim["target"]) == 2
-        assert len(claim["mini_click"]) == 2
+        assert len(claim["map_filter_pos"]) == 2
+        assert len(claim["map_label_pos"]) == 2
         assert game_map.template_size(claim["world_icon"]) is not None, race
-        assert game_map.template_size(claim["npc_icon"]) is not None, race
-        if claim.get("npc_icon2"):
-            assert game_map.template_size(claim["npc_icon2"]) is not None, race
     assert mingwang.CLAIM_POINTS["仙族"]["map"] == "天宫"
-    assert mingwang.CLAIM_POINTS["仙族"]["target"] == (190, 122)
-    # 武尊神双造型模板阈值（用户实机校准 0.7）；魔族沿用默认
-    assert mingwang.CLAIM_POINTS["仙族"]["npc_threshold"] == 0.7
-    assert mingwang._claim_npc_threshold(mingwang.CLAIM_POINTS["魔族"]) \
-        == mingwang.CLAIM_NPC_THRESHOLD
-    # 小地图点击位置为用户实机微调值（2026-11-10：800→794→821,358）
-    assert mingwang.CLAIM_POINTS["仙族"]["mini_click"] == (821, 358)
-    # 两族都必须坐标到达领取点（NPC 模板可见不算到达）
-    assert "npc_arrival_fallback" not in mingwang.CLAIM_POINTS["仙族"]
-    assert "npc_arrival_fallback" not in mingwang.CLAIM_POINTS["魔族"]
+    # 旧「坐标寻路 + NPC 模板」路线已移除（用户 2026-11-16 规则）
+    for race in ("魔族", "仙族"):
+        for key in ("target", "mini_click", "npc_icon", "npc_icon2",
+                    "npc_threshold", "npc_full_fallback"):
+            assert key not in mingwang.CLAIM_POINTS[race], (race, key)
 
 
 def test_race_strip_rect():
@@ -204,30 +186,6 @@ def test_race_strip_rect():
     # 边界夹取
     strip = mingwang._race_strip_rect((1300, 5, 1365, 180), (1378, 831))
     assert strip == (1365, 0, 1378, 200)
-
-
-def test_at_claim_point():
-    mozu = mingwang.CLAIM_POINTS["魔族"]
-    xian = mingwang.CLAIM_POINTS["仙族"]
-    tol = mingwang.CLAIM_POS_TOLERANCE
-    # 坐标/容差按领取点配置动态取值（用户会按实机标定微调，测试不写死）
-    mx, my = mozu["target"]
-    assert mingwang._at_claim_point(("大唐边境", mx, my), mozu)
-    assert mingwang._at_claim_point(("大唐边境", mx - tol, my + tol), mozu)  # 容差边界内
-    assert not mingwang._at_claim_point(("大唐边境", mx - tol, my + tol + 2), mozu)  # y 超容差
-    assert not mingwang._at_claim_point(("大唐边境", mx - tol - 2, my + tol), mozu)  # x 超容差
-    assert not mingwang._at_claim_point(("大唐边境", mx - 18, my), mozu)
-    assert not mingwang._at_claim_point(("长安", mx, my), mozu)
-    assert not mingwang._at_claim_point(None, mozu)
-    # 仙族：坐标同取配置
-    xx, xy = xian["target"]
-    assert mingwang._at_claim_point(("天宫", xx + 2, xy), xian)  # 2px 差在容差内
-    assert mingwang._at_claim_point(("天宫", xx - tol, xy + tol), xian)  # 容差边界内
-    assert not mingwang._at_claim_point(("天宫", xx, xy + tol + 1), xian)  # 超容差
-    assert not mingwang._at_claim_point(("天宫", xx - 20, xy), xian)
-    # 同坐标不同地图不互认
-    assert not mingwang._at_claim_point(("大唐边境", mx, my), xian)
-    assert not mingwang._at_claim_point(("天宫", xx, xy), mozu)
 
 
 def test_find_attr_rect_skips_button_area():
@@ -240,46 +198,6 @@ def test_find_attr_rect_skips_button_area():
     frame[300:300 + th, 520:520 + tw] = tpl
     rect = mingwang._find_attr_rect(frame)
     assert rect == (520, 300, 520 + tw, 300 + th)
-
-
-def test_match_npc_band_and_full_fallback():
-    for race in ("魔族", "仙族"):
-        claim = mingwang.CLAIM_POINTS[race]
-        frame = _paste_bgr(claim["npc_icon"], x=450, y=300)
-        pt, score, _full = mingwang._match_npc(frame, claim, 0.0)
-        assert pt is not None and score >= mingwang.CLAIM_NPC_THRESHOLD, race
-        # 无 NPC 的噪声帧：条带 + 全帧都没有命中
-        pt, score, _full = mingwang._match_npc(_noise_bgr(seed=7),
-                                               claim, 0.0)
-        assert pt is None and score < mingwang.CLAIM_NPC_THRESHOLD, race
-
-
-def test_match_npc_second_template():
-    """武尊神第二造型模板：两个模板任一命中即可（阈值 0.79）。"""
-    claim = mingwang.CLAIM_POINTS["仙族"]
-    assert mingwang._claim_npc_icons(claim) == [
-        claim["npc_icon"], claim["npc_icon2"]]
-    frame = _paste_bgr(claim["npc_icon2"], x=450, y=300)
-    pt, score, _full = mingwang._match_npc(frame, claim, 0.0)
-    assert pt is not None and score >= claim["npc_threshold"]
-    frame2 = _paste_bgr(claim["npc_icon"], x=450, y=300)
-    pt2, score2, _full = mingwang._match_npc(frame2, claim, 0.0)
-    assert pt2 is not None and score2 >= claim["npc_threshold"]
-
-
-def test_match_npc_xianzu_no_full_frame_fallback():
-    """仙族 NPC 模板与同造型玩家互匹配：条带外（画面右缘）不得兜底命中。"""
-    claim = mingwang.CLAIM_POINTS["仙族"]
-    assert claim["npc_full_fallback"] is False
-    frame = _paste_bgr(claim["npc_icon"], x=1250, y=200)  # 条带右缘 1180 之外
-    pt, score, _full = mingwang._match_npc(frame, claim, 0.0)
-    assert pt is None and score < mingwang.CLAIM_NPC_THRESHOLD
-    # 魔族保留原有全帧兜底（布局漂移保险）
-    mozu = mingwang.CLAIM_POINTS["魔族"]
-    frame2 = _paste_bgr(mozu["npc_icon"], x=1250, y=200)
-    pt, score, full = mingwang._match_npc(frame2, mozu, 0.0)
-    assert pt is not None and score >= mingwang.CLAIM_NPC_THRESHOLD
-    assert full > 0.0
 
 
 def test_detect_race_uses_title_right_strip_and_closes(monkeypatch):
@@ -1786,70 +1704,25 @@ def test_seal_close_bag_if_open(monkeypatch):
     mingwang._reset_seal_state()
 
 
-# ---- 领取到达：两族都必须坐标到达领取点（NPC 模板可见不算到达）----
-def test_wait_arrive_requires_claim_point(monkeypatch):
-    """位置稳定且 NPC 可见但坐标不在领取点容差内 → 不算到达。"""
-    for race, pos in (("仙族", ("天宫", 166, 136)),
-                      ("魔族", ("大唐边境", 460, 180))):
-        claim = mingwang.CLAIM_POINTS[race]
-        win = _FakeWin([_pil(_noise_bgr(seed=31))])
-        monkeypatch.setattr(mingwang, "is_in_battle_frame", lambda bgr: False)
-        monkeypatch.setattr(mingwang.game_map, "read_map_position",
-                            lambda w, img=None, p=pos: p)
-        monkeypatch.setattr(mingwang, "_match_npc",
-                            lambda bgr, c, full: ((1000, 500), 0.95, full))
-        monkeypatch.setattr(mingwang.time, "sleep", lambda s: None)
-        ok, _info = mingwang.wait_arrive(win, claim, timeout=0.05)
-        assert not ok, race
-
-
-def test_wait_arrive_at_claim_point(monkeypatch):
-    """坐标进入领取点容差 → 直接判定到达。"""
-    claim = mingwang.CLAIM_POINTS["仙族"]
-    win = _FakeWin([_pil(_noise_bgr(seed=32))])
-    monkeypatch.setattr(mingwang, "is_in_battle_frame", lambda bgr: False)
-    monkeypatch.setattr(mingwang.game_map, "read_map_position",
-                        lambda w, img=None: ("天宫", 185, 122))
-    monkeypatch.setattr(mingwang.time, "sleep", lambda s: None)
-    ok, info = mingwang.wait_arrive(win, claim, timeout=1.0)
-    assert ok and "已到达领取点附近" in info
-
-
-# ---- 领取入口 NPC 搜索：对话框遮挡 NPC 模板时点屏推进（2026-11-10 实机）----
-def _patch_claim_entry(monkeypatch, dialog_score):
+# ---- 领取入口链（自动对话框模式）：等绿色选项，绝不发生世界点击 ----
+def test_claim_entry_auto_dialog_only_no_world_click(monkeypatch):
+    """等待自动对话框期间只等绿色选项：不点 NPC/不点屏幕中间（世界点击
+    会取消游戏自动寻路），超时直接返回失败。"""
     win = _FakeWin([_pil(_noise_bgr(seed=20261118))])
-    monkeypatch.setattr(mingwang, "CLAIM_ENTRY_TIMEOUT", 0.05)
+    monkeypatch.setattr(mingwang, "MAP_CLAIM_ARRIVE_TIMEOUT", 0.05)
     monkeypatch.setattr(mingwang, "is_in_battle_frame", lambda bgr: False)
-    monkeypatch.setattr(mingwang, "_match_npc",
-                        lambda bgr, c, full: (None, 0.36, full))
-    monkeypatch.setattr(mingwang, "dialog_frame_score",
-                        lambda img: dialog_score)
     monkeypatch.setattr(mingwang.game_map, "ocr_region",
                         lambda img, region=None: ([], np.asarray(img)))
     monkeypatch.setattr(mingwang, "_click_claim_option", lambda *a, **k: False)
-    known = []
-    monkeypatch.setattr(mingwang, "_click_known_dialog_option",
-                        lambda *a, **k: known.append(1) or False)
-    centers = []
+    clicks = []
+    monkeypatch.setattr(mingwang, "human_click",
+                        lambda *a, **k: clicks.append(a))
     monkeypatch.setattr(mingwang, "_click_screen_center",
-                        lambda w, times=1, prefix="": centers.append(times))
+                        lambda *a, **k: clicks.append("center"))
     monkeypatch.setattr(mingwang.time, "sleep", lambda s: None)
-    return win, centers, known
-
-
-def test_claim_entry_advances_dialog_when_npc_missing(monkeypatch):
-    """NPC 未找到且对话框在场 → 点屏幕中间推进（不再干等）。"""
-    win, centers, known = _patch_claim_entry(monkeypatch, 0.99)
-    ok, _info = mingwang._claim_and_open_panel(
-        win, mingwang.CLAIM_POINTS["仙族"])
-    assert not ok and known == [1] and centers == [1]
-
-
-def test_claim_entry_no_dialog_no_click(monkeypatch):
-    """对话框不在场 → 不点屏（世界点击可能误开新对话）。"""
-    win, centers, _known = _patch_claim_entry(monkeypatch, 0.1)
-    mingwang._claim_and_open_panel(win, mingwang.CLAIM_POINTS["仙族"])
-    assert centers == []
+    ok, info = mingwang._claim_and_open_panel(
+        win, mingwang.CLAIM_POINTS["仙族"], timeout=0.05)
+    assert not ok and "超时" in info and clicks == []
 
 
 # ---- 灵力镐：追踪「前往大唐边境，使用灵力镐」→ 点蕴灵石头 → 到达 → 用镐（2026-11-10）----
@@ -2431,70 +2304,7 @@ def test_handle_dialog_options_calls_jiamo(monkeypatch):
 
 
 # ---- 领取链不做起飞/降落（2026-11-12 用户规则：领取链飞行逻辑已去掉）----
-def _patch_navigate(monkeypatch, pos):
-    """navigate_to_claim_point 环境替换：位置/地图/点击/到达。"""
-    order = []
-    monkeypatch.setattr(mingwang, "is_in_battle", lambda w: False)
-    monkeypatch.setattr(mingwang, "close_scene_panels",
-                        lambda w, p: order.append("close_panels"))
-    monkeypatch.setattr(mingwang.game_map, "read_map_position",
-                        lambda w: pos)
-    monkeypatch.setattr(mingwang.game_map, "open_mini_map_city",
-                        lambda w, icon, label:
-                        order.append("world_map") or (True, "小地图已打开"))
-    monkeypatch.setattr(mingwang.game_map, "open_mini_map",
-                        lambda w: order.append("mini_map") or (True, "已打开"))
-    monkeypatch.setattr(mingwang, "human_click",
-                        lambda w, x, y, button="primary":
-                        order.append(("click", x, y)))
-    monkeypatch.setattr(mingwang, "wait_arrive",
-                        lambda w, c: (True, "已到达领取点附近"))
-    monkeypatch.setattr(mingwang.time, "sleep", lambda s: None)
-    return order
-
-
-def test_navigate_claim_point_travels_by_world_map(monkeypatch):
-    """不在领取点 → 经世界地图寻路到小地图领取点（不做起飞）。"""
-    claim = mingwang.CLAIM_POINTS["魔族"]
-    order = _patch_navigate(monkeypatch, ("长安城", 88, 40))
-    ok, _info = mingwang.navigate_to_claim_point(object(), claim)
-    assert ok
-    assert "world_map" in order
-    assert ("click", claim["mini_click"][0], claim["mini_click"][1]) in order
-
-
-def test_navigate_claim_point_at_point_skips_travel(monkeypatch):
-    """已在领取点 → 直接返回，不开地图、不点击。"""
-    claim = mingwang.CLAIM_POINTS["魔族"]
-    order = _patch_navigate(monkeypatch, (claim["map"], claim["target"][0],
-                                          claim["target"][1]))
-    ok, info = mingwang.navigate_to_claim_point(object(), claim)
-    assert ok and "已在领取点" in info
-    assert "world_map" not in order and "mini_map" not in order
-    assert not any(isinstance(step, tuple) for step in order)
-
-
-def test_open_claim_panel_alt4_then_claim(monkeypatch):
-    """旧路线（小地图快捷领取关闭）：到达领取点后 Alt+4 清屏、再点 NPC。"""
-    order = []
-    monkeypatch.setattr(mingwang, "is_in_battle", lambda w: False)
-    monkeypatch.setattr(mingwang, "load_mingwang_map_claim", lambda: False)
-    monkeypatch.setattr(mingwang, "_find_panel_anchor", lambda bgr: None)
-    monkeypatch.setattr(mingwang, "navigate_to_claim_point",
-                        lambda w, c: order.append("nav") or (True, "已到达"))
-    monkeypatch.setattr(mingwang, "_press_alt4_clear",
-                        lambda w: order.append("alt4"))
-    monkeypatch.setattr(mingwang, "_claim_and_open_panel",
-                        lambda w, c: order.append("claim")
-                        or (True, "已打开面板"))
-    monkeypatch.setattr(mingwang.debug_overlay, "set_phase", lambda p: None)
-    win = _FakeWin([_pil(_noise_bgr(seed=21))])
-    ok, info = mingwang._open_claim_panel(win, "魔族")
-    assert ok and "面板" in info
-    assert order == ["nav", "alt4", "claim"]
-
-
-# ---- 小地图快捷领取（2026-11-16 用户规则，开关默认开启）----
+# ---- 小地图快捷领取（2026-11-16 用户规则：名望唯一领取路线）----
 def test_claim_points_have_map_claim_positions():
     """两族都有小地图快捷领取**绝对坐标**（窗口位置固定，用户 2026-11-16
     规则：不做窗口锚点相对换算）。"""
@@ -2507,13 +2317,6 @@ def test_claim_points_have_map_claim_positions():
     assert mingwang.CLAIM_POINTS["魔族"]["map_filter_pos"] == (501, 665)
     assert mingwang.CLAIM_POINTS["魔族"]["map_label_pos"] == (989, 380)
     assert mingwang.CLAIM_POINTS["仙族"]["map_label_pos"] == (821, 368)
-    # 固定标签点应与旧领取点 mini_click 基本重合（黄字标签高约 20px，
-    # 实测标签中心在旧点附近 ±12px 内）
-    for race in ("魔族", "仙族"):
-        claim = mingwang.CLAIM_POINTS[race]
-        x, y = claim["mini_click"]
-        lx, ly = claim["map_label_pos"]
-        assert abs(lx - x) <= 12 and abs(ly - y) <= 12
 
 
 def test_map_filter_checked_white_pixels():
@@ -2656,14 +2459,12 @@ def test_verify_map_claim_flow_only_uses_quick_route(monkeypatch):
     monkeypatch.setattr(mingwang, "_find_panel_anchor", lambda bgr: None)
     monkeypatch.setattr(mingwang, "detect_race",
                         lambda w: seen.append("race") or ("魔族", "x"))
-    monkeypatch.setattr(mingwang, "navigate_to_claim_point",
-                        lambda w, c: seen.append("old") or (True, "旧路线"))
     monkeypatch.setattr(mingwang, "navigate_to_claim_by_map_label",
                         lambda w, c: seen.append(("map", c["map"]))
                         or (True, "已点击固定点"))
 
-    def fake_claim(w, c, timeout=None, auto_dialog=False):
-        seen.append(("claim", c["map"], timeout, auto_dialog))
+    def fake_claim(w, c, timeout=None):
+        seen.append(("claim", c["map"], timeout))
         return True, "已打开山河名望任务领取面板"
 
     monkeypatch.setattr(mingwang, "_claim_and_open_panel", fake_claim)
@@ -2675,7 +2476,7 @@ def test_verify_map_claim_flow_only_uses_quick_route(monkeypatch):
         claim_map = mingwang.CLAIM_POINTS[race]["map"]
         assert seen == [("map", claim_map),
                         ("claim", claim_map,
-                         mingwang.MAP_CLAIM_ARRIVE_TIMEOUT, True)]
+                         mingwang.MAP_CLAIM_ARRIVE_TIMEOUT)]
 
 
 def test_verify_map_claim_flow_unsupported_race(monkeypatch):
@@ -2717,23 +2518,17 @@ def test_verify_map_claim_flow_quick_route_failure(monkeypatch):
     assert not ok and "锚点" in info and claimed == []
 
 
-def test_open_claim_panel_uses_map_route_when_enabled(monkeypatch):
-    """开关开启（默认）→ 走小地图快捷领取，入口链超时覆盖跨图寻路。"""
+def test_open_claim_panel_uses_map_route(monkeypatch):
+    """名望唯一领取路线：小地图快捷领取，入口链超时覆盖跨图寻路。"""
     order = []
     seen = {}
     monkeypatch.setattr(mingwang, "is_in_battle", lambda w: False)
-    monkeypatch.setattr(mingwang, "load_mingwang_map_claim", lambda: True)
     monkeypatch.setattr(mingwang, "_find_panel_anchor", lambda bgr: None)
     monkeypatch.setattr(mingwang, "navigate_to_claim_by_map_label",
                         lambda w, c: order.append("map") or (True, "已点击黄字"))
-    monkeypatch.setattr(mingwang, "navigate_to_claim_point",
-                        lambda w, c: order.append("old") or (True, "已到达"))
-    monkeypatch.setattr(mingwang, "_press_alt4_clear",
-                        lambda w: order.append("alt4"))
 
-    def fake_claim(w, c, timeout=None, auto_dialog=False):
+    def fake_claim(w, c, timeout=None):
         seen["timeout"] = timeout
-        seen["auto_dialog"] = auto_dialog
         order.append("claim")
         return True, "已打开面板"
 
@@ -2744,63 +2539,23 @@ def test_open_claim_panel_uses_map_route_when_enabled(monkeypatch):
     assert ok and "面板" in info
     assert order == ["map", "claim"]
     assert seen["timeout"] == mingwang.MAP_CLAIM_ARRIVE_TIMEOUT
-    assert seen["auto_dialog"] is True
 
 
-def test_open_claim_panel_falls_back_after_auto_dialog_timeout(monkeypatch):
-    """黄字点击后等不到自动对话框 → 本次运行后续轮次改用旧领取路线。"""
+def test_open_claim_panel_no_fallback_when_map_route_fails(monkeypatch):
+    """小地图快捷领取失败 → 直接返回失败（旧路线已移除，无回退）。"""
     order = []
     monkeypatch.setattr(mingwang, "is_in_battle", lambda w: False)
-    monkeypatch.setattr(mingwang, "load_mingwang_map_claim", lambda: True)
-    monkeypatch.setattr(mingwang, "_find_panel_anchor", lambda bgr: None)
-    monkeypatch.setattr(mingwang, "navigate_to_claim_by_map_label",
-                        lambda w, c: order.append("map") or (True, "已点击黄字"))
-    monkeypatch.setattr(mingwang, "navigate_to_claim_point",
-                        lambda w, c: order.append("old") or (True, "已到达"))
-    monkeypatch.setattr(mingwang, "_press_alt4_clear",
-                        lambda w: order.append("alt4"))
-
-    def fake_claim(w, c, timeout=None, auto_dialog=False):
-        order.append(("claim", auto_dialog))
-        if auto_dialog:
-            return False, "领取入口链超时（60s，未等到自动对话框）"
-        return True, "旧路线已打开面板"
-
-    monkeypatch.setattr(mingwang, "_claim_and_open_panel", fake_claim)
-    monkeypatch.setattr(mingwang.debug_overlay, "set_phase", lambda p: None)
-    win = _FakeWin([_pil(_noise_bgr(seed=24))])
-    ok, info = mingwang._open_claim_panel(win, "魔族")
-    assert not ok and "自动对话框" in info
-    assert mingwang._map_claim_dialog_failed is True
-    assert order == ["map", ("claim", True)]
-    # 第二次调用：回退标志已置位 → 不再走小地图快捷领取
-    order.clear()
-    ok, info = mingwang._open_claim_panel(win, "魔族")
-    assert ok and "面板" in info
-    assert order == ["old", "alt4", ("claim", False)]
-
-
-def test_open_claim_panel_falls_back_when_map_route_fails(monkeypatch):
-    """小地图快捷领取失败 → 回退旧寻路 + Alt+4 + 模板领取路线。"""
-    order = []
-    monkeypatch.setattr(mingwang, "is_in_battle", lambda w: False)
-    monkeypatch.setattr(mingwang, "load_mingwang_map_claim", lambda: True)
     monkeypatch.setattr(mingwang, "_find_panel_anchor", lambda bgr: None)
     monkeypatch.setattr(mingwang, "navigate_to_claim_by_map_label",
                         lambda w, c: order.append("map")
                         or (False, "未找到黄色标签"))
-    monkeypatch.setattr(mingwang, "navigate_to_claim_point",
-                        lambda w, c: order.append("old") or (True, "已到达"))
-    monkeypatch.setattr(mingwang, "_press_alt4_clear",
-                        lambda w: order.append("alt4"))
     monkeypatch.setattr(mingwang, "_claim_and_open_panel",
-                        lambda w, c, timeout=None:
-                        order.append("claim") or (True, "已打开面板"))
+                        lambda *a, **k: order.append("claim") or (True, "x"))
     monkeypatch.setattr(mingwang.debug_overlay, "set_phase", lambda p: None)
     win = _FakeWin([_pil(_noise_bgr(seed=23))])
     ok, info = mingwang._open_claim_panel(win, "魔族")
-    assert ok and "面板" in info
-    assert order == ["map", "old", "alt4", "claim"]
+    assert not ok and "黄色标签" in info
+    assert order == ["map"]  # 不进入入口链
 
 
 # ---- 天宫奇遇（仙族·天宫）：导航链接 / 1px 到达 / 偷丹葫芦 / 魔取仙丹 ----

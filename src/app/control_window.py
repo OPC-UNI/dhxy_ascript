@@ -82,7 +82,6 @@ from ..core.settings import (
     build_group_last_scan_payload, load_auto_famen, load_auto_refill, load_battle_actions,
     load_battle_only_auto_rejoin, load_battle_only_hezi, load_clear_screen, load_debug_overlay, load_debug_ui_unlocked,
     load_group_actions, load_group_last_scan, load_high_perf, load_selected_modes,
-    load_mingwang_map_claim,
     load_silent_mode, load_task_counts, load_thresholds, load_ui_theme,
     load_update_auto_check, load_update_feed_url, load_update_last_check, load_update_skipped_version,
     load_use_sheyaoxiang, load_wubei_auto_create_team, load_wubei_auto_kick_away,
@@ -99,7 +98,6 @@ from ..core.settings import (
     save_auto_famen, save_auto_refill, save_battle_action, save_battle_only_auto_rejoin,
     save_battle_only_hezi,
     save_clear_screen, save_debug_overlay, save_debug_ui_unlocked, save_group_actions,
-    save_mingwang_map_claim,
     save_group_last_scan, save_high_perf, save_selected_modes, save_silent_mode,
     save_task_count, save_threshold, save_ui_theme, save_update_auto_check,
     save_update_last_check, save_update_skipped_version, save_use_sheyaoxiang, save_wubei_auto_create_team,
@@ -239,7 +237,6 @@ class ControlWindow(WebWindow):
         self.expose(self.save_wubei_auto_repair)
         self.expose(self.save_wubei_repair_interval)
         self.expose(self.save_wubei_kuimulang_switch)
-        self.expose(self.save_mingwang_map_claim)
         self.expose(self.save_wubei_tab_group)
         self.expose(self.save_zhongzu_check_team)
         self.expose(self.save_zhongzu_auto_create_team)
@@ -855,7 +852,6 @@ class ControlWindow(WebWindow):
                             "auto_repair": load_zhongzu_auto_repair(),
                             "repair_interval": load_zhongzu_repair_interval(),
                             "tab_group": load_zhongzu_tab_group()},
-                "mingwang": {"map_claim": load_mingwang_map_claim()},
                 "xiuluo_shout": load_xiuluo_shout_switch(),
                 "xiuluo_shout_text": load_xiuluo_shout_text(),
                 "battle_only_auto_rejoin": load_battle_only_auto_rejoin(),
@@ -1106,10 +1102,6 @@ class ControlWindow(WebWindow):
     def save_wubei_hezi(self, on):
         """五倍设置变更：保存自动抢盒子开关状态。"""
         return save_wubei_hezi(on)
-
-    def save_mingwang_map_claim(self, on):
-        """名望设置变更：保存小地图快捷领取开关状态。"""
-        return save_mingwang_map_claim(on)
 
     def save_wubei_check_team(self, on):
         """五倍设置变更：保存检查队伍开关状态。"""
