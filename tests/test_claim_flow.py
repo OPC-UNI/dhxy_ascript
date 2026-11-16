@@ -216,3 +216,43 @@ def test_follow_to_done_recovery_retries_without_first_items(monkeypatch):
     assert recovered == [1]
     assert "first_items" in calls[0]
     assert "first_items" not in calls[1]
+
+
+# ---- 小地图走位到达自动弹出的任务对话框（2026-11-16 用户提示）----
+
+def test_wait_auto_claim_dialog_returns_frame_on_option(monkeypatch):
+    """对话框门控命中 + 对话区命中领取绿色选项 → 返回该帧（供同帧点击）。"""
+    calls = []
+    monkeypatch.setattr(claim_flow, "dialog_frame_score", lambda img: 0.99)
+    monkeypatch.setattr(
+        claim_flow.game_map, "ocr_region",
+        lambda img, region: calls.append(region)
+        or ([("闲来无事，要我帮忙吗", [450, 400, 700, 420], 0.95)], None))
+    monkeypatch.setattr(claim_flow, "find_claim_option",
+                        lambda items, img_np, needles: (1, 2, "txt", False))
+    frame = claim_flow.wait_auto_claim_dialog(_Win(), ("x",), timeout=0.0)
+    assert frame is not None and frame[0]
+    assert calls == [claim_flow.task_tracker.DIALOG_REGION]
+
+
+def test_wait_auto_claim_dialog_none_without_option(monkeypatch):
+    """对话框门控通过但无领取选项 → 短窗口结束返回 None。"""
+    monkeypatch.setattr(claim_flow, "dialog_frame_score", lambda img: 0.99)
+    monkeypatch.setattr(claim_flow.game_map, "ocr_region",
+                        lambda img, region: ([], None))
+    clock = _Clock()
+    monkeypatch.setattr(claim_flow, "time", clock)
+    assert claim_flow.wait_auto_claim_dialog(
+        _Win(), ("x",), timeout=1.0, interval=0.5) is None
+    assert clock.t >= 1.0
+
+
+def test_wait_auto_claim_dialog_gate_skips_ocr(monkeypatch):
+    """对话框模板门控未命中 → 不 OCR 对话区（空场景 OCR ~150-600ms）。"""
+    ocr = []
+    monkeypatch.setattr(claim_flow, "dialog_frame_score", lambda img: 0.1)
+    monkeypatch.setattr(claim_flow.game_map, "ocr_region",
+                        lambda img, region: ocr.append(1) or ([], None))
+    assert claim_flow.wait_auto_claim_dialog(
+        _Win(), ("x",), timeout=0.0) is None
+    assert ocr == []

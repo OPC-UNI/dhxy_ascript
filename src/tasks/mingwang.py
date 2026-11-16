@@ -23,6 +23,20 @@
      点击 (821,358) → 等待寻路完成。
    - 到达判定：**必须**坐标进入目标坐标容差内（两族一致；NPC 模板
      可见不算到达——远处点击不生效，2026-11-10 仙族实机教训）
+   - **小地图快捷领取（2026-11-16 用户规则，开关默认开启）**：不再
+     点坐标 + 找 NPC 模板，改为打开种族地图小地图（**已在目标地图则
+     直接点位置区域开小地图**，否则经世界地图 → 点击种族地图标签）→
+     勾选底部「任务」筛选 → 点击地图上**固定位置**的黄色任务 NPC 名
+     （魔族 逆天魔 / 仙族 武尊神，位置固定）——游戏自动寻路/传送并在
+     到达后自动打开对话框，直接点绿色选项「开启山河名望志」；不按坐标
+     到达判定、不按 Alt+4 清屏、不做 NPC 模板匹配。通用能力（开小地图/
+     任务筛选/点击固定点）已下沉到 `device/map.py` 的
+     `minimap_quick_navigate`，其他任务可直接复用；本模块只保留种族
+     场景的**绝对坐标**标定（CLAIM_POINTS 的 map_filter_pos /
+     map_label_pos——小地图窗口位置固定，即使被拖走下次打开也恢复默认
+     位置，2026-11-16 用户规则，不做窗口锚点相对换算）。黄字只点一次
+     （重复点击会打断自动寻路），等待上限 60s；失败回退上面的旧路线。
+     开关在任务页「名望」专属设置中可关闭。
 3. 到达坐标后先按 Alt+4 完全清屏（隐藏界面元素防遮挡；静默/物理
    模式都执行，2026-11-10 用户规则）再点击 NPC（魔族
    mingwang_nitianmo.png / mingwang_nitianmo2.png 双模板任一命中；
@@ -141,7 +155,8 @@ from ..minigames.shahai import (SHAHAI_GAME_ARM_TIMEOUT,
                                 _shahai_game_present)  # 沙海触发门/在场检测
 from ..device.battle import is_in_battle, is_in_battle_frame  # 战斗判定（单帧复用）
 from ..core import debug_overlay  # 调试信息悬浮层（任务阶段更新）
-from ..core.settings import load_task_counts  # 任务次数上限（通用设置）
+from ..core.settings import (load_mingwang_map_claim,  # 小地图快捷领取开关
+                             load_task_counts)  # 任务次数上限（通用设置）
 from ..device.dialog_common import (_click_green_option_once,  # 绿色选项点击（共享实现）
                             _click_screen_center,      # 点击屏幕中间推进对话
                             _dialog_text_present,      # 对话框文案模糊匹配
@@ -214,6 +229,15 @@ CLAIM_POINTS = {
         "npc_icon2": "mingwang_nitianmo2.png",
         "npc_name": "逆天魔",
         "npc_full_fallback": True,
+        # 小地图快捷领取（2026-11-16 用户规则 + 实机标定）：偏移以窗口
+        # 右上搜索栏关闭按钮（map_xiaoditu_open.png）为锚点——地图窗口
+        # 可拖动且不同场景窗口宽度不同，绝对坐标不可靠。锚点 (1090,219)
+        # 时「任务」勾选框中心 (499,667)、黄色逆天魔标签中心 (987,382)；
+        # 点击黄色标签后游戏自动寻路/传送，到达后自动打开 NPC 对话框。
+        # 小地图「任务」勾选框 / 黄字「逆天魔」点击点（绝对坐标，
+        # 2026-11-16 16:38/16:39 实机日志实测值；窗口位置固定）
+        "map_filter_pos": (501, 665),
+        "map_label_pos": (989, 380),
     },
     "仙族": {
         "map": "天宫",
@@ -226,6 +250,15 @@ CLAIM_POINTS = {
         "npc_icon2": "mingwang_wuzunshen2.png",
         "npc_threshold": 0.7,                      # 武尊神双模板阈值（用户 2026-11-10 指定）
         "npc_name": "武尊神",
+        # 天宫小地图（2026-11-16 实测锚点 (991,217)）：「任务」勾选框中心
+        # (599,668)；黄色武尊神标签按旧领取点 (821,358) + 魔族实测的
+        # 「黄字中心在旧领取点下方约 10px」换算（仙族账号实机复核后按需
+        # 微调；标签高约 20px，±10px 仍落在文字框内）。
+        # 小地图「任务」勾选框 / 黄字「武尊神」点击点（绝对坐标：
+        # 勾选框按天宫锚点 (991,217) 标定换算，黄字为 17:06 实机日志
+        # 实测值；窗口位置固定）
+        "map_filter_pos": (599, 668),
+        "map_label_pos": (821, 368),
         # 图2 是 36×58 的小体型角色模板，实测与同造型玩家角色 0.9888
         # 互匹配（2026-11-10 天宫实机）：只允许世界区域条带内搜索，
         # 不做全帧兜底——HUD/画面边缘的玩家会被误点（NPC 到达后必在
@@ -251,6 +284,28 @@ CLAIM_ENTRY_TIMEOUT = 45               # 整条领取入口链（NPC→选项→
 # 则先点已知对话选项、否则点屏幕中间推进（用户 2026-11-10 规则）；
 # 1s 冷却防连点（多屏对话逐屏推进）。
 CLAIM_DIALOG_ADVANCE_INTERVAL = 1.0
+
+# ---- 小地图快捷领取（2026-11-16 用户规则，开关默认开启）----
+# 旧路线缺陷：到达领取点后靠 NPC 模板找逆天魔/武尊神，模板会被玩家/
+# 对话框/摊位遮挡导致找不到（用户反馈的明显缺陷）。新路线：打开种族
+# 地图小地图（已在该地图直接开，否则经世界地图 → 点击种族地图标签）→
+# 勾选底部「任务」筛选 → 点击地图上**固定位置**的黄色任务 NPC 名
+# （魔族 逆天魔 / 仙族 武尊神；位置固定，2026-11-16 用户确认）→ 游戏
+# 自动寻路/传送，到达后自动打开 NPC 对话框 → 直接点绿色选项「开启
+# 山河名望志」。不走坐标到达判定、不按 Alt+4 清屏、不做 NPC 模板匹配。
+# 通用能力（开小地图/任务筛选/点击固定点）下沉到
+# device/map.py 的 minimap_quick_navigate，供其他任务复用；本模块只保留
+# 种族场景的**绝对坐标**标定（CLAIM_POINTS 的 map_filter_pos /
+# map_label_pos——小地图窗口位置固定，不做窗口锚点相对换算，用户
+# 2026-11-16 规则）。
+# 点击黄色任务 NPC 名后**只点一次**，随后等游戏自动寻路走过去（用户
+# 2026-11-16 指正：不要点邻近点重试——第一次点击已开始寻路，重复点击
+# 会重新选点/打断寻路；寻路耗时按 60s 超时）。地图窗口不要求立即关闭。
+MAP_CLAIM_ARRIVE_TIMEOUT = 120     # 黄字点击后等待自动寻路到达+对话的时限（秒）
+# 小地图快捷领取等不到自动对话框时，本次运行后续轮次回退旧领取路线
+# （坐标寻路 + NPC 模板）——黄字固定点偏移是按场景标定的，仙族等场景
+# 若偏移偏差导致点击只走路不开对话，不能每轮都白等 60s 反复失败。
+_map_claim_dialog_failed = False
 
 # ---- 山河名望任务栏（2026-11-10 实机标定，大唐边境面板打开时截图标定） ----
 # 任务栏锚点 = 面板顶部「接取」图标（今日已完成行左侧，用户素材 22.png）
@@ -1040,6 +1095,33 @@ def wait_arrive(win, claim, timeout=ARRIVE_TIMEOUT):
     return False, f"等待寻路完成超时（{timeout}s）"
 
 
+def navigate_to_claim_by_map_label(win, claim):
+    """小地图快捷领取：打开种族地图小地图 → 任务筛选 → 点黄色任务 NPC 名。
+
+    2026-11-16 用户规则（开关默认开启）：调用 map.minimap_quick_navigate
+    （通用能力已下沉）——已在目标地图时直接开小地图，否则经世界地图点
+    种族地图标签；勾选底部「任务」筛选后点击固定位置的黄色任务 NPC 名
+    （魔族 逆天魔 / 仙族 武尊神，**绝对坐标**，只点一次），游戏自动
+    寻路/传送并在到达后自动打开对话框；后续由
+    _claim_and_open_panel(auto_dialog=True) 等待对话框并点绿色选项
+    「开启山河名望志」。
+    返回 (是否成功, 描述)；失败由调用方回退旧寻路+模板领取路线。
+    """
+    if is_in_battle(win):
+        return False, "战斗中，跳过本轮小地图快捷领取"
+    # 场景前置：清理残留地图/物品栏（与旧路线一致）
+    close_scene_panels(win, "名望")
+    ok, info = game_map.minimap_quick_navigate(
+        win, claim["map"], claim["world_icon"],
+        claim["map_filter_pos"], claim["map_label_pos"])
+    if not ok:
+        close_scene_panels(win, "名望", quiet=True)
+        return False, info
+    log(f"[名望] 小地图快捷领取：{info}，黄色「{claim['npc_name']}」"
+        f"已触发自动寻路（超时 {MAP_CLAIM_ARRIVE_TIMEOUT}s）", "SYS")
+    return True, info
+
+
 def navigate_to_claim_point(win, claim):
     """寻路到种族领取点（目标坐标附近）。
 
@@ -1130,16 +1212,23 @@ def _click_claim_option(win, items, img_np):
                                     CLAIM_DIALOG_OPTION, prefix="名望")
 
 
-def _claim_and_open_panel(win, claim):
-    """领取入口链：点击 NPC → 绿色选项 → 点击山河名望入口。
+def _claim_and_open_panel(win, claim, timeout=None, auto_dialog=False):
+    """领取入口链：点击 NPC / 等自动对话框 → 绿色选项 → 开门望面板。
 
     每轮询只截一帧（战斗判定/入口匹配/对话区 OCR/NPC 匹配同帧）；
     对话框区域直接 OCR，不使用对话框模板门控（用户要求）。
     未找到 NPC 时检查标准对话框（模板分）：命中则先点已知对话选项、
     否则点屏幕中间推进（对话框会遮挡 NPC 模板，实测匹配仅 0.360）。
+    timeout：整条入口链时限（小地图快捷领取后只需等自动对话框，
+    传 MAP_CLAIM_ARRIVE_TIMEOUT；旧路线省略用 CLAIM_ENTRY_TIMEOUT）。
+    auto_dialog：小地图黄字点击后的模式——游戏自动寻路并自动打开对话框，
+    等待期间**只等绿色选项**，不点 NPC、不点屏幕中间（世界点击会取消
+    自动寻路）。旧路线为 False（保留 NPC 模板/点屏推进兜底）。
     返回 (是否成功, 描述)。
     """
-    deadline = time.time() + CLAIM_ENTRY_TIMEOUT
+    if timeout is None:
+        timeout = CLAIM_ENTRY_TIMEOUT  # 运行时读取，测试可 patch 模块常量
+    deadline = time.time() + timeout
     npc_click_at = 0.0
     option_click_at = 0.0
     last_score = 0.0
@@ -1162,6 +1251,11 @@ def _claim_and_open_panel(win, claim):
         # ① 山河名望入口出现（选项点击后才会出现）→ 点击打开领取面板。
         #    全帧匹配仅在此阶段（短窗口）执行，不属于常态轮询热路径。
         if option_click_at > 0.0:
+            # 面板可能已随选项点击自动打开（2026-11-16 小地图快捷领取
+            # 实机：点「开启山河名望志」后领取面板直接弹出，左缘入口
+            # 竖牌变成面板标题牌）——已打开则不再点击入口。
+            if _find_panel_anchor(bgr) is not None:
+                return True, "山河名望任务领取面板已打开"
             score, pt = game_map.best_match_np(bgr, CLAIM_SHANHE_ICON)
             if score >= CLAIM_SHANHE_THRESHOLD:
                 human_click(win, pt[0], pt[1])
@@ -1182,7 +1276,7 @@ def _claim_and_open_panel(win, claim):
         # ③ 点击 NPC（对话未出现/点击未注册时按间隔重试）。选项已点过
         #    后不再点 NPC：对话框可能仍在推进/结算，此时点 NPC 区域会
         #    误关对话（选项未选中）——等入口出现或按间隔重点选项即可
-        if option_click_at == 0.0 \
+        if not auto_dialog and option_click_at == 0.0 \
                 and now - npc_click_at >= NPC_CLICK_RETRY_INTERVAL:
             pt, score, full_check_at = _match_npc(bgr, claim, full_check_at)
             last_score = score
@@ -1225,7 +1319,7 @@ def _claim_and_open_panel(win, claim):
                 log(f"[名望] 画面中未找到{npc_name}（最佳匹配 {last_score:.3f}，"
                     f"阈值 {_claim_npc_threshold(claim)}），继续等待", "INFO")
         time.sleep(0.4)
-    return False, (f"领取入口链超时（{CLAIM_ENTRY_TIMEOUT}s，{npc_name}最佳匹配 "
+    return False, (f"领取入口链超时（{timeout}s，{npc_name}最佳匹配 "
                    f"{last_score:.3f}）")
 
 
@@ -3446,9 +3540,14 @@ def _open_claim_panel(win, race):
     """前往领取点并打开山河名望任务面板（第一阶段入口链）。
 
     面板已打开时直接返回（重试/诊断时不重复走 NPC 对话链）。
+    小地图快捷领取开关（默认开启）打开时走新路线：打开种族地图小地图
+    （已在目标地图则直接开小地图，否则经世界地图）→ 勾选任务筛选 →
+    点固定位置黄色任务 NPC 名 → 等游戏自动寻路到达并自动打开对话框 →
+    点绿色选项；失败回退旧「小地图坐标寻路 + NPC 模板点击」路线。
     race：已判定的种族（决定领取点配置）。
     返回 (是否成功, 描述)。
     """
+    global _map_claim_dialog_failed
     if is_in_battle(win):
         return False, "战斗中，跳过本轮（等待战斗结束）"
     claim = CLAIM_POINTS.get(race)
@@ -3458,6 +3557,27 @@ def _open_claim_panel(win, race):
     if img is not None and _find_panel_anchor(_bgr_frame(img)) is not None:
         return True, "山河名望面板已打开"
     debug_overlay.set_phase("前往领取点")
+    if load_mingwang_map_claim() and not _map_claim_dialog_failed:
+        ok, info = navigate_to_claim_by_map_label(win, claim)
+        if ok:
+            debug_overlay.set_phase("领取任务")
+            # 黄字点击后游戏自动寻路/传送，到达后自动打开对话框：只等
+            # 对话框并点选项（不走 Alt+4/坐标到达判定/NPC 模板/点屏）
+            ok2, info2 = _claim_and_open_panel(
+                win, claim, timeout=MAP_CLAIM_ARRIVE_TIMEOUT,
+                auto_dialog=True)
+            if ok2:
+                return True, info2
+            # 60s 内未等到自动对话框：本次运行后续轮次改用旧路线
+            # （黄字偏移按场景标定，偏差/瞬态不能每轮白等 60s）
+            if not _map_claim_dialog_failed:
+                _map_claim_dialog_failed = True
+                log(f"[名望] 小地图快捷领取未等到自动对话框（{info2}），"
+                    f"本次运行后续轮次改用旧领取路线（坐标寻路 + NPC 模板）",
+                    "WARN")
+            return False, info2
+        log(f"[名望] 小地图快捷领取失败（{info}），回退旧寻路+模板领取路线",
+            "WARN")
     ok, info = navigate_to_claim_point(win, claim)
     if not ok:
         return False, info
@@ -3523,6 +3643,37 @@ def verify_claim_flow(win):
         return False, (f"{race}领取流程待补充"
                        f"（当前仅实现 {'、'.join(CLAIM_POINTS)}）")
     return _open_claim_panel(win, race)
+
+
+def verify_map_claim_flow(win, race):
+    """诊断页-名望-魔族/仙族领取验证：**仅走小地图快捷领取方式**。
+
+    不做种族判定、不走旧「坐标寻路 + NPC 模板」路线（也不受小地图快捷
+    领取开关影响，诊断始终用新方式）：打开该种族地图小地图（已在目标
+    地图直接开，否则经世界地图）→ 勾选底部「任务」筛选 → 点击固定位置
+    黄色任务 NPC 名（魔族 逆天魔 / 仙族 武尊神，只点一次）→ 等待游戏
+    自动寻路/传送并在到达后自动打开对话框 → 点绿色选项「开启山河名望
+    志」→ 打开山河名望面板后停止（不领取面板内任务）。
+    race：已指定的种族（"魔族"/"仙族"）。
+    返回 (是否成功, 描述)。
+    """
+    if is_in_battle(win):
+        return False, "战斗中，跳过本次验证"
+    claim = CLAIM_POINTS.get(race)
+    if claim is None:
+        return False, f"{race}领取点未配置（当前仅实现 {'、'.join(CLAIM_POINTS)}）"
+    img = win.capture(force_activate=False)
+    if img is None:
+        return False, "窗口截图失败（游戏窗口可能已最小化）"
+    if _find_panel_anchor(_bgr_frame(img)) is not None:
+        return True, "山河名望面板已打开"
+    ok, info = navigate_to_claim_by_map_label(win, claim)
+    if not ok:
+        return False, info
+    log(f"[名望] 验证{race}小地图快捷领取：{info}", "SYS")
+    return _claim_and_open_panel(win, claim,
+                                 timeout=MAP_CLAIM_ARRIVE_TIMEOUT,
+                                 auto_dialog=True)
 
 
 def verify_claim_task_flow(win):

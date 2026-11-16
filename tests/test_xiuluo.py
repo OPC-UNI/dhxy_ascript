@@ -16,6 +16,14 @@ from src.workflows import claim_flow
 CENTER = xiuluo.SCREEN_CENTER_POS  # (689, 415)
 
 
+@pytest.fixture(autouse=True)
+def _reset_claim_walk_state(monkeypatch):
+    """小地图走位/任务筛选状态跨用例隔离。"""
+    monkeypatch.setattr(xiuluo, "_claim_arrived_by_walk", False)
+    monkeypatch.setattr(xiuluo, "_claim_task_filter_on", None)
+    monkeypatch.setattr(xiuluo, "_claim_map_kept_open", False)
+
+
 class _FakeClock:
     """可控时钟：sleep 推进虚拟时间，time 返回虚拟时间。"""
 
@@ -281,6 +289,105 @@ def test_walk_to_claim_spot_button_in_lingshoucun_arrival(monkeypatch):
     assert ok is True and "领取按钮可见" in info
 
 
+def test_walk_to_claim_spot_keeps_map_when_auto_dialog(monkeypatch):
+    """走位后领取对话框已自动弹出（模态）：跳过关地图，标记待选项点掉补关。"""
+    win = _FakeWin()
+    monkeypatch.setattr(xiuluo, "is_in_battle", lambda w: False)
+    monkeypatch.setattr(xiuluo.game_map, "match_frame_np", lambda *a, **k: None)
+    monkeypatch.setattr(xiuluo.game_map, "read_map_position",
+                        lambda w, img=None: ("灵兽村", 165, 98))
+    def fake_open(w, pos=None):
+        xiuluo._claim_task_filter_on = True  # 开小地图时读到的筛选状态
+        return True, "已点击"
+
+    def fake_close(w):
+        xiuluo._claim_map_kept_open = True
+        return True
+
+    monkeypatch.setattr(xiuluo, "_open_claim_map", fake_open)
+    monkeypatch.setattr(xiuluo, "_close_claim_map_before_arrival", fake_close)
+    monkeypatch.setattr(xiuluo.time, "sleep", lambda s: None)
+    monkeypatch.setattr(xiuluo, "log", lambda *a, **k: None)
+    ok, info = xiuluo._walk_to_claim_spot(win)
+    assert ok is True and "自动弹出" in info
+    assert xiuluo._claim_map_kept_open is True
+
+
+def test_close_claim_map_before_arrival_keeps_map_on_dialog(monkeypatch):
+    """单次关地图失败且任务对话框已自动弹出：保留地图，不再做 3 次重试。"""
+    win = _FakeWin()
+    monkeypatch.setattr(xiuluo.game_map, "match_frame_np",
+                        lambda *a, **k: (1085, 217))
+    monkeypatch.setattr(xiuluo.game_map, "is_mini_map_open", lambda w: True)
+    monkeypatch.setattr(xiuluo, "human_click", lambda *a, **k: None)
+    monkeypatch.setattr(xiuluo, "_claim_task_filter_on", True)
+    monkeypatch.setattr(xiuluo.claim_flow, "wait_auto_claim_dialog",
+                        lambda *a, **k: ([], None))
+    closed = []
+    monkeypatch.setattr(xiuluo.game_map, "close_maps",
+                        lambda w, quiet=False: closed.append(1))
+    monkeypatch.setattr(xiuluo.time, "sleep", lambda s: None)
+    monkeypatch.setattr(xiuluo, "log", lambda *a, **k: None)
+    assert xiuluo._close_claim_map_before_arrival(win) is True
+    assert xiuluo._claim_map_kept_open is True
+    assert closed == []
+
+
+def test_close_claim_map_before_arrival_retries_when_no_dialog(monkeypatch):
+    """关地图失败但无自动对话框（非对话框原因）：回退标准 close_maps 重试。"""
+    win = _FakeWin()
+    monkeypatch.setattr(xiuluo.game_map, "match_frame_np",
+                        lambda *a, **k: (1085, 217))
+    monkeypatch.setattr(xiuluo.game_map, "is_mini_map_open", lambda w: True)
+    monkeypatch.setattr(xiuluo, "human_click", lambda *a, **k: None)
+    monkeypatch.setattr(xiuluo, "_claim_task_filter_on", True)
+    monkeypatch.setattr(xiuluo.claim_flow, "wait_auto_claim_dialog",
+                        lambda *a, **k: None)
+    closed = []
+    monkeypatch.setattr(xiuluo.game_map, "close_maps",
+                        lambda w, quiet=False: closed.append(1))
+    monkeypatch.setattr(xiuluo.time, "sleep", lambda s: None)
+    monkeypatch.setattr(xiuluo, "log", lambda *a, **k: None)
+    assert xiuluo._close_claim_map_before_arrival(win) is False
+    assert xiuluo._claim_map_kept_open is False
+    assert closed == [1]
+
+
+def test_walk_to_claim_spot_closes_map_when_filter_off(monkeypatch):
+    """任务筛选未勾选：不查自动对话框，照常关地图走位（原流程不变）。"""
+    win = _FakeWin()
+    monkeypatch.setattr(xiuluo, "is_in_battle", lambda w: False)
+    monkeypatch.setattr(xiuluo.game_map, "match_frame_np", lambda *a, **k: None)
+    # 决策帧：不在领取点（避免「位置近但入口未出现」宽限窗读模板）；
+    # 走位到达循环：位置到领取点即返回
+    positions = iter([("灵兽村", 165, 98)]
+                     + [("灵兽村", *xiuluo.CLAIM_SPOT)] * 10)
+    monkeypatch.setattr(
+        xiuluo.game_map, "read_map_position",
+        lambda w, img=None: next(positions,
+                                 ("灵兽村", *xiuluo.CLAIM_SPOT)))
+    def fake_open(w, pos=None):
+        xiuluo._claim_task_filter_on = False  # 开小地图时读到未勾选
+        return True, "已点击"
+
+    monkeypatch.setattr(xiuluo, "_open_claim_map", fake_open)
+    monkeypatch.setattr(xiuluo, "is_in_battle_frame", lambda img: False)
+    auto = []
+    monkeypatch.setattr(xiuluo.claim_flow, "wait_auto_claim_dialog",
+                        lambda *a, **k: auto.append(1) or ([], None))
+    closed = []
+    monkeypatch.setattr(xiuluo.game_map, "close_world_map",
+                        lambda w, quiet=False: closed.append(1))
+    monkeypatch.setattr(xiuluo.game_map, "close_maps",
+                        lambda w, quiet=False: closed.append("maps"))
+    monkeypatch.setattr(xiuluo.time, "sleep", lambda s: None)
+    monkeypatch.setattr(xiuluo, "log", lambda *a, **k: None)
+    ok, _info = xiuluo._walk_to_claim_spot(win)
+    assert ok is True
+    assert auto == [] and closed == [1]
+    assert xiuluo._claim_map_kept_open is False
+
+
 def test_task_state_panel_closed(monkeypatch):
     """面板不在场：按无任务返回（不阻塞领取），且不得 OCR 静态区域误采信。"""
     monkeypatch.setattr(claim_flow, "is_in_battle_frame", lambda img: False)
@@ -321,6 +428,160 @@ def test_claim_task_skips_when_task_reappeared(monkeypatch):
     assert ok is False and "续跑跟踪" in info and frame is None
     assert called == []  # 不进入领取入口流程
 
+
+def test_claim_task_auto_dialog_only_for_minimap_walk(monkeypatch):
+    """小地图走位到达+任务勾选：到达自动弹出的对话框直接点选项，
+    跳过领取入口点击（用户 2026-11-16）。"""
+    monkeypatch.setattr(xiuluo, "is_in_battle", lambda w: False)
+    monkeypatch.setattr(xiuluo.task_tracker, "ocr_track", lambda img: ([], None))
+    monkeypatch.setattr(xiuluo.task_tracker, "task_signature_in",
+                        lambda items, title: None)
+    monkeypatch.setattr(xiuluo, "_claim_arrived_by_walk", True)
+    monkeypatch.setattr(xiuluo, "_claim_task_filter_on", True)
+    seen = ([], None)
+    monkeypatch.setattr(xiuluo.claim_flow, "wait_auto_claim_dialog",
+                        lambda w, needles: seen)
+    entry = []
+    monkeypatch.setattr(
+        xiuluo, "_click_entry_ensuring_dialog",
+        lambda w, **k: entry.append(k) or (False, "x", None, None, None))
+    options = []
+    monkeypatch.setattr(xiuluo, "_click_claim_option",
+                        lambda w, items, img_np: options.append(1) or False)
+    monkeypatch.setattr(xiuluo, "CLAIM_DIALOG_TIMEOUT", 0)
+    monkeypatch.setattr(xiuluo.time, "sleep", lambda s: None)
+    monkeypatch.setattr(xiuluo, "log", lambda *a, **k: None)
+    ok, info, frame = xiuluo._claim_task(_FakeWin())
+    assert not ok and "对话框处理失败" in info and frame is None
+    assert entry == []  # 已自动弹出对话框：不点领取入口
+    assert options == [1]  # 直接点自动对话框的领取选项
+
+
+def test_claim_task_no_auto_dialog_check_when_standing(monkeypatch):
+    """站着/返程到达：不检查自动对话框，正常走领取入口流程（原流程不变）。"""
+    monkeypatch.setattr(xiuluo, "is_in_battle", lambda w: False)
+    monkeypatch.setattr(xiuluo.task_tracker, "ocr_track", lambda img: ([], None))
+    monkeypatch.setattr(xiuluo.task_tracker, "task_signature_in",
+                        lambda items, title: None)
+    monkeypatch.setattr(xiuluo, "_claim_arrived_by_walk", False)
+    auto = []
+    monkeypatch.setattr(xiuluo.claim_flow, "wait_auto_claim_dialog",
+                        lambda *a, **k: auto.append(1) or ([], None))
+    entry = []
+    monkeypatch.setattr(
+        xiuluo, "_click_entry_ensuring_dialog",
+        lambda w, **k: entry.append(k)
+        or (False, "入口失败", None, None, None))
+    monkeypatch.setattr(xiuluo, "log", lambda *a, **k: None)
+    ok, info, frame = xiuluo._claim_task(_FakeWin())
+    assert not ok and info == "入口失败" and frame is None
+    assert auto == []  # 非走位到达：不查自动对话框
+    assert entry and entry[0]["allow_auto_dialog"] is False
+
+
+def test_claim_task_skips_auto_dialog_when_filter_off(monkeypatch):
+    """小地图「任务」筛选未勾选：即使走位到达也不查自动对话框。"""
+    monkeypatch.setattr(xiuluo, "is_in_battle", lambda w: False)
+    monkeypatch.setattr(xiuluo.task_tracker, "ocr_track", lambda img: ([], None))
+    monkeypatch.setattr(xiuluo.task_tracker, "task_signature_in",
+                        lambda items, title: None)
+    monkeypatch.setattr(xiuluo, "_claim_arrived_by_walk", True)
+    monkeypatch.setattr(xiuluo, "_claim_task_filter_on", False)
+    auto = []
+    monkeypatch.setattr(xiuluo.claim_flow, "wait_auto_claim_dialog",
+                        lambda *a, **k: auto.append(1) or ([], None))
+    entry = []
+    monkeypatch.setattr(
+        xiuluo, "_click_entry_ensuring_dialog",
+        lambda w, **k: entry.append(k)
+        or (False, "入口失败", None, None, None))
+    monkeypatch.setattr(xiuluo, "log", lambda *a, **k: None)
+    ok, info, frame = xiuluo._claim_task(_FakeWin())
+    assert not ok and info == "入口失败" and frame is None
+    assert auto == []
+    assert entry and entry[0]["allow_auto_dialog"] is False
+
+
+
+# ---- 入口等待：轮询内检测自动弹出的任务对话框（2026-11-16 五倍
+#      实机 18:32 空等入口窗口 8s 教训，修罗同款对齐） ----
+
+def _entry_wait_env(monkeypatch, dialog_score=0.0):
+    """装配 _wait_claim_entry：入口模板全不命中、无战斗、可控时钟。"""
+    clock = _FakeClock()
+    monkeypatch.setattr(xiuluo, "time", clock)
+    monkeypatch.setattr(xiuluo, "is_in_battle_frame", lambda img: False)
+    monkeypatch.setattr(xiuluo, "dialog_frame_score", lambda img: dialog_score)
+    monkeypatch.setattr(
+        xiuluo.game_map, "match_frame_multi",
+        lambda frame, icons: {icon: None for icon in icons})
+    state = {"ocr_calls": 0}
+
+    def fake_ocr(img, region):
+        state["ocr_calls"] += 1
+        return [], None
+
+    monkeypatch.setattr(xiuluo.game_map, "ocr_region", fake_ocr)
+    return state
+
+
+def test_wait_claim_entry_detects_auto_dialog_during_wait(monkeypatch):
+    """入口等待期间自动弹出的任务对话框：轮询内命中即返回哨兵，
+    调用方补查该帧直接处理选项，不再空等整个入口窗口。"""
+    monkeypatch.setattr(xiuluo, "_claim_task_filter_on", True)
+    _entry_wait_env(monkeypatch, dialog_score=1.0)
+    monkeypatch.setattr(
+        xiuluo, "_find_claim_option",
+        lambda items, img_np, needles=None: (534, 399, "领取", False))
+    assert xiuluo._wait_claim_entry(
+        _FakeWin(), 10, allow_auto_dialog=True) == (None, "自动对话框")
+
+
+def test_wait_claim_entry_skips_dialog_check_when_filter_off(monkeypatch):
+    """任务筛选未勾选 / 未开启自动对话框检测：入口等待不查对话框
+    （原流程零变化，不付对话区 OCR 成本）。"""
+    monkeypatch.setattr(xiuluo, "_claim_task_filter_on", False)
+    state = _entry_wait_env(monkeypatch, dialog_score=1.0)
+    xiuluo._wait_claim_entry(_FakeWin(), 3, allow_auto_dialog=True)
+    assert state["ocr_calls"] == 0
+
+
+def test_auto_dialog_claim_mode_requires_walk_and_filter(monkeypatch):
+    """自动对话框模式 = 小地图走位到达 + 任务筛选勾选/未知（None 也算）。
+
+    该模式下首次领取前的队伍监控循环让位给领取流程（run_loop），
+    直接点自动弹出的对话框选项（用户 2026-11-16 五倍实机同款）。"""
+    monkeypatch.setattr(xiuluo, "_claim_arrived_by_walk", True)
+    monkeypatch.setattr(xiuluo, "_claim_task_filter_on", True)
+    assert xiuluo._auto_dialog_claim_mode() is True
+    monkeypatch.setattr(xiuluo, "_claim_task_filter_on", None)
+    assert xiuluo._auto_dialog_claim_mode() is True
+    monkeypatch.setattr(xiuluo, "_claim_task_filter_on", False)
+    assert xiuluo._auto_dialog_claim_mode() is False
+    monkeypatch.setattr(xiuluo, "_claim_task_filter_on", True)
+    monkeypatch.setattr(xiuluo, "_claim_arrived_by_walk", False)
+    assert xiuluo._auto_dialog_claim_mode() is False
+
+
+def test_arrival_claim_dialog_up_requires_mode_and_dialog(monkeypatch):
+    """到达后检查自动对话框：只有「黄字走位模式 + 对话框真的在场」才跳过
+    队伍监控；没点中黄字（对话框没弹）→ False，走正常队伍监控。"""
+    monkeypatch.setattr(xiuluo, "_claim_arrived_by_walk", False)
+    monkeypatch.setattr(xiuluo, "_claim_task_filter_on", True)
+    called = []
+    monkeypatch.setattr(xiuluo.claim_flow, "wait_auto_claim_dialog",
+                        lambda *a, **k: called.append(1) or ([], None))
+    assert xiuluo._arrival_claim_dialog_up(_FakeWin()) is False
+    assert called == []  # 非走位模式：不检查对话框
+    monkeypatch.setattr(xiuluo, "_claim_arrived_by_walk", True)
+    assert xiuluo._arrival_claim_dialog_up(_FakeWin()) is True
+    monkeypatch.setattr(xiuluo.claim_flow, "wait_auto_claim_dialog",
+                        lambda *a, **k: None)
+    assert xiuluo._arrival_claim_dialog_up(_FakeWin()) is False
+    monkeypatch.setattr(xiuluo, "_claim_task_filter_on", False)
+    monkeypatch.setattr(xiuluo.claim_flow, "wait_auto_claim_dialog",
+                        lambda *a, **k: ([], None))
+    assert xiuluo._arrival_claim_dialog_up(_FakeWin()) is False
 
 
 # ---- 缺人喊话内容（2026-11-12：设置内容 + {种族} 占位符替换） ----

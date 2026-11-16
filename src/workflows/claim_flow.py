@@ -14,7 +14,9 @@ from ..core.app_utils import human_click, log, move_away, norm_text
 from ..device import map as game_map
 from ..device import task_tracker
 from ..device.battle import is_in_battle_frame
-from ..device.dialog_common import green_option_center
+from ..device.dialog_common import (DIALOG_FRAME_THRESHOLD,
+                                    dialog_frame_score,
+                                    green_option_center)
 from .follow import follow_task
 
 _UNSET = object()
@@ -81,6 +83,40 @@ def find_claim_option(items, img_np, needles):
                     img_np, rect, len(needle), len(ntxt))
                 return cx, cy, txt, idx == len(needles) - 1
     return None
+
+
+# 到达领取点后等待「自动弹出任务对话框」的短窗口（用户 2026-11-16）：
+# 小地图勾选「任务」筛选时，点任务目标点走位到附近可能自动触发领取
+# 对话框，此时领取入口按钮/NPC 可能被对话框遮挡——先查对话框直接点选项。
+AUTO_DIALOG_GRACE = 1.5
+AUTO_DIALOG_POLL = 0.5
+
+
+def wait_auto_claim_dialog(win, needles, timeout=AUTO_DIALOG_GRACE,
+                           interval=AUTO_DIALOG_POLL):
+    """短窗口检查任务对话框是否已自动弹出；命中返回 (items, img_np)。
+
+    2026-11-16 用户提示：修罗/五倍走小地图点任务目标点时，若小地图底部
+    「任务」筛选已勾选，到达目标点后游戏可能自动弹出领取对话框。命中
+    绿色选项时直接复用该帧点选项，跳过领取入口（按钮/NPC）点击——入口
+    可能已被对话框遮挡或已无必要。未命中返回 None，调用方按原入口流程
+    继续；timeout=0 时只查一帧（点入口前/入口未出现时的即时判定）。
+    """
+    deadline = time.time() + timeout
+    while True:
+        img = win.capture(force_activate=False)
+        if img is not None:
+            # 对话框模板门控（~9ms）：无标准对话框边框直接跳过对话区
+            # OCR（空场景 OCR ~150-600ms，用户 2026-11-16 要求加门控）。
+            # 标准对话框（领取等）模板分实测 ≥0.98；未命中不解锁 OCR。
+            if dialog_frame_score(img) >= DIALOG_FRAME_THRESHOLD:
+                items, img_np = game_map.ocr_region(
+                    img, task_tracker.DIALOG_REGION)
+                if find_claim_option(items, img_np, needles) is not None:
+                    return items, img_np
+        if time.time() >= deadline:
+            return None
+        time.sleep(interval)
 
 
 def click_claim_option(win, items, img_np, *, needles, prefix,

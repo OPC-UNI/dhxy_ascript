@@ -3,6 +3,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from PIL import Image
 from ascript.windows.system import R
 
 from src.device import map as game_map
@@ -262,3 +263,42 @@ def test_open_mini_map_city_dumps_frame_on_failure(monkeypatch):
         _FrameWin(), "shijie_luoyang.png", "洛阳城")
     assert ok is False and "小地图未打开" in info
     assert calls == ["city_open"]
+
+
+# ---- 小地图「任务」筛选勾选状态（模板匹配，跨场景通用；2026-11-16）----
+
+def _minimap_filter_frame(checked):
+    """合成小地图窗口帧：窗口锚点 + 五个勾选框（第 4 个为「任务」）。"""
+    frame = make_bgr_frame(seed=20261116)
+    anchor = _tpl(game_map.MINI_MAP_OPEN_ICON)
+    ah, aw = anchor.shape[:2]
+    frame = paste_template(frame, anchor, 1000, 200)
+    ax, ay = 1000 + aw // 2, 200 + ah // 2
+    on = _tpl(game_map.MINI_MAP_TASK_ON_ICON)
+    off = _tpl(game_map.MINI_MAP_TASK_OFF_ICON)
+    # 大唐边境实测：锚点(1090,219) 下五个勾选框中心
+    # x 295/363/431/499/567、y 667 → 相对锚点 -795/-727/-659/-591/-523、+448
+    for i, dx in enumerate((-795, -727, -659, -591, -523)):
+        tpl = on if (checked and i == 3) else off
+        th, tw = tpl.shape[:2]
+        cx, cy = ax + dx, ay + 448
+        frame = paste_template(frame, tpl, cx - tw // 2, cy - th // 2)
+    return frame
+
+
+def test_minimap_task_filter_state_checked():
+    frame = _minimap_filter_frame(checked=True)
+    img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+    assert game_map.minimap_task_filter_state(None, img=img) is True
+
+
+def test_minimap_task_filter_state_unchecked():
+    frame = _minimap_filter_frame(checked=False)
+    img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+    assert game_map.minimap_task_filter_state(None, img=img) is False
+
+
+def test_minimap_task_filter_state_no_map():
+    frame = make_bgr_frame(seed=7)
+    img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+    assert game_map.minimap_task_filter_state(None, img=img) is None

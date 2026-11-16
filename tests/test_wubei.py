@@ -11,6 +11,14 @@ import pytest
 from src.tasks import wubei
 
 
+@pytest.fixture(autouse=True)
+def _reset_claim_walk_state(monkeypatch):
+    """小地图走位/任务筛选状态跨用例隔离。"""
+    monkeypatch.setattr(wubei, "_arrive_by_walk", False)
+    monkeypatch.setattr(wubei, "_claim_task_filter_on", None)
+    monkeypatch.setattr(wubei, "_claim_map_kept_open", False)
+
+
 def test_click_track_link_clicks_underline_not_rect_center(monkeypatch):
     """整行矩形中心在链接「平顶山」右缘外，须点下划线中心。
 
@@ -729,6 +737,321 @@ def test_claim_task_replace_allows_existing_task(monkeypatch):
     ok, info, frame = wubei._claim_task(_FakeWin(), allow_existing=True)
     assert ok is False and info == "入口失败"
     assert called == [1]  # 已进入领取入口流程
+
+
+def test_claim_task_auto_dialog_clicks_claim_option(monkeypatch):
+    """小地图走位到达+任务勾选：自动弹出的领取对话框直接点领取选项
+    （人数不足由领取流程自带的确认/补人逻辑处理，用户 2026-11-16）。"""
+    monkeypatch.setattr(wubei, "is_in_battle", lambda w: False)
+    monkeypatch.setattr(wubei.task_tracker, "ocr_track", lambda img: ([], None))
+    monkeypatch.setattr(wubei.task_tracker, "task_signature_in",
+                        lambda items, title: None)
+    monkeypatch.setattr(wubei, "_arrive_by_walk", True)
+    monkeypatch.setattr(wubei, "_claim_task_filter_on", True)
+    seen = ([], None)
+    monkeypatch.setattr(wubei.claim_flow, "wait_auto_claim_dialog",
+                        lambda w, needles, **k: seen)
+    entry = []
+    monkeypatch.setattr(
+        wubei, "_click_entry_ensuring_dialog",
+        lambda w, **k: entry.append(k) or (False, "x", None, None, None))
+    options = []
+    monkeypatch.setattr(wubei, "_click_claim_option",
+                        lambda w, items, img_np: options.append(1) or False)
+    monkeypatch.setattr(wubei, "CLAIM_DIALOG_TIMEOUT", 0)
+    monkeypatch.setattr(wubei.time, "sleep", lambda s: None)
+    monkeypatch.setattr(wubei, "log", lambda *a, **k: None)
+    ok, info, frame = wubei._claim_task(_FakeWin())
+    assert not ok and "领取对话框处理失败" in info and frame is None
+    assert entry == []  # 已自动弹出对话框：不点领取入口
+    assert options == [1]  # 直接点自动对话框的领取选项
+
+
+def test_claim_task_auto_dialog_insufficient_team_fills(monkeypatch):
+    """自动对话框点领取选项后人数不足 → 走自动补人逻辑（用户 2026-11-16）。"""
+    monkeypatch.setattr(wubei, "is_in_battle", lambda w: False)
+    monkeypatch.setattr(wubei.task_tracker, "ocr_track", lambda img: ([], None))
+    monkeypatch.setattr(wubei.task_tracker, "task_signature_in",
+                        lambda items, title: None)
+    monkeypatch.setattr(wubei, "_arrive_by_walk", True)
+    monkeypatch.setattr(wubei, "_claim_task_filter_on", True)
+    seen = ([], None)
+    monkeypatch.setattr(wubei.claim_flow, "wait_auto_claim_dialog",
+                        lambda w, needles, **k: seen)
+    entry = []
+    monkeypatch.setattr(
+        wubei, "_click_entry_ensuring_dialog",
+        lambda w, **k: entry.append(k) or (False, "x", None, None, None))
+    monkeypatch.setattr(wubei, "_click_claim_option",
+                        lambda w, items, img_np: False)
+    monkeypatch.setattr(wubei, "_dialog_text_present",
+                        lambda items, txt: txt == wubei.FULL_TEAM_DIALOG_TEXT)
+    monkeypatch.setattr(wubei.game_map, "ocr_regions",
+                        lambda img, regions: ([], None))
+    filled = []
+    monkeypatch.setattr(wubei, "_monitor_team_and_fill",
+                        lambda w, **k: filled.append(k))
+    monkeypatch.setattr(wubei, "human_click", lambda *a, **k: None)
+    monkeypatch.setattr(wubei.time, "sleep", lambda s: None)
+    monkeypatch.setattr(wubei, "log", lambda *a, **k: None)
+    # 跳过首次领取前队伍监控的路径：未组队时监控首次检查内自动创建
+    ok, info, frame = wubei._claim_task(
+        _FakeWin(), allow_fill=True, create_team_if_missing=True)
+    assert not ok and "队伍已补齐" in info and frame is None
+    assert entry == []  # 自动对话框已弹出：不点入口
+    # 人数不足进入监控补人循环，并透传自动创建队伍开关
+    assert filled == [{"create_if_missing": True}]
+
+
+def test_claim_task_no_auto_dialog_check_when_standing(monkeypatch):
+    """站着/返程到达：不检查自动对话框，正常走领取入口流程（原流程不变）。"""
+    monkeypatch.setattr(wubei, "is_in_battle", lambda w: False)
+    monkeypatch.setattr(wubei.task_tracker, "ocr_track", lambda img: ([], None))
+    monkeypatch.setattr(wubei.task_tracker, "task_signature_in",
+                        lambda items, title: None)
+    monkeypatch.setattr(wubei, "_arrive_by_walk", False)
+    auto = []
+    monkeypatch.setattr(wubei.claim_flow, "wait_auto_claim_dialog",
+                        lambda *a, **k: auto.append(1) or ([], None))
+    entry = []
+    monkeypatch.setattr(
+        wubei, "_click_entry_ensuring_dialog",
+        lambda w, **k: entry.append(k)
+        or (False, "入口失败", None, None, None))
+    monkeypatch.setattr(wubei, "log", lambda *a, **k: None)
+    ok, info, frame = wubei._claim_task(_FakeWin())
+    assert not ok and info == "入口失败" and frame is None
+    assert auto == []  # 非走位到达：不查自动对话框
+    assert entry and entry[0]["allow_auto_dialog"] is False
+
+
+def test_walk_to_claim_spot_keeps_map_when_auto_dialog(monkeypatch):
+    """走位后领取对话框已自动弹出（模态）：保留地图进领取流程
+    （选项点掉后再补关），用户 2026-11-16。"""
+    win = _FakeWin()
+    monkeypatch.setattr(wubei, "is_in_battle_frame", lambda img: False)
+    monkeypatch.setattr(wubei.game_map, "match_frame_np", lambda *a, **k: None)
+    monkeypatch.setattr(wubei.game_map, "read_map_position",
+                        lambda w, img=None: ("宝象国", 60, 60))
+
+    def fake_open(w, pos=None):
+        wubei._claim_task_filter_on = True  # 开小地图时读到的筛选状态
+        return True, "已点击"
+
+    def fake_close(w):
+        wubei._claim_map_kept_open = True
+        return True
+
+    monkeypatch.setattr(wubei, "_open_claim_map", fake_open)
+    monkeypatch.setattr(wubei, "_close_claim_map_before_arrival", fake_close)
+    monkeypatch.setattr(wubei.time, "sleep", lambda s: None)
+    monkeypatch.setattr(wubei, "log", lambda *a, **k: None)
+    ok, info = wubei._walk_to_claim_spot(win)
+    assert ok is True and "自动弹出" in info
+    assert wubei._claim_map_kept_open is True
+
+
+def test_close_claim_map_before_arrival_keeps_map_on_dialog(monkeypatch):
+    """单次关地图失败且领取对话框已自动弹出：保留地图，不再做 3 次重试。"""
+    win = _FakeWin()
+    monkeypatch.setattr(wubei.game_map, "match_frame_np",
+                        lambda *a, **k: (1030, 217))
+    monkeypatch.setattr(wubei.game_map, "is_mini_map_open", lambda w: True)
+    monkeypatch.setattr(wubei, "human_click", lambda *a, **k: None)
+    monkeypatch.setattr(wubei, "_claim_task_filter_on", True)
+    monkeypatch.setattr(wubei.claim_flow, "wait_auto_claim_dialog",
+                        lambda *a, **k: ([], None))
+    closed = []
+    monkeypatch.setattr(wubei.game_map, "close_maps",
+                        lambda w, quiet=False: closed.append(1))
+    monkeypatch.setattr(wubei.time, "sleep", lambda s: None)
+    monkeypatch.setattr(wubei, "log", lambda *a, **k: None)
+    assert wubei._close_claim_map_before_arrival(win) is True
+    assert wubei._claim_map_kept_open is True
+    assert closed == []  # 模态对话框拦着：不白跑 3 次重试
+
+
+def test_close_claim_map_before_arrival_retries_when_no_dialog(monkeypatch):
+    """关地图失败但无自动对话框（非对话框原因）：回退标准 close_maps 重试。"""
+    win = _FakeWin()
+    monkeypatch.setattr(wubei.game_map, "match_frame_np",
+                        lambda *a, **k: (1030, 217))
+    monkeypatch.setattr(wubei.game_map, "is_mini_map_open", lambda w: True)
+    monkeypatch.setattr(wubei, "human_click", lambda *a, **k: None)
+    monkeypatch.setattr(wubei, "_claim_task_filter_on", True)
+    monkeypatch.setattr(wubei.claim_flow, "wait_auto_claim_dialog",
+                        lambda *a, **k: None)
+    closed = []
+    monkeypatch.setattr(wubei.game_map, "close_maps",
+                        lambda w, quiet=False: closed.append(1))
+    monkeypatch.setattr(wubei.time, "sleep", lambda s: None)
+    monkeypatch.setattr(wubei, "log", lambda *a, **k: None)
+    assert wubei._close_claim_map_before_arrival(win) is False
+    assert wubei._claim_map_kept_open is False
+    assert closed == [1]
+
+
+# ---- 入口等待：自动对话框轮询 + 任务勾选走位驻足规则
+# （2026-11-16 实机 18:32：黄字「降魔侍卫」走位终点 ≈86,86 不在落点
+#  盒内，坐标门控不通过；自动对话框已在场仍空等入口窗口 8s）
+
+def _entry_wait_env(monkeypatch, positions, dialog_score=0.0):
+    """装配 _wait_claim_entry：领取按钮每轮命中、位置按序列返回、无战斗。"""
+    clock = _FakeClock()
+    monkeypatch.setattr(wubei, "time", clock)
+    monkeypatch.setattr(wubei, "is_in_battle_frame", lambda img: False)
+    monkeypatch.setattr(wubei, "dialog_frame_score", lambda img: dialog_score)
+    monkeypatch.setattr(wubei, "log", lambda *a, **k: None)
+    monkeypatch.setattr(
+        wubei.game_map, "match_frame_multi",
+        lambda frame, icons: {wubei.LINGQU_ICON: (818, 358),
+                              wubei.XIANGMOSHIWEI_ICON: None})
+    state = {"i": 0}
+
+    def fake_read(win, img=None):
+        i = min(state["i"], len(positions) - 1)
+        state["i"] += 1
+        return positions[i]
+
+    monkeypatch.setattr(wubei.game_map, "read_map_position", fake_read)
+    return state
+
+
+def test_wait_claim_entry_relaxes_walk_gate_after_stop_on_task_click(monkeypatch):
+    """任务筛选勾选：小地图黄字走位终点 ≈86,86（不在落点盒内），驻足
+    （连续两轮坐标相同）后按站着规则放行点领取按钮（规则 4）。"""
+    monkeypatch.setattr(wubei, "_claim_task_filter_on", True)
+    _entry_wait_env(monkeypatch, [
+        (wubei.BAOXIANGGUO, 112, 95),   # 走位中：门控不通过
+        (wubei.BAOXIANGGUO, 86, 86),    # 刚落点：环比一次不算驻足
+        (wubei.BAOXIANGGUO, 86, 86),    # 驻足：放行
+    ])
+    pt, src, pos = wubei._wait_claim_entry(_FakeWin(), 10, arrive_by_walk=True)
+    assert pt == (818, 358) and src == "领取任务按钮"
+    assert pos == (wubei.BAOXIANGGUO, 86, 86)
+
+
+def test_wait_claim_entry_keeps_strict_gate_when_filter_off(monkeypatch):
+    """任务筛选未勾选：走位终点固定为落点，86,86 驻足也不放行
+    （原流程不变——无黄字可点，落点不会是 NPC）。"""
+    monkeypatch.setattr(wubei, "_claim_task_filter_on", False)
+    _entry_wait_env(monkeypatch, [
+        (wubei.BAOXIANGGUO, 86, 86),
+        (wubei.BAOXIANGGUO, 86, 86),
+        (wubei.BAOXIANGGUO, 86, 86),
+    ])
+    assert wubei._wait_claim_entry(_FakeWin(), 5, arrive_by_walk=True) \
+        == (None, None, None)
+
+
+def test_wait_claim_entry_no_early_click_while_walking(monkeypatch):
+    """走位中位置每轮都变：即使坐标在领取点盒内也不提前点击
+    （驻足规则只在停下后生效，保留 2026-10-29 防误点设计）。"""
+    monkeypatch.setattr(wubei, "_claim_task_filter_on", True)
+    # 均在领取点 (86,86)±15 内、落点盒 (94,84)±5 外，且每轮坐标都变
+    _entry_wait_env(monkeypatch, [
+        (wubei.BAOXIANGGUO, 86, 88),
+        (wubei.BAOXIANGGUO, 90, 90),
+        (wubei.BAOXIANGGUO, 82, 90),
+        (wubei.BAOXIANGGUO, 84, 88),
+    ])
+    assert wubei._wait_claim_entry(_FakeWin(), 5, arrive_by_walk=True) \
+        == (None, None, None)
+
+
+def test_wait_claim_entry_detects_auto_dialog_during_wait(monkeypatch):
+    """入口等待期间自动弹出的领取对话框：轮询内命中即返回哨兵，
+    调用方补查该帧直接点领取选项，不再空等整个入口窗口。"""
+    monkeypatch.setattr(wubei, "_claim_task_filter_on", True)
+    _entry_wait_env(monkeypatch, [(wubei.BAOXIANGGUO, 112, 95)],
+                    dialog_score=1.0)
+    monkeypatch.setattr(wubei.game_map, "ocr_region",
+                        lambda img, region: ([], None))
+    monkeypatch.setattr(wubei, "_find_claim_option",
+                        lambda items, img_np: (534, 399, "除魔卫国，义不容辞", False))
+    assert wubei._wait_claim_entry(
+        _FakeWin(), 10, arrive_by_walk=True, allow_auto_dialog=True) \
+        == (None, "自动对话框", None)
+
+
+def test_wait_claim_entry_skips_dialog_check_when_filter_off(monkeypatch):
+    """任务筛选未勾选：入口等待不查自动对话框（原流程零变化）。"""
+    monkeypatch.setattr(wubei, "_claim_task_filter_on", False)
+    _entry_wait_env(monkeypatch, [(wubei.BAOXIANGGUO, 112, 95)],
+                    dialog_score=1.0)
+    calls = []
+    monkeypatch.setattr(wubei.game_map, "ocr_region",
+                        lambda img, region: calls.append(1) or ([], None))
+    wubei._wait_claim_entry(_FakeWin(), 3, arrive_by_walk=True,
+                            allow_auto_dialog=True)
+    assert calls == []
+
+
+def test_claim_task_skips_auto_dialog_when_filter_off(monkeypatch):
+    """小地图「任务」筛选未勾选：即使走位到达也不查自动对话框。"""
+    monkeypatch.setattr(wubei, "is_in_battle", lambda w: False)
+    monkeypatch.setattr(wubei.task_tracker, "ocr_track", lambda img: ([], None))
+    monkeypatch.setattr(wubei.task_tracker, "task_signature_in",
+                        lambda items, title: None)
+    monkeypatch.setattr(wubei, "_arrive_by_walk", True)
+    monkeypatch.setattr(wubei, "_claim_task_filter_on", False)
+    auto = []
+    monkeypatch.setattr(wubei.claim_flow, "wait_auto_claim_dialog",
+                        lambda *a, **k: auto.append(1) or ([], None))
+    entry = []
+    monkeypatch.setattr(
+        wubei, "_click_entry_ensuring_dialog",
+        lambda w, **k: entry.append(k)
+        or (False, "入口失败", None, None, None))
+    monkeypatch.setattr(wubei, "log", lambda *a, **k: None)
+    ok, info, frame = wubei._claim_task(_FakeWin())
+    assert not ok and info == "入口失败" and frame is None
+    assert auto == []
+    assert entry and entry[0]["allow_auto_dialog"] is False
+
+
+def test_auto_dialog_claim_mode_requires_walk_and_filter(monkeypatch):
+    """自动对话框模式 = 小地图走位到达 + 任务筛选勾选/未知（None 也算）。
+
+    该模式下首次领取前的队伍监控循环让位给领取流程（run_loop）：直接
+    点自动弹出的对话框选项，人数不足走拒绝→监控补人（用户 2026-11-16
+    实机 18:42：先监控会让对话框在场无人处理 10s+）。"""
+    monkeypatch.setattr(wubei, "_arrive_by_walk", True)
+    monkeypatch.setattr(wubei, "_claim_task_filter_on", True)
+    assert wubei._auto_dialog_claim_mode() is True
+    monkeypatch.setattr(wubei, "_claim_task_filter_on", None)
+    assert wubei._auto_dialog_claim_mode() is True
+    monkeypatch.setattr(wubei, "_claim_task_filter_on", False)
+    assert wubei._auto_dialog_claim_mode() is False
+    monkeypatch.setattr(wubei, "_claim_task_filter_on", True)
+    monkeypatch.setattr(wubei, "_arrive_by_walk", False)  # 站着/返程到达
+    assert wubei._auto_dialog_claim_mode() is False
+
+
+def test_arrival_claim_dialog_up_requires_mode_and_dialog(monkeypatch):
+    """到达后检查自动对话框：只有「黄字走位模式 + 对话框真的在场」才跳过
+    队伍监控；没点中黄字（对话框没弹）→ False，走正常队伍监控。"""
+    calls = []
+    monkeypatch.setattr(wubei.claim_flow, "wait_auto_claim_dialog",
+                        lambda w, needles, **k: calls.append(k.get("timeout"))
+                        or ([], None))
+    # 非黄字走位模式：不检查对话框
+    monkeypatch.setattr(wubei, "_arrive_by_walk", False)
+    monkeypatch.setattr(wubei, "_claim_task_filter_on", True)
+    assert wubei._arrival_claim_dialog_up(_FakeWin()) is False
+    assert calls == []
+    # 黄字走位模式 + 对话框已弹出
+    monkeypatch.setattr(wubei, "_arrive_by_walk", True)
+    assert wubei._arrival_claim_dialog_up(_FakeWin()) is True
+    # 黄字走位模式 + 无对话框（点在地面/没点中黄字）
+    monkeypatch.setattr(wubei.claim_flow, "wait_auto_claim_dialog",
+                        lambda w, needles, **k: None)
+    assert wubei._arrival_claim_dialog_up(_FakeWin()) is False
+    # 筛选未勾选：不检查
+    monkeypatch.setattr(wubei, "_claim_task_filter_on", False)
+    monkeypatch.setattr(wubei.claim_flow, "wait_auto_claim_dialog",
+                        lambda *a, **k: ([], None))
+    assert wubei._arrival_claim_dialog_up(_FakeWin()) is False
 
 
 # ---- 战斗失败重新领取（用户 2026-11-14：五倍不取消任务，直接重领） ----

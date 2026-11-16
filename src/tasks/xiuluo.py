@@ -116,7 +116,10 @@ CLAIM_NEAR_BTN_GRACE = 3.0                    # 位置近但按钮不可见时�
                                               # 按钮不出现，旧逻辑入口空等 20s 需人工走位）
 WALK_ARRIVE_TOLERANCE = 5                     # 寻路到达判定容差（用户步 1.2，更严格：
                                               # 走动中识图点击容易点不到）
-LINGSHOU_MAP_POS = (627, 396)                 # 灵兽村小地图上领取点位置的点击点（窗口相对坐标，用户实测）
+LINGSHOU_MAP_POS = (627, 396)                 # 灵兽村小地图上领取点位置的点击点（绝对坐标，
+                                              # 用户实测。2026-11-16 用户规则：小地图窗口位置
+                                              # 固定——即使被拖走，下次打开也会恢复默认位置，
+                                              # 固定绝对坐标即可）
 CLAIM_DIALOG_OPTION = "闲来无事，要我帮忙吗"    # 领取对话框绿色选项（游戏内原文，实测用字）
 CLAIM_OPTION_TAIL = "要我帮忙吗"               # 选项换行渲染时的尾部匹配串（实测完整文案
                                               # 永不单行命中，两次全靠尾部/兜底）
@@ -129,6 +132,11 @@ TEAM_CONFIRM_TEXT = "修罗的战斗力异常强大，你当前队伍的人数�
 TEAM_CONFIRM_ACCEPT = "确定"           # 确认弹窗选项：接受领取
 TEAM_CONFIRM_DECLINE = "我再想想"       # 确认弹窗选项：拒绝（等待补人）
 CLAIM_ARRIVE_TIMEOUT = 90                     # 寻路到领取点的超时
+CLAIM_ARRIVE_DIALOG_WAIT = 3.0                # 到达领取点后等待「自动弹出领取
+                                              # 对话框」的短窗口（秒，仅小地图
+                                              # 黄字走位模式）：窗口内未弹出按
+                                              # 「没点中黄字」处理，走正常队伍
+                                              # 监控（用户 2026-11-16 原则）
 CLAIM_BUTTON_TIMEOUT = 20                     # 到达后等待领取任务按钮出现的超时
 ENTRY_FIRST_WAIT = 4.5                         # 入口首轮等待：位置近判定可能误判（超出
                                                # 可点击范围入口不会出现），首轮只等 4.5s
@@ -273,6 +281,19 @@ _returned_last_round = False    # 上一轮返程成功（回城符已使用、�
                                 # 轮询等待加载完成，不误走世界地图寻路
                                 # （实测 12:30 传送加载超 8s 白走地图 ~11s）；
                                 # 进入领取流程时消耗复位，仅对紧邻轮次生效
+_claim_arrived_by_walk = False  # 本轮到达领取点是否经小地图点击走位：
+                                # 仅这种到达方式 + 小地图「任务」勾选时，
+                                # 游戏可能在到达时自动弹出领取对话框
+                                # （用户 2026-11-16）——只在走位到达的领取
+                                # 流程里检查自动对话框，站着/返程到达的
+                                # 正常「找领取模板点击」流程不受影响
+_claim_task_filter_on = None    # 开小地图时读到的「任务」筛选勾选状态：
+                                # True=勾选（到达可能自动弹领取对话框）、
+                                # False=未勾选（跳过自动对话框检查）、
+                                # None=未识别（仍做门控检查，成本极低）
+_claim_map_kept_open = False    # 小地图走位后领取对话框已自动弹出（模态）：
+                                # 关地图点击会被对话框拦住，故保留地图直接
+                                # 处理对话框；选项点掉后由 _claim_task 补关
 
 # ---- 高性能模式（通用设置开关，共享设施见 app_utils：领取选项/看打
 #      选项固定位置缓存点击 + 效果校验 + 识别回退；背包按钮缓存已下沉
@@ -494,7 +515,8 @@ def _run_wuyi_chain(win, hover_before_click=False, report_condition=False,
         if not ok:
             return False, info
         human_click(win, WUYI_MAP_POS[0], WUYI_MAP_POS[1])
-        log("[修罗][巫医] 已点击小地图巫医位置，自动寻路中", "SYS")
+        log(f"[修罗][巫医] 已点击小地图巫医位置 {WUYI_MAP_POS}，自动寻路中",
+            "SYS")
         time.sleep(1.0)
         game_map.close_maps(win)
         deadline = time.time() + WUYI_ARRIVE_TIMEOUT
@@ -704,13 +726,19 @@ def _near_shizhe_spot(pos):
     return xmin <= pos[1] <= xmax and ymin <= pos[2] <= ymax
 
 
-def _wait_claim_entry(win, timeout):
+def _wait_claim_entry(win, timeout, allow_auto_dialog=False,
+                      auto_dialog_needles=CLAIM_OPTION_NEEDLES):
     """等待领取入口出现（按钮或使者），返回 (pt, 来源) 或 (None, None)。
 
     战斗中跳过等待；每轮询只截一帧，双模板批量匹配共用一帧。
     走动中镜头随人物移动，点击须瞬时落点（调用方用 precise_click
     move_duration=0 取消拟人化移动，实测 2026-10-21 拟人化移动期间
     点击位置已过期偶现无效）。
+
+    allow_auto_dialog：轮询内检测「小地图走位到达自动弹出」的任务
+    对话框（任务筛选勾选/未知时），命中返回 (None, "自动对话框")，
+    调用方补查该帧直接处理选项——入口被模态对话框遮挡时不再空等
+    整个入口窗口（2026-11-16 五倍同款修正：实机 18:32 空等 8s）。
     """
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -721,6 +749,15 @@ def _wait_claim_entry(win, timeout):
         if is_in_battle_frame(img):
             time.sleep(2.0)
             continue
+        # 轮询内检测自动弹出的任务对话框（模态；任务筛选勾选/未知）：
+        # 一出现即返回，调用方补查该帧直接处理选项
+        if allow_auto_dialog and _claim_task_filter_on is not False \
+                and dialog_frame_score(img) >= DIALOG_FRAME_THRESHOLD:
+            items_d, img_np_d = game_map.ocr_region(
+                img, task_tracker.DIALOG_REGION)
+            if _find_claim_option(items_d, img_np_d,
+                                  auto_dialog_needles) is not None:
+                return None, "自动对话框"
         frame = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
         found = game_map.match_frame_multi(frame, (LINGQU_ICON, LINGSHOUCUN_SHIZHE_ICON))
         for icon, label in ((LINGQU_ICON, "领取任务按钮"),
@@ -973,8 +1010,59 @@ def _open_claim_map(win, pos=None):
                                                LINGSHOUCUN)
         if not ok:
             return False, info
+    # 记录小地图「任务」筛选状态（用户 2026-11-16）：仅勾选时小地图
+    # 走位到达可能自动弹领取对话框；未勾选则不做自动对话框检查。
+    # 模板匹配勾选框（跨场景通用，~10ms），地图窗口此刻仍打开。
+    global _claim_task_filter_on
+    state = game_map.minimap_task_filter_state(win)
+    _claim_task_filter_on = state
+    if state is True:
+        log("[修罗] 小地图「任务」筛选已勾选（到达可能自动弹领取对话框）",
+            "INFO")
+    elif state is False:
+        log("[修罗] 小地图「任务」筛选未勾选（跳过自动对话框检查）", "INFO")
+    else:
+        log("[修罗] 小地图「任务」筛选状态未知（仍做门控检查）", "INFO")
+    # 小地图窗口位置固定（用户 2026-11-16 规则）→ 直接点绝对坐标，
+    # 不做锚点相对换算（关闭按钮所在面板宽度随状态变化，锚点不是稳定
+    # 的内容参照，实机 19:04 五倍侧实测锚点漂移导致相对点击整体偏移）
     human_click(win, LINGSHOU_MAP_POS[0], LINGSHOU_MAP_POS[1])
+    log(f"[修罗] 已点击灵兽村小地图领取点位置 {LINGSHOU_MAP_POS}", "SYS")
     return True, "已点击灵兽村小地图领取点位置"
+
+
+def _close_claim_map_before_arrival(win):
+    """点完小地图目标点后关地图；小地图关不掉且任务对话框已自动弹出
+    （模态）时保留地图并返回 True（调用方按到达处理）。
+
+    单次关闭尝试（0.5s 复检）：模态对话框会拦住关闭点击，
+    game_map.close_maps 的 3 次重试只会刷 WARN、白耗 ~4s（2026-11-16
+    五倍实机日志同款）。非对话框原因关不掉时回退标准 close_maps。
+    返回是否因自动任务对话框保留地图。
+    """
+    global _claim_map_kept_open
+    img = win.capture(force_activate=False)
+    if img is not None:
+        bgr = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
+        pt = game_map.match_frame_np(
+            bgr, game_map.MINI_MAP_OPEN_ICON,
+            region=game_map.MINI_MAP_REGION, fallback=False)
+        if pt is not None:
+            human_click(win, pt[0], pt[1])
+            time.sleep(0.5)
+            if game_map.is_mini_map_open(win):
+                if _claim_task_filter_on is not False:
+                    auto = claim_flow.wait_auto_claim_dialog(
+                        win, CLAIM_OPTION_NEEDLES, timeout=0.0)
+                    if auto is not None:
+                        _claim_map_kept_open = True
+                        log("[修罗] 任务对话框已自动弹出（模态），保留地图",
+                            "SYS")
+                        return True
+                game_map.close_maps(win)  # 非对话框原因：标准重试
+                return False
+    game_map.close_world_map(win, quiet=True)
+    return False
 
 
 def _walk_to_claim_spot(win, just_returned=False):
@@ -1005,6 +1093,10 @@ def _walk_to_claim_spot(win, just_returned=False):
     上限），超时才走世界地图寻路兜底——不再白走地图。
     返回 (是否成功, 描述)。
     """
+    global _claim_arrived_by_walk, _claim_task_filter_on, _claim_map_kept_open
+    _claim_arrived_by_walk = False  # 默认非走位到达；小地图走位路径下置位
+    _claim_task_filter_on = None    # 本轮筛选状态由 _open_claim_map 读取
+    _claim_map_kept_open = False    # 本轮是否因模态对话框保留小地图
     if is_in_battle(win):
         return False, "战斗中，跳过本轮寻路"
     img = win.capture(force_activate=False)
@@ -1070,7 +1162,14 @@ def _walk_to_claim_spot(win, just_returned=False):
         return False, info
     log("[修罗] 已点击灵兽村小地图领取点位置，自动寻路中", "SYS")
     time.sleep(1.0)  # 等待自动寻路启动
-    game_map.close_maps(win)
+    # 此后到达均经小地图点击走位：领取时可检查到达自动弹出的对话框
+    # （仅此路径 + 小地图「任务」勾选时出现，用户 2026-11-16）
+    _claim_arrived_by_walk = True
+    # 小地图任务点走位可能自动弹出领取对话框（模态）：对话框会拦住
+    # 关地图的点击。单次关闭尝试 + 失败时查对话框（见 helper），命中
+    # 则保留地图直接按到达处理，选项点掉后由 _claim_task 补关。
+    if _close_claim_map_before_arrival(win):
+        return True, "已到达领取点附近（任务对话框已自动弹出）"
     # 等待到达：按钮可见优先（直接信号），坐标 ±5 作为次级判据
     # （坐标误读时按钮判据兜底，实测站在领取点空等 30s+ 的根因）。
     # 按钮判据须地图名门控（_in_claim_map）：按钮模板在其他地图同样
@@ -1101,6 +1200,17 @@ def _walk_to_claim_spot(win, just_returned=False):
         if _near_claim_spot(pos, WALK_ARRIVE_TOLERANCE):
             log("[修罗] 已到达领取点附近", "SYS")
             return True, "已到达领取点附近"
+        # 到达自动弹出领取对话框（小地图走位 + 任务筛选勾选/未知，
+        # 用户 2026-11-16）：对话框在场且含领取选项即按到达处理，
+        # 避免入口按钮/坐标判据被对话框遮挡时空等到超时。门控模板
+        # ~10ms，无对话框不付对话区 OCR 成本。
+        if _claim_task_filter_on is not False \
+                and dialog_frame_score(img) >= DIALOG_FRAME_THRESHOLD:
+            items_d, img_np_d = game_map.ocr_region(
+                img, task_tracker.DIALOG_REGION)
+            if _find_claim_option(items_d, img_np_d) is not None:
+                log("[修罗] 已到达领取点附近（领取对话框已自动弹出）", "SYS")
+                return True, "已到达领取点附近（领取对话框已自动弹出）"
         polls += 1
         if polls % 5 == 0:
             log(f"[修罗] 前往领取点中... 当前位置: {pos or '识别失败'}", "INFO")
@@ -1123,7 +1233,10 @@ def _relocate_to_claim_spot(win):
         return False, info
     log("[修罗] 已点击灵兽村小地图领取点位置，重新寻路（领取校验兜底）", "SYS")
     time.sleep(1.0)
-    game_map.close_maps(win)
+    # 同 _walk_to_claim_spot：模态任务对话框会拦住关地图点击，命中则
+    # 保留地图直接按到达处理（选项点掉后由 _claim_task 补关）
+    if _close_claim_map_before_arrival(win):
+        return True, "已重走到领取点附近（任务对话框已自动弹出）"
     deadline = time.time() + CLAIM_ARRIVE_TIMEOUT
     polls = 0
     while time.time() < deadline:
@@ -1142,6 +1255,13 @@ def _relocate_to_claim_spot(win):
             return True, "已重走到领取点附近（领取按钮可见）"
         if _near_claim_spot(pos, WALK_ARRIVE_TOLERANCE):
             return True, "已重走到领取点附近"
+        # 同 _walk_to_claim_spot：到达自动弹出领取对话框即按到达处理
+        if _claim_task_filter_on is not False \
+                and dialog_frame_score(img) >= DIALOG_FRAME_THRESHOLD:
+            items_d, img_np_d = game_map.ocr_region(
+                img, task_tracker.DIALOG_REGION)
+            if _find_claim_option(items_d, img_np_d) is not None:
+                return True, "已重走到领取点附近（领取对话框已自动弹出）"
         polls += 1
         if polls % 5 == 0:
             log(f"[修罗] 重走领取点中... 当前位置: {pos or '识别失败'}", "INFO")
@@ -1152,7 +1272,7 @@ def _relocate_to_claim_spot(win):
 def _click_entry_ensuring_dialog(win, log_tag="[修罗]", hover_before_click=False,
                                  option_needles=CLAIM_OPTION_NEEDLES,
                                  option_cache_key="claim_option",
-                                 action="领取"):
+                                 action="领取", allow_auto_dialog=False):
     """点击领取入口（按钮或使者）并确保对话框出现；未出现判定坐标不对：
     打开小地图点击领取点坐标重定位后重试一次（用户确认的兜底路径）。
 
@@ -1160,6 +1280,12 @@ def _click_entry_ensuring_dialog(win, log_tag="[修罗]", hover_before_click=Fal
     option_needles / option_cache_key / action：对话框选项匹配串、高性能
     缓存键与动作名（领取默认；取消任务传 CANCEL_OPTION_NEEDLES /
     "cancel_option" / "取消任务"，对话框出现判定按取消选项）。
+    allow_auto_dialog：允许在入口等待期间/等待前后检测「小地图走位
+    到达自动弹出」的任务对话框（仅小地图走位到达置 True；站着/返程
+    到达保持 False，原流程零变化）。等待轮询内同样检测（模态对话框
+    会遮挡入口，不检测会空等整个入口窗口——2026-11-16 五倍实机
+    18:32）。第 2 次尝试必经小地图重定位走位，无论本参数都允许检测
+    （用户 2026-11-16）。
     返回 (是否成功, 描述, 来源, 坐标, 对话框帧)；成功时对话框已打开
     （选项可见），对话框帧 (items, img_np) 供领取流程同帧点选项——
     免重截+重 OCR（每轮省 ~0.5s）。
@@ -1169,13 +1295,39 @@ def _click_entry_ensuring_dialog(win, log_tag="[修罗]", hover_before_click=Fal
     src2 = pt2 = None
     seen_frame = None
     for attempt in (1, 2):
+        # 入口等待前先查自动弹出的任务对话框（允许时）：命中则直接返回
+        # 该帧处理选项（第 2 次尝试必经小地图重走，自动对话框可能在
+        # 重走到达时弹出，不能先空等 20s 入口——用户 2026-11-16）
+        if allow_auto_dialog or attempt == 2:
+            auto = claim_flow.wait_auto_claim_dialog(
+                win, option_needles, timeout=0.0)
+            if auto is not None:
+                log(f"{log_tag} 任务对话框已自动弹出，跳过入口等待"
+                    f"直接处理选项", "SYS")
+                return True, "任务对话框已自动弹出", "自动对话框", None, auto
         # 入口坐标直接用等待循环最近一帧的匹配结果点击：等待刚命中后
         # 再补一次识别（旧双检）会因标记动画/镜头未稳出现「出现后又
         # 消失」假失败（实测到达秒级报错未点击）；点不中由对话框出现
         # 判定兜底（小地图重定位重试）
         wait_timeout = ENTRY_FIRST_WAIT if attempt == 1 else CLAIM_BUTTON_TIMEOUT
-        pt2, src2 = _wait_claim_entry(win, wait_timeout)
+        # 等待期间同样检测自动弹出的任务对话框（模态会遮挡入口，
+        # 2026-11-16 五倍实机 18:32 空等 8s 教训）：一出现即返回补查
+        pt2, src2 = _wait_claim_entry(
+            win, wait_timeout,
+            allow_auto_dialog=allow_auto_dialog or attempt == 2,
+            auto_dialog_needles=option_needles)
         if pt2 is None:
+            # 自动弹出的任务对话框会遮挡/替代领取入口：先查对话框，
+            # 命中直接返回该帧（仅小地图走位到达启用；用户 2026-11-16：
+            # 小地图任务点走位到达可能自动弹出领取对话框），不再重走
+            # 领取点。站着/返程到达不查，原重走兜底流程不变。
+            if allow_auto_dialog or attempt == 2:
+                auto = claim_flow.wait_auto_claim_dialog(
+                    win, option_needles, timeout=0.0)
+                if auto is not None:
+                    log(f"{log_tag} 等待入口期间任务对话框已自动弹出，"
+                        f"直接处理选项", "SYS")
+                    return True, "任务对话框已自动弹出", "自动对话框", None, auto
             if attempt == 1:
                 # 入口未出现：小地图重走领取点（原地或短途，几秒即回）
                 # 后重试一次，不再空等整轮（2026-10-12 实测第 70 轮
@@ -1187,6 +1339,16 @@ def _click_entry_ensuring_dialog(win, log_tag="[修罗]", hover_before_click=Fal
                     return False, "到达后未出现领取任务按钮/灵兽村使者", None, None, None
                 continue
             return False, "到达后未出现领取任务按钮/灵兽村使者（重走领取点后仍无）", None, None, None
+        # 点击入口前再查一次自动弹出的任务对话框（到达后延迟弹出；
+        # 仅小地图走位到达/重定位后的第 2 次尝试启用）：命中则不点
+        # 入口，直接返回该帧处理选项
+        if allow_auto_dialog or attempt == 2:
+            auto = claim_flow.wait_auto_claim_dialog(
+                win, option_needles, timeout=0.0)
+            if auto is not None:
+                log(f"{log_tag} 任务对话框已自动弹出，跳过入口点击"
+                    f"直接处理选项", "SYS")
+                return True, "任务对话框已自动弹出", "自动对话框", None, auto
         if hover_before_click:
             human_move(win.rect.left + pt2[0], win.rect.top + pt2[1])
             log(f"{log_tag} 已移动鼠标到{src2} ({pt2[0]}, {pt2[1]})，"
@@ -1255,7 +1417,41 @@ def _click_entry_ensuring_dialog(win, log_tag="[修罗]", hover_before_click=Fal
     return True, f"已点击{src2}", src2, pt2, seen_frame
 
 
-def _claim_task(win, allow_fill=False):
+def _close_kept_claim_map(win):
+    """补关「自动对话框路径」保留的小地图（选项点掉/对话框关闭后）。"""
+    global _claim_map_kept_open
+    if _claim_map_kept_open:
+        game_map.close_maps(win, quiet=True)
+        _claim_map_kept_open = False
+
+
+def _auto_dialog_claim_mode():
+    """本轮是否为「小地图走位到达 + 任务筛选勾选/未知」的自动对话框模式。
+
+    该模式下点击领取点坐标可能命中黄字任务目标，走到附近自动弹出
+    领取对话框（用户 2026-11-16）：领取流程直接处理对话框里的选项；
+    首次领取前的队伍监控循环相应让位给领取流程（run_loop：先监控会
+    让自动弹出的对话框在场无人处理，五倍实机 18:42 同款教训）。
+    """
+    return _claim_arrived_by_walk and _claim_task_filter_on is not False
+
+
+def _arrival_claim_dialog_up(win, timeout=CLAIM_ARRIVE_DIALOG_WAIT):
+    """到达领取点后检查「自动弹出」的领取对话框是否真的在场。
+
+    仅小地图黄字走位模式（_auto_dialog_claim_mode）才检查：点中黄字任务
+    目标 → 走到附近自动弹领取对话框；没点中 → 不会弹。用户 2026-11-16
+    原则：**只有对话框真的出现**才跳过首次领取前的队伍监控直接领取
+    （人数不足走拒绝→补人）；没弹对话框必须走正常队伍监控，人满再领取。
+    timeout 为等待窗口（走位到达信号可能早于真正走到目标旁）。
+    """
+    if not _auto_dialog_claim_mode():
+        return False
+    return claim_flow.wait_auto_claim_dialog(
+        win, CLAIM_OPTION_NEEDLES, timeout=timeout) is not None
+
+
+def _claim_task(win, allow_fill=False, create_team_if_missing=False):
     """在领取点附近领取修罗任务（前提：已走到领取点附近）。
 
     识图 liuluo_lingqu.png 点击 → 对话框点绿色选项「闲来无事，要我帮忙吗」
@@ -1275,6 +1471,7 @@ def _claim_task(win, allow_fill=False):
     3. 校验循环内确认新任务渲染即返回（领取前有旧任务遗留面板时须
        签名变化才确认），不再重复一次 has_task 全量检查
     """
+    global _claim_map_kept_open
     if is_in_battle(win):
         return False, "战斗中，跳过本轮领取", None
     # 领取前面板签名：旧任务未完成遗留面板时，领取后面板刷新有延迟
@@ -1293,12 +1490,29 @@ def _claim_task(win, allow_fill=False):
         # _task_state 续跑跟踪（2026-11-11 用户确认场景：任务又出现时
         # 应继续寻路，不要空耗领取流程）
         return False, "任务追踪中仍有修罗任务，跳过领取（续跑跟踪）", None
-    # 识图领取入口（按钮或灵兽村使者）并点击；点击后对话框未出现
-    # （短窗口内选项不可见）判定坐标不对：打开小地图点击领取点坐标
-    # 重定位后重试一次（用户确认的兜底路径）
-    ok, info, _src2, _pt2, seen = _click_entry_ensuring_dialog(win)
-    if not ok:
-        return False, info, None
+    # 到达领取点后任务对话框可能已自动弹出（**仅小地图点击走位到达 +
+    # 小地图「任务」勾选时**，用户 2026-11-16）：命中则跳过领取入口
+    # 点击（入口可能已被对话框遮挡），直接复用该帧点选项。站着到达/
+    # 返程到达不检查，正常「找领取模板点击」流程完全不受影响。
+    # 筛选状态在开小地图时读取（_open_claim_map）：False=未勾选跳过检查；
+    # 未知（None）仍做门控检查（模板门控 ~10ms，成本极低）。
+    auto_dialog_ok = _auto_dialog_claim_mode()
+    seen = None
+    if auto_dialog_ok:
+        seen = claim_flow.wait_auto_claim_dialog(win, CLAIM_OPTION_NEEDLES)
+        if seen is not None:
+            log("[修罗] 小地图走位到达后任务对话框已自动弹出，"
+                "跳过入口点击直接处理选项", "SYS")
+    if seen is None:
+        # 识图领取入口（按钮或灵兽村使者）并点击；点击后对话框未出现
+        # （短窗口内选项不可见）判定坐标不对：打开小地图点击领取点坐标
+        # 重定位后重试一次（用户确认的兜底路径）。走位到达且任务筛选
+        # 勾选/未知时，允许入口等待期间检测自动弹出的任务对话框
+        # （其余路径保持原流程）。
+        ok, info, _src2, _pt2, seen = _click_entry_ensuring_dialog(
+            win, allow_auto_dialog=auto_dialog_ok)
+        if not ok:
+            return False, info, None
     # 对话框：点绿色选项「闲来无事，要我帮忙吗」完成领取——直接用
     # 「对话框已出现」的同一帧点击（帧上已确认选项可见，点同一帧
     # 与 0.3s 后重截重 OCR 再点等价）；未点中（罕见：选项渲染中）
@@ -1336,14 +1550,14 @@ def _claim_task(win, allow_fill=False):
             if confirm == "declined":
                 if allow_fill:
                     log("[修罗] 领取被拒：队伍人数不足，进入监控补人循环", "WARN")
-                    _monitor_team_and_fill(win)  # 人满才返回；非队长不返回（保持模式）
+                    _monitor_team_and_fill(win, create_if_missing=create_team_if_missing)  # 人满才返回；非队长不返回（保持模式）
                     return False, "队伍已补齐（监控循环判定），下轮重试领取", None
                 return False, "队伍人数不足，已点「我再想想」（检查队伍开关关闭，不补人）", None
             # accepted：已点「确定」接受领取，任务将进追踪（has_task 兜底置 claimed）
             if _handle_team_warning(win, items, img_np):
                 if allow_fill:
                     log("[修罗] 领取被拒：队伍人数不足，进入监控补人循环", "WARN")
-                    _monitor_team_and_fill(win)  # 人满才返回；非队长不返回（保持模式）
+                    _monitor_team_and_fill(win, create_if_missing=create_team_if_missing)  # 人满才返回；非队长不返回（保持模式）
                     return False, "队伍已补齐（监控循环判定），下轮重试领取", None
                 return False, "队伍数量小于 3，无法领取（已关闭提示对话框）", None
             claimed = _click_claim_option(win, items, img_np)
@@ -1356,6 +1570,8 @@ def _claim_task(win, allow_fill=False):
             time.sleep(0.3)
         if not claimed:
             return False, "领取对话框处理失败", None
+    # 自动对话框路径保留了小地图：选项点掉后补关，防地图遮挡任务追踪
+    _close_kept_claim_map(win)
     # 校验任务出现在追踪面板（正常轮询 CLAIM_VERIFY_WAIT 秒；旧任务
     # 遗留面板时须签名变化、窗口延长到 CLAIM_VERIFY_WAIT_STALE）与
     # 「今日已完成次数：N」解析共用同一批双区域 OCR 帧：新任务渲染
@@ -1449,14 +1665,14 @@ def _claim_task(win, allow_fill=False):
         if confirm == "declined":
             if allow_fill:
                 log("[修罗] 领取被拒：队伍人数不足，进入监控补人循环", "WARN")
-                _monitor_team_and_fill(win)  # 人满才返回；非队长不返回（保持模式）
+                _monitor_team_and_fill(win, create_if_missing=create_team_if_missing)  # 人满才返回；非队长不返回（保持模式）
                 return False, "队伍已补齐（监控循环判定），下轮重试领取", None
             return False, "队伍人数不足，已点「我再想想」（检查队伍开关关闭，不补人）", None
         # accepted：已点「确定」接受领取，校验循环继续等任务进追踪
         if _handle_team_warning(win, items, img_np):
             if allow_fill:
                 log("[修罗] 领取被拒：队伍人数不足，进入监控补人循环", "WARN")
-                _monitor_team_and_fill(win)  # 人满才返回；非队长不返回（保持模式）
+                _monitor_team_and_fill(win, create_if_missing=create_team_if_missing)  # 人满才返回；非队长不返回（保持模式）
                 return False, "队伍已补齐（监控循环判定），下轮重试领取", None
             return False, "队伍数量小于 3，无法领取（已关闭提示对话框）", None
         # 高性能缓存点击兜底：任务未进追踪且选项仍可见 → 同帧识别补点
@@ -1570,7 +1786,8 @@ def _cancel_task(win):
     #    （有任务时领取选项不出现，入口通常是灵兽村使者 NPC 模板）
     ok, info, _src, _pt, seen = _click_entry_ensuring_dialog(
         win, option_needles=CANCEL_OPTION_NEEDLES,
-        option_cache_key="cancel_option", action="取消任务")
+        option_cache_key="cancel_option", action="取消任务",
+        allow_auto_dialog=_claim_arrived_by_walk)
     if not ok:
         return False, info
     # 3. 点「我想取消任务」：优先复用对话框出现帧；高性能缓存路径
@@ -1620,6 +1837,8 @@ def _cancel_task(win):
     if not confirmed:
         return False, (f"取消确认弹窗未识别到「{CANCEL_CONFIRM_OPTION}」"
                        f"（任务未取消）")
+    # 自动对话框路径保留的小地图：二次确认点掉后补关，防遮挡消失校验
+    _close_kept_claim_map(win)
     # 5. 校验任务从追踪面板消失：连续 CANCEL_VERIFY_GONE_POLLS 轮确认
     #    （单轮漏检可能是面板重绘/滑动动画；战斗帧不构成消失证据）。
     #    成功后任务已不存在——调用方下一轮按其常规「无任务」路径处理
@@ -2042,7 +2261,8 @@ def verify_claim_flow(win, silent=False):
     # 2. 领取入口：鼠标定位 → 点击打开对话框；点击后对话框未出现则
     #    小地图重定位后重试（与领取流程共用同一兜底助手）
     ok, info, src2, pt2, _frame = _click_entry_ensuring_dialog(
-        win, log_tag="[修罗][验证]", hover_before_click=not silent)
+        win, log_tag="[修罗][验证]", hover_before_click=not silent,
+        allow_auto_dialog=_claim_arrived_by_walk)
     if not ok:
         return False, info
     # 3. 识别绿色选项：仅移动鼠标悬停，不点击（点击即领取）
@@ -2068,10 +2288,14 @@ def verify_claim_flow(win, silent=False):
             # 4. 点击屏幕中间关闭对话框（不领取）
             human_click(win, SCREEN_CENTER_POS[0], SCREEN_CENTER_POS[1])
             log("[修罗][验证] 已点击屏幕中间关闭对话框（未领取）", "SYS")
-            return True, f"验证通过：{src2} ({pt2[0]}, {pt2[1]})，选项「{txt}」({cx}, {cy})"
+            _close_kept_claim_map(win)
+            pos_desc = (f"{src2} ({pt2[0]}, {pt2[1]})"
+                        if pt2 is not None else src2)
+            return True, f"验证通过：{pos_desc}，选项「{txt}」({cx}, {cy})"
         time.sleep(0.3)
     # 对话框未出现或选项未识别：点击屏幕中间清理后失败
     human_click(win, SCREEN_CENTER_POS[0], SCREEN_CENTER_POS[1])
+    _close_kept_claim_map(win)
     return False, "对话框选项未识别（未领取，已尝试关闭对话框）"
 
 
@@ -2100,7 +2324,8 @@ def verify_cancel_flow(win, silent=False):
     ok, info, src2, pt2, frame = _click_entry_ensuring_dialog(
         win, log_tag="[修罗][验证]", hover_before_click=not silent,
         option_needles=CANCEL_OPTION_NEEDLES,
-        option_cache_key="cancel_option", action="取消任务")
+        option_cache_key="cancel_option", action="取消任务",
+        allow_auto_dialog=_claim_arrived_by_walk)
     if not ok:
         return False, info
     # 3. 识别取消绿色选项：仅移动鼠标悬停，不点击（点击即取消任务）
@@ -2128,9 +2353,13 @@ def verify_cancel_flow(win, silent=False):
         # 4. 点击屏幕中间关闭对话框（不取消任务）
         human_click(win, SCREEN_CENTER_POS[0], SCREEN_CENTER_POS[1])
         log("[修罗][验证] 已点击屏幕中间关闭对话框（未取消任务）", "SYS")
-        return True, f"验证通过：{src2} ({pt2[0]}, {pt2[1]})，选项「{txt}」({cx}, {cy})"
+        _close_kept_claim_map(win)
+        pos_desc = (f"{src2} ({pt2[0]}, {pt2[1]})"
+                    if pt2 is not None else src2)
+        return True, f"验证通过：{pos_desc}，选项「{txt}」({cx}, {cy})"
     # 选项未识别：点击屏幕中间清理后失败
     human_click(win, SCREEN_CENTER_POS[0], SCREEN_CENTER_POS[1])
+    _close_kept_claim_map(win)
     return False, "取消对话框选项未识别（任务未取消，已尝试关闭对话框）"
 
 
@@ -2480,21 +2709,40 @@ def run_loop(win, cycle_interval=1.0):
                 #     1.0 未检查（已在领取点）→ 照常立即监控
                 if pre_status == "ready":
                     log("[修罗] 走位前队伍检查已通过（人数满足），直接领取", "SYS")
+                elif _arrival_claim_dialog_up(win):
+                    # 到达领取点后领取对话框**确实已弹出**（小地图黄字
+                    # 走位命中任务目标）：直接进领取流程点选项，人数不足
+                    # 由领取流程自带的拒绝→监控补人处理（用户 2026-11-16
+                    # 原则：只有对话框真的出现才跳过队伍监控——没点中黄字
+                    # 时不会弹，必须走正常队伍监控人满再领取；模态对话框
+                    # 会拦住组队菜单，监控在对话框在场时必然失败）。未组队
+                    # 时由领取被拒后的监控首次检查自动创建（_claim_task
+                    # create_team_if_missing）。
+                    log("[修罗] 到达后领取对话框已自动弹出：跳过首次领取前"
+                        "队伍监控，直接领取（人数不足走补人逻辑）", "SYS")
                 else:
                     if pre_status == "wait":
                         time.sleep(TEAM_CHECK_RETRY_INTERVAL)
-                    debug_overlay.set_phase("检查队伍")  # 看板阶段
-                    log("[修罗] 首次领取前进入队伍监控循环（缺人自动补）", "SYS")
-                    # 预检被跳过（已在领取点/组号人数不足）时，自动
-                    # 创建并入监控的首次检查
-                    _monitor_team_and_fill(win, create_if_missing=pending_create)
-                    pending_create = False
-                    log("[修罗] 队伍人数满足要求，开始领取", "SYS")
+                    if _arrival_claim_dialog_up(win, timeout=0.0):
+                        # 预检等待期间角色才走到目标旁、对话框此时才弹出：
+                        # 同样改走直接领取（对话框在场时监控开不了组队菜单）
+                        log("[修罗] 领取对话框已自动弹出：跳过队伍监控，直接领取"
+                            "（人数不足走补人逻辑）", "SYS")
+                    else:
+                        debug_overlay.set_phase("检查队伍")  # 看板阶段
+                        log("[修罗] 首次领取前进入队伍监控循环（缺人自动补）", "SYS")
+                        # 预检被跳过（已在领取点/组号人数不足）时，自动
+                        # 创建并入监控的首次检查
+                        _monitor_team_and_fill(win, create_if_missing=pending_create)
+                        pending_create = False
+                        log("[修罗] 队伍人数满足要求，开始领取", "SYS")
             # 1.3 领取任务（校验帧随返回值带出，跟踪首轮复用免重复 OCR）；
             #     队伍不足被拒（战斗力异常强大提示）在 _claim_task 内已
             #     按开关重入监控补人循环，其余失败直接下轮重试
             debug_overlay.set_phase("领取任务")  # 看板阶段
-            ok, info, claim_items = _claim_task(win, allow_fill=check_team)
+            ok, info, claim_items = _claim_task(
+                win, allow_fill=check_team,
+                create_team_if_missing=pending_create)
             if not ok:
                 log(f"[修罗] {info}", "WARN")
                 time.sleep(cycle_interval)

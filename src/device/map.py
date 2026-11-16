@@ -703,7 +703,12 @@ def open_world_map(win):
     """点击世界地图按钮打开世界地图。返回 (是否成功, 描述)。
 
     高性能：按钮坐标缓存后直点；未打开回退识别点击（并刷新缓存）。
+    已打开时直接返回——按钮是切换式，地图开着再点会把它关掉
+    （2026-11-16 小地图快捷领取实机：世界地图残留时 open_mini_map_city
+    先点按钮反而关闭世界地图，导致城市标签找不到）。
     """
+    if is_world_map_open(win):
+        return True, "世界地图已打开"
     cached = app_utils.high_perf_click(win, "world_map_btn",
                                        "世界地图按钮", prefix="[地图] ")
     deadline = time.time() + 2.0
@@ -890,3 +895,146 @@ def close_maps(win, quiet=False):
     时点击——关闭动画瞬态匹配不点击（点击会落到游戏世界取消寻路）。"""
     close_mini_map(win, quiet=quiet)
     close_world_map(win, quiet=quiet)
+
+
+# ---- 场景小地图快捷导航（2026-11-16 用户要求下沉，任务共用）----
+# 场景小地图窗口右上搜索栏的圆形关闭按钮是窗口的稳定锚点（模板
+# map_xiaoditu_open.png，实测 0.97~1.00）；窗口可拖动且不同场景窗口
+# 宽度不同（大唐边境/天宫实测），窗口内固定位置（底部「任务」勾选框、
+# 黄色任务 NPC 名）一律按锚点 + 偏移换算，不写绝对坐标。
+# 典型用法（名望领取入口）：已在该地图直接开小地图（不要再走世界地图），
+# 勾选底部「任务」筛选使黄色任务 NPC 名显示，再点固定位置黄字——游戏
+# 自动寻路/传送并在到达后自动打开 NPC 对话框。点击点为**绝对坐标**，
+# 由调用方按场景标定后传入（见 tasks/mingwang.py CLAIM_POINTS 的
+# map_filter_pos / map_label_pos——小地图窗口位置固定，不做锚点相对换算，
+# 2026-11-16 用户规则）。
+MINI_MAP_TASK_CHECKED_MIN_WHITE = 4  # 勾选框近白像素 ≥4 = 已勾选（实测 13 vs 0）
+MINI_MAP_TASK_RADIUS_X = 11         # 勾选框白像素检测半宽（实测框约 24x22）
+MINI_MAP_TASK_RADIUS_Y = 10
+MINI_MAP_FILTER_WAIT = 0.4          # 点击「任务」筛选后等待渲染（秒）
+# 底部筛选勾选框状态模板（2026-11-16 实机标定，24x24）：
+# 勾选模板只命中「任务」框（大唐 1.000 / 天宫 0.947），未勾选模板命中
+# 其余四个框（0.889~0.930），两类互不命中——跨场景通用，无需按地图
+# 标定勾选框偏移。合并命中按 x 排序取第 4 个即「任务」框。
+MINI_MAP_TASK_ON_ICON = "map_task_filter_on.png"
+MINI_MAP_TASK_OFF_ICON = "map_task_filter_off.png"
+MINI_MAP_TASK_ICON_THRESHOLD = 0.85
+# 筛选行搜索带（**绝对坐标**，2026-11-16 用户规则：小地图窗口位置固定，
+# 即使被拖走下次打开也会恢复默认位置；关闭按钮所在搜索栏宽度随状态变化，
+# 锚点不是稳定的内容参照——实机 19:04 锚点从 (1030,217) 漂到 (1011,229)，
+# 相对带把勾选框上缘裁掉致状态恒为未知）。带宽为勾选框行（实测 y643-667）
+# 上下各留余量：上缘距模板顶 13px、下缘 33px。
+MINI_MAP_TASK_BAND = (120, 630, 1120, 700)
+
+
+def minimap_task_filter_checked(img, cx, cy):
+    """小地图底部「任务」勾选框是否已勾选（框内近白像素计数，零 OCR）。
+
+    实测（2026-11-16 大唐边境/天宫实机帧）：勾选态白色对勾像素 13 个、
+    未勾选 0 个；阈值 4 留渲染余量。cx/cy 为勾选框中心。
+    """
+    a = np.asarray(img)[:, :, :3]
+    l = max(0, int(cx) - MINI_MAP_TASK_RADIUS_X)
+    r = min(a.shape[1], int(cx) + MINI_MAP_TASK_RADIUS_X)
+    t = max(0, int(cy) - MINI_MAP_TASK_RADIUS_Y)
+    b = min(a.shape[0], int(cy) + MINI_MAP_TASK_RADIUS_Y)
+    if r <= l or b <= t:
+        return False
+    sub = a[t:b, l:r]
+    white = ((sub[:, :, 0] >= 200) & (sub[:, :, 1] >= 200)
+             & (sub[:, :, 2] >= 200))
+    return int(white.sum()) >= MINI_MAP_TASK_CHECKED_MIN_WHITE
+
+
+def minimap_task_filter_state(win, img=None):
+    """小地图底部「任务」筛选勾选状态（模板匹配勾选框，跨场景通用）。
+
+    底部五个勾选框（全部/传送/普通/任务/商业）是同一控件：勾选模板只
+    命中「任务」框，未勾选模板命中其余四个；合并两类命中按 x 排序取
+    第 4 个即「任务」框，按命中模板判定状态。2026-11-16 实机标定：
+    大唐边境 勾选 1.000 / 未勾选 0.889~0.924，天宫 勾选 0.947；两类
+    模板互不命中。返回 True（已勾选）/ False（未勾选）/ None（地图
+    未打开或筛选行未识别）。
+    """
+    if img is None:
+        img = win.capture(force_activate=False)
+        if img is None:
+            return None
+    bgr = bgr_frame(img)
+    # 绝对搜索带（小地图窗口位置固定，见 MINI_MAP_TASK_BAND 注释）：
+    # 地图未打开时带内无勾选框行，命中不足 5 个自然返回 None
+    hits = []
+    for state, icon in ((True, MINI_MAP_TASK_ON_ICON),
+                        (False, MINI_MAP_TASK_OFF_ICON)):
+        for score, x, y in match_frame_all(
+                bgr, icon, threshold=MINI_MAP_TASK_ICON_THRESHOLD,
+                region=MINI_MAP_TASK_BAND):
+            hits.append((state, float(score), int(x), int(y)))
+    if len(hits) < 5:
+        return None
+    hits.sort(key=lambda h: h[2])
+    merged = []
+    for h in hits:
+        if merged and abs(h[2] - merged[-1][2]) <= 6:
+            # 同一勾选框被两类模板同时命中（轻微形变）：取分数高者
+            if h[1] > merged[-1][1]:
+                merged[-1] = h
+        else:
+            merged.append(h)
+    if len(merged) < 5:
+        return None
+    return merged[3][0]
+
+
+def ensure_minimap_task_filter(win, filter_pos):
+    """确保小地图底部「任务」筛选已勾选。返回 (是否已勾选, 描述)。
+
+    filter_pos=(x,y)：勾选框中心**绝对坐标**（按场景标定后传入；小地图
+    窗口位置固定——即使被拖走，下次打开也会恢复默认位置，2026-11-16
+    用户规则，不做窗口锚点相对换算）。未勾选则点击一次并复检——未勾选
+    时地图不显示黄色任务 NPC 名，后续固定点点击不会触发自动寻路。
+    """
+    cx, cy = filter_pos
+    img = win.capture(force_activate=False)
+    if img is None:
+        return False, "截图失败（窗口可能已最小化）"
+    if minimap_task_filter_checked(img, cx, cy):
+        return True, "小地图「任务」筛选已勾选"
+    human_click(win, cx, cy)
+    log(f"[地图] 小地图「任务」筛选未勾选，已点击勾选框 @({cx},{cy})", "SYS")
+    time.sleep(MINI_MAP_FILTER_WAIT)
+    img2 = win.capture(force_activate=False)
+    if img2 is None:
+        return False, "点击任务筛选后截图失败"
+    if minimap_task_filter_checked(img2, cx, cy):
+        return True, "小地图「任务」筛选已勾选"
+    return False, "小地图「任务」筛选点击后仍未勾选"
+
+
+def minimap_quick_navigate(win, map_name, world_icon, filter_pos, label_pos):
+    """场景小地图快捷导航（任务共用）。返回 (是否成功, 描述)。
+
+    流程：打开目标地图的场景小地图 → 勾选底部「任务」筛选 → 点击黄色
+    任务 NPC 名固定点（**绝对坐标，只点一次**——第一次点击已开始寻路，
+    重复点击会重新选点/打断寻路，2026-11-16 用户规则）。小地图窗口位置
+    固定（即使被拖走，下次打开也会恢复默认位置），点击点直接按绝对
+    坐标传入，不做窗口锚点相对换算（关闭按钮所在搜索栏宽度随状态变化，
+    锚点不是稳定的内容参照，实机 19:04 锚点从 (1030,217) 漂到 (1011,229)）。
+    **已在该地图时直接点位置区域开小地图**，不再绕世界地图 → 城市标签
+    （2026-11-16 用户规则）；不在该地图才经世界地图点城市标签打开。
+    失败不清理地图（调用方按需 close_maps/close_scene_panels），避免
+    这个通用能力产生调用方意外的关闭动作。
+    """
+    pos = read_map_position(win)
+    on_map = pos is not None and pos[0].strip() == map_name
+    if on_map:
+        ok, info = open_mini_map(win)
+    else:
+        ok, info = open_mini_map_city(win, world_icon, map_name)
+    if not ok:
+        return False, f"打开{map_name}小地图失败：{info}"
+    ok, finfo = ensure_minimap_task_filter(win, filter_pos)
+    if not ok:
+        return False, finfo
+    human_click(win, label_pos[0], label_pos[1])
+    return True, f"已打开{map_name}小地图，已点击小地图固定点 @({label_pos[0]},{label_pos[1]})"

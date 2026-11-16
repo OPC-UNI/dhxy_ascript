@@ -82,6 +82,7 @@ from ..core.settings import (
     build_group_last_scan_payload, load_auto_famen, load_auto_refill, load_battle_actions,
     load_battle_only_auto_rejoin, load_battle_only_hezi, load_clear_screen, load_debug_overlay, load_debug_ui_unlocked,
     load_group_actions, load_group_last_scan, load_high_perf, load_selected_modes,
+    load_mingwang_map_claim,
     load_silent_mode, load_task_counts, load_thresholds, load_ui_theme,
     load_update_auto_check, load_update_feed_url, load_update_last_check, load_update_skipped_version,
     load_use_sheyaoxiang, load_wubei_auto_create_team, load_wubei_auto_kick_away,
@@ -98,6 +99,7 @@ from ..core.settings import (
     save_auto_famen, save_auto_refill, save_battle_action, save_battle_only_auto_rejoin,
     save_battle_only_hezi,
     save_clear_screen, save_debug_overlay, save_debug_ui_unlocked, save_group_actions,
+    save_mingwang_map_claim,
     save_group_last_scan, save_high_perf, save_selected_modes, save_silent_mode,
     save_task_count, save_threshold, save_ui_theme, save_update_auto_check,
     save_update_last_check, save_update_skipped_version, save_use_sheyaoxiang, save_wubei_auto_create_team,
@@ -237,6 +239,7 @@ class ControlWindow(WebWindow):
         self.expose(self.save_wubei_auto_repair)
         self.expose(self.save_wubei_repair_interval)
         self.expose(self.save_wubei_kuimulang_switch)
+        self.expose(self.save_mingwang_map_claim)
         self.expose(self.save_wubei_tab_group)
         self.expose(self.save_zhongzu_check_team)
         self.expose(self.save_zhongzu_auto_create_team)
@@ -277,6 +280,8 @@ class ControlWindow(WebWindow):
         self.expose(self.verify_kezhan_awang)
         self.expose(self.verify_mingwang_claim)
         self.expose(self.verify_mingwang_claim_task)
+        self.expose(self.verify_mingwang_claim_mozu)
+        self.expose(self.verify_mingwang_claim_xianzu)
         self.expose(self.verify_clear_screen)
         self.expose(self.verify_shout)
         self.expose(self.verify_jiguan)
@@ -850,6 +855,7 @@ class ControlWindow(WebWindow):
                             "auto_repair": load_zhongzu_auto_repair(),
                             "repair_interval": load_zhongzu_repair_interval(),
                             "tab_group": load_zhongzu_tab_group()},
+                "mingwang": {"map_claim": load_mingwang_map_claim()},
                 "xiuluo_shout": load_xiuluo_shout_switch(),
                 "xiuluo_shout_text": load_xiuluo_shout_text(),
                 "battle_only_auto_rejoin": load_battle_only_auto_rejoin(),
@@ -1100,6 +1106,10 @@ class ControlWindow(WebWindow):
     def save_wubei_hezi(self, on):
         """五倍设置变更：保存自动抢盒子开关状态。"""
         return save_wubei_hezi(on)
+
+    def save_mingwang_map_claim(self, on):
+        """名望设置变更：保存小地图快捷领取开关状态。"""
+        return save_mingwang_map_claim(on)
 
     def save_wubei_check_team(self, on):
         """五倍设置变更：保存检查队伍开关状态。"""
@@ -2128,6 +2138,63 @@ class ControlWindow(WebWindow):
                 ok_js = "true" if ok else "false"
                 self.webview_instance.evaluate_js(
                     f"if(window.onMingwangClaimTaskVerifyResult){{window.onMingwangClaimTaskVerifyResult({ok_js}, {json.dumps(info)});}}")
+            except Exception:
+                pass
+
+    def verify_mingwang_claim_mozu(self):
+        """诊断页-名望-魔族领取（小地图快捷）按钮：仅走小地图快捷领取。"""
+        return self._start_mingwang_map_claim_verify("魔族")
+
+    def verify_mingwang_claim_xianzu(self):
+        """诊断页-名望-仙族领取（小地图快捷）按钮：仅走小地图快捷领取。"""
+        return self._start_mingwang_map_claim_verify("仙族")
+
+    def _start_mingwang_map_claim_verify(self, race):
+        """名望种族领取（小地图快捷）验证公共入口：校验环境并起线程。"""
+        if self._tm.is_running():
+            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if self._verifying:
+            return {"status": "error", "msg": "验证进行中，请稍候"}
+        win = game.find_main_window()
+        if win is None:
+            return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
+        if not _game_window_clickable(win):
+            return {"status": "error", "msg": "游戏窗口被其他窗口遮挡，请将游戏窗口置于前台后再验证"}
+        self._verifying = True
+        threading.Thread(target=self._run_mingwang_map_claim_verify,
+                         args=(win, race), daemon=True,
+                         name=f"mingwang-map-claim-{race}").start()
+        return {"status": "success",
+                "msg": f"验证已开始（仅小地图快捷领取）：打开{race}地图小地图 → "
+                       f"勾选任务筛选 → 点击黄色任务 NPC 名 → 等自动寻路/对话框 → "
+                       f"点开启山河名望志 → 打开面板后停止"}
+
+    def _run_mingwang_map_claim_verify(self, win, race):
+        """名望种族领取（小地图快捷）验证线程体：结果回推页面与日志窗。"""
+        from ..tasks import mingwang  # 延迟导入：避免启动期加载任务模块
+        try:
+            self.add_logs([f"[验证] 开始验证{race}名望领取（仅小地图快捷领取："
+                           f"打开地图小地图 → 勾任务筛选 → 点黄色任务 NPC 名 → "
+                           f"自动对话框 → 开启山河名望志 → 打开面板）..."])
+            ok, info = mingwang.verify_map_claim_flow(win, race)
+        except Exception as e:
+            ok, info = False, f"验证异常: {e}"
+        try:
+            self.add_logs([f"[验证] 结果: {info}"])
+        except Exception:
+            pass
+        self._notify_mingwang_map_claim_verify_result(race, ok, info)
+        self._verifying = False
+
+    def _notify_mingwang_map_claim_verify_result(self, race, ok, info):
+        """名望种族领取（小地图快捷）验证结果回推页面。"""
+        if self.webview_instance:
+            try:
+                ok_js = "true" if ok else "false"
+                self.webview_instance.evaluate_js(
+                    f"if(window.onMingwangMapClaimVerifyResult){{"
+                    f"window.onMingwangMapClaimVerifyResult({json.dumps(race)}, "
+                    f"{ok_js}, {json.dumps(info)});}}")
             except Exception:
                 pass
 

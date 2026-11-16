@@ -156,6 +156,11 @@ CLAIM_NEAR_BTN_GRACE = 3.0                         # 位置近但按钮不可见
 # 3. 补充坐标（仅站着到达生效）：降魔侍卫在 (86,78)±XIANGMOSHIWEI_TOLERANCE
 #    内可见也可点——走位到达不点 NPC（寻路途中经过侍卫旁会误点，
 #    实测日志 21:21），走到落点点 lingqu
+# 4. 小地图「任务」筛选勾选/未知时，走位到达补一条**驻足**规则
+#    （2026-11-16 实机 18:32）：点击点与黄字「降魔侍卫」重叠，寻路
+#    终点是 NPC（≈86,86）而非落点 (94,84)，规则 1 永不命中。驻足
+#    （位置连续两轮相同，或 NPC 可见且位置显示消失连续两轮）后按
+#    规则 2/3 放行——走位途中位置每轮都在变，不会提前点击。
 # 规则独立判定、互不否定（交叉区内任一入口可见都可领取）；拒收模板
 # 远处可见/跨图误命中（按钮模板与修罗领取按钮同图 0.947、NPC 远距离
 # 也会命中）。实现见 _wait_claim_entry。
@@ -167,7 +172,11 @@ WALK_TARGET_SPOT = (94, 84)                        # 小地图点击 (521,488) �
                                                    # 旧判据用领取点 86,86 与真实落点差 8 单位
                                                    # 永不命中。走位到达的 lingqu 点击只在落点
                                                    # ±WALK_ARRIVE_TOLERANCE 内接受（规则 1）
-BAOXIANG_MAP_POS = (517, 488)                      # 宝象国小地图上领取点位置的点击点（窗口相对坐标，用户实测）
+BAOXIANG_MAP_POS = (517, 488)                      # 宝象国小地图上领取点位置的点击点（绝对坐标，
+                                                   # 用户实测。2026-11-16 用户规则：小地图窗口
+                                                   # 位置固定——即使被拖走，下次打开也会恢复到
+                                                   # 默认位置，固定绝对坐标即可，锚点相对偏移
+                                                   # 反而会因关闭按钮所在面板宽度变化点偏）
 CLAIM_DIALOG_OPTION = "除魔卫国，义不容辞"           # 领取对话框绿色选项（游戏内原文，实测用字）
 FULL_TEAM_DIALOG_TEXT = "前途凶险，还是请阁下组满5人队伍再来吧！"  # 领取被拒：队伍人数不足
                                                                    # （游戏要求组满 5 人）
@@ -180,6 +189,13 @@ DECLINE_DIALOG_OPTION = "事态严重，我等退散"          # 领取对话框
                                                    # 用户确认）；验证模式用拒绝选项关闭
                                                    # （不领取），不依赖点击位置
 CLAIM_ARRIVE_TIMEOUT = 90                          # 寻路到领取点的超时
+CLAIM_ARRIVE_DIALOG_WAIT = 3.0                     # 到达领取点后等待「自动弹出
+                                                   # 领取对话框」的短窗口（秒，仅
+                                                   # 小地图黄字走位模式）：走位到达
+                                                   # 信号可能早于角色真正走到 NPC，
+                                                   # 窗口内未弹出按「没点中黄字」
+                                                   # 处理，走正常队伍监控（用户
+                                                   # 2026-11-16 原则）
 CLAIM_BUTTON_TIMEOUT = 20                          # 到达后等待领取入口出现的超时
 ENTRY_FIRST_WAIT = 7.5                             # 入口首轮等待：位置近判定可能误判
                                                    # （回城符落点距领取点约 12.5 单位，
@@ -486,6 +502,13 @@ WUYI_HANDLE_TIMEOUT = 12                     # 点击 NPC 后等待战斗线程�
                                              # 恰好顶满 8s 零余量；超时后自行点击选项兜底，
                                              # 见 _run_wuyi_chain）
 
+_claim_task_filter_on = None    # 开小地图时读到的「任务」筛选勾选状态：
+                                # True=勾选（到达可能自动弹领取对话框）、
+                                # False=未勾选（跳过自动对话框检查）、
+                                # None=未识别（仍做门控检查，成本极低）
+_claim_map_kept_open = False    # 小地图走位后领取对话框已自动弹出（模态）：
+                                # 关地图点击会被对话框拦住，故保留地图直接
+                                # 处理对话框；选项点掉后由 _claim_task 补关
 _arrive_by_walk = False         # 本轮到达领取点是否经小地图走位（_walk_to_claim_spot
                                 # 走位路径返回时置位）：入口点击按坐标门控三规则
                                 # 分流——走位到达只在落点 (94,84)±2 点 lingqu
@@ -615,7 +638,8 @@ def _run_wuyi_chain(win, hover_before_click=False, report_condition=False,
         if not ok:
             return False, info
         human_click(win, WUYI_MAP_POS[0], WUYI_MAP_POS[1])
-        log("[五倍][巫医] 已点击小地图巫医位置，自动寻路中", "SYS")
+        log(f"[五倍][巫医] 已点击小地图巫医位置 {WUYI_MAP_POS}，自动寻路中",
+            "SYS")
         time.sleep(1.0)
         game_map.close_maps(win)
         deadline = time.time() + WUYI_ARRIVE_TIMEOUT
@@ -925,14 +949,16 @@ def _near_xiangmoshiwei_spot(pos):
                                                   XIANGMOSHIWEI_TOLERANCE)
 
 
-def _wait_claim_entry(win, timeout, arrive_by_walk=False):
+def _wait_claim_entry(win, timeout, arrive_by_walk=False,
+                      allow_auto_dialog=False):
     """等待领取入口出现（按钮或降魔侍卫），返回 (pt, 来源, 位置) 或 (None, None, None)。
 
     点击按坐标门控三规则（用户 2026-10-29 定稿，替代静止确认——静止
     确认带来 ~2.5-4s 等待，坐标盒收紧后直接按盒点击）：
     1. 小地图走位到达（arrive_by_walk=True）：lingqu 只在走到落点
-       (94,84)±2 内点击——快到目的地，微位移也能点中；走位途中位置
-       会提前读入盒内，但 ±2 收紧后提前量 <1 单位，点击仍落在按钮上
+       (94,84)±WALK_ARRIVE_TOLERANCE 内点击——快到目的地，微位移也能
+       点中；走位途中位置会提前读入盒内，收紧后提前量小，点击仍落
+       在按钮上
     2. 站着到达（arrive_by_walk=False）：lingqu 在 (86,86)±15 内
        可见即可点；位置读不到按在领取点处理（站在 NPC 旁位置显示
        会消失，拒收会空等超时）
@@ -940,6 +966,18 @@ def _wait_claim_entry(win, timeout, arrive_by_walk=False):
        可见也可点。走位到达不点 NPC——寻路途中会经过侍卫旁（实测
        日志 21:21 在 (82,84) 走位中误点侍卫），走到落点点 lingqu
        （用户 2026-10-29）
+    4. 小地图「任务」筛选勾选/未知时，走位到达补一条驻足规则
+       （2026-11-16 实机 18:32）：小地图点击点与黄字「降魔侍卫」
+       重叠，寻路终点是 NPC（≈86,86）而非落点 (94,84)，规则 1 永不
+       命中。驻足后（位置连续两轮相同，或 NPC 可见且位置显示消失
+       连续两轮）按规则 2/3 放行——走位途中位置每轮都在变，不会
+       提前点击。
+
+    allow_auto_dialog：轮询内检测「走位到达自动弹出」的领取对话框
+    （任务筛选勾选/未知时），对话框一出现即返回 (None, "自动对话框",
+    None)，调用方补查该帧直接点领取选项——入口被模态对话框遮挡/
+    坐标门控不通过时不再空等整个入口窗口（2026-11-16 实机 18:32
+    空等 8s 教训）。门控模板 ~10ms，无对话框不付 OCR 成本。
 
     战斗中跳过等待；每轮询只截一帧，双模板批量匹配+位置 OCR 共用
     一帧（模板命中才读位置）。降魔侍卫模板受待机动画影响分数波动
@@ -947,6 +985,9 @@ def _wait_claim_entry(win, timeout, arrive_by_walk=False):
     """
     deadline = time.time() + timeout
     polls = 0
+    prev_pos = None      # 上一轮读到且模板命中的位置（驻足判定）
+    pos_seen = False     # 本段等待中位置曾可读（NPC 旁位置显示会消失）
+    unread_polls = 0     # 连续位置不可读轮数（模板命中轮）
     while time.time() < deadline:
         img = win.capture(force_activate=False)
         if img is None:
@@ -955,25 +996,51 @@ def _wait_claim_entry(win, timeout, arrive_by_walk=False):
         if is_in_battle_frame(img):
             time.sleep(2.0)
             continue
+        # 轮询内检测自动弹出的领取对话框（模态；任务筛选勾选/未知）：
+        # 一出现即返回，调用方补查该帧直接点领取选项（用户 2026-11-16）
+        if allow_auto_dialog and _claim_task_filter_on is not False \
+                and dialog_frame_score(img) >= DIALOG_FRAME_THRESHOLD:
+            items_d, img_np_d = game_map.ocr_region(
+                img, task_tracker.DIALOG_REGION)
+            if _find_claim_option(items_d, img_np_d) is not None:
+                return None, "自动对话框", None
         frame = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
         found = game_map.match_frame_multi(frame, (LINGQU_ICON, XIANGMOSHIWEI_ICON))
         pos = None
-        if found[LINGQU_ICON] is not None or found[XIANGMOSHIWEI_ICON] is not None:
+        npc_hit = found[XIANGMOSHIWEI_ICON] is not None
+        if found[LINGQU_ICON] is not None or npc_hit:
             # 模板命中才读位置（同帧复用，规则 1 决策点单帧三件套）
             pos = game_map.read_map_position(win, img=img)
+            if pos is not None:
+                pos_seen = True
+                unread_polls = 0
+            else:
+                unread_polls += 1
+            # 驻足判定：坐标连续两轮相同，或 NPC 可见且位置显示消失
+            # 连续两轮（走到 NPC 旁位置显示会消失，巫医同款现象）
+            stopped = (pos is not None and pos == prev_pos) \
+                or (pos is None and npc_hit and unread_polls >= 2 and pos_seen)
+            if pos is not None:
+                prev_pos = pos
+            # 规则 4：任务筛选勾选/未知时走位终点可能是 NPC（≈86,86），
+            # 驻足后按站着规则放行（走位途中位置每轮都变，不会提前点）
+            walk_relaxed = arrive_by_walk and _claim_task_filter_on is not False
             if found[LINGQU_ICON] is not None:
-                # 规则 1/2：走位到达只在落点 (94,84)±2 点；站着到达
+                # 规则 1/2：走位到达只在落点 (94,84)±5 点；站着到达
                 # (86,86)±15 内可见即可点
                 allowed = _near_walk_target_spot(pos) if arrive_by_walk \
                     else (pos is None or _near_claim_spot(pos, CLAIM_NEAR_TOLERANCE))
+                if not allowed and walk_relaxed and stopped:
+                    allowed = pos is None or _near_claim_spot(
+                        pos, CLAIM_NEAR_TOLERANCE)
                 if allowed:
                     return found[LINGQU_ICON], "领取任务按钮", pos
-            if not arrive_by_walk and found[XIANGMOSHIWEI_ICON] is not None \
-                    and (pos is None or _near_xiangmoshiwei_spot(pos)):
-                # 规则 3（仅站着到达生效）：降魔侍卫补充坐标 (86,78)±6。
-                # 走位到达不点 NPC——寻路途中会经过侍卫旁（实测日志
-                # 21:21 在 (82,84) 走位中误点侍卫），走到落点点 lingqu
-                # （用户 2026-10-29）
+            if npc_hit and _near_xiangmoshiwei_spot(pos) \
+                    and (not arrive_by_walk or (walk_relaxed and stopped)):
+                # 规则 3（站着到达；或规则 4：走位+任务筛选勾选且已驻足）：
+                # 降魔侍卫补充坐标 (86,78)±6。普通走位到达不点 NPC——
+                # 寻路途中会经过侍卫旁（实测日志 21:21 在 (82,84)
+                # 走位中误点侍卫），走到落点点 lingqu（用户 2026-10-29）
                 return found[XIANGMOSHIWEI_ICON], "降魔侍卫", pos
             if polls % 7 == 0:  # 约 10s 输出一次：命中但门控未通过
                 log(f"[五倍] 入口模板命中但坐标门控未通过（位置: {pos or '不可读'}），继续等待", "INFO")
@@ -1131,8 +1198,60 @@ def _open_claim_map(win, pos=None):
                                                BAOXIANGGUO)
         if not ok:
             return False, info
+    # 记录小地图「任务」筛选状态（用户 2026-11-16）：仅勾选时小地图
+    # 走位到达可能自动弹领取对话框；未勾选则不做自动对话框检查。
+    # 模板匹配勾选框（跨场景通用，~10ms），地图窗口此刻仍打开。
+    global _claim_task_filter_on
+    state = game_map.minimap_task_filter_state(win)
+    _claim_task_filter_on = state
+    if state is True:
+        log("[五倍] 小地图「任务」筛选已勾选（到达可能自动弹领取对话框）",
+            "INFO")
+    elif state is False:
+        log("[五倍] 小地图「任务」筛选未勾选（跳过自动对话框检查）", "INFO")
+    else:
+        log("[五倍] 小地图「任务」筛选状态未知（仍做门控检查）", "INFO")
+    # 小地图窗口位置固定（用户 2026-11-16 规则：即使被拖走，下次打开也
+    # 会恢复到默认位置）→ 直接点绝对坐标，不做锚点相对换算（关闭按钮
+    # 所在面板宽度随状态变化，锚点不是稳定的内容参照，实机 19:04 实测
+    # 锚点从 (1030,217) 漂到 (1011,229)，相对点击会整体偏移）。
     human_click(win, BAOXIANG_MAP_POS[0], BAOXIANG_MAP_POS[1])
+    log(f"[五倍] 已点击宝象国小地图领取点位置 {BAOXIANG_MAP_POS}", "SYS")
     return True, "已点击宝象国小地图领取点位置"
+
+
+def _close_claim_map_before_arrival(win):
+    """点完小地图目标点后关地图；小地图关不掉且领取对话框已自动弹出
+    （模态）时保留地图并返回 True（调用方按到达处理）。
+
+    单次关闭尝试（0.5s 复检）：模态领取对话框会拦住关闭点击，
+    game_map.close_maps 的 3 次重试只会刷 WARN、白耗 ~4s（2026-11-16
+    实机日志 18:23）。非对话框原因关不掉时回退标准 close_maps。
+    返回是否因自动领取对话框保留地图。
+    """
+    global _claim_map_kept_open
+    img = win.capture(force_activate=False)
+    if img is not None:
+        bgr = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
+        pt = game_map.match_frame_np(
+            bgr, game_map.MINI_MAP_OPEN_ICON,
+            region=game_map.MINI_MAP_REGION, fallback=False)
+        if pt is not None:
+            human_click(win, pt[0], pt[1])
+            time.sleep(0.5)
+            if game_map.is_mini_map_open(win):
+                if _claim_task_filter_on is not False:
+                    auto = claim_flow.wait_auto_claim_dialog(
+                        win, CLAIM_OPTION_NEEDLES, timeout=0.0)
+                    if auto is not None:
+                        _claim_map_kept_open = True
+                        log("[五倍] 领取对话框已自动弹出（模态），保留地图",
+                            "SYS")
+                        return True
+                game_map.close_maps(win)  # 非对话框原因：标准重试
+                return False
+    game_map.close_world_map(win, quiet=True)
+    return False
 
 
 def _walk_to_claim_spot(win, just_returned=False):
@@ -1163,8 +1282,10 @@ def _walk_to_claim_spot(win, just_returned=False):
     # 入口单帧决策（性能审计 C：原 is_in_battle/找模板/位置 OCR 三次
     # 各自截窗）：截一帧 → 战斗判定 + 按钮匹配 + 位置 OCR 共用。
     # is_in_battle_frame 接受 PIL 帧，与 is_in_battle 同判定（battle.py）
-    global _arrive_by_walk
+    global _arrive_by_walk, _claim_task_filter_on, _claim_map_kept_open
     _arrive_by_walk = False  # 本轮到达路径默认站着到达；走位路径返回前置位
+    _claim_task_filter_on = None  # 本轮筛选状态由 _open_claim_map 读取
+    _claim_map_kept_open = False  # 本轮是否因模态对话框保留小地图
     img = win.capture(force_activate=False)
     if img is None:
         return False, "截图失败"
@@ -1221,8 +1342,14 @@ def _walk_to_claim_spot(win, just_returned=False):
         return False, info
     log("[五倍] 已点击宝象国小地图领取点位置，自动寻路中", "SYS")
     time.sleep(1.0)  # 等待自动寻路启动
-    game_map.close_maps(win)
     _arrive_by_walk = True  # 此后走位循环的到达均经小地图走位：入口点击按走位规则（落点 ±2）
+    # 小地图任务点走位可能自动弹出领取对话框（模态）：对话框会拦住
+    # 关地图的点击。单次关闭尝试 + 失败时查对话框（见 helper），命中
+    # 则保留地图直接按到达处理，进入领取流程后直接点领取选项（人数
+    # 不足由领取流程自带的确认/补人逻辑处理，用户 2026-11-16），
+    # 选项点掉后由 _claim_task 补关地图。
+    if _close_claim_map_before_arrival(win):
+        return True, "已到达领取点附近（领取对话框已自动弹出）"
     # 等待到达：按钮可见优先（直接信号，落点 12 单位外已可见——
     # 提前返回后入口等待按走位规则只在落点 (94,84)±2 点），小地图
     # 落点 (94,84)±2 作为坐标判据（用户实测落点；旧判据用 86,86 与
@@ -1267,6 +1394,17 @@ def _walk_to_claim_spot(win, just_returned=False):
                 and (_walk_pos is not None or pos_seen):
             log("[五倍] 已到达领取点附近（降魔侍卫可见）", "SYS")
             return True, "已到达领取点附近"
+        # 到达自动弹出领取对话框（小地图走位 + 任务筛选勾选/未知，
+        # 用户 2026-11-16）：对话框在场且含领取选项即按到达处理，
+        # 进入领取流程直接点领取选项（人数不足走领取流程自带的
+        # 确认/补人逻辑）。门控模板 ~10ms，无对话框不付 OCR 成本。
+        if _claim_task_filter_on is not False \
+                and dialog_frame_score(img) >= DIALOG_FRAME_THRESHOLD:
+            items_d, img_np_d = game_map.ocr_region(
+                img, task_tracker.DIALOG_REGION)
+            if _find_claim_option(items_d, img_np_d) is not None:
+                log("[五倍] 已到达领取点附近（领取对话框已自动弹出）", "SYS")
+                return True, "已到达领取点附近（领取对话框已自动弹出）"
         if polls % 5 == 0:
             log(f"[五倍] 前往领取点中... 当前位置: {_walk_pos or '识别失败'}", "INFO")
         time.sleep(2.0)
@@ -1288,7 +1426,10 @@ def _relocate_to_claim_spot(win):
         return False, info
     log("[五倍] 已点击宝象国小地图领取点位置，重新寻路（领取校验兜底）", "SYS")
     time.sleep(1.0)
-    game_map.close_maps(win)
+    # 同 _walk_to_claim_spot：模态领取对话框会拦住关地图点击，命中则
+    # 保留地图直接按到达处理（选项点掉后由 _claim_task 补关）
+    if _close_claim_map_before_arrival(win):
+        return True, "已重走到领取点附近（领取对话框已自动弹出）"
     deadline = time.time() + CLAIM_ARRIVE_TIMEOUT
     polls = 0
     while time.time() < deadline:
@@ -1312,6 +1453,13 @@ def _relocate_to_claim_spot(win):
             return True, "已重走到领取点附近"
         if npc_hit and _near_xiangmoshiwei_spot(pos):
             return True, "已重走到领取点附近（降魔侍卫可见）"
+        # 同 _walk_to_claim_spot：到达自动弹出领取对话框即按到达处理
+        if _claim_task_filter_on is not False \
+                and dialog_frame_score(img) >= DIALOG_FRAME_THRESHOLD:
+            items_d, img_np_d = game_map.ocr_region(
+                img, task_tracker.DIALOG_REGION)
+            if _find_claim_option(items_d, img_np_d) is not None:
+                return True, "已重走到领取点附近（领取对话框已自动弹出）"
         polls += 1
         if polls % 5 == 0:
             log(f"[五倍] 重走领取点中... 当前位置: {pos or '识别失败'}", "INFO")
@@ -1319,7 +1467,8 @@ def _relocate_to_claim_spot(win):
     return False, "重走领取点超时"
 
 
-def _click_entry_ensuring_dialog(win, log_tag="[五倍]", hover_before_click=False):
+def _click_entry_ensuring_dialog(win, log_tag="[五倍]", hover_before_click=False,
+                                 allow_auto_dialog=False):
     """点击领取入口（按钮或降魔侍卫）并确保对话框出现；未出现判定坐标不对：
     打开小地图点击领取点坐标重定位后重试一次（修罗同款兜底路径）。
 
@@ -1329,6 +1478,14 @@ def _click_entry_ensuring_dialog(win, log_tag="[五倍]", hover_before_click=Fal
     16:16 空等 20s 无入口，手动走位才恢复）。
 
     hover_before_click：点击前先移动鼠标定位入口（无延时，验证时序与真实流程一致）。
+    allow_auto_dialog：允许在入口等待期间/等待前后检测「小地图走位
+    到达自动弹出」的任务对话框，命中则直接返回该帧处理**领取选项**
+    （人数不足走领取流程自带的确认/补人逻辑，用户 2026-11-16；仅
+    小地图走位到达置 True，站着/返程到达保持 False，原流程零变化）。
+    等待轮询内同样检测（_wait_claim_entry）——模态对话框会遮挡入口、
+    任务勾选时黄字走位终点不在落点盒内门控不通过，不检测会空等整个
+    入口窗口（2026-11-16 实机 18:32）。第 2 次尝试必经小地图重定位
+    走位，无论本参数都允许检测。
     返回 (是否成功, 描述, 来源, 坐标, 对话框帧)；成功时对话框已打开
     （选项可见），对话框帧 (items, img_np) 供领取流程同帧点选项——
     免重截+重 OCR。
@@ -1338,17 +1495,43 @@ def _click_entry_ensuring_dialog(win, log_tag="[五倍]", hover_before_click=Fal
     src2 = pt2 = None
     seen_frame = None
     for attempt in (1, 2):
+        # 入口等待前先查自动弹出的任务对话框（允许时）：命中则直接返回
+        # 该帧处理领取选项（人数不足走领取流程自带的确认/补人逻辑；
+        # 第 2 次尝试必经小地图重走，自动对话框可能在重走到达时弹出）
+        if allow_auto_dialog or attempt == 2:
+            auto = claim_flow.wait_auto_claim_dialog(
+                win, CLAIM_OPTION_NEEDLES, timeout=0.0)
+            if auto is not None:
+                log(f"{log_tag} 任务对话框已自动弹出，跳过入口等待"
+                    f"直接处理选项", "SYS")
+                return True, "任务对话框已自动弹出", "自动对话框", None, auto
         # 入口坐标直接用等待循环最近一帧的匹配结果点击：等待刚命中后
         # 再补一次识别（旧双检）会因 NPC 动画/镜头未稳出现「出现后又
         # 消失」假失败（修罗实测到达秒级报错未点击）；点不中由对话框
         # 出现判定兜底（小地图重定位重试）
         wait_timeout = ENTRY_FIRST_WAIT if attempt == 1 else CLAIM_BUTTON_TIMEOUT
-        # 坐标门控三规则按到达路径分流：首轮按 _walk_to_claim_spot 的
-        # 到达路径（走位→落点 ±2 规则；站着→±15 规则）；次轮必经
-        # _relocate_to_claim_spot 小地图重走，一律按走位规则
+        # 坐标门控规则按到达路径分流：首轮按 _walk_to_claim_spot 的
+        # 到达路径（走位→落点 ±5 规则，任务筛选勾选时补驻足规则 4；
+        # 站着→±15 规则）；次轮必经 _relocate_to_claim_spot 小地图
+        # 重走，一律按走位规则
         arrive_by_walk = _arrive_by_walk if attempt == 1 else True
-        pt2, src2, pos2 = _wait_claim_entry(win, wait_timeout, arrive_by_walk=arrive_by_walk)
+        # 等待期间同样检测自动弹出的任务对话框（模态会遮挡入口，且
+        # 任务筛选勾选时黄字走位终点不在落点盒内、坐标门控不通过——
+        # 2026-11-16 实机 18:32 空等 8s）：一出现即返回补查取帧
+        pt2, src2, pos2 = _wait_claim_entry(
+            win, wait_timeout, arrive_by_walk=arrive_by_walk,
+            allow_auto_dialog=allow_auto_dialog or attempt == 2)
         if pt2 is None:
+            # 自动弹出的任务对话框会遮挡/替代领取入口：先查对话框，
+            # 命中直接返回该帧处理领取选项，不再重走领取点。站着/
+            # 返程到达不查，原重走兜底流程不变。
+            if allow_auto_dialog or attempt == 2:
+                auto = claim_flow.wait_auto_claim_dialog(
+                    win, CLAIM_OPTION_NEEDLES, timeout=0.0)
+                if auto is not None:
+                    log(f"{log_tag} 等待入口期间任务对话框已自动弹出，"
+                        f"直接处理选项", "SYS")
+                    return True, "任务对话框已自动弹出", "自动对话框", None, auto
             if attempt == 1:
                 # 入口未出现：小地图重走领取点（原地或短途，几秒即回）
                 # 后重试一次，不再空等整轮（见函数 docstring 实测教训）
@@ -1359,6 +1542,16 @@ def _click_entry_ensuring_dialog(win, log_tag="[五倍]", hover_before_click=Fal
                     return False, "到达后未出现领取任务按钮/降魔侍卫", None, None, None
                 continue
             return False, "到达后未出现领取任务按钮/降魔侍卫（重走领取点后仍无）", None, None, None
+        # 点击入口前再查一次自动弹出的任务对话框（到达后延迟弹出；
+        # 仅小地图走位到达/重定位后的第 2 次尝试启用）：命中则不点
+        # 入口，直接返回该帧处理领取选项
+        if allow_auto_dialog or attempt == 2:
+            auto = claim_flow.wait_auto_claim_dialog(
+                win, CLAIM_OPTION_NEEDLES, timeout=0.0)
+            if auto is not None:
+                log(f"{log_tag} 任务对话框已自动弹出，跳过入口点击"
+                    f"直接处理选项", "SYS")
+                return True, "任务对话框已自动弹出", "自动对话框", None, auto
         if hover_before_click:
             human_move(win.rect.left + pt2[0], win.rect.top + pt2[1])
             log(f"{log_tag} 已移动鼠标到{src2} ({pt2[0]}, {pt2[1]})，"
@@ -1446,7 +1639,43 @@ def _claim_verify_wait(win, pre_sig, t_opt, polls):
         probe_fn=_probe_task_block)
 
 
-def _claim_task(win, allow_fill=False, allow_existing=False):
+def _close_kept_claim_map(win):
+    """补关「自动对话框路径」保留的小地图（选项点掉/对话框关闭后）。"""
+    global _claim_map_kept_open
+    if _claim_map_kept_open:
+        game_map.close_maps(win, quiet=True)
+        _claim_map_kept_open = False
+
+
+def _auto_dialog_claim_mode():
+    """本轮是否为「小地图走位到达 + 任务筛选勾选/未知」的自动对话框模式。
+
+    该模式下点击领取点坐标会命中黄字「降魔侍卫」，走到 NPC 旁并自动
+    弹出领取对话框（用户 2026-11-16）：领取流程直接点选项里的「领取」
+    完成领取，人数不足走拒绝→监控补人；首次领取前的队伍监控循环相应
+    让位给领取流程（run_loop，实机 18:42：先监控会让自动对话框在场
+    无人处理 10s+）。
+    """
+    return _arrive_by_walk and _claim_task_filter_on is not False
+
+
+def _arrival_claim_dialog_up(win, timeout=CLAIM_ARRIVE_DIALOG_WAIT):
+    """到达领取点后检查「自动弹出」的领取对话框是否真的在场。
+
+    仅小地图黄字走位模式（_auto_dialog_claim_mode）才检查：点中黄字任务
+    NPC 名 → 走到 NPC 旁自动弹领取对话框；没点中（点在地面）→ 不会弹。
+    用户 2026-11-16 原则：**只有对话框真的出现**才跳过首次领取前的队伍
+    监控直接领取（人数不足走拒绝→补人）；没弹对话框必须走正常队伍监控，
+    人满再领取。timeout 为等待窗口（走位到达信号可能早于真正走到 NPC）。
+    """
+    if not _auto_dialog_claim_mode():
+        return False
+    return claim_flow.wait_auto_claim_dialog(
+        win, CLAIM_OPTION_NEEDLES, timeout=timeout) is not None
+
+
+def _claim_task(win, allow_fill=False, allow_existing=False,
+                create_team_if_missing=False):
     """在领取点附近领取五倍任务（前提：已走到领取点附近）。
 
     识图 wubei_lingqu.png / wubei_xiangmoshiwei.png 点击（入口点击按
@@ -1468,8 +1697,13 @@ def _claim_task(win, allow_fill=False, allow_existing=False):
     场景，need_replace=True——游戏允许重领替换）。默认 False：面板仍
     有五倍任务说明「任务消失」是误判/任务又出现，跳过领取返回让主
     循环续跑跟踪（2026-11-11 修罗同款，避免空等领取入口一整轮）。
+
+    create_team_if_missing：领取被拒（队伍人数不足）进入监控补人时
+    允许首次检查内自动创建队伍（自动对话框模式跳过首次领取前队伍
+    监控的路径专用——run_loop 传 pending_create；2026-11-16 实机
+    18:54：队伍未建时监控开不了组队菜单）。
     """
-    global _claim_confirm_dlg_score
+    global _claim_confirm_dlg_score, _claim_map_kept_open
     _claim_confirm_dlg_score = None  # 本轮确认帧模板分复位（run_loop 消费）
     if is_in_battle(win):
         return False, "战斗中，跳过本轮领取", None
@@ -1488,12 +1722,28 @@ def _claim_task(win, allow_fill=False, allow_existing=False):
         # 入口（2026-11-11 修罗同款）；替换任务场景由 allow_existing
         # 放行（游戏允许重领替换）
         return False, "任务追踪中仍有五倍任务，跳过领取（续跑跟踪）", None
-    # 识图领取入口（按钮或降魔侍卫）并点击；点击后对话框未出现
-    # （短窗口内选项不可见）判定坐标不对：打开小地图点击领取点坐标
-    # 重定位后重试一次（修罗同款兜底路径）
-    ok, info, _src2, _pt2, seen = _click_entry_ensuring_dialog(win)
-    if not ok:
-        return False, info, None
+    # 到达领取点后任务对话框可能已自动弹出（**仅小地图点击走位到达 +
+    # 小地图「任务」勾选时**，用户 2026-11-16）：命中则直接复用该帧点
+    # **领取选项**（不走入口点击）；人数不足时领取流程自带的队伍确认/
+    # 自动补人逻辑照常生效。站着/返程到达不检查，原流程完全不受影响。
+    # 筛选状态在开小地图时读取（_open_claim_map）：False=未勾选跳过检查；
+    # 未知（None）仍做门控检查（模板门控 ~10ms，成本极低）。
+    auto_dialog_ok = _auto_dialog_claim_mode()
+    seen = None
+    if auto_dialog_ok:
+        seen = claim_flow.wait_auto_claim_dialog(win, CLAIM_OPTION_NEEDLES)
+        if seen is not None:
+            log("[五倍] 小地图走位到达后任务对话框已自动弹出，"
+                "跳过入口点击直接处理选项", "SYS")
+    if seen is None:
+        # 识图领取入口（按钮或降魔侍卫）并点击；点击后对话框未出现
+        # （短窗口内选项不可见）判定坐标不对：打开小地图点击领取点坐标
+        # 重定位后重试一次（修罗同款兜底路径）。走位到达且任务筛选
+        # 勾选/未知时，允许入口等待期间检测自动弹出的任务对话框。
+        ok, info, _src2, _pt2, seen = _click_entry_ensuring_dialog(
+            win, allow_auto_dialog=auto_dialog_ok)
+        if not ok:
+            return False, info, None
     # 对话框：点绿色选项「除魔卫国，义不容辞」完成领取——直接用
     # 「对话框已出现」的同一帧点击（帧上已确认选项可见，点同一帧
     # 与 0.3s 后重截重 OCR 再点等价）；未点中再走短窗轮询兜底。
@@ -1522,12 +1772,32 @@ def _claim_task(win, allow_fill=False, allow_existing=False):
             time.sleep(0.3)
             continue
         items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
+        # 领取被拒：队伍人数不足（游戏要求组满 5 人）。点屏幕中间关闭
+        # 提示框；检查队伍开关开启时进入监控补人循环（查人数 → 补人 →
+        # 重查，人满返回后下轮重试领取）。自动弹出的领取对话框点领取
+        # 选项后人数不够同样走这里（用户 2026-11-16 确认）。
+        if _dialog_text_present(items, FULL_TEAM_DIALOG_TEXT):
+            human_click(win, SCREEN_CENTER_POS[0], SCREEN_CENTER_POS[1])
+            time.sleep(0.3)  # 等待提示框关闭
+            # 自动对话框路径保留的小地图先补关：补人/重试需要干净界面
+            _close_kept_claim_map(win)
+            if allow_fill:
+                log("[五倍] 领取被拒：队伍人数不足，进入监控补人循环", "WARN")
+                # 人满才返回；非队长不返回（保持模式）。未组队时允许
+                # 监控首次检查内自动创建（自动对话框模式跳过预监控）。
+                _monitor_team_and_fill(
+                    win, create_if_missing=create_team_if_missing)
+                return False, "队伍已补齐（监控循环判定），下轮重试领取", None
+            log("[五倍] 领取被拒：队伍人数不足（检查队伍开关关闭，不补人）", "WARN")
+            return False, "队伍人数不足，领取被拒（未开启检查队伍开关）", None
         claimed = _click_claim_option(win, items, img_np)
         if claimed:
             t_opt = time.time()
         time.sleep(0.3)
     if not claimed:
         return False, "领取对话框处理失败", None
+    # 自动对话框路径保留了小地图：选项点掉后补关，防地图遮挡任务追踪
+    _close_kept_claim_map(win)
     # 校验任务出现在追踪面板：正常轮询 CLAIM_VERIFY_WAIT 秒；新任务
     # 渲染即确认（旧任务遗留面板时须签名变化，窗口延长到
     # CLAIM_VERIFY_WAIT_STALE——不再重复一次 has_task 全量检查）；
@@ -1568,9 +1838,14 @@ def _claim_task(win, allow_fill=False, allow_existing=False):
         if _dialog_text_present(items, FULL_TEAM_DIALOG_TEXT):
             human_click(win, SCREEN_CENTER_POS[0], SCREEN_CENTER_POS[1])
             time.sleep(0.3)  # 等待提示框关闭
+            # 自动对话框路径保留的小地图先补关：补人/重试需要干净界面
+            _close_kept_claim_map(win)
             if allow_fill:
                 log("[五倍] 领取被拒：队伍人数不足，进入监控补人循环", "WARN")
-                _monitor_team_and_fill(win)  # 人满才返回；非队长不返回（保持模式）
+                # 人满才返回；非队长不返回（保持模式）。未组队时允许
+                # 监控首次检查内自动创建（自动对话框模式跳过预监控）。
+                _monitor_team_and_fill(
+                    win, create_if_missing=create_team_if_missing)
                 return False, "队伍已补齐（监控循环判定），下轮重试领取", None
             log("[五倍] 领取被拒：队伍人数不足（检查队伍开关关闭，不补人）", "WARN")
             return False, "队伍人数不足，领取被拒（未开启检查队伍开关）", None
@@ -2733,7 +3008,8 @@ def verify_claim_flow(win):
     # 2. 领取入口：鼠标定位 → 点击打开对话框；点击后对话框未出现则
     #    小地图重定位后重试（与领取流程共用同一兜底助手）
     ok, info, src2, pt2, _frame = _click_entry_ensuring_dialog(
-        win, log_tag="[五倍][验证]", hover_before_click=True)
+        win, log_tag="[五倍][验证]", hover_before_click=True,
+        allow_auto_dialog=_arrive_by_walk)
     if not ok:
         return False, info
     # 3. 识别绿色选项：仅移动鼠标悬停，不点击（点击即领取）
@@ -2754,10 +3030,14 @@ def verify_claim_flow(win):
             #    关闭（点屏幕中间也可关闭，用户 2026-11-09 确认；拒绝
             #    未识别时兜底点屏幕中间）
             _close_dialog_without_claim(win, items, img_np)
-            return True, f"验证通过：{src2} ({pt2[0]}, {pt2[1]})，选项「{txt}」({cx}, {cy})"
+            _close_kept_claim_map(win)
+            pos_desc = (f"{src2} ({pt2[0]}, {pt2[1]})"
+                        if pt2 is not None else src2)
+            return True, f"验证通过：{pos_desc}，选项「{txt}」({cx}, {cy})"
         time.sleep(0.3)
     # 对话框未出现或选项未识别：点屏幕中间清理后失败
     human_click(win, SCREEN_CENTER_POS[0], SCREEN_CENTER_POS[1])
+    _close_kept_claim_map(win)
     return False, "对话框选项未识别（未领取，已尝试关闭对话框）"
 
 
@@ -3096,16 +3376,34 @@ def run_loop(win, cycle_interval=1.0):
                     # 预检未执行（已在领取点）→ 照常立即监控
                     if pre_status == "ready":
                         log("[五倍] 走位前队伍检查已通过（人数满足），直接领取", "SYS")
+                    elif _arrival_claim_dialog_up(win):
+                        # 到达领取点后领取对话框**确实已弹出**（小地图黄字
+                        # 走位命中任务 NPC 名）：直接进领取流程点「领取」
+                        # 选项，人数不足由领取流程自带的拒绝→监控补人处理
+                        # （用户 2026-11-16 原则：只有对话框真的出现才跳过
+                        # 队伍监控——没点中黄字时到达不会弹对话框，必须走
+                        # 正常队伍监控，人满再领取；且模态对话框会拦住组队
+                        # 菜单，监控在对话框在场时必然失败）。未组队时由
+                        # 领取被拒后的监控首次检查自动创建（见 _claim_task
+                        # create_team_if_missing）。
+                        log("[五倍] 到达后领取对话框已自动弹出：跳过首次领取前"
+                            "队伍监控，直接领取（人数不足走补人逻辑）", "SYS")
                     else:
                         if pre_status == "wait":
                             time.sleep(TEAM_CHECK_RETRY_INTERVAL)
-                        debug_overlay.set_phase("检查队伍")  # 看板阶段
-                        log("[五倍] 首次领取前进入队伍监控循环（缺人自动补）", "SYS")
-                        # 预检被跳过（已在领取点/组号人数不足）时，自动
-                        # 创建并入监控的首次检查
-                        _monitor_team_and_fill(win, create_if_missing=pending_create)
-                        pending_create = False
-                        log("[五倍] 队伍已满 5 人，开始领取", "SYS")
+                        if _arrival_claim_dialog_up(win, timeout=0.0):
+                            # 预检等待期间角色才走到 NPC、对话框此时才弹出：
+                            # 同样改走直接领取（对话框在场时监控开不了组队菜单）
+                            log("[五倍] 领取对话框已自动弹出：跳过队伍监控，直接领取"
+                                "（人数不足走补人逻辑）", "SYS")
+                        else:
+                            debug_overlay.set_phase("检查队伍")  # 看板阶段
+                            log("[五倍] 首次领取前进入队伍监控循环（缺人自动补）", "SYS")
+                            # 预检被跳过（已在领取点/组号人数不足）时，自动
+                            # 创建并入监控的首次检查
+                            _monitor_team_and_fill(win, create_if_missing=pending_create)
+                            pending_create = False
+                            log("[五倍] 队伍已满 5 人，开始领取", "SYS")
                 # 替换校验（审计问题 3/5）：替换分支领取时旧任务仍在
                 # 追踪面板，领取校验 has_task 恒真——领取后比对任务内容
                 # 签名，签名未变化即替换未生效。连续失败达上限终止任务，
@@ -3117,8 +3415,9 @@ def run_loop(win, cycle_interval=1.0):
                 # 领取任务（校验帧随返回值带出，跟踪首轮复用免重复 OCR）；
                 # 队伍不足被拒时按开关决定是否重入监控补人循环
                 debug_overlay.set_phase("领取任务")  # 看板阶段
-                ok, info, claim_items = _claim_task(win, allow_fill=check_team,
-                                                    allow_existing=need_replace)
+                ok, info, claim_items = _claim_task(
+                    win, allow_fill=check_team, allow_existing=need_replace,
+                    create_team_if_missing=pending_create)
                 if not ok:
                     # 战斗失败重领的领取失败不累计替换失败上限（同普通
                     # 领取失败：下轮重试，不因连续失败终止整个任务）

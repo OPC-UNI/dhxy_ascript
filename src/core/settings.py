@@ -1274,3 +1274,24 @@ def save_auto_famen(on):
     role_settings.set_value(_AUTO_FAMEN_KEY, bool(on))
     return {"status": "success"}
 
+
+# ---- 名望小地图快捷领取（UI 开关，角色设置持久化，**默认开启**；
+#      2026-11-16 用户规则）----
+# 开启后领取入口不再走「小地图点坐标走过去 + NPC 模板点击」——模板会被
+# 玩家/对话框/摊位遮挡导致找不到 NPC（用户反馈的明显缺陷）。改为：世界
+# 地图 → 种族地图小地图 → 勾选底部「任务」筛选 → 点击地图上固定的黄色
+# 任务 NPC 名（魔族 逆天魔 / 仙族 武尊神）→ 游戏自动寻路并在到达后自动
+# 打开对话框 → 点绿色选项「开启山河名望志」。
+_MINGWANG_MAP_CLAIM_KEY = "mingwang_map_claim"
+
+
+def load_mingwang_map_claim():
+    """读取名望小地图快捷领取开关（首次默认开启）。"""
+    return bool(role_settings.get(_MINGWANG_MAP_CLAIM_KEY, True))
+
+
+def save_mingwang_map_claim(on):
+    """保存名望小地图快捷领取开关，返回操作结果。"""
+    role_settings.set_value(_MINGWANG_MAP_CLAIM_KEY, bool(on))
+    return {"status": "success"}
+

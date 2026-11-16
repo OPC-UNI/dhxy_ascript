@@ -34,6 +34,12 @@ def _reset_shahai_state(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _reset_map_claim_state(monkeypatch):
+    """小地图快捷领取回退标志跨用例隔离。"""
+    monkeypatch.setattr(mingwang, "_map_claim_dialog_failed", False)
+
+
+@pytest.fixture(autouse=True)
 def _reset_tgqy_state(monkeypatch):
     """天宫奇遇全局状态跨用例隔离（状态机/armed 时间戳）。"""
     for name, value in (
@@ -2469,9 +2475,10 @@ def test_navigate_claim_point_at_point_skips_travel(monkeypatch):
 
 
 def test_open_claim_panel_alt4_then_claim(monkeypatch):
-    """到达领取点：不降落，直接 Alt+4 清屏、再点 NPC。"""
+    """旧路线（小地图快捷领取关闭）：到达领取点后 Alt+4 清屏、再点 NPC。"""
     order = []
     monkeypatch.setattr(mingwang, "is_in_battle", lambda w: False)
+    monkeypatch.setattr(mingwang, "load_mingwang_map_claim", lambda: False)
     monkeypatch.setattr(mingwang, "_find_panel_anchor", lambda bgr: None)
     monkeypatch.setattr(mingwang, "navigate_to_claim_point",
                         lambda w, c: order.append("nav") or (True, "已到达"))
@@ -2485,6 +2492,315 @@ def test_open_claim_panel_alt4_then_claim(monkeypatch):
     ok, info = mingwang._open_claim_panel(win, "魔族")
     assert ok and "面板" in info
     assert order == ["nav", "alt4", "claim"]
+
+
+# ---- 小地图快捷领取（2026-11-16 用户规则，开关默认开启）----
+def test_claim_points_have_map_claim_positions():
+    """两族都有小地图快捷领取**绝对坐标**（窗口位置固定，用户 2026-11-16
+    规则：不做窗口锚点相对换算）。"""
+    for race in ("魔族", "仙族"):
+        claim = mingwang.CLAIM_POINTS[race]
+        assert isinstance(claim["map_filter_pos"], tuple)
+        assert isinstance(claim["map_label_pos"], tuple)
+    # 2026-11-16 实机日志：魔族勾选框 (501,665)、黄色逆天魔 (989,380)；
+    # 仙族黄色武尊神 (821,368)（勾选框按天宫锚点换算 (599,668)）
+    assert mingwang.CLAIM_POINTS["魔族"]["map_filter_pos"] == (501, 665)
+    assert mingwang.CLAIM_POINTS["魔族"]["map_label_pos"] == (989, 380)
+    assert mingwang.CLAIM_POINTS["仙族"]["map_label_pos"] == (821, 368)
+    # 固定标签点应与旧领取点 mini_click 基本重合（黄字标签高约 20px，
+    # 实测标签中心在旧点附近 ±12px 内）
+    for race in ("魔族", "仙族"):
+        claim = mingwang.CLAIM_POINTS[race]
+        x, y = claim["mini_click"]
+        lx, ly = claim["map_label_pos"]
+        assert abs(lx - x) <= 12 and abs(ly - y) <= 12
+
+
+def test_map_filter_checked_white_pixels():
+    """勾选框近白像素判定：勾选 13 vs 未勾选 0（实测，阈值 4）。"""
+    img = Image.fromarray(np.zeros((40, 40, 3), dtype=np.uint8))
+    assert not game_map.minimap_task_filter_checked(img, 20, 20)
+    a = np.asarray(img).copy()
+    a[17:23, 17:23] = 255  # 模拟白色对勾
+    assert game_map.minimap_task_filter_checked(Image.fromarray(a), 20, 20)
+
+
+def test_ensure_minimap_task_filter_clicks_when_unchecked(monkeypatch):
+    """任务筛选未勾选 → 点击绝对坐标勾选框，复检勾选。"""
+    win = _FakeWin([_pil(_noise_bgr(seed=1)), _pil(_noise_bgr(seed=2))])
+    states = iter([False, True])
+    monkeypatch.setattr(game_map, "minimap_task_filter_checked",
+                        lambda img, cx, cy: next(states))
+    clicks = []
+    monkeypatch.setattr(game_map, "human_click",
+                        lambda w, x, y, button="primary": clicks.append((x, y)))
+    monkeypatch.setattr(game_map.time, "sleep", lambda s: None)
+    ok, _info = game_map.ensure_minimap_task_filter(win, (501, 665))
+    assert ok and clicks == [(501, 665)]
+
+
+def test_ensure_minimap_task_filter_skips_when_checked(monkeypatch):
+    """任务筛选已勾选 → 不点击（勾选状态零 OCR 判定）。"""
+    win = _FakeWin([_pil(_noise_bgr(seed=1))])
+    monkeypatch.setattr(game_map, "minimap_task_filter_checked",
+                        lambda *a: True)
+    clicks = []
+    monkeypatch.setattr(game_map, "human_click",
+                        lambda w, x, y, button="primary": clicks.append((x, y)))
+    ok, _info = game_map.ensure_minimap_task_filter(win, (501, 665))
+    assert ok and clicks == []
+
+
+def test_minimap_quick_navigate_opens_scene_map_directly(monkeypatch):
+    """已在目标地图 → 直接开小地图（不绕世界地图）→ 勾筛选 → 点黄字
+    固定点（绝对坐标，只点一次）。"""
+    order = []
+    monkeypatch.setattr(game_map, "read_map_position",
+                        lambda w: ("大唐边境", 475, 180))
+    monkeypatch.setattr(game_map, "open_mini_map",
+                        lambda w: order.append("mini") or (True, "小地图已打开"))
+    monkeypatch.setattr(game_map, "open_mini_map_city",
+                        lambda w, icon, label:
+                        order.append("city") or (True, "ok"))
+    monkeypatch.setattr(game_map, "ensure_minimap_task_filter",
+                        lambda w, pos:
+                        order.append(("filter", pos)) or (True, "已勾选"))
+    monkeypatch.setattr(game_map, "human_click",
+                        lambda w, x, y, button="primary":
+                        order.append(("point", (x, y))))
+    ok, info = game_map.minimap_quick_navigate(
+        object(), "大唐边境", "shijie_datangbianjing.png",
+        (501, 665), (989, 380))
+    assert ok and "已打开大唐边境小地图" in info
+    assert order == ["mini", ("filter", (501, 665)),
+                     ("point", (989, 380))]
+
+
+def test_minimap_quick_navigate_uses_world_map_when_elsewhere(monkeypatch):
+    """不在目标地图 → 经世界地图点城市标签打开小地图。"""
+    order = []
+    monkeypatch.setattr(game_map, "read_map_position",
+                        lambda w: ("魔王寨", 62, 82))
+    monkeypatch.setattr(game_map, "open_mini_map",
+                        lambda w: order.append("mini") or (True, "ok"))
+    monkeypatch.setattr(game_map, "open_mini_map_city",
+                        lambda w, icon, label:
+                        order.append(("city", icon, label)) or (True, "ok"))
+    monkeypatch.setattr(game_map, "ensure_minimap_task_filter",
+                        lambda w, pos: (True, "已勾选"))
+    monkeypatch.setattr(game_map, "human_click",
+                        lambda w, x, y, button="primary": None)
+    ok, _info = game_map.minimap_quick_navigate(
+        object(), "大唐边境", "shijie_datangbianjing.png",
+        (501, 665), (989, 380))
+    assert ok
+    assert order == [("city", "shijie_datangbianjing.png", "大唐边境")]
+
+
+def test_minimap_quick_navigate_stops_when_filter_fails(monkeypatch):
+    """任务筛选勾选失败 → 不点击固定点，直接返回失败。"""
+    clicked = []
+    monkeypatch.setattr(game_map, "read_map_position", lambda w: None)
+    monkeypatch.setattr(game_map, "open_mini_map_city",
+                        lambda w, icon, label: (True, "ok"))
+    monkeypatch.setattr(game_map, "ensure_minimap_task_filter",
+                        lambda w, pos: (False, "筛选点击后仍未勾选"))
+    monkeypatch.setattr(game_map, "human_click",
+                        lambda w, x, y, button="primary":
+                        clicked.append((x, y)))
+    ok, info = game_map.minimap_quick_navigate(
+        object(), "大唐边境", "shijie_datangbianjing.png",
+        (501, 665), (989, 380))
+    assert not ok and "仍未勾选" in info and clicked == []
+
+
+def test_navigate_to_claim_by_map_label_success(monkeypatch):
+    """新路线：调用下沉到 map 的快捷导航（传入种族绝对坐标）。"""
+    claim = mingwang.CLAIM_POINTS["魔族"]
+    win = _FakeWin([_pil(_noise_bgr(seed=6))])
+    calls = []
+    monkeypatch.setattr(mingwang, "is_in_battle", lambda w: False)
+    monkeypatch.setattr(mingwang, "close_scene_panels",
+                        lambda w, p="", quiet=False:
+                        calls.append(("close", quiet)))
+    monkeypatch.setattr(mingwang.game_map, "minimap_quick_navigate",
+                        lambda w, map_name, icon, fpos, lpos:
+                        calls.append(("quick", map_name, icon, fpos, lpos))
+                        or (True, "已点击小地图固定点"))
+    ok, info = mingwang.navigate_to_claim_by_map_label(win, claim)
+    assert ok and "已点击" in info
+    assert ("quick", claim["map"], claim["world_icon"],
+            claim["map_filter_pos"], claim["map_label_pos"]) in calls
+
+
+def test_navigate_to_claim_by_map_label_failure_closes_map(monkeypatch):
+    """标签点击失败 → 关地图并返回失败（调用方回退旧路线）。"""
+    claim = mingwang.CLAIM_POINTS["魔族"]
+    win = _FakeWin([_pil(_noise_bgr(seed=7))])
+    calls = []
+    monkeypatch.setattr(mingwang, "is_in_battle", lambda w: False)
+    monkeypatch.setattr(mingwang, "close_scene_panels",
+                        lambda w, p="", quiet=False:
+                        calls.append(("close", quiet)))
+    monkeypatch.setattr(mingwang.game_map, "minimap_quick_navigate",
+                        lambda *a, **k: (False, "未找到黄色标签"))
+    ok, info = mingwang.navigate_to_claim_by_map_label(win, claim)
+    assert not ok and "未找到黄色标签" in info
+    assert ("close", True) in calls  # 失败清理地图（quiet）
+
+
+def test_verify_map_claim_flow_only_uses_quick_route(monkeypatch):
+    """诊断-魔族/仙族领取：仅走小地图快捷领取（不做种族判定/旧路线）。"""
+    seen = []
+    monkeypatch.setattr(mingwang, "is_in_battle", lambda w: False)
+    monkeypatch.setattr(mingwang, "_find_panel_anchor", lambda bgr: None)
+    monkeypatch.setattr(mingwang, "detect_race",
+                        lambda w: seen.append("race") or ("魔族", "x"))
+    monkeypatch.setattr(mingwang, "navigate_to_claim_point",
+                        lambda w, c: seen.append("old") or (True, "旧路线"))
+    monkeypatch.setattr(mingwang, "navigate_to_claim_by_map_label",
+                        lambda w, c: seen.append(("map", c["map"]))
+                        or (True, "已点击固定点"))
+
+    def fake_claim(w, c, timeout=None, auto_dialog=False):
+        seen.append(("claim", c["map"], timeout, auto_dialog))
+        return True, "已打开山河名望任务领取面板"
+
+    monkeypatch.setattr(mingwang, "_claim_and_open_panel", fake_claim)
+    win = _FakeWin([_pil(_noise_bgr(seed=31))])
+    for race in ("魔族", "仙族"):
+        seen.clear()
+        ok, info = mingwang.verify_map_claim_flow(win, race)
+        assert ok and "面板" in info
+        claim_map = mingwang.CLAIM_POINTS[race]["map"]
+        assert seen == [("map", claim_map),
+                        ("claim", claim_map,
+                         mingwang.MAP_CLAIM_ARRIVE_TIMEOUT, True)]
+
+
+def test_verify_map_claim_flow_unsupported_race(monkeypatch):
+    """诊断-未配置种族（人族/鬼族）→ 明确提示未配置，不发任何点击。"""
+    monkeypatch.setattr(mingwang, "is_in_battle", lambda w: False)
+    called = []
+    monkeypatch.setattr(mingwang, "navigate_to_claim_by_map_label",
+                        lambda w, c: called.append(c) or (True, "x"))
+    win = _FakeWin([_pil(_noise_bgr(seed=32))])
+    for race in ("人族", "鬼族"):
+        ok, info = mingwang.verify_map_claim_flow(win, race)
+        assert not ok and "未配置" in info
+    assert called == []
+
+
+def test_verify_map_claim_flow_panel_already_open(monkeypatch):
+    """面板已打开 → 直接成功，不再打开地图/点黄字。"""
+    monkeypatch.setattr(mingwang, "is_in_battle", lambda w: False)
+    monkeypatch.setattr(mingwang, "_find_panel_anchor", lambda bgr: (1, 2, 3, 4))
+    called = []
+    monkeypatch.setattr(mingwang, "navigate_to_claim_by_map_label",
+                        lambda w, c: called.append(1) or (True, "x"))
+    win = _FakeWin([_pil(_noise_bgr(seed=33))])
+    ok, info = mingwang.verify_map_claim_flow(win, "魔族")
+    assert ok and "已打开" in info and called == []
+
+
+def test_verify_map_claim_flow_quick_route_failure(monkeypatch):
+    """小地图快捷领取失败 → 诊断返回失败（不落回旧路线）。"""
+    monkeypatch.setattr(mingwang, "is_in_battle", lambda w: False)
+    monkeypatch.setattr(mingwang, "_find_panel_anchor", lambda bgr: None)
+    monkeypatch.setattr(mingwang, "navigate_to_claim_by_map_label",
+                        lambda w, c: (False, "小地图窗口锚点未找到"))
+    claimed = []
+    monkeypatch.setattr(mingwang, "_claim_and_open_panel",
+                        lambda *a, **k: claimed.append(1) or (True, "x"))
+    win = _FakeWin([_pil(_noise_bgr(seed=34))])
+    ok, info = mingwang.verify_map_claim_flow(win, "仙族")
+    assert not ok and "锚点" in info and claimed == []
+
+
+def test_open_claim_panel_uses_map_route_when_enabled(monkeypatch):
+    """开关开启（默认）→ 走小地图快捷领取，入口链超时覆盖跨图寻路。"""
+    order = []
+    seen = {}
+    monkeypatch.setattr(mingwang, "is_in_battle", lambda w: False)
+    monkeypatch.setattr(mingwang, "load_mingwang_map_claim", lambda: True)
+    monkeypatch.setattr(mingwang, "_find_panel_anchor", lambda bgr: None)
+    monkeypatch.setattr(mingwang, "navigate_to_claim_by_map_label",
+                        lambda w, c: order.append("map") or (True, "已点击黄字"))
+    monkeypatch.setattr(mingwang, "navigate_to_claim_point",
+                        lambda w, c: order.append("old") or (True, "已到达"))
+    monkeypatch.setattr(mingwang, "_press_alt4_clear",
+                        lambda w: order.append("alt4"))
+
+    def fake_claim(w, c, timeout=None, auto_dialog=False):
+        seen["timeout"] = timeout
+        seen["auto_dialog"] = auto_dialog
+        order.append("claim")
+        return True, "已打开面板"
+
+    monkeypatch.setattr(mingwang, "_claim_and_open_panel", fake_claim)
+    monkeypatch.setattr(mingwang.debug_overlay, "set_phase", lambda p: None)
+    win = _FakeWin([_pil(_noise_bgr(seed=22))])
+    ok, info = mingwang._open_claim_panel(win, "魔族")
+    assert ok and "面板" in info
+    assert order == ["map", "claim"]
+    assert seen["timeout"] == mingwang.MAP_CLAIM_ARRIVE_TIMEOUT
+    assert seen["auto_dialog"] is True
+
+
+def test_open_claim_panel_falls_back_after_auto_dialog_timeout(monkeypatch):
+    """黄字点击后等不到自动对话框 → 本次运行后续轮次改用旧领取路线。"""
+    order = []
+    monkeypatch.setattr(mingwang, "is_in_battle", lambda w: False)
+    monkeypatch.setattr(mingwang, "load_mingwang_map_claim", lambda: True)
+    monkeypatch.setattr(mingwang, "_find_panel_anchor", lambda bgr: None)
+    monkeypatch.setattr(mingwang, "navigate_to_claim_by_map_label",
+                        lambda w, c: order.append("map") or (True, "已点击黄字"))
+    monkeypatch.setattr(mingwang, "navigate_to_claim_point",
+                        lambda w, c: order.append("old") or (True, "已到达"))
+    monkeypatch.setattr(mingwang, "_press_alt4_clear",
+                        lambda w: order.append("alt4"))
+
+    def fake_claim(w, c, timeout=None, auto_dialog=False):
+        order.append(("claim", auto_dialog))
+        if auto_dialog:
+            return False, "领取入口链超时（60s，未等到自动对话框）"
+        return True, "旧路线已打开面板"
+
+    monkeypatch.setattr(mingwang, "_claim_and_open_panel", fake_claim)
+    monkeypatch.setattr(mingwang.debug_overlay, "set_phase", lambda p: None)
+    win = _FakeWin([_pil(_noise_bgr(seed=24))])
+    ok, info = mingwang._open_claim_panel(win, "魔族")
+    assert not ok and "自动对话框" in info
+    assert mingwang._map_claim_dialog_failed is True
+    assert order == ["map", ("claim", True)]
+    # 第二次调用：回退标志已置位 → 不再走小地图快捷领取
+    order.clear()
+    ok, info = mingwang._open_claim_panel(win, "魔族")
+    assert ok and "面板" in info
+    assert order == ["old", "alt4", ("claim", False)]
+
+
+def test_open_claim_panel_falls_back_when_map_route_fails(monkeypatch):
+    """小地图快捷领取失败 → 回退旧寻路 + Alt+4 + 模板领取路线。"""
+    order = []
+    monkeypatch.setattr(mingwang, "is_in_battle", lambda w: False)
+    monkeypatch.setattr(mingwang, "load_mingwang_map_claim", lambda: True)
+    monkeypatch.setattr(mingwang, "_find_panel_anchor", lambda bgr: None)
+    monkeypatch.setattr(mingwang, "navigate_to_claim_by_map_label",
+                        lambda w, c: order.append("map")
+                        or (False, "未找到黄色标签"))
+    monkeypatch.setattr(mingwang, "navigate_to_claim_point",
+                        lambda w, c: order.append("old") or (True, "已到达"))
+    monkeypatch.setattr(mingwang, "_press_alt4_clear",
+                        lambda w: order.append("alt4"))
+    monkeypatch.setattr(mingwang, "_claim_and_open_panel",
+                        lambda w, c, timeout=None:
+                        order.append("claim") or (True, "已打开面板"))
+    monkeypatch.setattr(mingwang.debug_overlay, "set_phase", lambda p: None)
+    win = _FakeWin([_pil(_noise_bgr(seed=23))])
+    ok, info = mingwang._open_claim_panel(win, "魔族")
+    assert ok and "面板" in info
+    assert order == ["map", "old", "alt4", "claim"]
 
 
 # ---- 天宫奇遇（仙族·天宫）：导航链接 / 1px 到达 / 偷丹葫芦 / 魔取仙丹 ----

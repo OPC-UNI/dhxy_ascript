@@ -1030,11 +1030,21 @@
                     <span class="task-order"></span>
                     <span class="task-name">名望</span>
                     <span class="badge">第一阶段</span>
+                        <button class="task-expand" data-mode="名望" title="名望专属设置">▾</button>
                     <div class="task-count">
                         <button class="th-btn" onclick="count('名望', -1)">−</button>
                         <span class="th-val" id="cnt-名望">5</span>
                         <button class="th-btn" onclick="count('名望', 1)">＋</button>
                     </div>
+                </div>
+                <!-- 名望设置手风琴：小地图快捷领取 -->
+                <div class="task-accordion">
+                    <div class="group-title">名望设置</div>
+                    <label class="switch-row">
+                        <input type="checkbox" id="mingwang-map-claim">
+                        <span class="switch-track"></span>
+                        <span>小地图快捷领取（勾选「任务」筛选后点黄色任务 NPC 名，默认开启）</span>
+                    </label>
                 </div>
             </div>
             <div class="task-card" data-mode="仅战斗">
@@ -1492,7 +1502,15 @@
                         <button id="btn-verify-mingwang-claim-task" class="btn" onclick="verifyMingwangClaimTask()">测试领取名望任务</button>
                         <span class="verify-result" id="mingwang-claim-task-verify-result"></span>
                     </div>
-                    <div class="group-hint">第一阶段链路（与任务流程一致、时序无额外延时）：点击 (1230,95) 开人物属性面板 → 识别种族（标题牌右侧 120px 条带，日志打印 OCR 文案与条带）→ 关面板 → 魔族前往大唐边境领取点（世界地图/小地图 985,384）→ 点击逆天魔 → 对话框选「开启山河名望志」→ 点击山河名望入口打开任务领取面板后停止（不在面板内领取任务）。当前仅实现魔族；仙族会在种族判定后提示待补充。测试领取名望任务=面板已打开则直接扫描任务栏（锚点下方 6 卡：3 列×2 行，190×154），按 高级>中级>初级 + 卡片顺序选第一个已实现任务（蛟魔复仇/沙海迷踪/蛟魔探秘/五庄封印/沙都修罗）并点击其接取按钮（真实领取；面板未打开时先走完整第一阶段链路），日志打印 6 卡级别/标题与匹配分数；领取后对话框模板门控命中即点屏幕中间关闭，残留山河名望面板右键标题牌关闭，任务追踪出现「山河名望」→ 复用 follow_task 跟踪至任务完成（任务对话按 DIALOG_OPTION_MAP 处理，如「黑水河深，不如蛟魔之心。」→「逆天魔大将派我前来」；沙海迷踪=「少侠准备好清理地图了吗？」→「我已经准备好了」后识别「开始」按钮 mingwang_chenjiuditu_kaishi 点击进入战斗，战斗结束即完成；净化水晶丛林=「糟糕，水晶丛林竟真被混沌缠上了，得赶快净化这些混沌！」→「马上净化水晶丛林上的混沌。」后识别「开始」按钮 mingwang_qingxishuijing_kaishi 点击进入战斗，战斗结束即完成；蛟魔探秘=「老头子我最喜欢的，就是在这里钓鱼了~」→「请将鱼竿借我一用！」后识别窗口标题 mingwang_diaochushuizhongguaiwu，复用 pochufengyin 点击冲刺连点闭环（mash：连点冲刺+维持泵点击率伺服（位置与持续点击率正相关，停手约 1 秒即回退），不按倒计时停手）；沙都修罗=追踪文案含「根据三张蟠桃园残像所示位置」时进入蟠桃园（世界地图点「蟠桃园」标签 shijie_pantaoyuan），按四个搜索点 (739,588)→(126,32) / (623,476)→(66,87) / (541,428)→(27,112) / (552,310)→(33,171) 依次寻路，先查 NPC 模板 mingwang_shaduxiuluo（阈值 0.79，命中直接点模板中心），未命中再 OCR 找「沙都修罗」（排除任务追踪同名文案），找到点击其上方 40px，四点均未找到限频重试）。任务运行中不可验证。</div>
+                    <div class="verify-row">
+                        <button id="btn-verify-mingwang-mozu" class="btn" onclick="verifyMingwangClaimRace('魔族')">魔族领取（小地图快捷）</button>
+                        <span class="verify-result" id="mingwang-mozu-verify-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="btn-verify-mingwang-xianzu" class="btn" onclick="verifyMingwangClaimRace('仙族')">仙族领取（小地图快捷）</button>
+                        <span class="verify-result" id="mingwang-xianzu-verify-result"></span>
+                    </div>
+                    <div class="group-hint">魔族领取（小地图快捷）/仙族领取（小地图快捷）=仅走小地图快捷领取方式（不做种族判定、不走旧坐标寻路 + NPC 模板路线）：打开该种族地图小地图（已在该地图直接开）→ 勾选底部「任务」筛选 → 点击固定位置黄色任务 NPC 名（魔族 逆天魔 / 仙族 武尊神，只点一次）→ 等待游戏自动寻路并在到达后自动打开对话框 → 点绿色选项「开启山河名望志」→ 打开山河名望面板后停止（不领取面板任务）。第一阶段链路（与任务流程一致、时序无额外延时）：点击 (1230,95) 开人物属性面板 → 识别种族（标题牌右侧 120px 条带，日志打印 OCR 文案与条带）→ 关面板 → 魔族前往大唐边境领取点（世界地图/小地图 985,384）→ 点击逆天魔 → 对话框选「开启山河名望志」→ 点击山河名望入口打开任务领取面板后停止（不在面板内领取任务）。测试领取名望任务=面板已打开则直接扫描任务栏（锚点下方 6 卡：3 列×2 行，190×154），按 高级>中级>初级 + 卡片顺序选第一个已实现任务（蛟魔复仇/沙海迷踪/蛟魔探秘/五庄封印/沙都修罗）并点击其接取按钮（真实领取；面板未打开时先走完整第一阶段链路），日志打印 6 卡级别/标题与匹配分数；领取后对话框模板门控命中即点屏幕中间关闭，残留山河名望面板右键标题牌关闭，任务追踪出现「山河名望」→ 复用 follow_task 跟踪至任务完成（任务对话按 DIALOG_OPTION_MAP 处理，如「黑水河深，不如蛟魔之心。」→「逆天魔大将派我前来」；沙海迷踪=「少侠准备好清理地图了吗？」→「我已经准备好了」后识别「开始」按钮 mingwang_chenjiuditu_kaishi 点击进入战斗，战斗结束即完成；净化水晶丛林=「糟糕，水晶丛林竟真被混沌缠上了，得赶快净化这些混沌！」→「马上净化水晶丛林上的混沌。」后识别「开始」按钮 mingwang_qingxishuijing_kaishi 点击进入战斗，战斗结束即完成；蛟魔探秘=「老头子我最喜欢的，就是在这里钓鱼了~」→「请将鱼竿借我一用！」后识别窗口标题 mingwang_diaochushuizhongguaiwu，复用 pochufengyin 点击冲刺连点闭环（mash：连点冲刺+维持泵点击率伺服（位置与持续点击率正相关，停手约 1 秒即回退），不按倒计时停手）；沙都修罗=追踪文案含「根据三张蟠桃园残像所示位置」时进入蟠桃园（世界地图点「蟠桃园」标签 shijie_pantaoyuan），按四个搜索点 (739,588)→(126,32) / (623,476)→(66,87) / (541,428)→(27,112) / (552,310)→(33,171) 依次寻路，先查 NPC 模板 mingwang_shaduxiuluo（阈值 0.79，命中直接点模板中心），未命中再 OCR 找「沙都修罗」（排除任务追踪同名文案），找到点击其上方 40px，四点均未找到限频重试）。任务运行中不可验证。</div>
                 </div>
                 <div class="group-box">
                     <div class="group-title">队伍</div>
@@ -1756,6 +1774,7 @@
     const zhongzuShout = document.getElementById('zhongzu-shout');
     const zhongzuShoutText = document.getElementById('zhongzu-shout-text');
     const wuhuanVitalityContinue = document.getElementById('wuhuan-vitality-continue');
+    const mingwangMapClaim = document.getElementById('mingwang-map-claim');
     // 组号设置页
     const navGroup = document.getElementById('nav-group');
     const btnGroupCheck = document.getElementById('btn-group-check');
@@ -1810,6 +1829,10 @@
     const mingwangClaimVerifyResultEl = document.getElementById('mingwang-claim-verify-result');
     const btnVerifyMingwangClaimTask = document.getElementById('btn-verify-mingwang-claim-task');
     const mingwangClaimTaskVerifyResultEl = document.getElementById('mingwang-claim-task-verify-result');
+    const btnVerifyMingwangMozu = document.getElementById('btn-verify-mingwang-mozu');
+    const mingwangMozuVerifyResultEl = document.getElementById('mingwang-mozu-verify-result');
+    const btnVerifyMingwangXianzu = document.getElementById('btn-verify-mingwang-xianzu');
+    const mingwangXianzuVerifyResultEl = document.getElementById('mingwang-xianzu-verify-result');
     const btnVerifyClearScreen = document.getElementById('btn-verify-clear-screen');
     const clearScreenVerifyResultEl = document.getElementById('clear-screen-verify-result');
     const btnVerifyShout = document.getElementById('btn-verify-shout');
@@ -3374,6 +3397,9 @@
     zhongzuTabGroup.addEventListener('change', () => {
         callPython('save_zhongzu_tab_group', zhongzuTabGroup.checked);
     });
+    mingwangMapClaim.addEventListener('change', () => {
+        callPython('save_mingwang_map_claim', mingwangMapClaim.checked);
+    });
     highPerf.addEventListener('change', () => {
         callPython('save_high_perf', highPerf.checked);
     });
@@ -3744,6 +3770,7 @@
             zhongzuRepairIntervalEl.innerText = info.zhongzu.repair_interval;
         }
         zhongzuTabGroup.checked = !!(info.zhongzu && info.zhongzu.tab_group);
+        mingwangMapClaim.checked = !!(info.mingwang && info.mingwang.map_claim);
         xiuluoShout.checked = !!info.xiuluo_shout;
         if (info.xiuluo_shout_text !== undefined) {
             xiuluoShoutText.value = info.xiuluo_shout_text;
@@ -4489,6 +4516,46 @@
         btnVerifyMingwangClaimTask.disabled = false;
         mingwangClaimTaskVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
         mingwangClaimTaskVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+    };
+
+    // 名望种族领取（小地图快捷）验证：魔族/仙族共用，结果经
+    // onMingwangMapClaimVerifyResult(race, ok, info) 回推
+    function mingwangRaceVerifyEls(race) {
+        return race === '魔族'
+            ? [btnVerifyMingwangMozu, mingwangMozuVerifyResultEl]
+            : [btnVerifyMingwangXianzu, mingwangXianzuVerifyResultEl];
+    }
+    async function verifyMingwangClaimRace(race) {
+        if (verifying) return;
+        verifying = true;
+        const [btn, el] = mingwangRaceVerifyEls(race);
+        btn.disabled = true;
+        el.style.color = 'var(--text)';
+        el.innerText = '验证中...';
+        const api = race === '魔族'
+            ? 'verify_mingwang_claim_mozu' : 'verify_mingwang_claim_xianzu';
+        try {
+            const r = await callPython(api);
+            if (!r || r.status !== 'success') {
+                el.style.color = 'var(--danger)';
+                el.innerText = (r && r.msg) || '验证请求失败';
+                verifying = false;
+                btn.disabled = false;
+            }
+            // 成功：等待 Python 侧 onMingwangMapClaimVerifyResult 回推最终结果
+        } catch (e) {
+            el.style.color = 'var(--danger)';
+            el.innerText = '验证请求异常';
+            verifying = false;
+            btn.disabled = false;
+        }
+    }
+    window.onMingwangMapClaimVerifyResult = function (race, ok, info) {
+        verifying = false;
+        const [btn, el] = mingwangRaceVerifyEls(race);
+        btn.disabled = false;
+        el.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        el.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
     // 五倍巫医验证：与修罗巫医验证同模式，结果经 onWubeiWuyiVerifyResult 异步回推
