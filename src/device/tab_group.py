@@ -231,41 +231,96 @@ def leader_id():
 
 _off_leader_log_at = 0.0  # 「游戏停在队员 Tab」提示限频（30s）
 
+# ---- 画面归属判定（2026-11-16 实机修正）----
+# 旧实现只看主窗口标题。实机发现手动切 Tab 时**标题与可见子窗口两路
+# 信号更新不同步**：用户切回队长后日志仍按另一 Tab 的画面命中对话框
+# 模板（「检测到对话框」出现在无对话框的队长屏、队员屏有对话框时反而
+# 无日志），同轮询内「追踪面板不在场 → 1s 后任务仍在」也自相矛盾。
+# 改为以**可见 Tab 子窗口**（list_tab_windows，即切 Tab 成败判定用的
+# 同一直接信号）为主、标题为兜底；并加切换后静默期，等新画面上屏。
+_TAB_STATE_TTL = 0.25            # 状态查询缓存（同一轮询内多次调用共用）
+TAB_SETTLE_AFTER_SWITCH = 1.0    # 观察到 Tab 切换后的静默期（秒）
+_last_tab_state = None           # (标题账号 ID, 可见子窗口账号 ID)
+_last_tab_state_at = 0.0         # 上次采样时间（缓存）
+_tab_switch_at = 0.0             # 最近一次观察到切换的时间（静默期起点）
+_tab_mismatch_log_at = 0.0       # 两路信号不一致日志限频
+
+
+def _tab_state(win):
+    """(标题账号 ID, 可见子窗口账号 ID)，带短缓存；变化即记切换时间。
+
+    可见子窗口：game.list_tab_windows 按 IsWindowVisible 取当前显示的
+    Tab 子窗口（与 return_to_leader/ensure_leader_tab 的判据同源）；
+    标题：主窗口 caption，游戏客户端异步更新，可能滞后/超前于画面。
+    任一变化都按一次 Tab 切换处理（TAB_SETTLE_AFTER_SWITCH 静默期）。
+    """
+    global _last_tab_state, _last_tab_state_at, _tab_switch_at
+    now = time.time()
+    if _last_tab_state is not None and now - _last_tab_state_at < _TAB_STATE_TTL:
+        return _last_tab_state
+    state = (user_data.role_id_from_text(getattr(win, "title", "") or ""),
+             _current_id(win))
+    if _last_tab_state is not None and state != _last_tab_state:
+        _tab_switch_at = now
+    _last_tab_state = state
+    _last_tab_state_at = now
+    return state
+
 
 def on_leader_screen(win):
     """当前画面是否属于本任务所在的队长 Tab（组号模式未激活时恒 True）。
 
-    只用 active()（当前任务模式仍是组号模式）判定：组号（一窗口多 Tab）
-    模式下窗口标题随选中 Tab 变化——实测静默 Tab 条点击切换也会同步
-    标题。任务线程/战斗线程的一切识别与点击都假定屏幕是队长 Tab：
-    - 用户手动切到队员 Tab（pass_active 为 False）：队员屏没有本任务
-      的任务追踪（会被判「任务消失」），队员屏的对话框也不是本任务的
-      （会被当队长对话框 OCR/点击）——2026-11-13 用户实机反馈；
-    - pass 进行中（pass_active 为 True）：屏幕本来就是队员 Tab。
-    两种情况都返回 False，调用方按「本轮不做识别/点击」处理，切回
-    队长 Tab / pass 结束后自动继续。标题无账号 ID（未登录/加载中）按
-    不在队长屏处理（保守暂停本轮）。
+    判据（按优先级）：
+    1. active() 为假（当前任务模式不是组号模式）→ True，不做归属检查；
+    2. pass 进行中（pass_active）→ False（屏幕本来就是队员 Tab）；
+    3. Tab 刚切换（两路信号任一变化）的静默期内 → False（等新画面上屏）；
+    4. 以**可见 Tab 子窗口**的账号 ID 判定（画面归属的直接信号，与切 Tab
+       成败判定同源）；子窗口枚举失败时才退回主窗口标题。
+
+    任务线程/战斗线程的一切识别与点击都假定屏幕是队长 Tab：
+    - 用户手动切到队员 Tab：队员屏没有本任务的任务追踪（会被判「任务
+      消失」），队员屏的对话框也不是本任务的（会被当队长对话框 OCR/
+      点击）——2026-11-13 用户实机反馈；
+    - 旧实现只看标题，手动切换时标题与画面不同步（2026-11-16 实机：
+      无对话框的队长屏被记「检测到对话框」）——改用可见子窗口。
+    无账号 ID（未登录/加载中/枚举失败且标题无 ID）按不在队长屏处理
+    （保守暂停本轮）。
 
     非组号任务模式（五环/客栈/玄枢等）不做归属检查：这些模式本来
     跟随当前画面执行、不管理 Tab，`_leader_id` 可能是上一个组号模式
     留下的旧值，套用会误暂停。
     """
+    global _tab_mismatch_log_at
     if not active():
         return True
     if pass_active:
         return False
-    rid = user_data.role_id_from_text(getattr(win, "title", "") or "")
+    now = time.time()
+    tid, cid = _tab_state(win)
+    if now - _tab_switch_at < TAB_SETTLE_AFTER_SWITCH:
+        return False  # 刚观察到切换：画面可能还是上一 Tab 的，按非队长处理
+    if tid is not None and cid is not None and tid != cid \
+            and now - _tab_mismatch_log_at >= 10.0:
+        # 诊断：标题与可见子窗口不一致（异步更新），按可见子窗口判定
+        _tab_mismatch_log_at = now
+        log(f"[组号] Tab 状态不一致：标题 ID {tid} / 可见 Tab ID {cid}，"
+            f"按可见 Tab 判定队长屏", "INFO")
+    rid = cid if cid is not None else tid
     return bool(rid) and rid == _leader_id
 
 
 def note_off_leader(prefix=""):
-    """「游戏停在队员 Tab」限频提示（30 秒一次，防每轮询刷屏）。"""
+    """「游戏停在队员 Tab」限频提示（30 秒一次，防每轮询刷屏）。
+
+    正常等待态（用户手动切 Tab / pass 切回失败残留），切回队长 Tab 后
+    自动继续——非异常，按 INFO 记录（2026-11-16 用户要求降级 WARN）。
+    """
     global _off_leader_log_at
     now = time.time()
     if now - _off_leader_log_at >= 30.0:
         _off_leader_log_at = now
         log(f"{prefix}游戏停在队员 Tab（非队长），暂停识别与点击，"
-            f"切回队长 Tab 后自动继续", "WARN")
+            f"切回队长 Tab 后自动继续", "INFO")
 
 
 def startup_check(win, create_if_missing=False, prefix="[组号]"):

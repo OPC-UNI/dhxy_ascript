@@ -135,3 +135,25 @@ def test_configured_requires_all_materials(monkeypatch):
     monkeypatch.setattr(repair, "REPAIR_DIALOGS", (("文案", "选项"),))
     monkeypatch.setattr(repair.game_map, "template_size", lambda icon: None)
     assert repair._configured() is False
+
+
+def test_repair_map_failure_closes_residual_maps(win, monkeypatch):
+    """地图打开失败 → 清理场景面板（残留世界地图污染 follow 追踪 OCR）。
+
+    2026-11-16 实机：修理失败后世界地图仍在场，其左缘竖排「世界地图」
+    被 follow 读进任务签名，空转 62s 直到跨图寻路关掉地图。
+    """
+    monkeypatch.setattr(repair, "_configured", lambda: True)
+    monkeypatch.setattr(repair.tab_group, "pass_active", False)
+    monkeypatch.setattr(repair.battle, "is_in_battle", lambda w: False)
+    monkeypatch.setattr(repair.game_map, "read_map_position",
+                        lambda w: ("凤巢五层", 38, 46))
+    monkeypatch.setattr(repair.game_map, "open_mini_map_city",
+                        lambda *a, **k: (False, "点击洛阳城后小地图未打开"))
+    closed = []
+    monkeypatch.setattr(repair.dialog_common, "close_scene_panels",
+                        lambda w, p="", quiet=False: closed.append(p))
+    monkeypatch.setattr(repair, "log", lambda *a, **k: None)
+    ok, info = repair._run_repair_chain(win)
+    assert ok is False and "小地图未打开" in info
+    assert closed == ["修理"]

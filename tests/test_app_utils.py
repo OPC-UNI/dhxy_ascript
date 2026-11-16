@@ -420,3 +420,18 @@ def test_char_key_prefers_bound_window_over_live_title(monkeypatch):
     # 无 hwnd 的假窗口（单测路径）：按标题解析
     assert app_utils.char_key(_RoleWin("服务器 - 角色甲（ID：1001）")) \
         == "（ID：1001）"
+
+
+def test_silent_click_warns_on_delivery_failure(monkeypatch):
+    """静默点击投递失败（窗口/客户区获取失败）→ WARN 且返回 None。
+
+    2026-11-16 地图点击失效排查：投递失败此前完全静默，日志无从确认
+    点击是否送达。
+    """
+    logs = []
+    monkeypatch.setattr("src.device.silent_click.send_silent_click",
+                        lambda w, x=None, y=None, button="primary": None)
+    monkeypatch.setattr(app_utils, "log",
+                        lambda msg, level="INFO": logs.append((level, msg)))
+    assert app_utils._silent_click(_FakeWin(), 1, 2) is None
+    assert logs and logs[0][0] == "WARN" and "投递失败" in logs[0][1]

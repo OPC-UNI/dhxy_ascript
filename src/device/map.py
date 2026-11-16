@@ -663,6 +663,42 @@ def is_mini_map_open(win):
     return find_template(win, MINI_MAP_OPEN_ICON) is not None
 
 
+# ---- 地图打开失败诊断帧（2026-11-16 用户要求）----
+# 打开失败时的现场状态无法从日志还原：2026-11-16 10:18 修理链路——世界
+# 地图在场、洛阳城标签回退重识别位置与缓存一致，但点击城市图标两次
+# 都没进详情图（间隔 3s），日志只有坐标，无法判断是动画竞态/弹窗遮挡/
+# 客户端瞬时无响应。失败时把窗口帧保存到 logs/diag_map_*.png 供事后
+# 定位。限频 FAIL_FRAME_DUMP_INTERVAL 秒一张：反复失败的调用方（如
+# 2026-11-13 五倍小地图连败约每 8s 一次）不会刷爆磁盘。
+FAIL_FRAME_DUMP_INTERVAL = 60.0
+_FAIL_DUMP_DIR = app_utils._LOG_DIR  # 工程 logs/（测试可替换为临时目录）
+_last_fail_dump_at = 0.0
+
+
+def _dump_failure_frame(win, tag):
+    """把当前窗口帧保存到 logs/ 供失败诊断（限频、best effort）。
+
+    tag：文件名标签（ascii，如 world_open / city_open），便于区分失败点。
+    保存失败只记日志，不影响调用方流程。
+    """
+    global _last_fail_dump_at
+    now = time.time()
+    if now - _last_fail_dump_at < FAIL_FRAME_DUMP_INTERVAL:
+        return
+    _last_fail_dump_at = now
+    try:
+        img = win.capture(force_activate=False)
+        if img is None:
+            return
+        _FAIL_DUMP_DIR.mkdir(parents=True, exist_ok=True)
+        path = _FAIL_DUMP_DIR / (
+            f"diag_map_{time.strftime('%m%d-%H%M%S')}_{tag}.png")
+        img.save(str(path))
+        log(f"[地图] 打开失败现场帧已保存: {path}", "WARN")
+    except Exception as e:  # 诊断路径失败不影响主流程
+        log(f"[地图] 失败现场帧保存失败: {e}", "WARN")
+
+
 def open_world_map(win):
     """点击世界地图按钮打开世界地图。返回 (是否成功, 描述)。
 
@@ -689,6 +725,7 @@ def open_world_map(win):
         time.sleep(0.3)
         if is_world_map_open(win):
             return True, "世界地图已打开"
+    _dump_failure_frame(win, "world_open")
     return False, "点击后世界地图未打开"
 
 
@@ -702,6 +739,7 @@ def open_mini_map(win):
     while not is_mini_map_open(win) and time.time() < deadline:
         time.sleep(0.5)
     if not is_mini_map_open(win):
+        _dump_failure_frame(win, "minimap_open")
         return False, "点击后小地图未打开"
     return True, "小地图已打开"
 
@@ -727,6 +765,7 @@ def open_mini_map_city(win, city_icon, city_label):
         log(f"[地图][高性能] 缓存点击未打开{city_label}小地图，回退识别", "WARN")
     pt = find_template(win, city_icon)
     if pt is None:
+        _dump_failure_frame(win, "city_label_missing")
         return False, f"世界地图中未找到{city_label}"
     app_utils.fixed_pos_set(key, win, pt[0], pt[1])
     log(f"[地图] 打开{city_label}小地图: 点击城市图标 @ ({pt[0]},{pt[1]})", "INFO")
@@ -736,6 +775,9 @@ def open_mini_map_city(win, city_icon, city_label):
     while not is_mini_map_open(win) and time.time() < deadline:
         time.sleep(0.3)
     if not is_mini_map_open(win):
+        # 失败现场落盘（2026-11-16）：世界地图此时大概率仍开着，帧里能
+        # 直接看出是弹窗遮挡、动画中、还是点击落在别处
+        _dump_failure_frame(win, "city_open")
         return False, f"点击{city_label}后小地图未打开"
     return True, f"{city_label}小地图已打开"
 

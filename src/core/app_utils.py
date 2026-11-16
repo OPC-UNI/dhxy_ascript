@@ -207,9 +207,17 @@ def press_alt4_clear(win, prefix=""):
 
 def _silent_click(win, x, y, button="primary"):
     """静默点击统一出口：延迟导入防循环（silent_click 反向导入本模块
-    拿 _INPUT_LOCK）。"""
+    拿 _INPUT_LOCK）。
+
+    投递失败（窗口/客户区解析失败，send_silent_click 返回 None）记 WARN：
+    否则整次点击静默丢失、日志无痕（2026-11-16 地图点击失效排查——
+    点击是否送达无从确认）。返回投递描述供调用方诊断。
+    """
     from ..device import silent_click
-    silent_click.send_silent_click(win, x=x, y=y, button=button)
+    info = silent_click.send_silent_click(win, x=x, y=y, button=button)
+    if info is None:
+        log(f"[点击] 静默点击投递失败 @({x},{y})（窗口/客户区获取失败）", "WARN")
+    return info
 
 
 class UserAbort(BaseException):

@@ -65,6 +65,17 @@ _GROUP_STATE_ATTRS = ("_active", "_mode", "_leader_id", "_tab_count",
 
 
 @pytest.fixture(autouse=True)
+def _reset_screen_state(monkeypatch):
+    """画面归属判定的模块状态隔离（Tab 状态缓存/切换静默期/不一致限频）。"""
+    for name, value in (("_last_tab_state", None),
+                        ("_last_tab_state_at", 0.0),
+                        ("_tab_switch_at", 0.0),
+                        ("_tab_mismatch_log_at", 0.0),
+                        ("_TAB_STATE_TTL", 0.0)):  # 用例内连续调用须重新采样
+        monkeypatch.setattr(tab_group, name, value)
+
+
+@pytest.fixture(autouse=True)
 def _restore_group_state(monkeypatch):
     """用例结束后恢复组号模块状态：init_task 会置 _active/_leader_id，
     泄漏到其他测试文件会改变 on_leader_screen 等判定。"""
@@ -1111,6 +1122,41 @@ def test_on_leader_screen_detects_manual_tab_switch(monkeypatch):
     assert tab_group.on_leader_screen(
         _TitleWin("服务器 - 队员（ID：214369642）")) is False
     assert tab_group.on_leader_screen(_TitleWin("大话西游2经典版")) is False
+
+
+def test_on_leader_screen_uses_visible_tab_over_title(monkeypatch):
+    """标题与可见 Tab 不一致时按可见子窗口判定（2026-11-16 实机修正）。
+
+    手动切 Tab 时窗口标题与画面不同步：用户切回队长后若标题仍是队员、
+    画面已是队长——旧实现只看标题会误暂停；反之标题已变队长、画面还是
+    队员时会误处理另一 Tab 的画面（无对话框的队长屏记「检测到对话框」，
+    2026-11-16 11:21 实机日志）。可见子窗口是切 Tab 成败判定的同一
+    直接信号（return_to_leader/ensure_leader_tab 同源）。
+    """
+    _group_active(monkeypatch)
+    monkeypatch.setattr(tab_group, "_current_id", lambda win: "286958560")
+    assert tab_group.on_leader_screen(
+        _TitleWin("服务器 - 队员（ID：214369642）")) is True
+    # 可见 Tab 是队员 → 非队长屏（标题仍写队长也一样）
+    monkeypatch.setattr(tab_group, "_current_id", lambda win: "214369642")
+    monkeypatch.setattr(tab_group, "_last_tab_state", None)
+    monkeypatch.setattr(tab_group, "_tab_switch_at", 0.0)
+    assert tab_group.on_leader_screen(
+        _TitleWin("服务器 - 队长（ID：286958560）")) is False
+
+
+def test_on_leader_screen_settles_after_tab_switch(monkeypatch):
+    """观察到 Tab 切换后的静默期按非队长处理（等新 Tab 画面上屏）。"""
+    _group_active(monkeypatch)
+    monkeypatch.setattr(tab_group, "_TAB_STATE_TTL", 0.0)  # 每次调用重新采样
+    vis = {"id": "286958560"}
+    monkeypatch.setattr(tab_group, "_current_id", lambda win: vis["id"])
+    win = _TitleWin("服务器 - 队长（ID：286958560）")
+    assert tab_group.on_leader_screen(win) is True    # 首帧：队长屏
+    vis["id"] = "214369642"                            # 切到队员
+    assert tab_group.on_leader_screen(win) is False
+    vis["id"] = "286958560"                            # 切回队长
+    assert tab_group.on_leader_screen(win) is False    # 静默期内仍按非队长
 
 
 def test_on_leader_screen_pass_active_false(monkeypatch):

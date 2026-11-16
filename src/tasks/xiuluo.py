@@ -1713,7 +1713,10 @@ def _click_fight_option_fallback(win, items, img_np):
         cx, cy = task_tracker.green_text_center(frame, rect2,
                                                 prefer_underline=False)
         human_click(win, cx, cy)
-        log(f"[修罗] 「看打！」选项未识别（OCR 漏检），2x 放大重识别点击 @({cx},{cy})", "WARN")
+        # 常规回落路径（区域 OCR 漏检 → 2x 放大重识别后成功点击），
+        # 非异常，按 INFO 记录（2026-11-16 用户要求降级 WARN）
+        log(f"[修罗] 「看打！」选项区域 OCR 漏检，2x 放大重识别后已点击 "
+            f"@({cx},{cy})", "INFO")
         app_utils.fixed_pos_set("fight_option", win, cx, cy)
         move_away(win)
         return True

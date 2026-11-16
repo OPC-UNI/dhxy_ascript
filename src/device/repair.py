@@ -407,6 +407,8 @@ def _run_repair_chain(win, prefix="修理", hover_before_click=False,
     """修理主链路（自动流程与验证共用）：前往洛阳城修理 NPC 并点选项。
 
     返回 (是否成功, 描述)。失败不阻塞任务：调用方继续本轮任务。
+    地图打开失败时先清理场景面板（世界地图可能残留在场，会污染 follow
+    的追踪面板 OCR，见失败分支注释）。
     """
     if not _configured():
         return False, "修理资料未配置（模板/坐标/对话框文案待提供）"
@@ -427,6 +429,12 @@ def _run_repair_chain(win, prefix="修理", hover_before_click=False,
             ok, info = game_map.open_mini_map_city(
                 win, WORLD_MAP_LUOYANG_ICON, LUOYANG)
         if not ok:
+            # 失败兜底：open_mini_map_city 失败时世界地图可能仍开着（地图
+            # 打开失败路径不关地图）。残留地图的左缘竖排「世界地图」文字
+            # 会被 follow 的追踪面板 OCR 读进任务签名——误判任务变化、
+            # 多余点击追踪绿字、空转一轮（2026-11-16 实机：修理失败后
+            # follow 空转 62s，直到跨图寻路把地图关掉）。
+            dialog_common.close_scene_panels(win, prefix, quiet=True)
             return False, info
         human_click(win, REPAIR_MAP_POS[0], REPAIR_MAP_POS[1])
         log(f"[{prefix}][修理] 已点击洛阳小地图修理位置，自动寻路中", "SYS")

@@ -211,3 +211,54 @@ def test_close_mini_map_still_open_clicks(monkeypatch):
     ok, info = game_map.close_mini_map(_FrameWin())
     assert ok is True and "关闭" in info
     assert clicks == [(1111, 227, "primary")]
+
+
+# ---- 地图打开失败诊断帧（2026-11-16 用户要求：失败瞬间截帧） ----
+
+class _DumpWin:
+    """capture 返回固定 PIL 帧（诊断帧落盘用）。"""
+
+    def __init__(self):
+        from PIL import Image
+        self.img = Image.fromarray(np.zeros((831, 1378, 3), dtype=np.uint8))
+
+    def capture(self, force_activate=False):
+        return self.img
+
+
+def test_dump_failure_frame_writes_and_rate_limits(tmp_path, monkeypatch):
+    """失败现场帧落盘；限频窗口内不重复落盘（防反复失败刷盘）。"""
+    win = _DumpWin()
+    monkeypatch.setattr(game_map, "_FAIL_DUMP_DIR", tmp_path)
+    monkeypatch.setattr(game_map, "_last_fail_dump_at", 0.0)
+    monkeypatch.setattr(game_map, "log", lambda *a, **k: None)
+    game_map._dump_failure_frame(win, "city_open")
+    assert len(list(tmp_path.glob("diag_map_*_city_open.png"))) == 1
+    game_map._dump_failure_frame(win, "city_open")  # 限频内
+    assert len(list(tmp_path.glob("diag_map_*.png"))) == 1
+
+
+def test_open_mini_map_city_dumps_frame_on_failure(monkeypatch):
+    """城市图标点击后小地图未打开 → 失败现场落盘（2026-11-16 排查依据）。
+
+    当天 10:18 修理链路：世界地图在场、洛阳城标签位置与缓存一致，但
+    点击城市图标两次（间隔 3s）都没进详情图，仅凭日志无法还原现场。
+    """
+    calls = []
+    monkeypatch.setattr(game_map, "time", _Clock())
+    monkeypatch.setattr(game_map, "open_world_map",
+                        lambda w: (True, "世界地图已打开"))
+    monkeypatch.setattr(game_map.app_utils, "high_perf_click",
+                        lambda *a, **k: True)
+    monkeypatch.setattr(game_map, "is_mini_map_open", lambda w: False)
+    monkeypatch.setattr(game_map, "find_template", lambda w, icon: (667, 627))
+    monkeypatch.setattr(game_map, "human_click", lambda *a, **k: None)
+    monkeypatch.setattr(game_map.app_utils, "fixed_pos_set",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(game_map, "log", lambda *a, **k: None)
+    monkeypatch.setattr(game_map, "_dump_failure_frame",
+                        lambda w, tag: calls.append(tag))
+    ok, info = game_map.open_mini_map_city(
+        _FrameWin(), "shijie_luoyang.png", "洛阳城")
+    assert ok is False and "小地图未打开" in info
+    assert calls == ["city_open"]
