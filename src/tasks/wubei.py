@@ -509,6 +509,10 @@ _claim_task_filter_on = None    # 开小地图时读到的「任务」筛选勾�
 _claim_map_kept_open = False    # 小地图走位后领取对话框已自动弹出（模态）：
                                 # 关地图点击会被对话框拦住，故保留地图直接
                                 # 处理对话框；选项点掉后由 _claim_task 补关
+_claim_arrive_dialog_frame = None  # 到达检查（_arrival_claim_dialog_up）已确认
+                                # 的自动对话框帧 (items, img_np)：run_loop
+                                # 检查后交给 _claim_task 复用点领取选项
+                                # （免重截+重 OCR ~0.3-0.6s），用后即弃
 _arrive_by_walk = False         # 本轮到达领取点是否经小地图走位（_walk_to_claim_spot
                                 # 走位路径返回时置位）：入口点击按坐标门控三规则
                                 # 分流——走位到达只在落点 (94,84)±2 点 lingqu
@@ -1668,10 +1672,19 @@ def _arrival_claim_dialog_up(win, timeout=CLAIM_ARRIVE_DIALOG_WAIT):
     监控直接领取（人数不足走拒绝→补人）；没弹对话框必须走正常队伍监控，
     人满再领取。timeout 为等待窗口（走位到达信号可能早于真正走到 NPC）。
     """
+    global _claim_arrive_dialog_frame
+    _claim_arrive_dialog_frame = None
     if not _auto_dialog_claim_mode():
         return False
-    return claim_flow.wait_auto_claim_dialog(
-        win, CLAIM_OPTION_NEEDLES, timeout=timeout) is not None
+    frame = claim_flow.wait_auto_claim_dialog(
+        win, CLAIM_OPTION_NEEDLES, timeout=timeout)
+    if frame is None:
+        return False
+    # 暂存该帧：run_loop 判定「直接领取」后由 _claim_task 复用点选项，
+    # 免去再次截帧+对话区 OCR（2026-11-16 19:20 实测对话框在场到点
+    # 领取约 3s，其中一次重复 OCR 占 ~0.3-0.6s）
+    _claim_arrive_dialog_frame = frame
+    return True
 
 
 def _claim_task(win, allow_fill=False, allow_existing=False,
@@ -1703,16 +1716,25 @@ def _claim_task(win, allow_fill=False, allow_existing=False,
     监控的路径专用——run_loop 传 pending_create；2026-11-16 实机
     18:54：队伍未建时监控开不了组队菜单）。
     """
-    global _claim_confirm_dlg_score, _claim_map_kept_open
+    global _claim_confirm_dlg_score, _claim_map_kept_open, \
+        _claim_arrive_dialog_frame
     _claim_confirm_dlg_score = None  # 本轮确认帧模板分复位（run_loop 消费）
-    if is_in_battle(win):
+    # 决策点单帧化：先截一帧，战斗判定与领取前面板签名共用（原
+    # is_in_battle 内截一帧 + 面板签名再截一帧）。组号 pass 期间与
+    # is_in_battle 同语义按「战斗中等待」处理（屏幕可能是队员 Tab）
+    img0 = win.capture(force_activate=False)
+    if tab_group.pass_active:
+        return False, "战斗中，跳过本轮领取", None
+    if img0 is None:
+        if is_in_battle(win):
+            return False, "战斗中，跳过本轮领取", None
+    elif is_in_battle_frame(img0):
         return False, "战斗中，跳过本轮领取", None
     # 领取前面板签名：旧任务未完成遗留面板时（如显形镜 AB 两点未
     # 命中走回重新领取），领取后面板刷新有延迟——校验须等新任务
     # 渲染（签名变化）才确认，防首轮点击追踪点到旧任务绿字、组号
     # pass 期间面板刷新被误判为任务进展（2026-11-04 20:32 日志实测）
     pre_sig = None
-    img0 = win.capture(force_activate=False)
     if img0 is not None:
         items0, _ = task_tracker.ocr_track(img0)
         pre_sig = task_tracker.task_signature_in(items0, TASK_TITLE)
@@ -1731,10 +1753,21 @@ def _claim_task(win, allow_fill=False, allow_existing=False,
     auto_dialog_ok = _auto_dialog_claim_mode()
     seen = None
     if auto_dialog_ok:
-        seen = claim_flow.wait_auto_claim_dialog(win, CLAIM_OPTION_NEEDLES)
-        if seen is not None:
+        # 优先复用到达检查已确认的对话框帧（免重截+重 OCR ~0.3-0.6s，
+        # 2026-11-16 19:20 实机：对话框在场到点领取约 3s）：img0 是刚
+        # 截的帧，对话框模板门控（~10ms）复核对话框仍在场，帧才够新鲜；
+        # 不在场则回退短窗轮询（对话框可能刚被关掉/换了页面）。
+        if _claim_arrive_dialog_frame is not None and img0 is not None \
+                and dialog_frame_score(img0) >= DIALOG_FRAME_THRESHOLD:
+            seen = _claim_arrive_dialog_frame
             log("[五倍] 小地图走位到达后任务对话框已自动弹出，"
-                "跳过入口点击直接处理选项", "SYS")
+                "跳过入口点击直接处理选项（复用到达检查帧）", "SYS")
+        else:
+            seen = claim_flow.wait_auto_claim_dialog(win, CLAIM_OPTION_NEEDLES)
+            if seen is not None:
+                log("[五倍] 小地图走位到达后任务对话框已自动弹出，"
+                    "跳过入口点击直接处理选项", "SYS")
+        _claim_arrive_dialog_frame = None  # 用后即弃（防跨轮复用陈旧帧）
     if seen is None:
         # 识图领取入口（按钮或降魔侍卫）并点击；点击后对话框未出现
         # （短窗口内选项不可见）判定坐标不对：打开小地图点击领取点坐标

@@ -22,6 +22,7 @@ def _reset_claim_walk_state(monkeypatch):
     monkeypatch.setattr(xiuluo, "_claim_arrived_by_walk", False)
     monkeypatch.setattr(xiuluo, "_claim_task_filter_on", None)
     monkeypatch.setattr(xiuluo, "_claim_map_kept_open", False)
+    monkeypatch.setattr(xiuluo, "_claim_arrive_dialog_frame", None)
 
 
 class _FakeClock:
@@ -417,6 +418,7 @@ def test_claim_task_skips_when_task_reappeared(monkeypatch):
     应继续寻路而不是空等领取入口。
     """
     monkeypatch.setattr(xiuluo, "is_in_battle", lambda w: False)
+    monkeypatch.setattr(xiuluo, "is_in_battle_frame", lambda img: False)
     monkeypatch.setattr(xiuluo.task_tracker, "ocr_track", lambda img: ([], None))
     monkeypatch.setattr(xiuluo.task_tracker, "task_signature_in",
                         lambda items, title: "sig")
@@ -429,10 +431,48 @@ def test_claim_task_skips_when_task_reappeared(monkeypatch):
     assert called == []  # 不进入领取入口流程
 
 
+def test_claim_task_reuses_arrival_dialog_frame(monkeypatch):
+    """到达检查已确认的对话框帧直接复用点选项（免重截+重 OCR）；
+    对话框门控复核不在场时不复用陈旧帧，回退短窗轮询。"""
+    monkeypatch.setattr(xiuluo, "is_in_battle", lambda w: False)
+    monkeypatch.setattr(xiuluo, "is_in_battle_frame", lambda img: False)
+    monkeypatch.setattr(xiuluo.task_tracker, "ocr_track", lambda img: ([], None))
+    monkeypatch.setattr(xiuluo.task_tracker, "task_signature_in",
+                        lambda items, title: None)
+    monkeypatch.setattr(xiuluo, "_claim_arrived_by_walk", True)
+    monkeypatch.setattr(xiuluo, "_claim_task_filter_on", True)
+    monkeypatch.setattr(xiuluo, "CLAIM_DIALOG_TIMEOUT", 0)
+    monkeypatch.setattr(xiuluo.time, "sleep", lambda s: None)
+    monkeypatch.setattr(xiuluo, "log", lambda *a, **k: None)
+    stash = (["到达帧选项"], None)
+    monkeypatch.setattr(xiuluo, "_claim_arrive_dialog_frame", stash)
+    monkeypatch.setattr(xiuluo, "dialog_frame_score", lambda img: 0.99)
+    called = []
+    monkeypatch.setattr(xiuluo.claim_flow, "wait_auto_claim_dialog",
+                        lambda *a, **k: called.append(1) or ([], None))
+    used = []
+    monkeypatch.setattr(xiuluo, "_click_claim_option",
+                        lambda w, items, img_np: used.append((items, img_np))
+                        or False)
+    xiuluo._claim_task(_FakeWin())
+    assert called == []  # 未重查对话框（复用到达检查帧）
+    assert used == [(stash[0], stash[1])]
+    assert xiuluo._claim_arrive_dialog_frame is None  # 用后即弃
+    # 对话框门控不达标 → 不复用陈旧帧，回退短窗轮询
+    monkeypatch.setattr(xiuluo, "_claim_arrive_dialog_frame", stash)
+    monkeypatch.setattr(xiuluo, "dialog_frame_score", lambda img: 0.3)
+    called.clear()
+    used.clear()
+    xiuluo._claim_task(_FakeWin())
+    assert called == [1]
+    assert used and used[0][0] == []
+
+
 def test_claim_task_auto_dialog_only_for_minimap_walk(monkeypatch):
     """小地图走位到达+任务勾选：到达自动弹出的对话框直接点选项，
     跳过领取入口点击（用户 2026-11-16）。"""
     monkeypatch.setattr(xiuluo, "is_in_battle", lambda w: False)
+    monkeypatch.setattr(xiuluo, "is_in_battle_frame", lambda img: False)
     monkeypatch.setattr(xiuluo.task_tracker, "ocr_track", lambda img: ([], None))
     monkeypatch.setattr(xiuluo.task_tracker, "task_signature_in",
                         lambda items, title: None)
@@ -460,6 +500,7 @@ def test_claim_task_auto_dialog_only_for_minimap_walk(monkeypatch):
 def test_claim_task_no_auto_dialog_check_when_standing(monkeypatch):
     """站着/返程到达：不检查自动对话框，正常走领取入口流程（原流程不变）。"""
     monkeypatch.setattr(xiuluo, "is_in_battle", lambda w: False)
+    monkeypatch.setattr(xiuluo, "is_in_battle_frame", lambda img: False)
     monkeypatch.setattr(xiuluo.task_tracker, "ocr_track", lambda img: ([], None))
     monkeypatch.setattr(xiuluo.task_tracker, "task_signature_in",
                         lambda items, title: None)
@@ -482,6 +523,7 @@ def test_claim_task_no_auto_dialog_check_when_standing(monkeypatch):
 def test_claim_task_skips_auto_dialog_when_filter_off(monkeypatch):
     """小地图「任务」筛选未勾选：即使走位到达也不查自动对话框。"""
     monkeypatch.setattr(xiuluo, "is_in_battle", lambda w: False)
+    monkeypatch.setattr(xiuluo, "is_in_battle_frame", lambda img: False)
     monkeypatch.setattr(xiuluo.task_tracker, "ocr_track", lambda img: ([], None))
     monkeypatch.setattr(xiuluo.task_tracker, "task_signature_in",
                         lambda items, title: None)
