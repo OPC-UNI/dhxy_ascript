@@ -110,6 +110,27 @@ def test_xuanshu_jiguan_requires_dialog_text(monkeypatch):
     assert calls == []  # 没有提示对话，不进入机关流程
 
 
+def test_xuanshu_chuyijuebao_uses_title_band(monkeypatch):
+    """锄遗聚宝检测走面板标题条带（与客栈共用同一标定，不做全帧兜底）。"""
+    seen = {}
+    calls = []
+    monkeypatch.setattr(xuanshu, "_diaoyu_window_check", lambda *a, **k: False)
+
+    def fake_find(img, icon, threshold=0.8, region=None):
+        seen["icon"] = icon
+        seen["region"] = region
+        return (712, 720)
+
+    monkeypatch.setattr(xuanshu.game_map, "find_template_in", fake_find)
+    monkeypatch.setattr(xuanshu, "_play_chuyijuebao",
+                        lambda win: calls.append("chuyijuebao") or (True, "ok"))
+    monkeypatch.setattr(xuanshu, "log", lambda *a, **k: None)
+    assert xuanshu._follow_wait_handler(object(), [], None, None) is True
+    assert seen["icon"] == xuanshu.CHUYIJUEBAO_ICON
+    assert seen["region"] == xuanshu.CHUYIJUEBAO_TITLE_REGION
+    assert calls == ["chuyijuebao"]
+
+
 # ---- 名望：沙海弹窗检测未 armed 时零截图/零执行 ----
 def test_mingwang_shahai_play_not_armed_noop(monkeypatch):
     calls = []

@@ -40,7 +40,8 @@ from ..minigames.jiguan import (JIGUAN_CLICK_ORDER, JIGUAN_DIALOG_TEXT,
                                _jiguan_link_progress)  # 机关触发/链接
 from ..minigames import jiguan as _jiguan_minigame  # 封印机关阻塞循环
 from ..minigames.chuyijuebao import (CHUYIJUEBAO_ICON,
-                                    CHUYIJUEBAO_TIMEOUT)  # 锄遗聚宝入口/超时
+                                    CHUYIJUEBAO_TIMEOUT,
+                                    CHUYIJUEBAO_TITLE_REGION)  # 锄遗聚宝入口/超时/标题条带
 from ..device import task_tracker  # 任务追踪面板操作
 from ..device import dialog_common  # 对话框共享组件（选项缓存点击）
 from ..workflows.follow import _signatures_similar, follow_task
@@ -607,7 +608,11 @@ def _follow_wait_handler(win, items, img_np, img):
         ok2, info2 = _play_jiguan_puzzle(win, TASK_TITLE)
         log(f"[{TASK_TITLE}] {info2}", "SYS" if ok2 else "WARN")
         return True
-    if game_map.find_template_in(img, CHUYIJUEBAO_ICON) is not None:
+    # 锄遗聚宝面板标题：条带匹配（2026-11-16 实测 0.9ms vs 全帧 46ms；
+    # 条带与客栈除异觉宝检测共用同一标定——面板是固定底部居中 UI）。
+    # 条带内未命中即面板未开，不做全帧兜底（性能规则 3）
+    if game_map.find_template_in(img, CHUYIJUEBAO_ICON,
+                                 region=CHUYIJUEBAO_TITLE_REGION) is not None:
         ok2, info2 = _play_chuyijuebao(win)
         log(f"[{TASK_TITLE}] {info2}", "SYS" if ok2 else "WARN")
         return True
