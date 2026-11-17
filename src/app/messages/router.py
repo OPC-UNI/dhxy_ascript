@@ -1,7 +1,10 @@
-"""消息命令路由：解析、白名单、限频、只读指令格式化。
+"""消息命令路由：解析、白名单、限频、指令格式化与执行。
 
 通道适配器只负责收发；本模块不 import ControlWindow，能力通过 host
-对象注入（见 service._ControlMessageHost）。
+对象注入（见 service._ControlMessageHost）。查询类指令（状态/进度/日志/
+截图/方案列表）直接格式化回复；控制类指令（启停任务/切换方案）经 host
+调用与面板按钮同一入口（授权校验、运行中护栏都在 ControlWindow 侧），
+/exitgame 额外走 confirm 二次确认。
 """
 import collections
 import re
@@ -160,6 +163,15 @@ class MessageRouter:
             elif command == "/capture":
                 ok, error = self._do_capture(adapter, incoming.chat_id,
                                              capture_cooldown)
+            elif command == "/schemes":
+                ok, error = self._send(adapter, incoming.chat_id,
+                                       self._render_schemes())
+            elif command == "/switch":
+                ok, error = self._handle_switch(arg, adapter, incoming.chat_id)
+            elif command == "/start":
+                ok, error = self._handle_start(adapter, incoming.chat_id)
+            elif command == "/stop":
+                ok, error = self._handle_stop(adapter, incoming.chat_id)
             elif command == "/exitgame":
                 ok, error = self._handle_exit_game(arg, incoming, adapter)
             else:
@@ -362,3 +374,118 @@ class MessageRouter:
             return "日志暂时为空。"
         return ("最近 %d 行日志：\n%s\n（文件：%s）"
                 % (len(lines), "\n".join(lines), result.get("path") or ""))
+
+    # ---- 控制指令：配置方案 / 启停任务 ----
+
+    def _scheme_data(self):
+        """{active, names}；host 不支持时返回空（按「无方案」处理）。"""
+        reader = getattr(self._host, "list_schemes", None)
+        if not callable(reader):
+            return {}
+        data = reader() or {}
+        return data if isinstance(data, dict) else {}
+
+    @staticmethod
+    def _fail_text(result, default="未知原因"):
+        """控制指令失败文案：BUSY 转人话，其余取 host 返回的 msg。"""
+        msg = str((result or {}).get("msg") or "").strip()
+        if msg == "BUSY":
+            return "任务正在启停中，请稍后再试"
+        return msg or default
+
+    def _render_schemes(self):
+        try:
+            data = self._scheme_data()
+        except Exception as e:
+            return f"读取配置方案失败：{type(e).__name__}: {e}"
+        names = [str(name) for name in data.get("names") or []]
+        active = str(data.get("active") or "")
+        if not names:
+            return "暂无配置方案（可在面板「系统」页新建）。"
+        lines = [f"配置方案 {len(names)} 个，当前：{active or '-'}"]
+        for name in names:
+            lines.append(f"· {name}（当前）" if name == active else f"· {name}")
+        lines.append("回复 /switch 方案名 切换（任务运行中不可切换）。")
+        return "\n".join(lines)
+
+    def _handle_switch(self, arg, adapter, chat_id):
+        """切换配置方案：与面板下拉同一入口（运行中由 ControlWindow 拒绝）。"""
+        name = str(arg or "").strip()
+        if not name:
+            return self._send(adapter, chat_id,
+                              "用法：/switch 方案名（发送 /schemes 查看列表）。")
+        switcher = getattr(self._host, "switch_scheme", None)
+        if not callable(switcher):
+            return self._send(adapter, chat_id, "当前版本不支持切换配置方案。")
+        try:
+            data = self._scheme_data()
+        except Exception as e:
+            return self._send(adapter, chat_id,
+                              f"✘ 读取配置方案失败：{type(e).__name__}: {e}")
+        names = [str(item) for item in data.get("names") or []]
+        if name not in names:
+            available = "、".join(names) if names else "无"
+            return self._send(adapter, chat_id,
+                              f"✘ 方案不存在：「{name}」\n可用方案：{available}")
+        if name == str(data.get("active") or ""):
+            return self._send(adapter, chat_id, f"「{name}」已是当前方案。")
+        try:
+            result = switcher(name) or {}
+        except Exception as e:
+            self._log(f"切换方案异常：{type(e).__name__}: {e}", "WARN")
+            return self._send(adapter, chat_id,
+                              f"✘ 切换方案异常：{type(e).__name__}: {e}")
+        if result.get("status") == "success":
+            return self._send(
+                adapter, chat_id,
+                f"✔ 已切换方案：「{result.get('active') or name}」")
+        return self._send(adapter, chat_id,
+                          "✘ 切换失败：" + self._fail_text(result))
+
+    def _handle_start(self, adapter, chat_id):
+        """启动任务：走 ControlWindow.start_task（授权校验/窗口绑定对齐同面板）。"""
+        starter = getattr(self._host, "start_task", None)
+        if not callable(starter):
+            return self._send(adapter, chat_id, "当前版本不支持远程启动任务。")
+        try:
+            if self._host.is_running():
+                return self._send(adapter, chat_id, "任务已在运行中。")
+        except Exception:
+            pass
+        # 负面条件：游戏窗口不在场时启动只会拉起一个必然退出的子进程
+        # （窗口看护 3 秒即判死），直接拒绝并提示先开游戏（与 /exitgame 对称）
+        if not self._game_window_present():
+            return self._send(adapter, chat_id,
+                              "✘ 启动失败：未检测到游戏窗口（请先启动游戏客户端）。")
+        try:
+            result = starter() or {}
+        except Exception as e:
+            self._log(f"启动任务异常：{type(e).__name__}: {e}", "WARN")
+            return self._send(adapter, chat_id,
+                              f"✘ 启动失败：{type(e).__name__}: {e}")
+        if result.get("status") == "success":
+            return self._send(adapter, chat_id, "✔ 任务已启动")
+        return self._send(adapter, chat_id,
+                          "✘ 启动失败：" + self._fail_text(result))
+
+    def _handle_stop(self, adapter, chat_id):
+        """停止任务：走 ControlWindow.stop_task（与面板停止按钮同一入口）。"""
+        stopper = getattr(self._host, "stop_task", None)
+        if not callable(stopper):
+            return self._send(adapter, chat_id, "当前版本不支持远程停止任务。")
+        try:
+            running = bool(self._host.is_running())
+        except Exception:
+            running = True
+        if not running:
+            return self._send(adapter, chat_id, "任务当前未运行。")
+        try:
+            result = stopper() or {}
+        except Exception as e:
+            self._log(f"停止任务异常：{type(e).__name__}: {e}", "WARN")
+            return self._send(adapter, chat_id,
+                              f"✘ 停止失败：{type(e).__name__}: {e}")
+        if result.get("status") == "success":
+            return self._send(adapter, chat_id, "✔ 任务已停止")
+        return self._send(adapter, chat_id,
+                          "✘ 停止失败：" + self._fail_text(result))

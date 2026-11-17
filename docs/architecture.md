@@ -41,7 +41,7 @@ flowchart TB
         TRAY["pystray 托盘"]
         VERIFY["诊断 / 验证按钮<br/>主进程内跑真实链路"]
         MP_OCR["OCR 预热线程<br/>供验证按钮使用"]
-        MSG["MessageService<br/>Telegram 长轮询 / 只读指令 / 事件推送"]
+        MSG["MessageService<br/>Telegram 长轮询 / 查询与控制指令 / 事件推送"]
     end
 
     subgraph SUB["任务子进程（daemon, spawn）"]
@@ -124,7 +124,7 @@ flowchart TB
 | 悬浮层子进程 | 读取状态文件绘制游戏窗口上的任务信息 | 父进程死 15s 后 `os._exit`；崩溃由监督线程自动重启；GDI 崩溃只丢悬浮层 |
 | 更新助手 | 自动更新：等主进程退出 → 备份/覆盖 exe/res/pylibs → 重启/回滚 | 运行在 `%TEMP%` 的 exe 副本，不锁安装目录；只动白名单文件；详细设计见 `docs/auto-update-design.md` |
 | 主进程验证 | 「诊断」页按钮在主进程跑真实链路（OCR 预热在此） | 与任务子进程共用 `find_main_window` 接缝；绑定 Tab 护栏 |
-| 消息服务 | Telegram `getUpdates` 长轮询、只读指令（状态/进度/日志/截图）、`/exitgame`（停任务→队伍处理→关闭客户端，二次确认）、事件旁路推送、一键验证 | 单实例锁；验证不调用 `getUpdates`；不修改任务子进程；事件失败重试；网络异常退避不冒泡 |
+| 消息服务 | Telegram `getUpdates` 长轮询、查询指令（状态/进度/日志/截图/方案列表）、控制指令（`/start` `/stop` `/switch`，与面板按钮共用入口与护栏）、`/exitgame`（停任务→队伍处理→关闭客户端，二次确认）、事件旁路推送、一键验证 | 单实例锁；验证不调用 `getUpdates`；不修改任务子进程；事件失败重试；网络异常退避不冒泡 |
 
 ---
 

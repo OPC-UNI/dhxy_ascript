@@ -74,6 +74,14 @@ COMMANDS = (
      "desc": "截取游戏窗口并发回"},
     {"cmd": "/log [n]", "aliases": ["日志"],
      "desc": "最近 n 行日志，默认 20，最多 100"},
+    {"cmd": "/schemes", "aliases": ["方案", "方案列表", "获取方案", "获取方案列表"],
+     "desc": "配置方案列表"},
+    {"cmd": "/switch <名称>", "aliases": ["切换方案", "切换"],
+     "desc": "切换配置方案（任务运行中不可切换）"},
+    {"cmd": "/start", "aliases": ["开始", "启动", "开始任务", "启动任务"],
+     "desc": "启动任务（与面板按钮同链路，含启动前授权校验）"},
+    {"cmd": "/stop", "aliases": ["停止", "停止任务"],
+     "desc": "停止任务"},
     {"cmd": "/exitgame", "aliases": ["退出游戏", "退出", "下线", "关闭游戏"],
      "desc": "停止任务、解散队伍并退出游戏（需二次确认）"},
 )
@@ -81,8 +89,8 @@ COMMANDS = (
 HELP_TEXT = "\n".join(
     ["啄木鸟消息服务", ""]
     + [f"{item['cmd']}  {item['desc']}" for item in COMMANDS]
-    + ["", "也可以直接发送中文关键字，例如「状态」「进度」「截图」「日志」。",
-       "只读查询与截图直接执行；/exitgame 需回复 confirm 二次确认。"])
+    + ["", "也可以直接发送中文关键字，例如「状态」「进度」「方案」「开始」「停止」。",
+       "查询与启停/切方案直接生效；/exitgame 需回复 confirm 二次确认。"])
 
 SECRET_FIELD_KEYS = frozenset({"token"})
 

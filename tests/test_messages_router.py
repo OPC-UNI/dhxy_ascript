@@ -1,4 +1,4 @@
-"""消息路由：解析/白名单/限频/只读指令格式化。"""
+"""消息路由：解析/白名单/限频/查询与控制指令。"""
 from src.app.messages.channel_base import InboundCommand, SendResult
 from src.app.messages.router import MessageRouter, parse_command
 
@@ -33,6 +33,13 @@ class FakeHost:
         self.game_present = True
         self.exit_result = {"ok": True, "message": "游戏客户端已关闭"}
         self.exit_calls = []
+        self.scheme_list = {"active": "默认", "names": ["默认", "方案A"]}
+        self.switch_result = {"status": "success", "active": "方案A"}
+        self.switch_calls = []
+        self.start_result = {"status": "success", "running": True}
+        self.stop_result = {"status": "success", "running": False}
+        self.start_calls = 0
+        self.stop_calls = 0
 
     def is_running(self):
         return self.running
@@ -62,6 +69,23 @@ class FakeHost:
         if progress is not None:
             progress("正在停止任务…")
         return dict(self.exit_result)
+
+    def list_schemes(self):
+        return dict(self.scheme_list)
+
+    def switch_scheme(self, name):
+        self.switch_calls.append(name)
+        return dict(self.switch_result)
+
+    def start_task(self):
+        self.start_calls += 1
+        self.running = bool(self.start_result.get("running"))
+        return dict(self.start_result)
+
+    def stop_task(self):
+        self.stop_calls += 1
+        self.running = bool(self.stop_result.get("running"))
+        return dict(self.stop_result)
 
 
 class FakeAdapter:
@@ -105,6 +129,16 @@ def test_parse_commands_and_aliases():
     assert parse_command("/log 30") == ("/log", "30")
     assert parse_command("退出游戏") == ("/exitgame", "")
     assert parse_command("/exitgame confirm") == ("/exitgame", "confirm")
+    assert parse_command("方案") == ("/schemes", "")
+    assert parse_command("方案列表") == ("/schemes", "")
+    assert parse_command("获取方案列表") == ("/schemes", "")
+    assert parse_command("切换方案 方案A") == ("/switch", "方案A")
+    assert parse_command("/switch 方案A") == ("/switch", "方案A")
+    assert parse_command("开始") == ("/start", "")
+    assert parse_command("启动任务") == ("/start", "")
+    assert parse_command("/start") == ("/start", "")
+    assert parse_command("停止") == ("/stop", "")
+    assert parse_command("/stop") == ("/stop", "")
     assert parse_command("/foo") == ("unknown", "/foo")
     assert parse_command("你好") is None
     assert parse_command("") is None
@@ -299,3 +333,120 @@ def test_reply_to_origin_chat():
     adapter = FakeAdapter()
     router.dispatch(adapter, _incoming("/status", chat_id="42"), ["42", "43"])
     assert adapter.texts[-1][0] == "42"
+
+
+def test_schemes_list_marks_active():
+    host = FakeHost()
+    router, records = _router(host)
+    adapter = FakeAdapter()
+    router.dispatch(adapter, _incoming("/schemes"), ["42"])
+    text = adapter.texts[-1][1]
+    assert "配置方案 2 个，当前：默认" in text
+    assert "· 默认（当前）" in text
+    assert "· 方案A" in text
+    assert "/switch" in text
+    assert records[-1]["command"] == "/schemes"
+    assert records[-1]["ok"] is True
+
+
+def test_switch_scheme_success():
+    host = FakeHost()
+    router, records = _router(host)
+    adapter = FakeAdapter()
+    router.dispatch(adapter, _incoming("切换方案 方案A"), ["42"])
+    assert host.switch_calls == ["方案A"]
+    assert "✔ 已切换方案：「方案A」" in adapter.texts[-1][1]
+    assert adapter.texts[-1][1].startswith("角色：角色A\n")
+    assert records[-1]["command"] == "/switch"
+
+
+def test_switch_scheme_rejects_unknown_and_missing_name():
+    host = FakeHost()
+    router, _ = _router(host)
+    adapter = FakeAdapter()
+    router.dispatch(adapter, _incoming("/switch"), ["42"])
+    assert "用法" in adapter.texts[-1][1]
+    router.dispatch(adapter, _incoming("/switch 不存在的方案"), ["42"])
+    assert "方案不存在" in adapter.texts[-1][1]
+    assert "默认、方案A" in adapter.texts[-1][1]
+    assert host.switch_calls == []
+
+
+def test_switch_scheme_already_active_and_guard_error():
+    host = FakeHost()
+    router, _ = _router(host)
+    adapter = FakeAdapter()
+    router.dispatch(adapter, _incoming("/switch 默认"), ["42"])
+    assert "已是当前方案" in adapter.texts[-1][1]
+    assert host.switch_calls == []
+    host.switch_result = {"status": "error",
+                          "msg": "任务运行中，请先停止任务再操作"}
+    router.dispatch(adapter, _incoming("/switch 方案A"), ["42"])
+    assert "✘ 切换失败" in adapter.texts[-1][1]
+    assert "任务运行中" in adapter.texts[-1][1]
+    assert host.switch_calls == ["方案A"]
+
+
+def test_start_task_when_running_skips_start():
+    host = FakeHost()
+    router, _ = _router(host)
+    adapter = FakeAdapter()
+    router.dispatch(adapter, _incoming("/start"), ["42"])
+    assert "任务已在运行中" in adapter.texts[-1][1]
+    assert host.start_calls == 0
+
+
+def test_start_refused_without_game_window():
+    host = FakeHost()
+    host.running = False
+    host.game_present = False
+    router, _ = _router(host)
+    adapter = FakeAdapter()
+    router.dispatch(adapter, _incoming("/start"), ["42"])
+    assert "未检测到游戏窗口" in adapter.texts[-1][1]
+    assert host.start_calls == 0
+
+
+def test_start_task_success_and_failure():
+    host = FakeHost()
+    host.running = False
+    router, records = _router(host)
+    adapter = FakeAdapter()
+    router.dispatch(adapter, _incoming("开始"), ["42"])
+    assert host.start_calls == 1
+    assert "✔ 任务已启动" in adapter.texts[-1][1]
+    assert records[-1]["ok"] is True
+    host.running = False
+    host.start_result = {"status": "error",
+                         "msg": "授权校验未通过，任务未启动：已过期"}
+    router.dispatch(adapter, _incoming("/start"), ["42"])
+    assert "✘ 启动失败" in adapter.texts[-1][1]
+    assert "授权校验未通过" in adapter.texts[-1][1]
+
+
+def test_start_stop_busy_message():
+    host = FakeHost()
+    host.running = False
+    host.start_result = {"status": "error", "msg": "BUSY"}
+    router, _ = _router(host)
+    adapter = FakeAdapter()
+    router.dispatch(adapter, _incoming("/start"), ["42"])
+    assert "任务正在启停中" in adapter.texts[-1][1]
+    host.running = True
+    host.stop_result = {"status": "error", "msg": "BUSY"}
+    router.dispatch(adapter, _incoming("/stop"), ["42"])
+    assert "任务正在启停中" in adapter.texts[-1][1]
+
+
+def test_stop_task_not_running_and_success():
+    host = FakeHost()
+    host.running = False
+    router, _ = _router(host)
+    adapter = FakeAdapter()
+    router.dispatch(adapter, _incoming("停止"), ["42"])
+    assert "任务当前未运行" in adapter.texts[-1][1]
+    assert host.stop_calls == 0
+    host.running = True
+    router.dispatch(adapter, _incoming("/stop"), ["42"])
+    assert host.stop_calls == 1
+    assert "✔ 任务已停止" in adapter.texts[-1][1]

@@ -520,3 +520,63 @@ def test_get_role_info_returns_id_and_label(monkeypatch):
                         lambda: "一生所爱「长相思」")
     assert control_window.ControlWindow.get_role_info(_Stub()) == {
         "id": "222", "label": "一生所爱「长相思」"}
+
+
+# ---- 消息服务控制指令 host（/schemes /switch /start /stop 转调） ----
+
+class _FakeWebview:
+    def __init__(self):
+        self.scripts = []
+
+    def evaluate_js(self, script):
+        self.scripts.append(script)
+
+
+class _FakeControlWindow:
+    def __init__(self):
+        self.calls = []
+        self.webview_instance = None
+        self.switch_result = {"status": "success", "active": "方案A"}
+
+    def is_running(self):
+        return False
+
+    def get_schemes(self):
+        self.calls.append("get_schemes")
+        return {"active": "默认", "names": ["默认"]}
+
+    def switch_scheme(self, name):
+        self.calls.append(("switch_scheme", name))
+        return dict(self.switch_result)
+
+    def start_task(self):
+        self.calls.append("start_task")
+        return {"status": "success", "running": True}
+
+    def stop_task(self):
+        self.calls.append("stop_task")
+        return {"status": "success", "running": False}
+
+
+def test_message_host_delegates_control_commands():
+    """消息指令必须转调控制窗口入口（启动含授权校验，不绕过面板链路）。"""
+    host = control_window._ControlMessageHost(_FakeControlWindow())
+    assert host.list_schemes()["active"] == "默认"
+    assert host.switch_scheme("方案A")["status"] == "success"
+    assert host.start_task()["running"] is True
+    assert host.stop_task()["running"] is False
+    assert host._cw.calls == ["get_schemes", ("switch_scheme", "方案A"),
+                              "start_task", "stop_task"]
+
+
+def test_message_host_switch_refreshes_panel():
+    """远程切方案成功 → 推 syncInitData 全量刷新；失败不推。"""
+    cw = _FakeControlWindow()
+    cw.webview_instance = _FakeWebview()
+    host = control_window._ControlMessageHost(cw)
+    host.switch_scheme("方案A")
+    assert any("syncInitData" in script for script in cw.webview_instance.scripts)
+    cw.webview_instance.scripts.clear()
+    cw.switch_result = {"status": "error", "msg": "任务运行中，请先停止任务再操作"}
+    host.switch_scheme("方案A")
+    assert cw.webview_instance.scripts == []

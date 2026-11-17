@@ -166,7 +166,7 @@ data/
 | `src/core/schemes.py` | 按角色方案文件、方案切换写 settings.json、迁移后 bootstrap |
 | `src/core/settings.py` | 角色设置 load/save（从 control_window 抽出）；进度/组号状态读当前角色 |
 | `src/app/control_window.py` | 设置项 UI 接线与 re-export；成就页返回 role 信息；消息服务桥接/截图/日志尾巴 |
-| `src/app/messages/` | 消息服务（通道注册表、Telegram 长轮询、只读指令、事件推送、单实例锁、日志尾巴） |
+| `src/app/messages/` | 消息服务（通道注册表、Telegram 长轮询、查询与控制指令、事件推送、单实例锁、日志尾巴） |
 | `main.py` | 绑定后执行迁移 + 角色设置建立 + 两次启动后的旧 config 字段清理 |
 
 ## 7. 测试

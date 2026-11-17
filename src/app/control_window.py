@@ -172,6 +172,33 @@ class _ControlMessageHost:
     def exit_game(self, progress=None):
         return self._cw._message_exit_game(progress)
 
+    # ---- 控制指令（/schemes /switch /start /stop）----
+    # 一律转调控制窗口同类入口，与面板按钮共用同一套护栏：切方案走
+    # switch_scheme（任务运行中拒绝）、启动走 start_task（授权校验 +
+    # 窗口绑定对齐）、停止走 stop_task。
+
+    def list_schemes(self):
+        return self._cw.get_schemes()
+
+    def switch_scheme(self, name):
+        result = self._cw.switch_scheme(name)
+        if isinstance(result, dict) and result.get("status") == "success":
+            # 远程切换后面板设置已整体替换：推一次全量刷新（与页面下拉
+            # 切换成功后的 syncInitData 一致），避免面板显示旧方案设置
+            try:
+                if self._cw.webview_instance:
+                    self._cw.webview_instance.evaluate_js(
+                        "if(window.syncInitData){window.syncInitData();}")
+            except Exception:
+                pass
+        return result
+
+    def start_task(self):
+        return self._cw.start_task()
+
+    def stop_task(self):
+        return self._cw.stop_task()
+
 
 # 静默按键诊断按钮白名单：hotkey 标识 → (修饰键, 主键, 展示文案,
 # 投主框架窗口, WM_CHAR 字符码)。后两项为变体按钮：Ctrl+Tab 切 Tab
