@@ -26,6 +26,7 @@ ControlWindow 基于 WebWindow（pywebview），页面为 res/ui/control_window.
 注意：页面不要自行声明 callPython 函数，使用框架注入的桥接
 （window.callPython → call_internal 通道），否则注入会被跳过。
 """
+import io
 import json
 import os
 import threading
@@ -45,6 +46,13 @@ from ..core import role_settings  # 当前角色生效设置（data/<角色ID>/s
 from . import hotkey  # 老板键（启动/停止按钮文案展示热键名）
 from . import updater  # 软件自动更新（清单/下载/覆盖升级）
 from . import update_config  # 更新渠道与节流常量
+from . import env_check  # 截屏黑帧判定（消息服务 /capture）
+from .messages import log_tail as message_log_tail  # 日志末尾读取（/log）
+from .messages import registry as message_registry  # 通道 spec/命令文档
+from .messages.service import MessageService  # 消息服务编排
+from ..core.settings import (load_message_config, mask_message_config,
+                             merge_message_config)
+from ..core.settings import save_message_config as save_message_config_kv
 from .. import __version__  # 版本号唯一来源（src/__init__.py，面板关于/侧边栏展示）
 
 
@@ -133,6 +141,38 @@ class _ApiBridge:
             return None
 
 
+class _ControlMessageHost:
+    """消息服务的主进程能力注入（service 不 import UI/device）。"""
+
+    def __init__(self, cw):
+        self._cw = cw
+
+    def is_running(self):
+        return self._cw._tm.is_running()
+
+    def runtime_status(self):
+        return self._cw.get_runtime_status()
+
+    def task_progress(self):
+        return task_progress_summary()
+
+    def identity(self):
+        return bound_short_label() or ""
+
+    def capture(self):
+        return self._cw._message_capture()
+
+    def log_tail(self, n):
+        return self._cw._message_log_tail(n)
+
+    def game_window_present(self):
+        """游戏主窗口是否在场（/exitgame 游戏未启动时直接返回，免二次确认）。"""
+        return game.find_main_window() is not None
+
+    def exit_game(self, progress=None):
+        return self._cw._message_exit_game(progress)
+
+
 # 静默按键诊断按钮白名单：hotkey 标识 → (修饰键, 主键, 展示文案,
 # 投主框架窗口, WM_CHAR 字符码)。后两项为变体按钮：Ctrl+Tab 切 Tab
 # 是客户端外壳功能改投主框架窗口；Enter 追加 WM_CHAR（部分应用只
@@ -178,6 +218,13 @@ class ControlWindow(WebWindow):
         self._license_info = license_info or {}  # 授权信息（高级设置-授权信息展示）
         self._panel_ready = False  # 页面首屏就绪标记（get_init_data 首次回调置位）
         self._pending_logs = []  # 页面就绪前的日志暂存（首屏加载补投抽屉）
+        # 消息服务（构造只读配置，不启线程；prepare() 建窗后 start）
+        self._capture_lock = threading.Lock()  # /capture 串行（主进程内）
+        self._exit_game_lock = threading.Lock()  # /exitgame 串行
+        self._message_service = MessageService(
+            host=_ControlMessageHost(self),
+            config=load_message_config(),
+            log=self._message_log)
         # 软件更新状态（后台检查/手动检查/下载/应用共用；页面经
         # get_init_data 或 onUpdateState 回调恢复）
         self._update_state = {"status": "idle", "current": __version__,
@@ -314,6 +361,12 @@ class ControlWindow(WebWindow):
         self.expose(self.scheme_import)
         self.expose(self.scheme_import_confirm)
         self.expose(self.get_runtime_status)
+        # 消息服务（侧边栏「消息」）
+        self.expose(self.get_message_config)
+        self.expose(self.save_message_config)
+        self.expose(self.verify_message_channel)
+        self.expose(self.get_message_state)
+        self.expose(self.restart_message_service)
         # 软件更新（系统页「关于」）
         self.expose(self.check_update)
         self.expose(self.get_update_state)
@@ -977,6 +1030,171 @@ class ControlWindow(WebWindow):
         或状态陈旧时返回 None。"""
         from ..core import debug_overlay  # 延迟导入：与其余验证模块保持一致
         return debug_overlay.read_runtime_status()
+
+    # ---- 消息服务（侧边栏「消息」；v1 只读查询 + 截图） ----
+
+    def get_message_config(self):
+        """消息页初始化：掩码配置 + 通道/命令元数据 + 运行状态。"""
+        raw = load_message_config()
+        effective = message_registry.effective_config(raw)
+        return {"config": mask_message_config(effective),
+                "meta": message_registry.payload(),
+                "state": self._message_service.get_state()}
+
+    def save_message_config(self, patch=None):
+        """保存消息配置（深合并；掩码占位不覆盖旧 Token）并热应用。"""
+        result = save_message_config_kv(patch or {})
+        if result.get("status") != "success":
+            return result
+        raw = result.get("config") or load_message_config()
+        self._message_service.apply_config(raw)
+        effective = message_registry.effective_config(raw)
+        return {"status": "success",
+                "config": mask_message_config(effective),
+                "state": self._message_service.get_state(),
+                "warnings": message_registry.config_warnings(effective)}
+
+    def get_message_state(self):
+        """消息页轮询：服务/通道健康、实例锁、最近指令、验证状态。"""
+        return self._message_service.get_state()
+
+    def restart_message_service(self):
+        """重试启动（锁 stale 接管 / 配置修正后）。"""
+        state = self._message_service.restart_with_config(
+            load_message_config())
+        return {"status": "success", "state": state}
+
+    def verify_message_channel(self, channel=None, patch=None):
+        """一键验证通道：用表单当前值（可未保存）走 getMe + 测试消息。"""
+        channel = str(channel or "telegram")
+        try:
+            candidate = merge_message_config(patch or {})
+        except ValueError as e:
+            return {"status": "error", "msg": str(e)}
+        return self._message_service.verify_async(
+            channel, candidate,
+            on_step=self._push_message_verify_step,
+            on_done=self._push_message_verify_result)
+
+    def _push_message_verify_step(self, step):
+        payload = {"key": getattr(step, "key", ""),
+                   "label": getattr(step, "label", ""),
+                   "ok": bool(getattr(step, "ok", False)),
+                   "detail": getattr(step, "detail", "")}
+        self._push_js(
+            "if(window.onMessageVerifyStep){window.onMessageVerifyStep(%s);}"
+            % json.dumps(payload, ensure_ascii=False))
+
+    def _push_message_verify_result(self, report):
+        self._push_js(
+            "if(window.onMessageVerifyResult){window.onMessageVerifyResult(%s);}"
+            % json.dumps(report or {}, ensure_ascii=False))
+
+    def stop_message_service(self):
+        """真正退出时停止服务（点 X 隐藏托盘不调用，远程服务继续）。"""
+        service = getattr(self, "_message_service", None)
+        if service is None:
+            return
+        try:
+            service.stop(timeout=1.5)
+        except Exception:
+            pass
+
+    def _message_log(self, msg, level="INFO"):
+        """消息服务日志：文件 + 面板抽屉（事件规则会忽略 [消息] 前缀）。"""
+        line = f"[消息] {msg}"
+        try:
+            app_utils.log(line, level)
+        except Exception:
+            pass
+        try:
+            self.add_logs([line])
+        except Exception:
+            pass
+
+    def _message_capture(self):
+        """游戏窗口截屏（不抢焦点）；返回 PNG bytes + 黑帧判定。"""
+        if not self._capture_lock.acquire(blocking=False):
+            return {"ok": False, "reason": "busy"}
+        try:
+            win = game.find_main_window()
+            if win is None:
+                return {"ok": False, "reason": "no_window"}
+            hwnd = int(getattr(win, "hwnd", 0) or 0)
+            try:
+                import win32gui
+                if hwnd and win32gui.IsIconic(hwnd):
+                    return {"ok": False, "reason": "minimized"}
+            except Exception:
+                pass
+            img = win.capture(force_activate=False)
+            if img is None:
+                return {"ok": False, "reason": "capture_failed"}
+            stats = env_check.frame_stats(img)
+            buffer = io.BytesIO()
+            img.save(buffer, format="PNG")
+            return {"ok": True, "image": buffer.getvalue(),
+                    "w": stats["w"], "h": stats["h"],
+                    "black_ratio": stats["black_ratio"],
+                    "black": stats["black_ratio"] >
+                             env_check._BLACK_RATIO_THRESHOLD}
+        except Exception as e:
+            return {"ok": False, "reason": "error", "detail": str(e)}
+        finally:
+            self._capture_lock.release()
+
+    def _message_log_tail(self, n=20):
+        """今天日志末尾 n 行（/log 指令）。"""
+        try:
+            count = max(1, min(100, int(n)))
+        except (TypeError, ValueError):
+            count = 20
+        path = app_utils.log_file_path()
+        try:
+            lines = message_log_tail.read_tail_lines(path, count)
+            return {"ok": True, "lines": lines, "path": str(path)}
+        except OSError as e:
+            return {"ok": False, "reason": str(e), "lines": [],
+                    "path": str(path)}
+
+    def _message_exit_game(self, progress=None):
+        """消息服务 /exitgame：停任务 → 解散/离开队伍 → 关闭游戏客户端。"""
+        if not self._exit_game_lock.acquire(blocking=False):
+            return {"ok": False, "message": "退出游戏流程正在进行"}
+        try:
+            from ..device import exit_game as exit_game_mod
+            if self._tm.is_running():
+                self._message_log("退出游戏：先停止任务")
+                if progress is not None:
+                    try:
+                        progress("正在停止任务…")
+                    except Exception:
+                        pass
+                self._tm.stop()
+                deadline = time.time() + 10.0
+                while self._tm.is_running() and time.time() < deadline:
+                    time.sleep(0.2)
+                if self._tm.is_running():
+                    return {"ok": False,
+                            "message": "任务进程未在 10 秒内停止，已放弃退出游戏"}
+            win = game.find_main_window()
+            if win is None:
+                return {"ok": True, "message": "游戏窗口已关闭，无需退出"}
+            ok, info = exit_game_mod.leave_teams_for_exit(win, progress)
+            self._message_log(f"退出游戏-队伍：{info}",
+                              "SYS" if ok else "WARN")
+            if not ok:
+                return {"ok": False, "message": info}
+            ok, info = exit_game_mod.exit_client(win, progress)
+            self._message_log(f"退出游戏：{info}", "SYS" if ok else "WARN")
+            return {"ok": ok, "message": info}
+        except Exception as e:
+            self._message_log(
+                f"退出游戏异常：{type(e).__name__}: {e}", "ERROR")
+            return {"ok": False,
+                    "message": f"退出游戏异常：{type(e).__name__}: {e}"}
+        finally:
+            self._exit_game_lock.release()
 
     def get_task_stats(self):
         """任务成就数据：直读当前角色 data/<ID>/task_stats.json
@@ -3466,8 +3684,14 @@ class ControlWindow(WebWindow):
         self.add_logs([line])
 
     def add_logs(self, lines):
-        """批量日志推送到主面板看板日志抽屉。"""
+        """批量日志推送到主面板看板日志抽屉（并旁路给消息服务事件规则）。"""
         self._push_panel_logs(lines)
+        service = getattr(self, "_message_service", None)
+        if service is not None:
+            try:
+                service.on_logs(lines)
+            except Exception:
+                pass
 
     def _push_panel_logs(self, lines):
         """主面板看板日志抽屉推送（页面未就绪时暂存、首屏加载补投；行数上限由页面截断）。"""
@@ -3545,7 +3769,8 @@ class ControlWindow(WebWindow):
         return False
 
     def close_window(self):
-        """真正退出：放行关闭并销毁主窗口 → Application.Exit → webview.start 返回。"""
+        """真正退出：停止消息服务 → 放行关闭并销毁主窗口 → webview.start 返回。"""
+        self.stop_message_service()
         self._real_close.set()
         if self.webview_instance:
             try:
@@ -3566,6 +3791,10 @@ class ControlWindow(WebWindow):
         if win is None:
             return
         self.webview_instance = win
+        try:
+            self._message_service.start()  # 只取锁+起 daemon 线程，不阻塞 GUI
+        except Exception as e:
+            self._message_log(f"启动失败：{type(e).__name__}: {e}", "WARN")
 
         def on_loaded(*_args):
             self._inject("control window loaded")

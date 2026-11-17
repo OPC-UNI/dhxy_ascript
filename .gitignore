@@ -45,3 +45,6 @@ pochu_debug/
 
 # 本地使用手册（HTML+图文素材，不入库）
 使用手册/
+
+# 消息服务单实例锁（运行时文件，与 config.json 同目录）
+message_service.lock

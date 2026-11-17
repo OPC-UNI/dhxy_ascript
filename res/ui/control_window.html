@@ -18,6 +18,7 @@
             --accent-dim: #1F8A53;
             --gold: #C9A15C;
             --danger: #E5484D;
+            --danger-text: #F2777A;   /* 正文/小字用（深色底 6.29:1；--danger 仅作背景/描边） */
             --seal: #C0392B;
             --team: #5C9BD1;
             --seal-ink: #0E1411;   /* 相位章（石绿/黛蓝/藤黄为亮色底）用深墨字 */
@@ -35,6 +36,7 @@
             --accent-dim: #1E8F57;
             --gold: #8A6A2E;
             --danger: #C23B33;
+            --danger-text: #C23B33;
             --seal: #B3352F;
             --team: #3A6EA5;
             --seal-ink: #FFFFFF;   /* 浅色主题相位章为深色底，用白字 */
@@ -221,7 +223,7 @@
             display: none;
         }
         .banner.warn { display: block; color: var(--gold); border-color: var(--gold); background: var(--panel); }
-        .banner.danger { display: block; color: var(--danger); border-color: var(--danger); background: var(--panel); }
+        .banner.danger { display: block; color: var(--danger-text); border-color: var(--danger); background: var(--panel); }
         /* ---- 设置开关行（文本居左、开关居右；DOM 为 track+文本，行反转） ---- */
         .switch-row { display: flex; flex-direction: row-reverse; align-items: center; justify-content: space-between; gap: 8px; color: var(--text); font-size: 13px; font-family: "微软雅黑"; cursor: pointer; user-select: none; }
         .switch-row span:not(.switch-track) { flex: 1; min-width: 0; }
@@ -491,7 +493,7 @@
         }
         .log-drawer.collapsed #dash-log-box { display: none; }
         /* ERROR 行显眼告警：红字加粗（[ERROR] 行到达时抽屉自动展开） */
-        #dash-log-box .log-err { color: var(--danger); font-weight: 700; }
+        #dash-log-box .log-err { color: var(--danger-text); font-weight: 700; }
         /* ---- 诊断页：双列工具卡 ---- */
         .tools-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: start; }
         .verify-row { display: flex; align-items: center; gap: 8px; }
@@ -596,7 +598,160 @@
         .stat-row.current + .stat-row { border-top: 1px solid var(--border); }
         .stat-empty { color: var(--text-dim); font-size: 12px; text-align: center; padding: 24px 12px; }
         .stat-foot { display: flex; justify-content: flex-end; flex-shrink: 0; }
-        .stat-foot .link-btn.danger { color: var(--danger); }
+        .stat-foot .link-btn.danger { color: var(--danger-text); }
+        /* ---- 消息服务 ---- */
+        /* 服务状态卡：状态文字第一视觉（状态点 + 大字），开关/元信息其次 */
+        .msg-hero { gap: 12px; }
+        .msg-hero-top { display: flex; align-items: center; gap: 10px; }
+        .msg-hero-state { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+        .msg-hero-title { font-size: 15px; color: var(--text); line-height: 1.3; }
+        .msg-hero-sub { font-size: 11px; color: var(--text-dim); line-height: 1.4; }
+        .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-dim); flex-shrink: 0; }
+        .status-dot.ok { background: var(--accent); }
+        .status-dot.warn { background: var(--gold); }
+        .status-dot.bad { background: var(--danger); }
+        /* 服务设置：开关行与状态行同一节奏（24px 行高、6px 间距），不单独做底色块 */
+        .msg-setting-rows { display: flex; flex-direction: column; gap: 6px; }
+        .msg-setting-rows .switch-row { min-height: 24px; }
+        .msg-setting-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 24px; }
+        .msg-setting-row .group-sub { text-align: right; word-break: break-all; }
+        /* 消息页开关：隐藏原生框但保留键盘焦点，焦点环画在轨道上；
+           标签行至少 24px 高（WCAG 2.2 网页指针目标下限） */
+        #page-message .switch-row { position: relative; min-height: 24px; }
+        #page-message .switch-row input {
+            display: block; position: absolute; width: 1px; height: 1px;
+            margin: 0; opacity: 0; pointer-events: none;
+        }
+        #page-message .switch-row input:focus-visible + .switch-track {
+            outline: 2px solid var(--accent); outline-offset: 2px;
+        }
+        /* 通道卡：左区是真按钮（键盘/读屏可展开），启用开关是卡头内的独立控件 */
+        .msg-channel { display: flex; flex-direction: column; gap: 10px; }
+        .msg-channel-head {
+            display: flex; align-items: center; gap: 8px; user-select: none;
+            margin: -4px -6px; padding: 4px 6px; border-radius: 6px;
+            transition: background 0.15s;
+        }
+        .msg-channel-head:hover { background: var(--panel2); }
+        .msg-channel-head-toggle {
+            flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px;
+            padding: 0; border: none; background: none; color: inherit;
+            font: inherit; text-align: left; cursor: pointer;
+        }
+        .msg-channel-head-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+        .msg-channel-head .group-title { flex-shrink: 0; }
+        .msg-chevron { display: flex; color: var(--text-dim); flex-shrink: 0; transition: transform 0.15s; }
+        .msg-chevron svg { width: 14px; height: 14px; display: block; }
+        .msg-channel.open .msg-chevron { transform: rotate(90deg); }
+        .msg-channel-side { display: flex; align-items: center; gap: 8px; flex-shrink: 0; margin-left: auto; }
+        .msg-channel-enable { gap: 6px; font-size: 12px; }
+        .msg-state-chip {
+            display: inline-flex; align-items: center; gap: 5px; height: 18px; padding: 0 8px;
+            border: 1px solid var(--border2); border-radius: 9px; font-size: 11px;
+            color: var(--text-dim); white-space: nowrap; min-width: 0;
+        }
+        .msg-state-chip .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
+        .msg-state-chip .txt { overflow: hidden; text-overflow: ellipsis; }
+        .msg-state-chip.ok { color: var(--accent); border-color: var(--accent); }
+        .msg-state-chip.warn { color: var(--gold); border-color: var(--gold); }
+        .msg-state-chip.bad { color: var(--danger-text); border-color: var(--danger-text); }
+        .msg-section-title { font-size: 11px; color: var(--text-dim); }
+        .msg-channel-body { display: none; flex-direction: column; gap: 10px; padding-top: 12px; border-top: 1px solid var(--border); }
+        .msg-channel.open .msg-channel-body { display: flex; }
+        .msg-health-box { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; background: var(--panel2); border: 1px solid var(--border); border-radius: 6px; }
+        .msg-health-box .group-row { gap: 12px; }
+        .msg-channel-health { display: flex; flex-direction: column; gap: 6px; }
+        .msg-channel-fields { display: flex; flex-direction: column; gap: 10px; }
+        .msg-field { display: flex; flex-direction: column; gap: 4px; }
+        .msg-field .group-label { white-space: normal; }
+        .msg-required { color: var(--danger-text); }
+        .msg-field.missing .shout-input { border-color: var(--danger-text); }
+        .msg-field-error { color: var(--danger-text); font-size: 11px; line-height: 1.4; }
+        .msg-field-inline { display: flex; align-items: center; gap: 12px; }
+        .msg-field-inline .group-label { flex: 1; min-width: 0; white-space: nowrap; }
+        .msg-field-inline input[type="number"] { width: 72px; flex: none; }
+        .msg-secret-row { display: flex; align-items: center; gap: 6px; }
+        .msg-secret-row .shout-input { flex: 1; min-width: 0; }
+        .msg-secret-toggle {
+            width: 26px; height: 26px; flex-shrink: 0; padding: 0;
+            display: flex; align-items: center; justify-content: center;
+            border: 1px solid var(--border2); border-radius: 4px;
+            background: var(--panel2); color: var(--text-dim); cursor: pointer;
+            transition: color 0.15s, border-color 0.15s;
+        }
+        .msg-secret-toggle:hover { color: var(--accent); border-color: var(--accent); }
+        .msg-secret-toggle svg { width: 14px; height: 14px; display: block; }
+        .msg-field textarea.shout-input { min-height: 62px; height: auto; resize: vertical; font-family: Consolas, "微软雅黑", monospace; line-height: 1.5; padding: 4px 8px; }
+        .msg-compact-row { display: flex; gap: 20px; align-items: center; flex-wrap: wrap; }
+        .msg-field-compact { flex-direction: row; align-items: center; gap: 8px; }
+        .msg-field-compact .group-label { flex: none; white-space: nowrap; }
+        .msg-field-compact input[type="number"] { width: 72px; }
+        .msg-field-compact .switch-row { padding: 0; }
+        .msg-channel-actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 2px; }
+        .btn-sm.accent { border-color: var(--accent); color: var(--accent); }
+        .btn-sm.accent:hover:not(:disabled) { background: var(--progress-tint); filter: none; }
+        .msg-steps { display: flex; flex-direction: column; gap: 5px; }
+        .msg-step { display: flex; gap: 8px; align-items: baseline; font-size: 12px; color: var(--text-dim); }
+        .msg-step .grow { flex: 1; min-width: 0; }
+        .msg-step .detail { color: var(--text-dim); font-size: 11px; text-align: right; overflow-wrap: anywhere; max-width: 58%; }
+        .msg-step .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--border2); flex-shrink: 0; align-self: center; }
+        .msg-step.running { color: var(--gold); }
+        .msg-step.running .dot { background: var(--gold); animation: msgStepPulse 1s ease-in-out infinite; }
+        .msg-step.ok { color: var(--accent); }
+        .msg-step.ok .dot { background: var(--accent); }
+        .msg-step.bad { color: var(--danger-text); }
+        .msg-step.bad .dot { background: var(--danger-text); }
+        @keyframes msgStepPulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
+        /* 最近指令：表格式列布局 + 成功/失败单列标记（可聚焦滚动） */
+        .msg-recent { max-height: 232px; overflow: auto; }
+        .msg-recent:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+        .msg-recent-head, .msg-recent-row {
+            display: grid; grid-template-columns: 62px 128px 1fr 52px;
+            gap: 10px; align-items: center;
+        }
+        .msg-recent-head {
+            position: sticky; top: 0; z-index: 1; padding: 2px 0 6px;
+            background: var(--panel); border-bottom: 1px solid var(--border);
+            font-size: 11px; color: var(--text-dim);
+        }
+        .msg-recent-row { padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 11px; color: var(--text-dim); }
+        .msg-recent-row:last-child { border-bottom: none; }
+        .msg-recent-row:hover { background: var(--panel2); }
+        .msg-recent-row .t { font-family: Consolas, "微软雅黑", monospace; }
+        .msg-recent-row .src { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: Consolas, "微软雅黑", monospace; }
+        .msg-recent-row .cmd { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: Consolas, "微软雅黑", monospace; }
+        .msg-recent-row .res { text-align: right; white-space: nowrap; }
+        .msg-recent-row .res.ok { color: var(--accent); }
+        .msg-recent-row .res.bad { color: var(--danger-text); }
+        .msg-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+        .msg-table th, .msg-table td { text-align: left; padding: 5px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
+        .msg-table th { color: var(--text-dim); font-weight: normal; }
+        .msg-table tr:last-child td { border-bottom: none; }
+        .msg-table tbody tr:hover td { background: var(--panel2); }
+        .cmd-chip {
+            display: inline-block; padding: 0 6px; border-radius: 4px;
+            border: 1px solid var(--border2); background: var(--panel2);
+            color: var(--accent); font-family: Consolas, "微软雅黑", monospace;
+            font-size: 11px; white-space: nowrap;
+        }
+        .msg-empty { color: var(--text-dim); font-size: 12px; padding: 8px 0; line-height: 1.7; }
+        #msg-events { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 28px; padding: 2px 0; }
+        #msg-events .switch-row { padding: 2px 0; }
+        /* 保存/验证反馈：页内浮动提示，滚动到任何位置都可见 */
+        .msg-toast {
+            position: fixed; left: calc(50% + 74px); bottom: 22px; z-index: 60;
+            max-width: min(420px, calc(100vw - 190px));
+            padding: 8px 14px; border-radius: 6px;
+            background: var(--panel); color: var(--text);
+            border: 1px solid var(--border2); border-left: 3px solid var(--accent);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+            font-size: 12px; line-height: 1.5;
+            opacity: 0; transform: translate(-50%, 8px);
+            pointer-events: none;
+            transition: opacity 0.18s, transform 0.18s;
+        }
+        .msg-toast.show { opacity: 1; transform: translate(-50%, 0); }
+        .msg-toast.bad { border-left-color: var(--danger); }
     </style>
 </head>
 <body class="light">
@@ -630,6 +785,10 @@
             <div class="nav-item" data-page="stats">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg>
                 <span>成 就</span>
+            </div>
+            <div class="nav-item" data-page="message">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                <span>消 息</span>
             </div>
             <div class="nav-item" data-page="system">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
@@ -1075,7 +1234,7 @@
                     <span class="group-sub" id="group-check-msg"></span>
                 </div>
                 <div class="group-row" id="group-switch-warn" style="display:none">
-                    <span class="group-sub" style="color:var(--danger)">注意：修罗/五倍/种族比武「检查队伍」开关未开启，组号模式启动会停止任务。</span>
+                    <span class="group-sub" style="color:var(--danger-text)">注意：修罗/五倍/种族比武「检查队伍」开关未开启，组号模式启动会停止任务。</span>
                 </div>
                 <div class="group-row" id="group-leader-row" style="display:none">
                     <span class="group-label" id="group-leader-name">-</span>
@@ -1229,6 +1388,64 @@
                     <span class="link-btn danger" id="stat-clear" onclick="clearStats()">清空记录</span>
                 </div>
             </div>
+        </div>
+        <!-- ============ 消息服务（Telegram 通道 + 只读指令 + 事件推送） ============ -->
+        <div class="page" id="page-message">
+            <div class="banner warn" id="msg-banner" style="display:none"></div>
+            <div class="group-box msg-hero">
+                <div class="msg-hero-top">
+                    <span class="status-dot" id="msg-status-dot"></span>
+                    <div class="msg-hero-state">
+                        <div class="msg-hero-title" id="msg-status">未启用</div>
+                        <div class="msg-hero-sub" id="msg-status-sub">启用后可在手机 Telegram 上查询状态、进度与截图</div>
+                    </div>
+                    <button class="btn-sm" id="msg-restart" onclick="restartMessageService()">重试启动</button>
+                </div>
+            </div>
+            <div class="group-box">
+                <div class="group-title">服务设置</div>
+                <div class="msg-setting-rows">
+                    <label class="switch-row">
+                        <input type="checkbox" id="msg-enabled">
+                        <span class="switch-track"></span>
+                        <span>启用消息服务（全局设置，不随配置方案）</span>
+                    </label>
+                    <label class="switch-row">
+                        <input type="checkbox" id="msg-notify-online">
+                        <span class="switch-track"></span>
+                        <span>服务启动时推送「已上线」提示</span>
+                    </label>
+                    <div class="msg-setting-row">
+                        <span class="group-label">实例锁</span>
+                        <span class="group-sub" id="msg-lock">—</span>
+                    </div>
+                    <div class="msg-setting-row" id="msg-queue-row" style="display:none">
+                        <span class="group-label">事件队列</span>
+                        <span class="group-sub" id="msg-queue">—</span>
+                    </div>
+                </div>
+                <div class="group-hint">
+                    同一 config 目录只允许一个实例启用消息服务；多开时推荐每个实例使用独立 bot。
+                    国内网络访问 Telegram 需配置 HTTP 代理。
+                </div>
+            </div>
+            <div id="msg-channels"></div>
+            <div class="group-box">
+                <div class="group-title">事件推送</div>
+                <div id="msg-events"></div>
+                <div class="group-hint">事件仅从主进程日志/状态旁路获取，不干预任务子进程。</div>
+            </div>
+            <div class="group-box">
+                <div class="group-title">最近指令</div>
+                <div class="msg-recent" id="msg-recent" tabindex="0" role="region" aria-label="最近指令（可滚动）"></div>
+                <div class="group-hint">未授权的 chat_id 尝试也会记录（不会回复）。可用 @userinfobot 查询自己的 chat_id；群聊为负数，群成员都能看到截图。</div>
+            </div>
+            <div class="group-box">
+                <div class="group-title">指令速查</div>
+                <div id="msg-cheatsheet"></div>
+                <div class="group-hint">支持只读查询、截图与 /exitgame（退出游戏，需二次确认）；不支持远程启停任务。</div>
+            </div>
+            <div class="msg-toast" id="msg-save-hint" role="status" aria-live="polite"></div>
         </div>
         <!-- ============ 系统页（环境 / 授权 / 配置方案 / 关于） ============ -->
         <div class="page" id="page-system">
@@ -2014,6 +2231,7 @@
         if (name === 'system') refreshEnv();
         if (name === 'dash') { refreshProgress(); refreshRuntimeStatus(); }
         if (name === 'stats') refreshStats();
+        if (name === 'message') refreshMessagePage();
         if (name === 'group') groupLoadLastScan();
     }
 
@@ -2650,7 +2868,7 @@
     // 方案操作反馈文案（6s 自动消失，成功/失败着色）
     let schemeMsgTimer = null;
     function schemeMsg(text, ok) {
-        schemeMsgEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        schemeMsgEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         schemeMsgEl.innerText = text;
         if (schemeMsgTimer) clearTimeout(schemeMsgTimer);
         schemeMsgTimer = setTimeout(() => { schemeMsgEl.innerText = ''; }, 6000);
@@ -3040,6 +3258,8 @@
             refreshRuntimeStatus();
         } else if (pageIsActive('page-stats')) {
             refreshStats();
+        } else if (pageIsActive('page-message')) {
+            refreshMessageState();
         }
         refreshGroupState();
         refreshRoleInfo();
@@ -3810,6 +4030,1071 @@
         return true;
     }
 
+    /* ================= 消息服务（侧边栏「消息」） ================= */
+    let msgMeta = null;
+    let msgConfig = null;
+    let msgState = null;
+    let msgVerifying = false;
+    let msgVerifyChannel = null;
+    let msgExpandedChannel = null;
+    const msgSaveHintEl = document.getElementById('msg-save-hint');
+    const msgBannerEl = document.getElementById('msg-banner');
+
+    function msgEscape(text) {
+        return String(text == null ? '' : text)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    function msgFmtAgo(ts) {
+        const value = Number(ts) || 0;
+        if (!value) return '—';
+        const diff = Math.max(0, Date.now() / 1000 - value);
+        if (diff < 5) return '刚刚';
+        if (diff < 60) return Math.floor(diff) + ' 秒前';
+        if (diff < 3600) return Math.floor(diff / 60) + ' 分钟前';
+        return Math.floor(diff / 3600) + ' 小时前';
+    }
+
+    function msgFmtDuration(seconds) {
+        const total = Math.max(0, Math.floor(Number(seconds) || 0));
+        if (total < 60) return total + ' 秒';
+        const minutes = Math.floor(total / 60);
+        if (minutes < 60) return minutes + ' 分钟';
+        const hours = Math.floor(minutes / 60);
+        if (hours < 24) {
+            return hours + ' 小时' + (minutes % 60 ? ' ' + (minutes % 60) + ' 分' : '');
+        }
+        return Math.floor(hours / 24) + ' 天' +
+            (hours % 24 ? ' ' + (hours % 24) + ' 小时' : '');
+    }
+
+    // 保存/验证反馈走页内浮动 toast：滚动到任何位置都能看到。
+    // neutral=true 表示进行中/提示类：不加 ✔/✘，也不按失败着色。
+    function msgSetHint(text, ok, neutral) {
+        if (!msgSaveHintEl) return;
+        msgSaveHintEl.classList.toggle('bad', !!text && !ok && !neutral);
+        const prefix = text && !neutral ? (ok ? '✔ ' : '✘ ') : '';
+        msgSaveHintEl.innerText = text ? prefix + text : '';
+        msgSaveHintEl.classList.toggle('show', !!text);
+        if (msgSaveHintEl._timer) clearTimeout(msgSaveHintEl._timer);
+        if (text) {
+            msgSaveHintEl._timer = setTimeout(() => {
+                msgSaveHintEl.classList.remove('show');
+            }, 4200);
+        }
+    }
+
+    function msgServiceStatusClass(status) {
+        if (status === 'online') return 'ok';
+        if (status === 'no_channels') return 'warn';
+        if (status === 'blocked' || status === 'error') return 'bad';
+        return '';
+    }
+
+    function msgServiceSubline(state) {
+        if (state.status === 'online') {
+            const parts = [];
+            if (state.started_at) {
+                parts.push('已运行 ' +
+                    msgFmtDuration(Date.now() / 1000 - state.started_at));
+            }
+            parts.push(state.last_command_ts ?
+                '最近指令 ' + msgFmtAgo(state.last_command_ts) : '暂无指令');
+            return parts.join(' · ');
+        }
+        if (state.status === 'blocked') {
+            return '本实例未启动 · 多开请为每个实例使用独立 bot';
+        }
+        if (state.status === 'no_channels') {
+            return '已启用，但没有配置完整的通道 — 填写 Bot Token 与 chat_id 并启用';
+        }
+        if (state.status === 'disabled') {
+            return state.enabled ? '已启用，正在等待启动' :
+                '启用后可在手机 Telegram 上查询状态、进度与截图';
+        }
+        if (state.status === 'stopped') {
+            return '服务已停止；开启「启用消息服务」可重新启动';
+        }
+        return state.status_text || '';
+    }
+
+    function msgChannelStateClass(item) {
+        if (!item.enabled) return '';
+        const state = item.state || '';
+        if (state === 'polling') return 'ok';
+        if (state === 'connecting' || state === 'not_configured' ||
+            state === 'network_error' || state === 'rate_limited') {
+            return 'warn';
+        }
+        if (state === 'auth_error' || state === 'conflict' ||
+            state === 'webhook_conflict' || state === 'error') {
+            return 'bad';
+        }
+        return '';
+    }
+
+    function msgChannelConfig(name) {
+        return (msgConfig && msgConfig.channels && msgConfig.channels[name]) || {};
+    }
+
+    async function refreshMessagePage() {
+        const resp = await callPython('get_message_config');
+        if (!resp) {
+            msgSetHint('读取消息服务配置失败', false);
+            return;
+        }
+        msgMeta = resp.meta || msgMeta;
+        msgConfig = resp.config || msgConfig;
+        msgState = resp.state || msgState;
+        renderMessageChannels();
+        renderMessageEvents();
+        renderMessageCheatSheet();
+        applyMessageState(msgState);
+    }
+
+    async function refreshMessageState() {
+        const state = await callPython('get_message_state');
+        if (!state) return;
+        msgState = state;
+        applyMessageState(state);
+    }
+
+    function applyMessageState(state) {
+        if (!state) return;
+        const enabledEl = document.getElementById('msg-enabled');
+        if (enabledEl && document.activeElement !== enabledEl) {
+            enabledEl.checked = !!state.enabled;
+        }
+        const notifyEl = document.getElementById('msg-notify-online');
+        if (notifyEl && msgConfig) notifyEl.checked = !!msgConfig.notify_online;
+        // 服务状态（第一视觉）：状态点 + 大字 + 运行摘要
+        const statusEl = document.getElementById('msg-status');
+        if (statusEl) statusEl.innerText = state.status_text || '—';
+        const dotEl = document.getElementById('msg-status-dot');
+        if (dotEl) {
+            const statusClass = msgServiceStatusClass(state.status);
+            dotEl.className = 'status-dot' + (statusClass ? ' ' + statusClass : '');
+        }
+        const subEl = document.getElementById('msg-status-sub');
+        if (subEl) subEl.innerText = msgServiceSubline(state);
+        const restartEl = document.getElementById('msg-restart');
+        if (restartEl) {
+            restartEl.disabled = !state.enabled;
+            restartEl.title = state.enabled ? '' : '先启用消息服务';
+        }
+        const lock = state.lock || {};
+        const lockEl = document.getElementById('msg-lock');
+        if (lockEl) {
+            if (lock.held) {
+                lockEl.innerText = '本实例持有（PID ' + (lock.pid || '-') + '）';
+            } else if (lock.pid) {
+                lockEl.innerText = '被 PID ' + lock.pid + ' 占用';
+            } else {
+                lockEl.innerText = '未占用';
+            }
+            if (lock.stale_taken) lockEl.innerText += ' · 已接管旧锁';
+        }
+        // 事件队列：空闲时不占视觉，积压/丢弃才显示
+        const queue = state.queue || {};
+        const queueRow = document.getElementById('msg-queue-row');
+        const queueEl = document.getElementById('msg-queue');
+        if (queueRow && queueEl) {
+            const parts = [];
+            if (queue.size) parts.push('待推送 ' + queue.size);
+            if (queue.dropped) parts.push('已丢弃 ' + queue.dropped);
+            if (queue.error_suppressed) {
+                parts.push('已抑制 ' + queue.error_suppressed);
+            }
+            queueRow.style.display = parts.length ? '' : 'none';
+            if (parts.length) queueEl.innerText = parts.join(' · ');
+        }
+        if (msgBannerEl) {
+            if (state.status === 'blocked') {
+                msgBannerEl.className = 'banner danger';
+                msgBannerEl.style.display = '';
+                msgBannerEl.innerText =
+                    '检测到另一个实例已启用消息服务（PID ' + (lock.pid || '?') +
+                    '）。同一配置目录只允许一个实例；多开时请为每个实例使用独立 bot。';
+            } else {
+                msgBannerEl.style.display = 'none';
+            }
+        }
+        renderMessageChannelStates(state);
+        renderMessageRecent(state);
+    }
+
+    function buildMessageField(spec, field, value) {
+        const wrap = document.createElement('div');
+        wrap.className = 'msg-field';
+        wrap.dataset.key = field.key;
+        if (field.kind === 'switch') {
+            const label = document.createElement('label');
+            label.className = 'switch-row';
+            const input = document.createElement('input');
+            input.type = 'checkbox';
+            input.dataset.field = field.key;
+            input.checked = !!value;
+            const track = document.createElement('span');
+            track.className = 'switch-track';
+            const text = document.createElement('span');
+            text.innerText = field.label;
+            label.appendChild(input);
+            label.appendChild(track);
+            label.appendChild(text);
+            wrap.appendChild(label);
+        } else {
+            const label = document.createElement('label');
+            label.className = 'group-label';
+            label.innerText = field.label;
+            if (field.required) {
+                const mark = document.createElement('span');
+                mark.className = 'msg-required';
+                mark.setAttribute('aria-hidden', 'true');
+                mark.innerText = ' *';
+                label.appendChild(mark);
+            }
+            let input;
+            if (field.kind === 'textarea') {
+                input = document.createElement('textarea');
+                const list = Array.isArray(value) ? value :
+                    (value === undefined || value === null || value === '' ? [] :
+                        String(value).split(/[\r\n,，]+/));
+                input.value = list.map(item => String(item).trim())
+                    .filter(Boolean).join('\n');
+            } else {
+                input = document.createElement('input');
+                input.type = field.kind === 'password' ? 'password' :
+                    (field.kind === 'number' ? 'number' : 'text');
+                if (field.kind === 'number') {
+                    if (field.min !== null && field.min !== undefined) input.min = field.min;
+                    if (field.max !== null && field.max !== undefined) input.max = field.max;
+                }
+                input.value = value === undefined || value === null ? '' : value;
+            }
+            input.className = 'shout-input';
+            input.dataset.field = field.key;
+            input.id = 'msg-field-' + spec.name + '-' + field.key;
+            label.htmlFor = input.id;
+            if (field.placeholder) input.placeholder = field.placeholder;
+            // 输入即清除就地校验错误
+            input.addEventListener('input', () => {
+                msgClearFieldError(input.closest('.msg-field'));
+            });
+            if (field.required) input.setAttribute('aria-required', 'true');
+            if (field.kind === 'number') {
+                // 失焦按 spec 范围收敛，避免界面值与保存值不一致
+                input.addEventListener('blur', () => {
+                    let current = parseInt(input.value, 10);
+                    if (!Number.isFinite(current)) {
+                        current = field.min !== null && field.min !== undefined ?
+                            field.min : 0;
+                    }
+                    if (field.min !== null && field.min !== undefined) {
+                        current = Math.max(current, field.min);
+                    }
+                    if (field.max !== null && field.max !== undefined) {
+                        current = Math.min(current, field.max);
+                    }
+                    input.value = current;
+                });
+                // 数字短字段独占一行：标签左、输入右，与开关行同节奏
+                const row = document.createElement('div');
+                row.className = 'msg-field-inline';
+                row.appendChild(label);
+                row.appendChild(input);
+                wrap.appendChild(row);
+            } else if (field.kind === 'password') {
+                wrap.appendChild(label);
+                const secretRow = document.createElement('div');
+                secretRow.className = 'msg-secret-row';
+                secretRow.appendChild(input);
+                secretRow.appendChild(buildSecretToggle(input, field.label));
+                wrap.appendChild(secretRow);
+            } else {
+                wrap.appendChild(label);
+                wrap.appendChild(input);
+            }
+            if (field.secret && value) {
+                const saved = document.createElement('div');
+                saved.className = 'group-hint';
+                saved.innerText = '当前已保存：' + value;
+                wrap.appendChild(saved);
+            }
+        }
+        if (field.hint) {
+            const hint = document.createElement('div');
+            hint.className = 'group-hint';
+            hint.id = 'msg-field-hint-' + spec.name + '-' + field.key;
+            hint.innerText = field.hint;
+            wrap.appendChild(hint);
+            const fieldInput = wrap.querySelector('[data-field]');
+            if (fieldInput) {
+                const ids = (fieldInput.getAttribute('aria-describedby') || '')
+                    .split(/\s+/).filter(Boolean);
+                ids.push(hint.id);
+                fieldInput.setAttribute('aria-describedby', ids.join(' '));
+            }
+        }
+        return wrap;
+    }
+
+    function buildSecretToggle(input, labelText) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'msg-secret-toggle';
+        btn.setAttribute('aria-label', '显示' + labelText);
+        btn.setAttribute('aria-pressed', 'false');
+        btn.innerHTML =
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+            'stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">' +
+            '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>' +
+            '<circle cx="12" cy="12" r="3"/></svg>' +
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+            'stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" ' +
+            'style="display:none">' +
+            '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 ' +
+            '18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 ' +
+            '11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/>' +
+            '<path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/>' +
+            '<line x1="1" y1="1" x2="23" y2="23"/></svg>';
+        btn.addEventListener('click', () => {
+            const reveal = input.type === 'password';
+            input.type = reveal ? 'text' : 'password';
+            btn.setAttribute('aria-pressed', reveal ? 'true' : 'false');
+            btn.setAttribute('aria-label', (reveal ? '隐藏' : '显示') + labelText);
+            const icons = btn.querySelectorAll('svg');
+            if (icons.length >= 2) {
+                icons[0].style.display = reveal ? 'none' : 'block';
+                icons[1].style.display = reveal ? 'block' : 'none';
+            }
+        });
+        return btn;
+    }
+
+    function msgClearFieldError(wrap) {
+        if (!wrap) return;
+        wrap.classList.remove('missing');
+        const error = wrap.querySelector('.msg-field-error');
+        const errorId = error ? error.id : '';
+        if (error) error.remove();
+        const input = wrap.querySelector('[data-field]');
+        if (!input) return;
+        input.removeAttribute('aria-invalid');
+        if (!errorId) return;
+        // 只移除错误 id，保留常驻提示的 aria-describedby
+        const ids = (input.getAttribute('aria-describedby') || '')
+            .split(/\s+/).filter(Boolean).filter(id => id !== errorId);
+        if (ids.length) input.setAttribute('aria-describedby', ids.join(' '));
+        else input.removeAttribute('aria-describedby');
+    }
+
+    function msgMarkMissingFields(name, keys) {
+        const card = document.querySelector(
+            '.msg-channel[data-channel="' + name + '"]');
+        if (!card) return;
+        card.querySelectorAll('.msg-field').forEach(wrap => {
+            const key = wrap.dataset.key;
+            if (keys.indexOf(key) === -1) {
+                msgClearFieldError(wrap);
+                return;
+            }
+            wrap.classList.add('missing');
+            let error = wrap.querySelector('.msg-field-error');
+            if (!error) {
+                error = document.createElement('div');
+                error.className = 'msg-field-error';
+                error.id = 'msg-field-error-' + name + '-' + key;
+                // 就地错误紧跟输入框（有常驻提示时放在提示之前）
+                const hint = wrap.querySelector('.group-hint');
+                if (hint) wrap.insertBefore(error, hint);
+                else wrap.appendChild(error);
+            }
+            error.innerText = '必填：启用通道前请填写';
+            const input = wrap.querySelector('[data-field]');
+            if (input) {
+                input.setAttribute('aria-invalid', 'true');
+                const ids = (input.getAttribute('aria-describedby') || '')
+                    .split(/\s+/).filter(Boolean).filter(id => id !== error.id);
+                ids.push(error.id);
+                input.setAttribute('aria-describedby', ids.join(' '));
+            }
+        });
+        const first = card.querySelector('.msg-field.missing [data-field]');
+        if (first) first.focus();
+    }
+
+    function buildChannelEnable(spec, cfg) {
+        const label = document.createElement('label');
+        label.className = 'switch-row msg-channel-enable';
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.dataset.field = 'enabled';
+        input.checked = !!cfg.enabled;
+        input.setAttribute('aria-label', spec.title + ' 启用');
+        input.onchange = () => msgToggleChannelEnabled(spec.name, input);
+        const track = document.createElement('span');
+        track.className = 'switch-track';
+        const text = document.createElement('span');
+        text.innerText = '启用';
+        label.appendChild(input);
+        label.appendChild(track);
+        label.appendChild(text);
+        return label;
+    }
+
+    function buildCompactField(spec, field, value) {
+        const wrap = document.createElement('div');
+        wrap.className = 'msg-field msg-field-compact';
+        wrap.dataset.key = field.key;
+        if (field.kind === 'switch') {
+            const label = document.createElement('label');
+            label.className = 'switch-row';
+            const input = document.createElement('input');
+            input.type = 'checkbox';
+            input.dataset.field = field.key;
+            input.checked = !!value;
+            const track = document.createElement('span');
+            track.className = 'switch-track';
+            const text = document.createElement('span');
+            text.innerText = field.label;
+            label.appendChild(input);
+            label.appendChild(track);
+            label.appendChild(text);
+            wrap.appendChild(label);
+        } else {
+            const label = document.createElement('span');
+            label.className = 'group-label';
+            label.innerText = field.label;
+            const input = document.createElement('input');
+            input.type = field.kind === 'number' ? 'number' : 'text';
+            if (field.kind === 'number') {
+                if (field.min !== null && field.min !== undefined) input.min = field.min;
+                if (field.max !== null && field.max !== undefined) input.max = field.max;
+            }
+            input.className = 'shout-input';
+            input.dataset.field = field.key;
+            input.value = value === undefined || value === null ? '' : value;
+            wrap.appendChild(label);
+            wrap.appendChild(input);
+        }
+        if (field.hint) wrap.title = field.hint;
+        return wrap;
+    }
+
+    function msgExpandChannel(name) {
+        const card = document.querySelector(
+            '.msg-channel[data-channel="' + name + '"]');
+        if (card && !card.classList.contains('open')) msgToggleChannel(name);
+    }
+
+    async function msgToggleChannelEnabled(name, input) {
+        const desired = input.checked;
+        const spec = ((msgMeta && msgMeta.channels) || [])
+            .find(item => item.name === name) || {};
+        input.disabled = true;
+        try {
+            if (desired) {
+                const values = collectMessageChannel(name);
+                const missing = (spec.fields || []).filter(field => {
+                    if (!field.required) return false;
+                    const value = values[field.key];
+                    return Array.isArray(value) ? !value.length :
+                        !String(value === undefined || value === null ? '' : value).trim();
+                });
+                if (missing.length) {
+                    input.checked = false;
+                    msgExpandChannel(name);
+                    msgMarkMissingFields(name,
+                        missing.map(field => field.key));
+                    msgSetHint('启用前请先填写：' +
+                        missing.map(field => field.label).join('、'), false);
+                    return;
+                }
+                const patch = {channels: {}};
+                patch.channels[name] = values;
+                const resp = await saveMessagePatch(patch);
+                if (!resp) {
+                    input.checked = !desired;
+                    msgExpandChannel(name);
+                }
+                return;
+            }
+            const resp = await saveMessagePatch(
+                {channels: {[name]: {enabled: false}}});
+            if (!resp) input.checked = !desired;
+        } finally {
+            input.disabled = false;
+        }
+    }
+
+    function msgUpdateChannelToggleButtons() {
+        document.querySelectorAll('.msg-channel').forEach(card => {
+            const open = card.classList.contains('open');
+            const toggle = card.querySelector('.msg-channel-head-toggle');
+            if (toggle) {
+                toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+            }
+        });
+    }
+
+    function msgToggleChannel(name) {
+        const card = document.querySelector(
+            '.msg-channel[data-channel="' + name + '"]');
+        if (!card) return;
+        const open = !card.classList.contains('open');
+        document.querySelectorAll('.msg-channel').forEach(item => {
+            item.classList.toggle('open', open && item === card);
+        });
+        msgExpandedChannel = open ? name : null;
+        msgUpdateChannelToggleButtons();
+    }
+
+    function renderMessageChannels() {
+        const box = document.getElementById('msg-channels');
+        if (!box || !msgMeta) return;
+        box.innerHTML = '';
+        (msgMeta.channels || []).forEach(spec => {
+            const cfg = msgChannelConfig(spec.name);
+            const card = document.createElement('div');
+            card.className = 'group-box msg-channel';
+            card.dataset.channel = spec.name;
+
+            // 卡头：左区是真按钮（键盘/读屏可展开），启用开关独立在右区
+            const head = document.createElement('div');
+            head.className = 'msg-channel-head';
+
+            const headToggle = document.createElement('button');
+            headToggle.type = 'button';
+            headToggle.className = 'msg-channel-head-toggle';
+            headToggle.setAttribute('aria-expanded', 'false');
+            headToggle.setAttribute('aria-controls',
+                'msg-channel-body-' + spec.name);
+            headToggle.addEventListener('click',
+                () => msgToggleChannel(spec.name));
+
+            const chevron = document.createElement('span');
+            chevron.className = 'msg-chevron';
+            chevron.setAttribute('aria-hidden', 'true');
+            chevron.innerHTML = '<svg viewBox="0 0 24 24" fill="none" ' +
+                'stroke="currentColor" stroke-width="1.5" stroke-linecap="round" ' +
+                'stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>';
+            headToggle.appendChild(chevron);
+
+            const title = document.createElement('div');
+            title.className = 'group-title';
+            title.innerText = spec.title;
+            headToggle.appendChild(title);
+
+            const stateEl = document.createElement('span');
+            stateEl.className = 'msg-state-chip';
+            stateEl.id = 'msg-channel-state-' + spec.name;
+            stateEl.innerHTML = '<span class="dot"></span><span class="txt"></span>';
+            headToggle.appendChild(stateEl);
+
+            head.appendChild(headToggle);
+
+            const side = document.createElement('div');
+            side.className = 'msg-channel-side';
+            side.appendChild(buildChannelEnable(spec, cfg));
+            head.appendChild(side);
+
+            card.appendChild(head);
+
+            const body = document.createElement('div');
+            body.className = 'msg-channel-body';
+            body.id = 'msg-channel-body-' + spec.name;
+            if (spec.help) {
+                const help = document.createElement('div');
+                help.className = 'group-hint';
+                help.innerText = spec.help;
+                body.appendChild(help);
+            }
+            if ((spec.health_fields || []).length) {
+                const healthBox = document.createElement('div');
+                healthBox.className = 'msg-health-box';
+                const healthTitle = document.createElement('div');
+                healthTitle.className = 'msg-section-title';
+                healthTitle.innerText = '运行健康';
+                healthBox.appendChild(healthTitle);
+                const holder = document.createElement('div');
+                holder.className = 'msg-channel-health';
+                holder.id = 'msg-channel-health-' + spec.name;
+                healthBox.appendChild(holder);
+                body.appendChild(healthBox);
+            }
+
+            const fields = document.createElement('div');
+            fields.className = 'msg-channel-fields';
+            const fieldsTitle = document.createElement('div');
+            fieldsTitle.className = 'msg-section-title';
+            fieldsTitle.innerText = '通道配置';
+            fields.appendChild(fieldsTitle);
+            let compactRow = null;
+            (spec.fields || []).forEach(field => {
+                if (field.key === 'enabled') return;  // 启用开关在卡片头部
+                const value = cfg[field.key] === undefined ?
+                    field.default : cfg[field.key];
+                if (field.compact) {
+                    if (!compactRow) {
+                        compactRow = document.createElement('div');
+                        compactRow.className = 'msg-compact-row';
+                        fields.appendChild(compactRow);
+                    }
+                    compactRow.appendChild(
+                        buildCompactField(spec, field, value));
+                } else {
+                    compactRow = null;
+                    fields.appendChild(buildMessageField(spec, field, value));
+                }
+            });
+            body.appendChild(fields);
+
+            const actions = document.createElement('div');
+            actions.className = 'msg-channel-actions';
+            const saveBtn = document.createElement('button');
+            saveBtn.type = 'button';
+            saveBtn.className = 'btn-sm accent msg-save-btn';
+            saveBtn.innerText = '保存通道';
+            saveBtn.onclick = () => saveMessageChannel(spec.name);
+            const verifyBtn = document.createElement('button');
+            verifyBtn.type = 'button';
+            verifyBtn.className = 'btn-sm msg-verify-btn';
+            verifyBtn.innerText = '验证通道';
+            verifyBtn.onclick = () => verifyMessageChannel(spec.name);
+            actions.appendChild(saveBtn);
+            actions.appendChild(verifyBtn);
+            body.appendChild(actions);
+
+            const steps = document.createElement('div');
+            steps.className = 'msg-steps';
+            steps.id = 'msg-verify-' + spec.name;
+            (spec.verify_steps || []).forEach(step => {
+                const row = document.createElement('div');
+                row.className = 'msg-step';
+                row.dataset.key = step.key;
+                const rowDot = document.createElement('span');
+                rowDot.className = 'dot';
+                const label = document.createElement('span');
+                label.className = 'grow';
+                label.innerText = step.label;
+                const detail = document.createElement('span');
+                detail.className = 'detail';
+                row.appendChild(rowDot);
+                row.appendChild(label);
+                row.appendChild(detail);
+                steps.appendChild(row);
+            });
+            body.appendChild(steps);
+            card.appendChild(body);
+            if (msgExpandedChannel === spec.name) card.classList.add('open');
+            box.appendChild(card);
+        });
+        msgUpdateChannelToggleButtons();
+        renderMessageChannelStates(msgState);
+        // 卡片重绘（切页回来/保存）时恢复验证中状态，避免按钮可点但请求被静默拒绝
+        const verifyState = (msgState && msgState.verify) || {};
+        if (verifyState.running && verifyState.channel) {
+            msgVerifying = true;
+            msgVerifyChannel = verifyState.channel;
+            msgVerifyButton(verifyState.channel, true);
+        }
+    }
+
+    function renderMessageChannelHealth(spec, item) {
+        const box = document.getElementById('msg-channel-health-' + spec.name);
+        if (!box) return;
+        const fields = spec.health_fields || [];
+        box.innerHTML = '';
+        fields.forEach(field => {
+            const raw = item[field.key];
+            if (field.kind === 'error' && !raw) return;
+            const row = document.createElement('div');
+            row.className = 'group-row';
+            const key = document.createElement('span');
+            key.className = 'group-label';
+            key.innerText = field.label;
+            const value = document.createElement('span');
+            value.className = 'group-sub';
+            if (field.kind === 'ago') value.innerText = msgFmtAgo(raw);
+            else if (field.kind === 'error') {
+                value.innerText = String(raw);
+                value.style.color = 'var(--danger-text)';
+            } else {
+                value.innerText = (field.prefix || '') + (raw || '—');
+            }
+            row.appendChild(key);
+            row.appendChild(value);
+            box.appendChild(row);
+        });
+    }
+
+    function renderMessageChannelStates(state) {
+        if (!state || !state.channels) return;
+        Object.keys(state.channels).forEach(name => {
+            const item = state.channels[name] || {};
+            const chip = document.getElementById('msg-channel-state-' + name);
+            if (chip) {
+                const txt = chip.querySelector('.txt');
+                if (txt) {
+                    txt.innerText = item.enabled ?
+                        (item.state_text || '已启用') : '未启用';
+                }
+                const stateClass = msgChannelStateClass(item);
+                chip.className = 'msg-state-chip' +
+                    (stateClass ? ' ' + stateClass : '');
+                chip.title = item.last_error || '';
+            }
+            const spec = ((msgMeta && msgMeta.channels) || [])
+                .find(entry => entry.name === name);
+            if (spec) renderMessageChannelHealth(spec, item);
+        });
+    }
+
+    function renderMessageEvents() {
+        const box = document.getElementById('msg-events');
+        if (!box || !msgMeta) return;
+        box.innerHTML = '';
+        const events = (msgConfig && msgConfig.events) || {};
+        (msgMeta.events || []).forEach(item => {
+            const label = document.createElement('label');
+            label.className = 'switch-row';
+            const input = document.createElement('input');
+            input.type = 'checkbox';
+            input.checked = events[item.key] !== false;
+            input.onchange = async () => {
+                const desired = input.checked;
+                // 仅事件开关变化：两张卡都不重建，避免打断焦点/丢弃未保存的通道编辑
+                const resp = await saveMessagePatch(
+                    {events: {[item.key]: desired}},
+                    {skipEventsRender: true, skipChannelRender: true});
+                if (!resp) input.checked = !desired;
+            };
+            const track = document.createElement('span');
+            track.className = 'switch-track';
+            const text = document.createElement('span');
+            text.innerText = item.label;
+            label.appendChild(input);
+            label.appendChild(track);
+            label.appendChild(text);
+            box.appendChild(label);
+        });
+    }
+
+    function renderMessageCheatSheet() {
+        const box = document.getElementById('msg-cheatsheet');
+        if (!box || !msgMeta) return;
+        const rows = ['<table class="msg-table"><tr><th>指令</th>' +
+            '<th>中文关键字</th><th>说明</th></tr>'];
+        (msgMeta.commands || []).forEach(item => {
+            rows.push('<tr><td><span class="cmd-chip">' +
+                msgEscape(item.cmd) + '</span></td><td>' +
+                msgEscape((item.aliases || []).join(' / ')) + '</td><td>' +
+                msgEscape(item.desc) + '</td></tr>');
+        });
+        rows.push('</table>');
+        box.innerHTML = rows.join('');
+    }
+
+    // 最近指令：数据未变不重建（3s 轮询不打断滚动/选中）
+    let msgRecentSig = null;
+
+    function renderMessageRecent(state) {
+        const box = document.getElementById('msg-recent');
+        if (!box) return;
+        const items = (state && state.recent_commands) || [];
+        const signature = JSON.stringify(items);
+        if (signature === msgRecentSig) return;
+        msgRecentSig = signature;
+        const scrollTop = box.scrollTop;
+        box.innerHTML = '';
+        // 列头放在滚动容器内（吸顶）：出现滚动条时列仍与数据行对齐
+        const head = document.createElement('div');
+        head.className = 'msg-recent-head';
+        ['时间', '来源', '指令', '结果'].forEach((label, index) => {
+            const cell = document.createElement('span');
+            cell.innerText = label;
+            if (index === 3) cell.style.textAlign = 'right';
+            head.appendChild(cell);
+        });
+        box.appendChild(head);
+        if (!items.length) {
+            const empty = document.createElement('div');
+            empty.className = 'msg-empty';
+            empty.innerText = '还没有收到指令 — 在手机 Telegram 里给 bot 发 /help 试试';
+            box.appendChild(empty);
+            return;
+        }
+        items.forEach(item => {
+            const row = document.createElement('div');
+            row.className = 'msg-recent-row';
+            const when = document.createElement('span');
+            when.className = 't';
+            when.innerText = item.ts ?
+                new Date(item.ts * 1000).toLocaleTimeString('zh-CN',
+                    {hour12: false}) : '—';
+            if (item.ts) {
+                when.title = new Date(item.ts * 1000).toLocaleString('zh-CN');
+            }
+            const source = document.createElement('span');
+            source.className = 'src';
+            source.innerText = (item.channel || '—') + ' · ' +
+                (item.chat_id || '—');
+            source.title = source.innerText;
+            const command = document.createElement('span');
+            command.className = 'cmd';
+            // 失败原因跟指令同行显示（截断+悬浮看全文）；未授权由结果列表达
+            command.innerText = (item.command || item.text || '—') +
+                (!item.rejected && item.error ? ' · ' + item.error : '');
+            if (item.error) command.title = command.innerText;
+            const result = document.createElement('span');
+            result.className = 'res ' + (item.ok ? 'ok' : 'bad');
+            result.innerText = item.rejected ? '未授权' :
+                (item.ok ? '✔' : '失败');
+            if (item.error) result.title = item.error;
+            row.appendChild(when);
+            row.appendChild(source);
+            row.appendChild(command);
+            row.appendChild(result);
+            box.appendChild(row);
+        });
+        box.scrollTop = scrollTop;
+    }
+
+    function collectMessageChannel(name) {
+        const card = document.querySelector(
+            '.msg-channel[data-channel="' + name + '"]');
+        if (!card) return {};
+        const spec = ((msgMeta && msgMeta.channels) || [])
+            .find(item => item.name === name) || {};
+        const numberFields = {};
+        (spec.fields || []).forEach(field => {
+            if (field.kind === 'number') numberFields[field.key] = field;
+        });
+        const out = {};
+        card.querySelectorAll('[data-field]').forEach(el => {
+            const key = el.dataset.field;
+            if (el.type === 'checkbox') out[key] = el.checked;
+            else if (el.type === 'number') {
+                let value = parseInt(el.value, 10);
+                if (!Number.isFinite(value)) value = 0;
+                const meta = numberFields[key];
+                if (meta) {
+                    if (meta.min !== null && meta.min !== undefined) {
+                        value = Math.max(value, meta.min);
+                    }
+                    if (meta.max !== null && meta.max !== undefined) {
+                        value = Math.min(value, meta.max);
+                    }
+                    el.value = value;
+                }
+                out[key] = value;
+            } else if (el.tagName === 'TEXTAREA') {
+                out[key] = el.value.split(/[\r\n,，]+/).map(s => s.trim())
+                    .filter(Boolean);
+            } else out[key] = el.value;
+        });
+        return out;
+    }
+
+    async function saveMessagePatch(patch, options) {
+        const opts = options || {};
+        const resp = await callPython('save_message_config', patch);
+        if (!resp) {
+            msgSetHint('保存失败：无响应', false);
+            return null;
+        }
+        if (resp.status !== 'success') {
+            msgSetHint('保存失败：' + (resp.msg || ''), false);
+            return null;
+        }
+        msgConfig = resp.config || msgConfig;
+        msgState = resp.state || msgState;
+        if (!opts.skipChannelRender) renderMessageChannels();
+        if (!opts.skipEventsRender) renderMessageEvents();
+        applyMessageState(msgState);
+        const warnings = (resp.warnings || []).join('；');
+        if (warnings) {
+            msgSetHint('已保存（注意）：' + warnings, true, true);
+        } else {
+            msgSetHint('已保存', true);
+        }
+        return resp;
+    }
+
+    let msgSavingChannel = null;
+
+    function msgSaveButton(name, busy) {
+        const card = document.querySelector(
+            '.msg-channel[data-channel="' + name + '"]');
+        const btn = card && card.querySelector('.msg-save-btn');
+        if (!btn) return;
+        btn.disabled = busy;
+        btn.innerText = busy ? '保存中…' : '保存通道';
+    }
+
+    async function saveMessageChannel(name) {
+        if (msgSavingChannel) return;
+        msgSavingChannel = name;
+        msgSaveButton(name, true);
+        const patch = {channels: {}};
+        patch.channels[name] = collectMessageChannel(name);
+        try {
+            await saveMessagePatch(patch);
+        } finally {
+            msgSavingChannel = null;
+            // 保存成功会重建卡片，这里重新取新按钮恢复文案
+            msgSaveButton(name, false);
+        }
+    }
+
+    async function restartMessageService() {
+        const btn = document.getElementById('msg-restart');
+        if (btn) {
+            btn.disabled = true;
+            btn.innerText = '启动中…';
+        }
+        const resp = await callPython('restart_message_service');
+        if (btn) {
+            btn.innerText = '重试启动';
+            btn.disabled = false;
+        }
+        if (!resp || resp.status !== 'success') {
+            msgSetHint('重启失败：' + ((resp && resp.msg) || '无响应'), false);
+            return;
+        }
+        msgState = resp.state || msgState;
+        applyMessageState(msgState);
+        msgSetHint('已按当前配置重新启动', true);
+    }
+
+    function msgVerifyButton(name, busy) {
+        const card = document.querySelector(
+            '.msg-channel[data-channel="' + name + '"]');
+        const btn = card && card.querySelector('.msg-verify-btn');
+        if (!btn) return;
+        btn.disabled = busy;
+        btn.innerText = busy ? '验证中…' : '验证通道';
+    }
+
+    function msgClearVerifyRunning(box) {
+        if (!box) return;
+        box.querySelectorAll('.msg-step.running').forEach(row => {
+            row.classList.remove('running');
+            const detail = row.querySelector('.detail');
+            if (detail) detail.innerText = '';
+        });
+    }
+
+    async function verifyMessageChannel(name) {
+        if (msgVerifying) return;
+        msgVerifying = true;
+        msgVerifyChannel = name;
+        const box = document.getElementById('msg-verify-' + name);
+        if (box) {
+            box.querySelectorAll('.msg-step').forEach((row, index) => {
+                row.classList.remove('ok', 'bad', 'running');
+                const detail = row.querySelector('.detail');
+                if (detail) detail.innerText = index === 0 ? '验证中…' : '';
+                if (index === 0) row.classList.add('running');
+            });
+        }
+        msgVerifyButton(name, true);
+        const patch = {channels: {}};
+        patch.channels[name] = collectMessageChannel(name);
+        const resp = await callPython('verify_message_channel', name, patch);
+        if (!resp || resp.status !== 'success') {
+            msgSetHint('验证未开始：' + ((resp && resp.msg) || '无响应'), false);
+            msgVerifying = false;
+            msgClearVerifyRunning(box);
+            msgVerifyButton(name, false);
+        } else {
+            msgSetHint('验证中…', true, true);
+        }
+    }
+
+    window.onMessageVerifyStep = function (payload) {
+        if (!payload || !msgVerifyChannel) return;
+        const box = document.getElementById('msg-verify-' + msgVerifyChannel);
+        if (!box) return;
+        const rows = Array.prototype.slice.call(
+            box.querySelectorAll('.msg-step'));
+        const row = box.querySelector('.msg-step[data-key="' +
+            payload.key + '"]');
+        if (!row) return;
+        row.classList.remove('running');
+        row.classList.toggle('ok', !!payload.ok);
+        row.classList.toggle('bad', !payload.ok);
+        const detail = row.querySelector('.detail');
+        if (detail) detail.innerText = payload.detail || '';
+        // 后续步骤先复位，再把紧邻下一步标记为进行中
+        const index = rows.indexOf(row);
+        rows.forEach((item, itemIndex) => {
+            if (itemIndex <= index) return;
+            item.classList.remove('ok', 'bad', 'running');
+            const itemDetail = item.querySelector('.detail');
+            if (itemDetail) itemDetail.innerText = '';
+        });
+        const next = rows[index + 1];
+        if (next) {
+            next.classList.add('running');
+            const nextDetail = next.querySelector('.detail');
+            if (nextDetail) nextDetail.innerText = '验证中…';
+        }
+    };
+
+    window.onMessageVerifyResult = function (report) {
+        msgVerifying = false;
+        const name = msgVerifyChannel;
+        if (name) {
+            const box = document.getElementById('msg-verify-' + name);
+            if (box && report && Array.isArray(report.steps)) {
+                report.steps.forEach(step => {
+                    const row = box.querySelector('.msg-step[data-key="' +
+                        step.key + '"]');
+                    if (!row) return;
+                    row.classList.remove('running');
+                    row.classList.toggle('ok', !!step.ok);
+                    row.classList.toggle('bad', !step.ok);
+                    const detail = row.querySelector('.detail');
+                    if (detail) detail.innerText = step.detail || '';
+                });
+            }
+            msgClearVerifyRunning(box);
+            msgVerifyButton(name, false);
+            if (report && !report.ok) msgExpandChannel(name);
+        }
+        if (!report) return;
+        msgSetHint(report.ok ? '通道验证通过' :
+            '通道验证未通过，请按步骤提示检查', !!report.ok);
+    };
+
+    const msgEnabledEl = document.getElementById('msg-enabled');
+    if (msgEnabledEl) {
+        msgEnabledEl.addEventListener('change', async () => {
+            const desired = msgEnabledEl.checked;
+            const resp = await saveMessagePatch({enabled: desired},
+                {skipChannelRender: true});
+            if (!resp) msgEnabledEl.checked = !desired;  // 保存失败立即回滚
+        });
+    }
+    const msgNotifyEl = document.getElementById('msg-notify-online');
+    if (msgNotifyEl) {
+        msgNotifyEl.addEventListener('change', async () => {
+            const desired = msgNotifyEl.checked;
+            const resp = await saveMessagePatch({notify_online: desired},
+                {skipChannelRender: true});
+            if (!resp) msgNotifyEl.checked = !desired;
+        });
+    }
+
+    function pollMessageTick() {
+        if (document.visibilityState === 'hidden') return;
+        if (pageIsActive('page-message')) refreshMessageState();
+    }
+    setInterval(pollMessageTick, 3000);
+
     /* ================= Python 侧回调入口（名称与语义必须与后端一致） ================= */
 
     // 页面初始化：恢复上次的所有设置
@@ -3844,14 +5129,14 @@
         try {
             const r = await callPython('verify_xiuluo_return');
             if (!r || r.status !== 'success') {
-                verifyResultEl.style.color = 'var(--danger)';
+                verifyResultEl.style.color = 'var(--danger-text)';
                 verifyResultEl.innerText = (r && r.msg) || '验证请求失败';
                 verifying = false;
                 btnVerifyXiuluo.disabled = false;
             }
             // 成功：等待 Python 侧 onVerifyResult 回推最终结果
         } catch (e) {
-            verifyResultEl.style.color = 'var(--danger)';
+            verifyResultEl.style.color = 'var(--danger-text)';
             verifyResultEl.innerText = '验证请求异常';
             verifying = false;
             btnVerifyXiuluo.disabled = false;
@@ -3860,7 +5145,7 @@
     window.onVerifyResult = function (ok, info) {
         verifying = false;
         btnVerifyXiuluo.disabled = false;
-        verifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        verifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         verifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
@@ -3874,13 +5159,13 @@
         try {
             const r = await callPython('verify_xiuluo_claim');
             if (!r || r.status !== 'success') {
-                claimVerifyResultEl.style.color = 'var(--danger)';
+                claimVerifyResultEl.style.color = 'var(--danger-text)';
                 claimVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
                 verifying = false;
                 btnVerifyXiuluoClaim.disabled = false;
             }
         } catch (e) {
-            claimVerifyResultEl.style.color = 'var(--danger)';
+            claimVerifyResultEl.style.color = 'var(--danger-text)';
             claimVerifyResultEl.innerText = '验证请求异常';
             verifying = false;
             btnVerifyXiuluoClaim.disabled = false;
@@ -3889,7 +5174,7 @@
     window.onClaimVerifyResult = function (ok, info) {
         verifying = false;
         btnVerifyXiuluoClaim.disabled = false;
-        claimVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        claimVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         claimVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
@@ -3903,13 +5188,13 @@
         try {
             const r = await callPython('verify_xiuluo_wuyi');
             if (!r || r.status !== 'success') {
-                wuyiVerifyResultEl.style.color = 'var(--danger)';
+                wuyiVerifyResultEl.style.color = 'var(--danger-text)';
                 wuyiVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
                 verifying = false;
                 btnVerifyXiuluoWuyi.disabled = false;
             }
         } catch (e) {
-            wuyiVerifyResultEl.style.color = 'var(--danger)';
+            wuyiVerifyResultEl.style.color = 'var(--danger-text)';
             wuyiVerifyResultEl.innerText = '验证请求异常';
             verifying = false;
             btnVerifyXiuluoWuyi.disabled = false;
@@ -3918,7 +5203,7 @@
     window.onWuyiVerifyResult = function (ok, info) {
         verifying = false;
         btnVerifyXiuluoWuyi.disabled = false;
-        wuyiVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        wuyiVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         wuyiVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
@@ -3932,13 +5217,13 @@
         try {
             const r = await callPython('verify_xiuluo_tab_wuyi');
             if (!r || r.status !== 'success') {
-                tabWuyiVerifyResultEl.style.color = 'var(--danger)';
+                tabWuyiVerifyResultEl.style.color = 'var(--danger-text)';
                 tabWuyiVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
                 verifying = false;
                 btnVerifyXiuluoTabWuyi.disabled = false;
             }
         } catch (e) {
-            tabWuyiVerifyResultEl.style.color = 'var(--danger)';
+            tabWuyiVerifyResultEl.style.color = 'var(--danger-text)';
             tabWuyiVerifyResultEl.innerText = '验证请求异常';
             verifying = false;
             btnVerifyXiuluoTabWuyi.disabled = false;
@@ -3947,7 +5232,7 @@
     window.onTabWuyiVerifyResult = function (ok, info) {
         verifying = false;
         btnVerifyXiuluoTabWuyi.disabled = false;
-        tabWuyiVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        tabWuyiVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         tabWuyiVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
@@ -3961,13 +5246,13 @@
         try {
             const r = await callPython('verify_xiuluo_repair');
             if (!r || r.status !== 'success') {
-                repairVerifyResultEl.style.color = 'var(--danger)';
+                repairVerifyResultEl.style.color = 'var(--danger-text)';
                 repairVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
                 verifying = false;
                 btnVerifyXiuluoRepair.disabled = false;
             }
         } catch (e) {
-            repairVerifyResultEl.style.color = 'var(--danger)';
+            repairVerifyResultEl.style.color = 'var(--danger-text)';
             repairVerifyResultEl.innerText = '验证请求异常';
             verifying = false;
             btnVerifyXiuluoRepair.disabled = false;
@@ -3976,7 +5261,7 @@
     window.onRepairVerifyResult = function (ok, info) {
         verifying = false;
         btnVerifyXiuluoRepair.disabled = false;
-        repairVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        repairVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         repairVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
@@ -3990,13 +5275,13 @@
         try {
             const r = await callPython('verify_xiuluo_tab_repair');
             if (!r || r.status !== 'success') {
-                tabRepairVerifyResultEl.style.color = 'var(--danger)';
+                tabRepairVerifyResultEl.style.color = 'var(--danger-text)';
                 tabRepairVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
                 verifying = false;
                 btnVerifyXiuluoTabRepair.disabled = false;
             }
         } catch (e) {
-            tabRepairVerifyResultEl.style.color = 'var(--danger)';
+            tabRepairVerifyResultEl.style.color = 'var(--danger-text)';
             tabRepairVerifyResultEl.innerText = '验证请求异常';
             verifying = false;
             btnVerifyXiuluoTabRepair.disabled = false;
@@ -4005,7 +5290,7 @@
     window.onTabRepairVerifyResult = function (ok, info) {
         verifying = false;
         btnVerifyXiuluoTabRepair.disabled = false;
-        tabRepairVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        tabRepairVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         tabRepairVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
@@ -4024,13 +5309,13 @@
         try {
             const r = await callPython('group_check_team');
             if (!r || r.status !== 'success') {
-                groupCheckMsgEl.style.color = 'var(--danger)';
+                groupCheckMsgEl.style.color = 'var(--danger-text)';
                 groupCheckMsgEl.innerText = (r && r.msg) || '检查请求失败';
                 groupChecking = false;
                 btnGroupCheck.disabled = false;
             }
         } catch (e) {
-            groupCheckMsgEl.style.color = 'var(--danger)';
+            groupCheckMsgEl.style.color = 'var(--danger-text)';
             groupCheckMsgEl.innerText = '检查请求异常';
             groupChecking = false;
             btnGroupCheck.disabled = false;
@@ -4109,7 +5394,7 @@
             label.className = 'group-label';
             label.innerText = `${m.name || '未知'}（ID ${m.id}）`;
             if (m.char === null || m.char === undefined) {
-                label.style.color = 'var(--danger)';
+                label.style.color = 'var(--danger-text)';
                 label.innerText += '（未设置）';
             }
             const box = document.createElement('div');
@@ -4132,7 +5417,7 @@
         btnGroupCheck.disabled = false;
         let ok = false, info = '', data = null;
         try { ({ ok, info, data } = JSON.parse(payload)); } catch (e) { info = '结果解析失败'; }
-        groupCheckMsgEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        groupCheckMsgEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         groupCheckMsgEl.innerText = (ok ? '✔ ' : '✘ ') + info;
         groupData = ok ? data : null;
         if (groupData) {
@@ -4153,7 +5438,7 @@
             mapping[m.id] = { char: char, beast: beast };
         });
         if (!Object.keys(mapping).length) {
-            groupSaveMsgEl.style.color = 'var(--danger)';
+            groupSaveMsgEl.style.color = 'var(--danger-text)';
             groupSaveMsgEl.innerText = '仍有成员未设置，无法保存';
             return;
         }
@@ -4169,11 +5454,11 @@
                 });
                 groupRender();
             } else {
-                groupSaveMsgEl.style.color = 'var(--danger)';
+                groupSaveMsgEl.style.color = 'var(--danger-text)';
                 groupSaveMsgEl.innerText = (r && r.msg) || '保存失败';
             }
         } catch (e) {
-            groupSaveMsgEl.style.color = 'var(--danger)';
+            groupSaveMsgEl.style.color = 'var(--danger-text)';
             groupSaveMsgEl.innerText = '保存请求异常';
         }
     }
@@ -4188,14 +5473,14 @@
         try {
             const r = await callPython('verify_xiuluo_claim_silent');
             if (!r || r.status !== 'success') {
-                silentClaimVerifyResultEl.style.color = 'var(--danger)';
+                silentClaimVerifyResultEl.style.color = 'var(--danger-text)';
                 silentClaimVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
                 verifying = false;
                 btnVerifyXiuluoClaimSilent.disabled = false;
             }
             // 成功：等待 Python 侧 onSilentClaimVerifyResult 回推最终结果
         } catch (e) {
-            silentClaimVerifyResultEl.style.color = 'var(--danger)';
+            silentClaimVerifyResultEl.style.color = 'var(--danger-text)';
             silentClaimVerifyResultEl.innerText = '验证请求异常';
             verifying = false;
             btnVerifyXiuluoClaimSilent.disabled = false;
@@ -4204,7 +5489,7 @@
     window.onSilentClaimVerifyResult = function (ok, info) {
         verifying = false;
         btnVerifyXiuluoClaimSilent.disabled = false;
-        silentClaimVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        silentClaimVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         silentClaimVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
@@ -4218,14 +5503,14 @@
         try {
             const r = await callPython('verify_xiuluo_wuyi_silent');
             if (!r || r.status !== 'success') {
-                silentWuyiVerifyResultEl.style.color = 'var(--danger)';
+                silentWuyiVerifyResultEl.style.color = 'var(--danger-text)';
                 silentWuyiVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
                 verifying = false;
                 btnVerifyXiuluoWuyiSilent.disabled = false;
             }
             // 成功：等待 Python 侧 onSilentWuyiVerifyResult 回推最终结果
         } catch (e) {
-            silentWuyiVerifyResultEl.style.color = 'var(--danger)';
+            silentWuyiVerifyResultEl.style.color = 'var(--danger-text)';
             silentWuyiVerifyResultEl.innerText = '验证请求异常';
             verifying = false;
             btnVerifyXiuluoWuyiSilent.disabled = false;
@@ -4234,7 +5519,7 @@
     window.onSilentWuyiVerifyResult = function (ok, info) {
         verifying = false;
         btnVerifyXiuluoWuyiSilent.disabled = false;
-        silentWuyiVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        silentWuyiVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         silentWuyiVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
@@ -4248,14 +5533,14 @@
         try {
             const r = await callPython('verify_xiuluo_return_silent');
             if (!r || r.status !== 'success') {
-                silentReturnVerifyResultEl.style.color = 'var(--danger)';
+                silentReturnVerifyResultEl.style.color = 'var(--danger-text)';
                 silentReturnVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
                 verifying = false;
                 btnVerifyXiuluoReturnSilent.disabled = false;
             }
             // 成功：等待 Python 侧 onSilentReturnVerifyResult 回推最终结果
         } catch (e) {
-            silentReturnVerifyResultEl.style.color = 'var(--danger)';
+            silentReturnVerifyResultEl.style.color = 'var(--danger-text)';
             silentReturnVerifyResultEl.innerText = '验证请求异常';
             verifying = false;
             btnVerifyXiuluoReturnSilent.disabled = false;
@@ -4264,7 +5549,7 @@
     window.onSilentReturnVerifyResult = function (ok, info) {
         verifying = false;
         btnVerifyXiuluoReturnSilent.disabled = false;
-        silentReturnVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        silentReturnVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         silentReturnVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
@@ -4278,13 +5563,13 @@
         try {
             const r = await callPython('verify_wubei_claim');
             if (!r || r.status !== 'success') {
-                wubeiClaimVerifyResultEl.style.color = 'var(--danger)';
+                wubeiClaimVerifyResultEl.style.color = 'var(--danger-text)';
                 wubeiClaimVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
                 verifying = false;
                 btnVerifyWubeiClaim.disabled = false;
             }
         } catch (e) {
-            wubeiClaimVerifyResultEl.style.color = 'var(--danger)';
+            wubeiClaimVerifyResultEl.style.color = 'var(--danger-text)';
             wubeiClaimVerifyResultEl.innerText = '验证请求异常';
             verifying = false;
             btnVerifyWubeiClaim.disabled = false;
@@ -4293,7 +5578,7 @@
     window.onWubeiClaimVerifyResult = function (ok, info) {
         verifying = false;
         btnVerifyWubeiClaim.disabled = false;
-        wubeiClaimVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        wubeiClaimVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         wubeiClaimVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
@@ -4307,13 +5592,13 @@
         try {
             const r = await callPython('verify_zhongzu_claim');
             if (!r || r.status !== 'success') {
-                zhongzuClaimVerifyResultEl.style.color = 'var(--danger)';
+                zhongzuClaimVerifyResultEl.style.color = 'var(--danger-text)';
                 zhongzuClaimVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
                 verifying = false;
                 btnVerifyZhongzuClaim.disabled = false;
             }
         } catch (e) {
-            zhongzuClaimVerifyResultEl.style.color = 'var(--danger)';
+            zhongzuClaimVerifyResultEl.style.color = 'var(--danger-text)';
             zhongzuClaimVerifyResultEl.innerText = '验证请求异常';
             verifying = false;
             btnVerifyZhongzuClaim.disabled = false;
@@ -4322,7 +5607,7 @@
     window.onZhongzuClaimVerifyResult = function (ok, info) {
         verifying = false;
         btnVerifyZhongzuClaim.disabled = false;
-        zhongzuClaimVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        zhongzuClaimVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         zhongzuClaimVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
@@ -4336,13 +5621,13 @@
         try {
             const r = await callPython('verify_wubei_return');
             if (!r || r.status !== 'success') {
-                wubeiReturnVerifyResultEl.style.color = 'var(--danger)';
+                wubeiReturnVerifyResultEl.style.color = 'var(--danger-text)';
                 wubeiReturnVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
                 verifying = false;
                 btnVerifyWubeiReturn.disabled = false;
             }
         } catch (e) {
-            wubeiReturnVerifyResultEl.style.color = 'var(--danger)';
+            wubeiReturnVerifyResultEl.style.color = 'var(--danger-text)';
             wubeiReturnVerifyResultEl.innerText = '验证请求异常';
             verifying = false;
             btnVerifyWubeiReturn.disabled = false;
@@ -4351,7 +5636,7 @@
     window.onWubeiReturnVerifyResult = function (ok, info) {
         verifying = false;
         btnVerifyWubeiReturn.disabled = false;
-        wubeiReturnVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        wubeiReturnVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         wubeiReturnVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
@@ -4365,13 +5650,13 @@
         try {
             const r = await callPython('verify_wuhuan_cloth');
             if (!r || r.status !== 'success') {
-                wuhuanClothVerifyResultEl.style.color = 'var(--danger)';
+                wuhuanClothVerifyResultEl.style.color = 'var(--danger-text)';
                 wuhuanClothVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
                 verifying = false;
                 btnVerifyWuhuanCloth.disabled = false;
             }
         } catch (e) {
-            wuhuanClothVerifyResultEl.style.color = 'var(--danger)';
+            wuhuanClothVerifyResultEl.style.color = 'var(--danger-text)';
             wuhuanClothVerifyResultEl.innerText = '验证请求异常';
             verifying = false;
             btnVerifyWuhuanCloth.disabled = false;
@@ -4380,7 +5665,7 @@
     window.onWuhuanClothVerifyResult = function (ok, info) {
         verifying = false;
         btnVerifyWuhuanCloth.disabled = false;
-        wuhuanClothVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        wuhuanClothVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         wuhuanClothVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
@@ -4394,13 +5679,13 @@
         try {
             const r = await callPython('verify_wuhuan_claim');
             if (!r || r.status !== 'success') {
-                wuhuanClaimVerifyResultEl.style.color = 'var(--danger)';
+                wuhuanClaimVerifyResultEl.style.color = 'var(--danger-text)';
                 wuhuanClaimVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
                 verifying = false;
                 btnVerifyWuhuanClaim.disabled = false;
             }
         } catch (e) {
-            wuhuanClaimVerifyResultEl.style.color = 'var(--danger)';
+            wuhuanClaimVerifyResultEl.style.color = 'var(--danger-text)';
             wuhuanClaimVerifyResultEl.innerText = '验证请求异常';
             verifying = false;
             btnVerifyWuhuanClaim.disabled = false;
@@ -4409,7 +5694,7 @@
     window.onWuhuanClaimVerifyResult = function (ok, info) {
         verifying = false;
         btnVerifyWuhuanClaim.disabled = false;
-        wuhuanClaimVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        wuhuanClaimVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         wuhuanClaimVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
@@ -4423,14 +5708,14 @@
         try {
             const r = await callPython('verify_kezhan_awang');
             if (!r || r.status !== 'success') {
-                kezhanAwangVerifyResultEl.style.color = 'var(--danger)';
+                kezhanAwangVerifyResultEl.style.color = 'var(--danger-text)';
                 kezhanAwangVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
                 verifying = false;
                 btnVerifyKezhanAwang.disabled = false;
             }
             // 成功：等待 Python 侧 onKezhanAwangVerifyResult 回推最终结果
         } catch (e) {
-            kezhanAwangVerifyResultEl.style.color = 'var(--danger)';
+            kezhanAwangVerifyResultEl.style.color = 'var(--danger-text)';
             kezhanAwangVerifyResultEl.innerText = '验证请求异常';
             verifying = false;
             btnVerifyKezhanAwang.disabled = false;
@@ -4439,7 +5724,7 @@
     window.onKezhanAwangVerifyResult = function (ok, info) {
         verifying = false;
         btnVerifyKezhanAwang.disabled = false;
-        kezhanAwangVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        kezhanAwangVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         kezhanAwangVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
@@ -4453,14 +5738,14 @@
         try {
             const r = await callPython('verify_mingwang_claim');
             if (!r || r.status !== 'success') {
-                mingwangClaimVerifyResultEl.style.color = 'var(--danger)';
+                mingwangClaimVerifyResultEl.style.color = 'var(--danger-text)';
                 mingwangClaimVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
                 verifying = false;
                 btnVerifyMingwangClaim.disabled = false;
             }
             // 成功：等待 Python 侧 onMingwangClaimVerifyResult 回推最终结果
         } catch (e) {
-            mingwangClaimVerifyResultEl.style.color = 'var(--danger)';
+            mingwangClaimVerifyResultEl.style.color = 'var(--danger-text)';
             mingwangClaimVerifyResultEl.innerText = '验证请求异常';
             verifying = false;
             btnVerifyMingwangClaim.disabled = false;
@@ -4469,7 +5754,7 @@
     window.onMingwangClaimVerifyResult = function (ok, info) {
         verifying = false;
         btnVerifyMingwangClaim.disabled = false;
-        mingwangClaimVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        mingwangClaimVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         mingwangClaimVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
@@ -4483,14 +5768,14 @@
         try {
             const r = await callPython('verify_mingwang_claim_task');
             if (!r || r.status !== 'success') {
-                mingwangClaimTaskVerifyResultEl.style.color = 'var(--danger)';
+                mingwangClaimTaskVerifyResultEl.style.color = 'var(--danger-text)';
                 mingwangClaimTaskVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
                 verifying = false;
                 btnVerifyMingwangClaimTask.disabled = false;
             }
             // 成功：等待 Python 侧 onMingwangClaimTaskVerifyResult 回推最终结果
         } catch (e) {
-            mingwangClaimTaskVerifyResultEl.style.color = 'var(--danger)';
+            mingwangClaimTaskVerifyResultEl.style.color = 'var(--danger-text)';
             mingwangClaimTaskVerifyResultEl.innerText = '验证请求异常';
             verifying = false;
             btnVerifyMingwangClaimTask.disabled = false;
@@ -4499,7 +5784,7 @@
     window.onMingwangClaimTaskVerifyResult = function (ok, info) {
         verifying = false;
         btnVerifyMingwangClaimTask.disabled = false;
-        mingwangClaimTaskVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        mingwangClaimTaskVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         mingwangClaimTaskVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
@@ -4522,14 +5807,14 @@
         try {
             const r = await callPython(api);
             if (!r || r.status !== 'success') {
-                el.style.color = 'var(--danger)';
+                el.style.color = 'var(--danger-text)';
                 el.innerText = (r && r.msg) || '验证请求失败';
                 verifying = false;
                 btn.disabled = false;
             }
             // 成功：等待 Python 侧 onMingwangMapClaimVerifyResult 回推最终结果
         } catch (e) {
-            el.style.color = 'var(--danger)';
+            el.style.color = 'var(--danger-text)';
             el.innerText = '验证请求异常';
             verifying = false;
             btn.disabled = false;
@@ -4539,7 +5824,7 @@
         verifying = false;
         const [btn, el] = mingwangRaceVerifyEls(race);
         btn.disabled = false;
-        el.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        el.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         el.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
@@ -4553,14 +5838,14 @@
         try {
             const r = await callPython('verify_wubei_wuyi');
             if (!r || r.status !== 'success') {
-                wubeiWuyiVerifyResultEl.style.color = 'var(--danger)';
+                wubeiWuyiVerifyResultEl.style.color = 'var(--danger-text)';
                 wubeiWuyiVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
                 verifying = false;
                 btnVerifyWubeiWuyi.disabled = false;
             }
             // 成功：等待 Python 侧 onWubeiWuyiVerifyResult 回推最终结果
         } catch (e) {
-            wubeiWuyiVerifyResultEl.style.color = 'var(--danger)';
+            wubeiWuyiVerifyResultEl.style.color = 'var(--danger-text)';
             wubeiWuyiVerifyResultEl.innerText = '验证请求异常';
             verifying = false;
             btnVerifyWubeiWuyi.disabled = false;
@@ -4569,7 +5854,7 @@
     window.onWubeiWuyiVerifyResult = function (ok, info) {
         verifying = false;
         btnVerifyWubeiWuyi.disabled = false;
-        wubeiWuyiVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        wubeiWuyiVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         wubeiWuyiVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
@@ -4583,13 +5868,13 @@
         try {
             const r = await callPython('verify_wubei_repair');
             if (!r || r.status !== 'success') {
-                wubeiRepairVerifyResultEl.style.color = 'var(--danger)';
+                wubeiRepairVerifyResultEl.style.color = 'var(--danger-text)';
                 wubeiRepairVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
                 verifying = false;
                 btnVerifyWubeiRepair.disabled = false;
             }
         } catch (e) {
-            wubeiRepairVerifyResultEl.style.color = 'var(--danger)';
+            wubeiRepairVerifyResultEl.style.color = 'var(--danger-text)';
             wubeiRepairVerifyResultEl.innerText = '验证请求异常';
             verifying = false;
             btnVerifyWubeiRepair.disabled = false;
@@ -4598,7 +5883,7 @@
     window.onWubeiRepairVerifyResult = function (ok, info) {
         verifying = false;
         btnVerifyWubeiRepair.disabled = false;
-        wubeiRepairVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        wubeiRepairVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         wubeiRepairVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
@@ -4612,13 +5897,13 @@
         try {
             const r = await callPython('verify_wubei_tab_repair');
             if (!r || r.status !== 'success') {
-                wubeiTabRepairVerifyResultEl.style.color = 'var(--danger)';
+                wubeiTabRepairVerifyResultEl.style.color = 'var(--danger-text)';
                 wubeiTabRepairVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
                 verifying = false;
                 btnVerifyWubeiTabRepair.disabled = false;
             }
         } catch (e) {
-            wubeiTabRepairVerifyResultEl.style.color = 'var(--danger)';
+            wubeiTabRepairVerifyResultEl.style.color = 'var(--danger-text)';
             wubeiTabRepairVerifyResultEl.innerText = '验证请求异常';
             verifying = false;
             btnVerifyWubeiTabRepair.disabled = false;
@@ -4627,7 +5912,7 @@
     window.onWubeiTabRepairVerifyResult = function (ok, info) {
         verifying = false;
         btnVerifyWubeiTabRepair.disabled = false;
-        wubeiTabRepairVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        wubeiTabRepairVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         wubeiTabRepairVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
@@ -4641,13 +5926,13 @@
         try {
             const r = await callPython('verify_wubei_xj');
             if (!r || r.status !== 'success') {
-                wubeiXjVerifyResultEl.style.color = 'var(--danger)';
+                wubeiXjVerifyResultEl.style.color = 'var(--danger-text)';
                 wubeiXjVerifyResultEl.innerText = (r && r.msg) || '测试请求失败';
                 verifying = false;
                 btnVerifyWubeiXj.disabled = false;
             }
         } catch (e) {
-            wubeiXjVerifyResultEl.style.color = 'var(--danger)';
+            wubeiXjVerifyResultEl.style.color = 'var(--danger-text)';
             wubeiXjVerifyResultEl.innerText = '测试请求异常';
             verifying = false;
             btnVerifyWubeiXj.disabled = false;
@@ -4656,7 +5941,7 @@
     window.onWubeiXjVerifyResult = function (ok, info) {
         verifying = false;
         btnVerifyWubeiXj.disabled = false;
-        wubeiXjVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        wubeiXjVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         wubeiXjVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
@@ -4670,14 +5955,14 @@
         try {
             const r = await callPython('verify_clear_screen');
             if (!r || r.status !== 'success') {
-                clearScreenVerifyResultEl.style.color = 'var(--danger)';
+                clearScreenVerifyResultEl.style.color = 'var(--danger-text)';
                 clearScreenVerifyResultEl.innerText = (r && r.msg) || '验证请求失败';
                 verifying = false;
                 btnVerifyClearScreen.disabled = false;
             }
             // 成功：等待 Python 侧 onClearScreenVerifyResult 回推最终结果
         } catch (e) {
-            clearScreenVerifyResultEl.style.color = 'var(--danger)';
+            clearScreenVerifyResultEl.style.color = 'var(--danger-text)';
             clearScreenVerifyResultEl.innerText = '验证请求异常';
             verifying = false;
             btnVerifyClearScreen.disabled = false;
@@ -4686,7 +5971,7 @@
     window.onClearScreenVerifyResult = function (ok, info) {
         verifying = false;
         btnVerifyClearScreen.disabled = false;
-        clearScreenVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        clearScreenVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         clearScreenVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
@@ -4704,10 +5989,10 @@
         resEl.innerText = '发送中...';
         try {
             const r = await callPython('verify_shout', target);
-            resEl.style.color = r && r.status === 'success' ? 'var(--text)' : 'var(--danger)';
+            resEl.style.color = r && r.status === 'success' ? 'var(--text)' : 'var(--danger-text)';
             resEl.innerText = (r && r.msg) || '验证请求失败';
         } catch (e) {
-            resEl.style.color = 'var(--danger)';
+            resEl.style.color = 'var(--danger-text)';
             resEl.innerText = '验证请求失败';
         } finally {
             verifying = false;
@@ -4724,14 +6009,14 @@
         try {
             const r = await callPython('verify_jiguan');
             if (!r || r.status !== 'success') {
-                jiguanVerifyResultEl.style.color = 'var(--danger)';
+                jiguanVerifyResultEl.style.color = 'var(--danger-text)';
                 jiguanVerifyResultEl.innerText = (r && r.msg) || '测试请求失败';
                 verifying = false;
                 btnVerifyJiguan.disabled = false;
             }
             // 成功：等待 Python 侧 onJiguanVerifyResult 回推最终结果
         } catch (e) {
-            jiguanVerifyResultEl.style.color = 'var(--danger)';
+            jiguanVerifyResultEl.style.color = 'var(--danger-text)';
             jiguanVerifyResultEl.innerText = '测试请求异常';
             verifying = false;
             btnVerifyJiguan.disabled = false;
@@ -4740,7 +6025,7 @@
     window.onJiguanVerifyResult = function (ok, info) {
         verifying = false;
         btnVerifyJiguan.disabled = false;
-        jiguanVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        jiguanVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         jiguanVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
@@ -4753,14 +6038,14 @@
         try {
             const r = await callPython('verify_position');
             if (!r || r.status !== 'success') {
-                positionVerifyResultEl.style.color = 'var(--danger)';
+                positionVerifyResultEl.style.color = 'var(--danger-text)';
                 positionVerifyResultEl.innerText = (r && r.msg) || '获取请求失败';
                 verifying = false;
                 btnVerifyPosition.disabled = false;
             }
             // 成功：等待 Python 侧 onPositionVerifyResult 回推最终结果
         } catch (e) {
-            positionVerifyResultEl.style.color = 'var(--danger)';
+            positionVerifyResultEl.style.color = 'var(--danger-text)';
             positionVerifyResultEl.innerText = '获取请求异常';
             verifying = false;
             btnVerifyPosition.disabled = false;
@@ -4769,7 +6054,7 @@
     window.onPositionVerifyResult = function (ok, info) {
         verifying = false;
         btnVerifyPosition.disabled = false;
-        positionVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        positionVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         positionVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
@@ -4782,14 +6067,14 @@
         try {
             const r = await callPython('verify_dialog_detect');
             if (!r || r.status !== 'success') {
-                dialogDetectVerifyResultEl.style.color = 'var(--danger)';
+                dialogDetectVerifyResultEl.style.color = 'var(--danger-text)';
                 dialogDetectVerifyResultEl.innerText = (r && r.msg) || '测试请求失败';
                 verifying = false;
                 btnVerifyDialogDetect.disabled = false;
             }
             // 成功：等待 Python 侧 onDialogDetectVerifyResult 回推最终结果
         } catch (e) {
-            dialogDetectVerifyResultEl.style.color = 'var(--danger)';
+            dialogDetectVerifyResultEl.style.color = 'var(--danger-text)';
             dialogDetectVerifyResultEl.innerText = '测试请求异常';
             verifying = false;
             btnVerifyDialogDetect.disabled = false;
@@ -4798,7 +6083,7 @@
     window.onDialogDetectVerifyResult = function (ok, info) {
         verifying = false;
         btnVerifyDialogDetect.disabled = false;
-        dialogDetectVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        dialogDetectVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         dialogDetectVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
@@ -4811,14 +6096,14 @@
         try {
             const r = await callPython('verify_apply_panel');
             if (!r || r.status !== 'success') {
-                applyPanelVerifyResultEl.style.color = 'var(--danger)';
+                applyPanelVerifyResultEl.style.color = 'var(--danger-text)';
                 applyPanelVerifyResultEl.innerText = (r && r.msg) || '测试请求失败';
                 verifying = false;
                 btnVerifyApplyPanel.disabled = false;
             }
             // 成功：等待 Python 侧 onApplyPanelVerifyResult 回推最终结果
         } catch (e) {
-            applyPanelVerifyResultEl.style.color = 'var(--danger)';
+            applyPanelVerifyResultEl.style.color = 'var(--danger-text)';
             applyPanelVerifyResultEl.innerText = '测试请求异常';
             verifying = false;
             btnVerifyApplyPanel.disabled = false;
@@ -4827,7 +6112,7 @@
     window.onApplyPanelVerifyResult = function (ok, info) {
         verifying = false;
         btnVerifyApplyPanel.disabled = false;
-        applyPanelVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        applyPanelVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         applyPanelVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
@@ -4840,14 +6125,14 @@
         try {
             const r = await callPython('verify_team_check');
             if (!r || r.status !== 'success') {
-                teamCheckVerifyResultEl.style.color = 'var(--danger)';
+                teamCheckVerifyResultEl.style.color = 'var(--danger-text)';
                 teamCheckVerifyResultEl.innerText = (r && r.msg) || '获取请求失败';
                 verifying = false;
                 btnVerifyTeamCheck.disabled = false;
             }
             // 成功：等待 Python 侧 onTeamCheckVerifyResult 回推最终结果
         } catch (e) {
-            teamCheckVerifyResultEl.style.color = 'var(--danger)';
+            teamCheckVerifyResultEl.style.color = 'var(--danger-text)';
             teamCheckVerifyResultEl.innerText = '获取请求异常';
             verifying = false;
             btnVerifyTeamCheck.disabled = false;
@@ -4856,7 +6141,7 @@
     window.onTeamCheckVerifyResult = function (ok, info) {
         verifying = false;
         btnVerifyTeamCheck.disabled = false;
-        teamCheckVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        teamCheckVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         teamCheckVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
@@ -4869,14 +6154,14 @@
         try {
             const r = await callPython('verify_team_create');
             if (!r || r.status !== 'success') {
-                teamCreateVerifyResultEl.style.color = 'var(--danger)';
+                teamCreateVerifyResultEl.style.color = 'var(--danger-text)';
                 teamCreateVerifyResultEl.innerText = (r && r.msg) || '获取请求失败';
                 verifying = false;
                 btnVerifyTeamCreate.disabled = false;
             }
             // 成功：等待 Python 侧 onTeamCreateVerifyResult 回推最终结果
         } catch (e) {
-            teamCreateVerifyResultEl.style.color = 'var(--danger)';
+            teamCreateVerifyResultEl.style.color = 'var(--danger-text)';
             teamCreateVerifyResultEl.innerText = '获取请求异常';
             verifying = false;
             btnVerifyTeamCreate.disabled = false;
@@ -4885,7 +6170,7 @@
     window.onTeamCreateVerifyResult = function (ok, info) {
         verifying = false;
         btnVerifyTeamCreate.disabled = false;
-        teamCreateVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        teamCreateVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         teamCreateVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
@@ -4898,14 +6183,14 @@
         try {
             const r = await callPython('verify_zuoqi_open');
             if (!r || r.status !== 'success') {
-                zuoqiOpenVerifyResultEl.style.color = 'var(--danger)';
+                zuoqiOpenVerifyResultEl.style.color = 'var(--danger-text)';
                 zuoqiOpenVerifyResultEl.innerText = (r && r.msg) || '获取请求失败';
                 verifying = false;
                 btnVerifyZuoqiOpen.disabled = false;
             }
             // 成功：等待 Python 侧 onZuoqiOpenVerifyResult 回推最终结果
         } catch (e) {
-            zuoqiOpenVerifyResultEl.style.color = 'var(--danger)';
+            zuoqiOpenVerifyResultEl.style.color = 'var(--danger-text)';
             zuoqiOpenVerifyResultEl.innerText = '获取请求异常';
             verifying = false;
             btnVerifyZuoqiOpen.disabled = false;
@@ -4914,7 +6199,7 @@
     window.onZuoqiOpenVerifyResult = function (ok, info) {
         verifying = false;
         btnVerifyZuoqiOpen.disabled = false;
-        zuoqiOpenVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        zuoqiOpenVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         zuoqiOpenVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
@@ -4927,14 +6212,14 @@
         try {
             const r = await callPython('verify_zuoqi_close');
             if (!r || r.status !== 'success') {
-                zuoqiCloseVerifyResultEl.style.color = 'var(--danger)';
+                zuoqiCloseVerifyResultEl.style.color = 'var(--danger-text)';
                 zuoqiCloseVerifyResultEl.innerText = (r && r.msg) || '获取请求失败';
                 verifying = false;
                 btnVerifyZuoqiClose.disabled = false;
             }
             // 成功：等待 Python 侧 onZuoqiCloseVerifyResult 回推最终结果
         } catch (e) {
-            zuoqiCloseVerifyResultEl.style.color = 'var(--danger)';
+            zuoqiCloseVerifyResultEl.style.color = 'var(--danger-text)';
             zuoqiCloseVerifyResultEl.innerText = '获取请求异常';
             verifying = false;
             btnVerifyZuoqiClose.disabled = false;
@@ -4943,7 +6228,7 @@
     window.onZuoqiCloseVerifyResult = function (ok, info) {
         verifying = false;
         btnVerifyZuoqiClose.disabled = false;
-        zuoqiCloseVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        zuoqiCloseVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         zuoqiCloseVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
@@ -4956,14 +6241,14 @@
         try {
             const r = await callPython('verify_zuoqi_fly');
             if (!r || r.status !== 'success') {
-                zuoqiFlyVerifyResultEl.style.color = 'var(--danger)';
+                zuoqiFlyVerifyResultEl.style.color = 'var(--danger-text)';
                 zuoqiFlyVerifyResultEl.innerText = (r && r.msg) || '获取请求失败';
                 verifying = false;
                 btnVerifyZuoqiFly.disabled = false;
             }
             // 成功：等待 Python 侧 onZuoqiFlyVerifyResult 回推最终结果
         } catch (e) {
-            zuoqiFlyVerifyResultEl.style.color = 'var(--danger)';
+            zuoqiFlyVerifyResultEl.style.color = 'var(--danger-text)';
             zuoqiFlyVerifyResultEl.innerText = '获取请求异常';
             verifying = false;
             btnVerifyZuoqiFly.disabled = false;
@@ -4972,7 +6257,7 @@
     window.onZuoqiFlyVerifyResult = function (ok, info) {
         verifying = false;
         btnVerifyZuoqiFly.disabled = false;
-        zuoqiFlyVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        zuoqiFlyVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         zuoqiFlyVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
@@ -4985,14 +6270,14 @@
         try {
             const r = await callPython('verify_zuoqi_land');
             if (!r || r.status !== 'success') {
-                zuoqiLandVerifyResultEl.style.color = 'var(--danger)';
+                zuoqiLandVerifyResultEl.style.color = 'var(--danger-text)';
                 zuoqiLandVerifyResultEl.innerText = (r && r.msg) || '获取请求失败';
                 verifying = false;
                 btnVerifyZuoqiLand.disabled = false;
             }
             // 成功：等待 Python 侧 onZuoqiLandVerifyResult 回推最终结果
         } catch (e) {
-            zuoqiLandVerifyResultEl.style.color = 'var(--danger)';
+            zuoqiLandVerifyResultEl.style.color = 'var(--danger-text)';
             zuoqiLandVerifyResultEl.innerText = '获取请求异常';
             verifying = false;
             btnVerifyZuoqiLand.disabled = false;
@@ -5001,7 +6286,7 @@
     window.onZuoqiLandVerifyResult = function (ok, info) {
         verifying = false;
         btnVerifyZuoqiLand.disabled = false;
-        zuoqiLandVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        zuoqiLandVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         zuoqiLandVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
@@ -5014,14 +6299,14 @@
         try {
             const r = await callPython('verify_rejoin');
             if (!r || r.status !== 'success') {
-                rejoinVerifyResultEl.style.color = 'var(--danger)';
+                rejoinVerifyResultEl.style.color = 'var(--danger-text)';
                 rejoinVerifyResultEl.innerText = (r && r.msg) || '获取请求失败';
                 verifying = false;
                 btnVerifyRejoin.disabled = false;
             }
             // 成功：等待 Python 侧 onRejoinVerifyResult 回推最终结果
         } catch (e) {
-            rejoinVerifyResultEl.style.color = 'var(--danger)';
+            rejoinVerifyResultEl.style.color = 'var(--danger-text)';
             rejoinVerifyResultEl.innerText = '获取请求异常';
             verifying = false;
             btnVerifyRejoin.disabled = false;
@@ -5030,7 +6315,7 @@
     window.onRejoinVerifyResult = function (ok, info) {
         verifying = false;
         btnVerifyRejoin.disabled = false;
-        rejoinVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        rejoinVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         rejoinVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
@@ -5043,14 +6328,14 @@
         try {
             const r = await callPython('verify_team_away');
             if (!r || r.status !== 'success') {
-                teamAwayVerifyResultEl.style.color = 'var(--danger)';
+                teamAwayVerifyResultEl.style.color = 'var(--danger-text)';
                 teamAwayVerifyResultEl.innerText = (r && r.msg) || '获取请求失败';
                 verifying = false;
                 btnVerifyTeamAway.disabled = false;
             }
             // 成功：等待 Python 侧 onTeamAwayVerifyResult 回推最终结果
         } catch (e) {
-            teamAwayVerifyResultEl.style.color = 'var(--danger)';
+            teamAwayVerifyResultEl.style.color = 'var(--danger-text)';
             teamAwayVerifyResultEl.innerText = '获取请求异常';
             verifying = false;
             btnVerifyTeamAway.disabled = false;
@@ -5059,7 +6344,7 @@
     window.onTeamAwayVerifyResult = function (ok, info) {
         verifying = false;
         btnVerifyTeamAway.disabled = false;
-        teamAwayVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        teamAwayVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         teamAwayVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
@@ -5072,14 +6357,14 @@
         try {
             const r = await callPython('verify_team_kick_away');
             if (!r || r.status !== 'success') {
-                teamKickAwayVerifyResultEl.style.color = 'var(--danger)';
+                teamKickAwayVerifyResultEl.style.color = 'var(--danger-text)';
                 teamKickAwayVerifyResultEl.innerText = (r && r.msg) || '获取请求失败';
                 verifying = false;
                 btnVerifyTeamKickAway.disabled = false;
             }
             // 成功：等待 Python 侧 onTeamKickAwayVerifyResult 回推最终结果
         } catch (e) {
-            teamKickAwayVerifyResultEl.style.color = 'var(--danger)';
+            teamKickAwayVerifyResultEl.style.color = 'var(--danger-text)';
             teamKickAwayVerifyResultEl.innerText = '获取请求异常';
             verifying = false;
             btnVerifyTeamKickAway.disabled = false;
@@ -5088,7 +6373,7 @@
     window.onTeamKickAwayVerifyResult = function (ok, info) {
         verifying = false;
         btnVerifyTeamKickAway.disabled = false;
-        teamKickAwayVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        teamKickAwayVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         teamKickAwayVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
@@ -5101,14 +6386,14 @@
         try {
             const r = await callPython('verify_group_rejoin');
             if (!r || r.status !== 'success') {
-                groupRejoinVerifyResultEl.style.color = 'var(--danger)';
+                groupRejoinVerifyResultEl.style.color = 'var(--danger-text)';
                 groupRejoinVerifyResultEl.innerText = (r && r.msg) || '获取请求失败';
                 verifying = false;
                 btnVerifyGroupRejoin.disabled = false;
             }
             // 成功：等待 Python 侧 onGroupRejoinVerifyResult 回推最终结果
         } catch (e) {
-            groupRejoinVerifyResultEl.style.color = 'var(--danger)';
+            groupRejoinVerifyResultEl.style.color = 'var(--danger-text)';
             groupRejoinVerifyResultEl.innerText = '获取请求异常';
             verifying = false;
             btnVerifyGroupRejoin.disabled = false;
@@ -5117,7 +6402,7 @@
     window.onGroupRejoinVerifyResult = function (ok, info) {
         verifying = false;
         btnVerifyGroupRejoin.disabled = false;
-        groupRejoinVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        groupRejoinVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         groupRejoinVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
@@ -5130,14 +6415,14 @@
         try {
             const r = await callPython('verify_capture_diag');
             if (!r || r.status !== 'success') {
-                captureDiagVerifyResultEl.style.color = 'var(--danger)';
+                captureDiagVerifyResultEl.style.color = 'var(--danger-text)';
                 captureDiagVerifyResultEl.innerText = (r && r.msg) || '诊断请求失败';
                 verifying = false;
                 btnVerifyCaptureDiag.disabled = false;
             }
             // 成功：等待 Python 侧 onCaptureDiagVerifyResult 回推最终结果
         } catch (e) {
-            captureDiagVerifyResultEl.style.color = 'var(--danger)';
+            captureDiagVerifyResultEl.style.color = 'var(--danger-text)';
             captureDiagVerifyResultEl.innerText = '诊断请求异常';
             verifying = false;
             btnVerifyCaptureDiag.disabled = false;
@@ -5146,7 +6431,7 @@
     window.onCaptureDiagVerifyResult = function (ok, info) {
         verifying = false;
         btnVerifyCaptureDiag.disabled = false;
-        captureDiagVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        captureDiagVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         captureDiagVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
@@ -5161,14 +6446,14 @@
         try {
             const r = await callPython('verify_silent_click', button || 'primary');
             if (!r || r.status !== 'success') {
-                resEl.style.color = 'var(--danger)';
+                resEl.style.color = 'var(--danger-text)';
                 resEl.innerText = (r && r.msg) || '验证请求失败';
                 verifying = false;
                 btn.disabled = false;
             }
             // 成功：等待 Python 侧 onSilentClickVerifyResult/onSilentClickRightVerifyResult 回推最终结果
         } catch (e) {
-            resEl.style.color = 'var(--danger)';
+            resEl.style.color = 'var(--danger-text)';
             resEl.innerText = '验证请求异常';
             verifying = false;
             btn.disabled = false;
@@ -5180,13 +6465,13 @@
     window.onSilentClickVerifyResult = function (ok, info) {
         verifying = false;
         btnVerifySilentClick.disabled = false;
-        silentClickVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        silentClickVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         silentClickVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
     window.onSilentClickRightVerifyResult = function (ok, info) {
         verifying = false;
         btnVerifySilentClickRight.disabled = false;
-        silentClickRightVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        silentClickRightVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         silentClickRightVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
@@ -5202,14 +6487,14 @@
         try {
             const r = await callPython('verify_silent_click', 'secondary', 1316, y, action);
             if (!r || r.status !== 'success') {
-                resEl.style.color = 'var(--danger)';
+                resEl.style.color = 'var(--danger-text)';
                 resEl.innerText = (r && r.msg) || '验证请求失败';
                 verifying = false;
                 btn.disabled = false;
             }
             // 成功：等待 Python 侧 onSilentMpVerifyResult/onSilentHpVerifyResult 回推最终结果
         } catch (e) {
-            resEl.style.color = 'var(--danger)';
+            resEl.style.color = 'var(--danger-text)';
             resEl.innerText = '验证请求异常';
             verifying = false;
             btn.disabled = false;
@@ -5224,13 +6509,13 @@
     window.onSilentMpVerifyResult = function (ok, info) {
         verifying = false;
         btnVerifySilentMp.disabled = false;
-        silentMpVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        silentMpVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         silentMpVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
     window.onSilentHpVerifyResult = function (ok, info) {
         verifying = false;
         btnVerifySilentHp.disabled = false;
-        silentHpVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+        silentHpVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         silentHpVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
@@ -5247,14 +6532,14 @@
         try {
             const r = await callPython('verify_silent_key', hotkey);
             if (!r || r.status !== 'success') {
-                resEl.style.color = 'var(--danger)';
+                resEl.style.color = 'var(--danger-text)';
                 resEl.innerText = (r && r.msg) || '验证请求失败';
                 verifying = false;
                 btn.disabled = false;
             }
             // 成功：等待 Python 侧 onSilentKeyVerifyResult 回推最终结果
         } catch (e) {
-            resEl.style.color = 'var(--danger)';
+            resEl.style.color = 'var(--danger-text)';
             resEl.innerText = '验证请求异常';
             verifying = false;
             btn.disabled = false;
@@ -5266,7 +6551,7 @@
         const resEl = document.getElementById('silent-key-' + hotkey + '-verify-result');
         if (btn) btn.disabled = false;
         if (resEl) {
-            resEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+            resEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
             resEl.innerText = (ok ? '✔ ' : '✘ ') + info;
         }
     };
@@ -5283,14 +6568,14 @@
         try {
             const r = await callPython('verify_silent_paste');
             if (!r || r.status !== 'success') {
-                resEl.style.color = 'var(--danger)';
+                resEl.style.color = 'var(--danger-text)';
                 resEl.innerText = (r && r.msg) || '验证请求失败';
                 verifying = false;
                 btn.disabled = false;
             }
             // 成功：等待 Python 侧 onSilentPasteVerifyResult 回推最终结果
         } catch (e) {
-            resEl.style.color = 'var(--danger)';
+            resEl.style.color = 'var(--danger-text)';
             resEl.innerText = '验证请求异常';
             verifying = false;
             btn.disabled = false;
@@ -5302,7 +6587,7 @@
         const resEl = document.getElementById('silent-paste-verify-result');
         if (btn) btn.disabled = false;
         if (resEl) {
-            resEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+            resEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
             resEl.innerText = (ok ? '✔ ' : '✘ ') + info;
         }
     };
@@ -5319,14 +6604,14 @@
         try {
             const r = await callPython('verify_silent_unichar');
             if (!r || r.status !== 'success') {
-                resEl.style.color = 'var(--danger)';
+                resEl.style.color = 'var(--danger-text)';
                 resEl.innerText = (r && r.msg) || '验证请求失败';
                 verifying = false;
                 btn.disabled = false;
             }
             // 成功：等待 Python 侧 onSilentUnicharVerifyResult 回推最终结果
         } catch (e) {
-            resEl.style.color = 'var(--danger)';
+            resEl.style.color = 'var(--danger-text)';
             resEl.innerText = '验证请求异常';
             verifying = false;
             btn.disabled = false;
@@ -5338,7 +6623,7 @@
         const resEl = document.getElementById('silent-unichar-verify-result');
         if (btn) btn.disabled = false;
         if (resEl) {
-            resEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+            resEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
             resEl.innerText = (ok ? '✔ ' : '✘ ') + info;
         }
     };
@@ -5355,14 +6640,14 @@
         try {
             const r = await callPython('verify_silent_char');
             if (!r || r.status !== 'success') {
-                resEl.style.color = 'var(--danger)';
+                resEl.style.color = 'var(--danger-text)';
                 resEl.innerText = (r && r.msg) || '验证请求失败';
                 verifying = false;
                 btn.disabled = false;
             }
             // 成功：等待 Python 侧 onSilentCharVerifyResult 回推最终结果
         } catch (e) {
-            resEl.style.color = 'var(--danger)';
+            resEl.style.color = 'var(--danger-text)';
             resEl.innerText = '验证请求异常';
             verifying = false;
             btn.disabled = false;
@@ -5374,7 +6659,7 @@
         const resEl = document.getElementById('silent-char-verify-result');
         if (btn) btn.disabled = false;
         if (resEl) {
-            resEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+            resEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
             resEl.innerText = (ok ? '✔ ' : '✘ ') + info;
         }
     };
@@ -5391,14 +6676,14 @@
         try {
             const r = await callPython('verify_child_windows');
             if (!r || r.status !== 'success') {
-                resEl.style.color = 'var(--danger)';
+                resEl.style.color = 'var(--danger-text)';
                 resEl.innerText = (r && r.msg) || '验证请求失败';
                 verifying = false;
                 btn.disabled = false;
             }
             // 成功：等待 Python 侧 onChildWindowsVerifyResult 回推最终结果
         } catch (e) {
-            resEl.style.color = 'var(--danger)';
+            resEl.style.color = 'var(--danger-text)';
             resEl.innerText = '验证请求异常';
             verifying = false;
             btn.disabled = false;
@@ -5410,7 +6695,7 @@
         const resEl = document.getElementById('child-windows-verify-result');
         if (btn) btn.disabled = false;
         if (resEl) {
-            resEl.style.color = ok ? 'var(--accent)' : 'var(--danger)';
+            resEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
             resEl.innerText = (ok ? '✔ ' : '✘ ') + info;
         }
     };

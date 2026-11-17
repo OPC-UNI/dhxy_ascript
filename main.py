@@ -837,7 +837,8 @@ if __name__ == '__main__':
     # （不能用 WebWindow.show()——它内部会重复 create_window 出第二个窗口）
     webview.start(debug=False, gui='edgechromium')
 
-    # GUI 循环结束（窗口已销毁）后收尾：兜底清理任务进程并退出
+    # GUI 循环结束（窗口已销毁）后收尾：兜底清理消息服务与任务进程并退出
+    control_win.stop_message_service()
     tm.stop()
     Runtime.stop()
     print("[系统] 程序已正常退出。")

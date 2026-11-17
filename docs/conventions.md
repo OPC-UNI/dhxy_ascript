@@ -26,7 +26,8 @@ src/
 ├─ tasks/       # 任务编排：xuanshu、wuhuan、kezhan、xiuluo、wubei、
 │               # zhongzu、mingwang
 └─ app/         # 外壳/UI/生命周期：control_window、task_manager、updater、
-                # hotkey、select_window、env_check、capture_diag、license_app_id
+                # hotkey、select_window、env_check、capture_diag、license_app_id、
+                # messages/（消息服务：通道注册表、Telegram、路由、事件、锁）
 ```
 
 `main.py` 留在仓库根目录，是唯一装配入口。

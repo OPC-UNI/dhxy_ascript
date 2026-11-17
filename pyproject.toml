@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dhxy2"
-version = "2.12.2"
+version = "2.13.0"
 description = "Ascript Project Template"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -25,7 +25,8 @@ dependencies = [
 package-dir = {"dhxy2" = "."}
 packages = ["dhxy2", "dhxy2.src",
             "dhxy2.src.core", "dhxy2.src.device", "dhxy2.src.tasks",
-            "dhxy2.src.app", "dhxy2.src.workflows", "dhxy2.src.minigames"]
+            "dhxy2.src.app", "dhxy2.src.app.messages",
+            "dhxy2.src.workflows", "dhxy2.src.minigames"]
 
 include-package-data = true
 

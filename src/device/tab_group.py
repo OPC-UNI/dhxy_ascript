@@ -592,6 +592,20 @@ def _current_id(win):
     return _current(win)[1]
 
 
+def current_tab_id(win):
+    """当前可见已登录 Tab 的账号 ID（退出游戏等外部流程用）。"""
+    return _current(win)[1]
+
+
+def switch_next_logged(win):
+    """切到下一个已登录 Tab（退出游戏流程用，语义同 _switch_next）。
+
+    返回切换后当前 Tab 的账号 ID；空串=切换成功但 Tab 未登录；
+    None=切换失败。
+    """
+    return _switch_next(win)
+
+
 def _ensure_foreground(win):
     """Ctrl+Tab 经前台窗口送达：激活游戏窗口并校验前台（同清屏链路）。
 

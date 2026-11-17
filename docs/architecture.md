@@ -13,7 +13,7 @@
 | 维度 | 设计 |
 |---|---|
 | 进程模型 | **主进程**（pywebview GUI / 控制平面）+ **任务子进程**（spawn，daemon）+ **悬浮层绘制子进程**（subprocess，独立进程） |
-| 线程模型 | 主进程：GUI 主线程、TaskManager 日志监听、窗口看护、老板键消息泵、托盘、Runtime 驻留、OCR 预热；任务子进程：`task_start` daemon 线程、`battle.watch_loop` 战斗线程、摄妖香空闲兜底线程、debug_overlay 监督线程 |
+| 线程模型 | 主进程：GUI 主线程、TaskManager 日志监听、窗口看护、老板键消息泵、托盘、Runtime 驻留、OCR 预热、消息服务轮询/事件线程；任务子进程：`task_start` daemon 线程、`battle.watch_loop` 战斗线程、摄妖香空闲兜底线程、debug_overlay 监督线程 |
 | 停止模型 | **杀进程是唯一可靠的全线程清理方式**：`stop_event → join 3s → terminate → join 1s → kill`（业务循环无协作式停止标志） |
 | 任务编排 | 面板勾选任务 → 按顺序逐个进入 `_run_task_mode`；每个任务循环自然结束后切下一个，全部结束任务进程退出 |
 | 感知 | Win32 窗口截图（不激活）→ PIL 帧（OCR / 绿字）或 BGR 帧（模板匹配）；RapidOCR 三种引擎（全帧 / 区域 / 2x 放大）+ OpenCV 模板匹配 |
@@ -30,6 +30,7 @@ flowchart TB
     subgraph EXT["外部环境"]
         GAME["游戏客户端 xy2_tab_x64<br/>主窗口类 DHXYJYMainFrame<br/>多个登录 Tab 子窗口"]
         ADMIN["操作员<br/>控制面板 / F11 老板键 / 托盘"]
+        TG["Telegram Bot API<br/>api.telegram.org"]
     end
 
     subgraph MAIN["主进程（GUI + 控制平面）"]
@@ -40,6 +41,7 @@ flowchart TB
         TRAY["pystray 托盘"]
         VERIFY["诊断 / 验证按钮<br/>主进程内跑真实链路"]
         MP_OCR["OCR 预热线程<br/>供验证按钮使用"]
+        MSG["MessageService<br/>Telegram 长轮询 / 只读指令 / 事件推送"]
     end
 
     subgraph SUB["任务子进程（daemon, spawn）"]
@@ -75,6 +77,13 @@ flowchart TB
     VERIFY --> MP_OCR
     UI --> CFG
     UI --> ROLE
+    UI -->|"配置 / 验证 / 状态轮询"| MSG
+    TM -->|"add_logs 事件旁路"| MSG
+    MSG --> CFG
+    MSG --> STATE
+    MSG --> LOG
+    MSG --> GAME
+    MSG <-->|"HTTPS（可配 HTTP 代理）"| TG
 
     TM -->|"multiprocessing.Process"| WRAP
     TM -->|"stop_event / terminate / kill"| WRAP
@@ -115,6 +124,7 @@ flowchart TB
 | 悬浮层子进程 | 读取状态文件绘制游戏窗口上的任务信息 | 父进程死 15s 后 `os._exit`；崩溃由监督线程自动重启；GDI 崩溃只丢悬浮层 |
 | 更新助手 | 自动更新：等主进程退出 → 备份/覆盖 exe/res/pylibs → 重启/回滚 | 运行在 `%TEMP%` 的 exe 副本，不锁安装目录；只动白名单文件；详细设计见 `docs/auto-update-design.md` |
 | 主进程验证 | 「诊断」页按钮在主进程跑真实链路（OCR 预热在此） | 与任务子进程共用 `find_main_window` 接缝；绑定 Tab 护栏 |
+| 消息服务 | Telegram `getUpdates` 长轮询、只读指令（状态/进度/日志/截图）、`/exitgame`（停任务→队伍处理→关闭客户端，二次确认）、事件旁路推送、一键验证 | 单实例锁；验证不调用 `getUpdates`；不修改任务子进程；事件失败重试；网络异常退避不冒泡 |
 
 ---
 

@@ -7,7 +7,9 @@ UI 布局、窗口、桥接逻辑仍留在 control_window.py；任务/设备模�
 迁移约定：设置键名、默认值、夹取/迁移逻辑一律保持不变；control_window
 在过渡期 re-export 本模块的名字以兼容旧 import。
 """
+import re
 import time
+import urllib.parse
 
 from ascript.windows.system.key_value import KeyValue
 
@@ -1274,3 +1276,217 @@ def save_auto_famen(on):
     role_settings.set_value(_AUTO_FAMEN_KEY, bool(on))
     return {"status": "success"}
 
+
+
+# ==================== 消息服务（全局设置，config.json） ====================
+# 与「调试信息」同类：全局、不进配置方案、不按角色隔离。通道字段文案与
+# 默认值归 app/messages/registry.py（core 不依赖 app）；本模块只负责
+# 顶层默认值、深合并（未知键保留）、通用校验与 secret 掩码。
+MESSAGE_SERVICE_KEY = "message_service"
+MESSAGE_CONFIG_VERSION = 1
+MESSAGE_EVENT_KEYS = ("task_start", "task_stop", "task_end",
+                      "task_crash", "error", "license_block")
+MESSAGE_DEFAULT_EVENTS = {key: True for key in MESSAGE_EVENT_KEYS}
+MESSAGE_DEFAULT_CONFIG = {
+    "version": MESSAGE_CONFIG_VERSION,
+    "enabled": False,
+    "notify_online": False,   # 服务上线提示默认关闭（避免每次开机噪音）
+    "events": dict(MESSAGE_DEFAULT_EVENTS),
+    "channels": {},
+}
+MESSAGE_SECRET_FIELD_KEYS = frozenset({"token"})
+MESSAGE_CAPTURE_COOLDOWN = 3.0
+MESSAGE_CHAT_IDS_MAX = 50
+MESSAGE_POLL_TIMEOUT_DEFAULT = 20
+MESSAGE_POLL_TIMEOUT_RANGE = (5, 50)
+_MESSAGE_MASK_PREFIX = "****"
+
+
+def mask_secret(value):
+    """secret 掩码：仅保留尾 4 位；空值返回空串。"""
+    text = str(value or "")
+    if not text:
+        return ""
+    if len(text) <= 4:
+        return _MESSAGE_MASK_PREFIX
+    return _MESSAGE_MASK_PREFIX + text[-4:]
+
+
+def _message_deep_merge(base, patch):
+    """递归深合并：未知键（含未知通道/通道内未来字段）原样保留。"""
+    out = dict(base) if isinstance(base, dict) else {}
+    for key, value in (patch or {}).items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = _message_deep_merge(out[key], value)
+        else:
+            out[key] = value
+    return out
+
+
+def _message_merge_defaults(raw):
+    """补顶层默认值并归一化布尔/事件表；channels 由通道注册表补默认。"""
+    cfg = _message_deep_merge(
+        MESSAGE_DEFAULT_CONFIG, raw if isinstance(raw, dict) else {})
+    cfg["version"] = MESSAGE_CONFIG_VERSION
+    cfg["enabled"] = _as_bool(cfg.get("enabled", False))
+    cfg["notify_online"] = _as_bool(cfg.get("notify_online", False))
+    events = cfg.get("events") if isinstance(cfg.get("events"), dict) else {}
+    cfg["events"] = {**MESSAGE_DEFAULT_EVENTS,
+                     **{key: _as_bool(value) for key, value in events.items()}}
+    if not isinstance(cfg.get("channels"), dict):
+        cfg["channels"] = {}
+    return cfg
+
+
+def _message_strip_masked(base, patch):
+    """UI 回写的掩码占位（****xxxx）一律不写盘：有旧值保留旧值。
+
+    真实 token 形如「数字:字母数字」，不会以 **** 开头；空串仍表示
+    显式清空（不受影响）。
+    """
+    if not isinstance(patch, dict):
+        return {}
+    out = {}
+    for key, value in patch.items():
+        old = base.get(key) if isinstance(base, dict) else None
+        if key in MESSAGE_SECRET_FIELD_KEYS and isinstance(value, str) \
+                and value.startswith(_MESSAGE_MASK_PREFIX):
+            continue
+        if isinstance(value, dict) and isinstance(old, dict):
+            out[key] = _message_strip_masked(old, value)
+        else:
+            out[key] = value
+    return out
+
+
+def _message_normalize_chat_ids(value):
+    """chat_ids 归一化：数字 ID（可负数群）、去重、上限 50；空串清空。"""
+    if value is None:
+        items = []
+    elif isinstance(value, str):
+        items = re.split(r"[\r\n,，]+", value)
+    elif isinstance(value, (list, tuple)):
+        items = list(value)
+    else:
+        raise ValueError("chat_ids 格式无效")
+    result, seen = [], set()
+    for item in items:
+        text = str(item or "").strip()
+        if not text or text in seen:
+            continue
+        if not re.fullmatch(r"-?\d+", text) or text == "0":
+            raise ValueError(f"chat_id 格式无效：{text}（只支持数字 ID，"
+                             f"可用 @userinfobot 查询）")
+        seen.add(text)
+        result.append(text)
+    if len(result) > MESSAGE_CHAT_IDS_MAX:
+        raise ValueError(f"chat_ids 最多 {MESSAGE_CHAT_IDS_MAX} 个")
+    return result
+
+
+def _message_normalize_proxy(value):
+    """代理地址：仅 http/https；缺 scheme 自动补 http://。"""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if "://" not in text:
+        text = "http://" + text
+    parsed = urllib.parse.urlparse(text)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise ValueError("代理地址无效：仅支持 http:// 或 https://（SOCKS 暂不支持）")
+    return text
+
+
+def _sanitize_message_config(cfg):
+    """校验并归一化已知通道字段；未知通道/未知字段原样保留、不校验。"""
+    channels = cfg.get("channels")
+    if not isinstance(channels, dict):
+        raise ValueError("channels 格式无效")
+    for name, channel in channels.items():
+        if not isinstance(channel, dict):
+            raise ValueError(f"通道 {name} 配置格式无效")
+        if "enabled" in channel:
+            channel["enabled"] = _as_bool(channel["enabled"])
+        if "token" in channel:
+            token = str(channel.get("token") or "").strip()
+            if any(ch.isspace() for ch in token):
+                raise ValueError("Bot Token 不应包含空格")
+            channel["token"] = token
+        if "chat_ids" in channel:
+            channel["chat_ids"] = _message_normalize_chat_ids(
+                channel["chat_ids"])
+        if "proxy" in channel:
+            channel["proxy"] = _message_normalize_proxy(channel["proxy"])
+        if "poll_timeout" in channel:
+            try:
+                value = int(channel["poll_timeout"])
+            except (TypeError, ValueError):
+                value = MESSAGE_POLL_TIMEOUT_DEFAULT
+            channel["poll_timeout"] = max(
+                MESSAGE_POLL_TIMEOUT_RANGE[0],
+                min(MESSAGE_POLL_TIMEOUT_RANGE[1], value))
+        if "photo_original" in channel:
+            channel["photo_original"] = _as_bool(channel["photo_original"])
+
+
+def load_message_config():
+    """读取消息服务配置（原始值，含真实 token；UI 展示前须 mask）。"""
+    return _message_merge_defaults(
+        app_utils.kv_read_fresh(MESSAGE_SERVICE_KEY, None))
+
+
+def merge_message_config(patch):
+    """纯函数：当前配置 + patch 深合并、掩码回填、校验；不写盘。
+
+    供「验证通道」用表单当前值（可未保存）直接验证；校验失败抛 ValueError。
+    """
+    base = load_message_config()
+    safe = _message_strip_masked(base, patch if isinstance(patch, dict) else {})
+    merged = _message_deep_merge(base, safe)
+    merged["version"] = MESSAGE_CONFIG_VERSION
+    _sanitize_message_config(merged)
+    return merged
+
+
+def save_message_config(patch):
+    """深合并保存（锁内重读→合并→校验→写）；未知键保留。
+
+    返回 {"status":"success","config":<raw merged>} 或
+    {"status":"error","msg":...}；空串 token 表示显式清空。
+    """
+    if not isinstance(patch, dict):
+        return {"status": "error", "msg": "配置格式无效"}
+    holder = {}
+
+    def _update(current):
+        base = _message_merge_defaults(current)
+        safe = _message_strip_masked(base, patch)
+        merged = _message_deep_merge(base, safe)
+        merged["version"] = MESSAGE_CONFIG_VERSION
+        _sanitize_message_config(merged)
+        holder["config"] = merged
+        return merged
+
+    try:
+        app_utils.kv_update_merged(MESSAGE_SERVICE_KEY, _update)
+    except ValueError as e:
+        return {"status": "error", "msg": str(e)}
+    return {"status": "success", "config": holder["config"]}
+
+
+def mask_message_config(cfg):
+    """UI 展示副本：secret 字段只显示 ****+尾 4 位。"""
+    def walk(node):
+        if isinstance(node, dict):
+            out = {}
+            for key, value in node.items():
+                if key in MESSAGE_SECRET_FIELD_KEYS and isinstance(value, str):
+                    out[key] = mask_secret(value)
+                else:
+                    out[key] = walk(value)
+            return out
+        if isinstance(node, list):
+            return [walk(value) for value in node]
+        return node
+
+    return walk(cfg)

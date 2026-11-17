@@ -24,6 +24,8 @@ data/
 
 - `data/` 与 `config.json` 同目录：开发环境为工程根，打包后为 exe
   所在目录；不可写时跟随 KeyValue 退 `~/.app_data`。
+- `message_service.lock`：消息服务单实例锁，与 `config.json` 同目录，
+  仅在启用消息服务时创建（运行时文件，`.gitignore` 已忽略）。
 - 角色 ID 只取数字；非法/缺失退 `_default`。
 
 ## 2. 角色归属
@@ -150,7 +152,8 @@ data/
 - `bound_window_id`、`license_cache_no`、`ui_theme`、`debug_overlay`、
   `debug_ui_unlocked`（若解锁过）、`boss_hotkey`（若配置过）、
   `update_auto_check` / `update_last_check_ts` / `update_skipped_version` /
-  `update_feed_url`（若存在）
+  `update_feed_url`（若存在）、`message_service`（消息服务通道配置；
+  全局、不按角色隔离、不进配置方案）
 
 ## 6. 代码入口
 
@@ -162,7 +165,8 @@ data/
 | `src/core/debug_overlay.py` | 成就文件路径 `data/<角色>/task_stats.json` |
 | `src/core/schemes.py` | 按角色方案文件、方案切换写 settings.json、迁移后 bootstrap |
 | `src/core/settings.py` | 角色设置 load/save（从 control_window 抽出）；进度/组号状态读当前角色 |
-| `src/app/control_window.py` | 设置项 UI 接线与 re-export；成就页返回 role 信息 |
+| `src/app/control_window.py` | 设置项 UI 接线与 re-export；成就页返回 role 信息；消息服务桥接/截图/日志尾巴 |
+| `src/app/messages/` | 消息服务（通道注册表、Telegram 长轮询、只读指令、事件推送、单实例锁、日志尾巴） |
 | `main.py` | 绑定后执行迁移 + 角色设置建立 + 两次启动后的旧 config 字段清理 |
 
 ## 7. 测试
