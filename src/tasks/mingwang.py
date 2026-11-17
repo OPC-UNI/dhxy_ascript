@@ -43,14 +43,17 @@
    mingwang_shaduxiuluo（阈值 0.79，命中直接点模板中心），未命中再
    OCR 世界区域找「沙都修罗」文案（必须排除任务追踪面板同名文案）
    → 找到点击文案上方 40px；全部路点均未找到限频重试。
-   五庄封印（仙族，2026-11-10 用户规则）：追踪面板出现「火藏之位」
-   「木藏之位」两个绿字链接，先点火藏之位；到达目的地（位置连续
+   五庄封印（仙族，2026-11-10 用户规则 + 2026-11-17 动态元素）：
+   追踪面板出现两个「X藏之位」绿字链接（五行任选两个：金/木/水/火/土，
+   实机已见 金+土、水+火、火+木），点第一个；到达目的地（位置连续
    稳定，复用五倍显形镜的坐标稳定判定）后打开背包任务储物格（与
    修罗回城符同格）右键使用唤风符（mingwang_huanfengfu）。用符后
    当前链接由亮绿变红（可能立刻、也可能战斗结束后变红）或坐标
-   离开五庄观即该点完成，改点木藏之位重复；两个点都完成后只等任务
-   整体从追踪面板消失（follow 判定完成；不做战斗判定，战斗由
-   battle 线程托管）。
+   离开五庄观即该点完成，改点另一个未完成的（按颜色选，完成顺序
+   不固定）；两个点都完成后只等任务整体从追踪面板消失（follow 判定
+   完成；不做战斗判定，战斗由 battle 线程托管）。封印点元素从追踪
+   文案动态解析（旧版写死火/木，实机轮到金/土时颜色判定落空、空转
+   到超时——2026-11-17 教训）。
    灵力镐（魔族，2026-11-10 用户规则）：任务追踪出现「前往大唐边境，
    使用灵力镐」→ 点击任务追踪绿色文案**蕴灵石头**（不可点「灵力镐」，
    那是物品说明）自动寻路（须先见位移才允许后续步骤，防在领取点
@@ -85,6 +88,13 @@
    （zuoqi.ensure_landed，降落后关面板防遮挡）→ 等待暗雷遭遇战斗
    （战斗由 follow_task/battle 线程托管，不做特殊处理）。已降落状态
    保持到目标地图变化（多段搜查换图重新降落）或触发词连续缺失复位。
+   星魂归位（仙族，2026-11-17 实机全流程）：追踪「看看天庭的星官X遇到
+   什么麻烦了。」→ 引擎点「星官X」链接寻路 → 对话选「是武尊神遣我过来
+   帮忙的。」（DIALOG_OPTION_MAP）→ 传送四象禁地 → 找场景中「X之星魂」
+   石柱（位置随机）点标签寻路、点石柱、选「催动法力，让星魂跟随自己
+   移动。」→ 点追踪「X之星宿石」链接寻路 → 选「星魂归位！」→ 点
+   「四象禁地」回中心，重复六个（顺序无要求）；六个归位后任务自动完成。
+   执行闭环见 minigames/xinghun.py（任务侧只注入共享帧与复位）。
 5. 领取后（用户 2026-11-10 规则）：接取后出现对话框——对话框模板
    门控命中则点屏幕中间关闭；任务追踪出现「山河名望」→ 复用
    workflows.follow.follow_task 跟踪到任务完成（每轮点击追踪绿字推进）。
@@ -136,6 +146,7 @@ from ..device import bag  # 背包操作（五庄封印任务储物格用唤风�
 from ..device import zuoqi  # 飞行驭器（蛟魔复仇到达目标地图后降落）
 from ..minigames import moqushendan as _moqu_minigame  # 天宫奇遇「魔取仙丹」顺序解封小游戏
 from ..minigames import mowangchongju as _mowang_minigame  # 魔王重聚「传音石寻人」引导（读提示找图/按方向收敛）
+from ..minigames import xinghun as _xinghun_minigame  # 星魂归位·四象禁地（找星魂→星宿石→归位闭环）
 from ..minigames import pochufengyin as _pochu_minigame  # 破除封印/钓鱼共用小游戏（闭环实现）
 from ..minigames import shahai as _shahai_minigame  # 沙海迷踪阻塞循环
 from ..minigames.shahai import (SHAHAI_GAME_ARM_TIMEOUT,
@@ -290,6 +301,9 @@ CLAIM_TASKS = (
     {"title": "净化水晶", "level": "高级"},
     {"title": "五庄封印", "level": "高级"},
     {"title": "沙都修罗", "level": "高级"},
+    # 星魂归位（仙族，2026-11-17 实机全流程）：高级卡片（用户确认）；
+    # 执行实现在 minigames/xinghun.py
+    {"title": "星魂归位", "level": "高级"},
     # 鬼族
 )
 # ---- 任务执行对话（类似 xuanshu.DIALOG_OPTION_MAP：对话框文案 → 绿色选项）----
@@ -307,6 +321,10 @@ DIALOG_OPTION_MAP = {
     "也许世人早已经忘记了我们，这可是一件好事。":"逆天魔派我过来帮忙。",
     "幽幽的缝隙，混杂着混沌气息的黑水从里面缓缓溢出。":"尝试清理",
     "老头子我最喜欢的，就是在这里钓鱼了~":"请将鱼竿借我一用！",
+    # 星魂归位（2026-11-17 实机）：星官角木蛟开场选「是武尊神遣我过来帮忙的。」
+    # 后传送到四象禁地；到达星宿石的归位确认对话（状态机也点，表作兜底）
+    "卦象显示，东方七宿": "是武尊神遣我过来帮忙的。",
+    "感觉差不多到对应的星位": "星魂归位！",
     "这该怎么办呢，好担心":"是武尊神遣我过来帮忙的。",
     "大事不妙！蟠桃园内大量的蟠桃树遭":"是武尊神遣我过来帮忙的。",
     "那个又唠叨又烦人的破龙王，天庭将这么重要的东海元石托付给他，居":"是武尊神遣我过来帮忙的。",
@@ -332,6 +350,9 @@ DIALOG_OPTION_MAP = {
 # 2026-11-10 实机（仙族五庄封印·五庄观 NPC 明月）：风暴封印线索。
 DIALOG_SKIP_TEXTS = {
     "我倒是担心风暴的封印": 1,
+    # 星魂归位（2026-11-17 实机）：选「是武尊神遣我过来帮忙的。」后的
+    # 无选项说明台词，点一次推进后自动传送四象禁地
+    "少侠不愧是武尊神看重之人": 1,
     # 魔王重聚（2026-11-15 实机）：魔王护卫战后台词 + 魔王三大王收尾台词
     "本事不错，俺家主人愿意见你一面": 1,
     "哼，不知道老牛吸取了之前失败的教训": 1,
@@ -339,18 +360,28 @@ DIALOG_SKIP_TEXTS = {
 FOLLOW_TIMEOUT = 300        # 跟踪任务总超时（秒；战斗等待时间不计入，同 xuanshu）
 
 # ---- 五庄封印（仙族）执行：追踪双链接 → 到达 → 任务储物格用唤风符 ----
-# 用户 2026-11-10 流程：追踪面板出现「火藏之位」「木藏之位」两个绿字链接，
-# 先点火藏之位 → 寻路到达 → 打开背包任务储物格（与修罗回城符同一格）→
-# 右键使用唤风符（mingwang_huanfengfu）。用符后当前链接**由亮绿变红**
-# （可能立刻、也可能战斗结束后变红）或坐标离开五庄观 = 该点完成，改点
-# 木藏之位重复；两个点都完成后只等任务整体消失（follow 判定）。到达判定
-# 复用五倍显形镜的「位置连续稳定」逻辑（XIANXINGJING_ARRIVE_POLLS=3）。
+# 用户 2026-11-10 流程：追踪面板出现两个「X藏之位」绿字链接（五行任选
+# 两个，2026-11-17 用户确认：金/木/水/火/土 都可能，实机已见
+# 金藏+土藏、水藏+火藏）→ 点第一个 → 寻路到达 → 打开背包任务储物格
+# （与修罗回城符同一格）→ 右键使用唤风符（mingwang_huanfengfu）。用符后
+# 当前链接**由亮绿变红**（可能立刻、也可能战斗结束后变红）或坐标离开
+# 五庄观 = 该点完成，改点另一个未完成的；两个点都完成后只等任务整体消失
+# （follow 判定）。到达判定复用五倍显形镜的「位置连续稳定」逻辑
+# （XIANXINGJING_ARRIVE_POLLS=3）。
+# **封印点从追踪文案动态解析**（2026-11-17 实机教训：旧版写死火藏/木藏，
+# 实机轮到「金藏之位+土藏之位」时颜色判定全落空——状态机认不出已完成，
+# 日志还一直报火藏，空转到超时）：目标元素 = 追踪签名里所有「X藏」
+# 的规范字，按文本顺序；当前目标 = 第一个未变红的，完成顺序两种都支持。
 SEAL_TASK_KEYWORD = "五庄"              # 追踪面板任务名关键词（五庄封印）
 SEAL_MAP = "五庄观"                     # 任务地图（离开即视为本点完成）
-SEAL_LINKS = ("火藏之位", "木藏之位")    # 依次完成的封印点链接（日志/展示用）
-# 链接匹配关键词（含 OCR 形近字别名）：木藏常被 OCR 读成「水藏/未藏」
-# （2026-11-10 实机两次识别分别为「木藏」「水藏」）；按顺序取首个命中。
-SEAL_LINK_KEYWORDS = (("火藏",), ("木藏", "水藏", "未藏"))
+SEAL_ELEM_ALIASES = {                   # 「X藏」OCR 形近字 → 五行规范字
+    "金": "金", "全": "金",
+    "木": "木", "未": "木", "本": "木",
+    "水": "水",
+    "火": "火", "灭": "火",
+    "土": "土", "士": "土",
+}
+SEAL_LINK_NAME_SUFFIX = "藏之位"         # 日志/展示用全名（X + 后缀）
 SEAL_ARRIVE_POLLS = 3                   # 位置连续稳定轮询数判定到达（同显形镜）
 SEAL_POS_TOLERANCE = 3                  # 坐标稳定容差（像素，同显形镜）
 SEAL_MOVE_DELTA = 5                     # 判定寻路已启动的位移阈值（同显形镜）
@@ -377,7 +408,8 @@ SEAL_ITEM_FIND_TIMEOUT = 10.0           # 任务储物格中查找唤风符的�
 # 不做战斗判定——战斗由 follow_task/battle 线程托管；战斗结束后任务
 # 若已从追踪面板消失，follow 直接判定完成（用户 2026-11-10 规则）。
 _seal_phase = 0
-_seal_link_idx = 0          # 当前目标链接下标（0=火藏 1=木藏）
+_seal_elems = []            # 封印点元素（规范字，按追踪文案顺序；动态解析）
+_seal_link_idx = 0          # 当前目标在 _seal_elems 中的下标
 _seal_stable = 0            # 位置连续稳定轮询数
 _seal_last_pos = None       # 上次位置
 _seal_need_move = False     # 点链接后须位置先变化才允许用符
@@ -1914,11 +1946,12 @@ def _handle_shadu_xiuluo(win, items, img_np):
 # ---- 五庄封印执行（追踪双链接 → 坐标稳定到达 → 任务储物格用唤风符）----
 def _reset_seal_state():
     """五庄封印状态机复位（新任务领取成功/跨任务防残留）。"""
-    global _seal_phase, _seal_link_idx, _seal_stable, _seal_last_pos, \
-        _seal_need_move, _seal_walk_from, _seal_move_stuck, _seal_use_at, \
-        _seal_use_retries, _seal_missing, _seal_both_warned, \
+    global _seal_phase, _seal_elems, _seal_link_idx, _seal_stable, \
+        _seal_last_pos, _seal_need_move, _seal_walk_from, _seal_move_stuck, \
+        _seal_use_at, _seal_use_retries, _seal_missing, _seal_both_warned, \
         _seal_dlg_streak, _seal_dlg_click_at, _seal_bag_close_at
     _seal_phase = 0
+    _seal_elems = []
     _seal_link_idx = 0
     _seal_stable = 0
     _seal_last_pos = None
@@ -1976,50 +2009,62 @@ def _seal_sig(items):
 def _seal_underline_point(img_np, rect, x):
     """在 OCR 行框底附近找距近似 x 最近的亮绿下划线段，返回点击点。
 
-    追踪面板一行内可能有多个绿色链接（火藏之位/木藏之位/唤风符），
-    整行绿字中心会点错；下划线段是链接专属标记，按文本内字符位置
-    按比例映射到框内 x，再取最近的下划线中心（同 task_tracker.
-    green_text_center 的下划线规则：行框底 -10~+8px、亮绿 ≥8px 连续段、
-    点击下划线上方 2px）。
+    通用能力已下沉 task_tracker.underline_point（2026-11-17 星魂归位
+    复用同一「一行多个绿字链接按 x 定位」需求）；本函数保留为任务侧
+    调用名，行为不变。
     """
-    l, t, r, b = rect
-    y0 = max(0, b - 10)
-    y1 = min(img_np.shape[0], b + 9)
-    x0 = max(0, l - 2)
-    x1 = min(img_np.shape[1], r + 60)
-    if y1 <= y0 or x1 <= x0:
-        return None
-    mask = task_tracker.green_mask(img_np[y0:y1, x0:x1],
-                                   task_tracker.GREEN_BRIGHT_MIN)
-    best = None
-    for yy in range(mask.shape[0]):
-        cols = np.where(mask[yy])[0]
-        if cols.size < 8:
+    return task_tracker.underline_point(img_np, rect, x)
+
+
+def _seal_parse_links(sig):
+    """从追踪签名解析封印点元素（规范字，按文本顺序）。
+
+    追踪文案如「在五庄观找到金藏之位和土藏之位的风暴封印处」——五行
+    任选两个（金木水火土，实机已见 金+土、水+火），链接名「X藏之位」。
+    OCR 形近字经 SEAL_ELEM_ALIASES 归一；去重保序。追踪文案拆行不影响
+    （签名是各 OCR 行规范化后拼接，无换行）。
+    """
+    elems = []
+    for m in re.finditer(r"[金全木未本水火灭土士]藏", sig):
+        el = SEAL_ELEM_ALIASES[m.group(0)[0]]
+        if el not in elems:
+            elems.append(el)
+    return elems
+
+
+def _seal_link_keywords(link_idx, elems=None):
+    """目标元素的可匹配关键词（含 OCR 形近字别名），如 ('金藏',)。"""
+    elems = _seal_elems if elems is None else elems
+    if not elems:
+        return ()
+    el = elems[min(link_idx, len(elems) - 1)]
+    return tuple(f"{a}藏" for a, canon in SEAL_ELEM_ALIASES.items()
+                 if canon == el)
+
+
+def _seal_link_name(link_idx):
+    """目标元素全名（日志/展示用），如「金藏之位」。"""
+    if not _seal_elems:
+        return "封印点"
+    el = _seal_elems[min(link_idx, len(_seal_elems) - 1)]
+    return el + SEAL_LINK_NAME_SUFFIX
+
+
+def _seal_pick_next(items, img_np, exclude=None):
+    """除 exclude 外第一个未变红的封印点下标；无可选返回 None。
+
+    完成顺序不固定（游戏可能让玩家先做任一封印点，2026-11-17 实机：
+    文案「金藏+土藏」先走到金藏）——按颜色选下一个，而非固定 0→1。
+    颜色读不出（None）按未完成处理（宁可多点一次）。
+    exclude 用于「坐标离开五庄观视为本点完成」：链接可能仍是绿的，
+    必须排除当前点再选另一个，否则会误判「两个都已完成」空转。
+    """
+    for i in range(len(_seal_elems)):
+        if i == exclude:
             continue
-        runs = []
-        start = prev = int(cols[0])
-        for c in cols[1:]:
-            c = int(c)
-            if c - prev <= 2:
-                prev = c
-            else:
-                runs.append((start, prev))
-                start = prev = c
-        runs.append((start, prev))
-        for a, bb in runs:
-            if bb - a + 1 < 8:
-                continue
-            cx = x0 + (a + bb) // 2
-            dist = abs(cx - x)
-            if best is None or dist < best[0]:
-                best = (dist, (cx, y0 + yy - 2))
-    return None if best is None else best[1]
-
-
-def _seal_link_keywords(link_idx):
-    """当前链接的可匹配关键词（含 OCR 形近字别名）。"""
-    idx = min(link_idx, len(SEAL_LINK_KEYWORDS) - 1)
-    return SEAL_LINK_KEYWORDS[idx]
+        if _seal_link_color(items, img_np, _seal_link_keywords(i)) != "red":
+            return i
+    return None
 
 
 def _seal_link_point(items, img_np, keyword):
@@ -2093,18 +2138,22 @@ def _seal_link_color(items, img_np, keyword):
 
 
 def _seal_green_picker(items, img_np):
-    """track_task green_picker：五庄封印按当前目标链接（火→木）定位。
+    """track_task green_picker：五庄封印按当前目标链接（动态元素）定位。
 
-    当前目标关键词未读出时退回任一封印链接，避免行级默认点击误点
-    同一行里的「唤风符」绿字链接。非五庄任务/无封印链接返回 None，
-    保持 track_task 原有行级选择行为。
+    `_seal_elems` 尚未由状态机解析时（引擎先于点绿字）就地按当前追踪
+    文案解析，避免退回行级默认点击误点「唤风符」绿字链接。
+    当前目标关键词未读出时退回任一封印链接。非五庄任务/无封印链接
+    返回 None，保持 track_task 原有行级选择行为。
     """
-    idx = min(_seal_link_idx, len(SEAL_LINKS) - 1)
-    pt = _seal_link_point(items, img_np, _seal_link_keywords(idx))
+    elems = _seal_elems or _seal_parse_links(_seal_sig(items))
+    if not elems:
+        return None
+    idx = min(_seal_link_idx, len(elems) - 1)
+    pt = _seal_link_point(items, img_np, _seal_link_keywords(idx, elems))
     if pt is not None:
         return pt
-    for i in range(len(SEAL_LINKS)):
-        pt = _seal_link_point(items, img_np, _seal_link_keywords(i))
+    for i in range(len(elems)):
+        pt = _seal_link_point(items, img_np, _seal_link_keywords(i, elems))
         if pt is not None:
             return pt
     return None
@@ -2112,18 +2161,22 @@ def _seal_green_picker(items, img_np):
 
 def _click_seal_link(win, items, img_np, link_idx=None):
     """点击指定（默认当前）封印链接；未识别到返回 False（下轮询重试）。"""
+    elems = _seal_elems or _seal_parse_links(_seal_sig(items))
+    if not elems:
+        return False
     idx = min(_seal_link_idx if link_idx is None else link_idx,
-              len(SEAL_LINKS) - 1)
-    pt = _seal_link_point(items, img_np, _seal_link_keywords(idx))
+              len(elems) - 1)
+    pt = _seal_link_point(items, img_np, _seal_link_keywords(idx, elems))
     if pt is None:
-        for i in range(len(SEAL_LINKS)):  # 目标未读出：退回任一封印链接
-            pt = _seal_link_point(items, img_np, _seal_link_keywords(i))
+        for i in range(len(elems)):  # 目标未读出：退回任一封印链接
+            pt = _seal_link_point(items, img_np, _seal_link_keywords(i, elems))
             if pt is not None:
                 break
     if pt is None:
         return False
     human_click(win, pt[0], pt[1])
-    log(f"[名望] 五庄封印：已点击「{SEAL_LINKS[idx]}」追踪链接 "
+    log(f"[名望] 五庄封印：已点击"
+        f"「{elems[idx] + SEAL_LINK_NAME_SUFFIX}」追踪链接 "
         f"@({pt[0]},{pt[1]})", "SYS")
     return True
 
@@ -2213,6 +2266,7 @@ def _seal_maybe_advance_dialog(win, items, img_np):
     story 兜底因「已知对话表」抑制不点、用符等待被阻塞 65s，须人工
     点屏才继续。有绿字选项时不动（交给选项表）；连续 4 轮询（~2s）
     无绿字才点一次，多屏对话逐页推进（点击后计数清零）。
+    返回 (是否无绿字选项剧情对话, 是否本帧点屏推进)。
     """
     global _seal_dlg_streak, _seal_dlg_click_at
     dl, dt = task_tracker.DIALOG_REGION[0], task_tracker.DIALOG_REGION[1]
@@ -2220,42 +2274,50 @@ def _seal_maybe_advance_dialog(win, items, img_np):
                     if it[2] >= 0.55 and it[1][0] >= dl and it[1][1] >= dt]
     if not region_items:
         _seal_dlg_streak = 0
-        return False
+        return False, False
     if green_option_row_present(img_np, region_items):
         _seal_dlg_streak = 0  # 有绿字选项：交给选项表处理，不点屏
-        return False
+        return False, False
     _seal_dlg_streak += 1
     now = time.time()
     if _seal_dlg_streak < SEAL_DIALOG_ADVANCE_POLLS \
             or now - _seal_dlg_click_at < SEAL_DIALOG_ADVANCE_INTERVAL:
-        return False
+        return True, False
     _seal_dlg_streak = 0
     _seal_dlg_click_at = now
     log("[名望] 五庄封印：对话无绿字选项，点击屏幕中间推进", "SYS")
     _click_screen_center(win, times=1, prefix="名望")
-    return True
+    return True, True
 
 
 def _seal_dialog_blocking(win, items, img_np):
-    """对话框在场判定（共享帧模板门）；命中时顺带尝试无选项自动推进。"""
+    """对话框在场判定（共享帧模板门）；无选项剧情对话由五庄封印独占推进。
+
+    返回 (是否在场, 是否无绿字选项剧情对话)。无选项对话时调用方返回
+    True 让引擎跳过剧情兜底——五庄封印的点屏推进与引擎 StoryDialog
+    Dismisser 同帧命中同一对话会连点两下，第二下在对话关闭/渐隐帧落到
+    世界把人带走，离开封印点后用符失败（2026-11-17 实机：最后一个
+    对话被点两次）。有绿字选项的对话返回 (True, False)，交给选项表。
+    """
     _rgb, bgr = _seal_frame(win, items)
     if bgr is None or dialog_frame_score(bgr) < DIALOG_FRAME_THRESHOLD:
-        return False
-    _seal_maybe_advance_dialog(win, items, img_np)
-    return True
+        return False, False
+    no_option, _clicked = _seal_maybe_advance_dialog(win, items, img_np)
+    return True, no_option
 
 
 def _bag_box_on_frame(win, items):
-    """共享帧上检测背包是否打开（bag_box 模板，不做全帧兜底）。
+    """共享帧上检测背包是否打开（bag.bag_open_on_frame 双锚点）。
 
-    对话框遮挡 bag_box 时 close_bag 会误报「背包未打开」而实际仍开着
-    （用户 2026-11-10 实测）；按帧检测 bag_box 再关是唯一可靠方式。
+    对话框/任务追踪遮挡 bag_box 时 close_bag 会误报「背包未打开」而
+    实际仍开着（用户 2026-11-10 / 2026-11-17 实测）；按帧检测再关是
+    唯一可靠方式。bag_box 被追踪面板盖住时由背包右缘储物格按钮兜底
+    （bag.bag_open_on_frame，通用能力在 bag.py）。
     """
     _rgb, bgr = _seal_frame(win, items)
     if bgr is None:
         return False
-    return game_map.match_frame_np(bgr, bag.BAG_BOX_ICON, threshold=0.8,
-                                   fallback=False) is not None
+    return bag.bag_open_on_frame(bgr)
 
 
 def _seal_close_bag_if_open(win, items):
@@ -2277,27 +2339,29 @@ def _seal_close_bag_if_open(win, items):
 def _seal_advance_if_done(win, items, img_np):
     """当前链接已变红（上一点完成/启动续跑）→ 自动前进并点下一个链接。
 
-    返回是否已处理（点击了下一个链接）。下一个链接也已是红色时只等
-    任务整体消失；对话框在场时先让对话处理（点链接会被对话框吞掉）。
+    下一个目标按颜色选（第一个未变红的），不依赖固定顺序；全部变红
+    时只等任务整体消失。对话框在场时先让对话处理（点链接会被吞掉）。
+    返回是否已处理（点击了下一个链接）。
     """
     global _seal_phase, _seal_link_idx, _seal_stable, _seal_last_pos, \
         _seal_need_move, _seal_walk_from, _seal_move_stuck, _seal_use_retries
-    link = SEAL_LINKS[_seal_link_idx]
+    if not _seal_elems:
+        return False
     if _seal_link_color(items, img_np,
                         _seal_link_keywords(_seal_link_idx)) != "red":
         return False
-    next_idx = _seal_link_idx + 1
-    if next_idx >= len(SEAL_LINKS):
-        return False  # 最后一个点已完成：等任务消失
-    if _seal_link_color(items, img_np, _seal_link_keywords(next_idx)) == "red":
-        return False  # 下一个点也已完成：等任务消失
+    next_idx = _seal_pick_next(items, img_np, exclude=_seal_link_idx)
+    if next_idx is None:
+        return False  # 两个点都已完成（或颜色未读出）：等任务消失
     pos = _seal_pos(win, items)
     if pos is None:
         return False
-    if _seal_dialog_blocking(win, items, img_np):
-        return False
+    blocking, no_option = _seal_dialog_blocking(win, items, img_np)
+    if blocking:
+        return no_option
     if not _click_seal_link(win, items, img_np, link_idx=next_idx):
         return False
+    prev = _seal_link_name(_seal_link_idx)
     _seal_link_idx = next_idx
     _seal_phase = 0
     _seal_stable = 0
@@ -2306,8 +2370,8 @@ def _seal_advance_if_done(win, items, img_np):
     _seal_walk_from = pos
     _seal_move_stuck = 0
     _seal_use_retries = 0
-    log(f"[名望] 五庄封印：{link}已变红（此点已完成），改点"
-        f"「{SEAL_LINKS[next_idx]}」", "SYS")
+    log(f"[名望] 五庄封印：{prev}已变红（此点已完成），改点"
+        f"「{_seal_link_name(next_idx)}」", "SYS")
     return True
 
 
@@ -2354,8 +2418,9 @@ def _seal_wait_arrival(win, items, img_np, now):
     if pos[0].strip() != SEAL_MAP:
         return False  # 跨图寻路中，尚未回到五庄观
     # 对话框在场时不操作背包；无绿字选项的对话由本状态机点屏推进
-    if _seal_dialog_blocking(win, items, img_np):
-        return False
+    blocking, no_option = _seal_dialog_blocking(win, items, img_np)
+    if blocking:
+        return no_option
     ok, info = _use_huanfengfu(win)
     if not ok:
         _seal_stable = 0
@@ -2363,7 +2428,7 @@ def _seal_wait_arrival(win, items, img_np, now):
         return False
     _seal_phase = 1
     _seal_use_at = time.time()
-    log(f"[名望] 五庄封印：已在{SEAL_LINKS[_seal_link_idx]}附近使用"
+    log(f"[名望] 五庄封印：已在{_seal_link_name(_seal_link_idx)}附近使用"
         f"唤风符，等待任务完成", "SYS")
     return True
 
@@ -2372,7 +2437,7 @@ def _seal_check_outcome(win, items, img_np, now):
     """phase 1：用符后等当前封印点完成（链接变红）→ 点下一个链接。
 
     用户 2026-11-10 规则：用符后当前链接由亮绿变红（可能立刻、也可能
-    战斗结束后变红）代表该点完成，必须改点下一个（火藏→木藏）；
+    战斗结束后变红）代表该点完成，必须改点另一个未完成的；
     坐标离开五庄观同样视为本点完成（用符传送/失败），一并切换。
     只在任务整体从追踪面板消失后由 follow 判定完成——本函数在最后
     一个链接变红后仅等待，不做完成判定、不做战斗判定。战斗期间追踪
@@ -2383,7 +2448,15 @@ def _seal_check_outcome(win, items, img_np, now):
         _seal_use_retries, _seal_both_warned, _seal_use_at
     if now - _seal_use_at < SEAL_USE_GRACE:
         return False
-    link = SEAL_LINKS[_seal_link_idx]
+    # 用符后对话可能常驻（战后任务台词等）：无绿字选项的对话必须由本
+    # 状态机推进，否则会卡死——重试用符被「对话框在场」拒绝、链接
+    # 永不变红、follow 空转到超时（2026-11-17 实机：战后对话 +
+    # story 兜底误判寻路中，空转 3 分钟直到超时重开）。有绿字选项的
+    # 对话不受影响（返回 False 交选项表）。
+    blocking, no_option = _seal_dialog_blocking(win, items, img_np)
+    if blocking:
+        return no_option
+    link = _seal_link_name(_seal_link_idx)
     state = _seal_link_color(items, img_np,
                              _seal_link_keywords(_seal_link_idx))
     pos = _seal_pos(win, items)
@@ -2407,7 +2480,8 @@ def _seal_check_outcome(win, items, img_np, now):
                 _seal_use_at = now
             return ok
         return False
-    if _seal_link_idx + 1 >= len(SEAL_LINKS):
+    next_idx = _seal_pick_next(items, img_np, exclude=_seal_link_idx)
+    if next_idx is None:
         if not _seal_both_warned:
             _seal_both_warned = True
             log(f"[名望] 五庄封印：{link}{reason}，两个封印点均已完成，"
@@ -2415,9 +2489,9 @@ def _seal_check_outcome(win, items, img_np, now):
         return False
     # 本点已完成：对话框在场时先让对话处理（点链接会被对话框吞掉；
     # 无绿字选项的对话由状态机点屏推进）
-    if _seal_dialog_blocking(win, items, img_np):
-        return False
-    next_idx = _seal_link_idx + 1
+    blocking, no_option = _seal_dialog_blocking(win, items, img_np)
+    if blocking:
+        return no_option
     if not _click_seal_link(win, items, img_np, link_idx=next_idx):
         return False
     _seal_link_idx = next_idx
@@ -2429,7 +2503,7 @@ def _seal_check_outcome(win, items, img_np, now):
     _seal_move_stuck = 0
     _seal_use_retries = 0
     log(f"[名望] 五庄封印：{link}{reason}，改点"
-        f"「{SEAL_LINKS[_seal_link_idx]}」", "SYS")
+        f"「{_seal_link_name(_seal_link_idx)}」", "SYS")
     return True
 
 
@@ -2441,14 +2515,30 @@ def _handle_wuzhuang_seal(win, items, img_np):
     稳定）→ 用符；1=已用符等结果。不做战斗判定：战斗由 follow_task
     跳过、battle 线程托管；战斗结束任务消失即完成（用户 2026-11-10）。
     """
-    global _seal_missing, _seal_phase
+    global _seal_missing, _seal_phase, _seal_elems, _seal_link_idx
     if _seal_phase == 1:
         # 用符后对话框可能遮挡背包导致关闭失败：残留背包限频补关
         # （放在 tracker 文案判定之前——背包遮挡追踪面板时也要能关）
         _seal_close_bag_if_open(win, items)
-    seal_present = SEAL_TASK_KEYWORD in _seal_sig(items)
+    sig = _seal_sig(items)
+    seal_present = SEAL_TASK_KEYWORD in sig
     if seal_present:
         _seal_missing = 0
+        # 封印点动态解析（2026-11-17：五行任选两个，实机已见 金+土、
+        # 水+火；旧版写死火/木导致颜色判定落空）。解析结果变化时按
+        # 当前元素在新列表中的位置跟随，不打断进行中的点。
+        elems = _seal_parse_links(sig)
+        # 只接受「不少于已知数量」的解析结果：OCR 偶发漏一个元素时不
+        # 覆盖（否则当前目标会被重置、可能重复点已完成链接）
+        if elems and (not _seal_elems or len(elems) >= len(_seal_elems)) \
+                and elems != _seal_elems:
+            old = _seal_elems[_seal_link_idx] \
+                if 0 <= _seal_link_idx < len(_seal_elems) else None
+            _seal_elems = elems
+            _seal_link_idx = elems.index(old) if old in elems else 0
+            log(f"[名望] 五庄封印：封印点 "
+                f"{'、'.join(_seal_link_name(i) for i in range(len(elems)))}",
+                "SYS")
     elif _seal_phase == 0:
         # 非五庄任务（或任务已完成）：连续多轮无五庄任务才清残留状态
         _seal_missing += 1
@@ -2529,9 +2619,13 @@ def _pick_green_picker(items, img_np):
 
 
 def _mingwang_green_picker(items, img_np):
-    """名望追踪链接精确点击：五庄封印 → 蕴灵石头 → 老君丹房门口。"""
+    """名望追踪链接精确点击：五庄封印 → 蕴灵石头 → 老君丹房门口 → 星魂归位。
+
+    星魂归位（minigames/xinghun.green_picker）：四象禁地阶段引擎若补点
+    追踪绿字，只允许点「四象禁地」回中心，绝不点星宿石链接。
+    """
     for picker in (_seal_green_picker, _pick_green_picker,
-                   _tgqy_green_picker):
+                   _tgqy_green_picker, _xinghun_minigame.green_picker):
         pt = picker(items, img_np)
         if pt is not None:
             return pt
@@ -2612,8 +2706,9 @@ def _pick_wait_arrival(win, items, img_np, now):
             log(f"[名望] 灵力镐：当前在{pos[0]}（非{PICK_MAP}），"
                 f"已重新点击链接寻路", "WARN")
         return False
-    if _seal_dialog_blocking(win, items, img_np):
-        return False  # 对话框在场时不操作背包
+    blocking, no_option = _seal_dialog_blocking(win, items, img_np)
+    if blocking:
+        return no_option  # 对话框在场时不操作背包
     ok, info = _use_lingligao(win)
     if not ok:
         _pick_stable = 0
@@ -2906,8 +3001,9 @@ def _tgqy_wait_arrival(win, items, img_np, now):
         _tgqy_need_move = False
         if _tgqy_stable < TGQY_ARRIVE_POLLS:
             return False
-        if _seal_dialog_blocking(win, items, img_np):
-            return False  # 对话框在场时不操作背包
+        blocking, no_option = _seal_dialog_blocking(win, items, img_np)
+        if blocking:
+            return no_option  # 对话框在场时不操作背包
         ok, info = _use_toudanhulu(win)
         if not ok:
             _tgqy_stable = 0
@@ -2957,8 +3053,9 @@ def _tgqy_check_outcome(win, items, img_np, now):
         return False
     if now - _tgqy_use_at >= TGQY_USE_RETRY_AFTER \
             and _tgqy_use_retries < TGQY_USE_RETRY_MAX:
-        if _seal_dialog_blocking(win, items, img_np):
-            return False
+        blocking, no_option = _seal_dialog_blocking(win, items, img_np)
+        if blocking:
+            return no_option
         _tgqy_use_retries += 1
         ok, info = _use_toudanhulu(win)
         log(f"[名望] 天宫奇遇：未出现魔取仙丹窗口，重试使用偷丹葫芦"
@@ -3294,9 +3391,11 @@ def _handle_dialog_options(win, items, img_np):
     收敛 → 魔王护卫战斗，实现见 minigames/mowangchongju）、天宫
     奇遇状态机（追踪「前往老君丹房门口」→ 到达天宫(13,99) → 任务储物格
     用偷丹葫芦 → 「魔取仙丹」顺序解封小游戏）、蛟魔复仇暗雷战斗状态机
-    （追踪「请在<地图>仔细搜查（暗雷战斗）」→ 到达目标地图后降落）与
-    沙都修罗搜索状态机（追踪文案触发 → 蟠桃园五路点找 NPC）在最前面
-    处理；其余任务无对应追踪文案时零操作。
+    （追踪「请在<地图>仔细搜查（暗雷战斗）」→ 到达目标地图后降落）、
+    沙都修罗搜索状态机（追踪文案触发 → 蟠桃园五路点找 NPC）与星魂归位
+    四象禁地闭环（minigames/xinghun.handle：找星魂→星宿石→归位，
+    追踪含「星宿石」时触发）在最前面处理；其余任务无对应追踪文案时
+    零操作。
     开采石头窗口检测排在灵力镐状态机之前：窗口在场时须先阻塞执行
     小游戏，防状态机同时重试用镐（打开背包干扰小游戏）；魔取仙丹
     窗口检测同理排在天宫奇遇状态机之前。沙海迷踪小游戏弹窗为模态
@@ -3316,6 +3415,10 @@ def _handle_dialog_options(win, items, img_np):
     if _handle_chuanyinshi(win, items, img_np):
         return True
     if _maybe_play_tgqy(win):
+        return True
+    if _xinghun_minigame.handle(win, items, img_np,
+                                frame_fn=_seal_frame,
+                                prefix="[名望] "):
         return True
     if _handle_tiangong_qiyu(win, items, img_np):
         return True
@@ -3341,7 +3444,7 @@ def _follow_task(win, timeout=FOLLOW_TIMEOUT):
     story_known_texts 传本模块对话表——
     否则本任务的带选项对话不在已知表内，选项未渲染时会被剧情兜底
     误点屏幕中间关闭；green_picker 让五庄封印按当前目标链接
-    （火藏之位→木藏之位）、灵力镐按「蕴灵石头」链接精确点击，
+    （按解析出的封印点元素）、灵力镐按「蕴灵石头」链接精确点击，
     其他任务无对应链接时自动退回引擎默认行级选择。
     返回 (是否完成, 描述)。
     """
@@ -3427,6 +3530,7 @@ def _post_claim_flow(win):
     _reset_seal_state()
     _reset_pick_state()
     _mowang_minigame.reset()
+    _xinghun_minigame.reset()  # 星魂归位状态（新任务防上一轮残留）
     _reset_tgqy_state()
     _reset_jiamo_state()
     _reset_diaoyu_fail_state()  # 新任务领取：钓鱼失败重试计数清零

@@ -558,8 +558,6 @@ def green_text_center(img_np, rect, prefer_underline=True):
 
 def has_underline(img_np, rect):
     """文字框底边 -10~+8px 内是否存在实线亮绿下划线（≥20px 连续列段）。
-
-    下划线是任务追踪链接的专属标记（可能只覆盖行尾的可点击部分）：
     描述行与链接行同为绿字时用它区分（客栈答题任务描述行「洛阳城正
     举办幸运五十二答题」与链接行「大会，去找答题大赛主办人」均绿，
     按首个绿行点击点错——实测 2026-10-13）。检测规则与
@@ -583,6 +581,51 @@ def has_underline(img_np, rect):
         if cols.size >= 20 and _longest_run_len(cols) >= 20:
             return True
     return False
+
+
+def underline_point(img_np, rect, x):
+    """在一行多个绿字链接中按近似 x 定位目标链接的下划线点击点。
+
+    追踪面板一行内可能有多个绿色链接（如星魂归位「应带到箕之星宿石、
+    房之星宿」两个星宿石链接、五庄封印「水藏之位和火藏之位」），
+    整行绿字中心会点错。下划线段是链接专属标记：按文本内字符位置
+    按比例映射到框内 x，再取距该 x 最近的亮绿下划线段中心（行框底
+    -10~+8px、亮绿 ≥8px 连续段、点击下划线上方 2px）。规则同
+    green_text_center 的下划线路径，但以 x 提示选择目标段而非最长段。
+    （2026-11-10 五庄封印实机；2026-11-17 下沉到本模块供星魂归位复用。）
+    未检测到下划线返回 None（调用方自行退回文字块坐标）。
+    """
+    l, t, r, b = rect
+    y0 = max(0, b - 10)
+    y1 = min(img_np.shape[0], b + 9)
+    x0 = max(0, l - 2)
+    x1 = min(img_np.shape[1], r + 60)
+    if y1 <= y0 or x1 <= x0:
+        return None
+    mask = green_mask(img_np[y0:y1, x0:x1], GREEN_BRIGHT_MIN)
+    best = None
+    for yy in range(mask.shape[0]):
+        cols = np.where(mask[yy])[0]
+        if cols.size < 8:
+            continue
+        runs = []
+        start = prev = int(cols[0])
+        for c in cols[1:]:
+            c = int(c)
+            if c - prev <= 2:
+                prev = c
+            else:
+                runs.append((start, prev))
+                start = prev = c
+        runs.append((start, prev))
+        for a, bb in runs:
+            if bb - a + 1 < 8:
+                continue
+            cx = x0 + (a + bb) // 2
+            dist = abs(cx - x)
+            if best is None or dist < best[0]:
+                best = (dist, (cx, y0 + yy - 2))
+    return None if best is None else best[1]
 
 
 def _is_title_line(txt):

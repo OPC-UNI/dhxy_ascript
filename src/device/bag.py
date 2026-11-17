@@ -123,6 +123,28 @@ def find_bag_box(win):
     return (r.x, r.y) if r else None
 
 
+def bag_open_on_frame(img_bgr):
+    """BGR 帧上判定背包面板是否在场（bag_box 优先，遮挡时储物格按钮兜底）。
+
+    2026-11-17 名望五庄封印实机：任务追踪窗口会盖住 bag_box（「物品栏」
+    竖标签在面板左缘），追踪面板刷新到前台后备标签被遮挡——is_bag_open
+    误报「背包未打开」而面板明显还开着，close_bag 不关闭、下一次
+    open_task_box 又按 Alt+E 把已开面板关掉，来回空转。任务储物格选择
+    按钮（box_task/box_task_selected）位于面板右侧储物格列，远离左缘
+    不被追踪面板遮挡，作为补充在场锚点（同帧双模板比分数、任一达标
+    即在场；两模板是同一按钮的未选中/选中态，与 open_task_box 规则
+    一致）。bag_box 命中即返回，常规路径零额外成本；仅遮挡时多跑两张
+    小模板。实测（live 帧）：开包 selected=0.969、关闭世界帧 0.542/0.651、
+    另一世界帧 0.477/0.577，阈值 0.8 分离良好。
+    """
+    if game_map.match_frame_np(img_bgr, BAG_BOX_ICON, threshold=0.8,
+                               fallback=False) is not None:
+        return True
+    scores = game_map.best_match_multi_np(img_bgr, (BOX_TASK_SELECTED_ICON,
+                                                    BOX_TASK_ICON))
+    return max(s for s, _ in scores.values()) >= TASK_BOX_THRESHOLD
+
+
 # 开/关背包的轮询参数：点击后轮询面板标志出现/消失（替代固定 1.5s
 # 等待——面板动画约 0.4s 完成，成功路径平均省 ~1s；1.5s 为超时上限）
 _BAG_TOGGLE_POLL = 0.4
@@ -134,8 +156,16 @@ _BAG_TOGGLE_TIMEOUT = 4.0   # 单次点击后的等待窗口：加宽覆盖战�
 
 
 def is_bag_open(win):
-    """检测背包是否已打开（是否找到 bag_box 模板）。"""
-    return _find_bag_box(win) is not None
+    """检测背包是否已打开（bag_box；被追踪面板等遮挡时储物格按钮兜底）。
+
+    见 bag_open_on_frame：单帧同时判两个锚点，避免面板左缘标签被任务
+    追踪窗口盖住时误判「未打开」（2026-11-17 名望五庄封印实机）。
+    """
+    img = win.capture(force_activate=False)
+    if img is None:
+        return False
+    return bag_open_on_frame(cv2.cvtColor(np.asarray(img),
+                                          cv2.COLOR_RGB2BGR))
 
 
 def find_item_in_bag(win, icon_name, threshold=0.8):
@@ -346,26 +376,44 @@ def open_bag(win):
 
 
 def close_bag(win):
-    """右键点击背包面板关闭背包。
+    """右键点击背包面板关闭背包（标志被遮挡时改用 Alt+E 开关）。
 
     识别到 bag_box 后记录坐标，关闭时移动到该位置右键点击（游戏面板
-    支持右键关闭）。点击后轮询 bag_box 消失：消失=关闭成功；未消失
-    =重试一次（等待窗口同 open_bag，正常关闭 <1s 即返回）。
+    支持右键关闭）。点击后轮询面板消失：消失=关闭成功；未消失=重试
+    一次（等待窗口同 open_bag，正常关闭 <1s 即返回）。
+
+    bag_box 被任务追踪等窗口遮挡时（2026-11-17 名望五庄封印实机：
+    面板右缘储物格按钮仍在、左缘标签被盖住），右键锚点不存在——改用
+    Alt+E 快捷键开关关闭（与位置/遮挡无关，open_bag 同款通道），以
+    bag_open_on_frame 的双锚点判定收敛。面板确实不在场时不按热键
+    （防把已关面板重新打开）。
     返回 (是否成功, 描述)。
     """
     for attempt in (1, 2):
         box = _find_bag_box(win)
-        if box is None:
-            if not is_bag_open(win):
-                return True, "背包未打开"
-            return False, "未找到背包面板"
-        human_click(win, box.x, box.y, button="secondary")
+        if box is not None:
+            human_click(win, box.x, box.y, button="secondary")
+            deadline = time.time() + _BAG_TOGGLE_TIMEOUT
+            while time.time() < deadline:
+                if not is_bag_open(win):
+                    return True, (f"第{attempt}次右键成功关闭"
+                                  f"（匹配度 {box.confidence:.2f}）")
+                time.sleep(_BAG_TOGGLE_POLL)
+            log(f"[背包] 第{attempt}次右键后背包仍打开，重试一次...", "WARN")
+            continue
+        if not is_bag_open(win):
+            return True, "背包未打开"
+        # 面板在场但 bag_box 被遮挡：Alt+E 开关关闭（无锚点可右键）
+        sent, desc = _press_bag_hotkey(win)
+        if not sent:
+            return False, f"未找到背包面板且{desc}"
+        log(f"[背包] 面板标志被遮挡（{desc}），改用快捷键关闭", "INFO")
         deadline = time.time() + _BAG_TOGGLE_TIMEOUT
         while time.time() < deadline:
             if not is_bag_open(win):
-                return True, f"第{attempt}次右键成功关闭（匹配度 {box.confidence:.2f}）"
+                return True, f"第{attempt}次 Alt+E 成功关闭（标志被遮挡）"
             time.sleep(_BAG_TOGGLE_POLL)
-        log(f"[背包] 第{attempt}次右键后背包仍打开，重试一次...", "WARN")
+        log(f"[背包] 第{attempt}次 Alt+E 后背包仍打开，重试一次...", "WARN")
     return False, "两次尝试后背包仍未关闭"
 
 

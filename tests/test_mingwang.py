@@ -1667,16 +1667,34 @@ def test_seal_link_color_red_green():
     assert mingwang._seal_link_color(SEAL_ITEMS_LIVE, frame, "木藏") == "green"
 
 
-def test_seal_link_ocr_alias_water_for_wood():
-    """OCR 把「木藏」读成「水藏」时仍能定位/判色（2026-11-10 实机）。"""
+def test_seal_parse_links_dynamic_elements():
+    """封印点从追踪文案动态解析（五行任选两个，2026-11-17 实机）。
+
+    实机已见「金藏+土藏」「水藏+火藏」「火藏+木藏」；OCR 形近字归一
+    （全→金、未/本→木、士→土、灭→火）；追踪拆行不影响（签名拼接无换行）。
+    """
+    assert mingwang._seal_parse_links(
+        "山河名望在五庄观找到金藏之位和土藏") == ["金", "土"]
+    assert mingwang._seal_parse_links(
+        "找到水藏之位和火藏之位的风暴封印处") == ["水", "火"]
+    assert mingwang._seal_parse_links("找到火藏之位和木藏") == ["火", "木"]
+    assert mingwang._seal_parse_links("找到全藏之位和士藏") == ["金", "土"]
+    assert mingwang._seal_parse_links("找到火藏之位和未藏") == ["火", "木"]
+    assert mingwang._seal_parse_links("没有链接的文案") == []
+
+
+def test_seal_link_keywords_and_color_follow_parsed_elements():
+    """解析出的元素用于定位/判色（「水藏」是真实元素，不再当木的别名）。"""
     items = [
         ("[日常]五庄封印[山河名望]", [18, 230, 205, 253], 0.97),
         ("在五庄观找到火藏之位和水藏", [22, 251, 222, 271], 1.0),
         ("之位的风暴封印处，使用唤风", [23, 267, 222, 288], 1.0),
     ]
     frame = _seal_frame_red_green(fire_red=True, wood_red=False)
-    kws = mingwang._seal_link_keywords(1)
-    assert "水藏" in kws and "木藏" in kws
+    elems = mingwang._seal_parse_links(mingwang._seal_sig(items))
+    assert elems == ["火", "水"]
+    kws = mingwang._seal_link_keywords(1, elems)
+    assert "水藏" in kws
     assert mingwang._seal_link_color(items, frame, kws) == "green"
     pt = mingwang._seal_link_point(items, frame, kws)
     assert pt is not None and abs(pt[0] - 203) <= 10
@@ -1836,7 +1854,9 @@ def test_use_huanfengfu_clicks_item(monkeypatch):
 
 
 def test_seal_config():
-    assert mingwang.SEAL_LINKS == ("火藏之位", "木藏之位")
+    # 封印点为动态解析（五行任选两个，2026-11-17 用户确认）
+    assert mingwang.SEAL_LINK_NAME_SUFFIX == "藏之位"
+    assert mingwang._seal_parse_links("找到金藏之位和土藏") == ["金", "土"]
     assert game_map.template_size(mingwang.SEAL_ITEM_ICON) is not None
     assert mingwang.SEAL_ARRIVE_POLLS >= 2
 
@@ -1844,7 +1864,11 @@ def test_seal_config():
 
 # ---- 到达后无选项对话自动推进 / 用符后残留背包补关（2026-11-10 实机）----
 def test_seal_dialog_advances_when_no_option(monkeypatch):
-    """到达后无绿字选项对话：连续 4 轮询（~2s）后点屏推进一次。"""
+    """到达后无绿字选项对话：连续 4 轮询（~2s）后点屏推进一次。
+
+    返回 (在场, 无选项)：无选项=True 让状态机独占推进（引擎剧情兜底
+    跳过）——两套点屏同帧命中会连点两次（2026-11-17 实机教训）。
+    """
     mingwang._reset_seal_state()
     frame = np.zeros((831, 1378, 3), dtype=np.uint8)
     monkeypatch.setattr(mingwang, "_seal_frame",
@@ -1855,15 +1879,16 @@ def test_seal_dialog_advances_when_no_option(monkeypatch):
                         lambda w, times=1, prefix="": clicked.append(times))
     items = [("这该怎么办呢，好担心", [500, 300, 800, 330], 0.95)]
     for _ in range(3):
-        assert mingwang._seal_dialog_blocking(object(), items, frame) is True
+        assert mingwang._seal_dialog_blocking(
+            object(), items, frame) == (True, True)
     assert clicked == []  # 未达 4 轮询：留足选项渲染时间
-    assert mingwang._seal_dialog_blocking(object(), items, frame) is True
+    assert mingwang._seal_dialog_blocking(object(), items, frame) == (True, True)
     assert clicked == [1]
     mingwang._reset_seal_state()
 
 
 def test_seal_dialog_with_green_option_not_advanced(monkeypatch):
-    """对话区有绿字选项：不点屏幕中间（交给选项表处理）。"""
+    """对话区有绿字选项：不点屏幕中间，返回「非独占」（交给选项表）。"""
     mingwang._reset_seal_state()
     frame = np.zeros((831, 1378, 3), dtype=np.uint8)
     frame[300:330, 500:800] = (0, 255, 0)
@@ -1875,7 +1900,8 @@ def test_seal_dialog_with_green_option_not_advanced(monkeypatch):
                             AssertionError("有选项不应点屏")))
     items = [("是武尊神遣我过来帮忙的。", [500, 300, 800, 330], 0.95)]
     for _ in range(6):
-        assert mingwang._seal_dialog_blocking(object(), items, frame) is True
+        assert mingwang._seal_dialog_blocking(
+            object(), items, frame) == (True, False)
     mingwang._reset_seal_state()
 
 
@@ -2010,7 +2036,7 @@ def _patch_pick_sm(monkeypatch):
     monkeypatch.setattr(mingwang, "_seal_pos",
                         lambda win, items: state["pos"])
     monkeypatch.setattr(mingwang, "_seal_dialog_blocking",
-                        lambda win, items, img: False)
+                        lambda win, items, img: (False, False))
     monkeypatch.setattr(mingwang, "_bag_box_on_frame",
                         lambda win, items: False)
 
@@ -2809,7 +2835,7 @@ def test_handle_tiangong_qiyu_uses_item_after_stable_target(monkeypatch):
     monkeypatch.setattr(mingwang, "_seal_pos",
                         lambda w, items: ("天宫", 13, 99))
     monkeypatch.setattr(mingwang, "_seal_dialog_blocking",
-                        lambda *a: False)
+                        lambda *a: (False, False))
     used = []
     monkeypatch.setattr(mingwang, "_use_toudanhulu",
                         lambda w: used.append(1) or (True, "已使用偷丹葫芦"))
@@ -2957,3 +2983,90 @@ def test_play_moqu_click_order(monkeypatch):
     expected += [moqu._gourd(n)["click"] for n in seq]
     expected.append(moqu.MOQUSHENDAN_BTN_POS)      # 提交
     assert clicks == expected
+
+
+def test_seal_phase1_advances_dialog_before_retry(monkeypatch):
+    """用符后链接未变红但对话框常驻：先推进对话再考虑重试用符。
+
+    2026-11-17 实机：战后任务台词常驻 + story 兜底误判寻路中，
+    重试用符被「对话框在场」拒绝、链接永不变红，空转 3 分钟到超时。
+    """
+    mingwang._reset_seal_state()
+    mingwang._seal_phase = 1
+    mingwang._seal_use_at = time.time() - 30
+    frame = np.zeros((831, 1378, 3), dtype=np.uint8)
+    monkeypatch.setattr(mingwang, "_seal_frame",
+                        lambda w, items: (None, frame))
+    monkeypatch.setattr(mingwang, "dialog_frame_score", lambda bgr: 0.99)
+    monkeypatch.setattr(mingwang, "_seal_pos",
+                        lambda w, items: ("五庄观", 160, 50))
+    monkeypatch.setattr(mingwang, "_seal_link_color",
+                        lambda items, img, kw: "green")
+    monkeypatch.setattr(mingwang, "_use_huanfengfu",
+                        lambda w: (_ for _ in ()).throw(
+                            AssertionError("对话在场不应重试用符")))
+    clicked = []
+    monkeypatch.setattr(mingwang, "_click_screen_center",
+                        lambda w, times=1, prefix="": clicked.append(times))
+    items = [("跑得真快，但是一瞬间，那人的人皮怎么好像掉了",
+              [500, 300, 940, 330], 0.98)]
+    for _ in range(3):
+        assert mingwang._seal_check_outcome(
+            object(), items, frame, time.time()) is True
+    assert clicked == []
+    assert mingwang._seal_check_outcome(
+        object(), items, frame, time.time()) is True
+    assert clicked == [1]
+    mingwang._reset_seal_state()
+
+
+def _seal_dynamic_env(monkeypatch, colors, pos=("五庄观", 100, 100)):
+    """动态元素状态机测试环境：颜色按关键词桩、点击记录。"""
+    items = [
+        ("[日常]五庄封印[山河名望]", [14, 232, 204, 252], 0.97),
+        ("在五庄观找到金藏之位和土藏", [22, 251, 222, 271], 1.0),
+        ("之位的风暴封印处，使用唤风", [23, 267, 222, 288], 1.0),
+    ]
+    monkeypatch.setattr(mingwang, "_seal_frame", lambda w, it: (None, None))
+    monkeypatch.setattr(mingwang, "_seal_pos", lambda w, it: pos)
+    monkeypatch.setattr(mingwang, "_seal_link_color",
+                        lambda it, img, kws: colors.get(kws[0]) if kws else None)
+    clicked = []
+    monkeypatch.setattr(mingwang, "_click_seal_link",
+                        lambda w, it, img, link_idx=None:
+                        clicked.append(link_idx) or True)
+    return items, clicked
+
+
+def test_seal_dynamic_elements_advance_to_other(monkeypatch):
+    """实机回归（2026-11-17）：追踪为「金藏+土藏」，金藏变红 → 改点土藏。
+
+    旧版写死火藏/木藏：颜色判定全部落空 → 日志一直报火藏 → 空转到超时。
+    """
+    mingwang._reset_seal_state()
+    mingwang._seal_phase = 1
+    mingwang._seal_use_at = time.time() - 999
+    items, clicked = _seal_dynamic_env(
+        monkeypatch, {"金藏": "red", "全藏": "red",
+                      "土藏": "green", "士藏": "green"})
+    assert mingwang._handle_wuzhuang_seal(object(), items, None) is True
+    assert clicked == [1]
+    assert mingwang._seal_elems == ["金", "土"]
+    assert mingwang._seal_link_idx == 1
+    mingwang._reset_seal_state()
+
+
+def test_seal_left_map_with_green_link_advances(monkeypatch):
+    """坐标离开五庄观但当前链接仍绿：按「本点完成」改点另一个（不是都完成）。"""
+    mingwang._reset_seal_state()
+    mingwang._seal_phase = 1
+    mingwang._seal_link_idx = 0
+    mingwang._seal_use_at = time.time() - 999
+    items, clicked = _seal_dynamic_env(
+        monkeypatch, {"金藏": "green", "全藏": "green",
+                      "土藏": "green", "士藏": "green"},
+        pos=("长安", 10, 20))
+    assert mingwang._handle_wuzhuang_seal(object(), items, None) is True
+    assert clicked == [1]
+    assert mingwang._seal_phase == 0
+    mingwang._reset_seal_state()

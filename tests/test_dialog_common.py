@@ -312,3 +312,89 @@ def test_dialog_ocr_skip_off_leader_skips(monkeypatch):
     assert dialog_common.dialog_ocr_skip(None, object()) is False
     # 不传 win（非组号调用/单测兼容）：不检查归属
     assert dialog_common.dialog_ocr_skip(None) is False
+
+
+# ---- 绿字选项行判定：行内绿色链接 vs 整行绿字选项（2026-11-17 实机）----
+
+def _glyph_blocks(frame, rect, blocks, color):
+    """在 rect 内按 (x0, x1) 列块画细字块（模拟稀疏字形像素）。"""
+    for x0, x1 in blocks:
+        frame[55:62, rect[0] + x0:rect[0] + x1] = color
+
+
+def test_green_option_row_inline_map_link_not_option():
+    """剧情行内绿色地图链接（「吹到了暖玉轩。」）不是选项行。
+
+    2026-11-17 名望五庄封印实机：OCR 拆行后该行 3 白字 + 3 绿字，
+    白/绿像素比 0.84（≤1.0）被旧判据当成选项行 → 点屏兜底永不触发、
+    follow 空转 5 分钟超时。绿字列覆盖仅约一半，必须判为非选项。
+    """
+    import numpy as np
+    frame = np.zeros((100, 200, 3), np.uint8)
+    rect = [20, 50, 123, 72]
+    _glyph_blocks(frame, rect, [(2, 9), (22, 29), (42, 49)],
+                  (255, 255, 255))                 # 白字「吹到了」
+    _glyph_blocks(frame, rect, [(62, 69), (82, 89), (98, 103)],
+                  (0, 255, 0))                     # 绿字「暖玉轩」
+    items = [("吹到了暖玉轩。", rect, 0.96)]
+    assert dialog_common.green_option_row_present(frame, items) is False
+
+
+def test_green_option_row_full_green_still_option():
+    """整行绿字（无白色正文）仍是选项行——防本次修改放宽选项保护。"""
+    import numpy as np
+    frame = np.zeros((100, 200, 3), np.uint8)
+    rect = [20, 50, 123, 72]
+    for x0 in range(2, 100, 16):
+        _glyph_blocks(frame, rect, [(x0, min(x0 + 8, 103))], (0, 255, 0))
+    items = [("是武尊神遣我过来帮忙的。", rect, 0.95)]
+    assert dialog_common.green_option_row_present(frame, items) is True
+
+
+# ---- 寻路判定背景动画误判兜底：坐标 OCR 复核（2026-11-17 五庄观实机）----
+
+def test_walking_false_positive_verified_by_position(monkeypatch):
+    """像素判移动持续 3s 后，两次坐标 OCR 一致 → 按站定放行点屏。
+
+    位置文字区是半透明标签条，背后世界动画让像素差分持续超阈值——
+    2026-11-17 五庄观实机对话在场连续 3 分钟「寻路中」，任务空转到
+    follow 超时（结束后自愈）。坐标 OCR 两次一致 = 人物实际站定。
+    """
+    import time as _time
+    from src.device import dialog_common as dc
+    d = dc.StoryDialogDismisser()
+    monkeypatch.setattr(d._move, "walking", lambda *a, **k: True)
+    monkeypatch.setattr(dc.game_map, "read_map_position",
+                        lambda win, img=None: ("五庄观", 7, 31))
+    d._moving_since = _time.time() - dc.STORY_MOVE_VERIFY_AFTER - 1
+    d._verify_at = 0.0
+    d._verify_pos = ("五庄观", 7, 31)
+    assert d._walking(None) is False  # 坐标一致 → 站定放行
+
+
+def test_walking_still_true_when_position_changes(monkeypatch):
+    """坐标 OCR 与上次不同 → 仍按移动处理（真寻路不误放行）。"""
+    import time as _time
+    from src.device import dialog_common as dc
+    d = dc.StoryDialogDismisser()
+    monkeypatch.setattr(d._move, "walking", lambda *a, **k: True)
+    monkeypatch.setattr(dc.game_map, "read_map_position",
+                        lambda win, img=None: ("五庄观", 8, 31))
+    d._moving_since = _time.time() - dc.STORY_MOVE_VERIFY_AFTER - 1
+    d._verify_at = 0.0
+    d._verify_pos = ("五庄观", 7, 31)
+    assert d._walking(None) is True
+
+
+def test_walking_verify_not_run_early(monkeypatch):
+    """像素判移动未满 3s：不付坐标 OCR，直接按移动处理。"""
+    import time as _time
+    from src.device import dialog_common as dc
+    d = dc.StoryDialogDismisser()
+    monkeypatch.setattr(d._move, "walking", lambda *a, **k: True)
+    called = []
+    monkeypatch.setattr(dc.game_map, "read_map_position",
+                        lambda win, img=None: called.append(1) or None)
+    d._moving_since = _time.time() - 1.0
+    assert d._walking(None) is True
+    assert called == []

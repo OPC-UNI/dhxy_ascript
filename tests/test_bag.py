@@ -177,3 +177,56 @@ def test_open_task_box_clicks_unselected_button(monkeypatch):
     ok, info = bag.open_task_box(_TaskBoxWin(), prefix="名望")
     assert ok and "已在背包中打开" in info
     assert clicks == [(800, 400, "primary")]
+
+
+# ---- 背包在场双锚点 / 遮挡时 Alt+E 关闭（2026-11-17 名望五庄封印实机）----
+
+def test_bag_open_on_frame_storage_tab_fallback(monkeypatch):
+    """bag_box 被追踪面板遮挡时，储物格按钮（选中/未选中态）兜底判定在场。"""
+    monkeypatch.setattr(bag.game_map, "match_frame_np",
+                        lambda frame, icon, **k: None)
+    monkeypatch.setattr(bag.game_map, "best_match_multi_np",
+                        lambda frame, icons, region=None: {
+                            bag.BOX_TASK_SELECTED_ICON: (0.969, (370, 638)),
+                            bag.BOX_TASK_ICON: (0.733, (375, 637))})
+    assert bag.bag_open_on_frame(object()) is True
+
+
+def test_bag_open_on_frame_closed_world(monkeypatch):
+    """世界帧（面板关闭）两锚点都低分 → 判未打开（实测 0.542/0.651）。"""
+    monkeypatch.setattr(bag.game_map, "match_frame_np",
+                        lambda frame, icon, **k: None)
+    monkeypatch.setattr(bag.game_map, "best_match_multi_np",
+                        lambda frame, icons, region=None: {
+                            bag.BOX_TASK_SELECTED_ICON: (0.542, (0, 0)),
+                            bag.BOX_TASK_ICON: (0.651, (0, 0))})
+    assert bag.bag_open_on_frame(object()) is False
+
+
+def test_close_bag_hotkey_when_anchor_occluded(monkeypatch):
+    """bag_box 未命中但面板在场（储物格按钮）→ 用 Alt+E 开关关闭。"""
+    state = {"open": True, "pressed": 0}
+    monkeypatch.setattr(bag, "_find_bag_box", lambda w: None)
+    monkeypatch.setattr(bag, "is_bag_open", lambda w: state["open"])
+    monkeypatch.setattr(bag.time, "sleep", lambda s: None)
+
+    def press(win):
+        state["pressed"] += 1
+        state["open"] = False  # 开关关闭生效
+        return True, "已静默投递 Alt+E 快捷键"
+
+    monkeypatch.setattr(bag, "_press_bag_hotkey", press)
+    ok, info = bag.close_bag(_TaskBoxWin())
+    assert ok and "Alt+E" in info
+    assert state == {"open": False, "pressed": 1}
+
+
+def test_close_bag_closed_does_not_press_hotkey(monkeypatch):
+    """面板确实不在场：不按 Alt+E（防把已关背包重新打开）。"""
+    monkeypatch.setattr(bag, "_find_bag_box", lambda w: None)
+    monkeypatch.setattr(bag, "is_bag_open", lambda w: False)
+    monkeypatch.setattr(bag, "_press_bag_hotkey",
+                        lambda w: (_ for _ in ()).throw(
+                            AssertionError("已关闭不应按热键")))
+    ok, info = bag.close_bag(_TaskBoxWin())
+    assert ok and info == "背包未打开"

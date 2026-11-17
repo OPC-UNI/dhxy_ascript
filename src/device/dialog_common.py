@@ -512,6 +512,11 @@ STORY_MOVE_DIFF_THRESHOLD = 0.3 # 位置区平均像素差阈值
 STORY_MOVE_BACKOFF = 1.0        # 检测到移动后的复查间隔（秒）
 STORY_MOVE_TRACK_GRACE = 2.0    # 追踪寻路点击后的静默期（秒）
 STORY_MOVE_LOG_INTERVAL = 5.0   # 寻路抑制日志限频（秒）
+# 像素判「移动中」持续该秒数后，用地图坐标 OCR 复核（背景动画误判兜底，
+# 2026-11-17 五庄观实机：位置标签条背后动画使像素差分持续超阈值，
+# 对话在场连续 3 分钟判寻路中）；两次复核最小间隔 = 坐标刷新周期
+STORY_MOVE_VERIFY_AFTER = 3.0
+STORY_MOVE_VERIFY_INTERVAL = 1.2
 
 
 def _position_crop(img):
@@ -707,16 +712,25 @@ def clear_blocking_dialog(win, prefix="", max_clicks=3):
 # OPTION_ROW_BODY_GREEN_MAX。
 OPTION_ROW_BODY_MAX = 200        # 选项行允许的正文（非绿亮字）像素上限
 OPTION_ROW_BODY_GREEN_MAX = 1.0  # 选项行正文/绿色像素比上限（选项行≈0）
+# 绿字列覆盖下限（2026-11-17 实机，名望五庄封印「吹到了暖玉轩。」）：
+# 剧情行内的绿色链接只覆盖行内部分列（该行实测 0.49——3 个白字
+# 「吹到了」+ 3 个绿字「暖玉轩」），真选项行整行绿字、覆盖≈1.0。
+# 旧判据只看白/绿像素比：该行白字 body=146、绿字 green=173、比值
+# 0.84 ≤ 1.0 被误判成选项行 → 剧情点屏兜底永不触发、follow 空转
+# 5 分钟超时（用户 2026-11-17 实报「任务没有继续推进」）。覆盖按
+# 「含文字列中带绿字列的占比」计算，抗 OCR 框边距与字距；与 body
+# 判据并联（2026-11-15 行内高亮行由 body 判据拦下，本行由覆盖拦下）。
+OPTION_ROW_GREEN_COVER = 0.8
 
 
 def green_option_row_present(img_np, region_items):
     """对话区是否存在独立的绿字选项行（整行绿字，非行内绿字高亮）。
 
     region_items：对话框区域的 OCR 行 [(txt, rect, score)]（含置信度
-    过滤，调用方已完成）。行内绿色高亮（物品名/人名链接混在白色正文
-    中）不算选项，返回 False——无选项剧情对话的点屏兜底须放行；整行
-    绿字（白色正文像素极少）返回 True，禁止点屏（防选项对话被点屏
-    关闭而丢选项）。标定见上方 OPTION_ROW_* 常量注释。
+    过滤，调用方已完成）。行内绿色高亮（物品名/人名/地图链接混在白色
+    正文中）不算选项，返回 False——无选项剧情对话的点屏兜底须放行；
+    整行绿字（白色正文像素极少、绿字列覆盖≈整行）返回 True，禁止点屏
+    （防选项对话被点屏关闭而丢选项）。标定见上方 OPTION_ROW_* 常量注释。
     """
     import numpy as np
     for _txt, rect, _score in region_items:
@@ -735,9 +749,20 @@ def green_option_row_present(img_np, region_items):
         if green_px <= 0:
             continue
         # 正文像素：任一通道亮于阈值且非绿色（白/浅黄/浅灰正文）
-        body_px = int((((r > 120) | (g > 120) | (b > 120)) & ~green).sum())
-        if body_px <= OPTION_ROW_BODY_MAX \
-                and body_px <= green_px * OPTION_ROW_BODY_GREEN_MAX:
+        text = (r > 120) | (g > 120) | (b > 120)
+        body_px = int((text & ~green).sum())
+        if body_px > OPTION_ROW_BODY_MAX \
+                or body_px > green_px * OPTION_ROW_BODY_GREEN_MAX:
+            continue
+        # 绿字列覆盖：选项行整行绿字（≈1.0）；行内绿色链接只覆盖部分
+        # 列（名望「吹到了暖玉轩。」实测 0.49），不得当选项行（防点屏
+        # 兜底被拦死、follow 空转，2026-11-17 实机教训）
+        cols_text = text.any(axis=0)
+        n_text = int(cols_text.sum())
+        if n_text <= 0:
+            continue
+        cover = float(green.any(axis=0)[cols_text].mean())
+        if cover >= OPTION_ROW_GREEN_COVER:
             return True
     return False
 
@@ -784,10 +809,17 @@ class StoryDialogDismisser:
         self.last_click_at = 0.0
         self._move = MoveWatch()    # 寻路判定（位置区像素直接信号）
         self._move_log_at = 0.0     # 寻路抑制日志限频时间戳
+        # 像素判移动中持续较久时的坐标 OCR 复核（背景动画误判兜底）
+        self._moving_since = None
+        self._verify_at = 0.0
+        self._verify_pos = None
 
     def _reset_walk(self):
         """重置寻路判定状态（对话关闭/守卫失败时调用）。"""
         self._move.reset()
+        self._moving_since = None
+        self._verify_at = 0.0
+        self._verify_pos = None
 
     def _walking(self, win, img=None):
         """人物是否仍在寻路（位置区像素仍在变化）。True = 禁止点屏。
@@ -796,9 +828,41 @@ class StoryDialogDismisser:
         取消自动寻路，人物停下不再走）。无帧可查（截窗失败/调用方
         无窗口）按未寻路放行：保持旧行为，防无坐标场景的剧情对话
         永不推进（模板/绿字守卫仍在）。
+
+        坐标 OCR 复核（2026-11-17 五庄观实机）：位置文字区是半透明
+        标签条，背后世界动画（雾气/粒子）会让像素差分持续超过阈值——
+        对话在场时连续 3 分钟判「寻路中」、点屏兜底永不触发，任务空转
+        到 follow 超时。像素判定连续「移动」≥STORY_MOVE_VERIFY_AFTER
+        秒后用地图坐标 OCR 复核：两次间隔 ≥STORY_MOVE_VERIFY_INTERVAL
+        读到相同坐标即人物站定，放行点屏；坐标变化/读不到仍按移动处理。
+        复核只在长时「移动」+ 对话在场的稀有路径付 ~0.1s/次。
         """
         walking = self._move.walking(win, img)
-        return False if walking is None else walking
+        if walking is None:
+            return None
+        if not walking:
+            self._moving_since = None
+            self._verify_pos = None
+            return False
+        now = time.time()
+        if self._moving_since is None:
+            self._moving_since = now
+        if now - self._moving_since < STORY_MOVE_VERIFY_AFTER:
+            return True
+        if now - self._verify_at < STORY_MOVE_VERIFY_INTERVAL:
+            return True
+        self._verify_at = now
+        pos = game_map.read_map_position(win, img=img)
+        if pos is None:
+            return True
+        if self._verify_pos is not None and pos == self._verify_pos:
+            # 坐标两次一致：像素差分来自背景动画，人物实际站定
+            self._move.reset()
+            self._moving_since = None
+            self._verify_pos = None
+            return False
+        self._verify_pos = pos
+        return True
 
     def try_dismiss(self, win, items, img_np, prefix="", img=None):
         """满足全部守卫时点屏幕中间一次，返回是否已点击。"""
