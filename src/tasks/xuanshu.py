@@ -36,15 +36,16 @@ from ..device import map as game_map  # 地图操作（世界地图/小地图/�
 from ..minigames import pochufengyin as _pochu_minigame  # 破除封印/钓鱼共用小游戏（闭环实现）
 from ..minigames import chuyijuebao as _chuyijuebao_minigame  # 锄遗聚宝阻塞循环
 from ..minigames.jiguan import (JIGUAN_CLICK_ORDER, JIGUAN_DIALOG_TEXT,
-                               JIGUAN_THRESHOLD, _jiguan_link_picker,
-                               _jiguan_link_progress)  # 机关触发/链接
+                               JIGUAN_THRESHOLD)  # 机关破解触发/模板
+from ..minigames.fengyin_link import (_jiguan_link_picker,
+                                     _jiguan_link_progress)  # 封印按序开启链接
 from ..minigames import jiguan as _jiguan_minigame  # 封印机关阻塞循环
 from ..minigames.chuyijuebao import (CHUYIJUEBAO_ICON,
                                     CHUYIJUEBAO_TIMEOUT,
                                     CHUYIJUEBAO_TITLE_REGION)  # 锄遗聚宝入口/超时/标题条带
 from ..device import task_tracker  # 任务追踪面板操作
 from ..device import dialog_common  # 对话框共享组件（选项缓存点击）
-from ..workflows.follow import _signatures_similar, follow_task
+from ..workflows.follow import follow_task
 from ..device.battle import is_in_battle  # 战斗状态判定（统一在 battle.py 中实现）
 from ..core import debug_overlay  # 调试信息悬浮层（任务进度更新）
 from ..core.settings import load_task_counts  # 任务次数上限（通用设置）
@@ -476,36 +477,9 @@ def navigate_to_task(win):
 
 
 
-def _current_task_sig(win, title):
-    """当前任务签名（仅 OCR 追踪面板区域）；任务不存在返回 ""。"""
-    img = win.capture(force_activate=False)
-    if img is None:
-        return None
-    items, _ = task_tracker.ocr_track(img)
-    task = task_tracker.find_task(
-        task_tracker.group_tasks(items,
-                                 task_tracker.panel_row_xmax(np.asarray(img))),
-        title)
-    if task is None:
-        return ""
-    return task_tracker.task_signature(task)
-
-
-def _task_done_or_changed(win, title, sig0):
-    """任务追踪是否消失或签名变化（相对 sig0；sig0 None 表示读不到，
-    此时不判变化）。"""
-    sig = _current_task_sig(win, title)
-    if sig is None:
-        return False
-    if sig == "":
-        return True  # 任务从追踪中消失
-    return sig0 is not None and sig0 != "" and not _signatures_similar(sig, sig0)
-
-
 def _play_jiguan_puzzle(win, title):
     """封印机关破解：阻塞循环在 minigames/jiguan.py，任务侧保留薄包装。"""
-    return _jiguan_minigame.play(win, title, _current_task_sig,
-                                 _task_done_or_changed)
+    return _jiguan_minigame.play(win, prefix=title)
 
 
 

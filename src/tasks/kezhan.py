@@ -542,8 +542,8 @@ GREEN_CLICK_ORDER = ["青龙", "白虎", "朱雀", "玄武"]
 # 顺序不一致（阅读序 镇煞→引灯→定魂，点击序 引灯→镇煞→定魂），不能按
 # 阅读序点击；每点完一处面板出现「第N处阵法已加固完成」——进度信号。
 # green_order 不适用（文案顺序≠点击顺序），用 progress_key（已加固计数）
-# + green_picker（按计数选关键词、下划线实线段定位点击，同 xuanshu
-# _jiguan_link_picker）；回调在非本任务阶段自门控不介入。
+# + green_picker（按计数选关键词、下划线实线段定位点击，同 minigames/
+# fengyin_link._jiguan_link_picker）；回调在非本任务阶段自门控不介入。
 SANCAI_LINK_ORDER = ("引灯阵法", "镇煞阵法", "定魂阵法")  # 点击顺序（领取对话：先点灯，再镇煞，终定魂）
 SANCAI_PROGRESS_RE = re.compile(r"第\s*([一二三四五1-5])\s*处\s*阵法\s*已\s*加固\s*完成")
 _CN_ORD = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5}
@@ -1251,7 +1251,7 @@ def _order_progress_key(items, img_np):
     智戏成空：每点完一处面板出现「第N处封印已开启」，三处全开为
     「封印已经全部开启」，计数即进度。
     三才：每点完一处面板出现「第N处阵法已加固完成」，计数即进度
-    （同 xuanshu._jiguan_link_progress）。
+    （同 minigames/fengyin_link._jiguan_link_progress）。
     四象：封印完成关键词变红（文字不变），绿字集合缩小即任务推进，
     follow_task 据此点击下一个绿字。词级判定不受 OCR 抖动影响。
     非顺序任务（如智多星答题：题目文案变化推进）回退取任务首行内容

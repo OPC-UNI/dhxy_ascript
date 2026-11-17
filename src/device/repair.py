@@ -65,7 +65,7 @@ REPAIR_DIALOGS = (
 )
 
 # ---- 行程参数 ----
-REPAIR_NEAR_TOLERANCE = 5          # 到达判定容差（对齐巫医：严格 ±5）
+REPAIR_NEAR_TOLERANCE = 3          # 到达判定容差（对齐巫医：严格 ±5）
 REPAIR_ARRIVE_TIMEOUT = 90         # 跨图寻路到达超时（秒）；途中战斗等待并顺延
 REPAIR_NPC_TIMEOUT = 3             # 到达后识别修理 NPC 模板窗口（秒，对齐巫医）
 REPAIR_HANDLE_TIMEOUT = 12         # 点击 NPC 后等待战斗线程点选项的超时（秒，对齐巫医）

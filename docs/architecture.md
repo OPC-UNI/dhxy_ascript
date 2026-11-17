@@ -143,7 +143,7 @@ flowchart TB
     end
 
     subgraph MINIGAMES["minigames：小游戏闭环"]
-        MG["pochufengyin / duchong / yinlv<br/>shahai / jiguan / chuyijuebao"]
+        MG["pochufengyin / duchong / yinlv<br/>shahai / jiguan / fengyin_link<br/>chuyijuebao"]
     end
 
     subgraph DEVICE["device：感知与执行"]
@@ -1241,6 +1241,7 @@ flowchart LR
 | `src/minigames/yinlv.py` | 音律小游戏（动态追亮点） | `play` |
 | `src/minigames/shahai.py` | 沙海迷踪小游戏 | `play_shahai_miyong` |
 | `src/minigames/jiguan.py` | 封印机关破解 | `play` |
+| `src/minigames/fengyin_link.py` | 封印按序开启（进度键/链接定位） | `_jiguan_link_progress`、`_jiguan_link_picker` |
 | `src/minigames/chuyijuebao.py` | 锄遗聚宝小游戏 | `play` |
 
 ---

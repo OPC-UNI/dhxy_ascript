@@ -22,7 +22,7 @@ src/
 │               # team（队伍）、repair（修理）
 ├─ workflows/   # 跨任务业务流：follow、team_flow、return_flow、claim_flow（批次 1）；claim 主流程/wuyi 待抽取
 ├─ minigames/   # 独立小游戏：pochufengyin、duchong、yinlv、shahai、jiguan、
-│               #               moqushendan、mowangchongju、...
+│               #               fengyin_link、moqushendan、mowangchongju、...
 ├─ tasks/       # 任务编排：xuanshu、wuhuan、kezhan、xiuluo、wubei、
 │               # zhongzu、mingwang
 └─ app/         # 外壳/UI/生命周期：control_window、task_manager、updater、
