@@ -999,6 +999,7 @@ def test_swat_round_clicks_once_and_reports_panel(monkeypatch):
         return np.zeros((10, 10, 3), np.uint8)
 
     monkeypatch.setattr(duchong, "_bug_capture", fake_capture)
+    monkeypatch.setattr(duchong, "_bug_dialog_present", lambda img: False)
     # 前 4 帧无面板（可拍虫），第 5/6 帧连续命中面板按钮
     monkeypatch.setattr(duchong, "_bug_button_pt",
                         lambda img: (680, 553) if state["n"] >= 4 else None)
@@ -1013,6 +1014,7 @@ def test_swat_round_idle_returns(monkeypatch):
     monkeypatch.setattr(duchong, "_bug_capture",
                         lambda win: np.zeros((10, 10, 3), np.uint8))
     monkeypatch.setattr(duchong, "_bug_button_pt", lambda img: None)
+    monkeypatch.setattr(duchong, "_bug_dialog_present", lambda img: False)
     monkeypatch.setattr(duchong, "_bug_candidates", lambda prev, cur: [])
     monkeypatch.setattr(duchong, "BUG_IDLE_END", 0.0)
     monkeypatch.setattr(duchong.time, "sleep", lambda s: None)
@@ -1038,6 +1040,7 @@ def test_swat_round_ignores_below_threshold_match(monkeypatch):
     monkeypatch.setattr(duchong, "log", lambda *a, **k: None)
     monkeypatch.setattr(duchong.time, "sleep", lambda s: None)
     monkeypatch.setattr(duchong, "_bug_button_pt", lambda img: None)
+    monkeypatch.setattr(duchong, "_bug_dialog_present", lambda img: False)
     monkeypatch.setattr(duchong, "_bug_candidates",
                         lambda prev, cur: [(400, 300, 40, 40)])
     monkeypatch.setattr(duchong, "_match_duchong",
@@ -1059,6 +1062,7 @@ def _patch_duchong_play(monkeypatch, states, swat_results, clicks,
     monkeypatch.setattr(duchong, "_bug_capture",
                         lambda win: np.zeros((10, 10, 3), np.uint8))
     monkeypatch.setattr(duchong, "_bug_button_pt", lambda img: button_pt)
+    monkeypatch.setattr(duchong, "_bug_dialog_present", lambda img: False)
     monkeypatch.setattr(
         duchong, "_swat_round",
         lambda win, deadline, ignore_panel_until=0.0: swat_results.pop(0))
@@ -1130,6 +1134,57 @@ def test_play_duchong_without_panel_returns_false(monkeypatch):
     ok, info = kezhan._play_duchong(object())
     assert ok is False and "未检测到开始按钮" in info
     assert clicks == []
+
+
+def test_swat_round_dialog_ends_round(monkeypatch):
+    """任务对话出现 = 小游戏完成：连续 2 次命中即返回 "dialog"，不再等面板。
+
+    2026-11-17 用户实测：最后一局达标后游戏直接弹任务对话、面板不重现，
+    旧逻辑白等 8s 面板超时才结束（对话选项延迟 12s 才被点击）。
+    """
+    import numpy as np
+    clicks = []
+    monkeypatch.setattr(duchong, "human_click",
+                        lambda win, x, y, **k: clicks.append((x, y)))
+    monkeypatch.setattr(duchong, "log", lambda *a, **k: None)
+    monkeypatch.setattr(duchong.time, "sleep", lambda s: None)
+    monkeypatch.setattr(duchong, "_bug_capture",
+                        lambda win: np.zeros((10, 10, 3), np.uint8))
+    monkeypatch.setattr(duchong, "_bug_button_pt", lambda img: None)
+    monkeypatch.setattr(duchong, "_bug_candidates", lambda prev, cur: [])
+    monkeypatch.setattr(duchong, "_bug_dialog_present", lambda img: True)
+    monkeypatch.setattr(duchong, "BUG_DIALOG_CHECK_INTERVAL", 0.0)
+    status, clicks_n = kezhan._swat_round(object(), time.time() + 5.0)
+    assert status == "dialog" and clicks_n == 0
+    assert clicks == []
+
+
+def test_play_duchong_dialog_ends_immediately(monkeypatch):
+    """面板等待期任务对话出现 → 立即按完成返回（不等 BUG_PANEL_WAIT）。"""
+    clicks = []
+    _patch_duchong_play(monkeypatch, ["sigA"] * 10, [("panel", 3)], clicks)
+    # 首轮面板按钮只在第一次轮询出现（点「开始」进入小游戏），其后消失
+    seq = {"n": 0}
+
+    def _btn(img):
+        seq["n"] += 1
+        return (680, 553) if seq["n"] == 1 else None
+
+    monkeypatch.setattr(duchong, "_bug_button_pt", _btn)
+    monkeypatch.setattr(duchong, "BUG_PANEL_WAIT", 30.0)  # 若等面板必超时
+    monkeypatch.setattr(duchong, "BUG_DIALOG_CHECK_INTERVAL", 0.0)
+    monkeypatch.setattr(duchong, "_bug_dialog_present", lambda img: True)
+    ok, info = kezhan._play_duchong(object())
+    assert ok and "任务对话出现" in info and "1 局" in info
+
+
+def test_play_duchong_swat_dialog_status(monkeypatch):
+    """_swat_round 返回 dialog → play 立即按完成返回（不再重开/等面板）。"""
+    clicks = []
+    _patch_duchong_play(monkeypatch, ["sigA"] * 10, [("dialog", 4)], clicks)
+    ok, info = kezhan._play_duchong(object())
+    assert ok and "任务对话出现" in info
+    assert clicks == [(680, 553)]  # 只点了开始，不再点重新开始
 
 
 def test_extras_enters_duchong_on_panel_button(monkeypatch):

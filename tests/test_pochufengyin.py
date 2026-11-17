@@ -264,6 +264,66 @@ def _mash_band():
     return lo, hi
 
 
+def _wrap_fail_match(monkeypatch, win, fail_from):
+    """在已安装的 match 替身上叠加「游戏失败」模板命中（第 fail_from 轮起）。"""
+    base = pochufengyin.game_map.match_frame_np
+
+    def _match(bgr, icon, threshold=0.8, region=None, fallback=True):
+        if icon == pochufengyin.POCHU_FAIL_ICON:
+            return (680, 590) if win.n >= fail_from else None
+        return base(bgr, icon, threshold=threshold, region=region,
+                    fallback=fallback)
+
+    monkeypatch.setattr(pochufengyin.game_map, "match_frame_np", _match)
+
+
+def test_fail_detect_stops_and_reports_failure(monkeypatch):
+    """fail_detect：失败结果面板（标题仍在 + 「游戏失败」红字）连续 2 轮
+    命中即停止全部操作并返回失败。2026-11-17 蛟魔探秘真机：失败面板
+    不自动关闭，旧逻辑等标题消失后按位置猜命中会误报成功、任务卡住。"""
+    win, _state, clicks = _install_mash(monkeypatch, per_click=0.2,
+                                        title_frames=99)
+    _wrap_fail_match(monkeypatch, win, fail_from=3)
+    ok, info = pochufengyin.play_pochufengyin(
+        win, "title", prefix="名望", label="蛟魔探秘钓鱼",
+        mash=True, fail_detect=True)
+    assert not ok and "游戏失败" in info
+    # 第 3 轮首命中（确认计数 1）、第 4 轮确认即返回：之后不再点击
+    assert win.n == 4
+    assert clicks and max(c[3] for c in clicks) < 4
+
+
+def test_fail_detect_requires_confirmation(monkeypatch):
+    """单轮命中不判失败（防单帧误检）：命中一轮后中断即恢复操作。"""
+    win, _state, clicks = _install_mash(monkeypatch, per_click=0.2,
+                                        title_frames=14)
+    base = pochufengyin.game_map.match_frame_np
+
+    def _match(bgr, icon, threshold=0.8, region=None, fallback=True):
+        if icon == pochufengyin.POCHU_FAIL_ICON:
+            return (680, 590) if win.n == 3 else None   # 仅一闪而过
+        return base(bgr, icon, threshold=threshold, region=region,
+                    fallback=fallback)
+
+    monkeypatch.setattr(pochufengyin.game_map, "match_frame_np", _match)
+    ok, info = pochufengyin.play_pochufengyin(
+        win, "title", prefix="名望", label="蛟魔探秘钓鱼",
+        mash=True, fail_detect=True)
+    assert ok and "游戏失败" not in info
+    assert clicks and len(clicks) > 1   # 未误判失败，维持泵照常工作
+
+
+def test_fail_template_ignored_without_opt_in(monkeypatch):
+    """未开启 fail_detect 的调用方（客栈/玄枢）行为不变：失败模板命中
+    也不影响原有「标题消失即结束 + 位置命中」语义。"""
+    win, _state, clicks = _install_mash(monkeypatch, per_click=0.2,
+                                       title_frames=14)
+    _wrap_fail_match(monkeypatch, win, fail_from=1)   # 全程命中
+    ok, info = pochufengyin.play_pochufengyin(
+        win, "title", prefix="玄枢轶闻", label="钓鱼", mash=True)
+    assert ok and "命中区间" in info
+
+
 def test_mash_mode_bursts_to_target_zone(monkeypatch):
     """冲刺连点（蛟魔探秘钓鱼）：单击仅 0.1 刻度时，按在线估算的每击
     推进量连点冲进目标带（三档节奏 3 击/秒永远到不了目标带，用户实测）。"""

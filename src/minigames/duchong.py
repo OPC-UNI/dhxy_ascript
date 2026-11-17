@@ -15,6 +15,7 @@ from ascript.windows.window.Window import WindowCaptureFormat
 
 from ..device import map as game_map
 from ..device import task_tracker
+from ..device.dialog_common import dialog_frame_score, DIALOG_FRAME_THRESHOLD
 from ..core.app_utils import human_click, log
 
 BUG_START_ICON = "bug_start.png"             # 「开始」按钮（首次进入面板）
@@ -50,6 +51,14 @@ BUG_IDLE_END = 6.0                     # 连续无真虫命中且无面板 → �
 BUG_SIG_RATIO = 0.8                    # 任务签名相似阈值（同 follow_task，过滤 OCR 抖动）
 DUCHONG_FINISHED_TTL = 300             # 判定完成后抑制重进的窗口（秒）
 DUCHONG_RETRY_GAP = 10                 # 拍虫失败后的重进退避（秒，防连点）
+# ---- 完成信号：任务对话出现（2026-11-17 用户实测修正）----
+# 最后一局达标时游戏**直接弹出任务对话**（如「放心吧，你母亲定会早日
+# 康复的。」），「重新开始」面板不再出现。旧逻辑只等面板/任务签名：
+# 实测 15:34:03 对话已出现，拍虫循环仍等到 15:34:13（面板等待 8s 超时）
+# 才返回，对话框选项延迟 12s 才被点击。对话模板与拍虫面板互斥
+# （实测 30s 对局内 0 次误命中，对话帧 0.989），命中即小游戏结束。
+BUG_DIALOG_CHECK_INTERVAL = 0.5        # 对话模板检测间隔（秒；同帧匹配 ~9ms）
+BUG_DIALOG_CONFIRM = 2                 # 连续命中次数判完成（防单帧误配）
 
 
 def _bug_sig_similar(a, b, ratio=BUG_SIG_RATIO):
@@ -70,6 +79,23 @@ def _bug_button_pt(bgr):
         if score >= BUG_BUTTON_THRESHOLD and (best is None or score > best[0]):
             best = (score, pt)
     return None if best is None else best[1]
+
+
+def _bug_dialog_present(bgr):
+    """标准任务对话在场（拍毒虫完成的直接信号）。
+
+    小游戏最后一局达标时游戏直接弹出任务对话（面板不再出现）——对话
+    模板命中即说明小游戏已结束，无需再等面板重现或任务签名变化
+    （2026-11-17 实测：对话 15:34:03 出现，旧逻辑等到 15:34:13 超时）。
+    对局期间面板/挥拍特效不会命中对话模板（同一局 30s 内 0 次误配）；
+    帧过小/匹配异常按不在场处理（拍虫热路径，不因感知异常中断）。
+    """
+    if bgr is None:
+        return False
+    try:
+        return dialog_frame_score(bgr) >= DIALOG_FRAME_THRESHOLD
+    except Exception:
+        return False
 
 
 def _bug_candidates(prev_bgr, cur_bgr):
@@ -166,18 +192,24 @@ def _bug_capture(win):
                        format=WindowCaptureFormat.OPENCV)
 
 def _swat_round(win, deadline, ignore_panel_until=0.0):
-    """单局拍虫（阻塞到面板重现/长时间无虫/超时）。
+    """单局拍虫（阻塞到面板重现/任务对话/长时间无虫/超时）。
 
-    每次轮询固定顺序：截帧 → 面板按钮检查（连续 BUG_PANEL_CONFIRM 次
-    命中判回合结束，ignore_panel_until 内跳过——点开始后的面板淡出帧
-    会误命中）→ 帧间差分候选 → 毒虫模板匹配 → 命中点击（全局点击冷却
-    BUG_CLICK_COOLDOWN，一只虫点一次）。返回 (状态, 本局点击数)：
-    "panel"（面板重现）/ "idle"（长时间无真虫命中）/ "timeout"。
+    每次轮询固定顺序：截帧 → **任务对话检查**（完成直接信号：最后一局
+    达标时游戏直接弹任务对话、面板不再出现——限频
+    BUG_DIALOG_CHECK_INTERVAL、连续 BUG_DIALOG_CONFIRM 次命中判完成）
+    → 面板按钮检查（连续 BUG_PANEL_CONFIRM 次命中判回合结束，
+    ignore_panel_until 内跳过——点开始后的面板淡出帧会误命中）→ 帧间
+    差分候选 → 毒虫模板匹配 → 命中点击（全局点击冷却 BUG_CLICK_COOLDOWN，
+    一只虫点一次）。返回 (状态, 本局点击数)：\"panel\"（面板重现）/
+    \"dialog\"（任务对话出现=小游戏完成）/ \"idle\"（长时间无真虫命中）/
+    \"timeout\"。
     """
     clicks = 0
     last_click = 0.0
     last_hit = time.time()
     panel_hits = 0
+    dlg_hits = 0
+    last_dlg_chk = 0.0
     prev = None
     while time.time() < deadline:
         t0 = time.time()
@@ -185,6 +217,15 @@ def _swat_round(win, deadline, ignore_panel_until=0.0):
         if img is None:
             time.sleep(BUG_POLL_INTERVAL)
             continue
+        now = time.time()
+        if now - last_dlg_chk >= BUG_DIALOG_CHECK_INTERVAL:
+            last_dlg_chk = now
+            if _bug_dialog_present(img):
+                dlg_hits += 1
+                if dlg_hits >= BUG_DIALOG_CONFIRM:
+                    return "dialog", clicks
+            else:
+                dlg_hits = 0
         if time.time() > ignore_panel_until and _bug_button_pt(img) is not None:
             panel_hits += 1
             if panel_hits >= BUG_PANEL_CONFIRM:
@@ -219,8 +260,11 @@ def play(win, task_title, prefix="客栈"):
     2026-11-12 用户确认流程：点「开始」→ 30s 倒计时内只拍三种毒虫
     （蜻蜓/七星虫不点）→ 面板重现（按钮变「重新开始」）→ 任务追踪
     签名未变就继续点「重新开始」重玩，签名变化/任务消失即完成。
-    结束条件：任务签名变化（含消失）/ 总超时 / 连续快速回面板
-    （点击未进入小游戏，防连点）。返回 (是否成功, 描述)。
+    2026-11-17 完成直接信号：最后一局达标时游戏**直接弹出任务对话**、
+    面板不再重现——_swat_round/面板等待期命中对话模板即立即返回完成
+    （旧逻辑白等面板 8~10s，选项延迟 12s 才被点击）。
+    结束条件：任务对话出现 / 任务签名变化（含消失）/ 总超时 / 连续
+    快速回面板（点击未进入小游戏，防连点）。返回 (是否成功, 描述)。
     """
     global _duchong_finished
     now = time.time()
@@ -247,12 +291,27 @@ def play(win, task_title, prefix="客栈"):
         # ---- 面板阶段：等开始/重新开始按钮出现 ----
         pt = None
         wait_until = time.time() + panel_wait
+        last_dlg_chk = 0.0
+        dlg_hits = 0
         while time.time() < wait_until:
             img = _bug_capture(win)
             if img is not None:
                 pt = _bug_button_pt(img)
                 if pt is not None:
                     break
+                # 完成直接信号：任务对话出现，面板不再重现（2026-11-17
+                # 用户实测：对话已出现仍白等面板 8~10s）
+                now = time.time()
+                if now - last_dlg_chk >= BUG_DIALOG_CHECK_INTERVAL:
+                    last_dlg_chk = now
+                    if _bug_dialog_present(img):
+                        dlg_hits += 1
+                        if dlg_hits >= BUG_DIALOG_CONFIRM:
+                            return True, (
+                                f"拍毒虫完成（任务对话出现，共 {rounds} 局，"
+                                f"拍中 {clicks_total} 只）")
+                    else:
+                        dlg_hits = 0
             time.sleep(0.2)
         if pt is None:
             state = _bug_task_state(win, task_title)
@@ -282,6 +341,12 @@ def play(win, task_title, prefix="客栈"):
             win, round_start + BUG_ROUND_TIMEOUT,
             ignore_panel_until=round_start + 1.0)
         clicks_total += clicks
+        if status == "dialog":
+            # 任务对话出现 = 小游戏完成（最后一局达标，面板不会重现）：
+            # 立即返回，让 follow 的对话处理及时点选项（2026-11-17：
+            # 旧逻辑白等面板 8~10s，选项延迟 12s 才被点击）
+            return True, (f"拍毒虫完成（任务对话出现，共 {rounds} 局，"
+                          f"拍中 {clicks_total} 只）")
         panel_wait = BUG_PANEL_WAIT
         if status == "panel" and clicks == 0 \
                 and time.time() - round_start < 3.0:

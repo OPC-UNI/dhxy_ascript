@@ -57,6 +57,9 @@ TEMPLATES = (
     (mingwang.PICK_ITEM_ICON, mingwang.PICK_ITEM_THRESHOLD),
     (mingwang.CHUANYIN_ITEM_ICON, mingwang.CHUANYIN_ITEM_THRESHOLD),
     (mingwang.PICK_MINING_TITLE_ICON, mingwang._pochu_minigame.POCHU_THRESHOLD),
+    (mingwang._pochu_minigame.POCHU_FAIL_ICON,
+     mingwang._pochu_minigame.POCHU_FAIL_THRESHOLD),
+    (mingwang.DIAOYU_FAIL_CLOSE_ICON, mingwang.DIAOYU_FAIL_CLOSE_THRESHOLD),
     (mingwang.SHADU_WORLD_ICON, 0.8),  # 世界地图标签（open_mini_map_city 默认 0.8）
     (mingwang.SHADU_NPC_ICON, mingwang.SHADU_NPC_THRESHOLD),
     (mingwang.SHAHAI_START_ICON, mingwang.SHAHAI_START_THRESHOLD),
@@ -659,6 +662,55 @@ def test_run_loop_stops_on_daily_full(monkeypatch):
                         lambda w, race=None: ("daily_done", "今日任务已全部完成"))
     info = mingwang.run_loop(object())
     assert "今日任务已全部完成" in info and "达到次数上限" not in info
+
+
+def test_run_loop_not_found_closes_panel(monkeypatch):
+    """任务栏无已实现任务 → 主循环结束前关闭山河名望面板（用户 2026-11-17
+    规则：残留面板遮挡后续任务的追踪面板/对话框区）。
+
+    该路径**不得**清标准对话框：领取面板在场时点屏幕中间 (689,415)
+    恰落在中间列「接取」按钮 (688,423) 附近，对话框模板一旦对面板误
+    命中就会误领未实现任务——只右键标题牌关闭。
+    """
+    monkeypatch.setattr(mingwang, "load_task_counts", lambda: {"名望": 5})
+    monkeypatch.setattr(mingwang.app_utils, "task_progress_done",
+                        lambda w, m: 0)
+    monkeypatch.setattr(mingwang, "_load_cached_race", lambda w: "魔族")
+    monkeypatch.setattr(mingwang, "_task_in_tracker", lambda w: False)
+    monkeypatch.setattr(mingwang, "run_cycle",
+                        lambda w, race=None: ("not_found",
+                                              "任务栏未找到已实现任务"))
+    monkeypatch.setattr(mingwang, "clear_blocking_dialog",
+                        lambda w, p="": (_ for _ in ()).throw(
+                            AssertionError("无已实现任务路径不得清对话框")))
+    closes = []
+    monkeypatch.setattr(mingwang, "_close_shanhe_panel",
+                        lambda w: closes.append("panel")
+                        or (True, "山河名望面板已关闭"))
+    info = mingwang.run_loop(object())
+    assert "未找到已实现任务" in info and "山河名望面板已关闭" in info
+    assert closes == ["panel"]
+
+
+def test_close_shanhe_panel_safely_retries(monkeypatch):
+    """面板关闭失败 → 最多重试 3 次；daily_done 路径先清标准对话框。"""
+    monkeypatch.setattr(mingwang.time, "sleep", lambda s: None)
+    seq = []
+
+    def _clear(w, p=""):
+        seq.append("dialog")
+        return True, True
+
+    def _close(w):
+        seq.append("panel")
+        return False, "山河名望面板关闭失败（右键标题牌未生效）"
+
+    monkeypatch.setattr(mingwang, "clear_blocking_dialog", _clear)
+    monkeypatch.setattr(mingwang, "_close_shanhe_panel", _close)
+    desc = mingwang._close_shanhe_panel_safely(object(), "测试")
+    assert "关闭失败" in desc
+    assert seq.count("panel") == 3
+    assert seq.count("dialog") == 4   # 首次 + 每次重试前各清一次
 
 
 def test_dismiss_claim_dialog_uses_frame_gate(monkeypatch):
@@ -1405,6 +1457,147 @@ def test_mingwang_diaoyu_not_armed_noop(monkeypatch):
     assert mingwang._mingwang_diaoyu_window_check(object()) is False
 
 
+# ---- 蛟魔探秘钓鱼失败重试（关面板 X → 点任务追踪重走，用户 2026-11-17）----
+def _diaoyu_fail_frame(seed=20261117, x_visible=True):
+    """合成失败结果面板帧：标题/「游戏失败」/X 模板按真机坐标贴入。"""
+    frame = _noise_bgr(seed)
+    icons = [(mingwang.MINGWANG_DIAOYU_TITLE_ICON, (592, 459)),
+             (mingwang._pochu_minigame.POCHU_FAIL_ICON, (646, 576))]
+    if x_visible:
+        icons.append((mingwang.DIAOYU_FAIL_CLOSE_ICON, (991, 469)))
+    for icon, (x, y) in icons:
+        tpl = cv2.imread(R.img(icon), cv2.IMREAD_COLOR)
+        th, tw = tpl.shape[:2]
+        frame[y:y + th, x:x + tw] = tpl
+    return frame
+
+
+def _diaoyu_items():
+    return [("·[日常]蛟魔探秘[山河名望]", [14, 230, 205, 253], 0.98),
+            ("请前往火云湖边，将捣乱者从", [21, 249, 221, 274], 0.99)]
+
+
+def test_diaoyu_fail_watchdog_closes_panel_and_retries(monkeypatch):
+    """失败面板看门狗：X 模板命中 → 点击关闭 → 确认标题消失 → 点任务
+    追踪绿字重走（用户规则：失败先点 X 关闭面板，再点任务追踪）。"""
+    monkeypatch.setattr(mingwang, "_diaoyu_fail_watch_at", 0.0)
+    monkeypatch.setattr(mingwang, "_diaoyu_fail_streak", 0)
+    monkeypatch.setattr(mingwang.time, "sleep", lambda s: None)
+    clicks = []
+    monkeypatch.setattr(mingwang, "human_click",
+                        lambda w, x, y, button="primary":
+                        clicks.append((x, y, button)))
+    track_calls = []
+
+    def _track(w, title, **kw):
+        track_calls.append(title)
+        return True, "已跟踪「山河名望」"
+
+    monkeypatch.setattr(mingwang.task_tracker, "track_task", _track)
+    # 第 1 帧看门狗检测；第 2 帧关闭链路复查并点 X；第 3 帧面板消失
+    win = _FakeWin([_pil(_diaoyu_fail_frame(x_visible=True)),
+                    _pil(_diaoyu_fail_frame(x_visible=True)),
+                    _pil(_noise_bgr(seed=7))])
+    assert mingwang._maybe_retry_diaoyu_fail(win, _diaoyu_items()) is True
+    assert clicks and clicks[0][:2] == (999, 479)   # X 模板中心
+    assert track_calls == [mingwang.TASK_TITLE]
+    assert mingwang._diaoyu_fail_streak == 1
+
+
+def test_diaoyu_fail_watchdog_retries_close_when_panel_stays(monkeypatch):
+    """X 点击后面板仍在：限时内重试点击（失败面板不关闭重走无从谈起）。"""
+    monkeypatch.setattr(mingwang, "_diaoyu_fail_watch_at", 0.0)
+    monkeypatch.setattr(mingwang, "_diaoyu_fail_streak", 0)
+    monkeypatch.setattr(mingwang.time, "sleep", lambda s: None)
+    clicks = []
+    monkeypatch.setattr(mingwang, "human_click",
+                        lambda w, x, y, button="primary":
+                        clicks.append((x, y, button)))
+    monkeypatch.setattr(mingwang.task_tracker, "track_task",
+                        lambda w, title, **kw: (True, "已跟踪"))
+    # 前 3 帧面板仍在（X 点击未生效），之后消失
+    frames = [_pil(_diaoyu_fail_frame()) for _ in range(4)]
+    frames.append(_pil(_noise_bgr(seed=8)))
+    win = _FakeWin(frames)
+    assert mingwang._maybe_retry_diaoyu_fail(win, _diaoyu_items()) is True
+    assert len(clicks) >= 3
+
+
+def test_diaoyu_fail_watchdog_skips_other_tasks(monkeypatch):
+    """追踪面板不是蛟魔探秘：不截帧零开销（看门狗 items 门控）。"""
+    monkeypatch.setattr(mingwang, "_diaoyu_fail_watch_at", 0.0)
+    monkeypatch.setattr(mingwang, "_diaoyu_fail_streak", 0)
+    win = _FakeWin([_pil(_diaoyu_fail_frame())])
+    items = [("·[日常]五庄封印[山河名望]", [14, 230, 205, 253], 0.98)]
+    assert mingwang._maybe_retry_diaoyu_fail(win, items) is False
+    assert win.calls == 0
+
+
+def test_diaoyu_fail_watchdog_stops_after_max(monkeypatch):
+    """连续失败达到上限 → 停止自动重试（防控制失准时无限空转）。"""
+    monkeypatch.setattr(mingwang, "_diaoyu_fail_watch_at", 0.0)
+    monkeypatch.setattr(mingwang, "_diaoyu_fail_streak",
+                        mingwang.DIAOYU_FAIL_RETRY_MAX)
+    win = _FakeWin([_pil(_diaoyu_fail_frame())])
+    assert mingwang._maybe_retry_diaoyu_fail(win, _diaoyu_items()) is False
+    assert win.calls == 0
+
+
+def test_mingwang_diaoyu_window_skips_fail_panel(monkeypatch):
+    """失败结果面板在场：不再次进入小游戏闭环（交给看门狗关闭+重走）。"""
+    monkeypatch.setattr(mingwang, "_mingwang_diaoyu_armed_at", time.time())
+    monkeypatch.setattr(mingwang, "_mingwang_diaoyu_last_check", 0.0)
+    monkeypatch.setattr(mingwang, "is_in_battle", lambda w: False)
+    monkeypatch.setattr(mingwang._pochu_minigame, "play_pochufengyin",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("失败面板不应进入闭环")))
+    win = _FakeWin([_pil(_diaoyu_fail_frame())])
+    assert mingwang._mingwang_diaoyu_window_check(win) is False
+
+
+def test_mingwang_diaoyu_window_failure_keeps_armed(monkeypatch):
+    """小游戏返回失败：开启 fail_detect、不 disarm（面板由看门狗重走）。"""
+    monkeypatch.setattr(mingwang, "_mingwang_diaoyu_armed_at", time.time())
+    monkeypatch.setattr(mingwang, "_mingwang_diaoyu_last_check", 0.0)
+    monkeypatch.setattr(mingwang, "is_in_battle", lambda w: False)
+    frame = _noise_bgr(seed=20261118)   # 仅标题，无失败红字
+    tpl = cv2.imread(R.img(mingwang.MINGWANG_DIAOYU_TITLE_ICON),
+                     cv2.IMREAD_COLOR)
+    th, tw = tpl.shape[:2]
+    frame[500:500 + th, 400:400 + tw] = tpl
+    calls = {}
+
+    def _play(w, icon, **kw):
+        calls.update(kw)
+        return False, "蛟魔探秘钓鱼游戏失败（P=1.99，点击 18 次）"
+
+    monkeypatch.setattr(mingwang._pochu_minigame, "play_pochufengyin", _play)
+    win = _FakeWin([_pil(frame)])
+    assert mingwang._mingwang_diaoyu_window_check(win) is True
+    assert calls.get("fail_detect") is True
+    assert calls.get("mash") is True
+    assert mingwang._mingwang_diaoyu_armed_at > 0   # 未 disarm，等看门狗接管
+
+
+def test_diaoyu_fail_success_resets_streak(monkeypatch):
+    """小游戏成功 → 连续失败计数清零（新一轮失败重新计数）。"""
+    monkeypatch.setattr(mingwang, "_mingwang_diaoyu_armed_at", time.time())
+    monkeypatch.setattr(mingwang, "_mingwang_diaoyu_last_check", 0.0)
+    monkeypatch.setattr(mingwang, "_diaoyu_fail_streak", 3)
+    monkeypatch.setattr(mingwang, "is_in_battle", lambda w: False)
+    frame = _noise_bgr(seed=20261119)
+    tpl = cv2.imread(R.img(mingwang.MINGWANG_DIAOYU_TITLE_ICON),
+                     cv2.IMREAD_COLOR)
+    th, tw = tpl.shape[:2]
+    frame[500:500 + th, 400:400 + tw] = tpl
+    monkeypatch.setattr(mingwang._pochu_minigame, "play_pochufengyin",
+                        lambda *a, **k: (True, "蛟魔探秘钓鱼结束（命中区间）"))
+    win = _FakeWin([_pil(frame)])
+    assert mingwang._mingwang_diaoyu_window_check(win) is True
+    assert mingwang._diaoyu_fail_streak == 0
+    assert mingwang._mingwang_diaoyu_armed_at == 0.0
+
+
 # ---- 五庄封印执行：追踪双链接 → 坐标稳定到达 → 任务储物格用唤风符 ----
 SEAL_ITEMS_LIVE = [
     ("[日常]五庄封印[山河名望]", [18, 230, 205, 253], 0.97),
@@ -2056,9 +2249,9 @@ def test_jiamo_map_match():
 
 
 def _patch_jiamo(monkeypatch, sig, pos, land_ok=True):
-    """蛟魔复仇状态机替换：追踪文案、位置读取、降落/关面板/Alt+D 记录。"""
+    """蛟魔复仇状态机替换：追踪文案、位置读取、降落/关面板/走位记录。"""
     state = {"land": 0, "close": 0, "sig": sig, "pos": pos, "ok": land_ok,
-             "pos_reads": 0, "alt_d": 0}
+             "pos_reads": 0, "walk": 0}
     monkeypatch.setattr(mingwang, "_seal_sig", lambda items: state["sig"])
 
     def _pos(win, items):
@@ -2076,13 +2269,13 @@ def _patch_jiamo(monkeypatch, sig, pos, land_ok=True):
         state["close"] += 1
         return True, "飞行驭器面板已关闭"
 
-    def _alt_d(win):
-        state["alt_d"] += 1
-        return "已静默投递 Alt+D 随机遇敌"
+    def _walk(win):
+        state["walk"] += 1
+        return "已点击世界地面模拟行走，等待暗雷遇敌"
 
     monkeypatch.setattr(mingwang.zuoqi, "ensure_landed", _land)
     monkeypatch.setattr(mingwang.zuoqi, "close_feixingyuqi_panel", _close)
-    monkeypatch.setattr(mingwang, "_press_alt_d", _alt_d)
+    monkeypatch.setattr(mingwang, "_jiamo_walk_click", _walk)
     return state
 
 
@@ -2210,34 +2403,54 @@ def test_jiamo_new_target_map_relands(monkeypatch):
     assert state["land"] == 2 and mingwang._jiamo_phase == 1
 
 
-def test_jiamo_alt_d_after_stable_no_battle(monkeypatch):
-    """到达稳定后仍不开战（任务文案仍在）→ 按 Alt+D 随机遇敌（限频重按）。"""
+def test_jiamo_walk_click_after_stable_no_battle(monkeypatch):
+    """到达稳定后仍不开战（任务文案仍在）→ 点击世界地面模拟行走催战
+    （静默 Alt+D 不会让人物走动，2026-11-17 用户实测修正；限频重按）。"""
     state = _patch_jiamo(monkeypatch, JIAMO_SIG, ("女儿村", 1, 1))
     mingwang._reset_jiamo_state()
     _jiamo_seed_stable(("女儿村", 1, 1))
     assert _jiamo_poll(state) is True              # 降落 → phase 1
-    assert state["alt_d"] == 0
-    # 稳定但未到 Alt+D 等待时限：不按
+    assert state["walk"] == 0
+    # 稳定但未到走位等待时限：不点
     assert _jiamo_poll(state) is False
-    assert state["alt_d"] == 0 and mingwang._jiamo_stable_at > 0
-    # 等待时限到：按 Alt+D
-    mingwang._jiamo_stable_at = time.time() - mingwang.JIAMO_ALT_D_WAIT - 1
+    assert state["walk"] == 0 and mingwang._jiamo_stable_at > 0
+    # 等待时限到：点地面走位
+    mingwang._jiamo_stable_at = time.time() - mingwang.JIAMO_WALK_WAIT - 1
     assert _jiamo_poll(state) is True
-    assert state["alt_d"] == 1
+    assert state["walk"] == 1
     # 重按间隔内不重复
     assert _jiamo_poll(state) is False
-    assert state["alt_d"] == 1
-    # 间隔到：再次按
-    mingwang._jiamo_alt_d_at = (time.time()
-                                - mingwang.JIAMO_ALT_D_INTERVAL - 1)
+    assert state["walk"] == 1
+    # 间隔到：再次点
+    mingwang._jiamo_walk_click_at = (time.time()
+                                     - mingwang.JIAMO_WALK_INTERVAL - 1)
     assert _jiamo_poll(state) is True
-    assert state["alt_d"] == 2
-    # 位置变化（仍在移动）→ 稳定清零、不按
+    assert state["walk"] == 2
+    # 位置变化（走动中）→ 稳定清零、不点
     assert _jiamo_poll(state, ("女儿村", 40, 40)) is False
     assert mingwang._jiamo_stable_at == 0.0
-    mingwang._jiamo_alt_d_at = 0.0
+    mingwang._jiamo_walk_click_at = 0.0
     assert _jiamo_poll(state) is False
-    assert state["alt_d"] == 2
+    assert state["walk"] == 2
+
+
+def test_jiamo_walk_click_human_click_rotates(monkeypatch):
+    """走位点击：human_click 世界点轮换（避开 UI，四点循环）。"""
+    clicks = []
+    monkeypatch.setattr(mingwang, "human_click",
+                        lambda w, x, y, button="primary":
+                        clicks.append((x, y)))
+    mingwang._jiamo_walk_idx = 0
+    for _ in range(len(mingwang.JIAMO_WALK_POINTS) + 1):
+        desc = mingwang._jiamo_walk_click(object())
+        assert "点击世界地面" in desc and "等待暗雷遇敌" in desc
+    pts = [p for p in clicks]
+    assert pts[0] == mingwang.JIAMO_WALK_POINTS[0]
+    assert pts[:4] == list(mingwang.JIAMO_WALK_POINTS)
+    assert pts[4] == mingwang.JIAMO_WALK_POINTS[0]   # 循环回第一个点
+    # 走位点都在世界区域（避开左上追踪面板/底部战斗面板/技能栏）
+    for x, y in mingwang.JIAMO_WALK_POINTS:
+        assert 420 <= x <= 950 and 230 <= y <= 680
 
 
 def test_jiamo_reset_when_trigger_gone(monkeypatch):
@@ -2268,28 +2481,6 @@ def test_jiamo_arrival_fallback_when_unparsed(monkeypatch):
     assert _jiamo_poll(state) is True
     assert mingwang._jiamo_target == "女儿村"
     assert state["land"] == 1 and mingwang._jiamo_phase == 1
-
-
-def test_press_alt_d_silent_and_physical(monkeypatch):
-    """Alt+D 随机遇敌：静默模式走消息投递；非静默需前台（keyboard_ok）。"""
-    calls = []
-
-    def _hotkey(win, mods, key, **kwargs):
-        calls.append((tuple(mods), key))
-        return {"ok": True}
-
-    monkeypatch.setattr(mingwang.app_utils, "silent_mode_on", lambda: True)
-    from src.device import silent_click
-    monkeypatch.setattr(silent_click, "send_silent_hotkey", _hotkey)
-    desc = mingwang._press_alt_d(object())
-    assert "静默" in desc and calls == [(("alt",), "d")]
-    monkeypatch.setattr(silent_click, "send_silent_hotkey",
-                        lambda *a, **k: None)
-    assert "投递失败" in mingwang._press_alt_d(object())
-    # 物理模式：不在前台 → 不发送
-    monkeypatch.setattr(mingwang.app_utils, "silent_mode_on", lambda: False)
-    monkeypatch.setattr(mingwang.app_utils, "keyboard_ok", lambda w: False)
-    assert "未发送" in mingwang._press_alt_d(object())
 
 
 def test_handle_dialog_options_calls_jiamo(monkeypatch):

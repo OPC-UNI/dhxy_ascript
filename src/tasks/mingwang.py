@@ -108,7 +108,12 @@
    mingwang_diaochushuizhongguaiwu 并复用共享闭环
    pochufengyin.play_pochufengyin（点击冲刺连点模式：单次点击推进小，
    须高频率连点才能到达目标带；填充条停手会自动回退，进带后持续
-   补点维持到窗口结束），标题消失即小游戏结束。
+   补点维持到窗口结束），标题消失即小游戏结束。**失败重试**（用户
+   2026-11-17 规则）：小游戏循环检测到「游戏失败」提前返回失败，失败
+   结果面板（标题仍在、不自动关闭）由 _maybe_retry_diaoyu_fail 看门狗
+   点右上角 X 关闭 → 点任务追踪绿色链接重走一遍（与 follow 引擎同款
+   track_task），入口对话/选项重新触发钓鱼；连续失败
+   DIAOYU_FAIL_RETRY_MAX 次后停止自动重试并告警。
 6. 主循环（同玄枢轶闻）：完成一轮后回去领取下一轮，直到次数上限/
    每日次数已满/任务栏无当前已实现任务/**今日任务全部完成**（点击
    接取后出现「今日还请多加歇息，明日再来吧」→ 关闭山河名望面板后
@@ -519,7 +524,7 @@ _tgqy_game_last_check = 0.0 # 上次窗口检测时间（限频）
 _tgqy_game_retry_at = 0.0   # 小游戏游玩失败后的下次允许游玩时间（冷却）
 
 # ---- 蛟魔复仇（暗雷战斗）：追踪「请在<地图>仔细搜查（暗雷战斗）」→
-#      寻路 → 到达目标地图 → 降落 → Alt+D 随机遇敌兜底 ----
+#      寻路 → 到达目标地图 → 降落 → 点地面走位催发暗雷遭遇 ----
 # 用户 2026-11-11 规则：追踪面板任务文案括号内含「暗雷战斗」时，点击
 # 追踪绿字即自动寻路到文案中的地图（实机原文：「仙族兵士逃窜而去，
 # 请在女儿村仔细搜查，可不能让让他就这么走了。（暗雷战斗）」→ 女儿村）；
@@ -534,9 +539,15 @@ _tgqy_game_retry_at = 0.0   # 小游戏游玩失败后的下次允许游玩时�
 # 再次起飞，白降落一次。改为先等「位移启动」（寻路已开始），再在目标
 # 地图内位置连续稳定才判到达，到达后才降落。未见位移 JIAMO_MOVE_WAIT
 # 秒（目的地就在脚下/点击未生效）也按到达放行，避免死等。
-# 随机遇敌兜底（2026-11-15 用户规则）：到达稳定后仍长时间未触发战斗且
-# 任务仍在（暗雷战斗文案仍可见）时，按 Alt+D（游戏随机遇敌热键）催发
-# 遭遇战；未触发按间隔重按，战斗开始后由 follow/battle 线程接管。
+# 随机遇敌兜底（2026-11-15 用户规则 + 2026-11-17 修正）：到达稳定后仍
+# 长时间未触发战斗且任务仍在（暗雷战斗文案仍可见）时**点击世界地面模拟
+# 玩家行走**催发暗雷遭遇战（静默模式下 Alt+D 热键实测不会让人物随机
+# 走动——2026-11-17 用户反馈连续多次静默投递零位移零战斗；点击是静默
+# 通道已验证生效的世界交互，且走动本身就触发暗雷）。走位点四点轮换防
+# 反复撞同一障碍/NPC；点击前已有位置连续稳定断言（点屏/世界点击须先
+# 确认站定，防打断自动寻路——性能规则 13）；走动使稳定性自然清零，
+# 到达稳定 JIAMO_WALK_WAIT 秒后再点下一个点。战斗开始后由 follow/
+# battle 线程接管。
 JIAMO_ANLEI_KEYWORD = "暗雷战斗"     # 追踪触发词（任务描述括号内）
 # 目标地图解析：「请在<地图>仔细搜查」——地图名 2~8 字非贪婪，锚定在
 # 「仔细/搜查」之前（OCR 形近变体一并收录；_seal_sig 已去标点，直接在
@@ -557,11 +568,17 @@ JIAMO_MOVE_DELTA = 5             # 判定寻路已启动的位移阈值（像素
 JIAMO_MOVE_WAIT = 12.0           # 等待寻路启动时限（秒）——超时未见位移视为已在目的地
 JIAMO_ARRIVE_POLLS = 3           # 到达判定：位置连续稳定轮询数（同封印/镐）
 JIAMO_POS_TOLERANCE = 3          # 到达判定：坐标稳定容差（像素）
-# 随机遇敌兜底（按 Alt+D）：到达稳定后等战斗的时限与重按间隔
-JIAMO_ALT_D_WAIT = 5.0           # 到达稳定后仍未开战多久按 Alt+D（秒）
-JIAMO_ALT_D_INTERVAL = 10.0      # 再次按 Alt+D 的间隔（秒）
-# 状态机：0=等寻路启动/到达/降落；1=已到达并降落，等战斗（Alt+D 兜底；
-# 保持到目标地图变化/复位）。
+# 随机遇敌兜底（点地面模拟行走）：到达稳定后等战斗的时限与走路间隔
+JIAMO_WALK_WAIT = 5.0            # 到达稳定后仍未开战多久点地面走位（秒）
+JIAMO_WALK_INTERVAL = 10.0       # 两次走位点击的最小间隔（秒）
+# 走位点（窗口坐标，四点轮换）：世界区域中心附近、避开所有 UI 面板
+# （左上任务追踪 x<400/y200-355、左下自动战斗 y≥690/x<330、右侧血蓝
+# 与技能栏 x>1020、顶部状态栏 y<200、底部技能栏 y>735）——角色在屏幕
+# 中心附近，任意一个点都会走出可观位移；轮换防止连续撞同一障碍物或
+# 误点到同一 NPC。
+JIAMO_WALK_POINTS = ((900, 430), (480, 430), (690, 650), (690, 250))
+# 状态机：0=等寻路启动/到达/降落；1=已到达并降落，等战斗（点地面走位
+# 兜底；保持到目标地图变化/复位）。
 _jiamo_phase = 0
 _jiamo_target = None          # 解析出的目标地图名
 _jiamo_missing = 0            # 触发词连续缺失轮询数（≥JIAMO_ABSENT_RESET 复位）
@@ -571,10 +588,11 @@ _jiamo_warned = False         # 目标地图解析失败已告警（每状态实
 _jiamo_walk_from = None       # 等待寻路启动的起点位置
 _jiamo_move_seen = False      # 已见位移（寻路已启动）或超时放行
 _jiamo_walk_at = 0.0          # 首见文案时间（未见位移超时起点）
-_jiamo_stable = 0             # 位置连续稳定轮询数（到达/Alt+D 共用）
+_jiamo_stable = 0             # 位置连续稳定轮询数（到达/走位共用）
 _jiamo_last_pos = None        # 上次位置
-_jiamo_stable_at = 0.0        # 稳定起点（Alt+D 等待起点；不稳清零）
-_jiamo_alt_d_at = 0.0         # 上次按 Alt+D 时间（重按间隔）
+_jiamo_stable_at = 0.0        # 稳定起点（走位等待起点；不稳清零）
+_jiamo_walk_click_at = 0.0    # 上次走位点击时间（重按间隔）
+_jiamo_walk_idx = 0           # 走位点轮换下标
 
 # ---- 沙海迷踪（高级任务）执行入口 ----
 # 入口对话选项「少侠准备好清理地图了吗？」→「我已经准备好了」（在
@@ -637,6 +655,30 @@ MINGWANG_DIAOYU_ARM_TIMEOUT = _pochu_minigame.POCHU_ARM_TIMEOUT      # armed 时
 MINGWANG_DIAOYU_CHECK_INTERVAL = _pochu_minigame.POCHU_CHECK_INTERVAL  # 检测限频（秒）
 _mingwang_diaoyu_armed_at = 0.0   # 入口选项点击时间；>0 且未超时=检测开启
 _mingwang_diaoyu_last_check = 0.0 # 上次窗口检测时间（限频）
+
+# ---- 蛟魔探秘钓鱼失败重试（2026-11-17 用户规则）----
+# 失败结果面板**标题仍在**、进度条下方居中显示红色「游戏失败」，面板
+# 不自动关闭（2026-11-17 13:00 真机：脚本按位置猜成「命中区间」返回，
+# 失败面板留在屏幕上，任务追踪点击被面板拦截，任务停住到 300s 跟踪
+# 超时才自然重试）。失败后恢复链（用户指定）：
+# 1. 点面板右上角 X 关闭（模板 pochu_guanbi.png，正样本 1.00/0.99、
+#    非面板帧 ≤0.41；关闭后以标题模板消失确认）；
+# 2. 点任务追踪绿色链接重走（复用 task_tracker.track_task，与 follow
+#    引擎同一实现）→ 游戏自动寻路/原地重开 NPC 对话 → 入口选项重新
+#    arm 钓鱼小游戏。
+# 小游戏循环 fail_detect=True 检测「游戏失败」提前返回失败（面板仍在），
+# 本链路负责关闭；另有 extras 看门狗兜底「标题消失误判结束、面板残留」
+# 的路径。同一任务领取期间连续失败 DIAOYU_FAIL_RETRY_MAX 次后停止自动
+# 重试并打一条 ERROR（防控制参数失准时无限重试空转）。
+DIAOYU_FAIL_WATCH_INTERVAL = 1.0     # 失败面板看门狗检测限频（热路径，秒）
+DIAOYU_FAIL_CLOSE_ICON = _pochu_minigame.POCHU_CLOSE_ICON
+DIAOYU_FAIL_CLOSE_REGION = _pochu_minigame.POCHU_CLOSE_REGION
+DIAOYU_FAIL_CLOSE_THRESHOLD = _pochu_minigame.POCHU_FAIL_THRESHOLD
+DIAOYU_FAIL_CLOSE_TIMEOUT = 4.0      # 点 X 后等待面板关闭的时限（秒，含重试点击）
+DIAOYU_FAIL_CLOSE_INTERVAL = 0.5     # 关闭确认轮询间隔（秒）
+DIAOYU_FAIL_RETRY_MAX = 5            # 连续失败自动重试上限（同一任务领取期间）
+_diaoyu_fail_watch_at = 0.0          # 看门狗上次检测时间（限频）
+_diaoyu_fail_streak = 0              # 连续失败重试次数（成功/新领取复位）
 
 # ---- 沙都修罗（高级）：追踪文案触发 → 蟠桃园五路点找 NPC → 点名字上方 ----
 # 用户 2026-11-10 流程：跟踪面板内容包含「根据三张蟠桃园残像所示位置」时：
@@ -936,23 +978,21 @@ def navigate_to_claim_by_map_label(win, claim):
     return True, info
 
 
-def _press_alt_d(win):
-    """按 Alt+D 随机遇敌（蛟魔复仇：到达稳定仍未开战的催战兜底）。
+def _jiamo_walk_click(win):
+    """点击世界地面模拟玩家行走（蛟魔复仇：到达稳定仍未开战的催战兜底）。
 
-    静默模式走消息投递（游戏窗口无需前台）；非静默走物理热键，按键前
-    校验游戏窗口在前台（keyboard_ok）。失败只记描述不抛异常。
+    2026-11-17 用户修正：静默模式下 Alt+D 热键不会让人物随机走动
+    （连续多次投递零位移零战斗），点击世界地面模拟玩家行走才是有效
+    催战方式——走动本身触发暗雷遭遇。走位点按 JIAMO_WALK_POINTS 轮换；
+    调用方已通过位置连续稳定断言人物站定（世界点击须先确认站定，防
+    打断自动寻路，性能规则 13），点击走 human_click 全局锁/静默通道。
     返回描述文案。
     """
-    if app_utils.silent_mode_on():
-        from ..device import silent_click  # 延迟导入（避免模块级循环）
-        info = silent_click.send_silent_hotkey(win, ("alt",), "d")
-        if info is None:
-            return "静默 Alt+D 随机遇敌投递失败（窗口不存在）"
-        return "已静默投递 Alt+D 随机遇敌"
-    if app_utils.keyboard_ok(win):
-        Keyboard.key_hot("alt", "d")
-        return "已按 Alt+D 随机遇敌"
-    return "游戏窗口未在前台（激活失败），Alt+D 未发送"
+    global _jiamo_walk_idx
+    x, y = JIAMO_WALK_POINTS[_jiamo_walk_idx % len(JIAMO_WALK_POINTS)]
+    _jiamo_walk_idx += 1
+    human_click(win, x, y)
+    return f"已点击世界地面 ({x},{y}) 模拟行走，等待暗雷遇敌"
 
 
 def _click_claim_option(win, items, img_np):
@@ -1191,25 +1231,35 @@ def _daily_full_dialog_present(items):
     return any(_dialog_text_present(items, txt) for txt in DAILY_FULL_TEXTS)
 
 
-def _close_after_daily_full(win):
-    """今日全部完成：关闭山河名望面板（用户 2026-11-15 规则）。
+def _close_shanhe_panel_safely(win, reason, clear_dialog=True):
+    """结束前关闭山河名望面板（可选清标准对话框 + 右键标题牌，最多 3 次）。
 
+    两种结束路径共用（用户规则）：今日任务全部完成（2026-11-15）、
+    任务栏无已实现任务（2026-11-17）——残留面板会遮挡后续任务的追踪
+    面板与对话框区，且任务已结束不会再有领取动作处理它。面板未打开时
+    _close_shanhe_panel 直接按成功返回（结束路径的防御性检查）。
     今日全部完成提示是非标准对话框（无标准边框，同玄枢「请明天再来」
-    提示）——先按模板门控清一次标准对话框（若恰有其它标准对话在场），
-    再右键面板标题牌关闭山河名望面板；关闭失败最多重试 2 次（提示
-    漂浮文字可能短暂遮挡/吞点击，_close_shanhe_panel 每次都先复核
-    面板仍在才右键，重试幂等）。返回关闭结果描述。
+    提示）——daily_done 路径先按模板门控清一次标准对话框（若恰有其它
+    标准对话在场），再右键面板标题牌关闭面板；关闭失败最多重试 2 次
+    （漂浮提示文字可能短暂遮挡/吞点击，_close_shanhe_panel 每次都先
+    复核面板仍在才右键，重试幂等）。
+    clear_dialog=False：无已实现任务路径**不得**清对话框——领取面板
+    在场时点屏幕中间 (689,415) 恰落在中间列「接取」按钮附近
+    (688,423)，一旦对话框模板对面板误命中就会误领未实现任务；该路径
+    只右键标题牌关闭。reason：日志前缀（结束原因）。返回关闭结果描述。
     """
-    had, _clicked = clear_blocking_dialog(win, "名望")
-    if had:
-        log("[名望] 今日全部完成：已关闭在场的标准对话框", "SYS")
+    if clear_dialog:
+        had, _clicked = clear_blocking_dialog(win, "名望")
+        if had:
+            log(f"[名望] {reason}：已关闭在场的标准对话框", "SYS")
     desc = "山河名望面板未打开"
     for attempt in (1, 2, 3):
         ok, desc = _close_shanhe_panel(win)
         if ok:
             break
-        log(f"[名望] 今日全部完成：{desc}，第 {attempt} 次重试关闭面板", "WARN")
-        clear_blocking_dialog(win, "名望")
+        log(f"[名望] {reason}：{desc}，第 {attempt} 次重试关闭面板", "WARN")
+        if clear_dialog:
+            clear_blocking_dialog(win, "名望")
         time.sleep(0.5)
     return desc
 
@@ -1303,7 +1353,7 @@ def claim_panel_task(win):
     if vstate == "daily_done":
         # 今日任务已全部完成（用户 2026-11-15 规则）：关闭山河名望
         # 面板，结束本次任务——不计数、不再重试领取
-        cdesc = _close_after_daily_full(win)
+        cdesc = _close_shanhe_panel_safely(win, "今日全部完成")
         log(f"[名望] {vinfo}——今日山河名望任务已全部完成，{cdesc}", "SYS")
         return "daily_done", f"{vinfo}——今日任务已全部完成（{cdesc}）"
     if vstate == "claimed":
@@ -1493,6 +1543,140 @@ def _arm_mingwang_diaoyu_check(opt):
             f"（{MINGWANG_DIAOYU_ARM_TIMEOUT}s 内有效）", "SYS")
 
 
+def _diaoyu_fail_panel_present(bgr):
+    """失败结果面板在场：标题 + 「游戏失败」双模板同一帧命中（场景锚点）。
+
+    只用标题判在场不够——正常游戏中的面板也有标题（X 按钮此时不可用于
+    关闭）；失败结果面板的区分信号是进度条下方的红字，模板
+    pochu_youxishibai.png 真机交叉验证正样本 1.00 / 非面板帧 0.09~0.10。
+    """
+    if bgr is None:
+        return False
+    if game_map.match_frame_np(
+            bgr, MINGWANG_DIAOYU_TITLE_ICON,
+            threshold=_pochu_minigame.POCHU_THRESHOLD,
+            region=_pochu_minigame.POCHU_REGION, fallback=False) is None:
+        return False
+    return game_map.match_frame_np(
+        bgr, _pochu_minigame.POCHU_FAIL_ICON,
+        threshold=_pochu_minigame.POCHU_FAIL_THRESHOLD,
+        region=_pochu_minigame.POCHU_FAIL_REGION, fallback=False) is not None
+
+
+def _diaoyu_panel_present(bgr):
+    """钓鱼面板（任意状态）在场：标题模板命中。"""
+    return bgr is not None and game_map.match_frame_np(
+        bgr, MINGWANG_DIAOYU_TITLE_ICON,
+        threshold=_pochu_minigame.POCHU_THRESHOLD,
+        region=_pochu_minigame.POCHU_REGION, fallback=False) is not None
+
+
+def _close_diaoyu_fail_panel(win):
+    """点面板右上角 X 关闭失败结果面板，轮询标题模板确认关闭。
+
+    前置条件：每轮点击前复查「标题 + 游戏失败」双模板（场景锚点 +
+    目标唯一性，X 模板 16×20 单独使用不做唯一性假设）；面板已不在场
+    （标题消失）直接按成功返回。X 点击无效时在
+    DIAOYU_FAIL_CLOSE_TIMEOUT 内重试，超时返回失败由看门狗下轮再试。
+    返回 (是否已关闭, 描述)。
+    """
+    deadline = time.time() + DIAOYU_FAIL_CLOSE_TIMEOUT
+    clicks = 0
+    while time.time() < deadline:
+        img = win.capture(force_activate=False)
+        if img is None:
+            time.sleep(DIAOYU_FAIL_CLOSE_INTERVAL)
+            continue
+        bgr = _bgr_frame(img)
+        if not _diaoyu_panel_present(bgr):
+            return True, f"失败面板已关闭（X 点击 {clicks} 次）"
+        if not _diaoyu_fail_panel_present(bgr):
+            # 面板在场但不是失败结果态（防御：正常游戏中的面板不得点 X）
+            return False, "面板在场但非失败结果态，未点击 X"
+        score, pt = game_map.best_match_np(
+            bgr, DIAOYU_FAIL_CLOSE_ICON, region=DIAOYU_FAIL_CLOSE_REGION)
+        if pt is None or score < DIAOYU_FAIL_CLOSE_THRESHOLD:
+            log(f"[名望] 蛟魔探秘钓鱼失败：面板 X 未识别"
+                f"（分数 {score:.2f}），下轮重试", "WARN")
+            time.sleep(DIAOYU_FAIL_CLOSE_INTERVAL)
+            continue
+        human_click(win, pt[0], pt[1])
+        clicks += 1
+        log(f"[名望] 蛟魔探秘钓鱼失败：已点击面板 X 关闭 @({pt[0]},{pt[1]})"
+            f"（第 {clicks} 次）", "SYS")
+        time.sleep(DIAOYU_FAIL_CLOSE_INTERVAL)
+    return False, (f"点击 X {clicks} 次后面板仍未关闭"
+                   f"（{DIAOYU_FAIL_CLOSE_TIMEOUT:.0f}s 超时）")
+
+
+def _retry_diaoyu_after_fail(win):
+    """失败恢复链：关失败面板 → 点任务追踪绿字重走。
+
+    任务追踪点击复用 task_tracker.track_task（与 follow 引擎同一实现，
+    面板锚点/内容行/绿字定位共用）：点击后游戏自动寻路或在原地重新
+    打开 NPC 对话（2026-11-17 13:04 实测点后 1s 出对话），入口选项
+    「请将鱼竿借我一用！」由 DIALOG_OPTION_MAP 处理并重新 arm 钓鱼。
+    返回 (是否已完成重试动作, 描述)。
+    """
+    closed, cinfo = _close_diaoyu_fail_panel(win)
+    if not closed:
+        return False, cinfo
+    ok, info = task_tracker.track_task(win, TASK_TITLE)
+    if ok:
+        return True, f"{cinfo}；{info}（已重新点击任务追踪，重走蛟魔探秘）"
+    return False, f"{cinfo}；任务追踪绿字点击失败: {info}"
+
+
+def _maybe_retry_diaoyu_fail(win, items=None):
+    """失败面板看门狗（extras 链每轮询调用，限频）：失败 → 关面板重走。
+
+    覆盖两条失败路径：
+    1. 小游戏循环 fail_detect 提前返回失败——窗口检测链路本轮已返回
+       True，下一轮由本看门狗接管；
+    2. 旧路径「标题瞬时消失误判结束」后面板重新出现在屏幕上（2026-11-17
+       13:00 实机：循环按位置猜成命中区间返回成功，失败面板残留，任务
+       追踪点击被面板拦截，任务卡到 300s 跟踪超时）——看门狗不依赖
+       armed/小游戏返回结果，面板在场即恢复。
+    items 门控：追踪面板 OCR 行不含「蛟魔探秘」时不截帧（其他任务零
+    额外开销；失败面板不遮挡追踪面板，标题行每轮可见）。
+    连续失败超过 DIAOYU_FAIL_RETRY_MAX 后停止自动重试并告警一次
+    （防小游戏控制失准时无限空转）。返回是否已处理。
+    """
+    global _diaoyu_fail_watch_at, _diaoyu_fail_streak
+    if _diaoyu_fail_streak >= DIAOYU_FAIL_RETRY_MAX:
+        return False
+    if items is not None and not any(
+            "蛟魔探秘" in norm_text(txt)
+            or _fuzzy_contains(norm_text(txt), "蛟魔探秘", threshold=0.8)
+            for txt, _r, _s in items):
+        return False
+    now = time.time()
+    if now - _diaoyu_fail_watch_at < DIAOYU_FAIL_WATCH_INTERVAL:
+        return False
+    _diaoyu_fail_watch_at = now
+    img = win.capture(force_activate=False)
+    if img is None:
+        return False
+    if not _diaoyu_fail_panel_present(_bgr_frame(img)):
+        return False
+    _diaoyu_fail_streak += 1
+    log(f"[名望] 蛟魔探秘钓鱼失败：检测到失败结果面板，关闭面板并重走任务"
+        f"（连续第 {_diaoyu_fail_streak}/{DIAOYU_FAIL_RETRY_MAX} 次）", "SYS")
+    ok, info = _retry_diaoyu_after_fail(win)
+    log(f"[名望] 蛟魔探秘钓鱼失败重试: {info}", "SYS" if ok else "WARN")
+    if _diaoyu_fail_streak >= DIAOYU_FAIL_RETRY_MAX:
+        log(f"[名望] 蛟魔探秘钓鱼连续失败 {_diaoyu_fail_streak} 次，"
+            f"停止自动重试（检查小游戏控制参数/站位）", "ERROR")
+    return True
+
+
+def _reset_diaoyu_fail_state():
+    """钓鱼失败重试状态复位（新任务领取/小游戏成功时调用）。"""
+    global _diaoyu_fail_watch_at, _diaoyu_fail_streak
+    _diaoyu_fail_watch_at = 0.0
+    _diaoyu_fail_streak = 0
+
+
 def _mingwang_diaoyu_window_check(win):
     """检测并执行蛟魔探秘钓鱼小游戏（armed 门控 + 限频），返回是否已处理。
 
@@ -1500,10 +1684,13 @@ def _mingwang_diaoyu_window_check(win):
     POCHU_REGION 内匹配窗口标题 mingwang_diaochushuizhongguaiwu.png；
     窗口出现即阻塞执行共享闭环 pochufengyin.play_pochufengyin（**点击
     模式 + 冲刺连点 mash=True**：开始后按钮为「点击」，该游戏单击仅推进
-    ~0.1 刻度，按三档节奏点不到目标带），标题消失即结束。检测限频
+    ~0.1 刻度，按三档节奏点不到目标带；fail_detect=True 检测「游戏失败」
+    提前返回），标题消失即结束。检测限频
     MINGWANG_DIAOYU_CHECK_INTERVAL；未 armed/
     限频未到/未命中返回 False（热路径零成本）。extras 回调不携带整帧，
     armed 窗口内按限频自行截一帧（1s 一次）。
+    失败结果面板在场时不再进入闭环（也不 disarm）——关闭面板与重走
+    由 _maybe_retry_diaoyu_fail 看门狗负责。
     """
     global _mingwang_diaoyu_armed_at, _mingwang_diaoyu_last_check
     if _mingwang_diaoyu_armed_at <= 0 \
@@ -1519,18 +1706,24 @@ def _mingwang_diaoyu_window_check(win):
     img = win.capture(force_activate=False)
     if img is None:
         return False
+    bgr = _bgr_frame(img)
     score, wpt = game_map.best_match_np(
-        _bgr_frame(img), MINGWANG_DIAOYU_TITLE_ICON,
+        bgr, MINGWANG_DIAOYU_TITLE_ICON,
         region=_pochu_minigame.POCHU_REGION)
     if wpt is None or score < _pochu_minigame.POCHU_THRESHOLD:
+        return False
+    if _diaoyu_fail_panel_present(bgr):
+        # 失败结果面板：交给看门狗关闭+重走，绝不再次进入闭环
+        # （结果态没有可玩内容，进入只会空点面板按钮）
         return False
     log(f"[名望] 检测到蛟魔探秘钓鱼窗口 @({wpt[0]},{wpt[1]})"
         f"（匹配度 {score:.2f}）", "SYS")
     ok, info = _pochu_minigame.play_pochufengyin(
         win, MINGWANG_DIAOYU_TITLE_ICON, prefix="名望", label="蛟魔探秘钓鱼",
-        mash=True)
+        mash=True, fail_detect=True)
     if ok:
         _mingwang_diaoyu_armed_at = 0.0
+        _reset_diaoyu_fail_state()  # 成功：连续失败计数清零
     log(f"[名望] {info}", "SYS" if ok else "WARN")
     return True
 
@@ -2817,7 +3010,7 @@ def _reset_jiamo_state():
     global _jiamo_phase, _jiamo_target, _jiamo_missing, _jiamo_pos_at, \
         _jiamo_land_at, _jiamo_warned, _jiamo_walk_from, _jiamo_move_seen, \
         _jiamo_walk_at, _jiamo_stable, _jiamo_last_pos, _jiamo_stable_at, \
-        _jiamo_alt_d_at
+        _jiamo_walk_click_at, _jiamo_walk_idx
     _jiamo_phase = 0
     _jiamo_target = None
     _jiamo_missing = 0
@@ -2830,7 +3023,8 @@ def _reset_jiamo_state():
     _jiamo_stable = 0
     _jiamo_last_pos = None
     _jiamo_stable_at = 0.0
-    _jiamo_alt_d_at = 0.0
+    _jiamo_walk_click_at = 0.0
+    _jiamo_walk_idx = 0
 
 
 def _reset_jiamo_arrival():
@@ -2841,7 +3035,7 @@ def _reset_jiamo_arrival():
     """
     global _jiamo_phase, _jiamo_walk_from, _jiamo_move_seen, \
         _jiamo_walk_at, _jiamo_stable, _jiamo_last_pos, _jiamo_stable_at, \
-        _jiamo_alt_d_at
+        _jiamo_walk_click_at
     _jiamo_phase = 0
     _jiamo_walk_from = None
     _jiamo_move_seen = False
@@ -2849,7 +3043,7 @@ def _reset_jiamo_arrival():
     _jiamo_stable = 0
     _jiamo_last_pos = None
     _jiamo_stable_at = 0.0
-    _jiamo_alt_d_at = 0.0
+    _jiamo_walk_click_at = 0.0
 
 
 def _jiamo_target_map(sig):
@@ -2961,14 +3155,17 @@ def _jiamo_step_arrival(win, items, now):
 
 
 def _jiamo_step_wait_battle(win, items, now):
-    """phase 1：已到达并降落，等暗雷遭遇战斗；稳定久未开战 → Alt+D。
+    """phase 1：已到达并降落，等暗雷遭遇战斗；稳定久未开战 → 点击地面走位。
 
     战斗由 follow_task/battle 线程托管，本步骤不做战斗操作；仅当任务
-    文案仍在（暗雷战斗）、位置稳定且超过 JIAMO_ALT_D_WAIT 未开战时按
-    Alt+D 随机遇敌催发，之后每 JIAMO_ALT_D_INTERVAL 重按。
-    返回是否已处理（按了 Alt+D）。
+    文案仍在（暗雷战斗）、位置稳定且超过 JIAMO_WALK_WAIT 未开战时点
+    世界地面模拟玩家行走催战（静默 Alt+D 无效，2026-11-17 用户实测），
+    之后每 JIAMO_WALK_INTERVAL 重按。走动的位移会自然清零稳定计数，
+    人物停下稳定 JIAMO_WALK_WAIT 秒后再点下一个走位点。
+    返回是否已处理（点了世界地面）。
     """
-    global _jiamo_stable, _jiamo_last_pos, _jiamo_stable_at, _jiamo_alt_d_at
+    global _jiamo_stable, _jiamo_last_pos, _jiamo_stable_at, \
+        _jiamo_walk_click_at
     pos = _seal_pos(win, items)
     if pos is None:
         return False
@@ -2979,18 +3176,18 @@ def _jiamo_step_wait_battle(win, items, now):
         _jiamo_stable += 1
     else:
         _jiamo_stable = 0
-        _jiamo_stable_at = 0.0   # 位置变化：稳定/Alt+D 等待重新计时
+        _jiamo_stable_at = 0.0   # 位置变化：稳定/走位等待重新计时
     _jiamo_last_pos = pos
     if _jiamo_stable < JIAMO_ARRIVE_POLLS:
         return False  # 仍在移动（自由寻路/被推挤）：不催遇敌
     if _jiamo_stable_at == 0.0:
         _jiamo_stable_at = now
-    if now - _jiamo_stable_at < JIAMO_ALT_D_WAIT:
+    if now - _jiamo_stable_at < JIAMO_WALK_WAIT:
         return False
-    if now - _jiamo_alt_d_at < JIAMO_ALT_D_INTERVAL:
+    if now - _jiamo_walk_click_at < JIAMO_WALK_INTERVAL:
         return False
-    _jiamo_alt_d_at = now
-    desc = _press_alt_d(win)
+    _jiamo_walk_click_at = now
+    desc = _jiamo_walk_click(win)
     log(f"[名望] 蛟魔复仇：到达稳定后仍未触发战斗，{desc}", "SYS")
     return True
 
@@ -3007,12 +3204,13 @@ def _handle_jiamo_anlei(win, items, img_np):
        目标地图内位置连续稳定（JIAMO_ARRIVE_POLLS）判到达，到达后才
        调用飞行驭器降落（zuoqi.ensure_landed，降落后关面板防遮挡）。
     2. 到达稳定后等暗雷遭遇战斗（battle 线程托管）；**任务仍在但长时间
-       未开战时按 Alt+D 随机遇敌**催发（JIAMO_ALT_D_WAIT 后首次、之后
-       每 JIAMO_ALT_D_INTERVAL 一次）。
+       未开战时点击世界地面模拟玩家行走**催发（JIAMO_WALK_WAIT 后首次、
+       之后每 JIAMO_WALK_INTERVAL 一次——静默 Alt+D 不会让人物走动，
+       2026-11-17 用户实测修正）。
     目标地图变化（多段搜查换图）时重新执行寻路/到达/降落判定；
     触发词连续 JIAMO_ABSENT_RESET 轮缺失即复位（空 OCR 帧为战斗心跳/
     加载过渡，不计缺失，防战斗中清掉已降落状态导致战后重复降落）。
-    返回是否已处理（执行了降落/按 Alt+D）。
+    返回是否已处理（执行了降落/点地面走位）。
     """
     global _jiamo_phase, _jiamo_target, _jiamo_missing, _jiamo_pos_at,         _jiamo_land_at, _jiamo_warned
     sig = _seal_sig(items)
@@ -3084,7 +3282,9 @@ def _handle_dialog_options(win, items, img_np):
     的 extras 通道调用（优先级高于引擎内置表与剧情对话兜底）。
     沙海迷踪/净化水晶丛林入口选项点击成功后 arm 各自「开始」按钮检测
     窗口；蛟魔探秘钓鱼入口选项点击成功后 arm 小游戏窗口检测（与玄枢
-    钓鱼同款闭环）。沙海迷踪「开始」点击成功后 arm 小游戏弹窗检测
+    钓鱼同款闭环），失败结果面板看门狗（_maybe_retry_diaoyu_fail）
+    在最前面处理——面板在场时须先关闭+重走，防其他处理器点击被拦截。
+    沙海迷踪「开始」点击成功后 arm 小游戏弹窗检测
     （_maybe_play_shahai）：弹窗出现即阻塞执行「记住混沌」闭环到结束。
     表值支持候选选项元组：按顺序逐个尝试，点到哪个算哪个。
     五庄封印执行状态机（追踪双链接/坐标稳定到达/任务储物格用唤风符）、
@@ -3104,6 +3304,8 @@ def _handle_dialog_options(win, items, img_np):
     返回是否已处理。
     """
     if _maybe_play_shahai(win):
+        return True
+    if _maybe_retry_diaoyu_fail(win, items):
         return True
     if _handle_wuzhuang_seal(win, items, img_np):
         return True
@@ -3227,6 +3429,7 @@ def _post_claim_flow(win):
     _mowang_minigame.reset()
     _reset_tgqy_state()
     _reset_jiamo_state()
+    _reset_diaoyu_fail_state()  # 新任务领取：钓鱼失败重试计数清零
     dismissed, dinfo = _dismiss_claim_dialog(win)
     log(f"[名望] {dinfo}", "SYS" if dismissed else "INFO")
     ok, info = _resume_tracking(win)
@@ -3479,9 +3682,14 @@ def run_loop(win, cycle_interval=3.0):
             log(f"[名望] {info}", "SYS")
             return f"名望今日任务已全部完成：{info}"
         elif status == "not_found":
-            # 卡片列表本轮内不会变化（每日刷新），重试无意义
-            log(f"[名望] {info}", "WARN")
-            return f"名望领取失败：{info}"
+            # 卡片列表本轮内不会变化（每日刷新），重试无意义；结束前
+            # 关闭山河名望面板（用户 2026-11-17 规则：名望结束须关闭
+            # 面板——残留面板遮挡后续任务的追踪面板/对话框区，后续
+            # 任务模块不会处理它）
+            cdesc = _close_shanhe_panel_safely(win, "无已实现任务",
+                                               clear_dialog=False)
+            log(f"[名望] {info}；{cdesc}", "WARN")
+            return f"名望领取失败：{info}（{cdesc}）"
         else:
             log(f"[名望] {info}", "WARN")
         time.sleep(cycle_interval)

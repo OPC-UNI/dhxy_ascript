@@ -130,6 +130,23 @@ POCHU_MASH_MAX_BURST = 90         # 单次冲刺点击上限（限制测量间�
 POCHU_MASH_MIN_CLICKS = 5         # 判定「点击未推进」所需最少点击数
 POCHU_MASH_PRESS = 0.02           # 冲刺点击按压时长（rapid_click 默认）
 POCHU_MASH_PRESS_MAX = 0.05       # 连续未推进时加压上限（防漏注册）
+# ---- 结果判定「游戏失败」（2026-11-17 蛟魔探秘真机帧标定）----
+# 失败结果面板**标题仍在**：进度条下方居中显示红色「游戏失败」、右侧
+# 按钮为「点击」圆钮，面板不会自动关闭。模板自真机失败画面截取
+# （pochu_youxishibai.png 85×34，OCR 框 (651,581)-(726,605) 外扩 5px），
+# 两条真机帧（13:00 失败画面 / 13:04 复现画面）交叉验证：正样本
+# 1.00/1.00，非面板帧（世界/战斗）0.09~0.10——阈值 0.8 余量充足。
+# 该提示只在进入结果态后渲染；fail_detect=True 的调用方（蛟魔探秘）
+# 检测到即停止全部操作提前返回失败，由调用方关闭面板重试；不检测
+# 时沿用旧行为（标题消失 + 位置猜测命中）。
+POCHU_FAIL_ICON = "pochu_youxishibai.png"
+POCHU_FAIL_REGION = (600, 545, 790, 640)  # 「游戏失败」搜索带（面板漂移余量）
+POCHU_FAIL_THRESHOLD = 0.8
+POCHU_FAIL_CONFIRM = 2                 # 连续命中轮数确认（防单帧误检）
+# 面板右上角 X 关闭按钮（模板截自同一真机帧，16×20）：正样本
+# 1.00/0.99、非面板帧 ≤0.41——失败重试时由调用方用本模板关闭面板。
+POCHU_CLOSE_ICON = "pochu_guanbi.png"
+POCHU_CLOSE_REGION = (950, 435, 1060, 525)  # X 搜索带（面板右上角）
 POCHU_ARM_TIMEOUT = 120                # 入口选项点击后检测窗口的最长时限（秒）
 POCHU_CHECK_INTERVAL = 1.0             # extras 链窗口检测限频（秒，条带匹配 ~10ms）
 POCHU_END_WINDOW = 2.0                 # 标题连续消失确认窗口（秒；结束确认防抖，不得缩短）
@@ -292,7 +309,7 @@ def _pochu_countdown(img_pil, cache, force=False):
 
 def play_pochufengyin(win, title_icon, prefix="客栈", label="破除封印",
                       hold=False, action_icon=None, mash=False,
-                      hold_catch=False):
+                      hold_catch=False, fail_detect=False):
     """进度条对准小游戏闭环控制（阻塞执行到标题消失）。返回 (是否完成, 描述)。
 
     流程（用户 2026-11-09 完整描述 + 7.png 实测标定）：
@@ -346,6 +363,11 @@ def play_pochufengyin(win, title_icon, prefix="客栈", label="破除封印",
     （2026-11-12 实机 8 次脉冲后 UP 丢失、按钮卡按下，填充跑到 10.05）。
     全程跳过区域 OCR 以保住采样频率（倒计时/按钮文案不参与本模式
     决策）。见 POCHU_CATCH_* 常量。
+    fail_detect=True：每轮询（同帧）匹配「游戏失败」结果模板，连续
+    POCHU_FAIL_CONFIRM 轮命中即停止全部操作并**提前返回失败**——
+    失败结果面板标题仍在、不会自动关闭，旧逻辑要等标题消失（或超时），
+    且结束时按位置猜命中会误报成功；调用方（蛟魔探秘）据失败返回关闭
+    面板并重走任务。仅蛟魔探秘开启，其他调用方行为不变。
     """
     perf = {"n": 0, "sum": 0.0, "max": 0.0, "last": None}  # 采样间隔统计
 
@@ -416,6 +438,7 @@ def play_pochufengyin(win, title_icon, prefix="客栈", label="破除封印",
     catch_adapt_t = 0.0           # 维持段冲出带上缘的自适应微调冷却（秒）
     last_debug = 0.0              # 调试图保存限频
     debug_seq = 0                 # 调试图序号（单次小游戏）
+    fail_cnt = 0                  # 「游戏失败」结果连续命中轮数（fail_detect）
     log(f"[{prefix}] {label}弹窗出现 {time.strftime('%H:%M:%S')}，进入闭环控制", "SYS")
 
     def _release_hold():
@@ -484,6 +507,30 @@ def play_pochufengyin(win, title_icon, prefix="客栈", label="破除封印",
             bgr = cv2.cvtColor(np.asarray(img)[:, :, :3], cv2.COLOR_RGB2BGR)
             if is_in_battle_frame(bgr):
                 return False, f"战斗开始，{label}中断"
+            if fail_detect:
+                # 失败结果（标题仍在的面板内红色「游戏失败」）：判断须在
+                # 所有推进决策之前——结果态下继续点击按钮毫无意义，且
+                # 结束时的位置命中猜测会把失败误报成成功（2026-11-17
+                # 蛟魔探秘 13:00 实测：P 在带内但游戏判负，任务卡住）。
+                if game_map.match_frame_np(
+                        bgr, POCHU_FAIL_ICON,
+                        threshold=POCHU_FAIL_THRESHOLD,
+                        region=POCHU_FAIL_REGION,
+                        fallback=False) is not None:
+                    fail_cnt += 1
+                    if fail_cnt >= POCHU_FAIL_CONFIRM:
+                        state = (f"P={last_meas_p:.2f}"
+                                 if last_meas_p is not None else "P=未知")
+                        if zone is not None:
+                            state += f" 区间[{zone[0]:.1f},{zone[1]:.1f}]"
+                        if last_cnt is not None:
+                            state += f" 倒计时={last_cnt}s"
+                        log(f"[{prefix}] {label}：检测到「游戏失败」，停止操作"
+                            f"（{state}，{act_name} {clicks} 次）", "WARN")
+                        return False, (f"{label}游戏失败（{state}，"
+                                       f"{act_name} {clicks} 次）")
+                else:
+                    fail_cnt = 0
             title = game_map.match_frame_np(bgr, title_icon,
                                             threshold=POCHU_THRESHOLD,
                                             region=POCHU_REGION, fallback=False)
