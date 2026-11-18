@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch: {}
+  # 供 build-exe.yml 作为构建门禁复用：tag 推送不会触发上面的分支 CI，
+  # 构建流水线在打包前调用本工作流重跑同一套测试，保证「先 CI 通过再构建」。
+  workflow_call: {}
 
 jobs:
   unit-test:

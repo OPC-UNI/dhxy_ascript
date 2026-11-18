@@ -1,0 +1,76 @@
+name: Notify Telegram
+
+# 独立的发布通知工作流，供 build-exe.yml 及其它工作流通过 workflow_call 复用。
+# 调用方在构建/发布成功后调用即可；本工作流自己读取更新日志并发送群消息。
+#
+# 需要仓库 Secrets（未配置时脚本打印警告并跳过，不影响调用方流程）：
+#   TELEGRAM_BOT_TOKEN  机器人 Token（@BotFather 获取）
+#   TELEGRAM_CHAT_ID    群组 chat_id（负数，机器人须已入群）
+#
+# 调用示例：
+#   jobs:
+#     notify:
+#       needs: build
+#       uses: ./.github/workflows/notify-telegram.yml
+#       with:
+#         version: ${{ github.ref_name }}
+#       secrets:
+#         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+#         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: 通知标题中的版本号（如 v2.13.2），同时作为 Release tag
+        required: true
+        type: string
+      notes-file:
+        description: 可选：仓库内更新日志文件路径；留空则读取 GitHub Release 正文
+        required: false
+        type: string
+        default: ""
+    secrets:
+      TELEGRAM_BOT_TOKEN:
+        required: false
+      TELEGRAM_CHAT_ID:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 准备更新日志
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          NOTES_FILE: ${{ inputs.notes-file }}
+        run: |
+          if [ -n "$NOTES_FILE" ] && [ -f "$NOTES_FILE" ]; then
+            cp "$NOTES_FILE" release_notes.md
+            echo "使用调用方提供的更新日志：$NOTES_FILE"
+          else
+            if [ -n "$NOTES_FILE" ]; then
+              echo "::warning title=更新日志不存在::$NOTES_FILE 不存在，回退读取 Release 正文"
+            fi
+            gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${VERSION}" \
+              --jq '.body' > release_notes.md
+            echo "使用 GitHub Release 正文：${VERSION}"
+          fi
+          echo "更新日志大小：$(wc -c < release_notes.md) 字节"
+
+      # 通知不附 Release / 下载链接：统一引导用户在面板「系统」页
+      # 点「检查更新」升级，避免绕过面板更新链路。
+      - name: 发送 Telegram 群通知
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python3 scripts/notify_telegram.py \
+            --version "${{ inputs.version }}" \
+            --notes-file release_notes.md

@@ -34,13 +34,16 @@
 
 - 版本号唯一来源：`src/__init__.py` 的 `__version__`；`pyproject.toml` 同步。
 - 发版：打 `vX.Y.Z` tag → `.github/workflows/build-exe.yml`：
-  1. 把 tag 版本号烙进 `src/__init__.py`；
-  2. Nuitka onefile 构建 `zhuomuniao.exe`；
-  3. numpy/onnxruntime 排除出 exe，组装为 `pylibs/`；
-  4. 打包 `release_pkg`（exe + res + pylibs）为 `zhuomuniao-windows.zip`；
-  5. 上传 Actions artifact，打 tag 时发 GitHub Release；
-  6. 打 tag 时还要：上传 OSS → 公网清单校验 → 清理 `app/`、`pylibs/` 旧包
+  1. CI 门禁：复用 `ci.yml` 跑单元测试，不通过不构建；
+  2. 把 tag 版本号烙进 `src/__init__.py`；
+  3. Nuitka onefile 构建 `zhuomuniao.exe`；
+  4. numpy/onnxruntime 排除出 exe，组装为 `pylibs/`；
+  5. 打包 `release_pkg`（exe + res + pylibs）为 `zhuomuniao-windows.zip`；
+  6. 上传 Actions artifact，打 tag 时发 GitHub Release；
+  7. 打 tag 时还要：上传 OSS → 公网清单校验 → 清理 `app/`、`pylibs/` 旧包
      （只留最新两版，见 §4.2）。
+- 发布通知：构建与 Release 发布成功后，`notify` job 把版本号与更新日志
+  （直接取 Release 正文）推送到 Telegram 群。
 - 用户侧：解压 zip 到任意目录，双击 `zhuomuniao.exe` 运行。
 
 ### 2.2 与更新相关的既有事实
@@ -220,7 +223,12 @@ OSS_BUCKET
 OSS_ACCESS_KEY_ID
 OSS_ACCESS_KEY_SECRET
 UPDATE_BASE_URL       # https://update.example.com/zhuomuniao/stable
+TELEGRAM_BOT_TOKEN    # 发布通知机器人 Token（@BotFather 获取）
+TELEGRAM_CHAT_ID      # 玩家群 chat_id（负数，机器人须已入群）
 ```
+
+`TELEGRAM_*` 仅用于构建成功后的群通知，与应用内「消息」页的消息服务配置无关；
+未配置时 `notify` job 打印警告并跳过，不影响发布。
 
 RAM 子账号最小权限：目标前缀的 `PutObject` / `GetObject` / `HeadObject`，旧包
 清理用的前缀级 `DeleteObject` 与（`oss:Prefix` 限定）`ListObjects`，不给其它
@@ -312,8 +320,11 @@ CI 步骤换成 `coscli cp`。两者只需要实现其中一套，另一套留�
 
 ## 6. 发布流水线（GitHub Actions）
 
-在现有 `build-exe.yml` 上增量修改，tag 触发才发布清单：
+在现有 `build-exe.yml` 上增量修改，tag 触发才发布清单。流水线为
+`ci` → `build` → `notify` 三个 job：
 
+0. **CI 门禁**：`ci` job 复用 `ci.yml`（`workflow_call`）跑单元测试；
+   tag 推送不触发分支 CI，因此必须在此显式重跑。失败则 `build` 不启动。
 1. 构建 exe、组装 `pylibs`（不变）。
 2. 组装三类产物：
    - `app_pkg/`：`zhuomuniao.exe` + `res/` → `zhuomuniao-app-<version>.zip`
@@ -331,11 +342,20 @@ CI 步骤换成 `coscli cp`。两者只需要实现其中一套，另一套留�
    - `update.json` → `stable/update.json`（最后）。
 8. 保留现有 GitHub Release 与 Actions artifact（内部留档/手动下载），打 tag 时附
    `zhuomuniao-windows-<version>.zip` 与 `update.json`。
-9. `workflow_dispatch` 手动构建**不发布清单**（默认）；需要预发布时增加
-   `publish` 输入并显式指定版本，防止误覆盖线上清单。
+9. **Telegram 通知**（仅 tag）：`notify` job 调用独立可复用工作流
+   `notify-telegram.yml`（`workflow_call`），由它用 `gh api` 读取已发布
+   Release 正文，交给 `scripts/notify_telegram.py` 发到群。调用方只需传
+   `version`（可选 `notes-file` 覆盖日志）并 `secrets: inherit`；其它工作流
+   也可直接复用。超长日志按 Telegram 4096 字符上限截断。通知不附 Release /
+   下载链接，统一引导用户在面板「系统」页点「检查更新」升级，避免绕过
+   面板更新链路。
+10. `workflow_dispatch` 手动构建**不发布清单、不发通知**（默认）；需要预发布时
+    增加 `publish` 输入并显式指定版本，防止误覆盖线上清单。
 
-CI 失败策略：任一步失败即终止，`update.json` 不更新，线上继续指向旧版；zip 上传
-成功但清单失败不会影响用户（只是多一个未被引用的对象）。
+失败策略：构建阶段任一步失败即终止，`update.json` 不更新，线上继续指向旧版；
+zip 上传成功但清单失败不会影响用户（只是多一个未被引用的对象）。`notify` 在
+Release 发布后独立执行，失败只会把本次工作流标记为失败，不会回滚已发布版本；
+未配置 `TELEGRAM_*` Secrets 时打印警告并跳过。
 
 ### 6.1 发布流程不变
 

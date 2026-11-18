@@ -1,8 +1,5 @@
 name: Build Windows exe
 
-permissions:
-  contents: write
-
 on:
   workflow_dispatch: {}
   push:
@@ -17,9 +14,25 @@ env:
   OSS_PREFIX: zhuomuniao/stable
 
 jobs:
+  # 构建门禁：复用 ci.yml 的同一套单元测试。tag 推送只触发本工作流，
+  # 不会触发 ci.yml 的 push 分支规则，所以在这里显式调用一次；
+  # 测试不通过则 build 不会开始（needs 依赖）。
+  ci:
+    # 与独立 CI 一致：测试结果汇总（dorny/test-reporter）需要 checks /
+    # pull-requests 写权限；不授予 contents 写（CI 只读代码）。
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
+    uses: ./.github/workflows/ci.yml
+
   build:
+    needs: ci
     runs-on: windows-latest
     timeout-minutes: 120
+    # 只有发布相关步骤需要写权限（创建/更新 GitHub Release）
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -349,3 +362,15 @@ jobs:
             dist_update/zhuomuniao-windows-*.zip
             dist_update/update.json
           body_path: release_notes.md
+
+  # 发布通知：独立可复用工作流（.github/workflows/notify-telegram.yml）。
+  # 仅 tag 发版且 build（含 Release 发布）成功后调用；其它工作流也可复用。
+  notify:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    uses: ./.github/workflows/notify-telegram.yml
+    with:
+      version: ${{ github.ref_name }}
+    secrets:
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
