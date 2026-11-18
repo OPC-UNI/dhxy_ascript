@@ -40,7 +40,6 @@ from ..device import game  # 游戏窗口查找（绑定/消息服务/组号检�
 from ..core import app_utils  # KeyValue 合并读写（kv_save_merged/kv_remove_merged）
 from ..core import schemes  # 配置方案（多套设置快照切换 + 导入导出）
 from ..core import user_data  # 角色数据目录（data/<角色ID>/）
-from ..core import role_settings  # 当前角色生效设置（data/<角色ID>/settings.json）
 from . import hotkey  # 老板键（启动/停止按钮文案展示热键名）
 from . import updater  # 软件自动更新（清单/下载/覆盖升级）
 from . import update_config  # 更新渠道与节流常量
@@ -52,71 +51,29 @@ from .messages.service import MessageService  # 消息服务编排
 from ..core.settings import load_message_config
 from .. import __version__  # 版本号唯一来源（src/__init__.py，面板关于/侧边栏展示）
 
-from ..device.binding import (_short_label_from_title, bound_label_from_binding,
-                              bound_short_label)
-from ..device.progress import (_fresh_progress_modes, _legacy_progress_char_key,
-                              task_progress_summary)
+from ..device.binding import bound_label_from_binding, bound_short_label
+from ..device.progress import task_progress_summary
 from ..core.settings import (
-    BATTLE_ONLY_MODE, BEAST_BATTLE_ACTIONS, CHAR_BATTLE_ACTIONS, DEFAULT_THRESHOLD,
-    ENV_ADAPT_RES, ENV_THEME, SHOUT_TEXT_MAX_LEN, TASK_COUNT_DEFAULTS,
-    TASK_COUNT_MAX, TASK_MODES, UI_THEMES, WUBEI_SHOUT_TEXT_DEFAULT,
-    XIULUO_MIN_DEFAULT, XIULUO_MIN_RANGE, XIULUO_RACES, XIULUO_RACES_DEFAULT,
-    XIULUO_SHOUT_TEXT_DEFAULT, ZHONGZU_SHOUT_TEXT_DEFAULT, _AUTO_FAMEN_KEY, _AUTO_REFILL_KEY,
-    _BATTLE_KEYS, _BATTLE_ONLY_AUTO_REJOIN_KEY, _BATTLE_ONLY_HEZI_KEY, _CLEAR_SCREEN_KEY, _COUNT_KEYS,
-    _DEBUG_OVERLAY_KEY, _DEBUG_UI_KEY, _DEFAULT_BATTLE, _DEFAULT_MODES,
-    _GROUP_ACTIONS_KEY, _GROUP_DETECTED_KEY, _GROUP_LAST_SCAN_KEY, _HIGH_PERF_KEY,
-    _MODES_KEY, _MODE_KEY_OLD, _REPAIR_INTERVAL_DEFAULT, _REPAIR_INTERVAL_MAX,
-    _REPAIR_INTERVAL_MIN, _SILENT_MODE_KEY, _TASK_PROGRESS_KEY, _THRESHOLD_KEYS,
-    _UI_THEME_KEY, _UPDATE_AUTO_CHECK_KEY, _UPDATE_FEED_KEY, _UPDATE_LAST_CHECK_KEY,
-    _UPDATE_SKIPPED_KEY, _USE_SHEYAOXIANG_KEY, _WUBEI_AUTO_CREATE_TEAM_KEY,
-    _WUBEI_AUTO_KICK_AWAY_KEY, _WUBEI_KICK_AWAY_MINUTES_KEY, _WUBEI_AUTO_REJOIN_KEY,
-    _WUBEI_AUTO_REPAIR_KEY, _WUBEI_AUTO_WUYI_KEY, _WUBEI_CHECK_TEAM_KEY, _WUBEI_HEZI_KEY,
-    _WUBEI_KUIMULANG_KEY, _WUBEI_REPAIR_INTERVAL_KEY, _WUBEI_SHOUT_SWITCH_KEY, _WUBEI_SHOUT_TEXT_KEY,
-    _WUBEI_TAB_GROUP_KEY, _WUBEI_WUYI_INTERVAL_KEY, _WUHUAN_VITALITY_CONTINUE_KEY, _WUYI_INTERVAL_MAX,
-    _WUYI_INTERVAL_MIN, _XIULUO_AUTO_CREATE_TEAM_KEY, _XIULUO_AUTO_REJOIN_KEY,
-    _XIULUO_AUTO_KICK_AWAY_KEY, _XIULUO_KICK_AWAY_MINUTES_KEY, _XIULUO_AUTO_REPAIR_KEY,
-    _XIULUO_AUTO_WUYI_KEY, _XIULUO_CHECK_TEAM_KEY, _XIULUO_HEZI_KEY, _XIULUO_HIGH_PERF_KEY_OLD,
-    _XIULUO_MIN_KEY, _XIULUO_RACES_KEY, _XIULUO_REPAIR_INTERVAL_KEY, _XIULUO_SHOUT_SWITCH_KEY,
-    _XIULUO_SHOUT_TEXT_KEY, _XIULUO_TAB_GROUP_KEY, _XIULUO_WUYI_INTERVAL_KEY, _ZHONGZU_AUTO_CREATE_TEAM_KEY,
-    _ZHONGZU_AUTO_REJOIN_KEY, _ZHONGZU_AUTO_REPAIR_KEY, _ZHONGZU_AUTO_WUYI_KEY, _ZHONGZU_CHECK_TEAM_KEY,
-    _ZHONGZU_REPAIR_INTERVAL_KEY, _ZHONGZU_SHOUT_SWITCH_KEY, _ZHONGZU_SHOUT_TEXT_KEY, _ZHONGZU_TAB_GROUP_KEY,
-    _ZHONGZU_WUYI_INTERVAL_KEY, _as_bool, _clamp_count,
-    _kv_remove, _kv_save, _norm_shout_text,
-    _sanitize_modes,
+    ENV_ADAPT_RES, ENV_THEME, _GROUP_DETECTED_KEY, _as_bool, _kv_remove,
     build_group_last_scan_payload, load_auto_famen, load_auto_refill, load_battle_actions,
-    load_battle_only_auto_rejoin, load_battle_only_hezi, load_clear_screen, load_debug_overlay, load_debug_ui_unlocked,
-    load_group_actions, load_group_last_scan, load_high_perf, load_selected_modes,
-    load_silent_mode, load_task_counts, load_thresholds, load_ui_theme,
-    load_update_auto_check, load_update_feed_url, load_update_last_check, load_update_skipped_version,
-    load_use_sheyaoxiang, load_wubei_auto_create_team, load_wubei_auto_kick_away,
-    load_wubei_kick_away_minutes, load_wubei_auto_rejoin, load_wubei_auto_repair,
-    load_wubei_auto_wuyi, load_wubei_check_team, load_wubei_hezi, load_wubei_kuimulang_switch,
-    load_wubei_repair_interval, load_wubei_shout_switch, load_wubei_shout_text, load_wubei_tab_group,
-    load_wubei_wuyi_interval, load_wuhuan_vitality_continue, load_xiuluo_auto_create_team, load_xiuluo_auto_rejoin,
-    load_xiuluo_auto_kick_away, load_xiuluo_kick_away_minutes,
-    load_xiuluo_auto_repair, load_xiuluo_auto_wuyi, load_xiuluo_check_team, load_xiuluo_hezi,
-    load_xiuluo_repair_interval, load_xiuluo_settings, load_xiuluo_shout_switch, load_xiuluo_shout_text,
-    load_xiuluo_tab_group, load_xiuluo_wuyi_interval, load_zhongzu_auto_create_team, load_zhongzu_auto_rejoin,
-    load_zhongzu_auto_repair, load_zhongzu_auto_wuyi, load_zhongzu_check_team, load_zhongzu_repair_interval,
-    load_zhongzu_shout_switch, load_zhongzu_shout_text, load_zhongzu_tab_group, load_zhongzu_wuyi_interval,
-    save_auto_famen, save_auto_refill, save_battle_action, save_battle_only_auto_rejoin,
-    save_battle_only_hezi,
-    save_clear_screen, save_debug_overlay, save_debug_ui_unlocked, save_group_actions,
-    save_group_last_scan, save_high_perf, save_selected_modes, save_silent_mode,
-    save_task_count, save_threshold, save_ui_theme, save_update_auto_check,
-    save_update_last_check, save_update_skipped_version, save_use_sheyaoxiang, save_wubei_auto_create_team,
-    save_wubei_auto_kick_away, save_wubei_kick_away_minutes,
-    save_wubei_auto_rejoin, save_wubei_auto_repair, save_wubei_auto_wuyi, save_wubei_check_team,
-    save_wubei_hezi, save_wubei_kuimulang_switch, save_wubei_repair_interval, save_wubei_shout_switch,
-    save_wubei_shout_text, save_wubei_tab_group, save_wubei_wuyi_interval, save_wuhuan_vitality_continue,
-    save_xiuluo_auto_create_team, save_xiuluo_auto_rejoin, save_xiuluo_auto_kick_away,
-    save_xiuluo_kick_away_minutes, save_xiuluo_auto_repair, save_xiuluo_auto_wuyi,
-    save_xiuluo_check_team, save_xiuluo_hezi, save_xiuluo_min, save_xiuluo_races,
-    save_xiuluo_repair_interval, save_xiuluo_shout_switch, save_xiuluo_shout_text, save_xiuluo_tab_group,
-    save_xiuluo_wuyi_interval, save_zhongzu_auto_create_team, save_zhongzu_auto_rejoin, save_zhongzu_auto_repair,
-    save_zhongzu_auto_wuyi, save_zhongzu_check_team, save_zhongzu_repair_interval, save_zhongzu_shout_switch,
-    save_zhongzu_shout_text, save_zhongzu_tab_group, save_zhongzu_wuyi_interval,
-)  # 过渡期 re-export：旧 import 仍可用，逐步切到 core.settings
+    load_battle_only_auto_rejoin, load_battle_only_hezi, load_clear_screen, load_debug_overlay,
+    load_debug_ui_unlocked, load_high_perf, load_selected_modes, load_silent_mode,
+    load_task_counts, load_thresholds, load_ui_theme, load_update_auto_check, load_update_feed_url,
+    load_update_last_check, load_update_skipped_version, load_use_sheyaoxiang,
+    load_wubei_auto_create_team, load_wubei_auto_kick_away, load_wubei_kick_away_minutes,
+    load_wubei_auto_rejoin, load_wubei_auto_repair, load_wubei_auto_wuyi, load_wubei_check_team,
+    load_wubei_hezi, load_wubei_kuimulang_switch, load_wubei_repair_interval,
+    load_wubei_shout_switch, load_wubei_shout_text, load_wubei_tab_group, load_wubei_wuyi_interval,
+    load_wuhuan_vitality_continue, load_xiuluo_auto_create_team, load_xiuluo_auto_rejoin,
+    load_xiuluo_auto_kick_away, load_xiuluo_kick_away_minutes, load_xiuluo_auto_repair,
+    load_xiuluo_auto_wuyi, load_xiuluo_check_team, load_xiuluo_hezi, load_xiuluo_repair_interval,
+    load_xiuluo_settings, load_xiuluo_shout_switch, load_xiuluo_shout_text, load_xiuluo_tab_group,
+    load_xiuluo_wuyi_interval, load_zhongzu_auto_create_team, load_zhongzu_auto_rejoin,
+    load_zhongzu_auto_repair, load_zhongzu_auto_wuyi, load_zhongzu_check_team,
+    load_zhongzu_repair_interval, load_zhongzu_shout_switch, load_zhongzu_shout_text,
+    load_zhongzu_tab_group, load_zhongzu_wuyi_interval, save_group_actions, save_group_last_scan,
+    save_update_auto_check, save_update_last_check, save_update_skipped_version,
+)  # 本模块实际使用；测试请直接从 core.settings 导入
 # 注意：方法按各自所在模块的全局名解析——53 个 save_* 在 settings_api
 # （转发 settings_module），消息/方案方法在 message_api/scheme_api。
 # 测试 patch 时须 patch 对应 mixin 模块或 core.settings；patch 本模块的

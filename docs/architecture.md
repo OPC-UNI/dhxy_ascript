@@ -1216,7 +1216,7 @@ flowchart LR
 | `main.py` | 进程入口、授权门、绑定、仅战斗、停止善后 | `task_start`、`_task_start_body`、`_battle_only_loop`、`task_stop` |
 | `src/app/task_registry.py` | 任务模式注册表（执行侧单点登记：模式 → 前置钩子 → 主循环） | `TaskSpec`、`TASKS`、`TASKS_BY_MODE`、`run_task_mode` |
 | `src/app/task_manager.py` | 任务子进程生命周期、日志回流、窗口看护 | `TaskManager.start/stop/is_running`、`_worker_wrapper`、`_window_watchdog` |
-| `src/app/control_window.py` | 控制面板外壳、设置项 UI 接线与 re-export、启停、看板 | `ControlWindow`、`ApiBridge`、`start_task` |
+| `src/app/control_window.py` | 控制面板外壳、设置项 UI 接线、启停、看板（设置/消息/方案方法见对应 mixin） | `ControlWindow`、`ApiBridge`、`start_task` |
 | `src/app/diagnostics.py` | 诊断/验证工具（2026-11-18 从 control_window 抽出的 mixin） | `DiagnosticsMixin`、`verify_*`、`_run_*_verify`、`_game_window_clickable` |
 | `src/app/settings_api.py` | 设置保存 mixin（53 个纯转发 core.settings + 2 个运行中守卫） | `SettingsApiMixin` |
 | `src/app/message_api.py` | 消息服务面板 API mixin（配置/验证/capture/log/喊话/退出游戏/解散队伍） | `MessageApiMixin`、`_window_minimized` |

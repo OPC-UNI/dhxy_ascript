@@ -13,7 +13,7 @@
 import numpy as np
 
 from src.app import control_window
-from src.core import schemes
+from src.core import role_settings, schemes, settings
 from src.device import task_tracker
 from src.tasks import zhongzu
 from src.workflows import team_flow
@@ -304,7 +304,7 @@ def test_claim_configured_with_provided_assets():
 
 def _patch_role_defaults(monkeypatch):
     """load_* 首次默认：role_settings.get 一律返回默认值。"""
-    monkeypatch.setattr(control_window.role_settings, "get",
+    monkeypatch.setattr(role_settings, "get",
                         lambda key, default=None, role=None: default)
 
 
@@ -316,32 +316,32 @@ def test_zhongzu_settings_defaults(monkeypatch):
     assert control_window.load_zhongzu_auto_rejoin() is True
     assert control_window.load_zhongzu_shout_switch() is True
     assert control_window.load_zhongzu_shout_text() == \
-        control_window.ZHONGZU_SHOUT_TEXT_DEFAULT
+        settings.ZHONGZU_SHOUT_TEXT_DEFAULT
     assert control_window.load_zhongzu_auto_wuyi() is True
     assert control_window.load_zhongzu_wuyi_interval() == 5
     assert control_window.load_zhongzu_auto_repair() is True
     assert control_window.load_zhongzu_repair_interval() == 30
     assert control_window.load_zhongzu_tab_group() is True
     spec = schemes._settings_spec()
-    assert spec[control_window._ZHONGZU_CHECK_TEAM_KEY] is True
-    assert spec[control_window._ZHONGZU_AUTO_CREATE_TEAM_KEY] is True
-    assert spec[control_window._ZHONGZU_AUTO_REJOIN_KEY] is True
-    assert spec[control_window._ZHONGZU_SHOUT_SWITCH_KEY] is True
-    assert spec[control_window._ZHONGZU_SHOUT_TEXT_KEY] == \
-        control_window.ZHONGZU_SHOUT_TEXT_DEFAULT
-    assert spec[control_window._ZHONGZU_AUTO_WUYI_KEY] is True
-    assert spec[control_window._ZHONGZU_WUYI_INTERVAL_KEY] == 5
-    assert spec[control_window._ZHONGZU_AUTO_REPAIR_KEY] is True
-    assert spec[control_window._ZHONGZU_REPAIR_INTERVAL_KEY] == 30
-    assert spec[control_window._ZHONGZU_TAB_GROUP_KEY] is True
+    assert spec[settings._ZHONGZU_CHECK_TEAM_KEY] is True
+    assert spec[settings._ZHONGZU_AUTO_CREATE_TEAM_KEY] is True
+    assert spec[settings._ZHONGZU_AUTO_REJOIN_KEY] is True
+    assert spec[settings._ZHONGZU_SHOUT_SWITCH_KEY] is True
+    assert spec[settings._ZHONGZU_SHOUT_TEXT_KEY] == \
+        settings.ZHONGZU_SHOUT_TEXT_DEFAULT
+    assert spec[settings._ZHONGZU_AUTO_WUYI_KEY] is True
+    assert spec[settings._ZHONGZU_WUYI_INTERVAL_KEY] == 5
+    assert spec[settings._ZHONGZU_AUTO_REPAIR_KEY] is True
+    assert spec[settings._ZHONGZU_REPAIR_INTERVAL_KEY] == 30
+    assert spec[settings._ZHONGZU_TAB_GROUP_KEY] is True
 
 
 def test_zhongzu_count_default_and_max():
     """次数默认 10、上限 100（用户 2026-11-12 确认）。"""
-    assert control_window.TASK_COUNT_DEFAULTS["种族比武"] == 10
-    assert control_window.TASK_COUNT_MAX["种族比武"] == 100
-    assert control_window._clamp_count("种族比武", 1000) == 100
-    assert control_window._clamp_count("种族比武", 0) == 0
+    assert settings.TASK_COUNT_DEFAULTS["种族比武"] == 10
+    assert settings.TASK_COUNT_MAX["种族比武"] == 100
+    assert settings._clamp_count("种族比武", 1000) == 100
+    assert settings._clamp_count("种族比武", 0) == 0
 
 
 # ---- 缺人自动喊话（2026-11-12 新增：开关 + 可设置内容） ----

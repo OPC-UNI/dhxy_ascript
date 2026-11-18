@@ -10,7 +10,8 @@ import inspect
 import re
 
 from src.app import control_window, message_api
-from src.app.control_window import (BATTLE_ONLY_MODE, TASK_MODES, _sanitize_modes,
+from src.core import settings
+from src.core.settings import (BATTLE_ONLY_MODE, TASK_MODES, _sanitize_modes,
                                 _COUNT_KEYS, TASK_COUNT_DEFAULTS)
 
 
@@ -93,12 +94,12 @@ def test_settings_spec_rejoin_and_check_team_defaults(monkeypatch):
     （load_* 首次默认与 _settings_spec 必须一致，否则方案对比/
     导入导出把默认值判成脏值）。"""
     from src.core import schemes
-    from src.app.control_window import (_WUBEI_AUTO_REJOIN_KEY, _XIULUO_AUTO_REJOIN_KEY,
-                                    _BATTLE_ONLY_AUTO_REJOIN_KEY,
-                                    _WUBEI_CHECK_TEAM_KEY, _XIULUO_CHECK_TEAM_KEY,
-                                    load_wubei_auto_rejoin, load_xiuluo_auto_rejoin,
-                                    load_battle_only_auto_rejoin,
-                                    load_wubei_check_team, load_xiuluo_check_team)
+    from src.core.settings import (
+        _WUBEI_AUTO_REJOIN_KEY, _XIULUO_AUTO_REJOIN_KEY, _BATTLE_ONLY_AUTO_REJOIN_KEY,
+        _WUBEI_CHECK_TEAM_KEY, _XIULUO_CHECK_TEAM_KEY, load_wubei_auto_rejoin,
+        load_xiuluo_auto_rejoin, load_battle_only_auto_rejoin, load_wubei_check_team,
+        load_xiuluo_check_team,
+    )
     spec = schemes._settings_spec()
     assert spec[_WUBEI_AUTO_REJOIN_KEY] is True
     assert spec[_XIULUO_AUTO_REJOIN_KEY] is True
@@ -117,8 +118,9 @@ def test_battle_only_hezi_default_off_and_roundtrip():
     """仅战斗自动抢盒子（2026-11-15 用户需求）：方案快照注册键、首次
     默认关闭（与 load_* 一致），保存后可读回。"""
     from src.core import schemes
-    from src.app.control_window import (_BATTLE_ONLY_HEZI_KEY,
-                                        load_battle_only_hezi, save_battle_only_hezi)
+    from src.core.settings import (
+        _BATTLE_ONLY_HEZI_KEY, load_battle_only_hezi, save_battle_only_hezi,
+    )
     spec = schemes._settings_spec()
     assert spec[_BATTLE_ONLY_HEZI_KEY] is False
     assert load_battle_only_hezi() is False
@@ -132,13 +134,14 @@ def test_settings_spec_kick_away_defaults(monkeypatch):
     """暂离超时自动请离开关/分钟（修罗/五倍各一套）：方案快照默认开启、
     默认 5 分钟；load_* 首次默认与 spec 一致；保存越界拒绝。"""
     from src.core import schemes
-    from src.app.control_window import (
+    from src.core.settings import (
         _XIULUO_AUTO_KICK_AWAY_KEY, _XIULUO_KICK_AWAY_MINUTES_KEY,
         _WUBEI_AUTO_KICK_AWAY_KEY, _WUBEI_KICK_AWAY_MINUTES_KEY,
         load_xiuluo_auto_kick_away, load_xiuluo_kick_away_minutes,
         save_xiuluo_auto_kick_away, save_xiuluo_kick_away_minutes,
         load_wubei_auto_kick_away, load_wubei_kick_away_minutes,
-        save_wubei_auto_kick_away, save_wubei_kick_away_minutes)
+        save_wubei_auto_kick_away, save_wubei_kick_away_minutes,
+    )
     spec = schemes._settings_spec()
     for switch_key, minutes_key in (
             (_XIULUO_AUTO_KICK_AWAY_KEY, _XIULUO_KICK_AWAY_MINUTES_KEY),
@@ -166,10 +169,10 @@ def test_settings_spec_auto_create_team_defaults(monkeypatch):
     各一开关；load_* 首次默认与 _settings_spec 必须一致，2026-11-12
     用户改为默认开）。"""
     from src.core import schemes
-    from src.app.control_window import (_WUBEI_AUTO_CREATE_TEAM_KEY,
-                                    _XIULUO_AUTO_CREATE_TEAM_KEY,
-                                    load_wubei_auto_create_team,
-                                    load_xiuluo_auto_create_team)
+    from src.core.settings import (
+        _WUBEI_AUTO_CREATE_TEAM_KEY, _XIULUO_AUTO_CREATE_TEAM_KEY,
+        load_wubei_auto_create_team, load_xiuluo_auto_create_team,
+    )
     spec = schemes._settings_spec()
     assert spec[_WUBEI_AUTO_CREATE_TEAM_KEY] is True
     assert spec[_XIULUO_AUTO_CREATE_TEAM_KEY] is True
@@ -187,13 +190,12 @@ def test_settings_spec_shout_and_tab_group_defaults(monkeypatch):
     组号专用默认开（已登录 Tab <2 的单号不激活，行为与关闭一致）。
     """
     from src.core import schemes
-    from src.app.control_window import (
-        _XIULUO_SHOUT_SWITCH_KEY, _WUBEI_SHOUT_SWITCH_KEY,
-        _ZHONGZU_SHOUT_SWITCH_KEY,
-        _XIULUO_TAB_GROUP_KEY, _WUBEI_TAB_GROUP_KEY,
-        load_xiuluo_shout_switch, load_wubei_shout_switch,
-        load_zhongzu_shout_switch,
-        load_xiuluo_tab_group, load_wubei_tab_group)
+    from src.core.settings import (
+        _XIULUO_SHOUT_SWITCH_KEY, _WUBEI_SHOUT_SWITCH_KEY, _ZHONGZU_SHOUT_SWITCH_KEY,
+        _XIULUO_TAB_GROUP_KEY, _WUBEI_TAB_GROUP_KEY, load_xiuluo_shout_switch,
+        load_wubei_shout_switch, load_zhongzu_shout_switch, load_xiuluo_tab_group,
+        load_wubei_tab_group,
+    )
     spec = schemes._settings_spec()
     for key in (_XIULUO_SHOUT_SWITCH_KEY, _WUBEI_SHOUT_SWITCH_KEY,
                 _ZHONGZU_SHOUT_SWITCH_KEY,
@@ -212,12 +214,13 @@ def test_shout_text_settings_defaults_and_save():
     """喊话内容设置（2026-11-12 用户要求可修改保存）：三任务默认内容与
     方案快照一致；保存去首尾空白、空内容恢复默认、超长截断。"""
     from src.core import schemes
-    from src.app.control_window import (
+    from src.core.settings import (
         _XIULUO_SHOUT_TEXT_KEY, _WUBEI_SHOUT_TEXT_KEY, _ZHONGZU_SHOUT_TEXT_KEY,
         XIULUO_SHOUT_TEXT_DEFAULT, WUBEI_SHOUT_TEXT_DEFAULT,
-        ZHONGZU_SHOUT_TEXT_DEFAULT, SHOUT_TEXT_MAX_LEN,
-        load_xiuluo_shout_text, load_wubei_shout_text, load_zhongzu_shout_text,
-        save_xiuluo_shout_text, save_wubei_shout_text, save_zhongzu_shout_text)
+        ZHONGZU_SHOUT_TEXT_DEFAULT, SHOUT_TEXT_MAX_LEN, load_xiuluo_shout_text,
+        load_wubei_shout_text, load_zhongzu_shout_text, save_xiuluo_shout_text,
+        save_wubei_shout_text, save_zhongzu_shout_text,
+    )
     spec = schemes._settings_spec()
     assert spec[_XIULUO_SHOUT_TEXT_KEY] == XIULUO_SHOUT_TEXT_DEFAULT
     assert spec[_WUBEI_SHOUT_TEXT_KEY] == WUBEI_SHOUT_TEXT_DEFAULT
@@ -318,7 +321,7 @@ def test_load_group_actions_filters_bad_entries(monkeypatch):
             "bad2": {"char": "攻击"},
             "notdict": "x",
         }})
-    result = control_window.load_group_actions()
+    result = settings.load_group_actions()
     assert result == {"12345": {"char": "攻击", "beast": "防御"}}
 
 
@@ -380,7 +383,9 @@ def test_settings_spec_excludes_debug_overlay():
     """调试信息开关放 config.json、不随方案走：切换方案不得改变
     「诊断」导航与悬浮层显隐，方案白名单不得包含该键。"""
     from src.core import schemes
-    from src.app.control_window import _DEBUG_OVERLAY_KEY
+    from src.core.settings import (
+        _DEBUG_OVERLAY_KEY,
+    )
     assert _DEBUG_OVERLAY_KEY not in schemes._settings_spec()
 
 
@@ -388,7 +393,9 @@ def test_snapshot_excludes_debug_globals(monkeypatch):
     """方案快照（切换/保存时写回）同样不得携带调试全局键，
     否则旧方案里残留的 debug_overlay 会随快照再次混入。"""
     from src.core import schemes
-    from src.app.control_window import _DEBUG_OVERLAY_KEY, _DEBUG_UI_KEY
+    from src.core.settings import (
+        _DEBUG_OVERLAY_KEY, _DEBUG_UI_KEY,
+    )
     _patch_kv_empty(monkeypatch)
     snap = schemes._snapshot_current()
     assert _DEBUG_OVERLAY_KEY not in snap
@@ -399,7 +406,9 @@ def test_theme_is_global_not_in_scheme(monkeypatch):
     """界面主题为全局设置（2026-11-11 用户确认）：不进方案白名单/
     快照，切账号/切方案不改主题。"""
     from src.core import schemes
-    from src.app.control_window import _UI_THEME_KEY
+    from src.core.settings import (
+        _UI_THEME_KEY,
+    )
     assert _UI_THEME_KEY not in schemes._settings_spec()
     _patch_kv_empty(monkeypatch)
     snap = schemes._snapshot_current()
@@ -412,9 +421,9 @@ def test_debug_ui_unlock_save_load(monkeypatch):
     from src.app import control_window
     store = _patch_kv_store(monkeypatch)
     assert control_window.load_debug_ui_unlocked() is False
-    r = control_window.save_debug_ui_unlocked(True)
+    r = settings.save_debug_ui_unlocked(True)
     assert r == {"status": "success"}
-    assert store[control_window._DEBUG_UI_KEY] is True
+    assert store[settings._DEBUG_UI_KEY] is True
     assert control_window.load_debug_ui_unlocked() is True
 
 
