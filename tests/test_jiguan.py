@@ -1,9 +1,10 @@
-"""minigames/jiguan.py：封印机关破解的解除结果信号与换模板逻辑。
+"""minigames/jiguan.py：封印机关破解的标签定位与解除结果判定。
 
-用户 2026-11-17 修正：点击任意一个机关模板后只看结果对话框——
-出现「换一处再试试」才换下一个模板；出现「此处已解除封印/解除封印
-成功」即解除成功；两者都没有也按成功处理（旧实现固定等 5s 查任务
-签名，签名被 OCR 抖动成乱码时会误判完成、跳过后续机关）。
+2026-11-18 实机重标定：旧模板跨封印点背景误匹配（真实剑位 0.28-0.53、
+背景杂岩 0.6-0.76），点击落空后「超时=成功」把未破除的封印当成功、
+人物原地卡死。改为 OCR 标签「封印机关·黄/蓝/红」定位（剑身 = 标签上方
+JIGUAN_SWORD_DY），结果只认三种直接信号：换一处 / 已被破解 / 已完成
+玄枢轶闻任务；超时按落空换下一个机关，绝不按成功处理。
 """
 import numpy as np
 
@@ -15,98 +16,183 @@ class _Win:
         return np.zeros((831, 1378, 3), dtype=np.uint8)
 
 
-def _install(monkeypatch, results, found=None):
-    """安装替身：results 按点击次数消费（"fail"/"success"/None）。
+# ---- 标签解析（2026-11-18 实机帧实测值）----
 
-    found：模板 icon → 坐标（缺省三个模板都命中）。
-    """
-    clicks = []
-    tried = []
-    dismissed = []
-    outcomes = iter(results)
-    found = found if found is not None else {
-        icon: (800 + i * 10, 400) for i, icon in enumerate(jiguan.JIGUAN_CLICK_ORDER)
-    }
-
-    def _find(win, icon, threshold=0.8, region=None):
-        if not tried or tried[-1] != icon:
-            tried.append(icon)  # 查找超时内会重复轮询，记录尝试顺序即可
-        return found.get(icon)
-
-    def _result(win, timeout=jiguan.JIGUAN_RESULT_WAIT):
-        return next(outcomes)
-
-    monkeypatch.setattr(jiguan, "log", lambda *a, **k: None)
-    monkeypatch.setattr(jiguan, "human_click",
-                        lambda win, x, y: clicks.append((x, y)))
-    monkeypatch.setattr(jiguan.game_map, "find_template", _find)
-    monkeypatch.setattr(jiguan, "_jiguan_result_dialog", _result)
-    monkeypatch.setattr(jiguan, "clear_blocking_dialog",
-                        lambda win, prefix="", max_clicks=3:
-                        dismissed.append(prefix) or (True, True))
-    monkeypatch.setattr(jiguan.app_utils, "silent_mode_on", lambda: False)
-    monkeypatch.setattr(jiguan.app_utils, "keyboard_ok", lambda win: False)
-    monkeypatch.setattr(jiguan.time, "sleep", lambda s: None)
-    monkeypatch.setattr(jiguan, "JIGUAN_FIND_TIMEOUT", 0.01)
-    return clicks, tried, dismissed
+def test_label_click_pos_full_label():
+    """整标签「封印机关·黄」(744,627)-(848,650) → 剑身 (796,573)。"""
+    x, y = jiguan._label_click_pos([744, 627, 848, 650], "封印机关·黄")
+    assert abs(x - 796) <= 3 and abs(y - 573) <= 3
 
 
-def test_play_fail_then_success_dialog_stops(monkeypatch):
-    """第一个机关提示换一处 → 换第二个并出现成功对话框 → 不再点第三个。"""
-    clicks, tried, dismissed = _install(monkeypatch, ["fail", "success"])
-    ok, info = jiguan.play(_Win(), prefix="玄枢轶闻")
-    assert ok and "出现解除成功提示" in info
-    assert tried == list(jiguan.JIGUAN_CLICK_ORDER[:2])  # 红不再查找/点击
-    assert len(clicks) == 3  # 1 次关提示对话 + 2 次点机关
-    assert len(dismissed) == 1  # 失败对话框被关闭后才换下一个
+def test_label_click_pos_merged_with_player_name():
+    """与玩家名合并的行（(657,446)-(819,470)）→ 剑身 x≈767（实测点击点）。"""
+    x, y = jiguan._label_click_pos([657, 446, 819, 470],
+                                   "入门御童封印机关·黄")
+    assert abs(x - 767) <= 6 and abs(y - 393) <= 3
 
 
-def test_play_fail_then_timeout_treated_as_success(monkeypatch):
-    """失败后换下一个；第二个既无失败也无成功对话框（超时）按成功处理。"""
-    clicks, tried, _ = _install(monkeypatch, ["fail", None])
-    ok, info = jiguan.play(_Win())
-    assert ok and "未出现换一处提示" in info
-    assert tried == list(jiguan.JIGUAN_CLICK_ORDER[:2])
-    assert len(clicks) == 3
+def test_label_click_pos_occluded_middle():
+    """被角色遮挡只认出「印机关」(632,387)-(677,408) → 近似剑身 x≈662。"""
+    x, y = jiguan._label_click_pos([632, 387, 677, 408], "印机关")
+    assert abs(x - 662) <= 6 and abs(y - 332) <= 3
 
 
-def test_play_all_fail_reports_end(monkeypatch):
-    """三个模板都提示换一处 → 逐个尝试后结束，不再重复。"""
-    clicks, tried, dismissed = _install(monkeypatch, ["fail", "fail", "fail"])
-    ok, info = jiguan.play(_Win())
-    assert ok and "均提示换一处" in info
-    assert tried == list(jiguan.JIGUAN_CLICK_ORDER)
-    assert len(clicks) == 4  # 1 次关提示对话 + 3 次点机关
-    assert len(dismissed) == 3
+def test_label_color_only_after_keyword():
+    """颜色只在「机关」之后找：同行玩家名里的颜色字不误判。"""
+    assert jiguan._label_color("封印机关·黄") == "黄"
+    assert jiguan._label_color("封印机关·蓝") == "蓝"
+    assert jiguan._label_color("入门御童封印机关·黄") == "黄"
+    assert jiguan._label_color("红孩儿封印机关·蓝") == "蓝"
+    assert jiguan._label_color("印机关") is None
 
 
-def test_play_no_template_found(monkeypatch):
-    """三个模板都找不到 → 未执行任何机关点击。"""
-    clicks, tried, _ = _install(monkeypatch, [], found={})
-    ok, info = jiguan.play(_Win())
-    assert not ok and "尝试 0 个机关" in info
-    assert clicks == [jiguan.SCREEN_CENTER_POS]  # 只关了提示对话，无机关点击
-    assert tried == list(jiguan.JIGUAN_CLICK_ORDER)
+def test_label_color_traditional_forms():
+    """繁体标签颜色归一（世界地图字体下 OCR 输出 黃/藍/紅）。"""
+    assert jiguan._label_color("封印机关·黃") == "黄"
+    assert jiguan._label_color("有情有问御童封御机关·黃") == "黄"
+    assert jiguan._label_color("封印机关·藍") == "蓝"
+    assert jiguan._label_color("封印机关·紅") == "红"
+
+
+def test_ordered_positions_user_order():
+    """黄→蓝→红顺序；颜色未识别的标签排最后但仍会尝试。"""
+    labels = [("红", (1, 1)), (None, (2, 2)), ("黄", (3, 3)), ("蓝", (4, 4))]
+    assert jiguan._ordered_positions(labels) == [(3, 3), (4, 4), (1, 1), (2, 2)]
+
+
+# ---- 解除结果信号 ----
+
+def _patch_result(monkeypatch, items):
+    monkeypatch.setattr(jiguan, "dialog_frame_score", lambda img: 1.0)
+    monkeypatch.setattr(jiguan.game_map, "ocr_region",
+                        lambda img, region: (items, None))
 
 
 def test_result_dialog_detects_fail_text(monkeypatch):
-    """结果对话框：OCR 到「换一处再试试」→ "fail"。"""
-    monkeypatch.setattr(jiguan, "dialog_frame_score", lambda img: 1.0)
-    monkeypatch.setattr(jiguan.game_map, "ocr_region",
-                        lambda img, region: ([("换一处再试试", [0, 0, 1, 1], 0.99)], None))
+    """「看来此处无法破除封印，换一处再试试吧」→ "fail"。"""
+    _patch_result(monkeypatch,
+                  [("看来此处无法破除封印，换一处再试试吧。", [0, 0, 1, 1], 0.99)])
     assert jiguan._jiguan_result_dialog(_Win()) == "fail"
 
 
 def test_result_dialog_detects_success_text(monkeypatch):
-    """结果对话框：OCR 到「此处已解除封印」→ "success"。"""
-    monkeypatch.setattr(jiguan, "dialog_frame_score", lambda img: 1.0)
-    monkeypatch.setattr(jiguan.game_map, "ocr_region",
-                        lambda img, region: ([("此处已解除封印", [0, 0, 1, 1], 0.99)], None))
+    """中间一处成功：「此处封印已被破解…」→ "success"（旧文案也认）。"""
+    _patch_result(monkeypatch,
+                  [("此处封印已被破解，回去找神秘人询问下一步要做什么。",
+                    [0, 0, 1, 1], 0.99)])
+    assert jiguan._jiguan_result_dialog(_Win()) == "success"
+    _patch_result(monkeypatch, [("此处已解除封印", [0, 0, 1, 1], 0.99)])
     assert jiguan._jiguan_result_dialog(_Win()) == "success"
 
 
-def test_result_dialog_timeout_without_text(monkeypatch):
-    """无结果对话框时按超时上限返回 None（调用方按成功处理）。"""
+def test_result_dialog_detects_task_done_message(monkeypatch):
+    """最后一处：「您已完成玄枢轶闻任务」消息栏提示 → "success"。"""
+    _patch_result(monkeypatch,
+                  [("您已完成玄枢轶闻任务", [0, 0, 1, 1], 0.99),
+                   ("您获得了4点玄枢积分", [0, 30, 1, 31], 0.99)])
+    assert jiguan._jiguan_result_dialog(_Win()) == "success"
+
+
+def test_result_dialog_timeout_returns_none(monkeypatch):
+    """无结果对话框 → None（调用方按落空处理，绝不按成功）。"""
     monkeypatch.setattr(jiguan, "dialog_frame_score", lambda img: 0.0)
     monkeypatch.setattr(jiguan.time, "sleep", lambda s: None)
     assert jiguan._jiguan_result_dialog(_Win(), timeout=0.01) is None
+
+
+# ---- play 主流程 ----
+
+def _install(monkeypatch, labels, results):
+    """安装替身：labels 供 _wait_labels，results 按点击次数消费。"""
+    clicks = []
+    dismissed = []
+    landed = []
+    outcomes = iter(results)
+    timeouts = []
+
+    monkeypatch.setattr(jiguan, "log", lambda *a, **k: None)
+    monkeypatch.setattr(jiguan.time, "sleep", lambda s: None)
+    monkeypatch.setattr(jiguan, "human_click",
+                        lambda win, x, y: clicks.append((x, y)))
+    monkeypatch.setattr(jiguan, "_wait_labels", lambda win: labels)
+    monkeypatch.setattr(jiguan, "_jiguan_result_dialog",
+                        lambda win, timeout=None: next(outcomes))
+    monkeypatch.setattr(jiguan, "clear_blocking_dialog",
+                        lambda win, prefix="", max_clicks=3:
+                        dismissed.append(prefix) or (True, True))
+    monkeypatch.setattr(jiguan.zuoqi, "ensure_landed",
+                        lambda win: landed.append("land") or (True, "已降落"))
+    monkeypatch.setattr(jiguan.zuoqi, "close_feixingyuqi_panel",
+                        lambda win: (True, "面板已关闭"))
+    return clicks, dismissed, landed, timeouts
+
+
+LABELS = [("黄", (760, 400)), ("蓝", (620, 470)), ("红", (800, 560))]
+
+
+def test_play_lands_with_zuoqi_not_altc(monkeypatch):
+    """降落走座骑（飞行驭器面板），不再按 Alt+C。"""
+    clicks, _dismissed, landed, _t = _install(monkeypatch, LABELS, [])
+    monkeypatch.setattr(jiguan, "_jiguan_result_dialog",
+                        lambda win, timeout=None: "success")
+    ok, info = jiguan.play(_Win(), prefix="玄枢轶闻")
+    assert ok
+    assert landed == ["land"]              # 座骑降落被调用
+    assert clicks[0] == jiguan.SCREEN_CENTER_POS  # 先关提示对话框
+
+
+def test_play_fail_then_success(monkeypatch):
+    """第一个机关提示换一处 → 关对话框换第二个 → 成功即停。"""
+    clicks, dismissed, _landed, _t = _install(
+        monkeypatch, LABELS, ["fail", "success"])
+    ok, info = jiguan.play(_Win())
+    assert ok and "封印破解完成" in info
+    assert clicks[1:] == [(760, 400), (620, 470)]  # 黄→蓝，红不再点
+    assert len(dismissed) == 1
+
+
+def test_play_timeout_is_not_success(monkeypatch):
+    """点击超时无结果 → 不按成功处理，换下一个；三个都落空 → 失败。"""
+    clicks, _dismissed, _landed, _t = _install(
+        monkeypatch, LABELS, [None, None, None])
+    ok, info = jiguan.play(_Win())
+    assert not ok and "尝试 3 个机关位置" in info
+    assert clicks[1:] == [(760, 400), (620, 470), (800, 560)]
+
+
+def test_play_done_message_success(monkeypatch):
+    """最后一处封印：任务完成提示即结束。"""
+    _clicks, _d, _l, _t = _install(monkeypatch, LABELS, ["success"])
+    ok, info = jiguan.play(_Win())
+    assert ok and "封印破解完成" in info
+
+
+def test_play_no_labels_reports_failure(monkeypatch):
+    """识别不到标签 → 不点击机关、返回失败（不再假装成功）。"""
+    clicks, _dismissed, landed, _t = _install(monkeypatch, [], [])
+    ok, info = jiguan.play(_Win())
+    assert not ok and "尝试 0 个机关位置" in info
+    assert landed == ["land"]
+    assert clicks == [jiguan.SCREEN_CENTER_POS]  # 只关了提示对话框
+
+
+def test_play_retries_new_positions_after_scene_change(monkeypatch):
+    """一轮三个位置都落空后再扫一轮：新位置会继续尝试（旧位置不重点）。"""
+    scans = iter([LABELS, LABELS, LABELS, [("黄", (900, 500))]])
+    monkeypatch.setattr(jiguan, "log", lambda *a, **k: None)
+    monkeypatch.setattr(jiguan.time, "sleep", lambda s: None)
+    clicks = []
+    monkeypatch.setattr(jiguan, "human_click",
+                        lambda win, x, y: clicks.append((x, y)))
+    monkeypatch.setattr(jiguan, "_wait_labels", lambda win: next(scans, []))
+    monkeypatch.setattr(jiguan, "_jiguan_result_dialog",
+                        lambda win, timeout=None: "fail")
+    monkeypatch.setattr(jiguan, "clear_blocking_dialog",
+                        lambda win, prefix="", max_clicks=3: (True, True))
+    monkeypatch.setattr(jiguan.zuoqi, "ensure_landed",
+                        lambda win: (True, "已降落"))
+    monkeypatch.setattr(jiguan.zuoqi, "close_feixingyuqi_panel",
+                        lambda win: (True, "面板已关闭"))
+    ok, info = jiguan.play(_Win())
+    assert not ok
+    assert clicks[1:] == [(760, 400), (620, 470), (800, 560), (900, 500)]

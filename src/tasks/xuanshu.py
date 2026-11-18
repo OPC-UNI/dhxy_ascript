@@ -35,8 +35,8 @@ from ..core import app_utils  # 高性能模式共享设施（固定位置缓存
 from ..device import map as game_map  # 地图操作（世界地图/小地图/位置识别）
 from ..minigames import pochufengyin as _pochu_minigame  # 破除封印/钓鱼共用小游戏（闭环实现）
 from ..minigames import chuyijuebao as _chuyijuebao_minigame  # 锄遗聚宝阻塞循环
-from ..minigames.jiguan import (JIGUAN_CLICK_ORDER, JIGUAN_DIALOG_TEXT,
-                               JIGUAN_THRESHOLD)  # 机关破解触发/模板
+from ..minigames.jiguan import (JIGUAN_DIALOG_TEXT, JIGUAN_TEMPLATES,
+                               JIGUAN_THRESHOLD)  # 机关破解触发/旧模板诊断
 from ..minigames.fengyin_link import (_jiguan_link_picker,
                                      _jiguan_link_progress)  # 封印按序开启链接
 from ..minigames import jiguan as _jiguan_minigame  # 封印机关阻塞循环
@@ -484,21 +484,30 @@ def _play_jiguan_puzzle(win, title):
 
 
 def verify_jiguan_templates(win):
-    """高级设置-测试机关模板按钮：对当前画面逐一测试三个机关模板，
-    打印全帧最佳匹配度与位置日志（只读不点击，供阈值/模板校准）。
+    """高级设置-测试机关模板按钮：报告当前画面的机关标签识别结果，
+    并附旧模板（黄/蓝/红）的全帧匹配度参考（只读不点击）。
+
+    2026-11-18 起流程按标签 OCR 定位机关（模板跨封印点背景误匹配），
+    模板分数仅供校准参考。
     返回 (是否成功, 描述)。
     """
     img = win.capture(force_activate=False)
     if img is None:
         log("[玄枢轶闻] 测试机关模板: 截图失败", "WARN")
         return False, "截图失败"
-    for icon in JIGUAN_CLICK_ORDER:
+    labels = _jiguan_minigame.scan_labels(win)
+    if labels:
+        for color, (x, y) in labels:
+            log(f"[玄枢轶闻] 机关标签: 颜色 {color or '未识别'}，"
+                f"点击位置 @({x},{y})", "SYS")
+    else:
+        log("[玄枢轶闻] 机关标签: 当前画面未识别到「封印机关」标签", "WARN")
+    for icon in JIGUAN_TEMPLATES:
         conf, (x, y) = game_map.best_match_in(img, icon)
         hit = conf >= JIGUAN_THRESHOLD
-        log(f"[玄枢轶闻] 测试机关模板 {icon}: 全帧最佳匹配度 {conf:.2f}"
-            f" @({x},{y}){'（≥阈值，任务会点击）' if hit else '（<阈值，任务不会点击）'}",
-            "SYS" if hit else "WARN")
-    return True, "三个模板已测试，结果见日志"
+        log(f"[玄枢轶闻] 旧模板 {icon}: 全帧最佳匹配度 {conf:.2f} @({x},{y})"
+            f"{'（≥阈值）' if hit else '（<阈值）'}", "INFO")
+    return True, f"识别到 {len(labels)} 个机关标签，模板分数见日志"
 
 
 # ---- 封印按序开启任务（花果山「先触南，再寻东，后破西」，2026-10-19 实测） ----
