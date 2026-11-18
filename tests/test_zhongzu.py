@@ -397,3 +397,82 @@ def test_monitor_shout_disabled_or_throttled(monkeypatch):
     assert _run_monitor_once(monkeypatch, "", 0.0)["shouts"] == 0
     assert _run_monitor_once(
         monkeypatch, "种族比武来人", 1_000_000.0)["shouts"] == 0
+
+
+# ---- claim_flow 批次 2 包装接线与到达判据（2026-11-18）----
+
+def test_claim_flow_open_map_wiring(monkeypatch):
+    """包装必须传长安参数与坐标夹取点击，且不读任务筛选状态。"""
+    captured = {}
+
+    def fake(win, pos=None, **kwargs):
+        captured["pos"] = pos
+        captured.update(kwargs)
+        return True, "ok"
+
+    monkeypatch.setattr(zhongzu.claim_flow, "open_claim_map", fake)
+    assert zhongzu._open_claim_map(object(), ("长安", 1, 2)) == (True, "ok")
+    assert captured["pos"] == ("长安", 1, 2)
+    assert captured["map_name"] == zhongzu.CHANGAN
+    assert captured["world_icon"] == zhongzu.game_map.WORLD_MAP_CHANGAN_ICON
+    assert captured["map_pos"] == zhongzu.CLAIM_MAP_POS
+    assert captured["prefix"] == "[种族比武]"
+    assert captured["click_fn"] is zhongzu._click_claim_map_pos
+    assert "on_filter_state" not in captured  # 种族比武无自动对话框路径
+
+
+def test_claim_flow_relocate_wiring(monkeypatch):
+    monkeypatch.setattr(zhongzu, "_claim_configured", lambda: True)
+    captured = {}
+    win = object()
+
+    def fake(win, **kwargs):
+        captured["win"] = win
+        captured.update(kwargs)
+        return True, "ok"
+
+    monkeypatch.setattr(zhongzu.claim_flow, "relocate_to_claim_spot", fake)
+    assert zhongzu._relocate_to_claim_spot(win) == (True, "ok")
+    assert captured["win"] is win
+    assert captured["map_name"] == zhongzu.CHANGAN
+    assert captured["open_map_fn"] is zhongzu._open_claim_map
+    assert captured["close_map_fn"] is zhongzu._close_maps_after_walk
+    assert captured["arrival_fn"] is zhongzu._relocate_arrival
+    assert captured["timeout"] == zhongzu.CLAIM_ARRIVE_TIMEOUT
+
+
+def test_claim_flow_relocate_unconfigured_skips_shared(monkeypatch):
+    monkeypatch.setattr(zhongzu, "_claim_configured", lambda: False)
+    monkeypatch.setattr(
+        zhongzu.claim_flow, "relocate_to_claim_spot",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("未配置不应重走")))
+    ok, info = zhongzu._relocate_to_claim_spot(object())
+    assert ok is False and info == zhongzu.CLAIM_UNCONFIGURED_INFO
+
+
+def test_close_maps_after_walk_closes_and_returns_false(monkeypatch):
+    calls = []
+    monkeypatch.setattr(zhongzu.game_map, "close_maps",
+                        lambda win: calls.append(win))
+    win = object()
+    assert zhongzu._close_maps_after_walk(win) is False
+    assert calls == [win]
+
+
+def test_relocate_arrival_npc_requires_map_gate(monkeypatch):
+    """外图命中领取 NPC 模板：不得判到达（地图名门控）。"""
+    monkeypatch.setattr(zhongzu, "_near_claim_spot", lambda pos, tol: False)
+    monkeypatch.setattr(zhongzu, "_find_claim_npc_np", lambda frame: (300, 300))
+    img = np.zeros((200, 200, 3), np.uint8)
+    assert zhongzu._relocate_arrival(
+        None, img, img, ("长安城东", 1, 2)) is None
+    desc = zhongzu._relocate_arrival(None, img, img, ("长安", 1, 2))
+    assert desc and "领取 NPC 可见" in desc
+
+
+def test_relocate_arrival_near_spot(monkeypatch):
+    monkeypatch.setattr(zhongzu, "_find_claim_npc_np", lambda frame: None)
+    monkeypatch.setattr(zhongzu, "_near_claim_spot", lambda pos, tol: True)
+    img = np.zeros((200, 200, 3), np.uint8)
+    assert zhongzu._relocate_arrival(
+        None, img, img, ("长安", 286, 159)) == "已重走到领取点附近"

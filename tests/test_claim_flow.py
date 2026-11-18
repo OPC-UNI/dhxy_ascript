@@ -1,5 +1,6 @@
-"""workflows.claim_flow：批次 1 领取共享流程测试。"""
+"""workflows.claim_flow：领取共享流程测试（批次 1 + 批次 2）。"""
 import numpy as np
+import pytest
 
 from src.workflows import claim_flow
 
@@ -256,3 +257,278 @@ def test_wait_auto_claim_dialog_gate_skips_ocr(monkeypatch):
     assert claim_flow.wait_auto_claim_dialog(
         _Win(), ("x",), timeout=0.0) is None
     assert ocr == []
+
+
+# ---- 地图感知导航 / 重走领取点（批次 2，2026-11-18）----
+
+class _FrameWin:
+    def __init__(self, frame=None):
+        self.captures = 0
+        self.frame = frame
+
+    def capture(self, force_activate=False):
+        self.captures += 1
+        if self.frame is not None:
+            return self.frame
+        return np.zeros((60, 60, 3), np.uint8)
+
+
+class _SeqWin:
+    """按序列返回帧（None 表示截图失败），用尽后返回零帧。"""
+
+    def __init__(self, frames):
+        self.frames = list(frames)
+        self.captures = 0
+
+    def capture(self, force_activate=False):
+        self.captures += 1
+        if self.frames:
+            return self.frames.pop(0)
+        return np.zeros((60, 60, 3), np.uint8)
+
+
+def _patch_open_env(monkeypatch, pos=("宝象国", 1, 2), battle=False,
+                    mini=(True, "ok"), city=(True, "ok"),
+                    filter_state=True):
+    calls = {"mini": [], "city": [], "click": [], "filter": [],
+             "read_pos": []}
+    monkeypatch.setattr(claim_flow, "is_in_battle_frame", lambda img: battle)
+    monkeypatch.setattr(
+        claim_flow.game_map, "read_map_position",
+        lambda win, img=None: calls["read_pos"].append(img) or pos)
+    monkeypatch.setattr(claim_flow.game_map, "open_mini_map",
+                        lambda win: calls["mini"].append(1) or mini)
+    monkeypatch.setattr(
+        claim_flow.game_map, "open_mini_map_city",
+        lambda win, icon, label: calls["city"].append((icon, label)) or city)
+    monkeypatch.setattr(
+        claim_flow.game_map, "minimap_task_filter_state",
+        lambda win: calls["filter"].append(1) or filter_state)
+    monkeypatch.setattr(claim_flow, "human_click",
+                        lambda win, x, y: calls["click"].append((x, y)))
+    monkeypatch.setattr(claim_flow, "log", lambda *a, **k: None)
+    return calls
+
+
+def test_open_claim_map_in_map_opens_minimap_and_clicks(monkeypatch):
+    calls = _patch_open_env(monkeypatch)
+    states = []
+    win = _FrameWin()
+    ok, info = claim_flow.open_claim_map(
+        win, None, map_name="宝象国",
+        world_icon="shijie_baoxiangguo.png", map_pos=(517, 488),
+        prefix="[测试]", on_filter_state=states.append)
+    assert ok is True and "宝象国" in info
+    assert calls["mini"] == [1] and calls["city"] == []
+    assert states == [True] and calls["filter"] == [1]
+    assert calls["click"] == [(517, 488)]
+    assert win.captures == 1  # 决策帧只截一次
+    assert len(calls["read_pos"]) == 1  # pos=None 时自行读一次位置
+
+
+def test_open_claim_map_other_map_goes_through_world_map(monkeypatch):
+    calls = _patch_open_env(monkeypatch, pos=("灵兽村", 111, 90))
+    ok, _info = claim_flow.open_claim_map(
+        _FrameWin(), None, map_name="宝象国",
+        world_icon="shijie_baoxiangguo.png", map_pos=(517, 488),
+        prefix="[测试]")
+    assert ok is True
+    assert calls["mini"] == []
+    assert calls["city"] == [("shijie_baoxiangguo.png", "宝象国")]
+    assert calls["click"] == [(517, 488)]
+
+
+def test_open_claim_map_battle_returns_false(monkeypatch):
+    calls = _patch_open_env(monkeypatch, battle=True)
+    win = _FrameWin()
+    ok, info = claim_flow.open_claim_map(
+        win, None, map_name="宝象国", world_icon="i.png",
+        map_pos=(1, 2), prefix="[测试]")
+    assert ok is False and "战斗中" in info
+    assert calls["mini"] == [] and calls["city"] == []
+    assert calls["filter"] == [] and calls["click"] == []
+    assert win.captures == 1
+
+
+def test_open_claim_map_capture_none_returns_false(monkeypatch):
+    calls = _patch_open_env(monkeypatch)
+    ok, info = claim_flow.open_claim_map(
+        _SeqWin([None]), None, map_name="宝象国", world_icon="i.png",
+        map_pos=(1, 2), prefix="[测试]")
+    assert ok is False and info == "截图失败"
+    assert calls["mini"] == [] and calls["city"] == []
+    assert calls["filter"] == [] and calls["click"] == []
+
+
+def test_open_claim_map_minimap_open_failure(monkeypatch):
+    calls = _patch_open_env(monkeypatch, mini=(False, "点击后小地图未打开"))
+    ok, info = claim_flow.open_claim_map(
+        _FrameWin(), ("宝象国", 1, 2), map_name="宝象国", world_icon="i.png",
+        map_pos=(1, 2), prefix="[测试]")
+    assert ok is False and info == "点击后小地图未打开"
+    assert calls["filter"] == [] and calls["click"] == []
+
+
+def test_open_claim_map_city_open_failure(monkeypatch):
+    calls = _patch_open_env(monkeypatch, pos=("灵兽村", 1, 2),
+                            city=(False, "世界地图中未找到宝象国"))
+    ok, info = claim_flow.open_claim_map(
+        _FrameWin(), None, map_name="宝象国", world_icon="i.png",
+        map_pos=(1, 2), prefix="[测试]")
+    assert ok is False and "未找到宝象国" in info
+    assert calls["filter"] == [] and calls["click"] == []
+
+
+@pytest.mark.parametrize("state", [True, False, None])
+def test_open_claim_map_filter_state_callback(monkeypatch, state):
+    calls = _patch_open_env(monkeypatch, filter_state=state)
+    states = []
+    ok, _info = claim_flow.open_claim_map(
+        _FrameWin(), ("宝象国", 1, 2), map_name="宝象国", world_icon="i.png",
+        map_pos=(1, 2), prefix="[测试]", on_filter_state=states.append)
+    assert ok is True
+    assert states == [state] and calls["filter"] == [1]
+
+
+def test_open_claim_map_custom_click_fn_and_no_filter_read(monkeypatch):
+    """种族比武路径：自定义点击（坐标夹取），不读取任务筛选状态。"""
+    calls = _patch_open_env(monkeypatch)
+    clicked = []
+    win = _FrameWin()
+    ok, _info = claim_flow.open_claim_map(
+        win, ("长安", 1, 2), map_name="长安",
+        world_icon="shijie_changan.png", map_pos=(737, 387),
+        prefix="[测试]", click_fn=lambda w: clicked.append(w))
+    assert ok is True and clicked
+    assert calls["click"] == []  # 未走默认 human_click
+    assert calls["filter"] == []  # 未读筛选状态（省一次截图+标记匹配）
+    assert calls["read_pos"] == []  # pos 已给：省一次位置 OCR
+    assert win.captures == 1
+
+
+def test_open_claim_map_pos_reused_skips_position_read(monkeypatch):
+    calls = _patch_open_env(monkeypatch)
+    ok, _info = claim_flow.open_claim_map(
+        _FrameWin(), ("宝象国", 86, 86), map_name="宝象国", world_icon="i.png",
+        map_pos=(1, 2), prefix="[测试]")
+    assert ok is True
+    assert calls["read_pos"] == []  # 同帧复用：不再读位置
+
+
+def test_relocate_returns_on_arrival(monkeypatch):
+    clock = _Clock()
+    monkeypatch.setattr(claim_flow, "time", clock)
+    monkeypatch.setattr(claim_flow, "is_in_battle", lambda win: False)
+    monkeypatch.setattr(claim_flow, "is_in_battle_frame", lambda img: False)
+    read_imgs = []
+    monkeypatch.setattr(
+        claim_flow.game_map, "read_map_position",
+        lambda win, img=None: read_imgs.append(img) or ("宝象国", 94, 84))
+    monkeypatch.setattr(claim_flow, "log", lambda *a, **k: None)
+    seen = []
+
+    def _arrival(win, img, frame, pos):
+        seen.append((img, frame, pos))
+        return "已重走到领取点附近"
+
+    # RGB (10,20,30) 帧：转 BGR 后应为 (30,20,10)
+    frame_rgb = np.full((60, 60, 3), (10, 20, 30), np.uint8)
+    win = _FrameWin(frame_rgb)
+    ok, info = claim_flow.relocate_to_claim_spot(
+        win, prefix="[测试]", map_name="宝象国",
+        open_map_fn=lambda w: (True, "已点击"),
+        close_map_fn=lambda w: False, arrival_fn=_arrival, timeout=30)
+    assert ok is True and info == "已重走到领取点附近"
+    assert seen and seen[0][2] == ("宝象国", 94, 84)
+    # 同帧复用：位置 OCR 与到达判据拿到的是同一帧
+    assert read_imgs[0] is seen[0][0]
+    # PIL(RGB) 帧给对话框判定；BGR 帧给模板匹配（绿字判定依赖 RGB）
+    assert seen[0][0][0, 0].tolist() == [10, 20, 30]
+    assert seen[0][1][0, 0].tolist() == [30, 20, 10]
+    assert win.captures == 1  # 每轮询一帧
+
+
+def test_relocate_skips_capture_failure_and_battle_frames(monkeypatch):
+    clock = _Clock()
+    monkeypatch.setattr(claim_flow, "time", clock)
+    monkeypatch.setattr(claim_flow, "is_in_battle", lambda win: False)
+    battle_frame = np.full((60, 60, 3), 255, np.uint8)
+    normal = np.zeros((60, 60, 3), np.uint8)
+    monkeypatch.setattr(claim_flow, "is_in_battle_frame",
+                        lambda img: img is not None and int(img[0, 0, 0]) == 255)
+    read_imgs = []
+    monkeypatch.setattr(
+        claim_flow.game_map, "read_map_position",
+        lambda win, img=None: read_imgs.append(img) or None)
+    monkeypatch.setattr(claim_flow, "log", lambda *a, **k: None)
+    seen = []
+
+    def _arrival(win, img, frame, pos):
+        seen.append(img)
+        return "已重走到领取点附近"
+
+    win = _SeqWin([None, battle_frame, normal])
+    ok, info = claim_flow.relocate_to_claim_spot(
+        win, prefix="[测试]", map_name="宝象国",
+        open_map_fn=lambda w: (True, "已点击"),
+        close_map_fn=lambda w: False, arrival_fn=_arrival, timeout=30)
+    assert ok is True and info == "已重走到领取点附近"
+    assert win.captures == 3  # 失败帧/战斗帧各跳过一次
+    assert seen == [normal]  # 跳过帧不进入到达判据
+    assert read_imgs == [normal]  # 跳过帧不读位置
+
+
+def test_relocate_kept_map_short_circuits_poll(monkeypatch):
+    clock = _Clock()
+    monkeypatch.setattr(claim_flow, "time", clock)
+    monkeypatch.setattr(claim_flow, "is_in_battle", lambda win: False)
+    monkeypatch.setattr(claim_flow, "log", lambda *a, **k: None)
+    opened, closed = [], []
+    win = _FrameWin()
+    ok, info = claim_flow.relocate_to_claim_spot(
+        win, prefix="[测试]", map_name="宝象国",
+        open_map_fn=lambda w: opened.append(1) or (True, "已点击"),
+        close_map_fn=lambda w: closed.append(1) or True,
+        arrival_fn=lambda *a: None, timeout=30)
+    assert ok is True and "自动弹出" in info
+    assert opened == [1] and closed == [1]
+    assert win.captures == 0
+
+
+def test_relocate_battle_and_open_fail(monkeypatch):
+    monkeypatch.setattr(claim_flow, "log", lambda *a, **k: None)
+    monkeypatch.setattr(claim_flow, "is_in_battle", lambda win: True)
+    ok, info = claim_flow.relocate_to_claim_spot(
+        _FrameWin(), prefix="[测试]", map_name="宝象国",
+        open_map_fn=lambda w: (True, "x"), close_map_fn=lambda w: False,
+        arrival_fn=lambda *a: None, timeout=1)
+    assert ok is False and "战斗中" in info
+    monkeypatch.setattr(claim_flow, "is_in_battle", lambda win: False)
+    ok, info = claim_flow.relocate_to_claim_spot(
+        _FrameWin(), prefix="[测试]", map_name="宝象国",
+        open_map_fn=lambda w: (False, "截图失败"), close_map_fn=lambda w: False,
+        arrival_fn=lambda *a: None, timeout=1)
+    assert ok is False and info == "截图失败"
+
+
+def test_relocate_times_out(monkeypatch):
+    clock = _Clock()
+    monkeypatch.setattr(claim_flow, "time", clock)
+    monkeypatch.setattr(claim_flow, "is_in_battle", lambda win: False)
+    monkeypatch.setattr(claim_flow, "is_in_battle_frame", lambda img: False)
+    read_imgs = []
+    monkeypatch.setattr(
+        claim_flow.game_map, "read_map_position",
+        lambda win, img=None: read_imgs.append(img) or None)
+    monkeypatch.setattr(claim_flow, "log", lambda *a, **k: None)
+    opened, closed = [], []
+    win = _FrameWin()
+    ok, info = claim_flow.relocate_to_claim_spot(
+        win, prefix="[测试]", map_name="宝象国",
+        open_map_fn=lambda w: opened.append(1) or (True, "已点击"),
+        close_map_fn=lambda w: closed.append(1) or False,
+        arrival_fn=lambda *a: None, timeout=5)
+    assert ok is False and info == "重走领取点超时"
+    assert opened == [1] and closed == [1]
+    assert win.captures == 3  # 1.0s 启动等待 + 2s 轮询，5s 内 3 帧
+    assert len(read_imgs) == 3 and all(img is not None for img in read_imgs)

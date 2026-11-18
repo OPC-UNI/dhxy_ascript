@@ -58,13 +58,29 @@
 校验等待间隔按用户 2026-11-13 指定统一为 0.8s（原五倍 1.0 / 修罗 0.8）。
 当前全量 902 passed。
 
-### 批次 2：中风险（批次 1 实机通过后）
+### 批次 2：中风险（部分完成 2026-11-18）
 
-- `open_claim_map(win, cfg, pos=None)`：注入地图名/世界图标/小地图点/点击回调。
-- `relocate_to_claim_spot(win, cfg, arrival_fn)`：保留原循环；到达判据由任务注入。
-- `click_entry_ensuring_dialog(...)`：先抽「等待入口 → 点击 → 等对话框 → 重定位 →
-  再等」的重试骨架，任务用回调提供入口等待、点击函数、到达判据、队伍警告、
-  清屏和返回值适配。此步建议单独提交并逐任务实机回归。
+- ✅ `open_claim_map(win, pos, *, map_name, world_icon, map_pos, prefix,
+  on_filter_state=None, click_fn=None)`：已下沉 `claim_flow`。地图名/世界
+  图标/小地图点由任务注入；`on_filter_state` 仅五倍/修罗传（读小地图
+  「任务」筛选状态并回写任务全局），种族比武不传；`click_fn` 供种族比武
+  注入坐标夹取点击。
+- ✅ `relocate_to_claim_spot(win, *, prefix, map_name, open_map_fn,
+  close_map_fn, arrival_fn, timeout)`：已下沉 `claim_flow`。共享
+  「战斗跳过 → 开图 → 关图 → 1s 启动等待 → 2s 轮询」骨架；到达判据由
+  任务注入 `arrival_fn(win, img, frame, pos)`，每轮询仍只截一帧
+  （img 给对话框判定、frame 给模板匹配、pos 同帧 OCR）。五倍/修罗保留
+  `_close_claim_map_before_arrival`（自动对话框保留地图），种族比武用
+  `game_map.close_maps` 包装。
+- ⏳ `click_entry_ensuring_dialog(...)`：**仍待做**（中风险）：先抽
+  「等待入口 → 点击 → 等对话框 → 重定位 → 再等」的重试骨架，任务用
+  回调提供入口等待、点击函数、到达判据、队伍警告、清屏和返回值适配。
+  此步建议单独提交并逐任务实机回归。
+
+2026-11-18 批次 2 前两项实施后：任务侧只保留同名薄包装
+（`_open_claim_map` / `_relocate_to_claim_spot`）与到达判据
+（`_relocate_arrival`），全量单测 1287 passed。**三任务实机回归尚未跑**
+（重点：跨图误命中、返程加载、自动对话框保留地图、种族比武坐标夹取）。
 
 ### 批次 3：不合并
 

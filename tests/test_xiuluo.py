@@ -7,6 +7,7 @@
 - 对话框持续存在也只点一次（防重复点击误点世界走位），超时取消
 - 无对话框遮挡的普通漏检：只等待超时，不点击
 """
+import numpy as np
 import pytest
 from PIL import Image
 
@@ -1269,3 +1270,98 @@ def test_follow_to_done_wires_battle_end_handler(monkeypatch):
     assert captured["battle_end_handler"] is xiuluo._on_battle_end
     assert xiuluo._fight_via_kanda is False
     assert xiuluo._battle_failed_reason is None
+
+
+# ---- claim_flow 批次 2 包装接线与到达判据（2026-11-18）----
+
+def test_claim_flow_open_map_wiring(monkeypatch):
+    """包装必须把灵兽村参数与筛选状态回调原样传给共享实现。"""
+    captured = {}
+    win = _FakeWin()
+
+    def fake(win, pos=None, **kwargs):
+        captured["win"], captured["pos"] = win, pos
+        captured.update(kwargs)
+        return True, "ok"
+
+    monkeypatch.setattr(claim_flow, "open_claim_map", fake)
+    assert xiuluo._open_claim_map(win, ("灵兽村", 1, 2)) == (True, "ok")
+    assert captured["win"] is win
+    assert captured["pos"] == ("灵兽村", 1, 2)
+    assert captured["map_name"] == xiuluo.LINGSHOUCUN
+    assert captured["world_icon"] == xiuluo.WORLD_MAP_LINGSHOUCUN_ICON
+    assert captured["map_pos"] == xiuluo.LINGSHOU_MAP_POS
+    assert captured["prefix"] == "[修罗]"
+    assert captured["on_filter_state"] is xiuluo._set_claim_task_filter
+
+
+def test_claim_flow_set_filter_state_writes_global(monkeypatch):
+    monkeypatch.setattr(xiuluo, "_claim_task_filter_on", True)
+    xiuluo._set_claim_task_filter(False)
+    assert xiuluo._claim_task_filter_on is False
+
+
+def test_claim_flow_relocate_wiring(monkeypatch):
+    captured = {}
+    win = _FakeWin()
+
+    def fake(win, **kwargs):
+        captured["win"] = win
+        captured.update(kwargs)
+        return True, "ok"
+
+    monkeypatch.setattr(claim_flow, "relocate_to_claim_spot", fake)
+    assert xiuluo._relocate_to_claim_spot(win) == (True, "ok")
+    assert captured["win"] is win
+    assert captured["map_name"] == xiuluo.LINGSHOUCUN
+    assert captured["open_map_fn"] is xiuluo._open_claim_map
+    assert captured["close_map_fn"] is xiuluo._close_claim_map_before_arrival
+    assert captured["arrival_fn"] is xiuluo._relocate_arrival
+    assert captured["timeout"] == xiuluo.CLAIM_ARRIVE_TIMEOUT
+
+
+def test_relocate_arrival_button_requires_map_gate(monkeypatch):
+    """长安命中领取按钮模板：不得判到达。"""
+    monkeypatch.setattr(xiuluo, "_claim_task_filter_on", False)
+    monkeypatch.setattr(xiuluo.game_map, "match_frame_np", lambda *a, **k: (300, 300))
+    monkeypatch.setattr(xiuluo, "_near_claim_spot", lambda pos, tol: False)
+    img = np.zeros((831, 1378, 3), np.uint8)
+    assert xiuluo._relocate_arrival(
+        None, img, img, ("长安", 367, 27)) is None
+
+
+def test_relocate_arrival_button_in_map(monkeypatch):
+    monkeypatch.setattr(xiuluo, "_claim_task_filter_on", False)
+    monkeypatch.setattr(xiuluo.game_map, "match_frame_np", lambda *a, **k: (300, 300))
+    monkeypatch.setattr(xiuluo, "_near_claim_spot", lambda pos, tol: False)
+    img = np.zeros((831, 1378, 3), np.uint8)
+    desc = xiuluo._relocate_arrival(None, img, img, ("灵兽村", 60, 60))
+    assert desc and "领取按钮可见" in desc
+
+
+def test_relocate_arrival_filter_false_skips_dialog_ocr(monkeypatch):
+    ocr = []
+    monkeypatch.setattr(xiuluo, "_claim_task_filter_on", False)
+    monkeypatch.setattr(xiuluo.game_map, "match_frame_np", lambda *a, **k: None)
+    monkeypatch.setattr(xiuluo, "_near_claim_spot", lambda pos, tol: False)
+    monkeypatch.setattr(xiuluo, "dialog_frame_score", lambda img: 0.99)
+    monkeypatch.setattr(xiuluo.game_map, "ocr_region",
+                        lambda img, region: ocr.append(1) or ([], None))
+    img = np.zeros((831, 1378, 3), np.uint8)
+    assert xiuluo._relocate_arrival(
+        None, img, img, ("灵兽村", 60, 60)) is None
+    assert ocr == []
+
+
+def test_relocate_arrival_filter_none_still_checks_dialog(monkeypatch):
+    monkeypatch.setattr(xiuluo, "_claim_task_filter_on", None)
+    monkeypatch.setattr(xiuluo.game_map, "match_frame_np", lambda *a, **k: None)
+    monkeypatch.setattr(xiuluo, "_near_claim_spot", lambda pos, tol: False)
+    monkeypatch.setattr(xiuluo, "dialog_frame_score", lambda img: 0.99)
+    monkeypatch.setattr(xiuluo.game_map, "ocr_region",
+                        lambda img, region: ([], None))
+    monkeypatch.setattr(xiuluo, "_find_claim_option",
+                        lambda items, img_np: (1, 2, "选项", False))
+    img = np.zeros((831, 1378, 3), np.uint8)
+    desc = xiuluo._relocate_arrival(None, img, img, ("灵兽村", 60, 60))
+    assert desc and "自动弹出" in desc

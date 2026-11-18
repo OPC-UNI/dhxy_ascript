@@ -1309,3 +1309,108 @@ def test_team_flow_injects_kick_away_settings(monkeypatch):
     wubei._team_flow.check_team_ready(object())
     assert calls["kick_overdue"] is True     # 首次默认开启
     assert calls["kick_timeout"] == 300      # 首次默认 5 分钟
+
+
+# ---- claim_flow 批次 2 包装接线与到达判据（2026-11-18）----
+
+def test_claim_flow_open_map_wiring(monkeypatch):
+    """包装必须把宝象国参数与筛选状态回调原样传给共享实现。"""
+    captured = {}
+    win = _FakeWin()
+
+    def fake(win, pos=None, **kwargs):
+        captured["win"], captured["pos"] = win, pos
+        captured.update(kwargs)
+        return True, "ok"
+
+    monkeypatch.setattr(wubei.claim_flow, "open_claim_map", fake)
+    assert wubei._open_claim_map(win, ("宝象国", 1, 2)) == (True, "ok")
+    assert captured["win"] is win
+    assert captured["pos"] == ("宝象国", 1, 2)
+    assert captured["map_name"] == wubei.BAOXIANGGUO
+    assert captured["world_icon"] == wubei.WORLD_MAP_BAOXIANGGUO_ICON
+    assert captured["map_pos"] == wubei.BAOXIANG_MAP_POS
+    assert captured["prefix"] == "[五倍]"
+    assert captured["on_filter_state"] is wubei._set_claim_task_filter
+
+
+def test_claim_flow_set_filter_state_writes_global(monkeypatch):
+    monkeypatch.setattr(wubei, "_claim_task_filter_on", True)
+    wubei._set_claim_task_filter(None)
+    assert wubei._claim_task_filter_on is None
+
+
+def test_claim_flow_relocate_wiring(monkeypatch):
+    captured = {}
+    win = _FakeWin()
+
+    def fake(win, **kwargs):
+        captured["win"] = win
+        captured.update(kwargs)
+        return True, "ok"
+
+    monkeypatch.setattr(wubei.claim_flow, "relocate_to_claim_spot", fake)
+    assert wubei._relocate_to_claim_spot(win) == (True, "ok")
+    assert captured["win"] is win
+    assert captured["map_name"] == wubei.BAOXIANGGUO
+    assert captured["open_map_fn"] is wubei._open_claim_map
+    assert captured["close_map_fn"] is wubei._close_claim_map_before_arrival
+    assert captured["arrival_fn"] is wubei._relocate_arrival
+    assert captured["timeout"] == wubei.CLAIM_ARRIVE_TIMEOUT
+
+
+def test_relocate_arrival_button_requires_map_gate(monkeypatch):
+    """长安命中领取按钮模板（跨图同图）：不得判到达。"""
+    monkeypatch.setattr(wubei, "_claim_task_filter_on", False)
+    monkeypatch.setattr(wubei.game_map, "match_frame_np",
+                        lambda frame, icon, **k: (300, 300)
+                        if icon == wubei.LINGQU_ICON else None)
+    monkeypatch.setattr(wubei, "_near_walk_target_spot", lambda pos: False)
+    monkeypatch.setattr(wubei, "_near_xiangmoshiwei_spot", lambda pos: False)
+    img = np.zeros((831, 1378, 3), np.uint8)
+    assert wubei._relocate_arrival(
+        None, img, img, ("长安", 367, 27)) is None
+
+
+def test_relocate_arrival_button_in_map(monkeypatch):
+    monkeypatch.setattr(wubei, "_claim_task_filter_on", False)
+    monkeypatch.setattr(wubei.game_map, "match_frame_np",
+                        lambda frame, icon, **k: (300, 300)
+                        if icon == wubei.LINGQU_ICON else None)
+    monkeypatch.setattr(wubei, "_near_walk_target_spot", lambda pos: False)
+    monkeypatch.setattr(wubei, "_near_xiangmoshiwei_spot", lambda pos: False)
+    img = np.zeros((831, 1378, 3), np.uint8)
+    desc = wubei._relocate_arrival(None, img, img, ("宝象国", 60, 60))
+    assert desc and "领取按钮可见" in desc
+
+
+def test_relocate_arrival_filter_false_skips_dialog_ocr(monkeypatch):
+    """小地图「任务」筛选未勾选（False）：不做自动对话框 OCR。"""
+    ocr = []
+    monkeypatch.setattr(wubei, "_claim_task_filter_on", False)
+    monkeypatch.setattr(wubei.game_map, "match_frame_np", lambda *a, **k: None)
+    monkeypatch.setattr(wubei, "_near_walk_target_spot", lambda pos: False)
+    monkeypatch.setattr(wubei, "_near_xiangmoshiwei_spot", lambda pos: False)
+    monkeypatch.setattr(wubei, "dialog_frame_score", lambda img: 0.99)
+    monkeypatch.setattr(wubei.game_map, "ocr_region",
+                        lambda img, region: ocr.append(1) or ([], None))
+    img = np.zeros((831, 1378, 3), np.uint8)
+    assert wubei._relocate_arrival(
+        None, img, img, ("宝象国", 60, 60)) is None
+    assert ocr == []
+
+
+def test_relocate_arrival_filter_none_still_checks_dialog(monkeypatch):
+    """筛选状态未知（None）仍做门控检查（仅 False 才跳过）。"""
+    monkeypatch.setattr(wubei, "_claim_task_filter_on", None)
+    monkeypatch.setattr(wubei.game_map, "match_frame_np", lambda *a, **k: None)
+    monkeypatch.setattr(wubei, "_near_walk_target_spot", lambda pos: False)
+    monkeypatch.setattr(wubei, "_near_xiangmoshiwei_spot", lambda pos: False)
+    monkeypatch.setattr(wubei, "dialog_frame_score", lambda img: 0.99)
+    monkeypatch.setattr(wubei.game_map, "ocr_region",
+                        lambda img, region: ([], None))
+    monkeypatch.setattr(wubei, "_find_claim_option",
+                        lambda items, img_np: (1, 2, "选项", False))
+    img = np.zeros((831, 1378, 3), np.uint8)
+    desc = wubei._relocate_arrival(None, img, img, ("宝象国", 60, 60))
+    assert desc and "自动弹出" in desc

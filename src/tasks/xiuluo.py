@@ -981,58 +981,28 @@ def _handle_team_confirm(win, items, img_np):
     return "accepted"
 
 
+def _set_claim_task_filter(state):
+    """小地图「任务」筛选状态回写（claim_flow.open_claim_map 回调）。"""
+    global _claim_task_filter_on
+    _claim_task_filter_on = state
+
+
 def _open_claim_map(win, pos=None):
-    """地图感知导航到灵兽村领取点（世界地图/小地图自动选择）。
+    """地图感知导航到灵兽村领取点（共享实现在 workflows/claim_flow.py）。
 
     位置读为灵兽村 → 直接打开小地图；其他地图（如五倍返程落点的
-    宝象国）或位置不可读 → 世界地图点击灵兽村图标。随后点击小地图
-    领取点坐标寻路。返回 (是否成功, 描述)。
-
-    领取按钮模板与五倍宝象国领取按钮同图（跨模板匹配 0.947），不在
-    灵兽村时直接开小地图点坐标会在别的图乱走（2026-10-23 五倍反向
-    实测：灵兽村小地图点宝象国坐标，人物跨图乱走）。
+    宝象国）或位置不可读 → 世界地图点击灵兽村图标，再点小地图领取点
+    坐标。同时读取并记录小地图「任务」筛选状态（决定到达时是否检查
+    自动弹出的领取对话框）。返回 (是否成功, 描述)。
 
     pos：调用方刚读到的位置（同帧复用，免重截+重 OCR——_walk_to_claim_spot
     决策帧已读过）；None 时自行截帧读取。
     """
-    img = win.capture(force_activate=False)
-    if img is None:
-        return False, "截图失败"
-    if is_in_battle_frame(img):
-        return False, "战斗中，跳过地图导航"
-    if pos is None:
-        pos = game_map.read_map_position(win, img=img)
-    if pos is not None and pos[0].strip() == LINGSHOUCUN:
-        ok, info = game_map.open_mini_map(win)
-        if not ok:
-            return False, info
-    else:
-        if pos is not None:
-            log(f"[修罗] 不在灵兽村（{pos[0].strip()}[{pos[1]},{pos[2]}]），"
-                f"经世界地图前往灵兽村", "SYS")
-        ok, info = game_map.open_mini_map_city(win, WORLD_MAP_LINGSHOUCUN_ICON,
-                                               LINGSHOUCUN)
-        if not ok:
-            return False, info
-    # 记录小地图「任务」筛选状态（用户 2026-11-16）：仅勾选时小地图
-    # 走位到达可能自动弹领取对话框；未勾选则不做自动对话框检查。
-    # 模板匹配勾选框（跨场景通用，~10ms），地图窗口此刻仍打开。
-    global _claim_task_filter_on
-    state = game_map.minimap_task_filter_state(win)
-    _claim_task_filter_on = state
-    if state is True:
-        log("[修罗] 小地图「任务」筛选已勾选（到达可能自动弹领取对话框）",
-            "INFO")
-    elif state is False:
-        log("[修罗] 小地图「任务」筛选未勾选（跳过自动对话框检查）", "INFO")
-    else:
-        log("[修罗] 小地图「任务」筛选状态未知（仍做门控检查）", "INFO")
-    # 小地图窗口位置固定（用户 2026-11-16 规则）→ 直接点绝对坐标，
-    # 不做锚点相对换算（关闭按钮所在面板宽度随状态变化，锚点不是稳定
-    # 的内容参照，实机 19:04 五倍侧实测锚点漂移导致相对点击整体偏移）
-    human_click(win, LINGSHOU_MAP_POS[0], LINGSHOU_MAP_POS[1])
-    log(f"[修罗] 已点击灵兽村小地图领取点位置 {LINGSHOU_MAP_POS}", "SYS")
-    return True, "已点击灵兽村小地图领取点位置"
+    return claim_flow.open_claim_map(
+        win, pos, map_name=LINGSHOUCUN,
+        world_icon=WORLD_MAP_LINGSHOUCUN_ICON,
+        map_pos=LINGSHOU_MAP_POS, prefix="[修罗]",
+        on_filter_state=_set_claim_task_filter)
 
 
 def _close_claim_map_before_arrival(win):
@@ -1222,55 +1192,40 @@ def _walk_to_claim_spot(win, just_returned=False):
     return False, f"寻路到领取点超时（未到达灵兽村 {CLAIM_SPOT[0]},{CLAIM_SPOT[1]} 附近）"
 
 
+def _relocate_arrival(win, img, frame, pos):
+    """重走领取点的到达判据（任务专属信号，供 claim_flow 轮询注入）。
+
+    每轮询只截一帧：img 为 PIL 帧（自动对话框判定）、frame 为 BGR 帧
+    （领取按钮模板匹配）、pos 为同帧地图位置。返回描述或 None。
+    """
+    # 按钮判据同 _walk_to_claim_spot：须地图名门控（跨图误命中）
+    if _in_claim_map(pos) \
+            and game_map.match_frame_np(frame, LINGQU_ICON) is not None:
+        return "已重走到领取点附近（领取按钮可见）"
+    if _near_claim_spot(pos, WALK_ARRIVE_TOLERANCE):
+        return "已重走到领取点附近"
+    # 同 _walk_to_claim_spot：到达自动弹出领取对话框即按到达处理
+    if _claim_task_filter_on is not False \
+            and dialog_frame_score(img) >= DIALOG_FRAME_THRESHOLD:
+        items_d, img_np_d = game_map.ocr_region(
+            img, task_tracker.DIALOG_REGION)
+        if _find_claim_option(items_d, img_np_d) is not None:
+            return "已重走到领取点附近（领取对话框已自动弹出）"
+    return None
+
+
 def _relocate_to_claim_spot(win):
     """小地图点击领取点坐标重新寻路（领取校验兜底，用户 2026-10-09）。
 
     领取已点但任务追踪未出现时调用：重走一次领取点坐标可能触发任务
-    渲染。与 _walk_to_claim_spot 的区别：不判断是否已在领取点附近
-    （通常在领取点原地重走，几秒即回），但同样走地图感知导航
-    （_open_claim_map：不在灵兽村时先经世界地图）。返回 (是否成功, 描述)。
+    渲染。循环骨架与关地图/轮询共享在 claim_flow，到达判据由
+    _relocate_arrival 注入。返回 (是否成功, 描述)。
     """
-    if is_in_battle(win):
-        return False, "战斗中，跳过重走"
-    ok, info = _open_claim_map(win)
-    if not ok:
-        return False, info
-    log("[修罗] 已点击灵兽村小地图领取点位置，重新寻路（领取校验兜底）", "SYS")
-    time.sleep(1.0)
-    # 同 _walk_to_claim_spot：模态任务对话框会拦住关地图点击，命中则
-    # 保留地图直接按到达处理（选项点掉后由 _claim_task 补关）
-    if _close_claim_map_before_arrival(win):
-        return True, "已重走到领取点附近（任务对话框已自动弹出）"
-    deadline = time.time() + CLAIM_ARRIVE_TIMEOUT
-    polls = 0
-    while time.time() < deadline:
-        img = win.capture(force_activate=False)
-        if img is None:
-            time.sleep(2.0)
-            continue
-        if is_in_battle_frame(img):
-            time.sleep(2.0)
-            continue
-        frame = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
-        pos = game_map.read_map_position(win, img=img)  # 同帧复用
-        # 按钮判据同 _walk_to_claim_spot：须地图名门控（跨图误命中）
-        if _in_claim_map(pos) \
-                and game_map.match_frame_np(frame, LINGQU_ICON) is not None:
-            return True, "已重走到领取点附近（领取按钮可见）"
-        if _near_claim_spot(pos, WALK_ARRIVE_TOLERANCE):
-            return True, "已重走到领取点附近"
-        # 同 _walk_to_claim_spot：到达自动弹出领取对话框即按到达处理
-        if _claim_task_filter_on is not False \
-                and dialog_frame_score(img) >= DIALOG_FRAME_THRESHOLD:
-            items_d, img_np_d = game_map.ocr_region(
-                img, task_tracker.DIALOG_REGION)
-            if _find_claim_option(items_d, img_np_d) is not None:
-                return True, "已重走到领取点附近（领取对话框已自动弹出）"
-        polls += 1
-        if polls % 5 == 0:
-            log(f"[修罗] 重走领取点中... 当前位置: {pos or '识别失败'}", "INFO")
-        time.sleep(2.0)
-    return False, "重走领取点超时"
+    return claim_flow.relocate_to_claim_spot(
+        win, prefix="[修罗]", map_name=LINGSHOUCUN,
+        open_map_fn=_open_claim_map,
+        close_map_fn=_close_claim_map_before_arrival,
+        arrival_fn=_relocate_arrival, timeout=CLAIM_ARRIVE_TIMEOUT)
 
 
 def _click_entry_ensuring_dialog(win, log_tag="[修罗]", hover_before_click=False,

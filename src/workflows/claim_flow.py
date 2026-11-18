@@ -1,19 +1,20 @@
-"""领取/走位共享流程（批次 1：低风险部分）。
+"""领取/走位共享流程。
 
-只收敛逐行同构或仅配置不同的部分：任务状态判定、领取选项查找/点击、
-领取点地图门控、校验等待与探针、follow 收尾参数封装。入口门控
-（`_wait_claim_entry`）、走位到达模型（`_walk_to_claim_spot`）与
-`_claim_task` 的任务专属分支仍留在 tasks/。
+收敛逐行同构或仅配置不同的部分：任务状态判定、领取选项查找/点击、
+领取点地图门控、校验等待与探针、地图感知导航/重走领取点、follow 收尾
+参数封装。入口门控（`_wait_claim_entry`）、走位到达模型
+（`_walk_to_claim_spot`）与 `_claim_task` 的任务专属分支仍留在 tasks/。
 """
 import time
 
+import cv2
 import numpy as np
 
 from ..core import app_utils
 from ..core.app_utils import human_click, log, move_away, norm_text
 from ..device import map as game_map
 from ..device import task_tracker
-from ..device.battle import is_in_battle_frame
+from ..device.battle import is_in_battle, is_in_battle_frame
 from ..device.dialog_common import (DIALOG_FRAME_THRESHOLD,
                                     dialog_frame_score,
                                     green_option_center)
@@ -146,6 +147,123 @@ def near_claim_spot(pos, map_name, spot, tolerance):
         return False
     return game_map.is_at_position(
         pos, map_name, spot[0], spot[1], tolerance)
+
+
+def open_claim_map(win, pos=None, *, map_name, world_icon, map_pos, prefix,
+                   on_filter_state=None, click_fn=None):
+    """地图感知导航到领取地图的小地图领取点（世界地图/小地图自动选择）。
+
+    位置读为 map_name → 直接打开小地图；其他地图或位置不可读 → 世界
+    地图点击地图图标。随后点击小地图领取点坐标寻路。
+
+    pos：调用方刚读到的位置（同帧复用，省一次位置 OCR；战斗判定仍需
+    本函数截一帧）；None 时自行截帧读取。
+
+    on_filter_state：读取小地图「任务」筛选状态后回调 True/False/None
+    （五倍/修罗据此决定到达时是否检查自动弹出的领取对话框）；不传则
+    不读取（种族比武无自动对话框路径）。
+
+    click_fn：小地图点击实现（如种族比武的坐标夹取）；None 时直接按
+    map_pos 绝对坐标点击。
+    """
+    img = win.capture(force_activate=False)
+    if img is None:
+        return False, "截图失败"
+    if is_in_battle_frame(img):
+        return False, "战斗中，跳过地图导航"
+    if pos is None:
+        pos = game_map.read_map_position(win, img=img)
+    if pos is not None and pos[0].strip() == map_name:
+        ok, info = game_map.open_mini_map(win)
+        if not ok:
+            return False, info
+    else:
+        if pos is not None:
+            log(f"{prefix} 不在{map_name}"
+                f"（{pos[0].strip()}[{pos[1]},{pos[2]}]），"
+                f"经世界地图前往{map_name}", "SYS")
+        ok, info = game_map.open_mini_map_city(win, world_icon, map_name)
+        if not ok:
+            return False, info
+    if on_filter_state is not None:
+        # 记录小地图「任务」筛选状态（用户 2026-11-16）：仅勾选时小地图
+        # 走位到达可能自动弹领取对话框；未勾选则不做自动对话框检查。
+        # 模板匹配勾选框（跨场景通用，~10ms），地图窗口此刻仍打开。
+        state = game_map.minimap_task_filter_state(win)
+        on_filter_state(state)
+        if state is True:
+            log(f"{prefix} 小地图「任务」筛选已勾选"
+                f"（到达可能自动弹领取对话框）", "INFO")
+        elif state is False:
+            log(f"{prefix} 小地图「任务」筛选未勾选"
+                f"（跳过自动对话框检查）", "INFO")
+        else:
+            log(f"{prefix} 小地图「任务」筛选状态未知（仍做门控检查）",
+                "INFO")
+    # 小地图窗口位置固定（用户 2026-11-16 规则：即使被拖走，下次打开也
+    # 会恢复到默认位置）→ 直接点绝对坐标，不做锚点相对换算（关闭按钮
+    # 所在面板宽度随状态变化，锚点不是稳定的内容参照，实机 19:04 实测
+    # 锚点从 (1030,217) 漂到 (1011,229)，相对点击会整体偏移）。
+    if click_fn is not None:
+        # 自定义点击实现自行负责点击日志（如种族比武坐标夹取会打印实际
+        # 点击点）；共享层不再重复打印未夹取的原始坐标，避免两份真相。
+        click_fn(win)
+    else:
+        human_click(win, map_pos[0], map_pos[1])
+        log(f"{prefix} 已点击{map_name}小地图领取点位置 {map_pos}", "SYS")
+    return True, f"已点击{map_name}小地图领取点位置"
+
+
+# 重走领取点：点击后等待自动寻路启动，再按 2s 轮询等待到达信号。
+RELOCATE_START_WAIT = 1.0
+RELOCATE_POLL_INTERVAL = 2.0
+
+
+def relocate_to_claim_spot(win, *, prefix, map_name, open_map_fn, close_map_fn,
+                           arrival_fn, timeout):
+    """小地图点击领取点坐标重新寻路（领取校验兜底）。
+
+    共享循环骨架：战斗中跳过 → 地图感知导航 → 关地图（close_map_fn
+    返回 True 表示领取对话框已自动弹出、地图被模态保留，直接按到达
+    处理）→ 轮询等待到达。到达判据由任务注入：
+    arrival_fn(win, img, frame, pos) -> 描述或 None，命中即按到达返回。
+
+    每轮询只截一帧：img 为 PIL 帧（对话框判定用）、frame 为 BGR 帧
+    （模板匹配用）、pos 为同帧地图位置（OCR 同帧复用）。
+    """
+    if is_in_battle(win):
+        return False, "战斗中，跳过重走"
+    ok, info = open_map_fn(win)
+    if not ok:
+        return False, info
+    log(f"{prefix} 已点击{map_name}小地图领取点位置，"
+        f"重新寻路（领取校验兜底）", "SYS")
+    time.sleep(RELOCATE_START_WAIT)
+    # 模态领取对话框会拦住关地图点击，命中则保留地图直接按到达处理
+    # （选项点掉后由任务侧 _claim_task 补关）。
+    if close_map_fn(win):
+        return True, "已重走到领取点附近（领取对话框已自动弹出）"
+    deadline = time.time() + timeout
+    polls = 0
+    while time.time() < deadline:
+        img = win.capture(force_activate=False)
+        if img is None:
+            time.sleep(RELOCATE_POLL_INTERVAL)
+            continue
+        if is_in_battle_frame(img):
+            time.sleep(RELOCATE_POLL_INTERVAL)
+            continue
+        frame = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
+        pos = game_map.read_map_position(win, img=img)  # 同帧复用
+        desc = arrival_fn(win, img, frame, pos)
+        if desc:
+            return True, desc
+        polls += 1
+        if polls % 5 == 0:
+            log(f"{prefix} 重走领取点中... 当前位置: {pos or '识别失败'}",
+                "INFO")
+        time.sleep(RELOCATE_POLL_INTERVAL)
+    return False, "重走领取点超时"
 
 
 def follow_to_done(win, first_items=None, *, title, prefix,

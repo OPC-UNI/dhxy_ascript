@@ -333,33 +333,19 @@ def _click_claim_map_pos(win):
 
 
 def _open_claim_map(win, pos=None):
-    """地图感知导航到长安领取点（世界地图/小地图自动选择）。
+    """地图感知导航到长安领取点（共享实现在 workflows/claim_flow.py）。
 
     位置读为长安 → 直接打开小地图；其他地图或位置不可读 → 世界地图
-    点击长安图标。随后点击小地图领取点坐标寻路。
+    点击长安图标，再点小地图领取点坐标（坐标超出窗口时由
+    _click_claim_map_pos 夹取）。返回 (是否成功, 描述)。
+
     pos：调用方刚读到的位置（同帧复用，免重截+重 OCR）。
     """
-    img = win.capture(force_activate=False)
-    if img is None:
-        return False, "截图失败"
-    if is_in_battle_frame(img):
-        return False, "战斗中，跳过地图导航"
-    if pos is None:
-        pos = game_map.read_map_position(win, img=img)
-    if pos is not None and pos[0].strip() == CHANGAN:
-        ok, info = game_map.open_mini_map(win)
-        if not ok:
-            return False, info
-    else:
-        if pos is not None:
-            log(f"[种族比武] 不在长安（{pos[0].strip()}[{pos[1]},{pos[2]}]），"
-                f"经世界地图前往长安", "SYS")
-        ok, info = game_map.open_mini_map_city(
-            win, game_map.WORLD_MAP_CHANGAN_ICON, CHANGAN)
-        if not ok:
-            return False, info
-    _click_claim_map_pos(win)
-    return True, "已点击长安小地图领取点位置"
+    return claim_flow.open_claim_map(
+        win, pos, map_name=CHANGAN,
+        world_icon=game_map.WORLD_MAP_CHANGAN_ICON,
+        map_pos=CLAIM_MAP_POS, prefix="[种族比武]",
+        click_fn=_click_claim_map_pos)
 
 
 def _walk_to_claim_spot(win):
@@ -444,40 +430,39 @@ def _walk_to_claim_spot(win):
                    f"{CLAIM_SPOT[0]},{CLAIM_SPOT[1]} 附近）")
 
 
+def _close_maps_after_walk(win):
+    """走位后关地图（种族比武无自动对话框路径）。返回是否保留地图。"""
+    game_map.close_maps(win)
+    return False
+
+
+def _relocate_arrival(win, img, frame, pos):
+    """重走领取点的到达判据（任务专属信号，供 claim_flow 轮询注入）。
+
+    每轮询只截一帧：frame 为 BGR 帧（领取 NPC 模板匹配）、pos 为同帧
+    地图位置。返回描述或 None。
+    """
+    if _in_claim_map(pos) \
+            and _find_claim_npc_np(frame) is not None:
+        return "已重走到领取点附近（领取 NPC 可见）"
+    if _near_claim_spot(pos, WALK_ARRIVE_TOLERANCE):
+        return "已重走到领取点附近"
+    return None
+
+
 def _relocate_to_claim_spot(win):
-    """小地图点击领取点坐标重新寻路（领取校验兜底）。"""
+    """小地图点击领取点坐标重新寻路（领取校验兜底）。
+
+    循环骨架与关地图/轮询共享在 claim_flow，到达判据由 _relocate_arrival
+    注入。返回 (是否成功, 描述)。
+    """
     if not _claim_configured():
         return False, CLAIM_UNCONFIGURED_INFO
-    if is_in_battle(win):
-        return False, "战斗中，跳过重走"
-    ok, info = _open_claim_map(win)
-    if not ok:
-        return False, info
-    log("[种族比武] 已点击长安小地图领取点位置，重新寻路（领取校验兜底）", "SYS")
-    time.sleep(1.0)
-    game_map.close_maps(win)
-    deadline = time.time() + CLAIM_ARRIVE_TIMEOUT
-    polls = 0
-    while time.time() < deadline:
-        img = win.capture(force_activate=False)
-        if img is None:
-            time.sleep(2.0)
-            continue
-        if is_in_battle_frame(img):
-            time.sleep(2.0)
-            continue
-        frame = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
-        pos = game_map.read_map_position(win, img=img)
-        if _in_claim_map(pos) \
-                and _find_claim_npc_np(frame) is not None:
-            return True, "已重走到领取点附近（领取 NPC 可见）"
-        if _near_claim_spot(pos, WALK_ARRIVE_TOLERANCE):
-            return True, "已重走到领取点附近"
-        polls += 1
-        if polls % 5 == 0:
-            log(f"[种族比武] 重走领取点中... 当前位置: {pos or '识别失败'}", "INFO")
-        time.sleep(2.0)
-    return False, "重走领取点超时"
+    return claim_flow.relocate_to_claim_spot(
+        win, prefix="[种族比武]", map_name=CHANGAN,
+        open_map_fn=_open_claim_map,
+        close_map_fn=_close_maps_after_walk,
+        arrival_fn=_relocate_arrival, timeout=CLAIM_ARRIVE_TIMEOUT)
 
 
 def _wait_claim_entry(win, timeout):
