@@ -6,9 +6,9 @@
 
 五环 · 客栈 · 修罗 · 五倍 · 玄枢轶闻 · 名望 —— 点一下，整晚不用管。
 
-[![Release](https://img.shields.io/github/v/release/OPC-UNI/dhxy_ascript?color=2ea44f&label=release&sort=semver)](https://github.com/OPC-UNI/dhxy_ascript/releases) [![CI](https://img.shields.io/github/actions/workflow/status/OPC-UNI/dhxy_ascript/ci.yml?branch=main&label=CI&logo=github)](https://github.com/OPC-UNI/dhxy_ascript/actions/workflows/ci.yml) [![Platform](https://img.shields.io/badge/platform-Windows%2010%2B-0078D4?logo=windows&logoColor=white)](#运行要求) [![Python](https://img.shields.io/badge/python-3.9%2B-3776AB?logo=python&logoColor=white)](#-快速开始) [![License](https://img.shields.io/badge/license-MIT-blue)](#-许可证) [![Telegram](https://img.shields.io/badge/Telegram-加入玩家群-26A5E4?logo=telegram&logoColor=white)](https://t.me/+C3QW9-lobKAyZDQx)
+[![Release](https://img.shields.io/github/v/release/OPC-UNI/dhxy_ascript?color=2ea44f&label=release&sort=semver)](https://github.com/OPC-UNI/dhxy_ascript/releases) [![CI](https://img.shields.io/github/actions/workflow/status/OPC-UNI/dhxy_ascript/ci.yml?branch=main&label=CI&logo=github)](https://github.com/OPC-UNI/dhxy_ascript/actions/workflows/ci.yml) [![Platform](https://img.shields.io/badge/platform-Windows%2010%2B-0078D4?logo=windows&logoColor=white)](#运行要求) [![Python](https://img.shields.io/badge/python-3.9%2B-3776AB?logo=python&logoColor=white)](#-快速开始) [![License](https://img.shields.io/badge/license-MIT-blue)](#-许可证) [![Telegram](https://img.shields.io/badge/Telegram-关注频道-26A5E4?logo=telegram&logoColor=white)](https://t.me/zhuomuniaonew_channel)
 
-[快速开始](#-快速开始) · [功能一览](#-功能一览) · [界面预览](#-界面预览) · [Telegram](#-telegram-玩家群与消息服务) · [文档导航](#-文档导航) · [路线图](#-路线图)
+[快速开始](#-快速开始) · [功能一览](#-功能一览) · [界面预览](#-界面预览) · [Telegram](#-telegram-频道与消息服务) · [文档导航](#-文档导航) · [路线图](#-路线图)
 
 </div>
 
@@ -64,11 +64,10 @@
 - **配置方案**：多套方案一键切换，支持导入 / 导出、重命名与复制，方案 = 全部设置的快照。
 - **任务成就**：按角色隔离的累计轮次、战斗、运行时长与效率报表。
 - **诊断页**：回程 / 领取 / 巫医 / 清屏 / 喊话等链路一键验证，问题定位到具体环节。
-- **玩家群入口**：侧栏底部玩家群组图标，可扩展多群组，hover 提示「加入 xxx」。
 
 ### 🔔 消息服务（Telegram）
 
-侧边栏「消息」页配置 Bot Token / chat_id / 代理，一键分步验证通道。手机端可查询任务状态与日志、获取游戏窗口截图，并远程启停任务。完整指令见 [Telegram 玩家群与消息服务](#-telegram-玩家群与消息服务)。
+侧边栏「消息」页配置 Bot Token / chat_id / 代理，一键分步验证通道。手机端可查询任务状态与日志、获取游戏窗口截图，并远程启停任务。完整指令见 [Telegram 频道与消息服务](#-telegram-频道与消息服务)。
 
 ### 🔐 授权、多开与更新
 
@@ -124,17 +123,17 @@ python main.py
 3. **选择任务**——「任务」页点击卡片加入已选区，拖动「≡」手柄或用 ↑↓ 调整顺序，按需展开专属设置。
 4. **启动**——点顶栏「启动」或按 **F11**；「运行」看板实时显示任务进度、战斗与日志。
 
-## 📱 Telegram 玩家群与消息服务
+## 📱 Telegram 频道与消息服务
 
 <div align="center">
 
-<img src="assets/telegram-qr.jpg" width="200" alt="Telegram 玩家群二维码">
+<img src="assets/telegram-channel-qr.jpg" width="200" alt="Telegram 官方频道二维码">
 
-**扫码或点击链接加入玩家群**
+**扫码或点击链接关注官方频道**
 
-🔗 **<https://t.me/+C3QW9-lobKAyZDQx>**
+🔗 **<https://t.me/zhuomuniaonew_channel>**
 
-版本通知、问题反馈、使用交流都在这里。
+版本更新与发布通知第一时间在这里推送。
 
 </div>
 
@@ -215,8 +214,8 @@ dhxy2/
 - **版本号唯一来源**：[src/__init__.py](src/__init__.py) 的 `__version__`；发版打 `v*` tag，CI 自动把 tag 版本号烙进构建产物。新增功能上线须同步更新 README 功能列表。
 - **测试**：`python -m pytest tests/ -m "not slow"`；OCR 引擎烟测等慢测试用 `python -m pytest tests/ -m slow`。CI 每次 push / PR 自动运行。
 - **exe 打包**：GitHub Actions（[.github/workflows/build-exe.yml](.github/workflows/build-exe.yml)）手动触发或 `v*` tag 自动构建；zip = exe + res + pylibs，numpy / onnxruntime 随 pylibs 分发。
-- **发布流水线**：推送 `v*` tag → CI 单元测试门禁（复用 [ci.yml](.github/workflows/ci.yml)，不通过不构建）→ 构建并发布 GitHub Release / OSS → 成功后调用独立的 [notify-telegram.yml](.github/workflows/notify-telegram.yml) 把新版本与更新日志推送到 Telegram 群（可复用工作流；不附下载链接，统一引导面板「检查更新」升级）；CI 或构建失败即停止，通知失败不影响已发布版本。
-- **发布通知配置**：仓库 Secrets 配置 `TELEGRAM_BOT_TOKEN`（@BotFather 获取）与 `TELEGRAM_CHAT_ID`（群组 ID 为负数，机器人需已入群，可用 @userinfobot 或 `getUpdates` 获取）。未配置时构建照常发布，通知步骤打印警告后跳过。
+- **发布流水线**：推送 `v*` tag → CI 单元测试门禁（复用 [ci.yml](.github/workflows/ci.yml)，不通过不构建）→ 构建并发布 GitHub Release / OSS → 成功后调用独立的 [notify-telegram.yml](.github/workflows/notify-telegram.yml) 把新版本与更新日志推送到 Telegram 频道（可复用工作流；不附下载链接，统一引导面板「检查更新」升级）；CI 或构建失败即停止，通知失败不影响已发布版本。
+- **发布通知配置**：仓库 Secrets 配置 `TELEGRAM_BOT_TOKEN`（@BotFather 获取）与 `TELEGRAM_CHAT_ID`（频道 ID 为负数，机器人需设为频道管理员，可通过转发频道消息给 @userinfobot 或 `getUpdates` 获取）。未配置时构建照常发布，通知步骤打印警告后跳过。
 - **发版**：打 `v*` tag 时 CI 拆包（app / pylibs / 完整包）、生成并校验 `update.json`、上传阿里云 OSS；Secrets 需 `OSS_ACCESS_KEY_ID` / `OSS_ACCESS_KEY_SECRET`。设计见 [docs/auto-update-design.md](docs/auto-update-design.md)。
 - **日志**：双写工程目录 `logs/`（按日期）；排查任务问题先用诊断页按钮逐链路确认。
 - **代码规范**：提交前过 `tests/test_import_rules.py`；任务间禁止相互 import，通用能力下沉到 `bag` / `map` / `task_tracker` / `dialog_common` / `app_utils` 等工具模块。
