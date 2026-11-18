@@ -9,7 +9,7 @@
 import inspect
 import re
 
-from src.app import control_window
+from src.app import control_window, message_api
 from src.app.control_window import (BATTLE_ONLY_MODE, TASK_MODES, _sanitize_modes,
                                 _COUNT_KEYS, TASK_COUNT_DEFAULTS)
 
@@ -628,7 +628,7 @@ def test_message_shout_running_skips_tab_guard_and_notes(monkeypatch):
     """任务运行中也允许喊话：不切 Tab（防打断组号 pass），回复注明按当前 Tab。"""
     from src.device import silent_click, tab_group
     monkeypatch.setattr(control_window.game, "find_main_window", lambda: object())
-    monkeypatch.setattr(control_window, "_window_minimized", lambda win: False)
+    monkeypatch.setattr(message_api, "_window_minimized", lambda win: False)
     guard_calls = []
     monkeypatch.setattr(
         tab_group, "ensure_bound_tab",
@@ -652,7 +652,7 @@ def test_message_shout_stopped_uses_tab_guard(monkeypatch):
     """任务未运行：先切回绑定角色 Tab，正常回复不带运行中提示。"""
     from src.device import silent_click, tab_group
     monkeypatch.setattr(control_window.game, "find_main_window", lambda: object())
-    monkeypatch.setattr(control_window, "_window_minimized", lambda win: False)
+    monkeypatch.setattr(message_api, "_window_minimized", lambda win: False)
     guard_calls = []
     monkeypatch.setattr(
         tab_group, "ensure_bound_tab",
@@ -671,7 +671,7 @@ def test_message_shout_stopped_uses_tab_guard(monkeypatch):
 def test_message_shout_refused_when_minimized(monkeypatch):
     monkeypatch.setattr(control_window.game, "find_main_window",
                         lambda: object())
-    monkeypatch.setattr(control_window, "_window_minimized", lambda win: True)
+    monkeypatch.setattr(message_api, "_window_minimized", lambda win: True)
     result = control_window.ControlWindow._message_shout(
         _MessageCwStub(), "来人")
     assert result["ok"] is False
@@ -687,13 +687,13 @@ def test_message_disband_refused_when_task_running():
 
 def test_default_shout_text_follows_selected_modes(monkeypatch):
     stub = _MessageCwStub()
-    monkeypatch.setattr(control_window, "load_selected_modes",
+    monkeypatch.setattr(message_api, "load_selected_modes",
                         lambda: ["五环", "五倍"])
-    monkeypatch.setattr(control_window, "load_wubei_shout_text",
+    monkeypatch.setattr(message_api, "load_wubei_shout_text",
                         lambda: "百次五倍来人，效率队")
     assert control_window.ControlWindow._default_shout_text(stub) == \
         "百次五倍来人，效率队"
-    monkeypatch.setattr(control_window, "load_selected_modes", lambda: ["五环"])
+    monkeypatch.setattr(message_api, "load_selected_modes", lambda: ["五环"])
     assert control_window.ControlWindow._default_shout_text(stub) == ""
 
 
@@ -701,7 +701,7 @@ def test_message_disband_runs_guard_then_team_helper(monkeypatch):
     """解散队伍：先绑定 Tab 护栏，再走队长解散/队员离开；结果透传。"""
     from src.device import tab_group, team
     monkeypatch.setattr(control_window.game, "find_main_window", lambda: object())
-    monkeypatch.setattr(control_window, "_window_minimized", lambda win: False)
+    monkeypatch.setattr(message_api, "_window_minimized", lambda win: False)
     calls = []
     monkeypatch.setattr(
         tab_group, "ensure_bound_tab",
@@ -720,7 +720,7 @@ def test_message_shout_sends_truncated_silent_text(monkeypatch):
     from src.device import silent_click, tab_group
     from src.core import settings
     monkeypatch.setattr(control_window.game, "find_main_window", lambda: object())
-    monkeypatch.setattr(control_window, "_window_minimized", lambda win: False)
+    monkeypatch.setattr(message_api, "_window_minimized", lambda win: False)
     monkeypatch.setattr(tab_group, "ensure_bound_tab",
                         lambda win: (True, "已在绑定角色 Tab"))
     monkeypatch.setattr(control_window.app_utils, "silent_mode_on",
@@ -760,9 +760,9 @@ def test_diagnostics_methods_live_in_mixin():
                    if getattr(ControlWindow, n).__module__
                    != "src.app.diagnostics")
     assert wrong == []
-    # 消息服务验证不属于诊断页，仍留在控制窗口
+    # 消息服务验证不属于诊断页，归消息 API mixin
     assert ControlWindow.verify_message_channel.__module__ \
-        == "src.app.control_window"
+        == "src.app.message_api"
     # control_window 仍导出共用前置检查（队伍检查方法在用）
     assert control_window._game_window_clickable \
         is diagnostics._game_window_clickable
@@ -795,3 +795,37 @@ def test_moved_verify_methods_no_window_paths(monkeypatch):
     assert "未检测到游戏窗口" in team_result["msg"]
     assert host.verify_silent_key("bogus")["status"] == "error"
     assert host.verify_silent_click("bogus")["status"] == "error"
+
+
+def test_mixin_methods_resolve_without_shadowing():
+    """P3 拆分：四个 mixin 的每个方法在 ControlWindow 上原样解析（无遮蔽）。
+
+    callPython 名不变；任一同名方法被搬回 ControlWindow 类体或出现在
+    另一个 mixin，都会因 `is not` 失败（防止形成两份实现后只改一份）。
+    """
+    from src.app import diagnostics, message_api, scheme_api, settings_api
+
+    for cls in (diagnostics.DiagnosticsMixin, settings_api.SettingsApiMixin,
+                message_api.MessageApiMixin, scheme_api.SchemeApiMixin):
+        assert issubclass(control_window.ControlWindow, cls), cls.__name__
+        shadowed = sorted(
+            name for name, member in vars(cls).items()
+            if inspect.isfunction(member)
+            and getattr(control_window.ControlWindow, name) is not member)
+        assert shadowed == [], f"{cls.__name__} 方法被遮蔽: {shadowed}"
+    assert message_api._window_minimized.__module__ == "src.app.message_api"
+
+
+def test_scheme_import_confirm_without_pending():
+    """无待确认导入：返回错误并释放对话框忙标记（搬迁后烟测）。"""
+    from src.app import scheme_api
+
+    class _Host(scheme_api.SchemeApiMixin):
+        _pending_import = None
+        _scheme_dialog_busy = True
+
+    host = _Host()
+    result = host.scheme_import_confirm("overwrite")
+    assert result["status"] == "error"
+    assert "无待确认的导入" in result["msg"]
+    assert host._scheme_dialog_busy is False  # 忙标记已释放

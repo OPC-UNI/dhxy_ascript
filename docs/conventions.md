@@ -1,6 +1,6 @@
 # 项目代码规范（目录 / 分层 / 依赖）
 
-> 状态：P0–P2 已落地（2026-11-13）。本文件是模块归属与依赖方向的唯一约定，
+> 状态：P0–P3 已落地（2026-11-18）。本文件是模块归属与依赖方向的唯一约定，
 > 与 CLAUDE.md 的「任务模块隔离」规则配套，由 `tests/test_import_rules.py`
 > 强制执行。迁移路线见文末。
 
@@ -25,10 +25,11 @@ src/
 │               #               fengyin_link、moqushendan、mowangchongju、...
 ├─ tasks/       # 任务编排：xuanshu、wuhuan、kezhan、xiuluo、wubei、
 │               # zhongzu、mingwang
-└─ app/         # 外壳/UI/生命周期：control_window、diagnostics、task_manager、
-                # task_registry、updater、hotkey、select_window、env_check、
-                # capture_diag、license_app_id、messages/（消息服务：通道注册表、
-                # Telegram、路由、事件、锁）
+└─ app/         # 外壳/UI/生命周期：control_window、diagnostics、settings_api、
+                # message_api、scheme_api、host_contract（mixin 宿主契约）、
+                # task_manager、task_registry、updater、hotkey、select_window、
+                # env_check、capture_diag、license_app_id、messages/（消息服务：
+                # 通道注册表、Telegram、路由、事件、锁）
 ```
 
 `main.py` 留在仓库根目录，是唯一装配入口。
@@ -108,7 +109,7 @@ core  ←  device  ←  workflows  ←  tasks
 3. **兼容期留 shim**：如 `xuanshu.follow_task = workflows.follow.follow_task`
    保留一个提交，调用方全部改完后删除；测试同提交更新。
 4. **每个抽取的模块保留/补齐测试**；提交前 `python -m pytest -q` 全绿
-   （基线：1301 passed, 2 deselected，2026-11-18）。
+   （基线：1368 passed, 2 deselected，2026-11-18）。
 5. **涉及任务链路的抽取至少真机跑一轮**对应任务；纯移动/改名可只跑测试。
 6. **打包**：`pyproject.toml` 的 `packages` 必须包含新子包；
    Nuitka `--include-package=src` 会自动跟随，但 pip/ascript 打包不会。
@@ -118,8 +119,16 @@ core  ←  device  ←  workflows  ←  tasks
 ## 5. 命名与资源
 
 - 模块名：小写 + 下划线；一个任务 / 小游戏 / 流程一个模块，不建大杂烩。
-- 模板：`res/img/<模块前缀>_<用途>.png`（沿用现状）；不整目录搬 `res/img`
-  （模板常量散落各处，迁移收益低于风险）。
+- 模板：保持平铺在 `res/img`，文件名小写 snake_case；**新增模板必须
+  `<模块前缀>_<用途>.png`**，不得再起裸名。不整目录搬 `res/img`
+  （模板常量散落各处，迁移收益低于风险），也不建子目录。
+  - `tests/test_res_templates.py` 是唯一执行点：代码引用与文件双向存在、
+    新增未引用模板会失败。模板新增/删除/改名必须同提交更新素材与引用。
+  - `LEGACY_BARE_NAMES`：28 个历史裸名白名单，只减不增；改名/删除后
+    必须同步删条目，否则 stale 检查失败。数量由测试锁定为 28。
+  - `UNREFERENCED_KEEP`：暂未接入代码、但要保留的素材，登记时写清理由，
+    只减不增（数量锁定为 10）；一旦被引用或删除必须移除条目。
+  - `RUNTIME_OUTPUTS`：诊断截图/失败落盘等运行期产物，不是模板。
 - 日志：任务模块统一 `[任务名]` 前缀；共享模块使用调用方传入的 `prefix`。
 - 时序常量：名称带含义，注释写实测日期与来源；重构时不得「顺手调」。
 
@@ -155,5 +164,5 @@ core  ←  device  ←  workflows  ←  tasks
 | P2 | 重构审查修复（拍毒虫退避状态、updater 路径深度、工具链/CI 路径、导入规则补强） | ✅ 已完成（2026-11-13） |
 | P2 | 既有问题清理（独立诊断脚本移出包、package-data 去用户数据/旧模板路径、清屏状态键命名、拍毒虫完成态 TTL 清理、恒真测试修复、小游戏 re-export 清理、binding/progress 专属测试） | ✅ 已完成（2026-11-13） |
 | P3 | main 任务注册表 | ✅ 已完成（2026-11-18）：`src/app/task_registry.py` 单点登记 `TaskSpec`/`TASKS`/`run_task_mode`，`main` 移除 if/elif 分发；模式集合与顺序由 `tests/test_task_registry.py` 对照 `settings.TASK_MODES` 锁定 |
-| P3 | 拆分 `control_window.py` | 🚧 部分完成（2026-11-18）：诊断/验证工具（132 方法、约 2140 行）已下沉 `src/app/diagnostics.py` 的 `DiagnosticsMixin`，`ControlWindow` 继承；纯搬迁、callPython 名不变。剩余 `save_*` 薄封装表驱动、scheme/update/message 宿主控制器待评估 |
-| P3 | 模板目录分组 | 待定（建议降级为命名治理：保持平铺 + 前缀命名/引用一致性测试，见 §5） |
+| P3 | 拆分 `control_window.py` | ✅ 已完成（2026-11-18）：诊断 132 方法 → `diagnostics.py`；55 个 `save_*`（53 个纯转发 + 运行中守卫 2 个）→ `settings_api.py`；消息 15 方法 → `message_api.py`；方案 12 方法 → `scheme_api.py`；mixin 宿主契约集中 `host_contract.py`。`ControlWindow` 4012 → 约 1230 行，只剩桥接/生命周期/绑定/启停/日志/初始化数据；callPython 名与行为不变；`tests/test_control_window.py` 以「mixin 方法在 ControlWindow 上 `is` 原样解析」锁定无重复实现 |
+| P3 | 模板目录分组/命名规范 | ✅ 方案 A 已完成（2026-11-18）：保持平铺；小写命名 + **新增模板必须 `<模块前缀>_<用途>.png`**（28 个历史裸名只减不增白名单）+ 引用双向存在测试（`tests/test_res_templates.py`）；物理分目录不做（见 §5） |

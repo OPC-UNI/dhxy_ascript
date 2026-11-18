@@ -137,6 +137,7 @@ flowchart TB
     subgraph APP["app：外壳 / UI / 生命周期"]
         UI["control_window.py"]
         DIAG["diagnostics.py"]
+        API["settings_api / message_api / scheme_api<br/>host_contract"]
         REG["task_registry.py"]
         TM["task_manager.py"]
         UPD["updater.py / update_config.py"]
@@ -1217,6 +1218,10 @@ flowchart LR
 | `src/app/task_manager.py` | 任务子进程生命周期、日志回流、窗口看护 | `TaskManager.start/stop/is_running`、`_worker_wrapper`、`_window_watchdog` |
 | `src/app/control_window.py` | 控制面板外壳、设置项 UI 接线与 re-export、启停、看板 | `ControlWindow`、`ApiBridge`、`start_task` |
 | `src/app/diagnostics.py` | 诊断/验证工具（2026-11-18 从 control_window 抽出的 mixin） | `DiagnosticsMixin`、`verify_*`、`_run_*_verify`、`_game_window_clickable` |
+| `src/app/settings_api.py` | 设置保存 mixin（53 个纯转发 core.settings + 2 个运行中守卫） | `SettingsApiMixin` |
+| `src/app/message_api.py` | 消息服务面板 API mixin（配置/验证/capture/log/喊话/退出游戏/解散队伍） | `MessageApiMixin`、`_window_minimized` |
+| `src/app/scheme_api.py` | 配置方案面板 API mixin（列表/切换/保存/另存/删除/导入导出/冲突确认） | `SchemeApiMixin` |
+| `src/app/host_contract.py` | Mixin 宿主契约（仅类型检查；运行期为 object） | `ControlHost`（锁/_tm/webview_instance/_push_js 等） |
 | `src/core/settings.py` | 设置访问器/常量（P2-A 从 control_window 抽出） | `load_*`、`save_*`、`build_group_last_scan_payload` |
 | `src/core/role_settings.py` | 当前角色设置（settings.json）进程内缓存与读写 | `get`、`set_value`、`update`、`refresh` |
 | `src/core/user_data.py` | 角色解析、data 路径、state/settings 读写、迁移 | `current_role_id`、`role_dir`、`read_state`、`write_settings` |

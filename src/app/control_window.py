@@ -26,7 +26,6 @@ ControlWindow 基于 WebWindow（pywebview），页面为 res/ui/control_window.
 注意：页面不要自行声明 callPython 函数，使用框架注入的桥接
 （window.callPython → call_internal 通道），否则注入会被跳过。
 """
-import io
 import json
 import os
 import threading
@@ -34,7 +33,6 @@ import time
 import webbrowser
 import webview
 from pathlib import Path
-from ascript.windows.hardware.keyboard import Keyboard
 from ascript.windows.system import R
 from ascript.windows.system.device import Device
 from ascript.windows.ui import WebWindow
@@ -46,16 +44,13 @@ from ..core import role_settings  # 当前角色生效设置（data/<角色ID>/s
 from . import hotkey  # 老板键（启动/停止按钮文案展示热键名）
 from . import updater  # 软件自动更新（清单/下载/覆盖升级）
 from . import update_config  # 更新渠道与节流常量
-from . import env_check  # 截屏黑帧判定（消息服务 /capture）
 from .diagnostics import DiagnosticsMixin, _game_window_clickable  # 诊断页验证工具（P3 拆分）
-from .messages import log_tail as message_log_tail  # 日志末尾读取（/log）
-from .messages import registry as message_registry  # 通道 spec/命令文档
+from .settings_api import SettingsApiMixin  # 设置保存表驱动方法（P3 拆分）
+from .message_api import MessageApiMixin  # 消息服务面板 API（P3 拆分）
+from .scheme_api import SchemeApiMixin  # 配置方案面板 API（P3 拆分）
 from .messages.service import MessageService  # 消息服务编排
-from ..core.settings import (load_message_config, mask_message_config,
-                             merge_message_config)
-from ..core.settings import save_message_config as save_message_config_kv
+from ..core.settings import load_message_config
 from .. import __version__  # 版本号唯一来源（src/__init__.py，面板关于/侧边栏展示）
-
 
 from ..device.binding import (_short_label_from_title, bound_label_from_binding,
                               bound_short_label)
@@ -122,8 +117,10 @@ from ..core.settings import (
     save_zhongzu_auto_wuyi, save_zhongzu_check_team, save_zhongzu_repair_interval, save_zhongzu_shout_switch,
     save_zhongzu_shout_text, save_zhongzu_tab_group, save_zhongzu_wuyi_interval,
 )  # 过渡期 re-export：旧 import 仍可用，逐步切到 core.settings
-# 注意：ControlWindow 方法按本模块全局名解析设置函数；测试 patch 类方法
-# 路径时须 patch control_window 的绑定，patch core.settings 不会替换它。
+# 注意：方法按各自所在模块的全局名解析——53 个 save_* 在 settings_api
+# （转发 settings_module），消息/方案方法在 message_api/scheme_api。
+# 测试 patch 时须 patch 对应 mixin 模块或 core.settings；patch 本模块的
+# 同名导入不会再影响这些方法。
 
 class _ApiBridge:
     """JS 与 Python 之间的 API 桥接，与 WebWindow 内部实现保持一致。"""
@@ -140,7 +137,6 @@ class _ApiBridge:
         except Exception as e:
             print(f"Error calling {func_name}: {e}")
             return None
-
 
 class _ControlMessageHost:
     """消息服务的主进程能力注入（service 不 import UI/device）。"""
@@ -206,8 +202,8 @@ class _ControlMessageHost:
     def shout(self, text=""):
         return self._cw._message_shout(text)
 
-
-class ControlWindow(DiagnosticsMixin, WebWindow):
+class ControlWindow(DiagnosticsMixin, SettingsApiMixin, MessageApiMixin,
+                     SchemeApiMixin, WebWindow):
     """应用主窗口：任务启动/停止、配置页面；日志展示在面板内日志抽屉。
 
     启停通过桥接调用 TaskManager（任务子进程管理），状态与日志由
@@ -410,7 +406,7 @@ class ControlWindow(DiagnosticsMixin, WebWindow):
         except Exception as e:
             app_utils.log(f"[绑定] 自动改绑检测失败: {e}", "WARN")
             return False
-        if not rebound:
+        if not rebound or win is None:
             return False
         line = f"[绑定] 绑定窗口已关闭，自动改绑实际操作窗口: {win.title}"
         app_utils.log(line, "SYS")
@@ -485,145 +481,6 @@ class ControlWindow(DiagnosticsMixin, WebWindow):
     # 方案 = 全部设置的快照（schemes.py）；任务运行中全部禁止（切换会
     # 改战斗阈值/任务列表等运行中任务正在读的键，删除活动方案会应用
     # 「默认」——页面同步禁用，此处为双保险）。
-
-    def get_schemes(self):
-        """方案列表与当前活动方案（页面下拉/管理区渲染）。"""
-        return schemes.list_schemes()
-
-    def _scheme_guard(self):
-        """方案操作前置检查：任务运行中拒绝。"""
-        if self._tm.is_running():
-            return {"status": "error", "msg": "任务运行中，请先停止任务再操作"}
-        return None
-
-    def switch_scheme(self, name):
-        """一键切换方案：整体替换当前设置（切换前自动保存当前改动）。"""
-        guard = self._scheme_guard()
-        return guard if guard else schemes.switch_scheme(name)
-
-    def scheme_resave(self, name):
-        """保存：当前设置快照写回活动方案（输入名即方案名，改了名即重命名）。"""
-        guard = self._scheme_guard()
-        return guard if guard else schemes.resave_scheme(name)
-
-    def scheme_copy(self, name):
-        """另存新方案：当前设置另存为新方案（重名自动加序号）。"""
-        guard = self._scheme_guard()
-        return guard if guard else schemes.save_scheme_copy(name)
-
-    def scheme_delete(self):
-        """删除当前活动方案（页面二次点击确认；删除后回落「默认」）。"""
-        guard = self._scheme_guard()
-        if guard:
-            return guard
-        name = schemes.active_name()
-        if not name:
-            return {"status": "error", "msg": "当前无活动方案"}
-        return schemes.delete_scheme(name)
-
-    def scheme_export(self):
-        """导出当前活动方案：后台线程弹另存为对话框，结果经
-        onSchemeExportResult 回推页面（同验证流程模式，不阻塞 webview）。"""
-        guard = self._scheme_guard()
-        if guard:
-            return guard
-        if self._scheme_dialog_busy:
-            return {"status": "error", "msg": "文件对话框已打开，请先完成当前操作"}
-        name = schemes.active_name()
-        if not name:
-            return {"status": "error", "msg": "当前无活动方案"}
-        self._scheme_dialog_busy = True
-        threading.Thread(target=self._run_scheme_export, args=(name,),
-                         daemon=True, name="scheme-export").start()
-        return {"status": "success", "msg": "请在弹出的窗口选择导出位置"}
-
-    def _run_scheme_export(self, name):
-        """导出线程体：文件对话框 → 写文件 → 结果回推页面。"""
-        try:
-            path = schemes.pick_save_path(f"{name}.json")
-            if not path:
-                ok, info = False, "已取消导出"
-            else:
-                schemes.export_scheme_to(path, name)
-                ok, info = True, f"已导出方案「{name}」"
-        except Exception as e:
-            ok, info = False, f"导出失败: {e}"
-        self._push_js("if(window.onSchemeExportResult){window.onSchemeExportResult("
-                      f"{'true' if ok else 'false'}, {json.dumps(info)});}}")
-        self._scheme_dialog_busy = False
-
-    def scheme_import(self):
-        """导入方案：后台线程弹打开对话框；同名冲突经 onSchemeImportPending
-        回推页面确认（覆盖/另存为/取消），无冲突直接入列（不激活）。"""
-        guard = self._scheme_guard()
-        if guard:
-            return guard
-        if self._scheme_dialog_busy:
-            return {"status": "error", "msg": "文件对话框已打开，请先完成当前操作"}
-        self._scheme_dialog_busy = True
-        threading.Thread(target=self._run_scheme_import,
-                         daemon=True, name="scheme-import").start()
-        return {"status": "success", "msg": "请选择要导入的方案文件"}
-
-    def _run_scheme_import(self):
-        """导入线程体：对话框 → 解析校验 → 无冲突直接入列 / 冲突挂起等确认。"""
-        try:
-            path = schemes.pick_open_path()
-            if not path:
-                self._finish_scheme_import(False, "已取消导入")
-                return
-            name, settings = schemes.read_import_file(path)
-            if schemes.name_exists(name):
-                self._pending_import = {"name": name, "settings": settings}
-                self._push_js("if(window.onSchemeImportPending)"
-                              f"{{window.onSchemeImportPending({json.dumps(name)});}}")
-                self._scheme_dialog_busy = False
-                return
-            result = schemes.add_scheme(name, settings)
-            if result.get("status") != "success":
-                self._finish_scheme_import(False, result.get("msg", "导入失败"))
-                return
-            self._finish_scheme_import(True, f"已导入方案「{name}」（未激活，可在顶部下拉切换）")
-        except Exception as e:
-            self._finish_scheme_import(False, f"导入失败: {e}")
-
-    def _finish_scheme_import(self, ok, info):
-        """导入结束回推页面（附最新方案列表供下拉重渲染）。"""
-        self._pending_import = None
-        self._push_js("if(window.onSchemeImportResult){window.onSchemeImportResult("
-                      f"{'true' if ok else 'false'}, {json.dumps(info)}, "
-                      f"{json.dumps(schemes.list_schemes())});}}")
-        self._scheme_dialog_busy = False
-
-    def scheme_import_confirm(self, action):
-        """导入同名冲突确认（页面确认行按钮）：overwrite/rename/cancel。"""
-        pending = self._pending_import
-        self._pending_import = None
-        if not pending:
-            self._scheme_dialog_busy = False
-            return {"status": "error", "msg": "无待确认的导入"}
-        name, settings = pending["name"], pending["settings"]
-        try:
-            if action == "cancel":
-                self._scheme_dialog_busy = False
-                return {"status": "success", "msg": "已取消导入",
-                        "schemes": schemes.list_schemes()}
-            if action == "overwrite":
-                result = schemes.replace_scheme(name, settings)
-                msg = f"已覆盖方案「{name}」"
-            elif action == "rename":
-                new_name = schemes.unique_name(name)
-                result = schemes.add_scheme(new_name, settings)
-                msg = f"已导入为「{new_name}」（未激活，可在顶部下拉切换）"
-            else:
-                return {"status": "error", "msg": "未知操作",
-                        "schemes": schemes.list_schemes()}
-        finally:
-            self._scheme_dialog_busy = False
-        if result.get("status") != "success":
-            return {**result, "schemes": schemes.list_schemes()}
-        return {"status": "success", "msg": msg,
-                "schemes": schemes.list_schemes()}
 
     def _push_js(self, js):
         """执行页面 JS（导入导出结果异步回推用；页面未就绪时静默忽略）。"""
@@ -715,7 +572,9 @@ class ControlWindow(DiagnosticsMixin, WebWindow):
             return self._set_update_state(status="error", error=err,
                                           progress=None)
         save_update_last_check(time.time())
-        manifest = result.get("manifest") or {}
+        manifest = result.get("manifest")
+        if not isinstance(manifest, dict):
+            manifest = {}
         if result.get("status") == "up_to_date":
             if manual:
                 app_utils.log("[更新] 已是最新版本", "SYS")
@@ -940,10 +799,6 @@ class ControlWindow(DiagnosticsMixin, WebWindow):
                 "update": self.get_update_state(),
                 "update_last_result": last_result}
 
-    def save_battle_action(self, target, value):
-        """战斗设置变更：保存人物/召唤兽默认战斗动作。"""
-        return save_battle_action(target, value)
-
     # ---- 组号设置页（侧边栏「组号」：检查当前队伍 + 成员战斗动作） ----
 
     def group_check_team(self):
@@ -1019,24 +874,6 @@ class ControlWindow(DiagnosticsMixin, WebWindow):
             return {"status": "error", "msg": "任务运行中，请先停止任务再修改"}
         return save_group_actions(mapping)
 
-    def save_threshold(self, name, value):
-        """阈值设置变更：保存某条血蓝阈值。"""
-        return save_threshold(name, value)
-
-    def save_task_modes(self, modes):
-        """任务多选变更：保存选中列表。任务运行中拒绝修改（只能停止后
-        修改，用户要求；页面侧同样禁用控件，此为双保险）。"""
-        if self._tm.is_running():
-            return {"status": "error", "msg": "任务运行中，请先停止任务再修改"}
-        return save_selected_modes(modes)
-
-    def save_task_count(self, mode, value):
-        """任务次数变更：保存某模式的执行次数。任务运行中拒绝修改
-        （只能停止后修改，用户要求；页面侧同样禁用控件，此为双保险）。"""
-        if self._tm.is_running():
-            return {"status": "error", "msg": "任务运行中，请先停止任务再修改"}
-        return save_task_count(mode, value)
-
     def get_task_progress(self):
         """任务总进度（页面进度条轮询）：选中任务当天完成次数合计 /
         次数上限合计；进度由任务子进程写入 config.json，本函数直读
@@ -1049,299 +886,6 @@ class ControlWindow(DiagnosticsMixin, WebWindow):
         或状态陈旧时返回 None。"""
         from ..core import debug_overlay  # 延迟导入：与其余验证模块保持一致
         return debug_overlay.read_runtime_status()
-
-    # ---- 消息服务（侧边栏「消息」；v1 只读查询 + 截图） ----
-
-    def get_message_config(self):
-        """消息页初始化：掩码配置 + 通道/命令元数据 + 运行状态。"""
-        raw = load_message_config()
-        effective = message_registry.effective_config(raw)
-        return {"config": mask_message_config(effective),
-                "meta": message_registry.payload(),
-                "state": self._message_service.get_state()}
-
-    def save_message_config(self, patch=None):
-        """保存消息配置（深合并；掩码占位不覆盖旧 Token）并热应用。"""
-        result = save_message_config_kv(patch or {})
-        if result.get("status") != "success":
-            return result
-        raw = result.get("config") or load_message_config()
-        self._message_service.apply_config(raw)
-        effective = message_registry.effective_config(raw)
-        return {"status": "success",
-                "config": mask_message_config(effective),
-                "state": self._message_service.get_state(),
-                "warnings": message_registry.config_warnings(effective)}
-
-    def get_message_state(self):
-        """消息页轮询：服务/通道健康、实例锁、最近指令、验证状态。"""
-        return self._message_service.get_state()
-
-    def restart_message_service(self):
-        """重试启动（锁 stale 接管 / 配置修正后）。"""
-        state = self._message_service.restart_with_config(
-            load_message_config())
-        return {"status": "success", "state": state}
-
-    def verify_message_channel(self, channel=None, patch=None):
-        """一键验证通道：用表单当前值（可未保存）走 getMe + 测试消息。"""
-        channel = str(channel or "telegram")
-        try:
-            candidate = merge_message_config(patch or {})
-        except ValueError as e:
-            return {"status": "error", "msg": str(e)}
-        return self._message_service.verify_async(
-            channel, candidate,
-            on_step=self._push_message_verify_step,
-            on_done=self._push_message_verify_result)
-
-    def _push_message_verify_step(self, step):
-        payload = {"key": getattr(step, "key", ""),
-                   "label": getattr(step, "label", ""),
-                   "ok": bool(getattr(step, "ok", False)),
-                   "detail": getattr(step, "detail", "")}
-        self._push_js(
-            "if(window.onMessageVerifyStep){window.onMessageVerifyStep(%s);}"
-            % json.dumps(payload, ensure_ascii=False))
-
-    def _push_message_verify_result(self, report):
-        self._push_js(
-            "if(window.onMessageVerifyResult){window.onMessageVerifyResult(%s);}"
-            % json.dumps(report or {}, ensure_ascii=False))
-
-    def stop_message_service(self):
-        """真正退出时停止服务（点 X 隐藏托盘不调用，远程服务继续）。"""
-        service = getattr(self, "_message_service", None)
-        if service is None:
-            return
-        try:
-            service.stop(timeout=1.5)
-        except Exception:
-            pass
-
-    def _message_log(self, msg, level="INFO"):
-        """消息服务日志：文件 + 面板抽屉（事件规则会忽略 [消息] 前缀）。"""
-        line = f"[消息] {msg}"
-        try:
-            app_utils.log(line, level)
-        except Exception:
-            pass
-        try:
-            self.add_logs([line])
-        except Exception:
-            pass
-
-    def _message_capture(self):
-        """游戏窗口截屏（不抢焦点）；返回 PNG bytes + 黑帧判定。"""
-        if not self._capture_lock.acquire(blocking=False):
-            return {"ok": False, "reason": "busy"}
-        try:
-            win = game.find_main_window()
-            if win is None:
-                return {"ok": False, "reason": "no_window"}
-            hwnd = int(getattr(win, "hwnd", 0) or 0)
-            try:
-                import win32gui
-                if hwnd and win32gui.IsIconic(hwnd):
-                    return {"ok": False, "reason": "minimized"}
-            except Exception:
-                pass
-            img = win.capture(force_activate=False)
-            if img is None:
-                return {"ok": False, "reason": "capture_failed"}
-            stats = env_check.frame_stats(img)
-            buffer = io.BytesIO()
-            img.save(buffer, format="PNG")
-            return {"ok": True, "image": buffer.getvalue(),
-                    "w": stats["w"], "h": stats["h"],
-                    "black_ratio": stats["black_ratio"],
-                    "black": stats["black_ratio"] >
-                             env_check._BLACK_RATIO_THRESHOLD}
-        except Exception as e:
-            return {"ok": False, "reason": "error", "detail": str(e)}
-        finally:
-            self._capture_lock.release()
-
-    def _message_log_tail(self, n=20):
-        """今天日志末尾 n 行（/log 指令）。"""
-        try:
-            count = max(1, min(100, int(n)))
-        except (TypeError, ValueError):
-            count = 20
-        path = app_utils.log_file_path()
-        try:
-            lines = message_log_tail.read_tail_lines(path, count)
-            return {"ok": True, "lines": lines, "path": str(path)}
-        except OSError as e:
-            return {"ok": False, "reason": str(e), "lines": [],
-                    "path": str(path)}
-
-    def _message_exit_game(self, progress=None):
-        """消息服务 /exitgame：停任务 → 解散/离开队伍 → 关闭游戏客户端。"""
-        if not self._game_op_lock.acquire(blocking=False):
-            return {"ok": False,
-                    "message": "另一项游戏操作正在进行（退出/解散队伍/喊话），请稍后再试"}
-        try:
-            from ..device import exit_game as exit_game_mod
-            if self._tm.is_running():
-                self._message_log("退出游戏：先停止任务")
-                if progress is not None:
-                    try:
-                        progress("正在停止任务…")
-                    except Exception:
-                        pass
-                self._tm.stop()
-                deadline = time.time() + 10.0
-                while self._tm.is_running() and time.time() < deadline:
-                    time.sleep(0.2)
-                if self._tm.is_running():
-                    return {"ok": False,
-                            "message": "任务进程未在 10 秒内停止，已放弃退出游戏"}
-            win = game.find_main_window()
-            if win is None:
-                return {"ok": True, "message": "游戏窗口已关闭，无需退出"}
-            ok, info = exit_game_mod.leave_teams_for_exit(win, progress)
-            self._message_log(f"退出游戏-队伍：{info}",
-                              "SYS" if ok else "WARN")
-            if not ok:
-                return {"ok": False, "message": info}
-            ok, info = exit_game_mod.exit_client(win, progress)
-            self._message_log(f"退出游戏：{info}", "SYS" if ok else "WARN")
-            return {"ok": ok, "message": info}
-        except Exception as e:
-            self._message_log(
-                f"退出游戏异常：{type(e).__name__}: {e}", "ERROR")
-            return {"ok": False,
-                    "message": f"退出游戏异常：{type(e).__name__}: {e}"}
-        finally:
-            self._game_op_lock.release()
-
-    def _message_disband(self):
-        """消息服务 /disband：绑定 Tab 护栏 → 队长解散 / 队员离开（单次面板流程）。
-
-        与诊断页「检查队伍信息」同一套护栏：先切回绑定角色 Tab（错误 Tab
-        上执行会操作错账号）；未组队时 leave_or_disband_team 直接返回无需
-        操作。任务运行中拒绝（任务自己管队伍，抢面板会打乱其检查/补人）。
-        """
-        if self._tm.is_running():
-            return {"ok": False, "message": "任务运行中，请先停止任务再解散队伍"}
-        if not self._game_op_lock.acquire(blocking=False):
-            return {"ok": False,
-                    "message": "另一项游戏操作正在进行（退出/解散队伍/喊话），请稍后再试"}
-        try:
-            win = game.find_main_window()
-            if win is None:
-                return {"ok": False, "message": "未找到游戏窗口（游戏未启动）。"}
-            if _window_minimized(win):
-                return {"ok": False, "message": "游戏窗口已最小化，请恢复窗口后再试。"}
-            from ..device import tab_group, team
-            ok_tab, tab_info = tab_group.ensure_bound_tab(win)
-            if not ok_tab:
-                return {"ok": False, "message": tab_info}
-            ok, info = team.leave_or_disband_team(win)
-            self._message_log(f"解散/离开队伍：{info}",
-                              "SYS" if ok else "WARN")
-            return {"ok": ok, "message": info}
-        except Exception as e:
-            self._message_log(
-                f"解散队伍异常：{type(e).__name__}: {e}", "ERROR")
-            return {"ok": False,
-                    "message": f"解散队伍异常：{type(e).__name__}: {e}"}
-        finally:
-            self._game_op_lock.release()
-
-    def _default_shout_text(self):
-        """未带内容时的喊话文案：按任务选择顺序取首个可喊话任务的设置。
-
-        修罗模板的 {种族} 与任务内自动喊话同源（_build_shout_text），保证
-        手机远程喊话和任务自动喊话文案一致；无相关任务选中返回空串。
-        """
-        try:
-            modes = load_selected_modes()
-        except Exception:
-            return ""
-        for mode in modes:
-            try:
-                if mode == "五倍":
-                    return load_wubei_shout_text()
-                if mode == "修罗":
-                    from ..tasks import xiuluo  # 延迟导入：避免启动期加载任务模块
-                    return xiuluo._build_shout_text()
-                if mode == "种族比武":
-                    return load_zhongzu_shout_text()
-            except Exception as e:
-                self._message_log(f"读取喊话文案失败（{mode}）：{e}", "WARN")
-                return ""
-        return ""
-
-    def _message_shout(self, text=""):
-        """消息服务 /shout：向游戏聊天发送一次喊话（任务运行中也可用）。
-
-        与任务内喊话同链路：静默模式走 WM_CHAR 逐字符注入（无需前台），
-        关闭静默时激活窗口走物理键盘（Enter 发送）；文本上限沿用喊话
-        设置的长度上限。整段打字+回车持跨进程聊天输入互斥（与任务自动
-        喊话、客栈金额输入排队执行，防止两段文字拼成一条）。运行中不
-        切 Tab（避免打断组号 pass），按当前 Tab 角色发送——若任务正处
-        对话/战斗中，公屏可能显示不出来，回复里注明。
-        """
-        try:
-            running = bool(self._tm.is_running())
-        except Exception:
-            running = False
-        if not self._game_op_lock.acquire(blocking=False):
-            return {"ok": False,
-                    "message": "另一项游戏操作正在进行（退出/解散队伍/喊话），请稍后再试"}
-        try:
-            # 多行输入会把换行当回车投进聊天（提前发送半截文案）：
-            # 空白折叠成单个空格，只保留一行
-            text = " ".join(str(text or "").split())
-            if not text:
-                text = self._default_shout_text()
-                if not text:
-                    return {"ok": False,
-                            "message": "未选中五倍/修罗/种族比武任务，没有可用的喊话文案；"
-                                       "请带上内容：/shout 喊话内容"}
-            text = text[:SHOUT_TEXT_MAX_LEN]
-            win = game.find_main_window()
-            if win is None:
-                return {"ok": False, "message": "未找到游戏窗口（游戏未启动）。"}
-            if _window_minimized(win):
-                return {"ok": False, "message": "游戏窗口已最小化，请恢复窗口后再试。"}
-            if not running:
-                # 任务未运行才做绑定 Tab 护栏；运行中切 Tab 会打断组号 pass
-                from ..device import tab_group
-                ok_tab, tab_info = tab_group.ensure_bound_tab(win)
-                if not ok_tab:
-                    return {"ok": False, "message": tab_info}
-            with app_utils.chat_input_lock() as locked:
-                if not locked:
-                    return {"ok": False,
-                            "message": "喊话通道正忙（另一条喊话发送中），请稍后再试。"}
-                if app_utils.silent_mode_on():
-                    from ..device import silent_click  # 延迟导入：仅静默路径需要
-                    info = silent_click.send_silent_text(win, text, end_enter=True)
-                    if info is None:
-                        return {"ok": False, "message": "喊话投递失败（窗口句柄不可用）。"}
-                else:
-                    # 键盘事件只进前台窗口；与任务内物理喊话同时序
-                    win.activate()
-                    time.sleep(0.5)
-                    Keyboard.input(text)
-                    time.sleep(0.8)  # 等待剪贴板粘贴完成（中文走 Ctrl+V）
-                    Keyboard.key("enter")
-                    time.sleep(0.5)
-            self._message_log(f"喊话已发送：{text}")
-            note = ""
-            if running:
-                note = ("\n（任务运行中：按当前 Tab 发送；若正处对话/战斗中，"
-                        "公屏可能显示不出来）")
-            return {"ok": True, "message": f"已喊话：{text}" + note}
-        except Exception as e:
-            self._message_log(f"喊话异常：{type(e).__name__}: {e}", "ERROR")
-            return {"ok": False,
-                    "message": f"喊话异常：{type(e).__name__}: {e}"}
-        finally:
-            self._game_op_lock.release()
 
     def get_task_stats(self):
         """任务成就数据：直读当前角色 data/<ID>/task_stats.json
@@ -1383,212 +927,6 @@ class ControlWindow(DiagnosticsMixin, WebWindow):
             except Exception:
                 tabs = 0
         return {"show": switch_on and detected and tabs >= 2, "tabs": tabs}
-
-    def save_use_sheyaoxiang(self, on):
-        """摄妖香开关变更：保存开关状态。"""
-        return save_use_sheyaoxiang(on)
-
-    def save_auto_famen(self, on):
-        """战斗设置变更：保存自动使用法门开关状态。"""
-        return save_auto_famen(on)
-
-    def save_xiuluo_min(self, value):
-        """修罗设置变更：保存最少人数。"""
-        return save_xiuluo_min(value)
-
-    def save_xiuluo_races(self, races):
-        """修罗设置变更：保存必须有的种族列表。"""
-        return save_xiuluo_races(races)
-
-    def save_wuhuan_vitality_continue(self, on):
-        """五环设置变更：保存活力不足继续任务开关状态。"""
-        return save_wuhuan_vitality_continue(on)
-
-    def save_xiuluo_hezi(self, on):
-        """修罗设置变更：保存自动抢盒子开关状态。"""
-        return save_xiuluo_hezi(on)
-
-    def save_xiuluo_check_team(self, on):
-        """修罗设置变更：保存检查队伍开关状态。"""
-        return save_xiuluo_check_team(on)
-
-    def save_xiuluo_auto_create_team(self, on):
-        """修罗设置变更：保存自动创建队伍开关状态。"""
-        return save_xiuluo_auto_create_team(on)
-
-    def save_xiuluo_auto_rejoin(self, on):
-        """修罗设置变更：保存自动归队开关状态。"""
-        return save_xiuluo_auto_rejoin(on)
-
-    def save_xiuluo_auto_kick_away(self, on):
-        """修罗设置变更：保存暂离超时自动请离开关状态。"""
-        return save_xiuluo_auto_kick_away(on)
-
-    def save_xiuluo_kick_away_minutes(self, value):
-        """修罗设置变更：保存暂离超时（分钟）。"""
-        return save_xiuluo_kick_away_minutes(value)
-
-    def save_xiuluo_auto_wuyi(self, on):
-        """修罗设置变更：保存自动巫医开关状态。"""
-        return save_xiuluo_auto_wuyi(on)
-
-    def save_xiuluo_wuyi_interval(self, value):
-        """修罗设置变更：保存自动巫医间隔（轮）。"""
-        return save_xiuluo_wuyi_interval(value)
-
-    def save_xiuluo_auto_repair(self, on):
-        """修罗设置变更：保存自动修理装备开关状态。"""
-        return save_xiuluo_auto_repair(on)
-
-    def save_xiuluo_repair_interval(self, value):
-        """修罗设置变更：保存自动修理间隔（场战斗）。"""
-        return save_xiuluo_repair_interval(value)
-
-    def save_xiuluo_tab_group(self, on):
-        """修罗设置变更：保存组号专用开关状态。"""
-        return save_xiuluo_tab_group(on)
-
-    def save_high_perf(self, on):
-        """通用设置变更：保存高性能模式开关状态。"""
-        return save_high_perf(on)
-
-    def save_auto_refill(self, on):
-        """通用设置变更：保存战斗结束自动补血量蓝量开关状态。"""
-        return save_auto_refill(on)
-
-    def save_clear_screen(self, on):
-        """通用设置变更：保存启动清屏开关状态。"""
-        return save_clear_screen(on)
-
-    def save_silent_mode(self, on):
-        """通用设置变更：保存静默操作开关状态（主进程立即生效）。"""
-        return save_silent_mode(on)
-
-    def save_wubei_hezi(self, on):
-        """五倍设置变更：保存自动抢盒子开关状态。"""
-        return save_wubei_hezi(on)
-
-    def save_wubei_check_team(self, on):
-        """五倍设置变更：保存检查队伍开关状态。"""
-        return save_wubei_check_team(on)
-
-    def save_wubei_auto_create_team(self, on):
-        """五倍设置变更：保存自动创建队伍开关状态。"""
-        return save_wubei_auto_create_team(on)
-
-    def save_wubei_auto_rejoin(self, on):
-        """五倍设置变更：保存自动归队开关状态。"""
-        return save_wubei_auto_rejoin(on)
-
-    def save_wubei_auto_kick_away(self, on):
-        """五倍设置变更：保存暂离超时自动请离开关状态。"""
-        return save_wubei_auto_kick_away(on)
-
-    def save_wubei_kick_away_minutes(self, value):
-        """五倍设置变更：保存暂离超时（分钟）。"""
-        return save_wubei_kick_away_minutes(value)
-
-    def save_battle_only_auto_rejoin(self, on):
-        """仅战斗设置变更：保存自动归队开关状态。"""
-        return save_battle_only_auto_rejoin(on)
-
-    def save_battle_only_hezi(self, on):
-        """仅战斗设置变更：保存自动抢盒子开关状态。"""
-        return save_battle_only_hezi(on)
-
-    def save_wubei_shout_switch(self, on):
-        """五倍设置变更：保存缺人自动喊话开关状态。"""
-        return save_wubei_shout_switch(on)
-
-    def save_wubei_shout_text(self, text):
-        """五倍设置变更：保存喊话内容（返回规范化后的生效内容）。"""
-        return save_wubei_shout_text(text)
-
-    def save_wubei_auto_wuyi(self, on):
-        """五倍设置变更：保存自动巫医开关状态。"""
-        return save_wubei_auto_wuyi(on)
-
-    def save_wubei_wuyi_interval(self, value):
-        """五倍设置变更：保存自动巫医间隔（轮）。"""
-        return save_wubei_wuyi_interval(value)
-
-    def save_wubei_auto_repair(self, on):
-        """五倍设置变更：保存自动修理装备开关状态。"""
-        return save_wubei_auto_repair(on)
-
-    def save_wubei_repair_interval(self, value):
-        """五倍设置变更：保存自动修理间隔（场战斗）。"""
-        return save_wubei_repair_interval(value)
-
-    def save_wubei_kuimulang_switch(self, on):
-        """五倍设置变更：保存领取奎木狼任务开关状态。"""
-        return save_wubei_kuimulang_switch(on)
-
-    def save_wubei_tab_group(self, on):
-        """五倍设置变更：保存组号专用开关状态。"""
-        return save_wubei_tab_group(on)
-
-    def save_zhongzu_check_team(self, on):
-        """种族比武设置变更：保存检查队伍开关状态。"""
-        return save_zhongzu_check_team(on)
-
-    def save_zhongzu_auto_create_team(self, on):
-        """种族比武设置变更：保存自动创建队伍开关状态。"""
-        return save_zhongzu_auto_create_team(on)
-
-    def save_zhongzu_auto_rejoin(self, on):
-        """种族比武设置变更：保存自动归队开关状态。"""
-        return save_zhongzu_auto_rejoin(on)
-
-    def save_zhongzu_shout_switch(self, on):
-        """种族比武设置变更：保存缺人自动喊话开关状态。"""
-        return save_zhongzu_shout_switch(on)
-
-    def save_zhongzu_shout_text(self, text):
-        """种族比武设置变更：保存喊话内容（返回规范化后的生效内容）。"""
-        return save_zhongzu_shout_text(text)
-
-    def save_zhongzu_auto_wuyi(self, on):
-        """种族比武设置变更：保存自动巫医开关状态。"""
-        return save_zhongzu_auto_wuyi(on)
-
-    def save_zhongzu_wuyi_interval(self, value):
-        """种族比武设置变更：保存自动巫医间隔（轮）。"""
-        return save_zhongzu_wuyi_interval(value)
-
-    def save_zhongzu_auto_repair(self, on):
-        """种族比武设置变更：保存自动修理装备开关状态。"""
-        return save_zhongzu_auto_repair(on)
-
-    def save_zhongzu_repair_interval(self, value):
-        """种族比武设置变更：保存自动修理间隔（场战斗）。"""
-        return save_zhongzu_repair_interval(value)
-
-    def save_zhongzu_tab_group(self, on):
-        """种族比武设置变更：保存组号专用开关状态。"""
-        return save_zhongzu_tab_group(on)
-
-    def save_xiuluo_shout_switch(self, on):
-        """修罗设置变更：保存缺人自动喊话开关状态。"""
-        return save_xiuluo_shout_switch(on)
-
-    def save_xiuluo_shout_text(self, text):
-        """修罗设置变更：保存喊话内容（返回规范化后的生效内容）。"""
-        return save_xiuluo_shout_text(text)
-
-    def save_debug_overlay(self, on):
-        """调试信息开关变更：保存开关状态（悬浮层由任务侧读取、
-        诊断导航显隐由页面侧同步）。"""
-        return save_debug_overlay(on)
-
-    def save_debug_ui_unlocked(self, on):
-        """「显示与调试」卡片解锁（关于页连点版本号 6 次）：保存
-        解锁标记，解锁后下次启动直接展示该卡片。"""
-        return save_debug_ui_unlocked(on)
-
-    def save_ui_theme(self, theme):
-        """主题切换：保存浅色/深色选择。"""
-        return save_ui_theme(theme)
 
     def start_task(self):
         """启动按钮：启动任务子进程。
@@ -1644,7 +982,7 @@ class ControlWindow(DiagnosticsMixin, WebWindow):
             win = game.find_main_window()
             rid = user_data.role_id_from_text(
                 getattr(win, "title", "") if win is not None else "")
-            if not rid:
+            if not rid or win is None:
                 return
             raw = game.bound_window_id()
             bid = raw.get("id") if isinstance(raw, dict) else raw
@@ -1681,7 +1019,6 @@ class ControlWindow(DiagnosticsMixin, WebWindow):
     def stop_task(self):
         """停止按钮：停止任务子进程（升级强杀，保证任务线程全清）。"""
         return self._tm.stop()
-
 
     def add_log(self, line):
         """单行日志推送到面板日志抽屉（主进程 [系统] 消息用）。"""
@@ -1810,19 +1147,3 @@ class ControlWindow(DiagnosticsMixin, WebWindow):
 
         win.events.loaded += on_loaded
         win.events.closing += self._on_closing
-
-
-
-
-def _window_minimized(win):
-    """游戏窗口是否最小化（最小化时截图/面板点击/聊天输入都不可靠）。
-
-    查询失败按未最小化处理（与 _game_window_clickable 的放行语义一致，
-    真正的失败由后续操作自身报错）。
-    """
-    try:
-        import win32gui
-        hwnd = int(getattr(win, "hwnd", 0) or 0)
-        return bool(hwnd and win32gui.IsIconic(hwnd))
-    except Exception:
-        return False

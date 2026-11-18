@@ -16,12 +16,14 @@ load_*_shout_text/_game_window_clickable 等）时必须 patch 本模块
 import json
 import threading
 import time
+from typing import Any
 
 from ascript.windows.hardware.keyboard import Keyboard
 
 from ..core import app_utils
 from ..core.settings import load_wubei_shout_text, load_zhongzu_shout_text
 from ..device import game
+from .host_contract import ControlHost
 
 
 _SILENT_KEY_HOTKEYS = {
@@ -64,7 +66,7 @@ def _game_window_clickable(win):
         return True  # 检查失败不阻塞验证（宁可放行）
 
 
-class DiagnosticsMixin:
+class DiagnosticsMixin(ControlHost):
     def verify_xiuluo_return(self):
         """高级设置-修罗回程验证按钮：与实际返程流程一致，但不右键使用
         回城符——仅将鼠标移动到回城符上定位（不点击）后关闭背包，供人工
@@ -1709,7 +1711,7 @@ class DiagnosticsMixin:
         from ..device import dialog_common  # 延迟导入：与其余验证模块保持一致
         # 奇遇补充门评分由 app 层注入（dialog_common 不得反向依赖任务
         # 模块）；注入失败不影响基础对话框诊断
-        extras = {}
+        extras: dict[str, Any] = {}
         try:
             from ..tasks import kezhan
             extras = dict(extra_score=kezhan.qiyu_frame_score,
