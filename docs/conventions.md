@@ -25,9 +25,10 @@ src/
 │               #               fengyin_link、moqushendan、mowangchongju、...
 ├─ tasks/       # 任务编排：xuanshu、wuhuan、kezhan、xiuluo、wubei、
 │               # zhongzu、mingwang
-└─ app/         # 外壳/UI/生命周期：control_window、task_manager、updater、
-                # hotkey、select_window、env_check、capture_diag、license_app_id、
-                # messages/（消息服务：通道注册表、Telegram、路由、事件、锁）
+└─ app/         # 外壳/UI/生命周期：control_window、diagnostics、task_manager、
+                # task_registry、updater、hotkey、select_window、env_check、
+                # capture_diag、license_app_id、messages/（消息服务：通道注册表、
+                # Telegram、路由、事件、锁）
 ```
 
 `main.py` 留在仓库根目录，是唯一装配入口。
@@ -80,7 +81,7 @@ core  ←  device  ←  workflows  ←  tasks
 
 | 场景 | 位置 | 公开入口 |
 |---|---|---|
-| 新任务 | `src/tasks/<task>.py` | `run_loop(win)`；诊断用 `verify_*` |
+| 新任务 | `src/tasks/<task>.py` + `app/task_registry.TASKS` 登记 | `run_loop(win)`；诊断用 `verify_*`；同步 `settings.TASK_MODES`/`TASK_COUNT_DEFAULTS`、HTML 任务卡与前端 `TASK_MODES`、`debug_overlay._STATS_MODES` |
 | 新小游戏 | `src/minigames/<game>.py` | `play_<game>(win, ...) -> (ok, info)` |
 | 两个及以上任务复用的流程 | `src/workflows/<flow>.py` | 参数化配置 + 主流程函数 |
 | 设备感知/执行能力 | `src/device/` | 按能力命名 |
@@ -107,7 +108,7 @@ core  ←  device  ←  workflows  ←  tasks
 3. **兼容期留 shim**：如 `xuanshu.follow_task = workflows.follow.follow_task`
    保留一个提交，调用方全部改完后删除；测试同提交更新。
 4. **每个抽取的模块保留/补齐测试**；提交前 `python -m pytest -q` 全绿
-   （基线：1287 passed, 2 deselected，2026-11-18）。
+   （基线：1301 passed, 2 deselected，2026-11-18）。
 5. **涉及任务链路的抽取至少真机跑一轮**对应任务；纯移动/改名可只跑测试。
 6. **打包**：`pyproject.toml` 的 `packages` 必须包含新子包；
    Nuitka `--include-package=src` 会自动跟随，但 pip/ascript 打包不会。
@@ -153,4 +154,6 @@ core  ←  device  ←  workflows  ←  tasks
 | P2 | 目录迁移（纯 `git mv` + import 改写） | ✅ 已完成（2026-11-13） |
 | P2 | 重构审查修复（拍毒虫退避状态、updater 路径深度、工具链/CI 路径、导入规则补强） | ✅ 已完成（2026-11-13） |
 | P2 | 既有问题清理（独立诊断脚本移出包、package-data 去用户数据/旧模板路径、清屏状态键命名、拍毒虫完成态 TTL 清理、恒真测试修复、小游戏 re-export 清理、binding/progress 专属测试） | ✅ 已完成（2026-11-13） |
-| P3 | 拆分 `control_window.py`、main 任务注册表、模板目录分组 | 待定 |
+| P3 | main 任务注册表 | ✅ 已完成（2026-11-18）：`src/app/task_registry.py` 单点登记 `TaskSpec`/`TASKS`/`run_task_mode`，`main` 移除 if/elif 分发；模式集合与顺序由 `tests/test_task_registry.py` 对照 `settings.TASK_MODES` 锁定 |
+| P3 | 拆分 `control_window.py` | 🚧 部分完成（2026-11-18）：诊断/验证工具（132 方法、约 2140 行）已下沉 `src/app/diagnostics.py` 的 `DiagnosticsMixin`，`ControlWindow` 继承；纯搬迁、callPython 名不变。剩余 `save_*` 薄封装表驱动、scheme/update/message 宿主控制器待评估 |
+| P3 | 模板目录分组 | 待定（建议降级为命名治理：保持平铺 + 前缀命名/引用一致性测试，见 §5） |

@@ -15,7 +15,7 @@
 | 进程模型 | **主进程**（pywebview GUI / 控制平面）+ **任务子进程**（spawn，daemon）+ **悬浮层绘制子进程**（subprocess，独立进程） |
 | 线程模型 | 主进程：GUI 主线程、TaskManager 日志监听、窗口看护、老板键消息泵、托盘、Runtime 驻留、OCR 预热、消息服务轮询/事件线程；任务子进程：`task_start` daemon 线程、`battle.watch_loop` 战斗线程、摄妖香空闲兜底线程、debug_overlay 监督线程 |
 | 停止模型 | **杀进程是唯一可靠的全线程清理方式**：`stop_event → join 3s → terminate → join 1s → kill`（业务循环无协作式停止标志） |
-| 任务编排 | 面板勾选任务 → 按顺序逐个进入 `_run_task_mode`；每个任务循环自然结束后切下一个，全部结束任务进程退出 |
+| 任务编排 | 面板勾选任务 → 按顺序逐个进入 `app.task_registry.run_task_mode`；每个任务循环自然结束后切下一个，全部结束任务进程退出 |
 | 感知 | Win32 窗口截图（不激活）→ PIL 帧（OCR / 绿字）或 BGR 帧（模板匹配）；RapidOCR 三种引擎（全帧 / 区域 / 2x 放大）+ OpenCV 模板匹配 |
 | 执行 | 物理鼠标（拟人化，全局 `RLock` 串行）或静默消息通道（`WM_MOUSEMOVE/LBUTTONDOWN/UP`，不移动鼠标、不抢前台）；键盘同理区分物理 / `WM_SYSKEY` / `WM_CHAR` |
 | 持久化 | `config.json`（KeyValue：软件全局设置 + 窗口绑定）、`data/<角色ID>/`（settings/schemes/state/task_stats/high_perf，按角色隔离）、`debug_overlay_state.json`（看板/悬浮层心跳）、`logs/日期.log`；详见 docs/user-data-layout.md |
@@ -136,6 +136,8 @@ flowchart TB
 
     subgraph APP["app：外壳 / UI / 生命周期"]
         UI["control_window.py"]
+        DIAG["diagnostics.py"]
+        REG["task_registry.py"]
         TM["task_manager.py"]
         UPD["updater.py / update_config.py"]
         MISC["hotkey.py / select_window.py<br/>env_check.py / capture_diag.py"]
@@ -261,7 +263,7 @@ flowchart TB
     M2 --> N
     N --> O["启动 battle.watch_loop 线程"]
     O --> P["按面板顺序遍历 modes"]
-    P --> Q["_run_task_mode(mode)<br/>任务前置 + 主循环"]
+    P --> Q["task_registry.run_task_mode(mode)<br/>任务前置 + 主循环"]
     Q --> R{"还有 mode？"}
     R -- 是 --> Q
     R -- 否 --> S["status_bars.check_all_bars<br/>血蓝条检测一次"]
@@ -378,7 +380,7 @@ flowchart LR
 
 ```mermaid
 flowchart TB
-    A["main._run_task_mode(玄枢轶闻)"] --> A1{"追踪中已有任务？"}
+    A["task_registry.run_task_mode(玄枢轶闻)"] --> A1{"追踪中已有任务？"}
     A1 -- 否 --> A2["team.leave_or_disband_team<br/>单人执行"]
     A1 -- 是 --> A3["直接续跑"]
     A2 --> B["run_loop"]
@@ -435,7 +437,7 @@ flowchart TB
 
 ```mermaid
 flowchart TB
-    A["main._run_task_mode(客栈)"] --> A1["team.leave_or_disband_team<br/>单人执行"]
+    A["task_registry.run_task_mode(客栈)"] --> A1["team.leave_or_disband_team<br/>单人执行"]
     A1 --> B["run_loop → run_cycle"]
     B --> C{"战斗中？"}
     C -- 是 --> C1["本轮失败，等待"]
@@ -1210,9 +1212,11 @@ flowchart LR
 
 | 文件 | 职责 | 关键入口 |
 |---|---|---|
-| `main.py` | 进程入口、授权门、绑定、模式分发、仅战斗、停止善后 | `task_start`、`_task_start_body`、`_run_task_mode`、`_battle_only_loop`、`task_stop` |
+| `main.py` | 进程入口、授权门、绑定、仅战斗、停止善后 | `task_start`、`_task_start_body`、`_battle_only_loop`、`task_stop` |
+| `src/app/task_registry.py` | 任务模式注册表（执行侧单点登记：模式 → 前置钩子 → 主循环） | `TaskSpec`、`TASKS`、`TASKS_BY_MODE`、`run_task_mode` |
 | `src/app/task_manager.py` | 任务子进程生命周期、日志回流、窗口看护 | `TaskManager.start/stop/is_running`、`_worker_wrapper`、`_window_watchdog` |
-| `src/app/control_window.py` | 控制面板、设置项 UI 接线与 re-export、诊断/验证按钮、看板 | `ControlWindow`、`ApiBridge`、`start_task`、`verify_*` |
+| `src/app/control_window.py` | 控制面板外壳、设置项 UI 接线与 re-export、启停、看板 | `ControlWindow`、`ApiBridge`、`start_task` |
+| `src/app/diagnostics.py` | 诊断/验证工具（2026-11-18 从 control_window 抽出的 mixin） | `DiagnosticsMixin`、`verify_*`、`_run_*_verify`、`_game_window_clickable` |
 | `src/core/settings.py` | 设置访问器/常量（P2-A 从 control_window 抽出） | `load_*`、`save_*`、`build_group_last_scan_payload` |
 | `src/core/role_settings.py` | 当前角色设置（settings.json）进程内缓存与读写 | `get`、`set_value`、`update`、`refresh` |
 | `src/core/user_data.py` | 角色解析、data 路径、state/settings 读写、迁移 | `current_role_id`、`role_dir`、`read_state`、`write_settings` |
