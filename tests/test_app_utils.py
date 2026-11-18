@@ -435,3 +435,23 @@ def test_silent_click_warns_on_delivery_failure(monkeypatch):
                         lambda msg, level="INFO": logs.append((level, msg)))
     assert app_utils._silent_click(_FakeWin(), 1, 2) is None
     assert logs and logs[0][0] == "WARN" and "投递失败" in logs[0][1]
+
+
+def test_chat_input_lock_acquires_and_releases():
+    """跨进程聊天输入互斥：正常获取；串行嵌套（同线程可重入）后释放。"""
+    with app_utils.chat_input_lock(timeout=0.5) as locked:
+        assert locked is True
+        with app_utils.chat_input_lock(timeout=0.5) as nested:
+            assert nested is True  # Win32 互斥体同线程递归
+    # 释放后其它线程可立即获取
+    result = []
+
+    def worker():
+        with app_utils.chat_input_lock(timeout=0.5) as got:
+            result.append(got)
+
+    import threading
+    thread = threading.Thread(target=worker)
+    thread.start()
+    thread.join(timeout=2.0)
+    assert result == [True]

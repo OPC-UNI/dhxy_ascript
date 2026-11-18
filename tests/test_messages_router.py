@@ -40,6 +40,10 @@ class FakeHost:
         self.stop_result = {"status": "success", "running": False}
         self.start_calls = 0
         self.stop_calls = 0
+        self.disband_result = {"ok": True, "message": "已解散队伍"}
+        self.shout_result = {"ok": True, "message": "已喊话：百次五倍来人，效率队"}
+        self.disband_calls = 0
+        self.shout_calls = []
 
     def is_running(self):
         return self.running
@@ -86,6 +90,14 @@ class FakeHost:
         self.stop_calls += 1
         self.running = bool(self.stop_result.get("running"))
         return dict(self.stop_result)
+
+    def disband_team(self):
+        self.disband_calls += 1
+        return dict(self.disband_result)
+
+    def shout(self, text=""):
+        self.shout_calls.append(text)
+        return dict(self.shout_result)
 
 
 class FakeAdapter:
@@ -139,6 +151,12 @@ def test_parse_commands_and_aliases():
     assert parse_command("/start") == ("/start", "")
     assert parse_command("停止") == ("/stop", "")
     assert parse_command("/stop") == ("/stop", "")
+    assert parse_command("解散队伍") == ("/disband", "")
+    assert parse_command("解散") == ("/disband", "")
+    assert parse_command("/disband") == ("/disband", "")
+    assert parse_command("喊话") == ("/shout", "")
+    assert parse_command("喊话 百次五倍来人") == ("/shout", "百次五倍来人")
+    assert parse_command("/shout 来人") == ("/shout", "来人")
     assert parse_command("/foo") == ("unknown", "/foo")
     assert parse_command("你好") is None
     assert parse_command("") is None
@@ -450,3 +468,60 @@ def test_stop_task_not_running_and_success():
     router.dispatch(adapter, _incoming("/stop"), ["42"])
     assert host.stop_calls == 1
     assert "✔ 任务已停止" in adapter.texts[-1][1]
+
+
+def test_disband_team_success_and_failure():
+    host = FakeHost()
+    host.running = False
+    router, records = _router(host)
+    adapter = FakeAdapter()
+    router.dispatch(adapter, _incoming("解散队伍"), ["42"])
+    assert host.disband_calls == 1
+    assert "✔ 已解散队伍" in adapter.texts[-1][1]
+    assert adapter.texts[-1][1].startswith("角色：角色A\n")
+    assert records[-1]["command"] == "/disband"
+    host.disband_result = {"ok": False,
+                           "message": "面板中未找到「解散队伍」按钮（可能不是队长）"}
+    router.dispatch(adapter, _incoming("/disband"), ["42"])
+    assert "✘" in adapter.texts[-1][1]
+    assert "可能不是队长" in adapter.texts[-1][1]
+
+
+def test_disband_refused_while_running():
+    host = FakeHost()  # running=True
+    router, _ = _router(host)
+    adapter = FakeAdapter()
+    router.dispatch(adapter, _incoming("/disband"), ["42"])
+    assert host.disband_calls == 0
+    assert "任务运行中" in adapter.texts[-1][1]
+    assert "/stop" in adapter.texts[-1][1]
+
+
+def test_shout_with_text_and_without():
+    host = FakeHost()
+    host.running = False
+    router, records = _router(host)
+    adapter = FakeAdapter()
+    router.dispatch(adapter, _incoming("喊话 百次五倍来人"), ["42"])
+    assert host.shout_calls == ["百次五倍来人"]
+    assert "✔ 已喊话" in adapter.texts[-1][1]
+    assert records[-1]["command"] == "/shout"
+    router.dispatch(adapter, _incoming("/shout"), ["42"])
+    assert host.shout_calls[-1] == ""  # 空内容由 host 取所选任务的喊话设置
+
+
+def test_shout_allowed_while_running_and_failure():
+    """任务运行中也可喊话（host 侧用跨进程输入互斥排队），失败如实回复。"""
+    host = FakeHost()  # running=True
+    router, _ = _router(host)
+    adapter = FakeAdapter()
+    router.dispatch(adapter, _incoming("/shout 来人"), ["42"])
+    assert host.shout_calls == ["来人"]
+    assert "✔ 已喊话" in adapter.texts[-1][1]
+    host.shout_result = {
+        "ok": False,
+        "message": "未选中五倍/修罗/种族比武任务，没有可用的喊话文案；"
+                   "请带上内容：/shout 喊话内容"}
+    router.dispatch(adapter, _incoming("喊话"), ["42"])
+    assert "✘" in adapter.texts[-1][1]
+    assert "喊话内容" in adapter.texts[-1][1]

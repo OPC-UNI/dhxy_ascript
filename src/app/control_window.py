@@ -199,6 +199,12 @@ class _ControlMessageHost:
     def stop_task(self):
         return self._cw.stop_task()
 
+    def disband_team(self):
+        return self._cw._message_disband()
+
+    def shout(self, text=""):
+        return self._cw._message_shout(text)
+
 
 # 静默按键诊断按钮白名单：hotkey 标识 → (修饰键, 主键, 展示文案,
 # 投主框架窗口, WM_CHAR 字符码)。后两项为变体按钮：Ctrl+Tab 切 Tab
@@ -247,7 +253,9 @@ class ControlWindow(WebWindow):
         self._pending_logs = []  # 页面就绪前的日志暂存（首屏加载补投抽屉）
         # 消息服务（构造只读配置，不启线程；prepare() 建窗后 start）
         self._capture_lock = threading.Lock()  # /capture 串行（主进程内）
-        self._exit_game_lock = threading.Lock()  # /exitgame 串行
+        # 消息侧游戏操作串行（/exitgame、/disband、/shout 互斥——都会操作
+        # 队伍面板/聊天输入，交错执行会打乱面板状态或输入内容）
+        self._game_op_lock = threading.Lock()
         self._message_service = MessageService(
             host=_ControlMessageHost(self),
             config=load_message_config(),
@@ -1186,8 +1194,9 @@ class ControlWindow(WebWindow):
 
     def _message_exit_game(self, progress=None):
         """消息服务 /exitgame：停任务 → 解散/离开队伍 → 关闭游戏客户端。"""
-        if not self._exit_game_lock.acquire(blocking=False):
-            return {"ok": False, "message": "退出游戏流程正在进行"}
+        if not self._game_op_lock.acquire(blocking=False):
+            return {"ok": False,
+                    "message": "另一项游戏操作正在进行（退出/解散队伍/喊话），请稍后再试"}
         try:
             from ..device import exit_game as exit_game_mod
             if self._tm.is_running():
@@ -1221,7 +1230,134 @@ class ControlWindow(WebWindow):
             return {"ok": False,
                     "message": f"退出游戏异常：{type(e).__name__}: {e}"}
         finally:
-            self._exit_game_lock.release()
+            self._game_op_lock.release()
+
+    def _message_disband(self):
+        """消息服务 /disband：绑定 Tab 护栏 → 队长解散 / 队员离开（单次面板流程）。
+
+        与诊断页「检查队伍信息」同一套护栏：先切回绑定角色 Tab（错误 Tab
+        上执行会操作错账号）；未组队时 leave_or_disband_team 直接返回无需
+        操作。任务运行中拒绝（任务自己管队伍，抢面板会打乱其检查/补人）。
+        """
+        if self._tm.is_running():
+            return {"ok": False, "message": "任务运行中，请先停止任务再解散队伍"}
+        if not self._game_op_lock.acquire(blocking=False):
+            return {"ok": False,
+                    "message": "另一项游戏操作正在进行（退出/解散队伍/喊话），请稍后再试"}
+        try:
+            win = game.find_main_window()
+            if win is None:
+                return {"ok": False, "message": "未找到游戏窗口（游戏未启动）。"}
+            if _window_minimized(win):
+                return {"ok": False, "message": "游戏窗口已最小化，请恢复窗口后再试。"}
+            from ..device import tab_group, team
+            ok_tab, tab_info = tab_group.ensure_bound_tab(win)
+            if not ok_tab:
+                return {"ok": False, "message": tab_info}
+            ok, info = team.leave_or_disband_team(win)
+            self._message_log(f"解散/离开队伍：{info}",
+                              "SYS" if ok else "WARN")
+            return {"ok": ok, "message": info}
+        except Exception as e:
+            self._message_log(
+                f"解散队伍异常：{type(e).__name__}: {e}", "ERROR")
+            return {"ok": False,
+                    "message": f"解散队伍异常：{type(e).__name__}: {e}"}
+        finally:
+            self._game_op_lock.release()
+
+    def _default_shout_text(self):
+        """未带内容时的喊话文案：按任务选择顺序取首个可喊话任务的设置。
+
+        修罗模板的 {种族} 与任务内自动喊话同源（_build_shout_text），保证
+        手机远程喊话和任务自动喊话文案一致；无相关任务选中返回空串。
+        """
+        try:
+            modes = load_selected_modes()
+        except Exception:
+            return ""
+        for mode in modes:
+            try:
+                if mode == "五倍":
+                    return load_wubei_shout_text()
+                if mode == "修罗":
+                    from ..tasks import xiuluo  # 延迟导入：避免启动期加载任务模块
+                    return xiuluo._build_shout_text()
+                if mode == "种族比武":
+                    return load_zhongzu_shout_text()
+            except Exception as e:
+                self._message_log(f"读取喊话文案失败（{mode}）：{e}", "WARN")
+                return ""
+        return ""
+
+    def _message_shout(self, text=""):
+        """消息服务 /shout：向游戏聊天发送一次喊话（任务运行中也可用）。
+
+        与任务内喊话同链路：静默模式走 WM_CHAR 逐字符注入（无需前台），
+        关闭静默时激活窗口走物理键盘（Enter 发送）；文本上限沿用喊话
+        设置的长度上限。整段打字+回车持跨进程聊天输入互斥（与任务自动
+        喊话、客栈金额输入排队执行，防止两段文字拼成一条）。运行中不
+        切 Tab（避免打断组号 pass），按当前 Tab 角色发送——若任务正处
+        对话/战斗中，公屏可能显示不出来，回复里注明。
+        """
+        try:
+            running = bool(self._tm.is_running())
+        except Exception:
+            running = False
+        if not self._game_op_lock.acquire(blocking=False):
+            return {"ok": False,
+                    "message": "另一项游戏操作正在进行（退出/解散队伍/喊话），请稍后再试"}
+        try:
+            # 多行输入会把换行当回车投进聊天（提前发送半截文案）：
+            # 空白折叠成单个空格，只保留一行
+            text = " ".join(str(text or "").split())
+            if not text:
+                text = self._default_shout_text()
+                if not text:
+                    return {"ok": False,
+                            "message": "未选中五倍/修罗/种族比武任务，没有可用的喊话文案；"
+                                       "请带上内容：/shout 喊话内容"}
+            text = text[:SHOUT_TEXT_MAX_LEN]
+            win = game.find_main_window()
+            if win is None:
+                return {"ok": False, "message": "未找到游戏窗口（游戏未启动）。"}
+            if _window_minimized(win):
+                return {"ok": False, "message": "游戏窗口已最小化，请恢复窗口后再试。"}
+            if not running:
+                # 任务未运行才做绑定 Tab 护栏；运行中切 Tab 会打断组号 pass
+                from ..device import tab_group
+                ok_tab, tab_info = tab_group.ensure_bound_tab(win)
+                if not ok_tab:
+                    return {"ok": False, "message": tab_info}
+            with app_utils.chat_input_lock() as locked:
+                if not locked:
+                    return {"ok": False,
+                            "message": "喊话通道正忙（另一条喊话发送中），请稍后再试。"}
+                if app_utils.silent_mode_on():
+                    from ..device import silent_click  # 延迟导入：仅静默路径需要
+                    info = silent_click.send_silent_text(win, text, end_enter=True)
+                    if info is None:
+                        return {"ok": False, "message": "喊话投递失败（窗口句柄不可用）。"}
+                else:
+                    # 键盘事件只进前台窗口；与任务内物理喊话同时序
+                    win.activate()
+                    time.sleep(0.5)
+                    Keyboard.input(text)
+                    time.sleep(0.8)  # 等待剪贴板粘贴完成（中文走 Ctrl+V）
+                    Keyboard.key("enter")
+                    time.sleep(0.5)
+            self._message_log(f"喊话已发送：{text}")
+            note = ""
+            if running:
+                note = ("\n（任务运行中：按当前 Tab 发送；若正处对话/战斗中，"
+                        "公屏可能显示不出来）")
+            return {"ok": True, "message": f"已喊话：{text}" + note}
+        except Exception as e:
+            self._message_log(f"喊话异常：{type(e).__name__}: {e}", "ERROR")
+            return {"ok": False,
+                    "message": f"喊话异常：{type(e).__name__}: {e}"}
+        finally:
+            self._game_op_lock.release()
 
     def get_task_stats(self):
         """任务成就数据：直读当前角色 data/<ID>/task_stats.json
@@ -3807,6 +3943,11 @@ class ControlWindow(WebWindow):
 
     def prepare(self, width=440, height=500):
         """创建主窗口（不启动事件循环，webview.start 统一执行）。"""
+        if not os.path.isfile(self.abs_path):
+            # 资源根目录解析异常时 webview 只会显示「未找到文件」白屏，
+            # 这里留一行明确日志便于定位（v2.13.0 SDK 路径回归教训：
+            # res/ui 被解析到 %TEMP% 解压目录，模板/OCR 模型同时失效）
+            app_utils.log(f"[界面] 控制面板页面文件缺失: {self.abs_path}", "ERROR")
         file_url = Path(self.abs_path).as_uri()
         win = webview.create_window(
             title=self._window_title,
@@ -3855,3 +3996,17 @@ def _game_window_clickable(win):
         return False
     except Exception:
         return True  # 检查失败不阻塞验证（宁可放行）
+
+
+def _window_minimized(win):
+    """游戏窗口是否最小化（最小化时截图/面板点击/聊天输入都不可靠）。
+
+    查询失败按未最小化处理（与 _game_window_clickable 的放行语义一致，
+    真正的失败由后续操作自身报错）。
+    """
+    try:
+        import win32gui
+        hwnd = int(getattr(win, "hwnd", 0) or 0)
+        return bool(hwnd and win32gui.IsIconic(hwnd))
+    except Exception:
+        return False

@@ -2,9 +2,9 @@
 
 通道适配器只负责收发；本模块不 import ControlWindow，能力通过 host
 对象注入（见 service._ControlMessageHost）。查询类指令（状态/进度/日志/
-截图/方案列表）直接格式化回复；控制类指令（启停任务/切换方案）经 host
-调用与面板按钮同一入口（授权校验、运行中护栏都在 ControlWindow 侧），
-/exitgame 额外走 confirm 二次确认。
+截图/方案列表）直接格式化回复；控制类指令（启停任务/切换方案/解散队伍/
+喊话）经 host 调用与面板同一入口（授权校验、运行中护栏、绑定 Tab 护栏
+都在 ControlWindow 侧），/exitgame 额外走 confirm 二次确认。
 """
 import collections
 import re
@@ -172,6 +172,10 @@ class MessageRouter:
                 ok, error = self._handle_start(adapter, incoming.chat_id)
             elif command == "/stop":
                 ok, error = self._handle_stop(adapter, incoming.chat_id)
+            elif command == "/disband":
+                ok, error = self._handle_disband(adapter, incoming.chat_id)
+            elif command == "/shout":
+                ok, error = self._handle_shout(arg, adapter, incoming.chat_id)
             elif command == "/exitgame":
                 ok, error = self._handle_exit_game(arg, incoming, adapter)
             else:
@@ -489,3 +493,47 @@ class MessageRouter:
             return self._send(adapter, chat_id, "✔ 任务已停止")
         return self._send(adapter, chat_id,
                           "✘ 停止失败：" + self._fail_text(result))
+
+    def _handle_disband(self, adapter, chat_id):
+        """解散/离开队伍：队长解散、队员离开（任务运行中在 host 侧拒绝）。"""
+        disband = getattr(self._host, "disband_team", None)
+        if not callable(disband):
+            return self._send(adapter, chat_id, "当前版本不支持远程解散队伍。")
+        try:
+            running = bool(self._host.is_running())
+        except Exception:
+            running = False
+        if running:
+            return self._send(adapter, chat_id,
+                              "任务运行中，请先发送 /stop 停止任务再解散队伍。")
+        try:
+            result = disband() or {}
+        except Exception as e:
+            self._log(f"解散队伍异常：{type(e).__name__}: {e}", "WARN")
+            return self._send(adapter, chat_id,
+                              f"✘ 解散队伍异常：{type(e).__name__}: {e}")
+        ok = bool(result.get("ok"))
+        message = str(result.get("message") or
+                      ("已解散队伍" if ok else "解散队伍失败"))
+        return self._send(adapter, chat_id, ("✔ " if ok else "✘ ") + message)
+
+    def _handle_shout(self, arg, adapter, chat_id):
+        """喊话：arg 为空时由 host 取所选任务配置的喊话内容（{种族} 已替换）。
+
+        任务运行中同样允许（host 侧与任务自动喊话共用跨进程输入互斥）；
+        未运行时才做绑定 Tab 护栏，运行中按当前 Tab 发送。
+        """
+        shout = getattr(self._host, "shout", None)
+        if not callable(shout):
+            return self._send(adapter, chat_id, "当前版本不支持远程喊话。")
+        text = str(arg or "").strip()
+        try:
+            result = shout(text) or {}
+        except Exception as e:
+            self._log(f"喊话异常：{type(e).__name__}: {e}", "WARN")
+            return self._send(adapter, chat_id,
+                              f"✘ 喊话异常：{type(e).__name__}: {e}")
+        ok = bool(result.get("ok"))
+        message = str(result.get("message") or
+                      ("已发送喊话" if ok else "喊话失败"))
+        return self._send(adapter, chat_id, ("✔ " if ok else "✘ ") + message)

@@ -1894,12 +1894,18 @@ def _give_money(win, npc_name):
     （用户确认 2026-11-03）。静默操作：金额走 WM_CHAR 注入。"""
     human_click(win, MONEY_GIVE_INPUT_POS[0], MONEY_GIVE_INPUT_POS[1])
     time.sleep(0.3)
-    if app_utils.silent_mode_on():
-        from ..device import silent_click  # 延迟导入：避免模块级循环
-        silent_click.send_silent_text(win, MONEY_GIVE_AMOUNT)
-        log(f"[客栈] {npc_name}给与：已静默输入 {MONEY_GIVE_AMOUNT}", "SYS")
-    else:
-        Keyboard.input(MONEY_GIVE_AMOUNT)
+    # 与主进程远程喊话共用跨进程聊天输入互斥：不互斥时远程喊话的字符
+    # 会混进金额输入框（金额打乱 -> 给与失败）
+    with app_utils.chat_input_lock() as locked:
+        if not locked:
+            log(f"[客栈] {npc_name}给与：等待输入锁超时，等待下次轮询重试", "WARN")
+            return True
+        if app_utils.silent_mode_on():
+            from ..device import silent_click  # 延迟导入：避免模块级循环
+            silent_click.send_silent_text(win, MONEY_GIVE_AMOUNT)
+            log(f"[客栈] {npc_name}给与：已静默输入 {MONEY_GIVE_AMOUNT}", "SYS")
+        else:
+            Keyboard.input(MONEY_GIVE_AMOUNT)
     time.sleep(0.3)
     pt = game_map.find_template(win, GIVE_BTN_ICON)
     if pt is None:

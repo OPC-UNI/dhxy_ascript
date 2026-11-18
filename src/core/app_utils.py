@@ -119,6 +119,72 @@ _INPUT_LOCK = threading.RLock()
 # 流程互斥；新增背包用户必须整段持本锁。
 _BAG_LOCK = threading.RLock()
 
+# ---- 跨进程聊天输入互斥（主进程远程喊话 ↔ 任务子进程自动喊话/金额输入）----
+# 主进程与任务子进程是两个进程，_INPUT_LOCK 管不到对方；两边都可能向
+# 游戏输入框注入文字（主进程 /shout、任务缺人自动喊话、客栈给钱金额），
+# 同时注入会把两段文字拼成一条再被回车发出（或把金额打乱）。用会话级
+# 命名互斥体（Local\ 命名空间，同用户会话跨进程可见）串行整段
+# 「打字 → 回车」序列。互斥体不可用（创建失败）时降级为无锁继续。
+_CHAT_MUTEX_NAME = "Local\\ZhuomuniaoChatInput"
+_CHAT_MUTEX_HANDLE = None
+_CHAT_WAIT_OBJECT_0 = 0x0
+_CHAT_WAIT_ABANDONED = 0x80
+
+
+def _chat_mutex_handle():
+    """惰性创建命名互斥体；失败返回 0（调用方按无锁继续）。"""
+    global _CHAT_MUTEX_HANDLE
+    if _CHAT_MUTEX_HANDLE is not None:
+        return _CHAT_MUTEX_HANDLE
+    try:
+        import ctypes
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateMutexW.restype = ctypes.c_void_p
+        kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_int,
+                                          ctypes.c_wchar_p]
+        handle = kernel32.CreateMutexW(None, 0, _CHAT_MUTEX_NAME)
+        _CHAT_MUTEX_HANDLE = int(handle or 0)
+    except Exception:
+        _CHAT_MUTEX_HANDLE = 0
+    return _CHAT_MUTEX_HANDLE
+
+
+@contextmanager
+def chat_input_lock(timeout=6.0):
+    """跨进程聊天输入互斥：整段「打字 + 回车」持锁执行。
+
+    yield True = 已持锁（或互斥体不可用，按无锁继续）；yield False =
+    等待超时，调用方应放弃本次输入（避免两条文案交错拼成一条）。
+    超时覆盖一次完整打字序列（任务自动喊话最长约 3 秒），默认 6 秒
+    足够；持锁进程崩溃（WAIT_ABANDONED）时所有权直接转给我们。
+    """
+    handle = _chat_mutex_handle()
+    kernel32 = None
+    acquired = False
+    if handle:
+        try:
+            import ctypes
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.WaitForSingleObject.restype = ctypes.c_uint32
+            kernel32.WaitForSingleObject.argtypes = [ctypes.c_void_p,
+                                                     ctypes.c_uint32]
+            kernel32.ReleaseMutex.argtypes = [ctypes.c_void_p]
+            result = int(kernel32.WaitForSingleObject(
+                ctypes.c_void_p(handle), int(max(0.0, timeout) * 1000)))
+            acquired = result in (_CHAT_WAIT_OBJECT_0, _CHAT_WAIT_ABANDONED)
+        except Exception:
+            kernel32 = None
+            acquired = False
+            handle = 0  # 内核调用异常：降级为无锁继续
+    try:
+        yield bool(acquired or not handle)
+    finally:
+        if acquired and kernel32 is not None:
+            try:
+                kernel32.ReleaseMutex(ctypes.c_void_p(handle))
+            except Exception:
+                pass
+
 # 静默点击模式：置位期间所有鼠标点击改走窗口消息投递（不移动物理
 # 鼠标、不激活窗口），鼠标移动/移开变为空操作——消息点击不产生物理
 # 悬停态，move_away 的防悬停变色不再需要。诊断页静默修罗领取/巫医

@@ -91,3 +91,21 @@ def test_battle_only_loop_runs_battle_until_thread_exits(monkeypatch):
     assert entered.is_set()           # 已登录：战斗监控线程已启动
     assert any("仅战斗模式" in msg for msg, _ in calls)
     assert any("战斗监控线程已退出" in msg for msg, _ in calls)
+
+
+def test_ascript_project_root_points_to_repo_root():
+    """AScript SDK R 资源根目录（2026-11-18 v2.13.0 白屏教训）。
+
+    ascript 1.3.29+ 的 R.get_root() 优先读 __main__.__file__，Nuitka
+    onefile 下指向 %TEMP% 解压目录，而 res/ 在 exe 旁 → 面板 HTML/图片
+    模板/OCR 模型全部找不到（ERR_FILE_NOT_FOUND 白屏）。main.py 必须在
+    导入 src/ascript 之前用 ASCRIPT_PROJECT_ROOT 显式指定工程根：
+    源码态 = main.py 所在目录（仓库根），冻结态 = exe 所在目录。
+    """
+    import os
+    from pathlib import Path
+
+    root = os.environ.get("ASCRIPT_PROJECT_ROOT")
+    assert root, "main.py 必须设置 ASCRIPT_PROJECT_ROOT"
+    assert Path(root) == Path(main.__file__).resolve().parent
+    assert Path(main._PROJECT_ROOT) == Path(root)

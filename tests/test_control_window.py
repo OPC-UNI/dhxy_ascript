@@ -557,6 +557,14 @@ class _FakeControlWindow:
         self.calls.append("stop_task")
         return {"status": "success", "running": False}
 
+    def _message_disband(self):
+        self.calls.append("message_disband")
+        return {"ok": True, "message": "已解散队伍"}
+
+    def _message_shout(self, text=""):
+        self.calls.append(("message_shout", text))
+        return {"ok": True, "message": "已喊话"}
+
 
 def test_message_host_delegates_control_commands():
     """消息指令必须转调控制窗口入口（启动含授权校验，不绕过面板链路）。"""
@@ -565,8 +573,11 @@ def test_message_host_delegates_control_commands():
     assert host.switch_scheme("方案A")["status"] == "success"
     assert host.start_task()["running"] is True
     assert host.stop_task()["running"] is False
+    assert host.disband_team()["ok"] is True
+    assert host.shout("来人")["ok"] is True
     assert host._cw.calls == ["get_schemes", ("switch_scheme", "方案A"),
-                              "start_task", "stop_task"]
+                              "start_task", "stop_task", "message_disband",
+                              ("message_shout", "来人")]
 
 
 def test_message_host_switch_refreshes_panel():
@@ -580,3 +591,150 @@ def test_message_host_switch_refreshes_panel():
     cw.switch_result = {"status": "error", "msg": "任务运行中，请先停止任务再操作"}
     host.switch_scheme("方案A")
     assert cw.webview_instance.scripts == []
+
+
+# ---- 消息侧解散队伍 / 喊话（桩，不碰真实窗口） ----
+
+class _FakeTm:
+    def __init__(self, running=False):
+        self._running = running
+
+    def is_running(self):
+        return self._running
+
+
+class _MessageCwStub:
+    """只带 _message_shout/_message_disband 所需属性的桩。"""
+
+    def __init__(self, running=False):
+        import threading
+        self._game_op_lock = threading.Lock()
+        self._tm = _FakeTm(running)
+        self.events = []
+
+    def _message_log(self, msg, level="INFO"):
+        self.events.append((msg, level))
+
+
+def test_message_shout_without_window_returns_error(monkeypatch):
+    monkeypatch.setattr(control_window.game, "find_main_window", lambda: None)
+    result = control_window.ControlWindow._message_shout(
+        _MessageCwStub(), "来人")
+    assert result["ok"] is False
+    assert "未找到游戏窗口" in result["message"]
+
+
+def test_message_shout_running_skips_tab_guard_and_notes(monkeypatch):
+    """任务运行中也允许喊话：不切 Tab（防打断组号 pass），回复注明按当前 Tab。"""
+    from src.device import silent_click, tab_group
+    monkeypatch.setattr(control_window.game, "find_main_window", lambda: object())
+    monkeypatch.setattr(control_window, "_window_minimized", lambda win: False)
+    guard_calls = []
+    monkeypatch.setattr(
+        tab_group, "ensure_bound_tab",
+        lambda win: (guard_calls.append(1), (True, "已在绑定角色 Tab"))[1])
+    monkeypatch.setattr(control_window.app_utils, "silent_mode_on",
+                        lambda: True)
+    sent = []
+    monkeypatch.setattr(
+        silent_click, "send_silent_text",
+        lambda win, text, end_enter=False:
+            (sent.append(text), {"hwnd": 1})[1])
+    result = control_window.ControlWindow._message_shout(
+        _MessageCwStub(running=True), "来人")
+    assert result["ok"] is True
+    assert sent == ["来人"]
+    assert guard_calls == []  # 运行中不切 Tab
+    assert "按当前 Tab" in result["message"]
+
+
+def test_message_shout_stopped_uses_tab_guard(monkeypatch):
+    """任务未运行：先切回绑定角色 Tab，正常回复不带运行中提示。"""
+    from src.device import silent_click, tab_group
+    monkeypatch.setattr(control_window.game, "find_main_window", lambda: object())
+    monkeypatch.setattr(control_window, "_window_minimized", lambda win: False)
+    guard_calls = []
+    monkeypatch.setattr(
+        tab_group, "ensure_bound_tab",
+        lambda win: (guard_calls.append(1), (True, "已在绑定角色 Tab"))[1])
+    monkeypatch.setattr(control_window.app_utils, "silent_mode_on",
+                        lambda: True)
+    monkeypatch.setattr(silent_click, "send_silent_text",
+                        lambda win, text, end_enter=False: {"hwnd": 1})
+    result = control_window.ControlWindow._message_shout(
+        _MessageCwStub(running=False), "来人")
+    assert result["ok"] is True
+    assert guard_calls == [1]
+    assert "按当前 Tab" not in result["message"]
+
+
+def test_message_shout_refused_when_minimized(monkeypatch):
+    monkeypatch.setattr(control_window.game, "find_main_window",
+                        lambda: object())
+    monkeypatch.setattr(control_window, "_window_minimized", lambda win: True)
+    result = control_window.ControlWindow._message_shout(
+        _MessageCwStub(), "来人")
+    assert result["ok"] is False
+    assert "最小化" in result["message"]
+
+
+def test_message_disband_refused_when_task_running():
+    result = control_window.ControlWindow._message_disband(
+        _MessageCwStub(running=True))
+    assert result["ok"] is False
+    assert "任务运行中" in result["message"]
+
+
+def test_default_shout_text_follows_selected_modes(monkeypatch):
+    stub = _MessageCwStub()
+    monkeypatch.setattr(control_window, "load_selected_modes",
+                        lambda: ["五环", "五倍"])
+    monkeypatch.setattr(control_window, "load_wubei_shout_text",
+                        lambda: "百次五倍来人，效率队")
+    assert control_window.ControlWindow._default_shout_text(stub) == \
+        "百次五倍来人，效率队"
+    monkeypatch.setattr(control_window, "load_selected_modes", lambda: ["五环"])
+    assert control_window.ControlWindow._default_shout_text(stub) == ""
+
+
+def test_message_disband_runs_guard_then_team_helper(monkeypatch):
+    """解散队伍：先绑定 Tab 护栏，再走队长解散/队员离开；结果透传。"""
+    from src.device import tab_group, team
+    monkeypatch.setattr(control_window.game, "find_main_window", lambda: object())
+    monkeypatch.setattr(control_window, "_window_minimized", lambda win: False)
+    calls = []
+    monkeypatch.setattr(
+        tab_group, "ensure_bound_tab",
+        lambda win: (calls.append("guard"), (True, "已在绑定角色 Tab"))[1])
+    monkeypatch.setattr(
+        team, "leave_or_disband_team",
+        lambda win: (calls.append("team"), (False, "面板未打开"))[1])
+    result = control_window.ControlWindow._message_disband(_MessageCwStub())
+    assert calls == ["guard", "team"]
+    assert result["ok"] is False
+    assert result["message"] == "面板未打开"
+
+
+def test_message_shout_sends_truncated_silent_text(monkeypatch):
+    """喊话：静默通道投递并追加回车，文本按喊话设置上限截断；换行折叠。"""
+    from src.device import silent_click, tab_group
+    from src.core import settings
+    monkeypatch.setattr(control_window.game, "find_main_window", lambda: object())
+    monkeypatch.setattr(control_window, "_window_minimized", lambda win: False)
+    monkeypatch.setattr(tab_group, "ensure_bound_tab",
+                        lambda win: (True, "已在绑定角色 Tab"))
+    monkeypatch.setattr(control_window.app_utils, "silent_mode_on",
+                        lambda: True)
+    sent = []
+    monkeypatch.setattr(
+        silent_click, "send_silent_text",
+        lambda win, text, end_enter=False:
+            (sent.append((text, end_enter)), {"hwnd": 1})[1])
+    long_text = "来" * 100
+    stub = _MessageCwStub()
+    result = control_window.ControlWindow._message_shout(stub, long_text)
+    assert result["ok"] is True
+    assert sent == [(("来" * settings.SHOUT_TEXT_MAX_LEN), True)]
+    control_window.ControlWindow._message_shout(stub, "  来人\n第二行 ")
+    assert sent[-1] == ("来人 第二行", True)  # 换行折叠成空格，防提前发送
+    assert stub.events  # 已写面板/文件日志

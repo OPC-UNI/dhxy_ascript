@@ -3,7 +3,7 @@
 所有线程均为 daemon；网络异常只更新状态/日志，不向 UI 或任务冒泡。
 本模块不 import ControlWindow：能力通过 host 注入（is_running/
 runtime_status/task_progress/identity/capture/log_tail/exit_game/
-list_schemes/switch_scheme/start_task/stop_task）。
+list_schemes/switch_scheme/start_task/stop_task/disband_team/shout）。
 """
 import collections
 import queue

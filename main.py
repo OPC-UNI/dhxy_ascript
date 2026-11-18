@@ -35,6 +35,20 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if os.path.isdir(os.path.join(_HERE, "src")):
     sys.path.insert(0, _HERE)
 
+# ---- 资源根目录引导（AScript SDK R 定位，必须早于任何 src/ascript 导入）----
+# ascript >= 1.3.29 的 R.get_root() 非冻结分支优先读 __main__.__file__：
+# Nuitka onefile 下该值指向 %TEMP% 解压目录，而 res/（面板 HTML、图片模板、
+# OCR 模型）是随包放在 exe 旁的外部目录、不在 exe 内，结果全部指向缺失
+# 路径——2026-11-18 v2.13.0 升级实测：控制面板白屏 ERR_FILE_NOT_FOUND，
+# 模板/OCR 模型同时失效。SDK 提供 ASCRIPT_PROJECT_ROOT 显式指定工程根
+# （R 首次调用即缓存 _BASE_DIR，src 模块导入期就会调用 R.res，故必须提前
+# 设置；spawn 任务子进程重导入本模块时同样生效）。
+if "__compiled__" in globals():
+    _PROJECT_ROOT = os.path.dirname(os.path.abspath(sys.executable))
+else:
+    _PROJECT_ROOT = _HERE
+os.environ["ASCRIPT_PROJECT_ROOT"] = _PROJECT_ROOT
+
 # ---- 自动更新助手入口（必须在导入 ascript/webview 等重依赖之前）----
 # 更新助手是当前 exe 复制到 %TEMP% 的副本，以 --apply-update 启动：
 # 只依赖标准库，快速进入「等主进程退出 → 覆盖 → 重启」流程。
@@ -647,6 +661,11 @@ if __name__ == '__main__':
     silent_ok = False
     deny_info = ""  # 静默被拒原因（用于弹窗前提示）
     startup_logs = []  # 启动阶段授权日志（面板首屏加载后补投抽屉）
+    # 资源根目录（res/ 所在目录）：包装路径解析异常时（如 SDK R 改用
+    # __main__.__file__ 导致指向 %TEMP% 解压目录），日志一眼定位
+    _root_line = f"[资源] 工程根目录: {_PROJECT_ROOT}"
+    log(_root_line, "SYS")
+    startup_logs.append(_root_line)
     if _UPDATE_RECOVERY:
         # 中断更新恢复结果（正常升级成功走 last_result，不在这里）
         _line = f"[更新] 启动恢复：{_UPDATE_RECOVERY}"

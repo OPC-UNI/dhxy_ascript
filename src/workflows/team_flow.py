@@ -120,29 +120,35 @@ class TeamFlow:
     def shout_recruit(self, win):
         """缺人自动喊话：输入内容 → Enter 发送到游戏当前默认频道。
 
-        静默模式走 WM_CHAR 逐字符注入，无需前台；投递失败不记时间戳，
-        下轮重试。
+        整段打字+回车持跨进程聊天输入互斥（主进程远程 /shout 可能与
+        本喊话同时发生，不互斥会把两条文案拼成一条）；等锁超时放弃本
+        轮、不记时间戳，下轮重试。静默模式走 WM_CHAR 逐字符注入，无需
+        前台；投递失败同样不记时间戳。
         """
         text = self._shout_text()
-        if app_utils.silent_mode_on():
-            from ..device import silent_click  # 延迟导入：避免模块级循环
-            info = silent_click.send_silent_text(win, text, end_enter=True)
-            if info is None:
-                log(f"{self.prefix} 静默喊话投递失败（窗口不存在）", "WARN")
+        with app_utils.chat_input_lock() as locked:
+            if not locked:
+                log(f"{self.prefix} 喊话等待输入锁超时，下轮重试", "WARN")
                 return
+            if app_utils.silent_mode_on():
+                from ..device import silent_click  # 延迟导入：避免模块级循环
+                info = silent_click.send_silent_text(win, text, end_enter=True)
+                if info is None:
+                    log(f"{self.prefix} 静默喊话投递失败（窗口不存在）", "WARN")
+                    return
+                self._shout_last_at = time.time()
+                log(f"{self.prefix} 已静默喊话: {text}", "SYS")
+                return
+            # 键盘事件只进前台窗口；喊话偶现静默丢失，先激活游戏窗口
+            win.activate()
+            time.sleep(0.5)
+            # 游戏聊天输入常驻（无需 Enter 打开）：直接输入 + Enter 发送
+            Keyboard.input(text)
+            time.sleep(0.8)  # 等待剪贴板粘贴完成（中文走 Ctrl+V）
+            Keyboard.key("enter")  # 发送
+            time.sleep(0.5)
             self._shout_last_at = time.time()
-            log(f"{self.prefix} 已静默喊话: {text}", "SYS")
-            return
-        # 键盘事件只进前台窗口；喊话偶现静默丢失，先激活游戏窗口
-        win.activate()
-        time.sleep(0.5)
-        # 游戏聊天输入常驻（无需 Enter 打开）：直接输入 + Enter 发送
-        Keyboard.input(text)
-        time.sleep(0.8)  # 等待剪贴板粘贴完成（中文走 Ctrl+V）
-        Keyboard.key("enter")  # 发送
-        time.sleep(0.5)
-        self._shout_last_at = time.time()
-        log(f"{self.prefix} 已自动喊话: {text}", "SYS")
+            log(f"{self.prefix} 已自动喊话: {text}", "SYS")
 
     def keep_alive(self, win, info):
         """非队长：核心流程不执行，保持任务运行（战斗线程自动操作）。
