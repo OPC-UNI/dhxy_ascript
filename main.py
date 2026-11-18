@@ -100,6 +100,10 @@ from src.core.settings import (BATTLE_ONLY_MODE,  # 设置读取（非 UI 层）
                                load_battle_only_auto_rejoin)
 from src.core import app_utils  # 通用工具（日志、高性能模式共享设施）
 from src.core.app_utils import log, log_file_path  # 日志
+# SDK 补丁：Window.capture 的 win32ui.error 逃逸兜底（详见 sdk_patches）。
+# 必须在任务子进程启动前生效；spawn 子进程重导入本模块时同样执行。
+from src.core.sdk_patches import install_window_capture_guard
+install_window_capture_guard(log_fn=app_utils.log)
 from src.device import game  # 游戏窗口操作
 from src.core import user_data  # 角色数据目录（data/<角色ID>/）
 from src.device import bag  # 背包操作
