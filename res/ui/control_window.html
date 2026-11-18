@@ -85,10 +85,15 @@
             display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-dim);
             flex-wrap: wrap;
         }
-        .lic-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
-        .lic-dot.warn { background: var(--gold); }
-        .lic-dot.bad { background: var(--danger); }
-        .side-ver { width: 100%; font-size: 10px; margin-top: 2px; }
+        /* 侧栏底部两行：授权行（状态点 + 文案，长文案换行时状态点不单独占行）
+           + 当前版本/群组图标行（同为 11px 文本，与授权对齐） */
+        .side-foot-top { width: 100%; display: flex; align-items: center; gap: 6px; }
+        .side-foot-top #lic-text { min-width: 0; }
+        .side-foot-bottom {
+            width: 100%; display: flex; align-items: center;
+            justify-content: space-between; gap: 6px; margin-top: 2px;
+        }
+        .side-ver { font-size: 11px; }
         .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
         /* ---- 顶栏 ---- */
         .top-bar {
@@ -157,6 +162,18 @@
             display: inline-flex; align-items: center; justify-content: center;
         }
         .icon-btn-sm svg { width: 14px; height: 14px; display: block; }
+        /* 加入群组：侧栏底部图标按钮（JS JOIN_GROUPS 驱动，预留多群组），
+           hover 由 title 提示「加入 xxx」，不占用文字入口 */
+        .join-groups { gap: 4px; }
+        .join-group-btn {
+            min-width: 22px; width: 22px; height: 22px; padding: 0; border-radius: 5px;
+            border: none; background: transparent;
+            color: var(--text); display: inline-flex; align-items: center;
+            justify-content: center; cursor: pointer; transition: all 0.15s;
+        }
+        .join-group-btn svg { width: 16px; height: 16px; display: block; }
+        .join-group-btn:hover { color: var(--accent); background: var(--panel2); }
+        .join-group-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
         #btn-scheme-delete { border-color: var(--danger); color: var(--danger); }
         #btn-scheme-delete.armed { background: var(--danger); color: #fff; }
         #btn-scheme-import-confirm-cancel { border-color: var(--text-dim); color: var(--text-dim); }
@@ -800,9 +817,15 @@
             </div>
         </div>
         <div class="side-footer">
-            <span class="lic-dot" id="lic-dot"></span>
-            <span id="lic-text">授权：-</span>
-            <span class="side-ver" id="app-version">-</span>
+            <div class="side-foot-top">
+                <span id="lic-text">授权：-</span>
+            </div>
+            <div class="side-foot-bottom">
+                <span class="side-ver" id="app-version">-</span>
+                <!-- 群组图标由 JS 的 JOIN_GROUPS 数组渲染：新增群组只需加一项，
+                     hover/读屏提示「加入 <群组名>」，页面不写死群组名称 -->
+                <div class="group-ctrl join-groups" id="join-groups"></div>
+            </div>
         </div>
     </nav>
     <!-- ================= 主列 ================= -->
@@ -2111,7 +2134,6 @@
     const schemeCurrentEl = document.getElementById('scheme-current');
     const schemeImportConfirmRow = document.getElementById('scheme-import-confirm');
     const schemeImportConfirmText = document.getElementById('scheme-import-confirm-text');
-    const licDot = document.getElementById('lic-dot');
     const licText = document.getElementById('lic-text');
     const appVersionEl = document.getElementById('app-version');
     const aboutVersionEl = document.getElementById('about-version');
@@ -3321,20 +3343,17 @@
         licenseStatusEl.innerText = lic.status;
         licenseExpireEl.innerText = lic.expire || '—';
         licText.innerText = '授权：' + lic.status;
-        // 到期解析（仅一次）：状态点与临期横幅共用
+        // 到期时间不单独占行：hover「授权：已激活」以提示形式显示（免费版/
+        // 未知状态无 expire 时不提示）；系统页仍展示完整「到期时间」。
+        const expireText = String(lic.expire || '').trim();
+        licText.title = expireText ? '到期时间：' + expireText : '';
+        licText.style.cursor = expireText ? 'help' : '';
+        // 到期解析（临期横幅用）
         let expMs = NaN;
         if (lic.expire) {
             expMs = new Date(String(lic.expire).replace(' ', 'T')).getTime();
         }
         const daysLeft = isNaN(expMs) ? NaN : Math.ceil((expMs - Date.now()) / 86400000);
-        // 状态点：已过期红 / 已激活且 7 天内到期金 / 其余绿（免费版无到期时间恒绿）
-        let cls = '';
-        if (lic.status === '已过期') {
-            cls = 'bad';
-        } else if (!isNaN(daysLeft) && daysLeft >= 0 && daysLeft <= 7) {
-            cls = 'warn';
-        }
-        licDot.className = 'lic-dot' + (cls ? ' ' + cls : '');
         // 临期横幅（系统页，7 天内到期）；其余状态（含免费版）明确隐藏——
         // 横幅 CSS warn 类默认可见，必须每次内联覆盖 display
         if (!isNaN(daysLeft) && daysLeft >= 0 && daysLeft <= 7 && lic.status !== '已过期') {
@@ -3843,13 +3862,51 @@
     window.onUpdateState = renderUpdateState;
     window.onUpdateProgress = renderUpdateProgress;
 
+    // 外链统一走系统浏览器：webview 内直接导航会跳离控制面板
+    function openExternal(url) {
+        if (/^https?:\/\//.test(url)) callPython('open_external', url);
+    }
+
+    // 加入群组：预留多群组能力——新增群组只需在数组里加一项。
+    // name 用于 hover/读屏提示（「加入 <名>」），页面上不写死群组名；
+    // icon 为 24x24 SVG 内部路径，filled=true 用实心品牌图标、
+    // false 用描边图标（与面板图标风格一致）。
+    const JOIN_GROUPS = [
+        {
+            name: 'Telegram',
+            url: 'https://t.me/+C3QW9-lobKAyZDQx',
+            filled: true,
+            icon: '<path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/>',
+        },
+    ];
+
+    function renderJoinGroups() {
+        const box = document.getElementById('join-groups');
+        if (!box) return;
+        box.innerHTML = '';
+        for (const group of JOIN_GROUPS) {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'join-group-btn';
+            btn.title = '加入 ' + group.name;
+            btn.setAttribute('aria-label', '加入 ' + group.name);
+            btn.innerHTML =
+                '<svg viewBox="0 0 24 24" aria-hidden="true" fill="' +
+                (group.filled ? 'currentColor' : 'none') + '" stroke="' +
+                (group.filled ? 'none' : 'currentColor') +
+                '" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">' +
+                group.icon + '</svg>';
+            btn.addEventListener('click', () => openExternal(group.url));
+            box.appendChild(btn);
+        }
+    }
+
     // 更新日志链接：拦截导航（webview 内点击会跳离面板），交给系统浏览器
     updateNotesEl.addEventListener('click', (ev) => {
         const a = ev.target && ev.target.closest ? ev.target.closest('a') : null;
         if (!a) return;
         ev.preventDefault();
-        const href = a.getAttribute('href') || '';
-        if (/^https?:\/\//.test(href)) callPython('open_external', href);
+        openExternal(a.getAttribute('href') || '');
     });
 
     /* ================= 全量同步设置到页面 ================= */
@@ -3903,9 +3960,9 @@
         charChip.innerText = env.bound_short || '未绑定角色';  // 短角色文案与窗口标题同源
         charChip.title = '操作窗口：' + (env.bound || '-') + '（点击前往系统页）';
         if (info.version) {
-            const v = 'v' + info.version;
-            appVersionEl.innerText = v;
-            aboutVersionEl.innerText = v;
+            // 侧栏底部与「授权：…」同格式（当前版本 2.13.0）；关于页保留 v 前缀
+            appVersionEl.innerText = '当前版本 ' + info.version;
+            aboutVersionEl.innerText = 'v' + info.version;
         }
         if (info.update) {
             updateAutoCheck.checked = info.update.auto_check !== false;
@@ -6702,6 +6759,7 @@
 
     /* ================= 初始化 ================= */
     // 顶部栏与看板初始按钮态（syncInitData 完成后由 update() 校正）
+    renderJoinGroups();
     update();
 </script>
 </body>
