@@ -414,7 +414,6 @@ def test_claim_flow_open_map_wiring(monkeypatch):
     assert zhongzu._open_claim_map(object(), ("长安", 1, 2)) == (True, "ok")
     assert captured["pos"] == ("长安", 1, 2)
     assert captured["map_name"] == zhongzu.CHANGAN
-    assert captured["world_icon"] == zhongzu.game_map.WORLD_MAP_CHANGAN_ICON
     assert captured["map_pos"] == zhongzu.CLAIM_MAP_POS
     assert captured["prefix"] == "[种族比武]"
     assert captured["click_fn"] is zhongzu._click_claim_map_pos

@@ -239,8 +239,8 @@ def test_dump_failure_frame_writes_and_rate_limits(tmp_path, monkeypatch):
     assert len(list(tmp_path.glob("diag_map_*.png"))) == 1
 
 
-def test_open_mini_map_city_dumps_frame_on_failure(monkeypatch):
-    """城市图标点击后小地图未打开 → 失败现场落盘（2026-11-16 排查依据）。
+def test_open_mini_map_by_name_dumps_frame_on_failure(monkeypatch):
+    """标签点击后小地图未打开 → 失败现场落盘（2026-11-16 排查依据）。
 
     当天 10:18 修理链路：世界地图在场、洛阳城标签位置与缓存一致，但
     点击城市图标两次（间隔 3s）都没进详情图，仅凭日志无法还原现场。
@@ -252,17 +252,217 @@ def test_open_mini_map_city_dumps_frame_on_failure(monkeypatch):
     monkeypatch.setattr(game_map.app_utils, "high_perf_click",
                         lambda *a, **k: True)
     monkeypatch.setattr(game_map, "is_mini_map_open", lambda w: False)
-    monkeypatch.setattr(game_map, "find_template", lambda w, icon: (667, 627))
-    monkeypatch.setattr(game_map, "human_click", lambda *a, **k: None)
-    monkeypatch.setattr(game_map.app_utils, "fixed_pos_set",
-                        lambda *a, **k: None)
+    monkeypatch.setattr(game_map, "click_world_map_label",
+                        lambda w, name, prefix="[地图] ", cache_key=None:
+                        (True, "已点击标签"))
     monkeypatch.setattr(game_map, "log", lambda *a, **k: None)
     monkeypatch.setattr(game_map, "_dump_failure_frame",
                         lambda w, tag: calls.append(tag))
-    ok, info = game_map.open_mini_map_city(
-        _FrameWin(), "shijie_luoyang.png", "洛阳城")
+    ok, info = game_map.open_mini_map_by_name(_FrameWin(), "洛阳城")
     assert ok is False and "小地图未打开" in info
     assert calls == ["city_open"]
+
+
+def test_open_mini_map_by_name_resolves_alias_and_cache_key(monkeypatch):
+    """位置地名「长安」经别名归一到标签「长安城」；高性能缓存键沿用
+    city_<图标>（历史持久化缓存兼容）。"""
+    monkeypatch.setattr(game_map, "time", _Clock())
+    monkeypatch.setattr(game_map, "open_world_map",
+                        lambda w: (True, "世界地图已打开"))
+    cache_calls = []
+
+    def fake_cached(win, key, label, prefix=""):
+        cache_calls.append((key, label))
+        return False
+
+    monkeypatch.setattr(game_map.app_utils, "high_perf_click", fake_cached)
+    opens = [False, True]  # 点击标签后：轮询 1 次即打开
+    monkeypatch.setattr(game_map, "is_mini_map_open",
+                        lambda w: opens.pop(0) if opens else True)
+    clicks = []
+    monkeypatch.setattr(game_map, "click_world_map_label",
+                        lambda w, name, prefix="[地图] ", cache_key=None:
+                        clicks.append((name, cache_key)) or (True, "ok"))
+    monkeypatch.setattr(game_map, "log", lambda *a, **k: None)
+    ok, info = game_map.open_mini_map_by_name(_FrameWin(), "长安")
+    assert ok is True and "长安城" in info
+    assert cache_calls == [("city_shijie_changan.png", "长安城标签")]
+    assert clicks == [("长安城", "city_shijie_changan.png")]
+
+
+def test_open_mini_map_by_name_unknown_map(monkeypatch):
+    ok, info = game_map.open_mini_map_by_name(_FrameWin(), "不存在的地")
+    assert ok is False and "未收录" in info
+
+
+class _PilWin:
+    """capture 返回 PIL 帧的窗口桩（click_world_map_label 用）。"""
+
+    def __init__(self, frame_bgr):
+        self.frame = Image.fromarray(cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB))
+
+    def capture(self, force_activate=False):
+        return self.frame
+
+
+def test_click_world_map_label_found_and_clicked(monkeypatch):
+    """共享标签点击能力：合成帧命中标签 → 点击匹配中心。"""
+    tpl = _tpl("shijie_luoyang.png")
+    frame = paste_template(make_bgr_frame(), tpl, 300, 400)
+    h, w = tpl.shape[:2]
+    monkeypatch.setattr(game_map, "time", _Clock())
+    monkeypatch.setattr(game_map, "log", lambda *a, **k: None)
+    cache = []
+    monkeypatch.setattr(game_map.app_utils, "fixed_pos_set",
+                        lambda key, win, x, y: cache.append((key, x, y)))
+    clicks = []
+    monkeypatch.setattr(game_map, "human_click",
+                        lambda w, x, y, button="primary": clicks.append((x, y)))
+    ok, info = game_map.click_world_map_label(
+        _PilWin(frame), "洛阳城", cache_key="city_t")
+    assert ok is True
+    assert clicks == [(300 + w // 2, 400 + h // 2)]
+    assert cache == [("city_t", 300 + w // 2, 400 + h // 2)]
+
+
+def test_click_world_map_label_missing(monkeypatch):
+    """标签未命中 → 失败日志带最佳分数（不再各处自写匹配逻辑）。"""
+    monkeypatch.setattr(game_map, "time", _Clock())
+    monkeypatch.setattr(game_map, "log", lambda *a, **k: None)
+    clicks = []
+    monkeypatch.setattr(game_map, "human_click",
+                        lambda w, x, y, button="primary": clicks.append((x, y)))
+    ok, info = game_map.click_world_map_label(
+        _PilWin(make_bgr_frame()), "洛阳城")
+    assert ok is False and "未找到" in info and "最佳匹配" in info
+    assert clicks == []
+
+
+# ---- 高性能开图（Alt+1 小地图 / Alt+2 世界地图，2026-11-18 用户要求）----
+# 高性能开关打开：快捷键开图（位置漂移免疫、可后台静默投递），未发出/
+# 未生效回退点击路径；开关关闭：维持原模板识别点击方案（不按快捷键）。
+
+def _patch_hotkey_env(monkeypatch, opens, sent=True):
+    """装配开图依赖：is_*_open 按序返回 opens、记录快捷键与点击。"""
+    monkeypatch.setattr(game_map, "time", _Clock())
+    seq = list(opens)
+    monkeypatch.setattr(game_map, "is_world_map_open",
+                        lambda w: seq.pop(0) if seq else True)
+    monkeypatch.setattr(game_map, "is_mini_map_open",
+                        lambda w: seq.pop(0) if seq else True)
+    hotkeys = []
+
+    def fake_hotkey(win, key, label, prefix=""):
+        hotkeys.append(key)
+        return sent, "hotkey"
+
+    monkeypatch.setattr(game_map.app_utils, "press_alt_hotkey", fake_hotkey)
+    monkeypatch.setattr(game_map, "log", lambda *a, **k: None)
+    return hotkeys
+
+
+def test_open_world_map_high_perf_uses_alt2(monkeypatch):
+    """高性能：Alt+2 打开世界地图（不点按钮），打开即返回。"""
+    monkeypatch.setattr(game_map.app_utils, "high_perf_on", lambda: True)
+    hotkeys = _patch_hotkey_env(monkeypatch, [False, False, True])
+    clicks = []
+    monkeypatch.setattr(game_map, "human_click",
+                        lambda w, x, y, button="primary": clicks.append((x, y)))
+    ok, info = game_map.open_world_map(_FrameWin())
+    assert ok is True and "Alt+2" in info
+    assert hotkeys == ["2"]
+    assert clicks == []
+
+
+def test_open_world_map_high_perf_hotkey_failure_falls_back(monkeypatch):
+    """高性能：Alt+2 未发出 → 回退识别点击（不因快捷键失败而报错）。"""
+    monkeypatch.setattr(game_map.app_utils, "high_perf_on", lambda: True)
+    hotkeys = _patch_hotkey_env(monkeypatch, [False], sent=False)
+    monkeypatch.setattr(game_map.app_utils, "high_perf_click",
+                        lambda *a, **k: False)
+    monkeypatch.setattr(game_map, "find_template", lambda w, icon: (300, 400))
+    monkeypatch.setattr(game_map.app_utils, "fixed_pos_set", lambda *a, **k: None)
+    state = {"open": False}
+    clicks = []
+
+    def fake_click(w, x, y, button="primary"):
+        clicks.append((x, y))
+        state["open"] = True
+
+    monkeypatch.setattr(game_map, "human_click", fake_click)
+    monkeypatch.setattr(game_map, "is_world_map_open", lambda w: state["open"])
+    ok, info = game_map.open_world_map(_FrameWin())
+    assert ok is True
+    assert hotkeys == ["2"]
+    assert clicks == [(300, 400)]
+
+
+def test_open_world_map_high_perf_off_keeps_template_path(monkeypatch):
+    """高性能关闭：不按快捷键，维持识别模板点击方案。"""
+    monkeypatch.setattr(game_map.app_utils, "high_perf_on", lambda: False)
+    hotkeys = _patch_hotkey_env(monkeypatch, [False], sent=False)
+    monkeypatch.setattr(game_map.app_utils, "high_perf_click",
+                        lambda *a, **k: False)
+    monkeypatch.setattr(game_map, "find_template", lambda w, icon: (300, 400))
+    monkeypatch.setattr(game_map.app_utils, "fixed_pos_set", lambda *a, **k: None)
+    state = {"open": False}
+    clicks = []
+
+    def fake_click(w, x, y, button="primary"):
+        clicks.append((x, y))
+        state["open"] = True
+
+    monkeypatch.setattr(game_map, "human_click", fake_click)
+    monkeypatch.setattr(game_map, "is_world_map_open", lambda w: state["open"])
+    ok, info = game_map.open_world_map(_FrameWin())
+    assert ok is True
+    assert hotkeys == []          # 关闭高性能不按快捷键
+    assert clicks == [(300, 400)]  # 仍走模板识别点击
+
+
+def test_open_mini_map_high_perf_uses_alt1(monkeypatch):
+    """高性能：Alt+1 打开小地图，不点地图位置区域。"""
+    monkeypatch.setattr(game_map.app_utils, "high_perf_on", lambda: True)
+    hotkeys = _patch_hotkey_env(monkeypatch, [False, False, True])
+    clicks = []
+    monkeypatch.setattr(game_map, "human_click",
+                        lambda w, x, y, button="primary": clicks.append((x, y)))
+    ok, info = game_map.open_mini_map(_FrameWin())
+    assert ok is True and "Alt+1" in info
+    assert hotkeys == ["1"]
+    assert clicks == []
+
+
+def test_open_mini_map_high_perf_already_open_no_hotkey(monkeypatch):
+    """高性能：小地图已打开直接返回（快捷键切换式，再按会关闭）。"""
+    monkeypatch.setattr(game_map.app_utils, "high_perf_on", lambda: True)
+    hotkeys = _patch_hotkey_env(monkeypatch, [True])
+    clicks = []
+    monkeypatch.setattr(game_map, "human_click",
+                        lambda w, x, y, button="primary": clicks.append((x, y)))
+    ok, info = game_map.open_mini_map(_FrameWin())
+    assert ok is True and info == "小地图已打开"
+    assert hotkeys == [] and clicks == []
+
+
+def test_open_mini_map_high_perf_off_clicks_position_region(monkeypatch):
+    """高性能关闭：不按快捷键，维持点击地图位置区域方案。"""
+    monkeypatch.setattr(game_map.app_utils, "high_perf_on", lambda: False)
+    hotkeys = _patch_hotkey_env(monkeypatch, [False], sent=False)
+    state = {"open": False}
+    clicks = []
+
+    def fake_click(w, x, y, button="primary"):
+        clicks.append((x, y))
+        state["open"] = True
+
+    monkeypatch.setattr(game_map, "human_click", fake_click)
+    monkeypatch.setattr(game_map, "is_mini_map_open", lambda w: state["open"])
+    ok, info = game_map.open_mini_map(_FrameWin())
+    assert ok is True
+    assert hotkeys == []
+    # MAP_POS_REGION (45,60,222,90) 中心
+    assert clicks == [((45 + 222) // 2, (60 + 90) // 2)]
 
 
 # ---- 小地图「任务」筛选勾选状态（模板匹配，跨场景通用；2026-11-16）----

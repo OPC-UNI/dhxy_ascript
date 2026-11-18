@@ -98,8 +98,7 @@ TASK_FALLBACK_TEXTS = ("消灭修罗",)  # has_task 兜底匹配串：标题整�
                               # （0.82~0.88）且仅在任务存在时出现
 
 # ---- 领取任务（灵兽村，用户实测） ----
-LINGSHOUCUN = "灵兽村"                        # 位置识别地名（精确匹配）
-WORLD_MAP_LINGSHOUCUN_ICON = "shijie_lingshoucun.png"  # 世界地图灵兽村图标（14.png 实测素材）
+LINGSHOUCUN = "灵兽村"                        # 位置识别地名（精确匹配；世界地图标签同名）
 LINGQU_ICON = "xiuluo_lingqu.png"             # 修罗领取任务按钮（15.png 实测素材）
 LINGSHOUCUN_SHIZHE_ICON = "xiuluo_lingshoucunshizhe.png"  # 灵兽村使者 NPC（识别到也可点击领取）
 CLAIM_SPOT = (111, 90)                        # 领取点地图坐标（用户实测 111,90 附近）
@@ -1000,7 +999,6 @@ def _open_claim_map(win, pos=None):
     """
     return claim_flow.open_claim_map(
         win, pos, map_name=LINGSHOUCUN,
-        world_icon=WORLD_MAP_LINGSHOUCUN_ICON,
         map_pos=LINGSHOU_MAP_POS, prefix="[修罗]",
         on_filter_state=_set_claim_task_filter)
 
@@ -1058,7 +1056,7 @@ def _walk_to_claim_spot(win, just_returned=False):
     模板与五倍宝象国领取按钮同图（跨模板匹配 0.947），跨图误命中
     会把五倍领取按钮当成修罗入口（实测 2026-10-23）。位置读取失败
     也按不在附近处理，直接走地图寻路（用户 2026-10-09 确认）：
-    加载/渲染等待由 open_mini_map_city 的轮询吸收，原 8s 等待 +
+    加载/渲染等待由 open_mini_map_by_name 的轮询吸收，原 8s 等待 +
     Alt+C 恢复实测整段空转（且 Alt+C 是位置显示开关，加载期误按
     会关掉显示——此处不再按）。
     just_returned=True（上一轮返程成功，落点必在灵兽村）时例外：

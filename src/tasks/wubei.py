@@ -139,8 +139,7 @@ class ReplaceTaskError(Exception):
     """
 
 # ---- 领取任务（宝象国，用户实测） ----
-BAOXIANGGUO = "宝象国"                              # 位置识别地名（精确匹配）
-WORLD_MAP_BAOXIANGGUO_ICON = "shijie_baoxiangguo.png"  # 世界地图宝象国图标（用户素材 17.png）
+BAOXIANGGUO = "宝象国"                              # 位置识别地名（精确匹配；世界地图标签同名）
 LINGQU_ICON = "wubei_lingqu.png"                   # 五倍领取任务按钮（用户素材 18.png）
 XIANGMOSHIWEI_ICON = "wubei_xiangmoshiwei.png"     # 降魔侍卫 NPC（用户素材 19.png，
                                                    # 待机动画致分数波动，轮询重试覆盖）
@@ -1188,7 +1187,6 @@ def _open_claim_map(win, pos=None):
     """
     return claim_flow.open_claim_map(
         win, pos, map_name=BAOXIANGGUO,
-        world_icon=WORLD_MAP_BAOXIANGGUO_ICON,
         map_pos=BAOXIANG_MAP_POS, prefix="[五倍]",
         on_filter_state=_set_claim_task_filter)
 
@@ -1247,7 +1245,7 @@ def _walk_to_claim_spot(win, just_returned=False):
     时无条件信任；否则须地图名门控——按钮模板与修罗灵兽村领取按钮
     同图（跨模板匹配 0.947），跨图误命中实测 2026-10-23。
     位置读取失败也按不在附近处理，直接走地图寻路（用户 2026-10-09
-    确认）：加载/渲染等待由 open_mini_map_city 的轮询吸收，原 8s
+    确认）：加载/渲染等待由 open_mini_map_by_name 的轮询吸收，原 8s
     等待 + Alt+C 恢复实测整段空转（且 Alt+C 是位置显示开关，
     加载期误按会关掉显示——此处不再按）。
     返回 (是否成功, 描述)。

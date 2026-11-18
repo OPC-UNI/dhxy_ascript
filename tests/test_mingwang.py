@@ -46,12 +46,12 @@ def _reset_tgqy_state(monkeypatch):
             ("_tgqy_game_last_check", 0.0), ("_tgqy_game_retry_at", 0.0)):
         monkeypatch.setattr(mingwang, name, value)
 
-# 模板 → 匹配阈值（与 mingwang 常量一致；shijie 标签走 open_mini_map_city
-# 默认 0.8）
+# 模板 → 匹配阈值（与 mingwang 常量一致；世界地图标签统一由
+# map.WORLD_MAP_LABELS 提供，阈值同 WORLD_MAP_LABEL_THRESHOLD）
 TEMPLATES = (
     (mingwang.RENWUSHUXING_ICON, mingwang.ATTR_TEMPLATE_THRESHOLD),
-    (mingwang.CLAIM_POINTS["魔族"]["world_icon"], 0.8),
-    (mingwang.CLAIM_POINTS["仙族"]["world_icon"], 0.8),
+    (game_map.world_map_label_icon(mingwang.CLAIM_POINTS["魔族"]["map"]), 0.8),
+    (game_map.world_map_label_icon(mingwang.CLAIM_POINTS["仙族"]["map"]), 0.8),
     (mingwang.CLAIM_SHANHE_ICON, mingwang.CLAIM_SHANHE_THRESHOLD),
     (mingwang.SEAL_ITEM_ICON, mingwang.SEAL_ITEM_THRESHOLD),
     (mingwang.PICK_ITEM_ICON, mingwang.PICK_ITEM_THRESHOLD),
@@ -60,7 +60,7 @@ TEMPLATES = (
     (mingwang._pochu_minigame.POCHU_FAIL_ICON,
      mingwang._pochu_minigame.POCHU_FAIL_THRESHOLD),
     (mingwang.DIAOYU_FAIL_CLOSE_ICON, mingwang.DIAOYU_FAIL_CLOSE_THRESHOLD),
-    (mingwang.SHADU_WORLD_ICON, 0.8),  # 世界地图标签（open_mini_map_city 默认 0.8）
+    (game_map.world_map_label_icon(mingwang.SHADU_MAP), 0.8),  # 世界地图标签
     (mingwang.SHADU_NPC_ICON, mingwang.SHADU_NPC_THRESHOLD),
     (mingwang.SHAHAI_START_ICON, mingwang.SHAHAI_START_THRESHOLD),
     (mingwang.QINGXI_START_ICON, mingwang.QINGXI_START_THRESHOLD),
@@ -173,7 +173,8 @@ def test_claim_points_config():
         assert claim["map"] and claim["npc_name"], race
         assert len(claim["map_filter_pos"]) == 2
         assert len(claim["map_label_pos"]) == 2
-        assert game_map.template_size(claim["world_icon"]) is not None, race
+        assert game_map.template_size(
+            game_map.world_map_label_icon(claim["map"])) is not None, race
     assert mingwang.CLAIM_POINTS["仙族"]["map"] == "天宫"
     # 旧「坐标寻路 + NPC 模板」路线已移除（用户 2026-11-16 规则）
     for race in ("魔族", "仙族"):
@@ -1331,20 +1332,20 @@ def test_shadu_search_falls_back_through_waypoints(monkeypatch):
                      (710, 393), (600, 200)]
 
 
-def test_shadu_search_enters_map_via_world_icon(monkeypatch):
-    """不在蟠桃园 → 世界地图点「蟠桃园」标签打开小地图。"""
+def test_shadu_search_enters_map_via_world_map_label(monkeypatch):
+    """不在蟠桃园 → 世界地图点「蟠桃园」标签打开小地图（只传地图名）。"""
     calls = []
     entered = []
     _patch_shadu_search(monkeypatch, calls, pos=("天宫", 185, 122))
     monkeypatch.setattr(mingwang.game_map, "is_mini_map_open", lambda w: True)
     monkeypatch.setattr(
-        mingwang.game_map, "open_mini_map_city",
-        lambda w, icon, label: entered.append((icon, label)) or (True, "ok"))
+        mingwang.game_map, "open_mini_map_by_name",
+        lambda w, map_name: entered.append(map_name) or (True, "ok"))
     monkeypatch.setattr(mingwang, "_shadu_scan_npc",
                         lambda w: ((600, 200), "找到"))
     ok, info = mingwang._shadu_search_npc(object())
     assert ok
-    assert entered == [(mingwang.SHADU_WORLD_ICON, mingwang.SHADU_MAP)]
+    assert entered == [mingwang.SHADU_MAP]
 
 
 def _shadu_win():
@@ -2579,8 +2580,8 @@ def test_minimap_quick_navigate_opens_scene_map_directly(monkeypatch):
                         lambda w: ("大唐边境", 475, 180))
     monkeypatch.setattr(game_map, "open_mini_map",
                         lambda w: order.append("mini") or (True, "小地图已打开"))
-    monkeypatch.setattr(game_map, "open_mini_map_city",
-                        lambda w, icon, label:
+    monkeypatch.setattr(game_map, "open_mini_map_by_name",
+                        lambda w, map_name:
                         order.append("city") or (True, "ok"))
     monkeypatch.setattr(game_map, "ensure_minimap_task_filter",
                         lambda w, pos:
@@ -2589,8 +2590,7 @@ def test_minimap_quick_navigate_opens_scene_map_directly(monkeypatch):
                         lambda w, x, y, button="primary":
                         order.append(("point", (x, y))))
     ok, info = game_map.minimap_quick_navigate(
-        object(), "大唐边境", "shijie_datangbianjing.png",
-        (501, 665), (989, 380))
+        object(), "大唐边境", (501, 665), (989, 380))
     assert ok and "已打开大唐边境小地图" in info
     assert order == ["mini", ("filter", (501, 665)),
                      ("point", (989, 380))]
@@ -2603,34 +2603,32 @@ def test_minimap_quick_navigate_uses_world_map_when_elsewhere(monkeypatch):
                         lambda w: ("魔王寨", 62, 82))
     monkeypatch.setattr(game_map, "open_mini_map",
                         lambda w: order.append("mini") or (True, "ok"))
-    monkeypatch.setattr(game_map, "open_mini_map_city",
-                        lambda w, icon, label:
-                        order.append(("city", icon, label)) or (True, "ok"))
+    monkeypatch.setattr(game_map, "open_mini_map_by_name",
+                        lambda w, map_name:
+                        order.append(("city", map_name)) or (True, "ok"))
     monkeypatch.setattr(game_map, "ensure_minimap_task_filter",
                         lambda w, pos: (True, "已勾选"))
     monkeypatch.setattr(game_map, "human_click",
                         lambda w, x, y, button="primary": None)
     ok, _info = game_map.minimap_quick_navigate(
-        object(), "大唐边境", "shijie_datangbianjing.png",
-        (501, 665), (989, 380))
+        object(), "大唐边境", (501, 665), (989, 380))
     assert ok
-    assert order == [("city", "shijie_datangbianjing.png", "大唐边境")]
+    assert order == [("city", "大唐边境")]
 
 
 def test_minimap_quick_navigate_stops_when_filter_fails(monkeypatch):
     """任务筛选勾选失败 → 不点击固定点，直接返回失败。"""
     clicked = []
     monkeypatch.setattr(game_map, "read_map_position", lambda w: None)
-    monkeypatch.setattr(game_map, "open_mini_map_city",
-                        lambda w, icon, label: (True, "ok"))
+    monkeypatch.setattr(game_map, "open_mini_map_by_name",
+                        lambda w, map_name: (True, "ok"))
     monkeypatch.setattr(game_map, "ensure_minimap_task_filter",
                         lambda w, pos: (False, "筛选点击后仍未勾选"))
     monkeypatch.setattr(game_map, "human_click",
                         lambda w, x, y, button="primary":
                         clicked.append((x, y)))
     ok, info = game_map.minimap_quick_navigate(
-        object(), "大唐边境", "shijie_datangbianjing.png",
-        (501, 665), (989, 380))
+        object(), "大唐边境", (501, 665), (989, 380))
     assert not ok and "仍未勾选" in info and clicked == []
 
 
@@ -2644,12 +2642,12 @@ def test_navigate_to_claim_by_map_label_success(monkeypatch):
                         lambda w, p="", quiet=False:
                         calls.append(("close", quiet)))
     monkeypatch.setattr(mingwang.game_map, "minimap_quick_navigate",
-                        lambda w, map_name, icon, fpos, lpos:
-                        calls.append(("quick", map_name, icon, fpos, lpos))
+                        lambda w, map_name, fpos, lpos:
+                        calls.append(("quick", map_name, fpos, lpos))
                         or (True, "已点击小地图固定点"))
     ok, info = mingwang.navigate_to_claim_by_map_label(win, claim)
     assert ok and "已点击" in info
-    assert ("quick", claim["map"], claim["world_icon"],
+    assert ("quick", claim["map"],
             claim["map_filter_pos"], claim["map_label_pos"]) in calls
 
 

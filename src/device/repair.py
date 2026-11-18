@@ -44,8 +44,7 @@ from . import battle  # 修理弹窗预期窗口 / 点击信号（battle 内延�
 from . import tab_group  # 组号模式：修理 pass
 
 # ---- 洛阳城修理点（用户 2026-11-12 实测提供） ----
-LUOYANG = "洛阳城"                        # 位置识别地名（精确匹配）
-WORLD_MAP_LUOYANG_ICON = game_map.WORLD_MAP_LUOYANG_ICON  # 世界地图洛阳城图标（客栈在用，实测 0.991）
+LUOYANG = "洛阳城"                        # 位置识别地名（精确匹配；世界地图标签同名）
 REPAIR_NPC_ICON = "luoyang_xiuli.png"     # 修理 NPC 屏幕模板（36x18 名牌）
 REPAIR_NPC_THRESHOLD = 0.8                # 模板匹配阈值（真机校准资产，改动前真图交叉验证）
 REPAIR_MAP_POS = (783, 458)               # 洛阳小地图上点修理 NPC 的点击点（窗口相对坐标）
@@ -426,10 +425,9 @@ def _run_repair_chain(win, prefix="修理", hover_before_click=False,
             ok, info = game_map.open_mini_map(win)
         else:
             # 跨图（含位置读不到）：世界地图 → 洛阳城 → 洛阳小地图
-            ok, info = game_map.open_mini_map_city(
-                win, WORLD_MAP_LUOYANG_ICON, LUOYANG)
+            ok, info = game_map.open_mini_map_by_name(win, LUOYANG)
         if not ok:
-            # 失败兜底：open_mini_map_city 失败时世界地图可能仍开着（地图
+            # 失败兜底：open_mini_map_by_name 失败时世界地图可能仍开着（地图
             # 打开失败路径不关地图）。残留地图的左缘竖排「世界地图」文字
             # 会被 follow 的追踪面板 OCR 读进任务签名——误判任务变化、
             # 多余点击追踪绿字、空转一轮（2026-11-16 实机：修理失败后

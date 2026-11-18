@@ -149,12 +149,13 @@ def near_claim_spot(pos, map_name, spot, tolerance):
         pos, map_name, spot[0], spot[1], tolerance)
 
 
-def open_claim_map(win, pos=None, *, map_name, world_icon, map_pos, prefix,
+def open_claim_map(win, pos=None, *, map_name, map_pos, prefix,
                    on_filter_state=None, click_fn=None):
     """地图感知导航到领取地图的小地图领取点（世界地图/小地图自动选择）。
 
     位置读为 map_name → 直接打开小地图；其他地图或位置不可读 → 世界
-    地图点击地图图标。随后点击小地图领取点坐标寻路。
+    地图点击地图标签（map.WORLD_MAP_LABELS 按地图名解析，调用方不再
+    传图标）。随后点击小地图领取点坐标寻路。
 
     pos：调用方刚读到的位置（同帧复用，省一次位置 OCR；战斗判定仍需
     本函数截一帧）；None 时自行截帧读取。
@@ -182,7 +183,7 @@ def open_claim_map(win, pos=None, *, map_name, world_icon, map_pos, prefix,
             log(f"{prefix} 不在{map_name}"
                 f"（{pos[0].strip()}[{pos[1]},{pos[2]}]），"
                 f"经世界地图前往{map_name}", "SYS")
-        ok, info = game_map.open_mini_map_city(win, world_icon, map_name)
+        ok, info = game_map.open_mini_map_by_name(win, map_name)
         if not ok:
             return False, info
     if on_filter_state is not None:

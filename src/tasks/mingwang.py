@@ -214,8 +214,7 @@ RACE_CACHE_KEY = "mingwang_race"
 # 相对换算，用户 2026-11-16 规则）。
 CLAIM_POINTS = {
     "魔族": {
-        "map": "大唐边境",
-        "world_icon": "shijie_datangbianjing.png",  # 世界地图标签（19.png）
+        "map": "大唐边境",  # 世界地图标签统一由 map.WORLD_MAP_LABELS 维护
         "npc_name": "逆天魔",
         # 小地图「任务」勾选框 / 黄字「逆天魔」点击点（绝对坐标，
         # 2026-11-16 16:38/16:39 实机日志实测值；窗口位置固定）
@@ -224,7 +223,6 @@ CLAIM_POINTS = {
     },
     "仙族": {
         "map": "天宫",
-        "world_icon": "shijie_tiangong.png",        # 世界地图标签（用户 图1，61×29）
         "npc_name": "武尊神",
         # 小地图「任务」勾选框 / 黄字「武尊神」点击点（绝对坐标：
         # 勾选框按天宫锚点 (991,217) 标定换算，黄字为 17:06 实机日志
@@ -729,8 +727,7 @@ _diaoyu_fail_streak = 0              # 连续失败重试次数（成功/新领�
 # 冷却一段时间让对话/战斗接管，防同一次寻路重复点击 NPC。
 SHADU_KEYWORD = "根据三张蟠桃园残像所示位置"
 SHADU_KEYWORD_SHORT = "蟠桃园残像"      # OCR 漏读前缀/尾字时的兜底触发词
-SHADU_MAP = "蟠桃园"
-SHADU_WORLD_ICON = "shijie_pantaoyuan.png"  # 世界地图「蟠桃园」标签（用户 图1，72×28）
+SHADU_MAP = "蟠桃园"  # 世界地图标签统一由 map.WORLD_MAP_LABELS 维护
 # 模板校准（2026-11-10 实机世界地图帧，logs/_world_map_probe.png）：目标帧
 # 0.9999 @(430,239)；天宫/主城帧 ≤0.28——0.8 阈值（map.find_template 默认）
 # 干净分开。
@@ -1001,8 +998,7 @@ def navigate_to_claim_by_map_label(win, claim):
     # 场景前置：清理残留地图/物品栏
     close_scene_panels(win, "名望")
     ok, info = game_map.minimap_quick_navigate(
-        win, claim["map"], claim["world_icon"],
-        claim["map_filter_pos"], claim["map_label_pos"])
+        win, claim["map"], claim["map_filter_pos"], claim["map_label_pos"])
     if not ok:
         close_scene_panels(win, "名望", quiet=True)
         return False, info
@@ -1875,7 +1871,7 @@ def _shadu_search_npc(win):
     pos = game_map.read_map_position(win)
     if pos is None or pos[0].strip() != SHADU_MAP:
         loc = "识别失败" if pos is None else f"{pos[0]}[{pos[1]},{pos[2]}]"
-        ok, info = game_map.open_mini_map_city(win, SHADU_WORLD_ICON, SHADU_MAP)
+        ok, info = game_map.open_mini_map_by_name(win, SHADU_MAP)
         if not ok:
             return False, f"前往{SHADU_MAP}失败（当前 {loc}）：{info}"
         log(f"[名望] 沙都修罗：不在{SHADU_MAP}（{loc}），已打开"

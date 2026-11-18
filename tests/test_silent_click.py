@@ -260,6 +260,18 @@ def test_send_silent_hotkey_alt_u_sequence(monkeypatch):
     assert [m[2] for m in fake.msgs] == [0x12, 0x55, 0x55, 0x12]
 
 
+def test_send_silent_hotkey_alt_digit_sequence(monkeypatch):
+    """Alt+1/Alt+2（高性能开小地图/世界地图）主键码在键表中。"""
+    fake = _FakeUser32(client=(1366, 768))
+    monkeypatch.setattr(silent_click, "user32", fake)
+    monkeypatch.setattr(silent_click.game, "list_tab_windows", lambda w: [])
+    info = silent_click.send_silent_hotkey(_FakeWin(0x123), ("alt",), "2")
+    assert info["modifiers"] == ["alt"] and info["key"] == "2"
+    assert [m[2] for m in fake.msgs] == [0x12, 0x32, 0x32, 0x12]
+    info = silent_click.send_silent_hotkey(_FakeWin(0x123), ("alt",), "1")
+    assert [m[2] for m in fake.msgs[-4:]] == [0x12, 0x31, 0x31, 0x12]
+
+
 def test_send_silent_hotkey_ctrl_tab_sequence(monkeypatch):
     fake = _FakeUser32(client=(1366, 768))
     monkeypatch.setattr(silent_click, "user32", fake)

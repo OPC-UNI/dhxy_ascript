@@ -6,8 +6,10 @@
 - is_in_map：判断当前是否在指定地图（地名模糊匹配）
 - is_at_position：判断位置是否在指定地图坐标附近（±tolerance）
 - open_world_map / close_world_map：世界地图开关
-- open_mini_map：打开当前地图的小地图（点击地图位置区域）
-- open_mini_map_city：打开世界地图并点击指定城市，打开该城市的小地图
+- open_mini_map：打开当前地图的小地图（高性能 Alt+1/Alt+2 快捷键，
+  非高性能点击地图位置区域/世界地图按钮）
+- open_mini_map_by_name / click_world_map_label：跨地图打开场景小地图
+  （地图名 → WORLD_MAP_LABELS 标签，任务/工作流统一入口，不再传图标）
 - close_mini_map / close_maps：关闭小地图/世界地图（小地图左键模板位置、
   世界地图右键模板位置；两者均带 1s 确认等待，复检仍打开才点击——
   防关闭/传送动画瞬态误检点击落到游戏世界取消寻路）
@@ -43,10 +45,10 @@ TRAY_BTN_REGION = (900, 737, 1378, 831)
 MAP_POS_REGION = (45, 60, 222, 90)
 # 世界地图按钮模板（实测匹配 0.969）
 WORLD_MAP_ICON = "item_map_shijie.png"
-# 世界地图上的城市图标（任务模块共用：点击城市打开该城市的小地图）
-WORLD_MAP_LUOYANG_ICON = "shijie_luoyang.png"  # 洛阳城（实测匹配 0.991）
-WORLD_MAP_CHANGAN_ICON = "shijie_changan.png"         # 长安城（五环任务实测）
-# ---- 世界地图标签全表（地图名 → 标签模板，供按名字导航的流程使用）----
+# ---- 世界地图标签全表（地图名 → 标签模板，唯一来源）----
+# 所有「打开世界地图点目标地图」的流程只传地图名，标签模板一律从本表
+# 解析（2026-11-18 用户规则：不得在任务模块再定义单图图标常量，
+# 如旧 WORLD_MAP_LUOYANG_ICON / WORLD_MAP_CHANGAN_ICON 已删除）。
 # 2026-11-15 实机从世界地图截图标定（按 OCR 行框裁剪、留 2px 余量），
 # 覆盖世界地图全部 55 个可见地名。全部模板实机自校验：目标世界地图帧
 # ≥0.98 唯一命中，非地图帧 ≤0.46（阈值 0.8 有充分余量）。
@@ -119,6 +121,11 @@ WORLD_MAP_OCR_ALIASES = str.maketrans({
     "輪": "轮", "迴": "回", "菜": "莱", "園": "园", "頂": "顶",
     "鄉": "乡", "鎮": "镇", "灣": "湾",
 })
+# 位置地名 → 世界地图标签名的别名（两者不完全一致的场景）：
+# 「长安」是任务的**位置识别地名**（五环/种族比武用 CHANGAN 做位置比对），
+# 世界地图标签名为「长安城」——不开别名表时只能靠相似度 0.8 与「长安东」
+# 打平（快照顺序决定胜负，不可依赖）。
+WORLD_MAP_NAME_ALIASES = {"长安": "长安城"}
 # 世界地图打开标志模板（实测匹配 0.95，右键其位置可关闭）
 # 小地图面板匹配区域（右上区）：面板可拖动但 58 帧实测均在
 # (900-1100, 150-300)；锄遗聚宝小游戏等面板含相似图标，会误匹配到
@@ -185,10 +192,11 @@ _zoom_engine = None
 
 
 def resolve_world_map_name(name):
-    """地图名 → WORLD_MAP_LABELS 键（精确 → 繁体归一 → 相似度）。
+    """地图名 → WORLD_MAP_LABELS 键（精确 → 别名 → 繁体归一 → 相似度）。
 
     地图名来自固定地点表，OCR 误读多为个别字（蓬菜/繁体 龍宫 等）：
-    先做繁体/形近归一（WORLD_MAP_OCR_ALIASES）后精确匹配，再取相似度
+    先做繁体/形近归一（WORLD_MAP_OCR_ALIASES）与位置地名别名
+    （WORLD_MAP_NAME_ALIASES：长安→长安城），再精确匹配，最后取相似度
     最高且 ≥0.6 的候选；短名（2 字）也按全名比对，不做部分包含匹配
     （长安东/长安城 相似度 0.667，取更高者）。未收录返回 None。
     """
@@ -197,6 +205,7 @@ def resolve_world_map_name(name):
     name = norm_text(name).translate(WORLD_MAP_OCR_ALIASES)
     if not name:
         return None
+    name = WORLD_MAP_NAME_ALIASES.get(name, name)
     if name in WORLD_MAP_LABELS:
         return name
     best, best_ratio = None, 0.0
@@ -659,8 +668,15 @@ def is_world_map_open(win):
 
 
 def is_mini_map_open(win):
-    """判断小地图是否打开。"""
-    return find_template(win, MINI_MAP_OPEN_ICON) is not None
+    """判断小地图是否打开。
+
+    匹配限定右上区（MINI_MAP_REGION）：面板可拖动但实测限于右上；
+    锄遗聚宝等小游戏面板含相似图标，全帧匹配会误配到屏幕中部
+    （实测 (559,395)/(606,613)，见 MINI_MAP_REGION 注释），且开图
+    轮询热路径条带 ~20ms vs 全帧 ~137ms。
+    """
+    return find_template(win, MINI_MAP_OPEN_ICON,
+                         region=MINI_MAP_REGION) is not None
 
 
 # ---- 地图打开失败诊断帧（2026-11-16 用户要求）----
@@ -700,24 +716,39 @@ def _dump_failure_frame(win, tag):
 
 
 def open_world_map(win):
-    """点击世界地图按钮打开世界地图。返回 (是否成功, 描述)。
+    """打开世界地图。返回 (是否成功, 描述)。
 
-    高性能：按钮坐标缓存后直点；未打开回退识别点击（并刷新缓存）。
-    已打开时直接返回——按钮是切换式，地图开着再点会把它关掉
-    （2026-11-16 小地图快捷领取实机：世界地图残留时 open_mini_map_city
-    先点按钮反而关闭世界地图，导致城市标签找不到）。
+    高性能（2026-11-18 用户要求）：Alt+2 快捷键打开（位置漂移免疫，
+    静默模式可后台投递）；快捷键未发出/未生效回退缓存坐标点击 →
+    识别点击。非高性能维持识别模板点击方案。
+    已打开时直接返回——按钮/快捷键是切换式，地图开着再触发会把它
+    关掉（2026-11-16 小地图快捷领取实机：世界地图残留时
+    open_mini_map_by_name 先点按钮反而关闭世界地图，导致城市标签找不到）。
     """
     if is_world_map_open(win):
         return True, "世界地图已打开"
+    if app_utils.high_perf_on():
+        sent, _ = app_utils.press_alt_hotkey(
+            win, "2", "世界地图", prefix="[地图] ")
+        if sent:
+            # 轮询等待打开（实测约 0.5s；打开即返回）
+            deadline = time.time() + 2.0
+            while time.time() < deadline:
+                time.sleep(0.3)
+                if is_world_map_open(win):
+                    return True, "世界地图已打开（Alt+2 快捷键）"
+            log("[地图][高性能] Alt+2 未打开世界地图，回退点击路径", "WARN")
     cached = app_utils.high_perf_click(win, "world_map_btn",
                                        "世界地图按钮", prefix="[地图] ")
-    deadline = time.time() + 2.0
-    while time.time() < deadline:
-        time.sleep(0.3)
-        if is_world_map_open(win):
-            return True, "世界地图已打开（高性能缓存）" if cached else "世界地图已打开"
     if cached:
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            time.sleep(0.3)
+            if is_world_map_open(win):
+                return True, "世界地图已打开（高性能缓存）"
         log("[地图][高性能] 缓存点击未打开世界地图，回退识别", "WARN")
+    # 未点击（开关关闭/无缓存）不等待：此前无论是否点击都空等 2s，
+    # 非高性能模式每次开图白耗 2s（2026-11-18 修正）
     pt = find_template(win, WORLD_MAP_ICON)
     if pt is None:
         return False, "未找到世界地图按钮"
@@ -735,7 +766,24 @@ def open_world_map(win):
 
 
 def open_mini_map(win):
-    """点击地图位置区域打开当前地图的小地图。返回 (是否成功, 描述)。"""
+    """打开当前地图的小地图。返回 (是否成功, 描述)。
+
+    高性能（2026-11-18 用户要求）：Alt+1 快捷键打开；已打开直接返回
+    （快捷键是切换式，开着再按会关闭）。快捷键未发出/未生效回退点击
+    地图位置区域（原方案）。非高性能维持点击位置区域方案。
+    """
+    if app_utils.high_perf_on():
+        if is_mini_map_open(win):
+            return True, "小地图已打开"
+        sent, _ = app_utils.press_alt_hotkey(
+            win, "1", "小地图", prefix="[地图] ")
+        if sent:
+            deadline = time.time() + 2.0
+            while time.time() < deadline:
+                time.sleep(0.3)
+                if is_mini_map_open(win):
+                    return True, "小地图已打开（Alt+1 快捷键）"
+            log("[地图][高性能] Alt+1 未打开小地图，回退点击位置区域", "WARN")
     cx = (MAP_POS_REGION[0] + MAP_POS_REGION[2]) // 2
     cy = (MAP_POS_REGION[1] + MAP_POS_REGION[3]) // 2
     log(f"[地图] 打开小地图: 点击位置区域 @ ({cx},{cy})", "INFO")
@@ -749,32 +797,81 @@ def open_mini_map(win):
     return True, "小地图已打开"
 
 
-def open_mini_map_city(win, city_icon, city_label):
-    """打开世界地图并点击指定城市，打开该城市的小地图。
+def world_map_label_icon(map_name):
+    """地图名 → 世界地图标签模板（WORLD_MAP_LABELS 唯一来源）。
 
-    世界地图点击城市后自动关闭（实测）。返回 (是否成功, 描述)。
-    高性能：城市图标坐标（世界地图布局固定）缓存后直点；未打开
-    回退识别点击（并刷新缓存）。
+    名称先经 resolve_world_map_name 归一（别名/繁体/相似度），未收录
+    返回 None。任务与工作流只传地图名，不再维护单图图标常量。
     """
+    key = resolve_world_map_name(map_name)
+    return WORLD_MAP_LABELS[key] if key else None
+
+
+def click_world_map_label(win, map_name, prefix="[地图] ", cache_key=None):
+    """世界地图（需已打开）定位并点击 map_name 标签，返回 (是否成功, 描述)。
+
+    地图标签定位/点击的唯一实现：模板来自 WORLD_MAP_LABELS，全帧最高分
+    与 WORLD_MAP_LABEL_THRESHOLD 校验（失败日志带分数便于诊断），首次
+    未命中短等 0.3s 复检一次（标签渲染可能滞后世界地图横幅一帧）。
+    cache_key：非 None 时把成功定位的坐标写入固定位置缓存（高性能城市
+    图标直点复用）。
+    """
+    key = resolve_world_map_name(map_name)
+    icon = WORLD_MAP_LABELS.get(key) if key else None
+    if icon is None:
+        return False, f"地图「{map_name}」未收录世界地图标签模板"
+    score, pt = 0.0, (0, 0)
+    for attempt in (1, 2):
+        img = win.capture(force_activate=False)
+        if img is None:
+            return False, "截图失败（窗口可能已最小化）"
+        score, pt = best_match_np(bgr_frame(img), icon)
+        if score >= WORLD_MAP_LABEL_THRESHOLD:
+            break
+        if attempt == 1:
+            time.sleep(0.3)
+    if score < WORLD_MAP_LABEL_THRESHOLD:
+        return False, (f"世界地图未找到「{key}」标签"
+                       f"（最佳匹配 {score:.3f}）")
+    if cache_key is not None:
+        app_utils.fixed_pos_set(cache_key, win, pt[0], pt[1])
+    human_click(win, pt[0], pt[1])
+    log(f"{prefix}世界地图已点「{key}」标签 @({pt[0]},{pt[1]})", "INFO")
+    return True, f"已点击「{key}」标签"
+
+
+def open_mini_map_by_name(win, map_name, prefix="[地图] "):
+    """打开 map_name 的场景小地图（跨图时经世界地图点标签）。返回 (是否成功, 描述)。
+
+    统一入口（2026-11-18 用户规则：地图标签图标统一走 WORLD_MAP_LABELS，
+    调用方只传地图名；旧 open_mini_map_city(icon, label) 的双参数与
+    单图图标常量已删除）。流程：打开世界地图（已打开则复用）→ 点击地图
+    标签 → 轮询小地图面板出现。世界地图点击地图后自动关闭（实测）。
+    高性能：标签坐标缓存后直点（键沿用 city_<图标>，历史缓存兼容），
+    未打开回退识别点击（并刷新缓存）。
+    """
+    key = resolve_world_map_name(map_name)
+    icon = WORLD_MAP_LABELS.get(key) if key else None
+    if icon is None:
+        return False, f"地图「{map_name}」未收录世界地图标签模板"
     ok, info = open_world_map(win)
     if not ok:
         return False, info
-    key = f"city_{city_icon}"
-    cached = app_utils.high_perf_click(win, key, f"{city_label}图标", prefix="[地图] ")
-    deadline = time.time() + 3
-    while not is_mini_map_open(win) and time.time() < deadline:
-        time.sleep(0.3)
-    if is_mini_map_open(win):
-        return True, f"{city_label}小地图已打开"
+    cache_key = f"city_{icon}"
+    cached = app_utils.high_perf_click(win, cache_key, f"{key}标签",
+                                       prefix=prefix)
     if cached:
-        log(f"[地图][高性能] 缓存点击未打开{city_label}小地图，回退识别", "WARN")
-    pt = find_template(win, city_icon)
-    if pt is None:
+        deadline = time.time() + 3
+        while not is_mini_map_open(win) and time.time() < deadline:
+            time.sleep(0.3)
+        if is_mini_map_open(win):
+            return True, f"{key}小地图已打开"
+        log(f"{prefix}[高性能] 缓存点击未打开{key}小地图，回退识别", "WARN")
+    ok, info = click_world_map_label(win, key, prefix=prefix,
+                                     cache_key=cache_key)
+    if not ok:
         _dump_failure_frame(win, "city_label_missing")
-        return False, f"世界地图中未找到{city_label}"
-    app_utils.fixed_pos_set(key, win, pt[0], pt[1])
-    log(f"[地图] 打开{city_label}小地图: 点击城市图标 @ ({pt[0]},{pt[1]})", "INFO")
-    human_click(win, pt[0], pt[1])
+        return False, info
     # 轮询等待小地图打开（替代固定 1.5s 等待，打开即返回）
     deadline = time.time() + 3
     while not is_mini_map_open(win) and time.time() < deadline:
@@ -783,8 +880,8 @@ def open_mini_map_city(win, city_icon, city_label):
         # 失败现场落盘（2026-11-16）：世界地图此时大概率仍开着，帧里能
         # 直接看出是弹窗遮挡、动画中、还是点击落在别处
         _dump_failure_frame(win, "city_open")
-        return False, f"点击{city_label}后小地图未打开"
-    return True, f"{city_label}小地图已打开"
+        return False, f"点击{key}后小地图未打开"
+    return True, f"{key}小地图已打开"
 
 
 def close_map_if_open(win, icon, label, fallbacks=(), primary_button="secondary",
@@ -1011,7 +1108,7 @@ def ensure_minimap_task_filter(win, filter_pos):
     return False, "小地图「任务」筛选点击后仍未勾选"
 
 
-def minimap_quick_navigate(win, map_name, world_icon, filter_pos, label_pos):
+def minimap_quick_navigate(win, map_name, filter_pos, label_pos):
     """场景小地图快捷导航（任务共用）。返回 (是否成功, 描述)。
 
     流程：打开目标地图的场景小地图 → 勾选底部「任务」筛选 → 点击黄色
@@ -1030,7 +1127,7 @@ def minimap_quick_navigate(win, map_name, world_icon, filter_pos, label_pos):
     if on_map:
         ok, info = open_mini_map(win)
     else:
-        ok, info = open_mini_map_city(win, world_icon, map_name)
+        ok, info = open_mini_map_by_name(win, map_name)
     if not ok:
         return False, f"打开{map_name}小地图失败：{info}"
     ok, finfo = ensure_minimap_task_filter(win, filter_pos)

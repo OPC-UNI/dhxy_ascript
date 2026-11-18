@@ -1015,7 +1015,7 @@ def _patch_navigate_env(monkeypatch, pos, calls):
                         lambda win, x, y: calls.append("click_map_point"))
     monkeypatch.setattr(xuanshu.game_map, "read_map_position", lambda win: pos)
     monkeypatch.setattr(xuanshu.game_map, "open_mini_map", lambda win: (True, "ok"))
-    monkeypatch.setattr(xuanshu.game_map, "open_mini_map_city",
+    monkeypatch.setattr(xuanshu.game_map, "open_mini_map_by_name",
                         lambda *a, **k: (True, "ok"))
     monkeypatch.setattr(xuanshu.game_map, "is_mini_map_open", lambda win: False)
     monkeypatch.setattr(xuanshu.game_map, "close_mini_map",

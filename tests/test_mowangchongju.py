@@ -257,13 +257,15 @@ def test_close_map_delegates_to_close_maps(monkeypatch):
 
 
 def _patch_go_map(monkeypatch, detail_open):
-    """桩：世界地图已开、标签点击成功、详情图在场状态可控。"""
+    """桩：世界地图 → 标签 → 详情图整段走共享 open_mini_map_by_name，
+    在场与否可控（跨图导航不再自写截图匹配）。"""
     st = {"walk": [], "closed": 0}
-    monkeypatch.setattr(mw.game_map, "is_world_map_open", lambda win: True)
-    monkeypatch.setattr(mw.game_map, "is_mini_map_open",
-                        lambda win: detail_open)
-    monkeypatch.setattr(mw, "_click_map_label",
-                        lambda win, name, prefix: True)
+    monkeypatch.setattr(
+        mw.game_map, "open_mini_map_by_name",
+        lambda win, name, prefix="[地图] ":
+        (detail_open,
+         "本图小地图已打开" if detail_open
+         else f"点击{name}后小地图未打开"))
     monkeypatch.setattr(mw, "_walk_click",
                         lambda win, x, y:
                         st["walk"].append((x, y)) or True)
@@ -275,14 +277,13 @@ def _patch_go_map(monkeypatch, detail_open):
 
 def test_go_map_requires_detail_panel(monkeypatch):
     """标签点击后详情图未打开 → 不点落点（防点到世界地图错位置）。"""
-    monkeypatch.setattr(mw, "MOWANG_DETAIL_OPEN_WAIT", 0.0)  # 不等面板动画
     st = _patch_go_map(monkeypatch, detail_open=False)
     logs = []
     monkeypatch.setattr(mw, "log", lambda msg, level="INFO": logs.append(msg))
     assert mw._go_map(object(), "狮驼岭", "[测] ") is False
     assert st["walk"] == []
     assert st["closed"] == 1
-    assert any("详情图未打开" in line for line in logs)
+    assert any("详情图失败" in line for line in logs)
 
 
 def test_go_map_clicks_entry_when_detail_open(monkeypatch):

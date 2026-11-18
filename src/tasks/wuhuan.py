@@ -68,7 +68,8 @@ _LINK_STRIP_RE = re.compile(
     r"|\d{2,}")
 
 # ---- 长安与服装店（用户实测坐标/模板） ----
-# 长安城世界地图图标见 map.py 的 WORLD_MAP_CHANGAN_ICON（城市图标统一在 map.py 维护）
+# 世界地图标签统一由 map.WORLD_MAP_LABELS 维护，调用 open_mini_map_by_name
+# 只传地图名（位置地名「长安」经 WORLD_MAP_NAME_ALIASES 归一到标签「长安城」）
 CHANGAN_CITY = "长安"                              # 位置识别地名（模糊匹配）
 CLOTH_SHOP_WALK_POS = (475, 443)                   # 长安小地图上布店位置的点击点（寻路到服装店门口）
 CLOTH_SHOP_ENTER_POS = (750, 373)                  # 进入服装店的点击点
@@ -257,7 +258,7 @@ def _enter_cloth_shop(win, tag="[五环]"):
     """
     # 打开长安小地图点击布店位置寻路（走到服装店门口）
     if not game_map.is_in_map(win, CHANGAN_CITY):
-        ok, info = game_map.open_mini_map_city(win, game_map.WORLD_MAP_CHANGAN_ICON, "长安")
+        ok, info = game_map.open_mini_map_by_name(win, CHANGAN_CITY)
         if not ok:
             return False, info
     if not game_map.is_mini_map_open(win):
@@ -485,7 +486,7 @@ def _walk_to_yunyou_claim_btn(win, tag="[五环]"):
     """
     # 确保在长安：不在则世界地图点长安（打开长安小地图）
     if not game_map.is_in_map(win, CHANGAN_CITY):
-        ok, info = game_map.open_mini_map_city(win, game_map.WORLD_MAP_CHANGAN_ICON, "长安")
+        ok, info = game_map.open_mini_map_by_name(win, CHANGAN_CITY)
         if not ok:
             return False, info
     # 打开长安小地图并点击云游大师位置寻路

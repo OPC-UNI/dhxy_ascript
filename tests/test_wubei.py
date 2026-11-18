@@ -1328,7 +1328,6 @@ def test_claim_flow_open_map_wiring(monkeypatch):
     assert captured["win"] is win
     assert captured["pos"] == ("宝象国", 1, 2)
     assert captured["map_name"] == wubei.BAOXIANGGUO
-    assert captured["world_icon"] == wubei.WORLD_MAP_BAOXIANGGUO_ICON
     assert captured["map_pos"] == wubei.BAOXIANG_MAP_POS
     assert captured["prefix"] == "[五倍]"
     assert captured["on_filter_state"] is wubei._set_claim_task_filter

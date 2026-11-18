@@ -1289,7 +1289,6 @@ def test_claim_flow_open_map_wiring(monkeypatch):
     assert captured["win"] is win
     assert captured["pos"] == ("灵兽村", 1, 2)
     assert captured["map_name"] == xiuluo.LINGSHOUCUN
-    assert captured["world_icon"] == xiuluo.WORLD_MAP_LINGSHOUCUN_ICON
     assert captured["map_pos"] == xiuluo.LINGSHOU_MAP_POS
     assert captured["prefix"] == "[修罗]"
     assert captured["on_filter_state"] is xiuluo._set_claim_task_filter

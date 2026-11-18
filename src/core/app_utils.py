@@ -282,6 +282,43 @@ def press_alt4_clear(win, prefix=""):
     return "已按 Alt+4 完全清屏"
 
 
+def press_alt_hotkey(win, key, label, prefix=""):
+    """按 Alt+<key> 组合键（高性能快捷入口通用：开地图 Alt+1/2 等）。
+
+    静默模式走消息投递（游戏窗口无需前台；key 须在 silent_click._KEY_CODES
+    表中）；非静默走物理热键，按键前校验游戏窗口在前台（非前台先激活
+    再校验，仍失败不盲发——键盘事件只进前台窗口）。返回 (是否已发送,
+    描述)；发送失败由调用方决定回退路径（如模板识别点击）。
+    """
+    tag = f"{prefix} " if prefix else ""
+    name = f"Alt+{key.upper()}"
+    if _SILENT_CLICK:
+        from ..device import silent_click  # 延迟导入防循环
+        info = silent_click.send_silent_hotkey(win, ("alt",), key)
+        if info is None:
+            desc = f"静默 {name} 投递失败（窗口不存在）"
+            log(f"{tag}{desc}", "WARN")
+            return False, desc
+        log(f"{tag}已静默投递 {name} {label}", "SYS")
+        return True, f"已静默投递 {name} {label}"
+    try:
+        import win32gui
+        if win32gui.GetForegroundWindow() != int(win.hwnd):
+            win.activate()
+            time.sleep(0.3)
+            if win32gui.GetForegroundWindow() != int(win.hwnd):
+                desc = f"游戏窗口未在前台（激活失败），{name} 未发送"
+                log(f"{tag}{desc}", "WARN")
+                return False, desc
+    except Exception as e:
+        desc = f"{name} 前台校验异常: {e}"
+        log(f"{tag}{desc}", "WARN")
+        return False, desc
+    Keyboard.key_hot("alt", key)
+    log(f"{tag}已按 {name} {label}", "SYS")
+    return True, f"已按 {name} {label}"
+
+
 def _silent_click(win, x, y, button="primary"):
     """静默点击统一出口：延迟导入防循环（silent_click 反向导入本模块
     拿 _INPUT_LOCK）。

@@ -401,7 +401,7 @@ flowchart TB
         D3 -- 是 --> D7["等待到达"]
         D3 -- 否 --> D4{"当前在洛阳城？"}
         D4 -- 是 --> D5["open_mini_map"]
-        D4 -- 否 --> D6["open_mini_map_city<br/>世界地图→洛阳→小地图"]
+        D4 -- 否 --> D6["open_mini_map_by_name<br/>世界地图→洛阳→小地图"]
         D5 --> D8["点击小地图任务点<br/>城内：主动关小地图"]
         D6 --> D8B["点击小地图任务点<br/>跨地图：等小地图随传送自关<br/>（主动关的点击会落到世界把人带走）"]
         D8 --> D7
@@ -1241,7 +1241,7 @@ flowchart LR
 | `src/device/team.py` | 队伍检查、补人、暂离请离、归队、退队 | `check_team_min`、`fill_team`、`maybe_rejoin`、`leave_or_disband_team` |
 | `src/device/tab_group.py` | 组号多 Tab 身份、pass、队员操作 | `init_task`、`startup_check`、`startup_member_check`、`member_*_pass` |
 | `src/device/task_tracker.py` | 追踪面板 OCR、绿字/下划线、TrackGate | `ocr_track`、`read_tasks`、`has_task`、`track_task`、`TrackGate` |
-| `src/device/map.py` | OCR 三引擎、模板匹配、地图开关与坐标 | `ocr_regions`、`match_frame_np`、`read_map_position`、`open_mini_map_city` |
+| `src/device/map.py` | OCR 三引擎、模板匹配、地图开关与坐标 | `ocr_regions`、`match_frame_np`、`read_map_position`、`open_mini_map_by_name` |
 | `src/device/dialog_common.py` | 对话框通用：绿字选项、序号点击、连点、面板清理 | `_click_green_option_once`、`_click_dialog_option_by_index`、`close_scene_panels` |
 | `src/core/app_utils.py` | 点击/键盘/全局锁/静默开关/KeyValue 合并写/进度 | `human_click`、`precise_click`、`high_perf_click`、`kv_*_merged` |
 | `src/device/silent_click.py` | Win32 消息点击/按键/文本/Tab 条切换 | `send_silent_click`、`send_silent_hotkey`、`send_silent_text`、`send_silent_tab_click` |

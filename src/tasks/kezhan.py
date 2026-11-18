@@ -767,7 +767,10 @@ def _try_fast_travel(win, img):
 
 
 def _go_to_inn(win):
-    """前往洛阳客栈：世界地图 → 点击洛阳城 → 小地图点击 (884,600)。
+    """前往洛阳客栈：打开洛阳小地图 → 点击 (884,600)。
+
+    已在洛阳城直接开当前地图小地图（open_mini_map），不在才经世界地图
+    点洛阳城标签（open_mini_map_by_name，2026-11-18 用户规则）。
 
     点击后两种走向：
     - 出现「你要到洛阳客栈」对话框 → 点击「快送我去」快送到达
@@ -781,9 +784,13 @@ def _go_to_inn(win):
     # 边框，clear_blocking_dialog 检测不到）
     _clear_qiyu_popup(win)
     close_scene_panels(win, "客栈")
-    # 世界地图 → 点击洛阳城，打开洛阳小地图
-    ok, info = game_map.open_mini_map_city(win, game_map.WORLD_MAP_LUOYANG_ICON,
-                                           LUOYANG_CITY)
+    # 已在洛阳城：直接打开当前地图小地图（免世界地图中转，2026-11-18
+    # 用户规则）；位置不可读按跨图处理（世界地图 → 洛阳城标签兜底）
+    pos = game_map.read_map_position(win)
+    if pos is not None and pos[0].strip() == LUOYANG_CITY:
+        ok, info = game_map.open_mini_map(win)
+    else:
+        ok, info = game_map.open_mini_map_by_name(win, LUOYANG_CITY)
     if not ok:
         return False, info
     human_click(win, INN_MAP_CLICK_POS[0], INN_MAP_CLICK_POS[1])
@@ -1067,8 +1074,7 @@ def _walk_to_luoyang_pos(win, click_pos, target_pos, timeout, desc):
         # 已在洛阳城：无需打开世界地图，直接打开小地图
         ok, info = game_map.open_mini_map(win)
     else:
-        ok, info = game_map.open_mini_map_city(win, game_map.WORLD_MAP_LUOYANG_ICON,
-                                               LUOYANG_CITY)
+        ok, info = game_map.open_mini_map_by_name(win, LUOYANG_CITY)
     if not ok:
         return False, info
     human_click(win, click_pos[0], click_pos[1])

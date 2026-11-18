@@ -83,9 +83,6 @@ MOWANG_DIR_VEC = {  # 地图像素方向：东=+x、北=-y（上=北，实测）
 # 世界地图详情图图区（窗口相对）与点击点内缩（防点到边框/标题）
 MOWANG_MAP_REGION = (290, 240, 1080, 680)
 MOWANG_MAP_INSET = 30
-# 标签点击后等详情面板出现的上限（秒；_click_map_label 已含 0.8s 打开
-# 动画等待，这里再按「面板出现」直接信号轮询，出现即放行）
-MOWANG_DETAIL_OPEN_WAIT = 1.5
 # 地图关闭一律走 game_map.close_maps（模板定位关闭钮 + 双帧确认 + 1s
 # 动画等待），禁止写死关闭坐标——2026-11-18 实机教训：原先按 2026-11-15
 # 标定的固定坐标点击（详情 (1106,219)、世界 (1048,238)），小地图面板
@@ -242,47 +239,6 @@ def _close_map(win):
     game_map.close_maps(win)
 
 
-def _click_map_label(win, map_name, prefix):
-    """世界地图（已打开）点击 map_name 标签打开详情图。返回是否成功。"""
-    icon = game_map.WORLD_MAP_LABELS.get(map_name)
-    if icon is None:
-        return False
-    img = win.capture(force_activate=False)
-    if img is None:
-        return False
-    score, pt = game_map.best_match_np(_bgr_frame(img), icon)
-    if score < game_map.WORLD_MAP_LABEL_THRESHOLD:
-        log(f"{prefix}传音石：世界地图未找到「{map_name}」标签"
-            f"（最佳匹配 {score:.3f}）", "WARN")
-        return False
-    human_click(win, pt[0], pt[1])
-    log(f"{prefix}传音石：世界地图已点「{map_name}」标签 @({pt[0]},{pt[1]})",
-        "INFO")
-    time.sleep(0.8)  # 详情图打开动画
-    return True
-
-
-def _detail_map_ready(win, map_name, prefix):
-    """详情图就绪门（场景锚）：标签点击后小地图面板必须在场。
-
-    标签点击可能未生效（世界地图打开动画/遮挡/点击落在标签外），此时
-    落点点击会点到世界地图上的错位置、启动一段错误寻路（2026-11-18
-    实机：魔王在狮驼岭，人物被带到万寿山来回走）。不在场时本轮放弃、
-    关地图后由调用方按重试节奏再来。面板已出现立即放行，未出现最多
-    再等 MOWANG_DETAIL_OPEN_WAIT 秒（各图面板动画不一）。
-    """
-    deadline = time.time() + MOWANG_DETAIL_OPEN_WAIT
-    while True:
-        if game_map.is_mini_map_open(win):
-            return True
-        if time.time() >= deadline:
-            break
-        time.sleep(0.3)
-    log(f"{prefix}传音石：点击「{map_name}」标签后详情图未打开，本轮放弃",
-        "WARN")
-    return False
-
-
 def _find_dot(img):
     """详情图上定位玩家位置红点（红色圆点标记），返回中心坐标或 None。
 
@@ -434,22 +390,20 @@ def _walk_step(win, direction, level, prefix):
 def _go_map(win, map_name, prefix):
     """世界地图导航到 map_name：点标签 → 详情图点落点候选 → 关地图。
 
-    落点候选按序尝试（避开飞行旗/驿站图标），以「位移启动」为成功
-    信号；未收录标签模板或全部候选失败返回 False（稍后重试）。
+    打开世界地图 → 点标签 → 等详情图出现的整段复用
+    `game_map.open_mini_map_by_name`（标签模板统一走 WORLD_MAP_LABELS，
+    2026-11-18 用户规则；本模块不再自行截图匹配标签）。落点候选按序
+    尝试（避开飞行旗/驿站图标），以「位移启动」为成功信号；未收录
+    标签模板或全部候选失败返回 False（稍后重试）。
     """
     if map_name not in game_map.WORLD_MAP_LABELS:
         log(f"{prefix}传音石：地图「{map_name}」未收录标签模板"
             f"（见 game_map.WORLD_MAP_LABELS），无法自动导航", "WARN")
         return False
-    if not game_map.is_world_map_open(win):
-        ok, info = game_map.open_world_map(win)
-        if not ok:
-            log(f"{prefix}传音石：打开世界地图失败（{info}）", "WARN")
-            return False
-    if not _click_map_label(win, map_name, prefix):
-        _close_map(win)
-        return False
-    if not _detail_map_ready(win, map_name, prefix):
+    ok, info = game_map.open_mini_map_by_name(win, map_name, prefix=prefix)
+    if not ok:
+        log(f"{prefix}传音石：前往「{map_name}」详情图失败（{info}），"
+            f"稍后重试", "WARN")
         _close_map(win)
         return False
     ok = False

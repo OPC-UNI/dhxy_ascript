@@ -83,7 +83,7 @@ CLAIM_STILL_POLL_INTERVAL = 0.3     # 站定轮询间隔（秒）
 CLAIM_STILL_TIMEOUT = 6.0           # 站定等待上限（秒）；超时按本轮失败返回
 # ---- 监天盘子任务（追踪文案「使用监天盘寻找石妖踪迹」出现即触发）----
 JIANTIANPAN_TRACK_TEXT = "使用监天盘寻找石妖踪迹"  # 任务追踪触发文案
-JIANTIANPAN_WORLD_ICON = "shijie_huoyungebi.png"  # 世界地图「火云戈壁」标签模板
+JIANTIANPAN_MAP_NAME = "火云戈壁"                  # 目标地图（世界地图标签见 map.WORLD_MAP_LABELS）
 JIANTIANPAN_MAP_CLICK_POS = (759, 435)            # 火云戈壁小地图点击点（寻路到目标附近）
 JIANTIANPAN_TARGET_POS = (180, 86)                # 目标坐标（火云戈壁）
 JIANTIANPAN_ARRIVE_TOLERANCE = 4                  # 到达容差（严格：仙药只在目标附近出现）
@@ -236,19 +236,24 @@ def _jiantianpan_active(items):
     return _fuzzy_contains(norm_text(panel_txt), JIANTIANPAN_TRACK_TEXT)
 
 
-def _at_huoyun_target(pos):
-    """是否已在火云戈壁目标附近（严格容差；地名抗 OCR 误读）。"""
+def _on_huoyungebi(pos):
+    """位置地名是否为火云戈壁（抗 OCR 误读：繁体/个别字错读）。"""
     if pos is None:
-        return False
-    x, y = JIANTIANPAN_TARGET_POS
-    if not (abs(pos[1] - x) <= JIANTIANPAN_ARRIVE_TOLERANCE
-            and abs(pos[2] - y) <= JIANTIANPAN_ARRIVE_TOLERANCE):
         return False
     name = pos[0].replace("雲", "云").strip()
     if name == "火云戈壁":
         return True
     return len(name) >= 3 and difflib.SequenceMatcher(
         None, name, "火云戈壁").ratio() >= 0.7
+
+
+def _at_huoyun_target(pos):
+    """是否已在火云戈壁目标附近（严格容差；地名抗 OCR 误读）。"""
+    if not _on_huoyungebi(pos):
+        return False
+    x, y = JIANTIANPAN_TARGET_POS
+    return (abs(pos[1] - x) <= JIANTIANPAN_ARRIVE_TOLERANCE
+            and abs(pos[2] - y) <= JIANTIANPAN_ARRIVE_TOLERANCE)
 
 
 def _wait_jiantianpan_arrive(win, timeout=JIANTIANPAN_ARRIVE_TIMEOUT):
@@ -285,7 +290,8 @@ def _handle_jiantianpan(win, items, img_np):
     """监天盘子任务（follow_task 附加处理回调）。
 
     追踪出现「使用监天盘寻找石妖踪迹」时执行：
-    世界地图点火云戈壁 → 小地图点 (744,441) 寻路 → 严格等待到达
+    打开火云戈壁小地图（已在火云戈壁直接开当前地图，不在才经世界
+    地图点标签）→ 小地图点 (744,441) 寻路 → 严格等待到达
     火云戈壁 183,81 附近 → 点击监天盘 → 点击探妖（用户 2026-10-09
     提供模板）→ 等待仙药出现并点击。
     已在目标附近时跳过寻路直接点监天盘（失败重试幂等）。
@@ -299,8 +305,14 @@ def _handle_jiantianpan(win, items, img_np):
         return False
     _jiantianpan_last_done = time.time()
     log("[玄枢轶闻] 检测到「使用监天盘寻找石妖踪迹」，执行监天盘流程", "SYS")
-    if not _at_huoyun_target(game_map.read_map_position(win)):
-        ok, info = game_map.open_mini_map_city(win, JIANTIANPAN_WORLD_ICON, "火云戈壁")
+    pos = game_map.read_map_position(win)
+    if not _at_huoyun_target(pos):
+        # 已在火云戈壁但未到目标点：直接开当前地图小地图（免世界地图
+        # 中转，2026-11-18 用户规则）；不在该图才经世界地图点标签。
+        if _on_huoyungebi(pos):
+            ok, info = game_map.open_mini_map(win)
+        else:
+            ok, info = game_map.open_mini_map_by_name(win, JIANTIANPAN_MAP_NAME)
         if not ok:
             log(f"[玄枢轶闻] 监天盘流程寻路失败: {info}", "WARN")
             game_map.close_maps(win)
@@ -385,7 +397,7 @@ def navigate_to_task(win):
             return False, info, None
         log(f"[玄枢轶闻] 在洛阳城（{loc}），已打开小地图", "SYS")
     else:
-        ok, info = game_map.open_mini_map_city(win, game_map.WORLD_MAP_LUOYANG_ICON, "洛阳城")
+        ok, info = game_map.open_mini_map_by_name(win, LUOYANG_CITY)
         if not ok:
             return False, info, None
         cross_city = True  # 跨地图传送：小地图随传送自关，不能主动点关闭

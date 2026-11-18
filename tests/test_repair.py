@@ -148,7 +148,7 @@ def test_repair_map_failure_closes_residual_maps(win, monkeypatch):
     monkeypatch.setattr(repair.battle, "is_in_battle", lambda w: False)
     monkeypatch.setattr(repair.game_map, "read_map_position",
                         lambda w: ("凤巢五层", 38, 46))
-    monkeypatch.setattr(repair.game_map, "open_mini_map_city",
+    monkeypatch.setattr(repair.game_map, "open_mini_map_by_name",
                         lambda *a, **k: (False, "点击洛阳城后小地图未打开"))
     closed = []
     monkeypatch.setattr(repair.dialog_common, "close_scene_panels",

@@ -299,8 +299,8 @@ def _patch_open_env(monkeypatch, pos=("宝象国", 1, 2), battle=False,
     monkeypatch.setattr(claim_flow.game_map, "open_mini_map",
                         lambda win: calls["mini"].append(1) or mini)
     monkeypatch.setattr(
-        claim_flow.game_map, "open_mini_map_city",
-        lambda win, icon, label: calls["city"].append((icon, label)) or city)
+        claim_flow.game_map, "open_mini_map_by_name",
+        lambda win, map_name: calls["city"].append(map_name) or city)
     monkeypatch.setattr(
         claim_flow.game_map, "minimap_task_filter_state",
         lambda win: calls["filter"].append(1) or filter_state)
@@ -315,8 +315,7 @@ def test_open_claim_map_in_map_opens_minimap_and_clicks(monkeypatch):
     states = []
     win = _FrameWin()
     ok, info = claim_flow.open_claim_map(
-        win, None, map_name="宝象国",
-        world_icon="shijie_baoxiangguo.png", map_pos=(517, 488),
+        win, None, map_name="宝象国", map_pos=(517, 488),
         prefix="[测试]", on_filter_state=states.append)
     assert ok is True and "宝象国" in info
     assert calls["mini"] == [1] and calls["city"] == []
@@ -329,12 +328,11 @@ def test_open_claim_map_in_map_opens_minimap_and_clicks(monkeypatch):
 def test_open_claim_map_other_map_goes_through_world_map(monkeypatch):
     calls = _patch_open_env(monkeypatch, pos=("灵兽村", 111, 90))
     ok, _info = claim_flow.open_claim_map(
-        _FrameWin(), None, map_name="宝象国",
-        world_icon="shijie_baoxiangguo.png", map_pos=(517, 488),
+        _FrameWin(), None, map_name="宝象国", map_pos=(517, 488),
         prefix="[测试]")
     assert ok is True
     assert calls["mini"] == []
-    assert calls["city"] == [("shijie_baoxiangguo.png", "宝象国")]
+    assert calls["city"] == ["宝象国"]
     assert calls["click"] == [(517, 488)]
 
 
@@ -342,7 +340,7 @@ def test_open_claim_map_battle_returns_false(monkeypatch):
     calls = _patch_open_env(monkeypatch, battle=True)
     win = _FrameWin()
     ok, info = claim_flow.open_claim_map(
-        win, None, map_name="宝象国", world_icon="i.png",
+        win, None, map_name="宝象国",
         map_pos=(1, 2), prefix="[测试]")
     assert ok is False and "战斗中" in info
     assert calls["mini"] == [] and calls["city"] == []
@@ -353,7 +351,7 @@ def test_open_claim_map_battle_returns_false(monkeypatch):
 def test_open_claim_map_capture_none_returns_false(monkeypatch):
     calls = _patch_open_env(monkeypatch)
     ok, info = claim_flow.open_claim_map(
-        _SeqWin([None]), None, map_name="宝象国", world_icon="i.png",
+        _SeqWin([None]), None, map_name="宝象国",
         map_pos=(1, 2), prefix="[测试]")
     assert ok is False and info == "截图失败"
     assert calls["mini"] == [] and calls["city"] == []
@@ -363,7 +361,7 @@ def test_open_claim_map_capture_none_returns_false(monkeypatch):
 def test_open_claim_map_minimap_open_failure(monkeypatch):
     calls = _patch_open_env(monkeypatch, mini=(False, "点击后小地图未打开"))
     ok, info = claim_flow.open_claim_map(
-        _FrameWin(), ("宝象国", 1, 2), map_name="宝象国", world_icon="i.png",
+        _FrameWin(), ("宝象国", 1, 2), map_name="宝象国",
         map_pos=(1, 2), prefix="[测试]")
     assert ok is False and info == "点击后小地图未打开"
     assert calls["filter"] == [] and calls["click"] == []
@@ -373,7 +371,7 @@ def test_open_claim_map_city_open_failure(monkeypatch):
     calls = _patch_open_env(monkeypatch, pos=("灵兽村", 1, 2),
                             city=(False, "世界地图中未找到宝象国"))
     ok, info = claim_flow.open_claim_map(
-        _FrameWin(), None, map_name="宝象国", world_icon="i.png",
+        _FrameWin(), None, map_name="宝象国",
         map_pos=(1, 2), prefix="[测试]")
     assert ok is False and "未找到宝象国" in info
     assert calls["filter"] == [] and calls["click"] == []
@@ -384,7 +382,7 @@ def test_open_claim_map_filter_state_callback(monkeypatch, state):
     calls = _patch_open_env(monkeypatch, filter_state=state)
     states = []
     ok, _info = claim_flow.open_claim_map(
-        _FrameWin(), ("宝象国", 1, 2), map_name="宝象国", world_icon="i.png",
+        _FrameWin(), ("宝象国", 1, 2), map_name="宝象国",
         map_pos=(1, 2), prefix="[测试]", on_filter_state=states.append)
     assert ok is True
     assert states == [state] and calls["filter"] == [1]
@@ -396,8 +394,7 @@ def test_open_claim_map_custom_click_fn_and_no_filter_read(monkeypatch):
     clicked = []
     win = _FrameWin()
     ok, _info = claim_flow.open_claim_map(
-        win, ("长安", 1, 2), map_name="长安",
-        world_icon="shijie_changan.png", map_pos=(737, 387),
+        win, ("长安", 1, 2), map_name="长安", map_pos=(737, 387),
         prefix="[测试]", click_fn=lambda w: clicked.append(w))
     assert ok is True and clicked
     assert calls["click"] == []  # 未走默认 human_click
@@ -409,7 +406,7 @@ def test_open_claim_map_custom_click_fn_and_no_filter_read(monkeypatch):
 def test_open_claim_map_pos_reused_skips_position_read(monkeypatch):
     calls = _patch_open_env(monkeypatch)
     ok, _info = claim_flow.open_claim_map(
-        _FrameWin(), ("宝象国", 86, 86), map_name="宝象国", world_icon="i.png",
+        _FrameWin(), ("宝象国", 86, 86), map_name="宝象国",
         map_pos=(1, 2), prefix="[测试]")
     assert ok is True
     assert calls["read_pos"] == []  # 同帧复用：不再读位置

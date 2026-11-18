@@ -343,7 +343,6 @@ def _open_claim_map(win, pos=None):
     """
     return claim_flow.open_claim_map(
         win, pos, map_name=CHANGAN,
-        world_icon=game_map.WORLD_MAP_CHANGAN_ICON,
         map_pos=CLAIM_MAP_POS, prefix="[种族比武]",
         click_fn=_click_claim_map_pos)
 
