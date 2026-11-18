@@ -17,8 +17,9 @@
    打开详情图 → 点普通地形点自动走过去。**必须避开飞行旗图标**
    （任务中不能飞，2026-11-15 用户实机：点到飞行旗提示「不能飞」且
    不移动；普通位置可自动寻路）。
-3. 方向引导：详情图上以玩家位置红点（红色圆点标记）为原点，按方向词
-   + 距离级别点目标点自动寻路；重复「使用 → 按提示走」直到提示
+3. 方向引导：当前地图直接点左上位置文字区打开小地图（open_mini_map，
+   2026-11-18 用户规则：不经世界地图），以玩家位置红点为原点，按方向
+   词 + 距离级别点目标点自动寻路；重复「使用 → 按提示走」直到提示
    「几乎崩裂/就在附近」——近身继续使用即触发 2 个「魔王护卫」战斗
    （战斗由 follow_task/battle 线程托管，本模块不做战斗操作）。
 4. 战后追踪变为「已经通过了魔王护卫的考验，请将传音石交给魔王三大王」
@@ -82,13 +83,20 @@ MOWANG_DIR_VEC = {  # 地图像素方向：东=+x、北=-y（上=北，实测）
 # 世界地图详情图图区（窗口相对）与点击点内缩（防点到边框/标题）
 MOWANG_MAP_REGION = (290, 240, 1080, 680)
 MOWANG_MAP_INSET = 30
-# 世界地图两种视图的关闭 X（实测：详情视图 (1106,219)、世界视图
-# (1048,238)；详情视图 X 先回到世界视图、世界视图 X 才整体关闭。
+# 标签点击后等详情面板出现的上限（秒；_click_map_label 已含 0.8s 打开
+# 动画等待，这里再按「面板出现」直接信号轮询，出现即放行）
+MOWANG_DETAIL_OPEN_WAIT = 1.5
+# 地图关闭一律走 game_map.close_maps（模板定位关闭钮 + 双帧确认 + 1s
+# 动画等待），禁止写死关闭坐标——2026-11-18 实机教训：原先按 2026-11-15
+# 标定的固定坐标点击（详情 (1106,219)、世界 (1048,238)），小地图面板
+# 尺寸/位置随目标地图变化（同日狮驼岭帧实测面板右缘 ~1005、关闭钮
+# (996,214)，固定点已在面板外；历史日志同模板命中也在
+# (1030..1111, 202..227) 漂移），
+# 固定坐标落到面板外即点到游戏世界，把刚用落点点亮的自动寻路打断
+# （用户实机观察：「点了一下地图右上，实际点到地图外边，寻路被打断」）。
 # 地图保持打开会让追踪面板 OCR 读到窗口左缘竖排「世界地图」文字，
 # follow 引擎误判任务变化并额外点击绿字（2026-11-15 实机 16:05:30
-# 日志教训）——地图操作完成后必须关闭）
-MOWANG_MAP_CLOSE_POS = {"detail": (1106, 219), "world": (1048, 238)}
-MOWANG_MAP_CLOSE_RETRY = 3     # 关闭重试次数（详情→世界→关闭，留 1 次余量）
+# 日志教训）——地图操作完成后必须关闭。
 # 跨图落点候选（详情图普通地形点，按序尝试；避开飞行旗/驿站图标，
 # 以「位移启动」为成功信号）
 MOWANG_ENTRY_POINTS = ((640, 450), (640, 380), (560, 500), (720, 500),
@@ -104,7 +112,6 @@ MOWANG_WALK_MAX = 150.0          # 单次寻路总时限（秒；跨图长途兜
 _use_at = 0.0          # 上次使用时间（最小间隔）
 _uses = 0              # 已使用次数（安全上限）
 _missing = 0           # 触发词连续缺失轮询数（≥MOWANG_ABSENT_RESET 复位）
-_target_map = None     # 提示给出的目标地图（WORLD_MAP_LABELS 键）
 _hint_misses = 0       # 连续未读出提示次数（日志/告警）
 _dialog_log_at = 0.0   # 对话框在场等待日志上次时间（限频）
 _walk = None           # 行走状态（dict，见 _walk_click/_walk_poll）
@@ -118,12 +125,11 @@ _frame_pos = _FRAME_UNSET
 
 def reset():
     """状态复位（新任务领取成功/跨任务防残留）。"""
-    global _use_at, _uses, _missing, _target_map, _hint_misses, _walk
+    global _use_at, _uses, _missing, _hint_misses, _walk
     global _dialog_log_at, _frame_key, _frame_rgb, _frame_bgr, _frame_pos
     _use_at = 0.0
     _uses = 0
     _missing = 0
-    _target_map = None
     _hint_misses = 0
     _dialog_log_at = 0.0
     _walk = None
@@ -225,23 +231,15 @@ def _read_hint(win):
 
 
 def _close_map(win):
-    """关闭世界地图/详情地图（best effort），返回是否已关闭。
+    """关闭世界地图/详情地图（best effort）。
 
-    只在地图确实打开时点击关闭 X（防点击落到游戏世界）；详情视图与
-    世界视图 X 不同，按当前视图选择。
+    走 game_map.close_maps：模板定位真实关闭钮（面板尺寸/位置随地图
+    与拖动变化）+ 双帧确认 + 1s 动画等待（面板已自动关闭或正在渐隐时
+    不点击）。详情面板在世界上层时按「小地图 → 世界地图」顺序关闭。
+    禁止改回固定坐标——2026-11-18 实机：固定坐标落到面板外点到游戏
+    世界，打断刚启动的地图寻路（见上方地图关闭注释）。
     """
-    for _attempt in range(MOWANG_MAP_CLOSE_RETRY):
-        if game_map.is_mini_map_open(win):
-            human_click(win, *MOWANG_MAP_CLOSE_POS["detail"])
-            time.sleep(0.5)
-            continue
-        if game_map.is_world_map_open(win):
-            human_click(win, *MOWANG_MAP_CLOSE_POS["world"])
-            time.sleep(0.5)
-            continue
-        return True
-    return not (game_map.is_mini_map_open(win)
-                or game_map.is_world_map_open(win))
+    game_map.close_maps(win)
 
 
 def _click_map_label(win, map_name, prefix):
@@ -258,8 +256,31 @@ def _click_map_label(win, map_name, prefix):
             f"（最佳匹配 {score:.3f}）", "WARN")
         return False
     human_click(win, pt[0], pt[1])
+    log(f"{prefix}传音石：世界地图已点「{map_name}」标签 @({pt[0]},{pt[1]})",
+        "INFO")
     time.sleep(0.8)  # 详情图打开动画
     return True
+
+
+def _detail_map_ready(win, map_name, prefix):
+    """详情图就绪门（场景锚）：标签点击后小地图面板必须在场。
+
+    标签点击可能未生效（世界地图打开动画/遮挡/点击落在标签外），此时
+    落点点击会点到世界地图上的错位置、启动一段错误寻路（2026-11-18
+    实机：魔王在狮驼岭，人物被带到万寿山来回走）。不在场时本轮放弃、
+    关地图后由调用方按重试节奏再来。面板已出现立即放行，未出现最多
+    再等 MOWANG_DETAIL_OPEN_WAIT 秒（各图面板动画不一）。
+    """
+    deadline = time.time() + MOWANG_DETAIL_OPEN_WAIT
+    while True:
+        if game_map.is_mini_map_open(win):
+            return True
+        if time.time() >= deadline:
+            break
+        time.sleep(0.3)
+    log(f"{prefix}传音石：点击「{map_name}」标签后详情图未打开，本轮放弃",
+        "WARN")
+    return False
 
 
 def _find_dot(img):
@@ -369,22 +390,21 @@ def _walk_poll(win, items, frame_fn, prefix):
 
 
 def _walk_step(win, direction, level, prefix):
-    """详情图按方向/距离点目标点自动寻路（当前地图）。返回是否启动寻路。"""
-    if not game_map.is_world_map_open(win):
-        ok, _info = game_map.open_world_map(win)
+    """当前地图详情图按方向/距离点目标点自动寻路。返回是否启动寻路。
+
+    2026-11-18 用户规则：方向提示只在目标地图内出现，直接打开当前地图
+    的小地图即可（点左上位置文字区，open_mini_map），不必先开世界地图
+    再点标签——旧路径每轮多两次地图操作，世界地图的关闭点击还可能落到
+    面板外打断寻路。
+    """
+    if game_map.is_world_map_open(win):
+        # 使用传音石后世界地图可能自动打开：先关掉，位置区点击才落在 HUD
+        game_map.close_world_map(win, quiet=True)
+    if not game_map.is_mini_map_open(win):
+        ok, info = game_map.open_mini_map(win)
         if not ok:
+            log(f"{prefix}传音石：打开当前地图小地图失败（{info}）", "WARN")
             return False
-    map_name = None
-    pos = game_map.read_map_position(win)
-    if pos is not None:
-        map_name = game_map.resolve_world_map_name(pos[0])
-    if map_name is None:
-        map_name = _target_map
-    if map_name is None:
-        return False
-    if not _click_map_label(win, map_name, prefix):
-        _close_map(win)
-        return False
     img = win.capture(force_activate=False)
     dot = _find_dot(img) if img is not None else None
     if dot is None:
@@ -429,9 +449,13 @@ def _go_map(win, map_name, prefix):
     if not _click_map_label(win, map_name, prefix):
         _close_map(win)
         return False
+    if not _detail_map_ready(win, map_name, prefix):
+        _close_map(win)
+        return False
     ok = False
     for x, y in MOWANG_ENTRY_POINTS:
         if _walk_click(win, x, y):
+            log(f"{prefix}传音石：详情图落点 @({x},{y}) 已启动寻路", "INFO")
             ok = True
             break
     _close_map(win)
@@ -454,7 +478,7 @@ def handle(win, items, img_np, frame_fn=None, use_item=None,
     follow 引擎绿字点击 + 任务对话表处理，本函数零操作。
     返回是否已处理。
     """
-    global _missing, _use_at, _uses, _target_map, _hint_misses, _walk
+    global _missing, _use_at, _uses, _hint_misses, _walk
     global _dialog_log_at
     sig = _sig(items)
     if not _trigger(sig):
@@ -502,7 +526,6 @@ def handle(win, items, img_np, frame_fn=None, use_item=None,
                 f"（见 game_map.WORLD_MAP_LABELS），无法自动导航", "WARN")
             _close_map(win)
             return True
-        _target_map = data
         _hint_misses = 0
         log(f"{prefix}传音石：魔王应在{data}，经世界地图前往", "SYS")
         if not _go_map(win, data, prefix):

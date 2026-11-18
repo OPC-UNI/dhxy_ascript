@@ -101,7 +101,6 @@ def test_use_then_map_navigation(monkeypatch):
     assert mw.handle(object(), _items(), None, use_item=use) is True
     assert st["uses"] == 1
     assert st["go"] == ["大唐边境"]
-    assert mw._target_map == "大唐边境"
 
 
 def test_use_then_direction_walk(monkeypatch):
@@ -242,6 +241,99 @@ def test_walk_in_progress_blocks_use(monkeypatch):
                         lambda win, items, fn: ("大唐边境", 105, 202))
     assert mw.handle(object(), _items(), None, use_item=use) is False
     assert st["uses"] == 0
+
+
+def test_close_map_delegates_to_close_maps(monkeypatch):
+    """关地图走 game_map.close_maps（模板定位关闭钮），不再用固定坐标。
+
+    2026-11-18 实机：固定坐标 (1106,219) 在狮驼岭帧落到面板外（面板
+    右缘 ~1005、关闭钮 (996,214)），点到游戏世界把刚启动的寻路打断。
+    """
+    calls = []
+    monkeypatch.setattr(mw.game_map, "close_maps",
+                        lambda win, quiet=False: calls.append(win))
+    mw._close_map(object())
+    assert len(calls) == 1
+
+
+def _patch_go_map(monkeypatch, detail_open):
+    """桩：世界地图已开、标签点击成功、详情图在场状态可控。"""
+    st = {"walk": [], "closed": 0}
+    monkeypatch.setattr(mw.game_map, "is_world_map_open", lambda win: True)
+    monkeypatch.setattr(mw.game_map, "is_mini_map_open",
+                        lambda win: detail_open)
+    monkeypatch.setattr(mw, "_click_map_label",
+                        lambda win, name, prefix: True)
+    monkeypatch.setattr(mw, "_walk_click",
+                        lambda win, x, y:
+                        st["walk"].append((x, y)) or True)
+    monkeypatch.setattr(mw, "_close_map",
+                        lambda win: st.__setitem__("closed",
+                                                   st["closed"] + 1))
+    return st
+
+
+def test_go_map_requires_detail_panel(monkeypatch):
+    """标签点击后详情图未打开 → 不点落点（防点到世界地图错位置）。"""
+    monkeypatch.setattr(mw, "MOWANG_DETAIL_OPEN_WAIT", 0.0)  # 不等面板动画
+    st = _patch_go_map(monkeypatch, detail_open=False)
+    logs = []
+    monkeypatch.setattr(mw, "log", lambda msg, level="INFO": logs.append(msg))
+    assert mw._go_map(object(), "狮驼岭", "[测] ") is False
+    assert st["walk"] == []
+    assert st["closed"] == 1
+    assert any("详情图未打开" in line for line in logs)
+
+
+def test_go_map_clicks_entry_when_detail_open(monkeypatch):
+    """详情图在场 → 点落点候选，首个启动寻路即停。"""
+    st = _patch_go_map(monkeypatch, detail_open=True)
+    assert mw._go_map(object(), "狮驼岭", "[测] ") is True
+    assert st["walk"] == [mw.MOWANG_ENTRY_POINTS[0]]
+    assert st["closed"] == 1
+
+
+class _FakeWin:
+    """桩窗口：capture 返回占位帧（_find_dot 已被替换）。"""
+    def capture(self, force_activate=True):
+        return object()
+
+
+def test_walk_step_opens_mini_map_directly(monkeypatch):
+    """方向步进直接开当前地图小地图，不经世界地图+标签（2026-11-18 用户规则）。
+
+    旧路径每轮先开世界地图、再点当前地图标签、再关世界地图；关闭点击
+    还可能落到面板外打断寻路。地图残留时先关，再点位置区开小地图。
+    """
+    calls = {"world": 0, "mini": 0, "close_world": 0,
+             "click": [], "closed": 0}
+    monkeypatch.setattr(mw.game_map, "is_world_map_open", lambda win: True)
+    monkeypatch.setattr(
+        mw.game_map, "close_world_map",
+        lambda win, quiet=False: calls.__setitem__(
+            "close_world", calls["close_world"] + 1))
+    monkeypatch.setattr(
+        mw.game_map, "open_world_map",
+        lambda win: calls.__setitem__("world", calls["world"] + 1)
+        or (True, "世界地图已打开"))
+    monkeypatch.setattr(mw.game_map, "is_mini_map_open", lambda win: False)
+    monkeypatch.setattr(
+        mw.game_map, "open_mini_map",
+        lambda win: calls.__setitem__("mini", calls["mini"] + 1)
+        or (True, "小地图已打开"))
+    monkeypatch.setattr(mw, "_find_dot", lambda img: (600, 400))
+    monkeypatch.setattr(mw, "_walk_click",
+                        lambda win, x, y: calls["click"].append((x, y)) or True)
+    monkeypatch.setattr(
+        mw, "_close_map",
+        lambda win: calls.__setitem__("closed", calls["closed"] + 1))
+    assert mw._walk_step(_FakeWin(), "东", "mid", "[测] ") is True
+    assert calls["close_world"] == 1          # 世界地图残留先关
+    assert calls["world"] == 0                 # 不再打开世界地图
+    assert calls["mini"] == 1                  # 直接开当前地图小地图
+    assert calls["click"] == [
+        (600 + mw.MOWANG_STEP_PX["mid"], 400)]  # 红点为原点按方向步进
+    assert calls["closed"] == 1
 
 
 def test_find_dot_color():
