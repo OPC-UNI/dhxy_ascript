@@ -738,3 +738,60 @@ def test_message_shout_sends_truncated_silent_text(monkeypatch):
     control_window.ControlWindow._message_shout(stub, "  来人\n第二行 ")
     assert sent[-1] == ("来人 第二行", True)  # 换行折叠成空格，防提前发送
     assert stub.events  # 已写面板/文件日志
+
+
+def test_diagnostics_methods_live_in_mixin():
+    """P3 拆分：全部诊断验证方法由 DiagnosticsMixin 提供，callPython 名不变。
+
+    遍历 expose 列表中的所有 verify_*（消息服务 verify_message_channel
+    除外），防止漏搬、搬回或形成两份实现；`test_all_exposed_methods_exist`
+    继续兜底名称可解析。
+    """
+    from src.app import diagnostics
+    from src.app.control_window import ControlWindow
+
+    assert issubclass(ControlWindow, diagnostics.DiagnosticsMixin)
+    src = inspect.getsource(ControlWindow.__init__)
+    exposed = set(re.findall(r"self\.expose\(self\.(\w+)\)", src))
+    diag = {n for n in exposed if n.startswith("verify_")} \
+        - {"verify_message_channel"}
+    assert len(diag) >= 40  # 解析自检：正则失效不得静默通过
+    wrong = sorted(n for n in diag
+                   if getattr(ControlWindow, n).__module__
+                   != "src.app.diagnostics")
+    assert wrong == []
+    # 消息服务验证不属于诊断页，仍留在控制窗口
+    assert ControlWindow.verify_message_channel.__module__ \
+        == "src.app.control_window"
+    # control_window 仍导出共用前置检查（队伍检查方法在用）
+    assert control_window._game_window_clickable \
+        is diagnostics._game_window_clickable
+
+
+def test_moved_verify_methods_no_window_paths(monkeypatch):
+    """搬迁后的 verify 方法可调用：无窗口路径返回错误字典（不抛异常）。
+
+    覆盖 mixin 对 `_SILENT_KEY_HOTKEYS`、`_tm`、`_verifying` 与 game 的
+    依赖；方法若引用未导入的全局名，这里会直接 NameError。
+    """
+    import types
+
+    from src.app import diagnostics
+
+    class _Host(diagnostics.DiagnosticsMixin):
+        def __init__(self):
+            self._tm = types.SimpleNamespace(is_running=lambda: False)
+            self._verifying = False
+            self.webview_instance = None
+            self.logs = []
+
+        def add_logs(self, lines):
+            self.logs.extend(lines)
+
+    monkeypatch.setattr(diagnostics.game, "find_main_window", lambda: None)
+    host = _Host()
+    team_result = host.verify_team_check()
+    assert team_result["status"] == "error"
+    assert "未检测到游戏窗口" in team_result["msg"]
+    assert host.verify_silent_key("bogus")["status"] == "error"
+    assert host.verify_silent_click("bogus")["status"] == "error"
