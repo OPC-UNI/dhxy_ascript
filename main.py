@@ -108,15 +108,8 @@ from src.device import game  # 游戏窗口操作
 from src.core import user_data  # 角色数据目录（data/<角色ID>/）
 from src.device import bag  # 背包操作
 from src.device import battle  # 战斗自动化（战斗监控与人物/召唤兽操作）
-from src.tasks import xuanshu  # 玄枢轶闻任务自动化
-from src.tasks import mingwang  # 名望任务自动化（第一阶段：魔族领取入口）
-from src.device import task_tracker  # 任务追踪面板操作（启动时判断是否已有跟踪中的任务）
-from src.tasks import wuhuan  # 五环任务自动化
-from src.tasks import kezhan  # 客栈任务自动化
-from src.device import team  # 组队功能（任务前置退队）
-from src.tasks import xiuluo  # 修罗任务自动化
-from src.tasks import zhongzu  # 种族比武任务自动化
-from src.tasks import wubei  # 五倍任务自动化
+from src.app.task_registry import run_task_mode  # 任务模式注册表（前置钩子 + 主循环）
+from src.device import team  # 组队功能（仅战斗自动归队）
 from src.device import status_bars  # 人物/召唤兽血蓝条检测
 from src.core import debug_overlay  # 调试信息悬浮层（游戏窗口上绘制任务/配置/进度）
 from src.device import clear_screen  # 启动清屏（Alt+6 屏蔽玩家 + Alt+5 屏蔽摊位）
@@ -240,40 +233,6 @@ def _sheyaoxiang_idle_fallback(win):
             log(f"[摄妖香] 空闲期兜底异常: {e}", "WARN")
 
 
-def _run_task_mode(win, mode):
-    """执行单个任务模式的主循环（原 task_start 内按模式分支的收拢）。
-
-    返回该模式循环的结束原因描述；「名望」当前仅实现第一阶段（种族
-    判定 + 魔族领取入口 + 打开山河名望面板），后续领取/跟踪流程待补充。
-    """
-    if mode == "玄枢轶闻":
-        # 任务前置：退出队伍（队长解散/队员离开），单人状态执行。
-        # 已有跟踪中的任务时跳过退队直接续跑（退队只服务于领取流程，
-        # 续跑无需检查队伍信息——用户确认）
-        if not task_tracker.has_task(win, xuanshu.TASK_TITLE):
-            ok, info = team.leave_or_disband_team(win)
-            log(f"[组队] 任务前置退队：{info}", "SYS" if ok else "WARN")
-        return xuanshu.run_loop(win)
-    if mode == "五环":
-        return wuhuan.run_loop(win)
-    if mode == "客栈":
-        # 任务前置：退出队伍（队长解散/队员离开），单人状态执行
-        ok, info = team.leave_or_disband_team(win)
-        log(f"[组队] 任务前置退队：{info}", "SYS" if ok else "WARN")
-        return kezhan.run_loop(win)
-    if mode == "修罗":
-        return xiuluo.run_loop(win)
-    if mode == "五倍":
-        return wubei.run_loop(win)
-    if mode == "种族比武":
-        return zhongzu.run_loop(win)
-    if mode == "名望":
-        return mingwang.run_loop(win)
-    # 其余模式：暂无自动化实现
-    log(f"[任务] {mode} 暂无自动化实现，跳过", "WARN")
-    return f"{mode} 暂无自动化实现，跳过"
-
-
 def _battle_only_loop(win):
     """仅战斗模式：只启动战斗监控线程并驻留任务进程。
 
@@ -348,6 +307,24 @@ def _overall_progress_text(win, modes):
     done = sum(min(app_utils.task_progress_done(win, m), counts.get(m, 0))
                for m in modes if counts.get(m, 0) > 0)
     return f"总进度 {done}/{total}" if total else "总进度 -"
+
+
+def _run_selected_tasks(win, modes):
+    """按面板顺序执行选中的任务（注册表分发 + 悬浮层/进度更新）。
+
+    单独成函数便于测试调用点：注册表映射正确但 main 实参颠倒/漏调用
+    时，单测可直接捕获 (win, mode)。
+    """
+    for mode in modes:
+        app_utils.set_current_task_mode(mode)
+        debug_overlay.set_task(mode)
+        log(f"[任务] 开始执行: {mode}", "SYS")
+        info = run_task_mode(win, mode)
+        log(f"[任务] {mode} 循环结束：{info}", "SYS")
+        # 任务切换间隙：悬浮层改显总进度（任务运行中由各模块
+        # 更新自己的进度行），并稍候界面状态稳定
+        debug_overlay.set_progress(_overall_progress_text(win, modes))
+        time.sleep(2)
 
 
 def task_start():
@@ -531,19 +508,10 @@ def _task_start_body():
         # 5. 选中任务顺序执行：每个任务的主循环正常结束（次数上限/
         #    每日次数已满/活力不足等）后进入下一个任务，全部结束后
         #    任务进程退出，面板自动显示已结束（无需逐个任务重启）。
-        #    任务前置（退队/清屏等）与循环逻辑由 _run_task_mode 按模式分发；
+        #    任务前置（退队等）与循环逻辑由 app.task_registry.run_task_mode 分发；
         #    当前任务模式经 app_utils 共享，战斗线程/寻路期续用按当前模式决策。
         if logged_in and modes:
-            for mode in modes:
-                app_utils.set_current_task_mode(mode)
-                debug_overlay.set_task(mode)
-                log(f"[任务] 开始执行: {mode}", "SYS")
-                info = _run_task_mode(main_win, mode)
-                log(f"[任务] {mode} 循环结束：{info}", "SYS")
-                # 任务切换间隙：悬浮层改显总进度（任务运行中由各模块
-                # 更新自己的进度行），并稍候界面状态稳定
-                debug_overlay.set_progress(_overall_progress_text(main_win, modes))
-                time.sleep(2)
+            _run_selected_tasks(main_win, modes)
         elif not logged_in:
             log("[检查] 未登录，无可执行任务，任务结束（登录后可重新启动）", "WARN")
         else:
