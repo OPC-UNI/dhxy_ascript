@@ -231,7 +231,7 @@ dhxy2/
 - **版本号唯一来源**：[src/__init__.py](src/__init__.py) 的 `__version__`；发版打 `v*` tag，CI 自动把 tag 版本号烙进构建产物。新增功能上线须同步更新 README 功能列表。
 - **测试**：`python -m pytest tests/ -m "not slow"`；OCR 引擎烟测等慢测试用 `python -m pytest tests/ -m slow`。CI 每次 push / PR 自动运行。
 - **exe 打包**：GitHub Actions（[.github/workflows/build-exe.yml](.github/workflows/build-exe.yml)）手动触发或 `v*` tag 自动构建；zip = exe + res + pylibs，numpy / onnxruntime 随 pylibs 分发。
-- **发布流水线**：推送 `v*` tag → CI 单元测试门禁（复用 [ci.yml](.github/workflows/ci.yml)，不通过不构建）→ 构建并发布 GitHub Release / OSS → 成功后调用独立的 [notify-telegram.yml](.github/workflows/notify-telegram.yml) 把新版本与更新日志推送到 Telegram 频道（可复用工作流；不附下载链接，统一引导面板「检查更新」升级）；CI 或构建失败即停止，通知失败不影响已发布版本。
+- **发布流水线**：推送 `v*` tag → CI 单元测试门禁（复用 [ci.yml](.github/workflows/ci.yml)，不通过不构建）→ 构建并发布 GitHub Release / OSS → 成功后调用独立的 [notify-telegram.yml](.github/workflows/notify-telegram.yml) 把新版本与更新日志推送到 Telegram 频道（可复用工作流；不附下载链接，统一引导面板「检查更新」升级）；CI 或构建失败即停止，通知失败不影响已发布版本。**更新日志按提交类型自动分类**：`feat` → 新增功能、`fix` → 问题修复、其余 → 变更与优化，纯内部提交（docs/test/ci/build/style/chore 与版本号 bump）不展示；可用 `changelog/<tag>.md` 人工覆盖（见 [scripts/make_release_notes.py](scripts/make_release_notes.py)）。
 - **发布通知配置**：仓库 Secrets 配置 `TELEGRAM_BOT_TOKEN`（@BotFather 获取）与 `TELEGRAM_CHAT_ID`（频道 ID 为负数，机器人需设为频道管理员，可通过转发频道消息给 @userinfobot 或 `getUpdates` 获取）。未配置时构建照常发布，通知步骤打印警告后跳过。
 - **发版**：打 `v*` tag 时 CI 拆包（app / pylibs / 完整包）、生成并校验 `update.json`、上传阿里云 OSS；Secrets 需 `OSS_ACCESS_KEY_ID` / `OSS_ACCESS_KEY_SECRET`。设计见 [docs/auto-update-design.md](docs/auto-update-design.md)。
 - **日志**：双写工程目录 `logs/`（按日期）；排查任务问题先用诊断页按钮逐链路确认。

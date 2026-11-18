@@ -236,12 +236,14 @@ jobs:
           name: zhuomuniao-windows-${{ github.ref_name }}
           path: dist_update/*.zip
 
-      - name: 生成变更说明（上一 tag 至今的提交列表；changelog/<tag>.md 可覆盖）
+      - name: 生成变更说明（上一 tag 至今的提交按类型分类；changelog/<tag>.md 可覆盖）
         if: startsWith(github.ref, 'refs/tags/')
         shell: pwsh
         run: |
           # GitHub 自动生成 notes 只列 PR；本仓库直推无 PR，只会显示
-          # 「Full Changelog」对比链接。改为从 git log 生成提交列表。
+          # 「Full Changelog」对比链接。改为从 git log 生成分类提交列表
+          # （scripts/make_release_notes.py：feat → 新增功能、fix → 问题
+          # 修复、其余 → 变更与优化；版本号 bump 提交不进日志）。
           # 若存在 changelog/vX.Y.Z.md，则以其内容为面向用户的更新日志。
           # 产物分两份：
           #   update_notes.md  → update.json 更新日志（面板展示，纯净无链接）
@@ -256,17 +258,14 @@ jobs:
           }
           $curated = "changelog/$env:GITHUB_REF_NAME.md"
           if (Test-Path $curated) {
-            $notes = Get-Content $curated -Raw
-            Write-Host "使用人工更新日志: $curated"
+            python scripts/make_release_notes.py --tag $env:GITHUB_REF_NAME `
+              --range $range --compare-url $link --curated $curated
           } else {
-            $notes = "## 变更（$env:GITHUB_REF_NAME）`n"
-            $notes += (git log --pretty=format:"- %s" $range | Out-String)
+            python scripts/make_release_notes.py --tag $env:GITHUB_REF_NAME `
+              --range $range --compare-url $link
           }
-          $notes = $notes.TrimEnd()
-          $notes | Out-File -Encoding utf8NoBOM -FilePath update_notes.md
-          ($notes + "`n`n完整对比: $link`n") | Out-File -Encoding utf8NoBOM -FilePath release_notes.md
           Write-Host "--- 生成的更新日志（update.json） ---"
-          Write-Host $notes
+          Get-Content update_notes.md -Raw | Write-Host
 
       - name: 生成并校验 update.json（仅打 tag）
         if: startsWith(github.ref, 'refs/tags/')
