@@ -499,6 +499,13 @@ def close_scene_panels(win, prefix="", quiet=False):
 DIALOG_FRAME_ICON = "dialog_frame.png"
 DIALOG_FRAME_BAND = (350, 200, 1030, 650)  # 居中对话框搜索条带（DIALOG_REGION 外扩）
 DIALOG_FRAME_THRESHOLD = 0.79              # 命中阈值（2026-11-07 巫医真图 0.795 校准）
+# 门控模板2：半透明 NPC 对话盒右下角暗区（2026-11-18 用户提供素材 333x58；
+# 用户要求不改原识别逻辑，只加一个门控模板）。原模板是深色底纹块，亮背景
+# 场景下被半透明对话盒削弱——采桃仙女对话实测仅 0.766 < 0.79，对话区 OCR
+# 被跳过、DIALOG_OPTION_MAP 永不命中（任务卡死）。模板2 与模板1 同一阈值
+# 取高分（OR 门）：目标帧 0.997；模板2 非目标帧交叉验证（世界地图/驿站
+# 金边提示盒/手册截图/测试夹具）≤0.439，双模板合计非目标帧 ≤0.662。
+DIALOG_FRAME_ICON2 = "dialog_frame2.png"
 
 # ---- 剧情对话点屏推进的寻路保护（2026-11-11 用户实机） ----
 # 剧情对话不挡路时人物照常自动寻路，此时点屏幕中间会取消寻路（人物
@@ -620,14 +627,20 @@ class PositionStillness:
 
 
 def dialog_frame_score(frame):
-    """对话框模板全局最高分（接受 PIL 或 BGR 帧，条带内匹配）。"""
+    """对话框模板全局最高分（接受 PIL 或 BGR 帧，条带内匹配）。
+
+    模板1（标准对话框）逻辑不变；模板2（半透明 NPC 对话盒右下角）作为
+    补充门控与模板1 取高分（同一阈值判定）。两块模板同帧匹配、灰度
+    转换只做一次（~+9ms/次，对话场景随后本就要付 470~930ms 对话区 OCR）。
+    """
     import cv2
     import numpy as np
     if not isinstance(frame, np.ndarray):
         frame = cv2.cvtColor(np.asarray(frame), cv2.COLOR_RGB2BGR)
-    score, _ = game_map.best_match_np(frame, DIALOG_FRAME_ICON,
-                                      region=DIALOG_FRAME_BAND)
-    return score
+    scores = game_map.best_match_multi_np(
+        frame, (DIALOG_FRAME_ICON, DIALOG_FRAME_ICON2),
+        region=DIALOG_FRAME_BAND)
+    return max(scores[DIALOG_FRAME_ICON][0], scores[DIALOG_FRAME_ICON2][0])
 
 
 _dlg_hit_state = False    # 上一轮询模板命中状态（上升沿日志用）

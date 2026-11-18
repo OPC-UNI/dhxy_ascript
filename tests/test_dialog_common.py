@@ -398,3 +398,41 @@ def test_walking_verify_not_run_early(monkeypatch):
     d._moving_since = _time.time() - 1.0
     assert d._walking(None) is True
     assert called == []
+
+
+# ---- 门控模板2：半透明 NPC 对话盒右下角（2026-11-18 采桃仙女实机） ----
+# 标准模板在亮背景场景被半透明对话盒削弱到 0.766 < 0.79，对话区 OCR
+# 被跳过、绿色选项永不点击 → 任务卡死。模板2（右下角）与原模板取高分补门。
+
+def _pasted(tpl_name, seed=7, x=600, y=470):
+    import cv2
+    from ascript.windows.system import R as _R
+    from tests.conftest import make_bgr_frame
+    tpl = cv2.imread(str(_R.img(tpl_name)))
+    frame = make_bgr_frame(seed=seed)
+    h, w = tpl.shape[:2]
+    frame[y:y + h, x:x + w] = tpl
+    return frame
+
+
+def test_dialog_frame_score_npc_corner_template_hits():
+    """模板2 在条带内命中即放行（亮背景半透明对话盒场景，原模板 0.766）。"""
+    frame = _pasted(dialog_common.DIALOG_FRAME_ICON2)
+    score = dialog_common.dialog_frame_score(frame)
+    assert score >= dialog_common.DIALOG_FRAME_THRESHOLD
+    assert score > 0.99
+
+
+def test_dialog_frame_score_original_template_unchanged():
+    """原模板路径不受影响：模板1 命中照常返回模板1 分数。"""
+    frame = _pasted(dialog_common.DIALOG_FRAME_ICON, seed=11)
+    score = dialog_common.dialog_frame_score(frame)
+    assert score >= dialog_common.DIALOG_FRAME_THRESHOLD
+    assert score > 0.99
+
+
+def test_dialog_frame_score_no_dialog_frame_stays_low():
+    """无可匹配模板的噪声帧：两模板都不命中，门控保持关闭。"""
+    from tests.conftest import make_bgr_frame
+    score = dialog_common.dialog_frame_score(make_bgr_frame(seed=3))
+    assert score < dialog_common.DIALOG_FRAME_THRESHOLD
