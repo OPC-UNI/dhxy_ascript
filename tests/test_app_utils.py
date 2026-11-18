@@ -1,13 +1,22 @@
 """app_utils 输入哨兵测试（2026-10-31 fail-safe 致任务线程裸崩的修复）。
 
 验证点：
-- Mouse 调用抛 pydirectinput.FailSafeException → 转 UserAbort（用户中断哨兵）
+- Mouse 调用抛 fail-safe 异常 → 转 UserAbort（用户中断哨兵）
 - 非 fail-safe 异常原样穿透，不被误转
 - 消息兜底：后端替换/异常被包装后仍按 "fail-safe" 文案识别
 - UserAbort 继承 BaseException：任务循环的 except Exception 兜底不吞它
+
+fail-safe 异常类型随 SDK 变化：1.3.31+ 为 MouseFailSafeError（原生
+SendInput，pydirectinput 已从依赖中移除），旧 SDK 为
+pydirectinput.FailSafeException。这里优先导入新类型，旧环境下回退，
+避免在只装 requirements.txt 的 CI 全新环境里 collection failure。
 """
 import pytest
-from pydirectinput import FailSafeException
+
+try:  # ascript 1.3.31+
+    from ascript.windows.hardware.mouse import MouseFailSafeError as FailSafeException
+except ImportError:  # 旧 SDK：fail-safe 由 pydirectinput 抛出
+    from pydirectinput import FailSafeException
 
 from src.core import app_utils
 
@@ -59,6 +68,13 @@ def test_human_move_failsafe_converts_to_user_abort(fake_mouse):
     with pytest.raises(app_utils.UserAbort) as ei:
         app_utils.human_move(100, 200)
     assert "人工接管" in str(ei.value)
+
+
+def test_human_move_failsafe_type_only_converts(fake_mouse):
+    # 类型信号单独生效：异常文案不含 "fail-safe" 也按类型转 UserAbort
+    fake_mouse.exc = FailSafeException("corner reached")
+    with pytest.raises(app_utils.UserAbort):
+        app_utils.human_move(100, 200)
 
 
 def test_human_move_failsafe_message_fallback(fake_mouse):

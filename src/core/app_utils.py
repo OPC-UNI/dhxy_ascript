@@ -15,10 +15,21 @@ from ascript.windows.system.key_value import KeyValue
 
 from . import user_data
 
+# 鼠标 fail-safe 异常类型：ascript 1.3.31+ 改为 ctypes SendInput 原生实现，
+# 抛 MouseFailSafeError；旧 SDK（1.3.4 及更早）走 pydirectinput，抛
+# pydirectinput.FailSafeException。打包版固定 1.3.31、旧源码环境可能仍是
+# 旧 SDK，按可用性收集类型（都不在时仍有 "fail-safe" 消息兜底）。
+_FAILSAFE_TYPES = ()
 try:
     from pydirectinput import FailSafeException as _PDIFailSafe
-except ImportError:  # 理论不可达（ascript Mouse 依赖 pydirectinput），防御性兜底
-    _PDIFailSafe = ()
+    _FAILSAFE_TYPES += (_PDIFailSafe,)
+except ImportError:  # 1.3.31+ 不再依赖 pydirectinput
+    pass
+try:
+    from ascript.windows.hardware.mouse import MouseFailSafeError as _SDKFailSafe
+    _FAILSAFE_TYPES += (_SDKFailSafe,)
+except ImportError:  # 旧 SDK 无此类型
+    pass
 
 # ---- 本地日志文件（开发调试用：日志落盘到工程目录 logs/，运行中/结束后
 # 可直接读取文件排查问题，无需翻浮动窗口日志面板）----
@@ -289,9 +300,10 @@ def _silent_click(win, x, y, button="primary"):
 class UserAbort(BaseException):
     """用户人工接管鼠标（fail-safe 触发）——任务应干净中止。
 
-    触发条件：物理鼠标位于屏幕角落时，PyDirectInput/PyAutoGUI 的
-    fail-safe 会拒绝一切输入操作（脚本自身所有移动目标都在游戏窗口
-    内，不可能把鼠标移到角落，只有人能触发）。
+    触发条件：物理鼠标位于屏幕角落时，ascript Mouse 的 fail-safe
+    （1.3.31+ 原生 SendInput 抛 MouseFailSafeError；更早走 pydirectinput）
+    会拒绝一切输入操作（脚本自身所有移动目标都在游戏窗口内，不可能把
+    鼠标移到角落，只有人能触发）。
 
     继承 BaseException 而非 Exception：任务循环内遍布的
     ``except Exception`` 兜底不应吞掉用户中断——与 KeyboardInterrupt
@@ -303,12 +315,13 @@ class UserAbort(BaseException):
 def _convert_failsafe(e):
     """鼠标输入异常识别：fail-safe 命中转 UserAbort，其余原样返回。
 
-    ascript Mouse 走 pydirectinput（FAILSAFE=True），类型信号为
-    pydirectinput.FailSafeException；消息兜底（"fail-safe"）覆盖后端
-    替换/异常被包装后类型丢失的情况。返回后调用方以裸 ``raise``
-    重抛原异常（本函数不抛即非 fail-safe）。
+    ascript Mouse 的 fail-safe 类型信号随 SDK 版本不同（1.3.31+ 为
+    MouseFailSafeError，旧版为 pydirectinput.FailSafeException，见
+    _FAILSAFE_TYPES）；消息兜底（"fail-safe"）覆盖后端替换/异常被包装
+    后类型丢失的情况。返回后调用方以裸 ``raise`` 重抛原异常（本函数
+    不抛即非 fail-safe）。
     """
-    if isinstance(e, _PDIFailSafe) or "fail-safe" in str(e).lower():
+    if isinstance(e, _FAILSAFE_TYPES) or "fail-safe" in str(e).lower():
         raise UserAbort(
             "检测到鼠标位于屏幕角落（fail-safe 触发），判定用户人工接管") from e
 
