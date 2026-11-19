@@ -34,12 +34,12 @@ import webbrowser
 import webview
 from pathlib import Path
 from ascript.windows.system import R
-from ascript.windows.system.device import Device
 from ascript.windows.ui import WebWindow
 from ..device import game  # 游戏窗口查找（绑定/消息服务/组号检查；game 不反向依赖本模块，可顶层导入）
 from ..core import app_utils  # KeyValue 合并读写（kv_save_merged/kv_remove_merged）
 from ..core import schemes  # 配置方案（多套设置快照切换 + 导入导出）
 from ..core import user_data  # 角色数据目录（data/<角色ID>/）
+from ..core.license_client import LicenseError  # 雪松授权错误（激活/解绑面板提示）
 from . import hotkey  # 老板键（启动/停止按钮文案展示热键名）
 from . import updater  # 软件自动更新（清单/下载/覆盖升级）
 from . import update_config  # 更新渠道与节流常量
@@ -54,7 +54,7 @@ from .. import __version__  # 版本号唯一来源（src/__init__.py，面板�
 from ..device.binding import bound_label_from_binding, bound_short_label
 from ..device.progress import task_progress_summary
 from ..core.settings import (
-    ENV_ADAPT_RES, ENV_THEME, _GROUP_DETECTED_KEY, _as_bool, _kv_remove,
+    ENV_ADAPT_RES, ENV_THEME, _GROUP_DETECTED_KEY, _as_bool,
     build_group_last_scan_payload, load_auto_famen, load_auto_refill, load_battle_actions,
     load_battle_only_auto_rejoin, load_battle_only_hezi, load_clear_screen, load_debug_overlay,
     load_debug_ui_unlocked, load_high_perf, load_selected_modes, load_silent_mode,
@@ -167,13 +167,16 @@ class ControlWindow(DiagnosticsMixin, SettingsApiMixin, MessageApiMixin,
     TaskManager 回调推送（sync_status / add_logs → 面板看板日志抽屉）。
     """
 
-    def __init__(self, tm, title="啄木鸟", license_info=None, license_gate=None):
+    def __init__(self, tm, title="啄木鸟", license_info=None, license_gate=None,
+                 license_client=None):
         super().__init__(R.ui("control_window.html"))
         self._tm = tm
         self._title = title
-        # 启动任务前授权校验（main 注入的闭包：在线校验证书到期，返回
+        # 启动任务前授权校验（main 注入的闭包：本地验签 + 在线心跳，返回
         # {"ok", "msg", "info"}）；启动按钮与老板键共用 start_task 入口
         self._license_gate = license_gate
+        # 雪松授权客户端（面板「激活卡密 / 解绑」按钮直接调用）
+        self._license_client = license_client
         self._start_lock = threading.Lock()  # 校验+启动整体串行（按钮/老板键并发防双启）
         # 窗口标题附加绑定角色短文案（启动时解析一次；仅角色信息，
         # 保持简短——服务器+角色名，如「啄木鸟 - 一生所爱「长相思」」）
@@ -322,6 +325,8 @@ class ControlWindow(DiagnosticsMixin, SettingsApiMixin, MessageApiMixin,
         self.expose(self.verify_silent_char)
         self.expose(self.verify_child_windows)
         self.expose(self.unbind_license)
+        self.expose(self.activate_license)
+        self.expose(self.get_license_info)
         self.expose(self.get_env_info)
         self.expose(self.unbind_window)
         self.expose(self.get_schemes)
@@ -388,9 +393,8 @@ class ControlWindow(DiagnosticsMixin, SettingsApiMixin, MessageApiMixin,
 
     def get_env_info(self):
         """使用环境信息（系统页-使用环境展示）：适配主题/分辨率、
-        当前游戏窗口分辨率、绑定窗口（页面展示用短角色文案 bound，
-        完整标题放 bound_full 作悬停提示；短文案与窗口标题同源）与
-        设备 ID。
+        绑定窗口（页面展示用短角色文案 bound，完整标题放 bound_full
+        作悬停提示；短文案与窗口标题同源）。
 
         绑定丢失且有自动选择窗口时注明实跑目标（find_main_window
         兜底：已登录窗口优先），并同步刷新窗口标题角色文案——防
@@ -401,10 +405,7 @@ class ControlWindow(DiagnosticsMixin, SettingsApiMixin, MessageApiMixin,
         数据随实际窗口切换。
         """
         self._sync_role_binding()
-        cur = "未检测到游戏窗口"
         win = game.find_main_window()
-        if win is not None:
-            cur = f"{win.rect.width} × {win.rect.height}"
         bound = game.find_bound_window()
         if bound is not None:
             bound_info = bound.title
@@ -420,22 +421,16 @@ class ControlWindow(DiagnosticsMixin, SettingsApiMixin, MessageApiMixin,
         else:
             bound_info = "未绑定（自动选择）"
         self.refresh_window_title()  # 标题角色文案随解析结果刷新
-        try:
-            device_id = Device.id  # classproperty：属性访问即为字符串，不可加括号调用
-        except Exception:
-            device_id = "获取失败"
         # 短文案只在有活窗口时取（游戏已关闭仍展示旧角色名会误导）；
         # 无窗口/绑定丢失等状态行本身已短，直接用 bound_info
         short = (bound_short_label() or "") if win is not None else ""
         return {"theme": ENV_THEME,
                 "adapt_res": f"{ENV_ADAPT_RES[0]} × {ENV_ADAPT_RES[1]}",
-                "cur_res": cur,
                 # 页面「绑定窗口」展示短文案（服务器+角色名）：完整窗口标题
                 # （「一生所爱 - xxx - 角色（ID：xxx）」）在分组行里显示不全
                 "bound": short or bound_info,
                 "bound_full": bound_info,  # 悬停提示用完整信息
-                "bound_short": short,
-                "device_id": device_id}
+                "bound_short": short}
 
     def unbind_window(self):
         """解除窗口绑定（下次启动多开时重新弹框选择）。"""
@@ -914,8 +909,14 @@ class ControlWindow(DiagnosticsMixin, SettingsApiMixin, MessageApiMixin,
                     msg = result.get("msg") or "授权校验未通过"
                     if "无法连接授权服务器" in msg:
                         hint = "请检查网络后重试"
+                    elif "激活数量" in msg or "设备" in msg:
+                        hint = "请联系作者在后台释放旧设备后重新激活"
+                    elif "过期" in msg:
+                        hint = "请续费后重试"
+                    elif "未激活" in msg or "输入卡密" in msg:
+                        hint = "请先在激活页输入卡密激活"
                     else:
-                        hint = "请重启软件重新激活或联系作者续费"
+                        hint = "请联系作者处理"
                     fail_line = f"[授权] 校验未通过：{msg}"
                     app_utils.log(fail_line, "WARN")
                     self.add_logs([fail_line])
@@ -926,6 +927,8 @@ class ControlWindow(DiagnosticsMixin, SettingsApiMixin, MessageApiMixin,
                 pass_line = f"[授权] 校验通过：{info.get('status', '未知')}"
                 if info.get("expire"):
                     pass_line += f"，到期 {info['expire']}"
+                if info.get("offline"):
+                    pass_line += "（网络异常，使用本地许可证）"
                 app_utils.log(pass_line, "SYS")
                 self.add_logs([pass_line])
             self._sync_start_tab_binding()  # 角色目录跟随「任务启动所在 Tab」
@@ -970,15 +973,59 @@ class ControlWindow(DiagnosticsMixin, SettingsApiMixin, MessageApiMixin,
             except Exception:
                 pass
 
-    def unbind_license(self):
-        """高级设置-解绑激活码：清除本地缓存激活码。
+    def get_license_info(self):
+        """刷新并返回授权信息（激活页「刷新状态」；未激活也返回设备码）。"""
+        if self._license_client is None:
+            return self._license_info or {}
+        info = self._license_client.info()
+        self._license_info = info
+        return info
 
-        解绑后下次点击「启动」即被授权门拦截（启动前校验发现无缓存码、
-        旧会话授权数据同步作废）；重启软件弹出激活窗口可输入新卡密。
+    def activate_license(self, code):
+        """激活页-激活卡密：用卡密激活当前设备并刷新面板授权信息。
+
+        激活成功后服务端把卡密与当前设备硬件指纹绑定；换机需联系作者
+        在后台释放旧设备（未满最大激活设备数时可直接再激活）。
         """
-        _kv_remove("license_cache_no")
+        if self._license_client is None:
+            return {"status": "error", "msg": "授权客户端未初始化"}
+        code = str(code or "").strip()
+        if not code:
+            return {"status": "error", "msg": "请输入卡密"}
+        try:
+            info = self._license_client.activate(code)
+        except LicenseError as e:
+            app_utils.log(f"[授权] 激活失败：{e}", "WARN")
+            return {"status": "error", "msg": e.message}
+        except Exception as e:  # noqa: BLE001 - 面板兜底，避免桥接异常
+            app_utils.log(f"[授权] 激活异常：{e}", "WARN")
+            return {"status": "error", "msg": f"激活异常：{e}"}
+        self._set_license_info(info)
+        line = f"[授权] 激活成功：{info.get('status', '已激活')}"
+        if info.get("expire"):
+            line += f"，到期 {info['expire']}"
+        app_utils.log(line, "SYS")
+        self.add_logs([line])
+        return {"status": "success", "msg": "激活成功", "info": info}
+
+    def unbind_license(self):
+        """系统页-解绑激活码：清除本地许可证。
+
+        只清除本机授权文件，不会释放服务端设备绑定；换机需联系作者在
+        后台删除旧设备的许可证（否则会提示激活数量已达上限）。
+        """
+        if self._license_client is None:
+            return {"status": "error", "msg": "授权客户端未初始化"}
+        try:
+            self._license_client.unbind_local()
+        except LicenseError as e:
+            return {"status": "error", "msg": e.message}
+        info = self._license_client.info()
+        self._set_license_info(info)
+        app_utils.log("[授权] 已清除本地授权，可在激活页输入新卡密", "SYS")
         return {"status": "success",
-                "msg": "已解绑本地激活码：后续启动任务将被拦截，重启软件可重新输入卡密激活"}
+                "msg": "已清除本地授权。换机请先联系作者在后台释放该设备，再输入卡密激活",
+                "info": info}
 
     def stop_task(self):
         """停止按钮：停止任务子进程（升级强杀，保证任务线程全清）。"""

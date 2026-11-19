@@ -149,11 +149,16 @@ data/
 
 清理完成后 `config.json` 只剩软件全局设置：
 
-- `bound_window_id`、`license_cache_no`、`ui_theme`、`debug_overlay`、
+- `bound_window_id`、`ui_theme`、`debug_overlay`、
   `debug_ui_unlocked`（若解锁过）、`boss_hotkey`（若配置过）、
   `update_auto_check` / `update_last_check_ts` / `update_skipped_version` /
   `update_feed_url`（若存在）、`message_service`（消息服务通道配置；
   全局、不按角色隔离、不进配置方案）
+
+授权文件不在 `config.json`：雪松 License Manager 的许可证存
+`data/_license/license.json`（机器全局，不按角色隔离，升级/回滚保留；
+含 license_file、license_key、产品公钥、心跳间隔与设备指纹）。
+`config.json` 的旧 `license_cache_no`（AScript 授权）已不再使用。
 
 ## 6. 代码入口
 

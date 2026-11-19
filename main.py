@@ -83,7 +83,6 @@ import uiautomation as auto  # UIA 需要线程内 COM 初始化
 import webview  # GUI 消息循环（窗口已在 ControlWindow.prepare 创建，这里直接 start）
 from ascript.windows.system import R  # 程序上下文与资源路由
 from ascript.windows.system import Runtime  # 生命周期驻留（防止程序自行退出）
-from ascript.windows.ui import LicenseWindow  # 安全验证组件
 from src.app.task_manager import TaskManager  # 任务子进程管理（启停/强杀/日志回流）
 from src.app.control_window import ControlWindow  # 网页控制窗口（启动/停止/重置）
 from src.device.binding import bound_short_label  # 绑定角色短文案
@@ -115,7 +114,10 @@ from src.core import debug_overlay  # 调试信息悬浮层（游戏窗口上绘
 from src.device import clear_screen  # 启动清屏（Alt+6 屏蔽玩家 + Alt+5 屏蔽摊位）
 from src.device import map as game_map  # 地图操作（OCR 引擎预热等）
 from src.app import env_check  # 启动环境自检（DPI/屏幕/首帧统计，远程机排障）
-from src.app.license_app_id import LICENSE_APP_ID  # 授权 app：本地 24528 / GitHub 打包烙入 23651
+from src.core.license_client import (LicenseClient,  # 雪松授权（设备绑定）
+                                     LicenseError)
+from src.app.license_config import (LICENSE_SERVER_URL, LICENSE_PRODUCT_NAME,
+                                    LICENSE_PUBLIC_KEY_FILE)
 
 
 def _setup_tray(icon_path, control_win):
@@ -539,77 +541,6 @@ def task_stop():
     log("资源释放完毕，安全退出。", "SYS")
 
 
-def _license_info(auth_win):
-    """整理授权信息供面板展示（状态 + 到期时间）。
-
-    字段来源：SDK 激活窗口同款数据——license_data.status（1=有效/2=过期）、
-    license_data.expire（到期时间字符串）、app_info.is_free（免费版标记）。
-    """
-    data = auth_win.license_data or {}
-    info = {"status": "未知", "expire": ""}
-    if data.get("status") == 1:
-        info["status"] = "已激活"
-        info["expire"] = str(data.get("expire") or "")
-    elif (auth_win.app_info or {}).get("is_free") == 1:
-        info["status"] = "免费版"
-    elif data.get("status") == 2:
-        info["status"] = "已过期"
-    return info
-
-
-def _silent_license_check(auth_win, attempts=3, retry_delay=2.0):
-    """在线静默校验授权，返回 (ok, deny_info)。
-
-    与启动授权门同款链路（get_app_info → 缓存码 activate_key → start_app）；
-    除启动时外，每次点击「启动」任务前也调用（证书到期/续期无需重启软件，
-    下次启动即生效）。明确拒绝（无缓存/无效/过期）不重试，仅网络异常重试。
-    """
-    deny = "授权未通过"
-    for attempt in range(max(1, attempts)):
-        try:
-            auth_win.get_app_info()
-            cached_key = auth_win.get_cached_key()
-            if cached_key:
-                auth_win.activate_key(cached_key)
-            else:
-                # 无缓存码（未激活/已解绑）：清掉上次校验留下的授权数据，
-                # 防解绑后沿用旧会话 license_data 静默通过（2026-11-08 教训）
-                auth_win.license_data = None
-            result = auth_win.start_app()
-            if result is True:
-                return True, ""
-            return False, (result or {}).get("error", "授权未通过")
-        except Exception as e:
-            deny = f"无法连接授权服务器：{e}"
-            print(f"[授权] 在线校验异常（第 {attempt + 1}/{attempts} 次）: {e}")
-            if attempt < attempts - 1:
-                time.sleep(retry_delay)
-    return False, deny
-
-
-def _parse_expire(expire):
-    """解析到期时间字符串，返回 datetime.date 或 None（格式未知时保守）。"""
-    if not expire:
-        return None
-    import datetime
-    text = str(expire).strip()
-    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S"):
-        try:
-            return datetime.datetime.strptime(text, fmt).date()
-        except ValueError:
-            continue
-    return None
-
-
-def _days_left(expire):
-    """距到期剩余天数（到期时间无法解析时返回 None）。"""
-    date = _parse_expire(expire)
-    if date is None:
-        return None
-    import datetime
-    return (date - datetime.date.today()).days
-
-
 if __name__ == '__main__':
     # 冻结打包（Nuitka/PyInstaller）下 spawn 子进程（任务进程/悬浮层绘制）
     # 会重新执行本二进制，须调用 freeze_support 正确处理（源码环境为空操作）
@@ -623,15 +554,11 @@ if __name__ == '__main__':
         _helper_main()
         sys.exit(0)
 
-    # ---- 授权守门员：未激活不允许进入主程序 ----
-    # 先静默在线校验（每次启动都需在线验证，achttp 闭源后端）：免费版直接
-    # 放行；本地缓存激活码在线验证通过则不弹窗。校验失败（无缓存/无效/
-    # 过期/网络异常）再弹激活窗口（阻塞），激活成功或关闭窗口后才继续。
-    # 注意：授权窗口必须独占一次 webview.start()——主程序装配必须在此之后。
-    debug_auth = os.environ.get("ASCRIPT_DEBUG_AUTH") == "1"  # 强制弹激活窗口（授权联调用）
-    auth_win = LicenseWindow(app_id=LICENSE_APP_ID)
-    silent_ok = False
-    deny_info = ""  # 静默被拒原因（用于弹窗前提示）
+    # ---- 授权守门员：雪松 License Manager（设备绑定 + 在线校验）----
+    # 本地许可证优先（RSA-PSS 验签 + 状态/有效期/硬件指纹），每次启动和
+    # 点「启动」任务前在线心跳；未激活不退出主程序——激活页输入卡密即可，
+    # 任务启动由 _license_gate 拦截（面板本身不含受保护功能）。
+    debug_auth = os.environ.get("ASCRIPT_DEBUG_AUTH") == "1"  # 授权联调：强制未激活
     startup_logs = []  # 启动阶段授权日志（面板首屏加载后补投抽屉）
     # 资源根目录（res/ 所在目录）：包装路径解析异常时（如 SDK R 改用
     # __main__.__file__ 导致指向 %TEMP% 解压目录），日志一眼定位
@@ -643,32 +570,45 @@ if __name__ == '__main__':
         _line = f"[更新] 启动恢复：{_UPDATE_RECOVERY}"
         log(_line, "SYS" if _UPDATE_RECOVERY.get("status") == "completed" else "WARN")
         startup_logs.append(_line)
+
+    from src import __version__ as _app_version
+    _public_key = ""
+    try:
+        with open(os.path.join(_PROJECT_ROOT, "res", LICENSE_PUBLIC_KEY_FILE),
+                  "r", encoding="utf-8") as _f:
+            _public_key = _f.read()
+    except Exception as e:
+        log(f"[授权] 读取产品公钥失败（将无法校验许可证）: {e}", "WARN")
+    license_client = LicenseClient(
+        LICENSE_SERVER_URL, _public_key,
+        product_name=LICENSE_PRODUCT_NAME, app_version=_app_version)
+    license_info = license_client.info()
     if debug_auth:
-        print("[授权] 调试模式：跳过静默校验，直接进入激活窗口")
-    else:
-        silent_ok, deny_info = _silent_license_check(auth_win)
-    if silent_ok:
-        info = _license_info(auth_win)
-        line = (f"[授权] 校验通过（app {LICENSE_APP_ID}）：状态 {info['status']}"
-                + (f"，到期 {info['expire']}" if info["expire"] else ""))
-        log(line, "SYS")
+        line = "[授权] 调试模式：跳过在线校验，按未激活进入（可在激活页激活）"
+        log(line, "WARN")
         startup_logs.append(line)
-        days_left = _days_left(info["expire"])
-        if days_left is not None and 0 <= days_left <= 7:
-            remind = f"[授权] 提醒：卡密将在 {days_left} 天后到期，请及时续费"
-            log(remind, "SYS")
-            startup_logs.append(remind)
     else:
-        deny_line = f"[授权] 未授权或授权已过期，请在弹出的窗口中输入卡密激活（{deny_info}）"
-        log(deny_line, "WARN")
-        startup_logs.append(deny_line)
-        # 阻塞式激活窗口：窗口内 start_app 校验通过会关闭窗口并置 _return_value=True
-        auth_win.show(title="软件授权激活", width=400, height=500)
-    if not auth_win._return_value:
-        log("授权未通过，程序退出。", "WARN")
-        sys.exit(0)
-    license_info = _license_info(auth_win)
-    pass_line = f"[授权] 授权通过（app {LICENSE_APP_ID}，{license_info['status']}），启动主程序"
+        try:
+            license_info = license_client.check(online=True)
+            line = f"[授权] 校验通过：{license_info['status']}"
+            if license_info.get("expire"):
+                line += f"，到期 {license_info['expire']}"
+            if license_info.get("offline"):
+                line += "（网络异常，使用本地许可证）"
+            log(line, "SYS")
+            startup_logs.append(line)
+            days_left = license_info.get("days_left")
+            if days_left is not None and 0 <= days_left <= 7:
+                remind = f"[授权] 提醒：卡密将在 {days_left} 天后到期，请及时续费"
+                log(remind, "SYS")
+                startup_logs.append(remind)
+        except LicenseError as e:
+            license_info = license_client.info()
+            deny_line = f"[授权] 未通过：{e}（请在激活页输入卡密激活）"
+            log(deny_line, "WARN")
+            startup_logs.append(deny_line)
+    pass_line = (f"[授权] 当前状态：{license_info.get('status', '未知')}"
+                 "，进入主程序")
     log(pass_line, "SYS")
     startup_logs.append(pass_line)
 
@@ -727,10 +667,9 @@ if __name__ == '__main__':
         except Exception as e:
             log(f"[数据] 旧版文件归档失败（下次启动重试）: {e}", "WARN")
 
-    # ---- 授权通过后装配主程序 ----
+    # ---- 装配主程序 ----
     # 必须放在 __main__ 内：Windows spawn 子进程会重新导入本模块但不执行此段
-    # （解决打包后子进程重复启动问题）；同时保证授权窗口阶段 webview 窗口
-    # 列表里只有授权窗口自己，其关闭即结束该次消息循环
+    # （解决打包后子进程重复启动问题）
     # 静默操作（通用设置）：主进程按配置置位（验证/诊断流程的点击通道；
     # 任务子进程在 task_start 内自行置位）
     app_utils.set_silent_mode(load_silent_mode())
@@ -740,14 +679,20 @@ if __name__ == '__main__':
     def _license_gate():
         """启动任务前授权校验（按钮与老板键共用）。
 
-        每次启动都在线校验证书到期状态：续期/换卡无需重启软件，下次启动
-        即生效；过期/无效/网络异常拦截启动。返回面板所需的结构化结果。
+        本地验签 + 在线心跳：未激活/过期/撤销/设备不匹配拦截启动；
+        网络异常时本地许可证仍有效则放行（沿用本地授权，不误拦）。
+        返回面板所需的结构化结果。
         """
-        ok, deny = _silent_license_check(auth_win, attempts=2, retry_delay=1.0)
-        return {"ok": ok, "msg": deny, "info": _license_info(auth_win)}
+        try:
+            info = license_client.check(online=True)
+            return {"ok": True, "msg": "", "info": info}
+        except LicenseError as e:
+            return {"ok": False, "msg": e.message,
+                    "info": license_client.info()}
 
     control_win = ControlWindow(tm, license_info=license_info,
-                                license_gate=_license_gate)  # 构造内已接线 tm 的状态/日志回调
+                                license_gate=_license_gate,
+                                license_client=license_client)  # 构造内已接线 tm 的状态/日志回调
     if startup_logs:
         control_win.add_logs(startup_logs)  # 页面未就绪前暂存，首屏加载补投抽屉
     # ---- 清理已销毁的预置窗口（授权窗口/多开绑定选择弹窗）----

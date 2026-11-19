@@ -194,6 +194,114 @@
         .group-ctrl { display: flex; align-items: center; gap: 6px; }
         .group-label { color: var(--text); font-size: 13px; font-family: "微软雅黑"; flex: 1; min-width: 0; white-space: nowrap; }
         .group-hint { color: var(--text-dim); font-size: 11px; font-family: "微软雅黑"; line-height: 1.5; }
+        /* ---- 未激活授权门禁（2026-11-19 重设计） ---- */
+        body.license-locked .page { display: none !important; }
+        .license-gate {
+            flex: 1; min-height: 0; overflow-y: auto; display: none;
+            align-items: center; justify-content: center; padding: 18px;
+            /* 内容高于可视区时退回顶部对齐，避免 flex 居中把卡片顶端裁掉 */
+            align-items: safe center; justify-content: safe center;
+        }
+        body.license-locked .license-gate { display: flex; }
+        .gate-card {
+            width: 100%; max-width: 560px; display: flex; flex-direction: column; gap: 18px;
+            background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+            padding: 22px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+        }
+        .gate-head { display: flex; align-items: flex-start; gap: 14px; }
+        .gate-seal {
+            width: 44px; height: 44px; flex-shrink: 0; border-radius: 10px;
+            display: flex; align-items: center; justify-content: center;
+            background: var(--progress-tint); border: 1px solid var(--gold);
+            color: var(--gold); font-family: KaiTi, STKaiti, '楷体', serif;
+            font-size: 24px; line-height: 1; transform: rotate(-2deg); user-select: none;
+        }
+        .gate-seal.danger { border-color: var(--danger); color: var(--danger-text); background: transparent; }
+        .gate-head-text { min-width: 0; }
+        .gate-title-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+        #gate-title { margin: 0; font-family: KaiTi, STKaiti, '楷体', serif; font-size: 20px; font-weight: 600; color: var(--text); }
+        .gate-pill {
+            font-size: 11px; line-height: 1; padding: 4px 9px; border-radius: 999px;
+            border: 1px solid var(--gold); color: var(--gold); white-space: nowrap;
+        }
+        .gate-pill.danger { border-color: var(--danger); color: var(--danger-text); }
+        .gate-desc { margin: 7px 0 0; font-size: 12px; line-height: 1.6; color: var(--text-dim); }
+        .gate-form { display: flex; flex-direction: column; gap: 8px; }
+        .gate-label { font-size: 12px; color: var(--text-dim); font-family: "微软雅黑"; }
+        .gate-form-row { display: flex; align-items: stretch; gap: 8px; }
+        .gate-input {
+            flex: 1; min-width: 0; height: 38px; box-sizing: border-box;
+            background: var(--panel2); color: var(--text);
+            border: 1px solid var(--border2); border-radius: 7px;
+            padding: 0 12px; font-family: Consolas, '微软雅黑', monospace;
+            font-size: 13px; letter-spacing: 0.3px;
+        }
+        .gate-input::placeholder { color: var(--text-dim); }
+        .gate-input:focus { border-color: var(--accent); outline: none; }
+        .gate-activate { min-width: 110px; height: 38px; flex-shrink: 0; }
+        .gate-msg { min-height: 17px; font-size: 12px; line-height: 1.5; color: var(--text-dim); }
+        .gate-msg.error { color: var(--danger-text); }
+        .gate-msg.ok { color: var(--accent); }
+        .gate-code {
+            display: block; width: 100%; min-width: 0; box-sizing: border-box;
+            margin: 0; padding: 0 12px; min-height: 38px; line-height: 38px;
+            background: var(--panel2); color: var(--text);
+            border: 1px solid var(--border2); border-radius: 7px;
+            font-family: Consolas, '微软雅黑', monospace;
+            font-size: 11px; letter-spacing: 0.2px; text-align: right;
+            white-space: nowrap; overflow-x: auto; overflow-y: hidden;
+            user-select: all;
+        }
+        /* 设备码：label 左、码右，单行（2026-11-19 用户确认） */
+        .gate-code-row, .device-code-row { display: flex; align-items: center; gap: 10px; }
+        .gate-code-row .gate-label, .device-code-row .group-label {
+            flex: 0 0 auto; white-space: nowrap;
+        }
+        .gate-code-row .gate-code, .device-code-row .gate-code {
+            flex: 1; width: auto; min-width: 0;
+        }
+        /* 系统页设备码：无背景框，纯文本单行（2026-11-19 用户确认） */
+        .device-code-row .gate-code.device-code-plain {
+            background: transparent; border: none; border-radius: 0;
+            padding: 0; min-height: 0; line-height: 1.6;
+        }
+        .gate-hint { font-size: 11px; line-height: 1.5; color: var(--text-dim); }
+        .gate-foot {
+            display: flex; flex-direction: column; align-items: stretch; gap: 8px;
+            border-top: 1px solid var(--border); padding-top: 12px;
+            font-size: 11px; color: var(--text-dim);
+        }
+        .gate-foot-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+        .gate-foot-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+        .gate-update-status { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 11px; color: var(--text-dim); }
+        .gate-update-status.available { color: var(--gold); }
+        .gate-update-status.error { color: var(--danger-text); }
+        .gate-update-progress {
+            height: 6px; background: var(--panel2); border: 1px solid var(--border);
+            border-radius: 4px; overflow: hidden;
+        }
+        #gate-update-progress-bar { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+        .gate-update-msg { font-size: 11px; line-height: 1.5; color: var(--text-dim); }
+        .gate-update-msg.error { color: var(--danger-text); }
+        .gate-update-msg:empty { display: none; }
+        .gate-update-notes { max-height: 118px; font-size: 11px; }
+        .device-code-block { display: flex; flex-direction: column; gap: 6px; }
+        .device-code-sm { font-size: 11px; }
+        /* 未激活：左侧导航置灰并禁止进入 */
+        .nav-item.locked { opacity: 0.35; filter: grayscale(1); cursor: not-allowed; }
+        .nav-item.locked:hover { background: transparent; color: var(--text-dim); }
+        body.license-locked .side-foot-top #lic-text { color: var(--gold); }
+        body.license-locked #scheme-select { opacity: 0.4; }
+        #license-toast {
+            position: fixed; left: 50%; bottom: 22px; z-index: 60;
+            max-width: 360px; padding: 8px 14px; border-radius: 6px;
+            background: var(--panel); color: var(--text);
+            border: 1px solid var(--border2); border-left: 3px solid var(--accent);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+            font-size: 12px; line-height: 1.5; opacity: 0; transform: translate(-50%, 8px);
+            pointer-events: none; transition: opacity 0.18s, transform 0.18s;
+        }
+        #license-toast.show { opacity: 1; transform: translate(-50%, 0); }
         /* 更新日志（markdown 渲染区）：文本先转义再套标签，样式跟随主题变量 */
         .update-notes {
             max-height: 180px; overflow: auto; background: var(--panel2);
@@ -516,11 +624,8 @@
         .verify-row { display: flex; align-items: center; gap: 8px; }
         .verify-row .btn { min-width: 0; flex-shrink: 0; }
         .verify-result { color: var(--text); font-size: 12px; font-family: "微软雅黑"; flex: 1; min-width: 0; word-break: break-all; }
-        /* 设备 ID / 绑定窗口等长文本值：超宽省略号截断，不挤压标签换行 */
-        #env-device-id, #env-bound { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        /* 设备 ID 点击复制 */
-        #env-device-id { cursor: pointer; }
-        #env-device-id:hover { color: var(--accent); }
+        /* 绑定窗口长文本值：超宽省略号截断，不挤压标签换行 */
+        #env-bound { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         /* ---- 成就页：四 KPI + 7 日趋势折线 + 任务模式明细（docs/task-stats-design.md） ---- */
         .stat-kpis { display: flex; gap: 8px; flex-shrink: 0; }
         .stat-card {
@@ -850,6 +955,60 @@
         </header>
         <!-- 启动被拦截横幅（授权过期/网络异常等）：顶栏下全页面可见，10s 自动隐藏 -->
         <div class="banner danger" id="start-error-banner" style="display:none"></div>
+        <!-- 未激活授权门禁：显示在全部页面之上，激活后自动隐藏 -->
+        <section class="license-gate" id="license-gate" aria-labelledby="gate-title">
+            <div class="gate-card">
+                <div class="gate-head">
+                    <div class="gate-seal" id="gate-seal">授</div>
+                    <div class="gate-head-text">
+                        <div class="gate-title-row">
+                            <h1 id="gate-title">激活啄木鸟</h1>
+                            <span class="gate-pill" id="gate-pill">未激活</span>
+                        </div>
+                        <p class="gate-desc" id="gate-desc">输入卡密，绑定当前电脑后即可启动任务。</p>
+                    </div>
+                </div>
+                <div class="gate-form">
+                    <label class="gate-label" for="gate-key-input">卡密</label>
+                    <div class="gate-form-row">
+                        <input id="gate-key-input" class="gate-input" type="text" maxlength="64"
+                               autocomplete="off" spellcheck="false"
+                               placeholder="LIC-COMP-XXXXXXXXXXXX-XXXX">
+                        <button id="gate-activate-btn" class="btn-primary gate-activate"
+                                onclick="activateLicense()">激 活</button>
+                    </div>
+                    <div class="gate-msg" id="gate-msg" role="status" aria-live="polite"></div>
+                </div>
+                <div class="gate-form">
+                    <div class="gate-code-row">
+                        <div class="gate-label">设备码</div>
+                        <code id="gate-code" class="gate-code" tabindex="0">读取中…</code>
+                    </div>
+                    <div class="gate-hint">换机或重装系统时，把设备码发给作者处理；卡密激活后绑定此设备。</div>
+                </div>
+                <div class="gate-foot">
+                    <div class="gate-foot-row">
+                        <span>激活后解锁全部任务功能</span>
+                        <div class="gate-foot-actions">
+                            <button class="btn-sm" id="gate-update-apply"
+                                    onclick="gateStartUpdate()" style="display:none">立即更新</button>
+                            <button class="btn-sm" id="gate-update-check"
+                                    onclick="gateCheckUpdate()">检查更新</button>
+                        </div>
+                    </div>
+                    <div class="gate-foot-row" id="gate-update-status-row" style="display:none">
+                        <span class="gate-update-status" id="gate-update-status"
+                              role="status" aria-live="polite"></span>
+                    </div>
+                </div>
+                <div class="update-notes gate-update-notes" id="gate-update-notes" style="display:none"></div>
+                <div class="gate-update-progress" id="gate-update-progress-row" style="display:none">
+                    <div id="gate-update-progress-bar"></div>
+                </div>
+                <div class="gate-update-msg" id="gate-update-msg"></div>
+            </div>
+        </section>
+        <div id="license-toast" role="status" aria-live="polite"></div>
         <!-- ============ 运行看板 ============ -->
         <div class="page active" id="page-dash">
             <div class="card dash-hero">
@@ -1484,10 +1643,6 @@
                     <span class="group-sub" id="env-adapt-res">1378 × 831</span>
                 </div>
                 <div class="group-row">
-                    <span class="group-label">当前窗口分辨率</span>
-                    <span class="group-sub" id="env-cur-res">-</span>
-                </div>
-                <div class="group-row">
                     <span class="group-label">绑定窗口</span>
                     <span class="group-sub" id="env-bound">-</span>
                 </div>
@@ -1496,10 +1651,6 @@
                     <button class="btn" id="btn-unbind-win" onclick="unbindWindow()">解除绑定</button>
                 </div>
                 <div class="group-hint" id="unbind-win-msg"></div>
-                <div class="group-row">
-                    <span class="group-label">设备 ID</span>
-                    <span class="group-sub" id="env-device-id" title="点击复制" onclick="copyDeviceId()">-</span>
-                </div>
             </div>
             <div class="group-box">
                 <div class="group-title">授权信息</div>
@@ -1510,6 +1661,12 @@
                 <div class="group-row">
                     <span class="group-label">到期时间</span>
                     <span class="group-sub" id="license-expire">-</span>
+                </div>
+                <div class="device-code-block">
+                    <div class="device-code-row">
+                        <span class="group-label">设备码</span>
+                        <code class="gate-code device-code-sm device-code-plain" id="license-fingerprint">-</code>
+                    </div>
                 </div>
                 <div class="group-row">
                     <span class="group-label">更换卡密</span>
@@ -1924,6 +2081,10 @@
     /* ================= 全局状态 ================= */
     let running = false;
     let switching = false;  // 启停请求在途标记（防连点）
+    let licenseLocked = false;       // 未激活/过期/撤销/设备不匹配：锁定导航与启动
+    let licenseToastTimer = null;    // 授权成功反馈 toast
+    let licenseRefreshInFlight = false;   // get_license_info 在途（防并发重复）
+    let licenseAutoRefreshTried = false;  // 只补拉一次的兜底标记（防循环）
     let startErrTimer = null;  // 启动拦截横幅自动隐藏计时器
     let bossHotkey = '';    // 老板键名（启动/停止按钮文案提示；none 时为空）
     let runtimeStatus = null;   // 任务运行状态（get_runtime_status 轮询，看板展示）
@@ -2115,13 +2276,29 @@
     const licenseBanner = document.getElementById('license-banner');
     const btnUnbind = document.getElementById('btn-unbind');
     const licenseMsgEl = document.getElementById('license-msg');
+    const licenseFingerprintEl = document.getElementById('license-fingerprint');
+    const licenseGate = document.getElementById('license-gate');
+    const gateTitle = document.getElementById('gate-title');
+    const gateDesc = document.getElementById('gate-desc');
+    const gatePill = document.getElementById('gate-pill');
+    const gateSeal = document.getElementById('gate-seal');
+    const gateKeyInput = document.getElementById('gate-key-input');
+    const gateActivateBtn = document.getElementById('gate-activate-btn');
+    const gateMsg = document.getElementById('gate-msg');
+    const gateCode = document.getElementById('gate-code');
+    const gateUpdateStatus = document.getElementById('gate-update-status');
+    const gateUpdateStatusRow = document.getElementById('gate-update-status-row');
+    const gateUpdateApply = document.getElementById('gate-update-apply');
+    const gateUpdateCheck = document.getElementById('gate-update-check');
+    const gateUpdateNotes = document.getElementById('gate-update-notes');
+    const gateUpdateProgressRow = document.getElementById('gate-update-progress-row');
+    const gateUpdateProgressBar = document.getElementById('gate-update-progress-bar');
+    const gateUpdateMsg = document.getElementById('gate-update-msg');
+    const licenseToast = document.getElementById('license-toast');
     const envThemeEl = document.getElementById('env-theme');
     const envAdaptResEl = document.getElementById('env-adapt-res');
-    const envCurResEl = document.getElementById('env-cur-res');
     const envBoundEl = document.getElementById('env-bound');
-    const envDeviceIdEl = document.getElementById('env-device-id');
     const charChip = document.getElementById('char-chip');
-    let envDeviceIdValue = '-';  // 设备 ID 原文（复制源；「已复制」反馈后恢复用）
     const unbindWinMsgEl = document.getElementById('unbind-win-msg');
     const schemeSelect = document.getElementById('scheme-select');
     const schemeInput = document.getElementById('scheme-name-input');
@@ -2246,6 +2423,12 @@
         item.addEventListener('click', () => switchPage(item.dataset.page));
     });
     function switchPage(name) {
+        if (licenseLocked) {
+            setGateMsg('请先激活授权', 'error');
+            if (gateKeyInput) gateKeyInput.focus();
+            showLicenseToast('请先激活授权');
+            return;
+        }
         document.querySelectorAll('.nav-item').forEach(n =>
             n.classList.toggle('active', n.dataset.page === name));
         document.querySelectorAll('.page').forEach(p =>
@@ -2799,6 +2982,8 @@
         const hotkeySuffix = bossHotkey ? '(' + bossHotkey.toUpperCase() + ')' : '';
         btnStart.innerText = (running ? '停 止' : '启 动') + hotkeySuffix;
         btnStart.classList.toggle('running', running);
+        // 未激活/过期/撤销/设备不匹配：启动按钮禁用；运行中保留「停止」
+        btnStart.disabled = !!licenseLocked && !running;
         // 运行期间任务选择/顺序与次数不可更改（用户确认：只能停止后
         // 修改）；停止后按仅战斗互斥重新启用可用项（渲染内已含）
         renderTaskZones();
@@ -3293,41 +3478,10 @@
         if (!env) return;
         if (env.theme) envThemeEl.innerText = env.theme;
         if (env.adapt_res) envAdaptResEl.innerText = env.adapt_res;
-        envCurResEl.innerText = env.cur_res || '-';
         envBoundEl.innerText = env.bound || '-';  // 短角色文案（完整标题在悬停提示）
         envBoundEl.title = env.bound_full || env.bound || '';
         charChip.innerText = env.bound_short || '未绑定角色';  // 短角色文案与窗口标题同源
         charChip.title = '操作窗口：' + (env.bound_full || env.bound || '-') + '（点击前往系统页）';
-        envDeviceIdValue = env.device_id || '-';
-        envDeviceIdEl.innerText = envDeviceIdValue;
-        envDeviceIdEl.title = envDeviceIdValue;  // 悬停看完整值，点击复制
-    }
-
-    // 设备 ID 点击复制：优先 navigator.clipboard，失败回退 execCommand
-    function copyDeviceId() {
-        const text = envDeviceIdValue;
-        if (!text || text === '-' || text === '获取失败') return;
-        const showDone = () => {
-            envDeviceIdEl.innerText = '已复制';
-            setTimeout(() => { envDeviceIdEl.innerText = envDeviceIdValue; }, 1500);
-        };
-        const legacyCopy = () => {
-            const ta = document.createElement('textarea');
-            ta.value = text;
-            ta.style.position = 'fixed';
-            ta.style.opacity = '0';
-            document.body.appendChild(ta);
-            ta.select();
-            let ok = false;
-            try { ok = document.execCommand('copy'); } catch (e) {}
-            document.body.removeChild(ta);
-            if (ok) showDone();
-        };
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(text).then(showDone).catch(legacyCopy);
-        } else {
-            legacyCopy();
-        }
     }
 
     // 解除窗口绑定：下次启动多开时重新弹框选择
@@ -3338,26 +3492,94 @@
         await refreshEnv();
     }
 
-    /* ================= 授权信息（系统页 + 侧边栏状态点） ================= */
+    /* ================= 授权信息 / 未激活门禁 ================= */
+    const LICENSE_INACTIVE_STATUS = ['未激活', '已过期', '已撤销', '设备不匹配'];
+    const LICENSE_GATE_META = {
+        '未激活': {title: '激活啄木鸟', desc: '输入卡密，绑定当前电脑后即可启动任务。'},
+        '已过期': {title: '授权已过期', desc: '续费后输入新的卡密继续使用；本机设备码不变。'},
+        '已撤销': {title: '授权已撤销', desc: '请联系作者处理后再输入卡密激活。'},
+        '设备不匹配': {title: '设备已更换', desc: '请联系作者解绑旧设备，再输入卡密激活。'},
+    };
+
+    function showLicenseToast(text) {
+        if (!licenseToast) return;
+        licenseToast.innerText = text;
+        licenseToast.classList.add('show');
+        if (licenseToastTimer) clearTimeout(licenseToastTimer);
+        licenseToastTimer = setTimeout(() => licenseToast.classList.remove('show'), 2200);
+    }
+
+    function setLicenseLocked(locked) {
+        licenseLocked = !!locked;
+        document.body.classList.toggle('license-locked', licenseLocked);
+        document.querySelectorAll('.nav-item').forEach(el => {
+            el.classList.toggle('locked', licenseLocked);
+            el.setAttribute('aria-disabled', licenseLocked ? 'true' : 'false');
+            if (licenseLocked) el.title = '请先激活授权';
+            else el.removeAttribute('title');
+        });
+        // 运行中即使授权异常也允许点「停止」，不能把正在跑的任务锁死
+        if (btnStart) btnStart.disabled = licenseLocked && !running;
+        if (schemeSelect) schemeSelect.disabled = licenseLocked || running;
+        if (licText) licText.style.color = licenseLocked ? 'var(--gold)' : '';
+        if (licenseLocked) {
+            // 门禁页优先聚焦卡密输入
+            setTimeout(() => { if (gateKeyInput) gateKeyInput.focus(); }, 50);
+        }
+    }
+
+    function renderDeviceCode(fp, error) {
+        const text = fp || (error ? ('设备码读取失败：' + error) : '读取中…');
+        if (gateCode) gateCode.innerText = text;
+        if (licenseFingerprintEl) licenseFingerprintEl.innerText = fp || '—';
+    }
+
+    function setGateMsg(text, kind) {
+        if (!gateMsg) return;
+        gateMsg.innerText = text || '';
+        gateMsg.classList.toggle('error', kind === 'error');
+        gateMsg.classList.toggle('ok', kind === 'ok');
+    }
+
     function applyLicense(lic) {
-        if (!lic || !lic.status) return;
-        licenseStatusEl.innerText = lic.status;
+        lic = lic || {};
+        const status = lic.status || '未激活';
+        const inactive = LICENSE_INACTIVE_STATUS.includes(status);
+        setLicenseLocked(inactive);
+        licenseStatusEl.innerText = status;
         licenseExpireEl.innerText = lic.expire || '—';
-        licText.innerText = '授权：' + lic.status;
-        // 到期时间不单独占行：hover「授权：已激活」以提示形式显示（免费版/
-        // 未知状态无 expire 时不提示）；系统页仍展示完整「到期时间」。
+        licText.innerText = '授权：' + status;
+        // 到期时间不单独占行：hover「授权：已激活」以提示形式显示
         const expireText = String(lic.expire || '').trim();
         licText.title = expireText ? '到期时间：' + expireText : '';
         licText.style.cursor = expireText ? 'help' : '';
-        // 到期解析（临期横幅用）
+        renderDeviceCode(lic.fingerprint, lic.fingerprint_error);
+        if (lic.fingerprint) licenseAutoRefreshTried = false;
+        // 兜底：调用方只给了状态（未带设备码/错误）时，后端补拉一次完整 info，
+        // 防止激活页设备码停在「读取中…」（2026-11-19 解绑路径实测）
+        if (inactive && !lic.fingerprint && !lic.fingerprint_error
+                && !licenseAutoRefreshTried) {
+            licenseAutoRefreshTried = true;
+            refreshLicenseInfo();
+        }
+        // 门禁页文案（未激活/过期/撤销/设备不匹配）
+        const meta = LICENSE_GATE_META[status] || LICENSE_GATE_META['未激活'];
+        if (gateTitle) gateTitle.innerText = meta.title;
+        if (gateDesc) gateDesc.innerText = meta.desc;
+        if (gatePill) {
+            gatePill.innerText = status;
+            gatePill.classList.toggle('danger', status !== '未激活');
+        }
+        if (gateSeal) gateSeal.classList.toggle('danger', status !== '未激活');
+        if (inactive && lic.error) setGateMsg(lic.error, 'error');
+        else if (!inactive) setGateMsg('', '');
+        // 系统页临期横幅（仅已激活且 7 天内；未激活由门禁表达）
         let expMs = NaN;
         if (lic.expire) {
             expMs = new Date(String(lic.expire).replace(' ', 'T')).getTime();
         }
         const daysLeft = isNaN(expMs) ? NaN : Math.ceil((expMs - Date.now()) / 86400000);
-        // 临期横幅（系统页，7 天内到期）；其余状态（含免费版）明确隐藏——
-        // 横幅 CSS warn 类默认可见，必须每次内联覆盖 display
-        if (!isNaN(daysLeft) && daysLeft >= 0 && daysLeft <= 7 && lic.status !== '已过期') {
+        if (!inactive && !isNaN(daysLeft) && daysLeft >= 0 && daysLeft <= 7) {
             licenseBanner.innerText = '授权即将到期：剩余 ' + daysLeft + ' 天（到期后请更换卡密激活）';
             licenseBanner.style.display = 'block';
         } else {
@@ -3365,7 +3587,48 @@
         }
     }
 
-    // 解绑激活码：二次确认（同删除方案模式），清除本地缓存后重启生效
+    async function activateLicense() {
+        const code = (gateKeyInput.value || '').trim();
+        if (!code) {
+            setGateMsg('请输入卡密', 'error');
+            gateKeyInput.focus();
+            return;
+        }
+        gateActivateBtn.disabled = true;
+        gateActivateBtn.innerText = '激活中…';
+        setGateMsg('正在验证卡密…', '');
+        try {
+            const r = await callPython('activate_license', code);
+            if (r && r.status === 'success' && r.info) {
+                gateKeyInput.value = '';
+                applyLicense(r.info);
+                setGateMsg('', '');
+                switchPage('dash');
+                showLicenseToast('激活成功，已解锁全部功能');
+            } else {
+                setGateMsg((r && r.msg) || '激活失败', 'error');
+            }
+        } catch (e) {
+            setGateMsg('激活异常：' + e, 'error');
+        } finally {
+            gateActivateBtn.disabled = false;
+            gateActivateBtn.innerText = '激 活';
+        }
+    }
+
+    async function refreshLicenseInfo() {
+        if (licenseRefreshInFlight) return;
+        licenseRefreshInFlight = true;
+        try {
+            const info = await callPython('get_license_info');
+            if (info) applyLicense(info);
+            else setGateMsg('刷新失败，请稍后重试', 'error');
+        } finally {
+            licenseRefreshInFlight = false;
+        }
+    }
+
+    // 解绑激活码：二次确认（同删除方案模式），清除本地授权文件
     let unbindArm = false;
     async function unbindLicense() {
         if (!unbindArm) {
@@ -3381,6 +3644,12 @@
         btnUnbind.innerText = '解绑激活码';
         const r = await callPython('unbind_license');
         licenseMsgEl.innerText = (r && r.msg) || '操作失败';
+        if (r && r.status === 'success') {
+            // 必须用后端返回的完整 info（含设备码），不能只传 status，
+            // 否则激活页设备码会停在「读取中…」（2026-11-19 实测）
+            applyLicense((r && r.info) || {status: '未激活'});
+            showLicenseToast('已清除本地授权');
+        }
     }
 
     /* ================= 阈值 / 修罗 / 巫医间隔步进（变更立即保存） ================= */
@@ -3802,6 +4071,53 @@
             appVersionEl.style.color = '';
             appVersionEl.title = '';
         }
+        // 激活页更新入口：未激活也能检查/更新，避免旧版本卡死。
+        // 可更新时不显示「发现新版本」文案：立即更新按钮 + 更新日志标题
+        // （含版本号）已经表达清楚；只保留检查中/已最新/失败/进度状态。
+        const gateText = (status === 'idle' || status === 'available') ? '' : text;
+        if (gateUpdateStatus) {
+            gateUpdateStatus.innerText = gateText;
+            gateUpdateStatus.classList.toggle('error', status === 'error');
+        }
+        if (gateUpdateStatusRow) {
+            gateUpdateStatusRow.style.display = gateText ? 'flex' : 'none';
+        }
+        if (gateUpdateApply) {
+            gateUpdateApply.style.display = showApply ? '' : 'none';
+            gateUpdateApply.disabled = busy;
+        }
+        if (gateUpdateCheck) {
+            gateUpdateCheck.style.display = busy ? 'none' : '';
+            gateUpdateCheck.disabled = status === 'checking';
+        }
+        if (gateUpdateNotes) {
+            if (status === 'available') {
+                const version = String(m.version || '');
+                const safeVersion = version.replace(/[&<>"']/g, c => ({
+                    '&': '&amp;', '<': '&lt;', '>': '&gt;',
+                    '"': '&quot;', "'": '&#39;'
+                }[c]));
+                const notesHtml = renderMarkdown(m.notes || '');
+                const header = safeVersion
+                    ? ('<h3>v' + safeVersion + ' 更新日志</h3>') : '';
+                gateUpdateNotes.innerHTML = header + notesHtml;
+                gateUpdateNotes.style.display =
+                    (header || notesHtml) ? 'block' : 'none';
+            } else {
+                gateUpdateNotes.innerHTML = '';
+                gateUpdateNotes.style.display = 'none';
+            }
+        }
+        if (gateUpdateProgressRow) {
+            gateUpdateProgressRow.style.display = showProgress ? 'block' : 'none';
+        }
+        if (gateUpdateMsg) {
+            gateUpdateMsg.innerText = updateState.error
+                || (status === 'available'
+                    ? '更新会保留配置与角色数据，完成后自动重启'
+                    : '');
+            gateUpdateMsg.classList.toggle('error', !!updateState.error);
+        }
     }
 
     function renderUpdateProgress(p) {
@@ -3810,6 +4126,59 @@
         updateProgressBar.style.width = percent + '%';
         const stageText = p && p.stage === 'extracting' ? '解压中' : '下载中';
         updateStatusEl.innerText = stageText + ' ' + percent + '%';
+        // 激活页进度同步
+        if (gateUpdateProgressRow) gateUpdateProgressRow.style.display = 'block';
+        if (gateUpdateProgressBar) gateUpdateProgressBar.style.width = percent + '%';
+        if (gateUpdateStatus) gateUpdateStatus.innerText = stageText + ' ' + percent + '%';
+        if (gateUpdateStatusRow) gateUpdateStatusRow.style.display = 'flex';
+    }
+
+    // 激活页「检查更新」：复用系统页同一后端链路；未激活也可用
+    async function gateCheckUpdate() {
+        if (gateUpdateCheck) gateUpdateCheck.disabled = true;
+        if (gateUpdateMsg) {
+            gateUpdateMsg.innerText = '';
+            gateUpdateMsg.classList.remove('error');
+        }
+        try {
+            const st = await callPython('check_update');
+            if (st) renderUpdateState(st);
+        } catch (e) {
+            if (gateUpdateMsg) {
+                gateUpdateMsg.innerText = '检查更新失败：' + e;
+                gateUpdateMsg.classList.add('error');
+            }
+        } finally {
+            if ((updateState.status || '') !== 'checking' && gateUpdateCheck) {
+                gateUpdateCheck.disabled = false;
+            }
+        }
+    }
+
+    // 激活页「立即更新」：任务运行中二次确认（与系统页同一交互）
+    let gateUpdateStopArm = false;
+    async function gateStartUpdate() {
+        let r = await callPython('start_update', gateUpdateStopArm);
+        if (!r) return;
+        if (r.status === 'need_stop') {
+            gateUpdateStopArm = true;
+            if (gateUpdateApply) gateUpdateApply.innerText = '确认停止任务并更新？';
+            if (gateUpdateMsg) {
+                gateUpdateMsg.innerText = r.msg || '任务正在运行，更新会先停止任务并重启程序。';
+                gateUpdateMsg.classList.add('error');
+            }
+            setTimeout(() => {
+                gateUpdateStopArm = false;
+                if (gateUpdateApply) gateUpdateApply.innerText = '立即更新';
+            }, 3000);
+            return;
+        }
+        gateUpdateStopArm = false;
+        if (gateUpdateApply) gateUpdateApply.innerText = '立即更新';
+        if (r.status === 'error' && gateUpdateMsg) {
+            gateUpdateMsg.innerText = r.msg || '无法开始更新';
+            gateUpdateMsg.classList.add('error');
+        }
     }
 
     async function checkUpdate() {
@@ -3956,7 +4325,6 @@
         const env = info.env || {};
         if (env.theme) envThemeEl.innerText = env.theme;
         if (env.adapt_res) envAdaptResEl.innerText = env.adapt_res;
-        envCurResEl.innerText = env.cur_res || '-';
         envBoundEl.innerText = env.bound || '-';  // 短角色文案（完整标题在悬停提示）
         envBoundEl.title = env.bound_full || env.bound || '';
         charChip.innerText = env.bound_short || '未绑定角色';  // 短角色文案与窗口标题同源
@@ -3980,9 +4348,6 @@
                     + (lr.from || '') + '；详情见 update/update.log';
             }
         }
-        envDeviceIdValue = env.device_id || '-';
-        envDeviceIdEl.innerText = envDeviceIdValue;
-        envDeviceIdEl.title = envDeviceIdValue;  // 悬停看完整值，点击复制
         if (info.xiuluo_wuyi_interval) {
             xiuluoWuyiIntervalEl.innerText = info.xiuluo_wuyi_interval;
         }

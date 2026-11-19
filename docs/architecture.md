@@ -202,7 +202,8 @@ sequenceDiagram
     autonumber
     participant U as 操作员
     participant M as main.py
-    participant L as LicenseWindow
+    participant L as LicenseClient（雪松）
+    participant Q as 授权服务器
     participant B as 窗口绑定
     participant S as schemes.py
     participant C as ControlWindow
@@ -210,21 +211,23 @@ sequenceDiagram
     participant P as 任务子进程
 
     U->>M: 启动（源码 / exe）
-    M->>L: 静默在线校验（get_app_info → activate_key → start_app）
-    alt 校验被拒 / 网络异常
-        M->>L: show 激活窗口（阻塞，独占一次 webview.start）
-        L-->>M: 激活成功或关闭
+    M->>L: 本地验签（许可证 / 设备指纹 / 有效期）
+    alt 无本地许可证 / 校验失败
+        M->>L: info → 面板激活页输入卡密
+        L->>Q: POST /api/v1/activate（卡密 + 设备指纹）
+        Q-->>L: license_file（RSA-PSS 签名）
     end
+    M->>Q: 在线心跳（网络异常降级为本地许可证）
     M->>M: _ensure_window_binding<br/>单窗口自动绑定 / 多开弹框选择
     M->>S: migrate_if_needed<br/>存量配置迁移为「默认」方案
     M->>M: set_silent_mode（主进程验证通道）
     M->>T: TaskManager(task_start, task_stop)
-    M->>C: ControlWindow(tm, license_info, license_gate)
+    M->>C: ControlWindow(tm, license_info, license_gate, license_client)
     M->>M: webview.windows.clear()<br/>prepare 唯一窗口 → webview.start()
     M->>M: 托盘 / 老板键 / Runtime.wait / OCR 预热（后台线程）
 
     U->>C: 点击「启动」或按 F11
-    C->>C: license_gate 在线校验到期
+    C->>C: license_gate 本地验签 + 在线心跳
     C->>T: start()
     T->>P: spawn _worker_wrapper
     P->>P: task_start（daemon 工作线程）

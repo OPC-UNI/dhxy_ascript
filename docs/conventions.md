@@ -28,7 +28,7 @@ src/
 └─ app/         # 外壳/UI/生命周期：control_window、diagnostics、settings_api、
                 # message_api、scheme_api、host_contract（mixin 宿主契约）、
                 # task_manager、task_registry、updater、hotkey、select_window、
-                # env_check、capture_diag、license_app_id、messages/（消息服务：
+                # env_check、capture_diag、license_config、messages/（消息服务：
                 # 通道注册表、Telegram、路由、事件、锁）
 ```
 
