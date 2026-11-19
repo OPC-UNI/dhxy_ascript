@@ -2652,6 +2652,7 @@
             const ok = await syncInitData();
             if (!ok) return;  // 同步失败：基线不动，下轮重试
             currentRoleId = r.id;  // 兜底推进基线（syncInitData 已按 info.role 设置）
+            refreshProgress();  // 进度按角色隔离：切角色（含游戏关闭→未绑定）后刷新
             refreshStats();  // 成就也按角色隔离：切角色后刷新当前角色数据
         } catch (e) {
             /* 桥接未就绪/窗口枚举失败：忽略，下轮再试 */

@@ -398,8 +398,13 @@ def test_probe_role_follows_live_window_when_bound_window_closed(monkeypatch):
     assert _ORIGINAL_PROBE() == "222"
 
 
-def test_probe_role_keeps_binding_without_any_game_window(monkeypatch):
-    """游戏窗口全部关闭（重启客户端间隙）：沿用绑定记录，不落到 _default。"""
+def test_probe_role_unbound_without_any_game_window(monkeypatch):
+    """游戏窗口全部关闭（客户端未启动）：按未绑定处理（None → _default）。
+
+    2026-11-19 用户反馈：此前无窗口时沿用绑定记录，面板会继续展示
+    上一次绑定角色的方案列表/进度/成就；绑定记录保留，游戏重新打开
+    后按绑定恢复该角色。
+    """
     from src.device import game
     monkeypatch.setattr(
         game, "bound_window_id",
@@ -407,6 +412,20 @@ def test_probe_role_keeps_binding_without_any_game_window(monkeypatch):
                  "title": "服务器 - A（ID：111）"})
     monkeypatch.setattr(game, "find_bound_window", lambda: None)
     monkeypatch.setattr(game, "find_main_window", lambda: None)
+    assert _ORIGINAL_PROBE() is None
+
+
+def test_probe_role_keeps_binding_on_login_screen(monkeypatch):
+    """窗口存在但标题无 ID（登录界面/客户端重启加载中）：沿用绑定记录，
+    角色信息不因登录状态丢失；与「游戏窗口全部关闭 → 未绑定」区分。"""
+    from src.device import game
+    monkeypatch.setattr(
+        game, "bound_window_id",
+        lambda: {"id": "（ID：111）", "hwnd": 1,
+                 "title": "服务器 - A（ID：111）"})
+    monkeypatch.setattr(game, "find_bound_window", lambda: None)
+    monkeypatch.setattr(game, "find_main_window",
+                        lambda: _TitleWin("大话西游2经典版"))
     assert _ORIGINAL_PROBE() == "111"
 
 

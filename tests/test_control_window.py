@@ -517,18 +517,73 @@ def test_sync_role_binding_noop_without_rebind(monkeypatch):
 
 def test_get_role_info_returns_id_and_label(monkeypatch):
     """页面轮询契约：get_role_info 返回 {id,label}（与 get_init_data.role
-    基线比对，变化时页面全量重同步方案/设置）。"""
+    基线比对，变化时页面全量重同步方案/设置）。角色强制重算（refresh=
+    True），游戏关闭/启动的未绑定切换在轮询周期内生效（2026-11-19）。"""
     from src.core import user_data
 
     class _Stub:
         def _sync_role_binding(self):
             return False
 
-    monkeypatch.setattr(user_data, "current_role_id", lambda refresh=False: "222")
+    calls = []
+    monkeypatch.setattr(user_data, "current_role_id",
+                        lambda refresh=False: calls.append(refresh) or "222")
     monkeypatch.setattr(control_window, "bound_short_label",
                         lambda: "一生所爱「长相思」")
     assert control_window.ControlWindow.get_role_info(_Stub()) == {
         "id": "222", "label": "一生所爱「长相思」"}
+    assert calls == [True]
+
+    # 游戏窗口全部关闭：id=_default、label 用可读的「未绑定」
+    monkeypatch.setattr(user_data, "current_role_id",
+                        lambda refresh=False: user_data.DEFAULT_ROLE)
+    monkeypatch.setattr(control_window, "bound_short_label", lambda: None)
+    assert control_window.ControlWindow.get_role_info(_Stub()) == {
+        "id": user_data.DEFAULT_ROLE, "label": "未绑定"}
+
+
+def test_get_task_stats_label_empty_when_unbound(monkeypatch):
+    """游戏窗口全部关闭（角色 = _default）：成就页不带旧绑定角色名
+    （2026-11-19 用户反馈：未打开游戏时不得展示上次绑定角色的数据）。"""
+    from src.core import debug_overlay, user_data
+
+    monkeypatch.setattr(debug_overlay, "read_task_stats",
+                        lambda: {"total": {}, "daily": {}})
+    monkeypatch.setattr(control_window, "bound_label_from_binding",
+                        lambda: "一生所爱长相思")
+    monkeypatch.setattr(user_data, "current_role_id",
+                        lambda refresh=False: user_data.DEFAULT_ROLE)
+    data = control_window.ControlWindow.get_task_stats(object())
+    assert data["role"] == {"id": user_data.DEFAULT_ROLE, "label": ""}
+
+    # 绑定角色仍带短文案（原行为不变）
+    monkeypatch.setattr(user_data, "current_role_id",
+                        lambda refresh=False: "222")
+    data = control_window.ControlWindow.get_task_stats(object())
+    assert data["role"] == {"id": "222", "label": "一生所爱长相思"}
+
+
+def test_env_info_unbound_when_no_game_window(monkeypatch):
+    """游戏窗口全部关闭：系统页「绑定窗口」按未绑定展示，不回显上次
+    绑定的窗口/角色（2026-11-19 用户反馈）。"""
+    from src.device import game
+
+    class _Stub:
+        def _sync_role_binding(self):
+            return False
+
+        def refresh_window_title(self):
+            pass
+
+    monkeypatch.setattr(game, "find_main_window", lambda: None)
+    monkeypatch.setattr(game, "find_bound_window", lambda: None)
+    monkeypatch.setattr(game, "bound_window_id",
+                        lambda: {"id": "（ID：111）", "hwnd": 1,
+                                 "title": "服务器 - A（ID：111）"})
+    info = control_window.ControlWindow.get_env_info(_Stub())
+    assert info["bound"] == "未绑定（游戏未启动）"
+    assert info["bound_full"] == "未绑定（游戏未启动）"
+    assert info["bound_short"] == ""
 
 
 # ---- 消息服务控制指令 host（/schemes /switch /start /stop 转调） ----

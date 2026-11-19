@@ -386,10 +386,18 @@ class ControlWindow(DiagnosticsMixin, SettingsApiMixin, MessageApiMixin,
         绑定窗口关闭后打开其他游戏窗口时先自动改绑（_sync_role_binding），
         角色随之切换；页面把返回的 id 与 get_init_data.role 比对，变化时
         全量重同步方案下拉/设置/顶部角色文案（按角色隔离数据）。
+
+        refresh=True 强制重算角色（不等 30s 缓存）：游戏关闭 → 未绑定 /
+        游戏启动 → 恢复绑定角色，切换在 5s 轮询周期内生效，否则关闭或
+        启动游戏后面板会继续展示旧角色数据约 30s（2026-11-19）。
         """
         self._sync_role_binding()
-        return {"id": user_data.current_role_id(),
-                "label": bound_short_label() or ""}
+        rid = user_data.current_role_id(refresh=True)
+        # 未绑定（游戏窗口全部关闭）时给页面一个可读文案，切换日志
+        # 不出现裸 _default（2026-11-19）
+        label = bound_short_label() or (
+            "未绑定" if rid == user_data.DEFAULT_ROLE else "")
+        return {"id": rid, "label": label}
 
     def get_env_info(self):
         """使用环境信息（系统页-使用环境展示）：适配主题/分辨率、
@@ -402,24 +410,23 @@ class ControlWindow(DiagnosticsMixin, SettingsApiMixin, MessageApiMixin,
         存在窗口（自动选择生效）时同样直接展示该窗口标题，与标题
         栏角色一致（单游戏窗口首次启动即此场景）。绑定窗口已关闭时
         先把绑定记录改绑到实际操作窗口（_sync_role_binding），角色
-        数据随实际窗口切换。
+        数据随实际窗口切换。游戏窗口全部关闭时按未绑定展示（2026-11-19
+        用户反馈：未打开游戏时不得回显上一次绑定的窗口/角色）。
         """
         self._sync_role_binding()
         win = game.find_main_window()
         bound = game.find_bound_window()
         if bound is not None:
             bound_info = bound.title
-        elif game.bound_window_id():
+        elif win is None:
+            bound_info = "未绑定（游戏未启动）"
+        else:
             raw = game.bound_window_id()
-            old = raw.get("title") if isinstance(raw, dict) else str(raw)
-            if win is not None:
+            if raw:
+                old = raw.get("title") if isinstance(raw, dict) else str(raw)
                 bound_info = f"已自动选择：{win.title}（原绑定 {old} 未匹配）"
             else:
-                bound_info = "绑定丢失（重启后重选）"
-        elif win is not None:
-            bound_info = win.title  # 无绑定记录：自动选择窗口即操作目标
-        else:
-            bound_info = "未绑定（自动选择）"
+                bound_info = win.title  # 无绑定记录：自动选择窗口即操作目标
         self.refresh_window_title()  # 标题角色文案随解析结果刷新
         # 短文案只在有活窗口时取（游戏已关闭仍展示旧角色名会误导）；
         # 无窗口/绑定丢失等状态行本身已短，直接用 bound_info
@@ -849,11 +856,17 @@ class ControlWindow(DiagnosticsMixin, SettingsApiMixin, MessageApiMixin,
     def get_task_stats(self):
         """任务成就数据：直读当前角色 data/<ID>/task_stats.json
         （累计/各模式/最近 7 天/最近一次会话快照）。任务未运行或已
-        停止时文件保留，照常返回；附 role（id/label）标明当前角色。"""
+        停止时文件保留，照常返回；附 role（id/label）标明当前角色。
+
+        未绑定（游戏窗口全部关闭 → _default）时不带角色短文案：绑定
+        记录里的上一次角色名会让人误以为成就属于该角色（2026-11-19
+        用户反馈：未打开游戏时不得展示上一次绑定角色的数据）。"""
         from ..core import debug_overlay
         data = debug_overlay.read_task_stats()
         role = user_data.current_role_id()
-        data["role"] = {"id": role, "label": bound_label_from_binding() or ""}
+        label = ("" if role == user_data.DEFAULT_ROLE
+                 else (bound_label_from_binding() or ""))
+        data["role"] = {"id": role, "label": label}
         return data
 
     def clear_task_stats(self):

@@ -63,6 +63,16 @@ def test_bound_short_label_no_window_no_binding(monkeypatch):
     assert binding.bound_short_label() is None
 
 
+def test_bound_short_label_none_without_window_even_if_bound(monkeypatch):
+    """游戏窗口全部关闭：即使有绑定记录也不回显旧角色（2026-11-19）。"""
+    fake = SimpleNamespace(
+        find_main_window=lambda: None,
+        bound_window_id=lambda: {
+            "title": "大话西游2经典版 - 一生所爱 - 长相思（ID：12345）"})
+    monkeypatch.setattr(binding, "game", fake)
+    assert binding.bound_short_label() is None
+
+
 def test_bound_label_from_binding_dict_and_string(monkeypatch):
     fake = SimpleNamespace(bound_window_id=lambda: {
         "title": "大话西游2经典版 - 一生所爱 - 长相思（ID：12345）"})

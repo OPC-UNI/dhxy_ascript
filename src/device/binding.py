@@ -26,12 +26,16 @@ def bound_short_label():
     """窗口绑定角色短文案（控制窗口标题/托盘菜单共用）：服务器+角色名，
     如「一生所爱「长相思」」。
 
-    优先取当前窗口标题（实时）；窗口在登录界面（标题无 ID）或未启动
-    时，回退绑定记录里的标题解析（角色信息不因登录状态丢失）。无绑定/
-    无角色信息返回 None。文案刻意保持简短，不拼完整标题。
+    优先取当前窗口标题（实时）；窗口在登录界面（标题无 ID）时回退
+    绑定记录里的标题解析（角色信息不因登录状态丢失）。游戏窗口全部
+    关闭时返回 None（未绑定）——不回退绑定记录，否则游戏未启动时窗口
+    标题/托盘/顶部栏仍展示上一次绑定角色（2026-11-19 用户反馈）。
+    无绑定/无角色信息返回 None。文案刻意保持简短，不拼完整标题。
     """
     win = game.find_main_window()
-    title = (getattr(win, "title", "") or "") if win is not None else ""
+    if win is None:
+        return None  # 游戏未启动：未绑定
+    title = (getattr(win, "title", "") or "")
     if "ID：" not in title:
         raw = game.bound_window_id()
         title = raw.get("title") if isinstance(raw, dict) else raw

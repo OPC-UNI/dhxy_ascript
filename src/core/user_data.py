@@ -18,8 +18,9 @@
 绑定窗口已关闭、脚本回退操作其他游戏窗口时（find_main_window 动态
 回退），绑定记录不再代表实际操作角色：此时跟随实时窗口标题解析，
 控制窗口轮询 game.ensure_binding_follows_live_window 完成改绑，方案/
-设置/成就随新窗口切换，无需重启（2026-11-13）。完全无游戏窗口时仍
-沿用绑定记录（游戏重启间隙不落到 _default）。
+设置/成就随新窗口切换，无需重启（2026-11-13）。游戏窗口全部关闭时
+按未绑定处理（_default，2026-11-19）：绑定记录保留，但面板不再展示
+上一次绑定角色的方案/进度/成就，游戏重新打开后按绑定恢复。
 
 旧版数据迁移：根目录 config.json / schemes.json / task_stats.json 原样
 保留（回滚安全），按角色把字段复制到 data/ 下——只复制不移动，
@@ -102,9 +103,15 @@ def _probe_role_id():
     2026-11-13 补充：绑定窗口已关闭（A 退出、打开 B）时脚本实际操作的
     是 find_main_window 回退窗口，绑定记录不再代表真实角色——此时跟随
     实时窗口标题解析（控制窗口轮询会先改绑，两者结果一致）。绑定窗口
-    存在时仍用绑定记录（保留 pass 防漂移）；完全无游戏窗口时沿用绑定
-    记录（游戏重启间隙不落到 _default）。未绑定时退回标题解析
-    （首次运行/登录界面/绑定丢失）。
+    存在时仍用绑定记录（保留 pass 防漂移）。未绑定时退回标题解析，
+    标题无 ID 再回退绑定记录（首次运行/登录界面/绑定丢失）。
+
+    2026-11-19：游戏窗口全部关闭（客户端未启动）时按未绑定处理（返回
+    None → _default）。此前无窗口时沿用绑定记录，导致游戏未打开时面板
+    仍展示上一次绑定角色的方案列表/进度/成就（用户反馈）。绑定记录
+    保留在 config.json，游戏重新打开后按绑定恢复该角色。窗口存在但
+    标题无 ID（登录界面/客户端重启加载中）仍沿用绑定记录（角色信息
+    不因登录状态丢失，与 device.binding.bound_short_label 同口径）。
     """
     try:
         from ..device import game
@@ -114,9 +121,9 @@ def _probe_role_id():
         if bound_rid and game.find_bound_window() is not None:
             return bound_rid
         win = game.find_main_window()
-        live_rid = role_id_from_text(
-            getattr(win, "title", "") if win is not None else "")
-        return live_rid or bound_rid
+        if win is None:
+            return None  # 游戏未启动：未绑定（不回退绑定记录）
+        return role_id_from_text(getattr(win, "title", "")) or bound_rid
     except Exception:
         return None
 
@@ -129,11 +136,12 @@ def current_role_id(refresh=False):
     rid = _probe_role_id() or DEFAULT_ROLE
     old = _ROLE_CACHE["id"]
     if old and old != rid:
-        # 运行中角色变化只应发生在换号（需重启）等显式场景；组号 pass 切
-        # Tab 不应再触发（绑定优先）。保留日志便于回归定位。
+        # 角色变化：换号改绑、游戏关闭（→ _default 未绑定）、游戏重新
+        # 打开（_default → 绑定角色）均为正常切换；组号 pass 切 Tab 不
+        # 应触发（绑定优先）。保留日志便于回归定位，不按 WARN 告警。
         try:
             from .app_utils import log
-            log(f"[数据] 角色解析变化: {old} → {rid}", "WARN")
+            log(f"[数据] 角色解析变化: {old} → {rid}", "SYS")
         except Exception:
             pass
     _ROLE_CACHE["id"] = rid
