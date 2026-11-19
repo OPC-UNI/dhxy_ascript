@@ -737,6 +737,64 @@ def test_find_awang_all_templates_missing_returns_none(monkeypatch):
     assert len(logs) == 1
 
 
+# ---- 阿旺名字世界区 OCR（2026-11-19 参考星魂归位场景标签条带扫法） ----
+class _AwangFrameWin:
+    def capture(self, **k):
+        import numpy as np
+        return np.zeros((831, 1378, 3), np.uint8)
+
+
+def _patch_awang_ocr(monkeypatch, items):
+    seen = []
+
+    def _ocr(img, bands):
+        seen.append(bands)
+        return items, None
+
+    monkeypatch.setattr(kezhan, "log", lambda *a, **k: None)
+    monkeypatch.setattr(kezhan, "_track_panel_region",
+                        lambda img: (0, 200, 260, 600))
+    monkeypatch.setattr(kezhan.game_map, "ocr_regions", _ocr)
+    return seen
+
+
+def test_find_awang_by_ocr_uses_bands_and_returns_name(monkeypatch):
+    """名字 OCR 走两段 736 条带（区域快引擎原尺寸），短行命中返回中心。
+
+    旧实现整帧全精度 OCR（约 2.2s、整屏杂背景参与检测）；星魂归位同款
+    条带扫法对小字世界标签更稳（「阿旺。」规范化后 2 字仍命中）。
+    """
+    seen = _patch_awang_ocr(monkeypatch, [
+        ("阿旺。", [600, 300, 660, 326], 0.97)])
+    assert kezhan._find_awang_by_ocr(_AwangFrameWin()) == (630, 313)
+    assert seen == [kezhan.AWANG_NAME_BANDS]
+
+
+def test_find_awang_by_ocr_excludes_tracker_panel(monkeypatch):
+    """追踪面板矩形内的同名文案跳过（「找阿旺。」不可点）。"""
+    _patch_awang_ocr(monkeypatch, [
+        ("找阿旺。", [20, 300, 100, 326], 0.99)])
+    assert kezhan._find_awang_by_ocr(_AwangFrameWin()) is None
+
+
+def test_find_awang_by_ocr_ignores_long_lines(monkeypatch):
+    """长行（>4 字）即使含「阿旺」也不算 NPC 名字（对话/追踪长句）。"""
+    _patch_awang_ocr(monkeypatch, [
+        ("阿旺朝比武场的方向跑去了", [600, 300, 900, 326], 0.99)])
+    assert kezhan._find_awang_by_ocr(_AwangFrameWin()) is None
+
+
+def test_find_awang_by_ocr_records_lines_for_diagnosis(monkeypatch):
+    """未命中时记录世界区 OCR 行（失败日志标定数据，同沙都修罗）。"""
+    _patch_awang_ocr(monkeypatch, [
+        ("生日我最大", [640, 440, 730, 470], 0.99),
+        ("低置信行", [10, 10, 50, 30], 0.40),
+    ])
+    kezhan._awang_ocr_lines = []
+    assert kezhan._find_awang_by_ocr(_AwangFrameWin()) is None
+    assert kezhan._awang_ocr_lines == ["生日我最大"]
+
+
 # ---- 阿旺兜底到达目标：185/176 两个落点任一到达即可（2026-11-11 用户） ----
 def test_near_luoyang_accepts_either_fallback_landing():
     """兜底目标为多落点：落在 (185,207)/(176,207) 任一点 ±5 内即算到达。"""

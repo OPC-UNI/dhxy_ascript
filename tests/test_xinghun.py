@@ -113,6 +113,42 @@ def test_soul_labels_exact_line_only(monkeypatch):
     assert [c[0] for c in cands] == ["尾", "氐", "尾"]
 
 
+def test_soul_labels_left_edge_fallback(monkeypatch):
+    """贴左缘标签主条带漏读时补扫左带检出。
+
+    2026-11-19 实机截图：屏幕左下「箕之星魂」rect 左缘 x=389 < 主条带
+    左界 410，主条带 OCR 读成「2星魂」（实测 0.899）→ 四字整行匹配
+    失败，模块连续 3 轮「视野内无星魂」游走约 60s。左带按原尺寸裁剪
+    识别为「箕之星魂」（实测 0.991）。
+    """
+    calls = []
+
+    def _ocr(img, region):
+        calls.append(region)
+        if region == xh.XH_SCAN_REGION:
+            return [("2星魂", [410, 725, 458, 751], 0.899)], None
+        return [("箕之星魂", [389, 725, 459, 750], 0.991)], None
+
+    monkeypatch.setattr(xh.game_map, "ocr_region", _ocr)
+    cands = xh._soul_labels(object(), [], _frame_fn, time.time(), force=True)
+    assert cands == [("箕", [389, 725, 459, 750])]
+    assert calls == [xh.XH_SCAN_REGION, xh.XH_SCAN_LEFT_REGION]
+
+
+def test_soul_labels_main_hit_skips_left_band(monkeypatch):
+    """主条带已命中星魂时不付左带补扫（正常帧零额外 OCR）。"""
+    calls = []
+
+    def _ocr(img, region):
+        calls.append(region)
+        return [("尾之星魂", [640, 420, 710, 445], 0.99)], None
+
+    monkeypatch.setattr(xh.game_map, "ocr_region", _ocr)
+    cands = xh._soul_labels(object(), [], _frame_fn, time.time(), force=True)
+    assert [c[0] for c in cands] == ["尾"]
+    assert calls == [xh.XH_SCAN_REGION]
+
+
 def test_pillar_point_offset_and_fallback():
     """石柱点 = 标签框顶上方 68px；标签被遮挡时回退人物上方固定点。"""
     assert xh._pillar_point([("尾", [640, 420, 710, 445])], "尾") == (675, 352)
@@ -276,6 +312,49 @@ def test_stone_phase_no_reclick_while_walking(monkeypatch):
     monkeypatch.setattr(xh, "_link_point", lambda *a, **k: (150, 332))
     assert xh.handle(_win(), TRACKER_ITEMS, _FRAME, frame_fn=_frame_fn) is False
     assert clicks == []
+
+
+def test_stone_phase_enhanced_ocr_fallback(monkeypatch):
+    """末行漏检 → 普通链接查找为空 → 增强 OCR 重识别补点星宿石。
+
+    2026-11-19 实机 160s 卡死：跟随后追踪末行「、氏之星宿石、尾之星宿石处」
+    压在亮背景下被区域 OCR 整行漏检（实拍截图复现），模块找不到「尾之星宿」
+    链接、静默等到 follow 超时。增强 OCR（3x 对比度）可读回该行
+    （实测「尾之星宿石处」0.99），命中即点。
+    """
+    clicks, enh_calls = [], []
+    xh._phase = 1
+    xh._target = "尾"
+    xh._phase_at = 0.0
+    xh._link_at = 0.0
+    xh._link_tries = 0
+    monkeypatch.setattr(xh, "_click_green_option_once", lambda *a, **k: False)
+    monkeypatch.setattr(xh, "_pos", lambda *a, **k: ("四象禁地", 100, 50))
+    monkeypatch.setattr(xh, "human_click", lambda w, x, y: clicks.append((x, y)))
+    monkeypatch.setattr(xh.task_tracker, "ocr_track_enhanced",
+                        lambda img: enh_calls.append(img) or TRACKER_ITEMS)
+    items = TRACKER_ITEMS[:-1]  # 实拍帧：末行整行漏检
+    assert xh.handle(_win(), items, _FRAME, frame_fn=_frame_fn) is True
+    assert enh_calls, "普通查找为空时应触发增强 OCR 兜底"
+    assert clicks, "增强 OCR 命中末行后必须点击星宿石链接"
+    assert xh._link_tries == 1
+
+
+def test_stone_phase_no_enhanced_when_link_found(monkeypatch):
+    """普通帧读出链接时不付增强 OCR（正常路径零额外开销）。"""
+    clicks, enh_calls = [], []
+    xh._phase = 1
+    xh._target = "尾"
+    xh._phase_at = 0.0
+    xh._link_at = 0.0
+    xh._link_tries = 0
+    monkeypatch.setattr(xh, "_click_green_option_once", lambda *a, **k: False)
+    monkeypatch.setattr(xh, "_pos", lambda *a, **k: ("四象禁地", 100, 50))
+    monkeypatch.setattr(xh, "human_click", lambda w, x, y: clicks.append((x, y)))
+    monkeypatch.setattr(xh.task_tracker, "ocr_track_enhanced",
+                        lambda img: enh_calls.append(img) or [])
+    assert xh.handle(_win(), TRACKER_ITEMS, _FRAME, frame_fn=_frame_fn) is True
+    assert clicks and not enh_calls
 
 
 def test_arrival_dialog_confirms_return(monkeypatch):

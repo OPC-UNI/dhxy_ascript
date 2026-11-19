@@ -851,27 +851,65 @@ def _wuhuan_link_picker(items, img_np):
     无链接标记行时返回 PICK_FAIL：track_task 等待重试，绝不做行级兜底
     点击——子目标行同为亮绿带下划线、剩余时间行因 OCR 框重叠沾绿
     （实测 3.2%），颜色与下划线都无法区分。
+
+    面板左列约束（2026-11-19 实测）：任务变化瞬间游戏在同一帧弹出同文案
+    的绿色浮字提示（距面板左列 ≥200px，落在追踪 OCR 区域「区域左缘
+    +300」宽度内）。旧实现行采集只按 panel_row_xmax（≥400）过滤行首，
+    浮字行混入链接行的同行合并框；链接行渲染过渡帧下划线未检出时，
+    green_text_center 回退取「最右绿块」点到浮字 (258,262)——浮字不可点，
+    人物原地不动 93s，等进度键抖动才重新点链接恢复（2026-11-19 五环
+    日志实测；与 2026-11-08 玄枢轶闻点中浮字 (260,260) 同因，见
+    task_tracker.ANCHOR_MAX_X 注释）。锚点与行采集限「面板左列」
+    （区域左缘 -10 ~ +ANCHOR_MAX_X）；区域未知（标题条模板未命中）时
+    以锚点标题行左缘为基准——面板行恒从区域左缘 +11~54 起，标题行同为
+    面板行。行采集不得再套「与锚点横向交叠」（track_task 内容采集的
+    过滤）：长链接行的尾部碎片（如「情缘」x≈182）恒在窄标题锚点右缘
+    +40 之外，套用会把链接行拆散、下划线定位退回碎片文字中点
+    （2026-10-31 教训），左列界才是合并行正确的几何约束。左列外行
+    （浮字/对话框行）从像素帧抹黑：浮字框与链接行框可横向重叠（浮字
+    x≈200 起、链接框右缘≈216），残留绿像素会污染 green_text_center 的
+    下划线/绿块定位（同 track_task 丢弃行处理，2026-11-08 教训）
     """
+    region = task_tracker.track_content_region(img_np)
+    base = region[0] if region is not None else None
+    # 锚点行首界：区域已知时限面板左列（排除浮字小标题）；区域未知
+    # 回退宽松绝对界 PANEL_MAX_X（同 panel_row_xmax 的 fallback 语义）
+    anchor_hi = base + task_tracker.ANCHOR_MAX_X if base is not None \
+        else task_tracker.PANEL_MAX_X
     anchor = None
-    xmax = task_tracker.panel_row_xmax(img_np)
     for txt, rect, score in items:
-        if task_tracker._is_title_line(txt) and WUHUAN_TITLE in txt \
-                and score >= 0.55 and rect[0] < xmax:
-            anchor = rect
-            break
+        if not (task_tracker._is_title_line(txt) and WUHUAN_TITLE in txt
+                and score >= 0.55 and rect[0] < anchor_hi):
+            continue
+        anchor = rect
+        break
     if anchor is None:
         return task_tracker.PICK_FAIL
+    if base is None:
+        base = anchor[0]
+    col_lo = base - 10
+    col_hi = base + task_tracker.ANCHOR_MAX_X
     rows = []
+    dropped = []  # 左列外行（浮字提示/对话框行）：像素帧抹黑防污染
     for txt, rect, score in items:
-        if score < 0.55 or rect[0] >= xmax:
+        if score < 0.55:
+            continue
+        if not (col_lo <= rect[0] < col_hi):
+            dropped.append(rect)
             continue
         if rect[1] - anchor[3] > 150:
             continue  # 锚点下方内容范围外（同 track_task 内容采集纵向限制）
-        if rect[0] >= anchor[2] + 40 and rect[2] <= anchor[0] - 40:
-            continue  # 与锚点无横向交叠（同内容采集几何过滤）
         rows.append((list(rect), txt))
     if not rows:
         return task_tracker.PICK_FAIL
+    if dropped:
+        img_np = img_np.copy()
+        h, w = img_np.shape[:2]
+        for l0, t0, r0, b0 in dropped:
+            l0, t0 = max(0, l0), max(0, t0)
+            r0, b0 = min(w, r0), min(h, b0)
+            if r0 > l0 and b0 > t0:
+                img_np[t0:b0, l0:r0] = 0
     for mrect, members in _merge_same_line(rows):
         if any(_LINK_MARK_RE.search(txt)
                or task_tracker.MAP_COORD_RE.search(txt)
@@ -939,6 +977,10 @@ def _follow_wuhuan(win):
     战斗结束且人物站定即补点任务链接恢复寻路（重新进入战斗）——
     2026-11-14 用户规则：正常胜利推进由签名变化点新链接；战败/遭遇战
     打断后签名不变，需补点链接重新寻路（见 follow 参数说明）
+    stall_recheck：寻路停滞看门狗全轮次启用（stall_recheck_target=None，
+    不限「徐卿卿」腿）——2026-11-19 五环实测点击落到任务变化浮字上、
+    人物原地 93s 不动，靠进度键抖动才恢复；看门狗在静止 ≥15s 且无
+    对话框/战斗时补点任务链接，把此类失效点击的恢复时间压到 ~15s
     """
     return follow_task(win, WUHUAN_TITLE, prefix="五环",
                        timeout=WUHUAN_FOLLOW_TIMEOUT,
@@ -952,6 +994,8 @@ def _follow_wuhuan(win):
                        require_coord=True,
                        signature_ratio=WUHUAN_SIG_RATIO,
                        battle_resume_reclick=True,
+                       stall_recheck=True,
+                       stall_recheck_target=None,
                        story_dialog_dismiss=False)
 
 

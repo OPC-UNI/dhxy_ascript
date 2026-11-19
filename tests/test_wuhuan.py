@@ -153,6 +153,66 @@ def test_link_picker_tail_only_read_clicks_underline():
     assert pt == (204, 268)
 
 
+def _frame_with_link_fragments_no_underline():
+    """链接行渲染过渡帧：碎片亮绿、行尾下划线尚未渲染（2026-11-19
+    浮字劫持实测帧型——下划线检出时 green_text_center 直接点下划线，
+    不会回退到「最右绿块」，浮字也就抢不走点击）。"""
+    img = np.zeros((831, 1378, 3), dtype=np.uint8)
+    img[255:268, 25:145:4] = (0, 255, 0)   # 替身行文字（亮绿笔画）
+    img[287, 24:115] = (0, 255, 0)         # 替身行下划线
+    img[255:268, 21:120:4] = (0, 255, 0)   # 「去找大雁塔二」碎片（亮绿）
+    img[255:268, 182:222:4] = (0, 255, 0)  # 「情缘」碎片（亮绿）
+    return img
+
+
+def test_link_picker_ignores_change_float_row():
+    """任务变化绿色浮字提示（同帧、x≈200 起、与链接行纵向重叠）不得
+    参与同行合并或成为点击目标。
+
+    2026-11-19 五环实测：进度键变化确认的同一帧弹浮字，旧行采集只按
+    panel_row_xmax(≥400) 过滤行首，浮字行并入链接行合并框；链接行
+    过渡帧下划线未检出 → green_text_center 回退取最右绿块点到浮字
+    (258,262)，浮字不可点、人物原地 93s 不动（等进度键抖动重新点链接
+    才恢复）。修复后左列外浮字行被排除并从像素帧抹黑。
+    """
+    img = _frame_with_link_fragments_no_underline()
+    img[252:269, 202:330] = (0, 255, 0)    # 浮字绿色文字块（连续实心）
+    items = _make([
+        ("五环[五环]", 14, 233, 100, 253),
+        ("去找大雁塔二", 21, 251, 120, 271),
+        ("情缘", 182, 252, 222, 272),
+        ("24载的替身[1/5]", 19, 262, 139, 293),
+        # 浮字（同文案，落在追踪 OCR 区域「区域左缘+300」内）
+        ("去找大雁塔二层(13，47)情缘", 202, 250, 330, 274),
+    ])
+    pt = wuhuan._wuhuan_link_picker(items, img)
+    # 修复前 ≈(265,262)（浮字中心）；修复后落在面板链接行碎片上
+    assert pt[0] < 202, f"点到浮字区: {pt}"
+    assert 250 <= pt[1] <= 275, f"点击行不在链接行: {pt}"
+
+
+def test_link_picker_region_column_excludes_float_anchor(monkeypatch):
+    """标题条模板定位到面板区域时：左列界 = 区域左缘 -10 ~ +ANCHOR_MAX_X。
+
+    浮字小标题（标题形态如「【五环】」、x≥左列界）不得劫持锚点；
+    行采集同样限左列，浮字行不参与合并。
+    """
+    monkeypatch.setattr(wuhuan.task_tracker, "track_content_region",
+                        lambda img_np, min_width=None: (7, 227, 307, 557))
+    img = _frame_with_link_fragments()  # 带行尾下划线（正常帧）
+    items = _make([
+        # 浮字小标题排在最前且纵坐标更高——旧锚点循环会先命中它
+        ("【五环】", 210, 236, 290, 254),
+        ("五环[五环]", 14, 233, 100, 253),
+        ("去找大雁塔二", 21, 251, 120, 271),
+        ("情缘", 182, 252, 222, 272),
+        ("24载的替身[1/5]", 19, 262, 139, 293),
+        ("剩余时间：00:59:41", 22, 283, 162, 304),
+    ])
+    pt = wuhuan._wuhuan_link_picker(items, img)
+    assert pt == (204, 268)
+
+
 # ---- 进服装店前降落检查（2026-11-07：飞行中无法点击进店，到达布店
 #      门口先 ensure_landed 再点入口；检查失败不阻断，超时兜底） ----
 
@@ -382,3 +442,7 @@ def test_follow_wuhuan_uses_shared_confirm(monkeypatch):
     # 战斗结束补点恢复开启（用户 2026-11-14：战败/遭遇战打断寻路后
     # 签名不变，也须补点任务链接重新寻路重新进入战斗）
     assert seen["battle_resume_reclick"] is True
+    # 寻路停滞看门狗全轮次启用（2026-11-19 点击落到任务变化浮字上、
+    # 人物原地 93s 不动的实测教训）
+    assert seen["stall_recheck"] is True
+    assert seen["stall_recheck_target"] is None

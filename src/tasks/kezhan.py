@@ -643,6 +643,15 @@ AWANG_ARRIVE_TIMEOUT = 20                     # 走近等待超时（秒；点�
 # NPC 名字 OCR 兜底查找的排除区（任务追踪面板；面板内文案如「找阿旺。」不可点）。
 # 静态兜底；运行时由 _track_panel_region 按标题条模板动态推导（面板漂移跟随）
 TRACK_PANEL_REGION = (0, 200, 260, 600)
+# 阿旺名字世界区 OCR 条带（2026-11-19 参考星魂归位/沙都修罗场景标签
+# 扫法）：全宽按 736 宽切两段（区域快引擎 Det 'max'/736，宽 ≤736 的
+# 裁剪按原尺寸检测——同沙都修罗实测 736 宽分段对小字 NPC 名检出 1.00；
+# 旧实现整帧全精度引擎（默认 'min'/736，1378x831 整帧原尺寸检测）
+# 实测 2.3s、整屏 UI/杂背景参与，两段实测 1.6s）。两段横向重叠 76px：
+# 名字正好压在 736 边界时在第二段里完整可见（星魂归位左缘裁字整行
+# 漏检教训，2026-11-19）。
+AWANG_NAME_BANDS = ((0, 100, 736, 760), (660, 100, 1378, 760))
+AWANG_NAME_SCORE = 0.55              # 名字行置信度下限（同各任务模块 0.55）
 
 
 def _track_panel_region(img_np):
@@ -657,6 +666,7 @@ def _track_panel_region(img_np):
     return task_tracker.track_content_region(img_np) or TRACK_PANEL_REGION
 
 _awang_missing_logged = False                 # 模板缺失仅记录一次，避免刷日志
+_awang_ocr_lines = []                         # 最近一次名字扫描世界区 OCR 行（失败诊断）
 _order_mismatch_logged = False                # 四象文本词/绿色词簇数不一致仅记录一次
 _dali_last_done = 0.0                         # 上次大理寺寻路完成时间（防重复触发）
 # ---- 特殊任务步骤：阿旺朝比武场方向跑（追踪文案出现时寻路到比武场） ----
@@ -922,23 +932,36 @@ def _find_awang(win):
     return best_pt
 
 
-def _find_awang_by_ocr(win):
-    """全屏 OCR 查找 NPC 名字「阿旺」，返回名字标签中心坐标或 None。
+def _rects_intersect(a, b):
+    """两矩形 (l,t,r,b) 是否相交（碰边算相交）。"""
+    return not (a[2] < b[0] or a[0] > b[2] or a[3] < b[1] or a[1] > b[3])
 
-    只匹配短行（≤4 字）含「阿旺」，排除任务追踪面板区域（0,200-260,600），
-    避免误点追踪文案（如「找阿旺。」）。点击目标由 _check_awang 换算：
-    交互点=名字上方约 40px（用户实测：点文字本身无效）、走近点=名字
-    左/右侧 90px（按屏幕左右侧选侧，见 _awang_approach_pos）。
+
+def _find_awang_by_ocr(win):
+    """世界区 OCR 查找 NPC 名字「阿旺」，返回名字标签中心坐标或 None。
+
+    2026-11-19 参考星魂归位场景标签扫法重写：全宽两段条带（见
+    AWANG_NAME_BANDS，区域快引擎按原尺寸检测）→ 规范化后短行（≤4 字）
+    含「阿旺」→ 与动态追踪面板矩形相交的行排除（面板内文案如「找阿旺。」
+    不可点）。旧实现整帧全精度 OCR 实测约 2.3s，两段约 1.6s。
+    点击目标由 _check_awang 换算：交互点=名字上方约 40px（用户实测：
+    点文字本身无效）、走近点=名字左/右侧 90px（按屏幕左右侧选侧，见
+    _awang_approach_pos）。未命中时把世界区 OCR 行存入 _awang_ocr_lines，
+    供失败日志诊断（名字漏读/误读的标定数据，同沙都修罗扫描日志）。
     """
+    global _awang_ocr_lines
     img = win.capture(force_activate=False)
     if img is None:
         return None
-    items, _ = game_map.ocr_image(img)
-    _, pt, pr, pb = _track_panel_region(np.asarray(img))
+    img_np = np.asarray(img)
+    panel = _track_panel_region(img_np)
+    items, _ = game_map.ocr_regions(img, AWANG_NAME_BANDS)
+    _awang_ocr_lines = [t for t, _r, s in items if s >= AWANG_NAME_SCORE]
     for txt, rect, score in items:
-        if score < 0.55 or len(txt) > 4 or "阿旺" not in txt:
+        norm = norm_text(txt)
+        if score < AWANG_NAME_SCORE or len(norm) > 4 or "阿旺" not in norm:
             continue
-        if rect[0] < pr and pt <= rect[1] <= pb:
+        if _rects_intersect(rect, panel):
             continue  # 任务追踪面板内的文案，跳过
         cx = (rect[0] + rect[2]) // 2
         cy = (rect[1] + rect[3]) // 2
@@ -1032,7 +1055,8 @@ def _check_awang(win):
         else:
             log("[客栈] 未找到阿旺，游戏不在前台：跳过 Alt+C", "WARN")
     if pt is None:
-        return False, "未找到阿旺（模板与 OCR 名字均未命中，Alt+C 后重试仍失败）"
+        return False, ("未找到阿旺（模板与 OCR 名字均未命中，Alt+C 后重试仍失败）"
+                       f"；世界区 OCR 行 {_awang_ocr_lines[:6] or '(无)'}")
     if ap is None:
         # 阿旺在屏幕中间 ±180px 内：距离已够近，无需走近，直接点交互点
         human_click(win, pt[0], pt[1])
@@ -1046,7 +1070,8 @@ def _check_awang(win):
     _wait_awang_arrival(win)
     pt, _ = _locate()
     if pt is None:
-        return False, "走近后仍未找到阿旺（模板与 OCR 名字均未命中）"
+        return False, ("走近后仍未找到阿旺（模板与 OCR 名字均未命中）"
+                       f"；世界区 OCR 行 {_awang_ocr_lines[:6] or '(无)'}")
     human_click(win, pt[0], pt[1])
     log(f"[客栈] 已点击阿旺 @({pt[0]},{pt[1]})", "SYS")
     return True, "已点击阿旺"

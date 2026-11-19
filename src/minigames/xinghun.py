@@ -78,6 +78,15 @@ XH_ELEMENTS = (
 XH_SOUL_TOTAL = 6                    # 星魂总数（用户 2026-11-17 确认固定 6）
 # 场景标签 OCR 条带（世界区，避开左侧追踪面板与标题栏）
 XH_SCAN_REGION = (410, 120, 1378, 790)
+# 左缘窄带补扫（2026-11-19 实机截图）：星魂标签贴世界区左缘时（实测
+# 「箕之星魂」OCR rect 左缘 x=389、追踪面板右缘 ≈307），主条带左界
+# 410 把整行裁成「2星魂」→ 四字整行匹配失败：画面里明明有星魂，模块
+# 连续 3 轮「视野内无星魂」游走约 60s 才把它转进主条带。直接把主条带
+# 左界放宽到 330 更糟——区域宽 >736 触发降采样，同一标签在原尺寸裁剪
+# 下 0.991 而宽条带里直接漏检。故保持主条带不变，主条带没有任何星魂
+# 时补扫左带（宽 330px <736，按原尺寸检测）；正常帧主条带即命中，
+# 补扫零开销。
+XH_SCAN_LEFT_REGION = (330, 120, 660, 790)
 XH_SCAN_INTERVAL = 2.0               # 场景 OCR 最小间隔（秒，全区域 ~0.4s）
 XH_SCAN_MIN_SCORE = 0.55             # 标签行置信度下限（同各任务模块）
 XH_PILLAR_OFFSET = 68                # 石柱点击点 = 标签框顶上方 68px（实测 62~76）
@@ -89,6 +98,12 @@ XH_PILLAR_RETRY_MAX = 3              # 同一星魂点石柱最多尝试次数
 XH_LINK_CLICK_INTERVAL = 2.0         # 追踪链接重复点击最小间隔（秒）
 XH_LINK_CLICK_MAX = 5                # 同一阶段追踪链接最多点击次数
 XH_LINK_STILL_POLLS = 2              # 寻路停滞判定：位置连续不变轮询数（可补点）
+# 追踪链接低对比度补偿 OCR 的最小间隔（秒）：面板末行压在亮背景上时
+# 区域 OCR 整行漏检（2026-11-19 实测「、氏之星宿石、尾之星宿石处」
+# 缺失 → 跟随后点不到星宿石、静默卡到 follow 超时 160s）；普通帧链接
+# 查找失败才触发增强重识别（track_task.ocr_track_enhanced，约 155ms），
+# 限频防卡死窗口内每轮询空烧
+XH_LINK_ENH_INTERVAL = 1.5
 XH_PHASE_DELAY = 1.0                 # 阶段切换后首次点击延迟（等对话关闭/浮字）
 XH_RETURN_WAIT = 4.0                 # 点「四象禁地」后回中心等待（秒）
 XH_SEARCH_INTERVAL = 2.0             # 无星魂可见时游走搜索的最小间隔（秒）
@@ -111,6 +126,7 @@ _link_at = 0.0            # 追踪链接（星宿石/四象禁地）上次点击
 _link_tries = 0
 _link_pos = None
 _link_still = 0
+_enh_link_at = 0.0        # 链接低对比度补偿 OCR 上次尝试（限频）
 _search_at = 0.0
 _search_idx = 0
 _search_pos = None
@@ -135,9 +151,9 @@ def reset():
     """状态复位（新任务领取成功/跨任务防残留）。"""
     global _phase, _target, _phase_at, _done, _walk_at, _walk_pos, \
         _walk_stable, _pillar_at, _pillar_tries, _link_at, _link_tries, \
-        _link_pos, _link_still, _search_at, _search_idx, _search_pos, \
-        _search_still, _scan_at, _scan_result, _bad, _missing, _dismisser, \
-        _frame_key, _frame_rgb, _frame_bgr, _frame_pos
+        _link_pos, _link_still, _enh_link_at, _search_at, _search_idx, \
+        _search_pos, _search_still, _scan_at, _scan_result, _bad, _missing, \
+        _dismisser, _frame_key, _frame_rgb, _frame_bgr, _frame_pos
     _phase = 0
     _target = None
     _phase_at = 0.0
@@ -151,6 +167,7 @@ def reset():
     _link_tries = 0
     _link_pos = None
     _link_still = 0
+    _enh_link_at = 0.0
     _search_at = 0.0
     _search_idx = 0
     _search_pos = None
@@ -231,16 +248,22 @@ def _soul_labels(win, items, frame_fn, now, force=False):
     exact = {f"{a}之星魂": el
              for el, aliases in XH_ELEMENTS for a in aliases}
     cands = []
-    try:
-        sitems, _ = game_map.ocr_region(rgb, XH_SCAN_REGION)
-    except Exception:
-        sitems = []
-    for txt, rect, score in sitems:
-        if score < XH_SCAN_MIN_SCORE:
-            continue
-        el = exact.get(norm_text(txt))
-        if el is not None:
-            cands.append((el, rect))
+    # 主条带 → 左缘窄带补扫（见 XH_SCAN_LEFT_REGION 注释）：标签贴左缘
+    # 时主条带会裁掉「X之」前缀、整行读成「2星魂」而漏检；主条带已命中
+    # 任何星魂即不再补扫（窄带只为贴左缘标签，正常帧零额外开销）
+    for region in (XH_SCAN_REGION, XH_SCAN_LEFT_REGION):
+        try:
+            sitems, _ = game_map.ocr_region(rgb, region)
+        except Exception:
+            sitems = []
+        for txt, rect, score in sitems:
+            if score < XH_SCAN_MIN_SCORE:
+                continue
+            el = exact.get(norm_text(txt))
+            if el is not None:
+                cands.append((el, rect))
+        if cands:
+            break
     _scan_result = cands
     return cands
 
@@ -465,9 +488,14 @@ def _search_phase(win, items, img_np, frame_fn, now, prefix):
 
 
 def _stone_phase(win, items, img_np, frame_fn, now, prefix):
-    """phase 1：点「X之星宿石」链接 → 到达 → 点「星魂归位！」。"""
+    """phase 1：点「X之星宿石」链接 → 到达 → 点「星魂归位！」
+
+    链接查找带低对比度补偿兜底（见 XH_LINK_ENH_INTERVAL）：面板末行
+    （氐/尾等链接）压在亮背景上时区域 OCR 会整行漏检，普通帧 items
+    找不到链接不代表链接不存在——增强 OCR 重识别后再放弃。
+    """
     global _phase, _phase_at, _done, _link_at, _link_tries, _link_pos, \
-        _link_still
+        _link_still, _enh_link_at
     # 到达星宿石：归位对话框在场 → 点「星魂归位！」
     if _arrive_dialog_present(items):
         if _click_green_option_once(win, items, img_np, "星魂归位",
@@ -498,7 +526,22 @@ def _stone_phase(win, items, img_np, frame_fn, now, prefix):
     _link_pos = pos
     if _link_tries > 0 and _link_still < XH_LINK_STILL_POLLS:
         return False
-    pt = _link_point(items, img_np, _stone_keywords(_target or ""))
+    kws = _stone_keywords(_target or "")
+    pt = _link_point(items, img_np, kws)
+    if pt is None and now - _enh_link_at >= XH_LINK_ENH_INTERVAL:
+        # 低对比度补偿（2026-11-19 实机 160s 卡死）：「、氏之星宿石、
+        # 尾之星宿石处」末行压在亮背景下被区域 OCR 整行漏检——跟随后
+        # 找不到星宿石链接，静默等到 follow 超时。增强 OCR（3x 对比度）
+        # 实测可读回该行（尾之星宿石处 0.99、点击 166,327），命中即点
+        _enh_link_at = now
+        rgb, _ = _frame(win, items, frame_fn)
+        if rgb is not None:
+            try:
+                enh = task_tracker.ocr_track_enhanced(rgb)
+            except Exception:
+                enh = None
+            if enh:
+                pt = _link_point(enh, rgb, kws)
     if pt is None:
         return False
     human_click(win, pt[0], pt[1])

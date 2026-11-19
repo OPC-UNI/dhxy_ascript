@@ -123,7 +123,9 @@ CONFIRM_POLL_INTERVAL = 0.2         # 变化确认轮询间隔（秒）；OCR �
 # 位置文字区逐轮像素比对（复用 STORY_MOVE_DIFF_THRESHOLD，~0.1ms/次），
 # 静止 ≥6s 才做对话框模板检查（~9ms/次，只在疑似停滞时付）：对话框在
 # 场按「站定正常」重新计时；无对话框且静止 ≥15s 时补点一次任务链接。
-STALL_RECHECK_TARGET = "徐卿卿"     # 仅该腿开启（用户 2026-11-13：只发现这一腿卡）
+STALL_RECHECK_TARGET = "徐卿卿"     # 默认仅该腿开启（用户 2026-11-13：只发现这一腿卡）；
+                                    # 五环传 stall_recheck_target=None 全轮次启用（2026-11-19
+                                    # 点击落到任务变化浮字上、人物原地 93s 不动实测）
 STALL_RECHECK_SECONDS = 15.0        # 允许补点的连续静止时长（秒）
 STALL_DIALOG_CHECK_SECONDS = 6.0    # 静止超过该时长才查对话框模板（省热路径开销）
 STALL_RECHECK_MAX = 3               # 每轮跟踪最多补点次数（防紧循环）
@@ -571,7 +573,8 @@ def follow_task(win, title, timeout=FOLLOW_TIMEOUT, prefix="",
                 dialog_tpl_gate=True, dialog_extra_gate=None,
                 battle_extras_tpl_gate=False,
                 story_dialog_dismiss=True, story_known_texts=None,
-                stall_recheck=False, battle_resume_reclick=False,
+                stall_recheck=False, stall_recheck_target=STALL_RECHECK_TARGET,
+                battle_resume_reclick=False,
                 dialog_option_map=None, dialog_option_index_map=None,
                 known_green_options=None, wait_handler=None,
                 option_click_handler=None, battle_end_handler=None):
@@ -677,8 +680,11 @@ def follow_task(win, title, timeout=FOLLOW_TIMEOUT, prefix="",
     follow 只能空等到 300s 超时（2026-11-08/11-13 玄枢轶闻同一腿实测）。
     开启后位置文字区逐轮像素比对：非战斗、静止 ≥STALL_RECHECK_SECONDS
     且无对话框时补点一次任务追踪链接（每轮至多 STALL_RECHECK_MAX 次，
-    补点后重新计时）。仅当本轮签名含 STALL_RECHECK_TARGET 时生效
-    （用户 2026-11-13：只发现「再去找徐卿卿接受他的考验」这一腿会卡）。
+    补点后重新计时）。仅当本轮签名含 stall_recheck_target 时生效
+    （默认 STALL_RECHECK_TARGET「徐卿卿」——用户 2026-11-13：只发现
+    「再去找徐卿卿接受他的考验」这一腿会卡）；传 None 表示本任务全部
+    轮次启用（五环 2026-11-19 实测：点击落到任务变化浮字上、人物原地
+    93s 不动，靠该看门狗兜底恢复）。
     battle_resume_reclick：战斗结束后的寻路恢复补点（默认关，五环
     2026-11-14 用户规则）。点任务链接发起的自动寻路被战斗打断后，正常
     情况胜利推进使签名变化、follow 点新链接；异常情况（战败/遭遇战打断
@@ -913,8 +919,10 @@ def follow_task(win, title, timeout=FOLLOW_TIMEOUT, prefix="",
         was_battle = False      # 本轮询前处于战斗（战斗结束转换帧直接做任务消失确认）；
                                 # 战斗帧与战斗线程确认状态都会置位，动画间隙不消费
         # 寻路停滞看门狗状态（每轮跟踪重置）：仅 stall_recheck 且本轮签名
-        # 含 STALL_RECHECK_TARGET（徐卿卿腿）时创建，其他轮次零开销
-        stall_on = stall_recheck and STALL_RECHECK_TARGET in sig
+        # 含 stall_recheck_target（默认徐卿卿腿；传 None 的任务全轮次）时
+        # 创建，其他轮次零开销
+        stall_on = stall_recheck and (stall_recheck_target is None
+                                      or stall_recheck_target in sig)
         stall_watch = PositionStillness() if stall_on else None
         stall_reclicks = 0
         # 战斗结束补点恢复状态（battle_resume_reclick，见常量说明）：

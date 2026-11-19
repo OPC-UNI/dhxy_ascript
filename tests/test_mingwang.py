@@ -1253,7 +1253,7 @@ def test_shadu_trigger_phrases():
 
 
 def test_shadu_npc_point_skips_tracking_panel():
-    """追踪面板同名文案（x<400）排除；点击点=文案中心正上方 40px。"""
+    """追踪面板同名文案（与面板矩形相交）排除；点击点=文案中心上方 40px。"""
     items = [("沙都修罗", [120, 300, 200, 320], 1.0),   # 追踪面板同名文案
              ("沙都修罗", [600, 300, 660, 320], 1.0)]
     assert mingwang._shadu_npc_point(items) == (630, 260)
@@ -1263,6 +1263,22 @@ def test_shadu_npc_point_skips_tracking_panel():
         [("沙都修罗", [600, 300, 660, 320], 0.4)]) is None
 
 
+def test_shadu_npc_point_left_edge_world_label():
+    """2026-11-19 回归：NPC 名在窗口左缘（x<400）也必须识别。
+
+    实机文案框 (331,622,400,646)、动态面板矩形 (7,227,307,557)：
+    旧实现按 x<400 整列排除 → 路点 3 站在 NPC 旁认不出；改为按面板
+    矩形相交排除后，世界区左缘文案正常命中，点击点=中心正上方 40px。
+    """
+    panel = (7, 227, 307, 557)
+    items = [("·[日常]沙都修罗[山河名望]", [14, 231, 205, 253], 1.0),
+             ("，找到入侵蟠桃园的沙都修罗", [27, 268, 220, 288], 1.0),
+             ("沙都修罗", [331, 622, 400, 646], 1.0)]
+    assert mingwang._shadu_npc_point(items, panel) == (365, 582)
+    # 面板矩形缺失时静态 TRACK_REGION 兜底（面板行仍被排除）
+    assert mingwang._shadu_npc_point(items) == (365, 582)
+
+
 def test_shadu_scan_npc_prefers_template(monkeypatch):
     """先查 NPC 本体模板：命中直接返回模板中心，不再 OCR 文案。"""
     tpl = cv2.imread(R.img(mingwang.SHADU_NPC_ICON), cv2.IMREAD_COLOR)
@@ -1270,8 +1286,8 @@ def test_shadu_scan_npc_prefers_template(monkeypatch):
     frame = _noise_bgr(seed=20261116)
     frame[300:300 + th, 600:600 + tw] = tpl
     monkeypatch.setattr(mingwang.time, "sleep", lambda s: None)
-    monkeypatch.setattr(mingwang.game_map, "ocr_region",
-                        lambda img, region: (_ for _ in ()).throw(
+    monkeypatch.setattr(mingwang.game_map, "ocr_regions",
+                        lambda img, regions: (_ for _ in ()).throw(
                             AssertionError("模板命中不应 OCR")))
     pt, info = mingwang._shadu_scan_npc(_FakeWin([_pil(frame)]))
     assert pt == (600 + tw // 2, 300 + th // 2)
@@ -1279,15 +1295,22 @@ def test_shadu_scan_npc_prefers_template(monkeypatch):
 
 
 def test_shadu_scan_npc_falls_back_to_ocr(monkeypatch):
-    """模板未命中 → OCR 文案并返回文案上方 40px。"""
+    """模板未命中 → 两段 OCR 文案并返回文案上方 40px。"""
     frame = _noise_bgr(seed=20261117)
+    seen = []
     monkeypatch.setattr(mingwang.time, "sleep", lambda s: None)
+    monkeypatch.setattr(mingwang, "_shadu_panel_rect",
+                        lambda img: (7, 227, 307, 557))
     monkeypatch.setattr(
-        mingwang.game_map, "ocr_region",
-        lambda img, region: ([("沙都修罗", [600, 300, 660, 320], 0.99)], None))
+        mingwang.game_map, "ocr_regions",
+        lambda img, regions: (seen.append(regions)
+                              or ([("沙都修罗", [600, 300, 660, 320], 0.99)],
+                                  None)))
     pt, info = mingwang._shadu_scan_npc(_FakeWin([_pil(frame)]))
     assert pt == (630, 260)
     assert "文案" in info
+    # 世界区两段 OCR（原生尺寸检出，见 SHADU_NPC_BANDS 注释）
+    assert seen and seen[0] == mingwang.SHADU_NPC_BANDS
 
 
 def _patch_shadu_search(monkeypatch, calls, pos=("蟠桃园", 300, 300)):

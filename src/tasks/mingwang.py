@@ -39,10 +39,11 @@
    蟠桃园残像所示位置」时触发搜索链——不在蟠桃园则经世界地图点
    shijie_pantaoyuan.png 打开蟠桃园小地图 → 依次在小地图点 (739,588)
    →(126,32)、(623,476)→(66,87)、(541,428)→(27,112)、(552,310)
-   →(33,171)、(710,393)→(111,130)，每点到达后先查 NPC 本体模板
-   mingwang_shaduxiuluo（阈值 0.79，命中直接点模板中心），未命中再
-   OCR 世界区域找「沙都修罗」文案（必须排除任务追踪面板同名文案）
-   → 找到点击文案上方 40px；全部路点均未找到限频重试。
+   →(33,171)、(710,393)→(111,130)、(762,430)→(138,111)（2026-11-18
+   增第六路点），每点到达后先查 NPC 本体模板 mingwang_shaduxiuluo
+   （阈值 0.75，命中直接点模板中心），未命中再 OCR 世界区域找「沙都
+   修罗」文案（按动态面板矩形排除追踪面板同名文案，世界区全宽两段
+   OCR）→ 找到点击文案上方 40px；全部路点均未找到限频重试。
    五庄封印（仙族，2026-11-10 用户规则 + 2026-11-17 动态元素）：
    追踪面板出现两个「X藏之位」绿字链接（五行任选两个：金/木/水/火/土，
    实机已见 金+土、水+火、火+木），点第一个；到达目的地（位置连续
@@ -721,8 +722,12 @@ _diaoyu_fail_streak = 0              # 连续失败重试次数（成功/新领�
 #    (710,393)→[111,130]（2026-11-12 用户新增第五路点）；
 # 3. OCR 找到后点击「沙都修罗」文案**上方 40px**（游戏 NPC 名字渲染在
 #    角色下方，名字上方即角色本体，用户标定）。
-# **OCR 必须排除任务追踪面板里的同名文案**（用户明确）：追踪面板在
-# x<400（task_tracker.PANEL_MAX_X），世界区条带从 x=400 起。
+# **OCR 必须排除任务追踪面板里的同名文案**（用户明确）：面板文案按
+# **动态面板矩形**排除（task_tracker.track_content_region，标题条模板
+# 定位；未命中回退静态 TRACK_REGION）——2026-11-19 实机教训：旧实现
+# 按 x<400 整列排除，而 NPC 名可出现在窗口左缘（实测文案框
+# (331,622,400,646) 正好被旧条带 x≥400 完全切掉，路点 3 已站在 NPC
+# 旁仍「均未找到」，见 _shadu_npc_point）。
 # 全部路点均未找到 → 限频重试整条搜索链（NPC 可能在移动）；点击成功后
 # 冷却一段时间让对话/战斗接管，防同一次寻路重复点击 NPC。
 SHADU_KEYWORD = "根据三张蟠桃园残像所示位置"
@@ -741,7 +746,13 @@ SHADU_NPC_TEXTS = ("沙都修罗", "沙都修羅")
 SHADU_NPC_ICON = "mingwang_shaduxiuluo.png"
 SHADU_NPC_THRESHOLD = 0.75
 SHADU_NPC_CLICK_OFFSET = 40            # 点击点 = 文案框中心正上方 40px
-SHADU_NPC_BAND = (400, 100, 1200, 760)  # 世界区域 OCR 条带（x<400=追踪面板，排除）
+# 世界区域搜索带（模板匹配用；全宽——NPC 名可出现在窗口左缘，2026-11-19
+# 实机「沙都修罗」文案框 (331,622,400,646) 被旧条带 x≥400 完全切掉）
+SHADU_WORLD_BAND = (0, 100, 1400, 760)
+# OCR 条带按 736 宽切两段（区域引擎 Det limit 'max'/736：宽 ≤736 的
+# 裁剪不缩放，14px 高 NPC 名按原尺寸检出；实测 1200 宽整条被压到
+# 736（0.61x）后小字 NPC 名直接漏检，736 宽分段 1.00 检出）。
+SHADU_NPC_BANDS = ((0, 100, 736, 760), (736, 100, 1400, 760))
 SHADU_OCR_MIN_SCORE = 0.55             # OCR 行置信度下限（同各任务模块）
 SHADU_WAYPOINTS = (                    # (小地图点击点, 目标地图坐标)
     ((739, 588), (126, 32)),
@@ -1778,18 +1789,41 @@ def _shadu_trigger(sig):
     return _fuzzy_contains(sig, SHADU_KEYWORD_SHORT, threshold=0.8)
 
 
-def _shadu_npc_point(items):
+def _rects_intersect(a, b):
+    """两矩形 (l,t,r,b) 是否相交（碰边算相交）。"""
+    return not (a[2] < b[0] or a[0] > b[2] or a[3] < b[1] or a[1] > b[3])
+
+
+def _shadu_panel_rect(img):
+    """追踪面板内容区矩形（排除面板同名文案用），定位失败回退静态区域。
+
+    面板位置由标题条模板动态推导（task_tracker.track_content_region）；
+    标题条未命中（面板关闭/模板失配）回退 TRACK_REGION 静态兜底。
+    img 为调用方已截 PIL 帧（np.asarray 得 RGB）。
+    """
+    rect = task_tracker.track_content_region(np.asarray(img))
+    if rect is not None:
+        return rect
+    return task_tracker.TRACK_REGION
+
+
+def _shadu_npc_point(items, panel_rect=None):
     """从世界区 OCR 行定位「沙都修罗」，返回文案上方点击点或 None。
 
-    排除追踪面板同名文案（x < SHADU_NPC_BAND[0]）——用户 2026-11-10
-    明确「注意不是任务追踪中的文案」。点击点取文案框中心正上方
-    SHADU_NPC_CLICK_OFFSET 像素（游戏 NPC 名字渲染在角色下方，名字
-    上方即角色本体，用户标定）。
+    排除追踪面板同名文案——用户 2026-11-10 明确「注意不是任务追踪中的
+    文案」：与面板矩形相交的行一律跳过（panel_rect 为动态面板内容区，
+    缺省回退静态 TRACK_REGION）。**不得改回按 x<400 整列排除**：
+    2026-11-19 实机 NPC 文案框 (331,622,400,646) 在窗口左缘，旧整列
+    排除把世界区目标连带切掉，路点 3 站在原地认不出 NPC。
+    点击点取文案框中心正上方 SHADU_NPC_CLICK_OFFSET 像素（游戏 NPC
+    名字渲染在角色下方，名字上方即角色本体，用户标定）。
     """
+    if panel_rect is None:
+        panel_rect = task_tracker.TRACK_REGION
     for txt, rect, score in items:
         if score < SHADU_OCR_MIN_SCORE:
             continue
-        if rect[0] < SHADU_NPC_BAND[0]:
+        if _rects_intersect(rect, panel_rect):
             continue
         text = norm_text(txt)
         if not any(name in text for name in SHADU_NPC_TEXTS) \
@@ -1837,9 +1871,11 @@ def _shadu_scan_npc(win, timeout=SHADU_NPC_SCAN_TIMEOUT):
     """到达搜索点后限时扫描「沙都修罗」NPC，返回 (点击点或 None, 描述)。
 
     用户 2026-11-10 规则：**先查 NPC 本体模板** mingwang_shaduxiuluo
-    （阈值 0.79），命中直接点匹配中心；模板未命中才 OCR「沙都修罗」
-    文案（排除任务追踪面板同名文案）并点文案上方 40px。每轮询只截一帧，
-    模板匹配吃 BGR、OCR 吃 PIL 帧。
+    （阈值 0.75），命中直接点匹配中心；模板未命中才 OCR「沙都修罗」
+    文案（按动态面板矩形排除追踪面板同名文案）并点文案上方 40px。
+    每轮询只截一帧：模板匹配吃 BGR、OCR 吃 PIL 帧、面板定位复用同一
+    帧的 RGB np。OCR 走 SHADU_NPC_BANDS 两段（均为原尺寸检出，见常量
+    注释），扫描为限频链路（全链失败 5s 后重试），双段成本可接受。
     """
     deadline = time.time() + timeout
     lines = []
@@ -1850,23 +1886,25 @@ def _shadu_scan_npc(win, timeout=SHADU_NPC_SCAN_TIMEOUT):
             time.sleep(SHADU_NPC_SCAN_INTERVAL)
             continue
         score, tpt = game_map.best_match_np(_bgr_frame(img), SHADU_NPC_ICON,
-                                            region=SHADU_NPC_BAND)
+                                            region=SHADU_WORLD_BAND)
         if score >= SHADU_NPC_THRESHOLD:
             return (int(tpt[0]), int(tpt[1])), \
                 f"模板命中「{SHADU_NPC_TEXT}」（匹配 {score:.3f}）"
-        items, _ = game_map.ocr_region(img, SHADU_NPC_BAND)
-        pt = _shadu_npc_point(items)
+        panel_rect = _shadu_panel_rect(img)
+        items, _ = game_map.ocr_regions(img, SHADU_NPC_BANDS)
+        pt = _shadu_npc_point(items, panel_rect)
         if pt is not None:
             return pt, f"文案找到「{SHADU_NPC_TEXT}」"
-        lines = [norm_text(t) for t, _r, s in items
-                 if s >= SHADU_OCR_MIN_SCORE]
+        lines = [norm_text(t) for t, r, s in items
+                 if s >= SHADU_OCR_MIN_SCORE
+                 and not _rects_intersect(r, panel_rect)]
         time.sleep(SHADU_NPC_SCAN_INTERVAL)
     return None, (f"模板/文案均未找到「{SHADU_NPC_TEXT}」"
                   f"（模板最佳 {score:.3f}，OCR 行 {lines[:8] or '(无)'}）")
 
 
 def _shadu_search_npc(win):
-    """按用户标定的五个路点依次寻找并点击沙都修罗，返回 (是否已点击, 描述)。"""
+    """按用户标定的各路点依次寻找并点击沙都修罗，返回 (是否已点击, 描述)。"""
     close_scene_panels(win, "名望")
     pos = game_map.read_map_position(win)
     if pos is None or pos[0].strip() != SHADU_MAP:
@@ -1905,7 +1943,7 @@ def _handle_shadu_xiuluo(win, items, img_np):
     """沙都修罗搜索状态机（follow extras 通道，每轮询一次）。
 
     追踪面板文案含「根据三张蟠桃园残像所示位置」（或短词「蟠桃园残像」）
-    时执行搜索链：不在蟠桃园先经世界地图进入 → 五个路点依次寻路 +
+    时执行搜索链：不在蟠桃园先经世界地图进入 → 各路点依次寻路 +
     世界区域 OCR 找 NPC（排除追踪面板同名文案）→ 找到点名字上方 40px。
     全链失败限频重试；点击成功后冷却让对话/战斗接管，防重复点 NPC；
     对话框在场时暂停搜索（先由对话表/剧情兜底推进，防误点 NPC）。
