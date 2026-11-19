@@ -3294,9 +3294,10 @@
         if (env.theme) envThemeEl.innerText = env.theme;
         if (env.adapt_res) envAdaptResEl.innerText = env.adapt_res;
         envCurResEl.innerText = env.cur_res || '-';
-        envBoundEl.innerText = env.bound || '-';
+        envBoundEl.innerText = env.bound || '-';  // 短角色文案（完整标题在悬停提示）
+        envBoundEl.title = env.bound_full || env.bound || '';
         charChip.innerText = env.bound_short || '未绑定角色';  // 短角色文案与窗口标题同源
-        charChip.title = '操作窗口：' + (env.bound || '-') + '（点击前往系统页）';
+        charChip.title = '操作窗口：' + (env.bound_full || env.bound || '-') + '（点击前往系统页）';
         envDeviceIdValue = env.device_id || '-';
         envDeviceIdEl.innerText = envDeviceIdValue;
         envDeviceIdEl.title = envDeviceIdValue;  // 悬停看完整值，点击复制
@@ -3956,9 +3957,10 @@
         if (env.theme) envThemeEl.innerText = env.theme;
         if (env.adapt_res) envAdaptResEl.innerText = env.adapt_res;
         envCurResEl.innerText = env.cur_res || '-';
-        envBoundEl.innerText = env.bound || '-';
+        envBoundEl.innerText = env.bound || '-';  // 短角色文案（完整标题在悬停提示）
+        envBoundEl.title = env.bound_full || env.bound || '';
         charChip.innerText = env.bound_short || '未绑定角色';  // 短角色文案与窗口标题同源
-        charChip.title = '操作窗口：' + (env.bound || '-') + '（点击前往系统页）';
+        charChip.title = '操作窗口：' + (env.bound_full || env.bound || '-') + '（点击前往系统页）';
         if (info.version) {
             // 侧栏底部与「授权：…」同格式（当前版本 2.13.0）；关于页保留 v 前缀
             appVersionEl.innerText = '当前版本 ' + info.version;

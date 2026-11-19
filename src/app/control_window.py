@@ -388,8 +388,9 @@ class ControlWindow(DiagnosticsMixin, SettingsApiMixin, MessageApiMixin,
 
     def get_env_info(self):
         """使用环境信息（系统页-使用环境展示）：适配主题/分辨率、
-        当前游戏窗口分辨率、绑定窗口（含短角色文案 bound_short，
-        顶栏 chip 用，与窗口标题同源）与设备 ID。
+        当前游戏窗口分辨率、绑定窗口（页面展示用短角色文案 bound，
+        完整标题放 bound_full 作悬停提示；短文案与窗口标题同源）与
+        设备 ID。
 
         绑定丢失且有自动选择窗口时注明实跑目标（find_main_window
         兜底：已登录窗口优先），并同步刷新窗口标题角色文案——防
@@ -423,11 +424,17 @@ class ControlWindow(DiagnosticsMixin, SettingsApiMixin, MessageApiMixin,
             device_id = Device.id  # classproperty：属性访问即为字符串，不可加括号调用
         except Exception:
             device_id = "获取失败"
+        # 短文案只在有活窗口时取（游戏已关闭仍展示旧角色名会误导）；
+        # 无窗口/绑定丢失等状态行本身已短，直接用 bound_info
+        short = (bound_short_label() or "") if win is not None else ""
         return {"theme": ENV_THEME,
                 "adapt_res": f"{ENV_ADAPT_RES[0]} × {ENV_ADAPT_RES[1]}",
                 "cur_res": cur,
-                "bound": bound_info,
-                "bound_short": bound_short_label() or "",
+                # 页面「绑定窗口」展示短文案（服务器+角色名）：完整窗口标题
+                # （「一生所爱 - xxx - 角色（ID：xxx）」）在分组行里显示不全
+                "bound": short or bound_info,
+                "bound_full": bound_info,  # 悬停提示用完整信息
+                "bound_short": short,
                 "device_id": device_id}
 
     def unbind_window(self):
