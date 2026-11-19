@@ -351,6 +351,11 @@ def test_norm_name_for_cmp_confusables():
     assert app_utils.norm_name_for_cmp("碧桃娘子") == "碧桃娘子"
     assert app_utils.norm_name_for_cmp("") == ""
     assert app_utils.norm_name_for_cmp(None) == ""
+    # 2026-11-19：Tab 标题全角引号 U+FF02 vs 面板 OCR 弯引号 U+201D
+    # （道影＂），原表漏收全角变体，归一后 0.667 < 0.7 漏配
+    assert app_utils.norm_name_for_cmp("道影＂") == "道影q"
+    assert app_utils.norm_name_for_cmp("道影＂") == \
+        app_utils.norm_name_for_cmp("道影”")
 
 
 # ---- 角色维度状态按角色隔离（data/<角色>/state.json，2026-11-11） ----

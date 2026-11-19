@@ -383,6 +383,11 @@ def test_name_similar_fuzzy():
     # 误读成 ”忆×嚣魂一，原始模糊比 0.5 < 0.7 漏配，组号少识别 1 人）
     assert tab_group._name_similar("〃忆ㄨ嚣魂ˉ", "”忆×嚣魂一")
     assert tab_group._name_similar("道影”", '道影"')
+    # 2026-11-19 教训：Tab 标题「道影＂」是全角引号 U+FF02、面板 OCR
+    # 读成 U+201D——「道影＂」vs「道影”」原始模糊比 0.667 < 0.7，
+    # 器魂带队时道影漏配（道影带队时因队长不做名字比对而正常）
+    assert tab_group._name_similar("道影＂", "道影”")
+    assert tab_group._name_similar("道影＂", "道影")  # OCR 漏检引号仍可配
     assert not tab_group._name_similar("〃忆ㄨ嚣魂ˉ", "义战天下メ帝")
     # 归一化只合并同形家族，不降低普通名字区分度
     assert not tab_group._name_similar("天一", "天1")
