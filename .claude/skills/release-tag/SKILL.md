@@ -1,6 +1,6 @@
 ---
 name: release-tag
-description: 提交+推送/发版打 tag。带 vX.Y.Z 且要求提交/发版时走发版流程（check/bump/test → 提交、推送、打 tag）；只说「提交并push/提交推送」时走仅提交推送流程（precommit/test → 提交、推送，不 bump、不打 tag）；说「打 tag/补打 tag/只打 tag」或单独「tag vX.Y.Z」走仅打 tag 流程（tagcheck → 打 tag、推送，不 bump、不提交，版本号滞后仅提示）。scripts/release.py 封装 check/bump/precommit/tagcheck/test 机械步骤。
+description: 提交+推送/发版打 tag。带 vX.Y.Z 且要求提交/发版时走发版流程（check/bump/test → 提交、推送、打 tag）；只说「提交并push/提交推送」时走仅提交推送流程（precommit/test → 提交、推送，不 bump、不打 tag）；说「打 tag/补打 tag/只打 tag」或单独「tag vX.Y.Z」走仅打 tag 流程（tagcheck → 打 tag、推送，不 bump、不提交，版本号滞后仅提示）。scripts/release.py 封装 check/bump/precommit/tagcheck/test/diffsum 机械步骤。
 ---
 
 # 提交推送 / 发版打 Tag
@@ -22,8 +22,9 @@ description: 提交+推送/发版打 tag。带 vX.Y.Z 且要求提交/发版时�
 3. **bump 版本号**：`python .claude/skills/release-tag/scripts/release.py bump X.Y.Z`——字节级正则原子更新两处版本号（不动换行符与其余内容；第二处写入失败自动回滚第一处）。禁止手改版本号。**若 check 提示两处版本号已是目标（bump 已完成）则跳过本步**，直接测试 → 提交推送 → 打 tag。
 4. **跑全量测试**：`python .claude/skills/release-tag/scripts/release.py test`（= `python -m pytest -q`）——必须全绿才发版，失败停下修复。
 5. **写提交信息**（仓库惯例，中文）：
+   - 先跑 `python .claude/skills/release-tag/scripts/release.py diffsum` 拿压缩摘要（改动行截断 200 字符、无上下文、未跟踪文件只列路径大小）；长代码改动或摘要不足以概括时，按文件用 `git diff HEAD -- <path>` 细读，不要整仓全量读 diff（无上下文会话里超长单行表格会占掉大半 token，2026-11-19 教训）
    - 首行 `feat:` / `fix:` + 一句功能摘要
-   - 正文分条列出关键变更（按 git diff 实际内容梳理，用户视角的实测结论/迁移项）
+   - 正文分条列出关键变更（按 diff 实际内容梳理，用户视角的实测结论/迁移项）
    - 结尾固定附 `Co-Authored-By: Claude Code <noreply@anthropic.com>`
 6. **提交并推送**：`git add -A && git commit -m "…"` → `git push`
 7. **打 tag**：`git tag vX.Y.Z && git push origin vX.Y.Z`（GitHub Actions 收到 tag 自动构建发布）
@@ -34,8 +35,9 @@ description: 提交+推送/发版打 tag。带 vX.Y.Z 且要求提交/发版时�
 1. **提交前核对**：`python .claude/skills/release-tag/scripts/release.py precommit`——列出 `git add -A` 将提交的全部改动；**未跟踪文件逐个确认**，命中疑似运行时数据名单时先决定是否进 .gitignore（同发版模式第 2 步）。
 2. **跑全量测试**：`python .claude/skills/release-tag/scripts/release.py test`——必须全绿才提交，失败停下修复。
 3. **写提交信息**（仓库惯例，中文）：
+   - 先跑 `python .claude/skills/release-tag/scripts/release.py diffsum` 拿压缩摘要（改动行截断 200 字符、无上下文、未跟踪文件只列路径大小）；长代码改动或摘要不足以概括时，按文件用 `git diff HEAD -- <path>` 细读，不要整仓全量读 diff
    - 首行 `feat:` / `fix:` + 一句功能摘要
-   - 正文分条列出关键变更（按 git diff 实际内容梳理）
+   - 正文分条列出关键变更（按 diff 实际内容梳理）
    - 结尾固定附 `Co-Authored-By: Claude Code <noreply@anthropic.com>`
 4. **提交并推送**：`git add -A && git commit -m "…"` → `git push`
 5. **汇报**：提交 hash、推送结果、测试通过数；明确说明本次未 bump 版本、未打 tag（后续要发版再走发版模式）。
@@ -52,5 +54,6 @@ description: 提交+推送/发版打 tag。带 vX.Y.Z 且要求提交/发版时�
 - **仅提交推送模式不修改版本号、不打 tag**；**仅打 tag 模式不 bump、不提交**（不要求仓库版本号等于 tag：CI 构建时用 tag 版本号烙进产物，源码版本滞后仅提示、下次发版对齐）；用户需要发版时会单独给出版本号/tag 请求。
 - 版本号只存在于 `src/__init__.py` 与 `pyproject.toml` 两处，README 等其他文件不含版本号；两处不一致时脚本直接拒绝 bump/tagcheck（先手动对齐）。
 - 提交信息用 heredoc 传多行中文（`git commit -m "$(cat <<'EOF' … EOF)"`），避免引号转义问题。
+- `diffsum` 是只读的压缩摘要（默认 `--width 200`、`--max-lines 0`）：文档表格超长单行不会再整行刷屏；`--max-lines N` 可按文件再限行数，被截断处会提示用 `git diff HEAD -- <path>` 查看。
 - 本机 git 会提示 LF→CRLF 转换 warning，属正常现象，忽略。
 - 历史发版示例：v2.2.0（静默操作开关）、v2.3.0（键盘/文本静默通道）、v2.11.6（防世界点击/组号门控/名望容差）。

@@ -8,6 +8,7 @@
     python .claude/skills/release-tag/scripts/release.py precommit
     python .claude/skills/release-tag/scripts/release.py tagcheck <X.Y.Z>
     python .claude/skills/release-tag/scripts/release.py test
+    python .claude/skills/release-tag/scripts/release.py diffsum [--width 200] [--max-lines N]
 
 封装发版/提交流程中确定性、易错的机械步骤；判断性步骤（提交信息撰写、
 git commit/push/tag）仍由执行者按 SKILL.md 手动完成：
@@ -27,6 +28,13 @@ git commit/push/tag）仍由执行者按 SKILL.md 手动完成：
          时会把 tag 版本号烙进产物，滞后仅提示）→ 工作区干净 → 本地
          HEAD 已推送（无上游时仅提示）
   test   全量测试 python -m pytest -q，退出码透传（未全绿不得发版/提交）
+  diffsum  提交信息撰写用的压缩改动摘要：文件 stat + git diff HEAD -U0
+         （去掉上下文与 index/mode 杂项头），每条改动行截断至 --width
+         字符（默认 200；docs 里几千字符的表格单行不再整行刷屏），
+         --max-lines N 可按文件再限行数；未跟踪文件只列路径/大小不读
+         内容。需要完整内容时按文件单独 git diff HEAD -- <path>
+         （2026-11-19 教训：无上下文会话里读全量 diff 撰写提交信息，
+         超长单行表格占掉大半 token）
 
 版本参数可带可不带 v 前缀（tag 名仍以用户请求原文为准，脚本只校验数字）。
 仓库根按当前工作目录经 git rev-parse 解析（脚本路径所在仓库无关紧要）。
@@ -254,6 +262,128 @@ def do_test(_args):
     sys.exit(rc)
 
 
+# ---- diffsum：提交信息撰写用的压缩改动摘要 ----
+
+# diff 头阶段省略的杂项行（index 哈希 / 文件模式 / rename 等对提交
+# 信息无贡献；---/+++ 与 diff --git 行重复）
+_DIFF_HEAD_NOISE = (
+    "index ", "old mode ", "new mode ", "deleted file mode ",
+    "new file mode ", "similarity index ", "dissimilarity index ",
+    "rename from ", "rename to ", "copy from ", "copy to ",
+    "--- ", "+++ ", "\\ No newline",
+)
+
+
+def _human_size(n):
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n:.0f}{unit}" if unit == "B" else f"{n:.1f}{unit}"
+        n /= 1024.0
+    return f"{n:.1f}GB"
+
+
+def _truncate(line, width):
+    """改动行截断：保留行首标记（+/-），超出部分折算为字符数提示。"""
+    if width <= 0 or len(line) <= width + 1:
+        return line
+    extra = len(line) - (width + 1)
+    return f"{line[:width + 1]} …[+{extra}字符]"
+
+
+def _diffsum_untracked():
+    """未跟踪条目只列路径/大小，不读内容（内容按需单独查看）。"""
+    out = []
+    for l in _git("status", "--porcelain").splitlines():
+        if not l.startswith("??"):
+            continue
+        rel = l[3:].strip().strip('"').rstrip("/")
+        p = REPO / rel
+        try:
+            if p.is_dir():
+                files = [f for f in p.rglob("*") if f.is_file()]
+                size = sum(f.stat().st_size for f in files)
+                out.append(f"  ?? {rel}/ （目录，{len(files)} 个文件，"
+                           f"{_human_size(size)}）")
+            elif p.is_file():
+                out.append(f"  ?? {rel} （{_human_size(p.stat().st_size)}）")
+            else:
+                out.append(f"  ?? {rel}")
+        except OSError:
+            out.append(f"  ?? {rel}")
+    return out
+
+
+def do_diffsum(args):
+    """压缩改动摘要：文件 stat + 截断的改动行（无上下文、去头杂项）。
+
+    供撰写提交信息使用；完整内容按文件用 git diff HEAD -- <path> 细读。
+    """
+    width, max_lines = args.width, args.max_lines
+    stat = _git("diff", "HEAD", "--stat").strip()
+    diff = _git("diff", "HEAD", "-U0").splitlines()
+    untracked = _diffsum_untracked()
+    if not stat and not diff and not untracked:
+        print("通过：工作区干净，无待提交改动")
+        return
+    wdesc = "不截断" if width <= 0 else f"截断至 {width} 字符"
+    print(f"说明：提交信息撰写用压缩摘要（改动行{wdesc}、无上下文、"
+          "省略 index/mode 头）；需要完整内容用 "
+          "git diff HEAD -- <path> 按文件细读")
+    print("== 文件摘要（git diff HEAD --stat）==")
+    print(stat if stat else "  （无已跟踪文件改动）")
+    print("== 改动行摘要（git diff HEAD -U0）==")
+    if not diff:
+        print("  （无已跟踪文件改动）")
+    in_head = False   # 是否处于 diff 头阶段（hunk 之前）
+    shown = 0         # 当前文件已显示改动行数
+    hidden = 0        # 当前文件因 --max-lines 隐藏的改动行数
+
+    def _flush_hidden():
+        nonlocal hidden
+        if hidden:
+            print(f"…（该文件另有 {hidden} 行变更未显示，"
+                  f"用 git diff HEAD -- <path> 查看）")
+            hidden = 0
+
+    for line in diff:
+        if line.startswith("diff --git "):
+            _flush_hidden()
+            in_head, shown = True, 0
+            print(line)
+            continue
+        if in_head:
+            if line.startswith("@@"):
+                in_head = False
+                print(line)
+                continue
+            if line.startswith("Binary files "):
+                print(line)
+                continue
+            if line.startswith(_DIFF_HEAD_NOISE):
+                continue
+            print(line)
+            continue
+        if line.startswith("@@"):
+            print(line)
+            continue
+        if line.startswith(("-", "+")):
+            if max_lines and shown >= max_lines:
+                hidden += 1
+                continue
+            shown += 1
+            print(_truncate(line, width))
+            continue
+        if line.startswith("\\ No newline"):
+            continue
+        print(line)
+    _flush_hidden()
+    if untracked:
+        print("== 未跟踪文件（git status，未读内容）==")
+        for l in untracked:
+            print(l)
+    print("通过：改动摘要输出完成")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="dhxy2 发版辅助脚本")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -263,10 +393,17 @@ def main(argv=None):
                              "仅提交推送的提交前核对（改动清单）"),
                             ("tagcheck", do_tagcheck,
                              "仅打 tag 前核对（不 bump、不提交）"),
-                            ("test", do_test, "全量测试 pytest -q")):
+                            ("test", do_test, "全量测试 pytest -q"),
+                            ("diffsum", do_diffsum,
+                             "压缩改动摘要（撰写提交信息用）")):
         p = sub.add_parser(name, help=help_)
         if name in ("check", "bump", "tagcheck"):
             p.add_argument("version", help="目标版本号（vX.Y.Z 或 X.Y.Z）")
+        elif name == "diffsum":
+            p.add_argument("--width", type=int, default=200,
+                           help="每条改动行截断字符数（0 = 不截断，默认 200）")
+            p.add_argument("--max-lines", type=int, default=0,
+                           help="每文件最多显示的改动行数（0 = 不限，默认 0）")
         p.set_defaults(fn=fn)
     args = parser.parse_args(argv)
     args.fn(args)
