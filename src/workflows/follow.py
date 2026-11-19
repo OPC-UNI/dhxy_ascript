@@ -248,7 +248,8 @@ def _task_gone_occluded(img, bgr=None):
 
 
 def _confirm_task_gone(win, title, fallback_texts=(), first_img=None,
-                       polls=TASK_GONE_CONFIRM_POLLS, check_occluders=True):
+                       polls=TASK_GONE_CONFIRM_POLLS, check_occluders=True,
+                       low_contrast_recheck=False):
     """确认任务确实从追踪面板消失（连续轮询未见且无战斗遮挡）。
 
     OCR 偶发漏读（标题误读、面板瞬时遮挡）会误判任务消失——五环实测
@@ -278,6 +279,17 @@ def _confirm_task_gone(win, title, fallback_texts=(), first_img=None,
     内容链接行「前往…消灭修罗」检测稳定，面板左区内出现任一兜底
     串即判定任务仍在（立刻中止确认）。
 
+    low_contrast_recheck：寻路期低对比度复核（2026-11-19 修罗误判完成
+    教训，用户指定只在寻路过程中开启）。追踪面板半透明，走路时面板
+    背后的地形/建筑/玩家名会让条带 OCR 整行漏检（与 2026-11-08 白字
+    压明亮背景同类）——修罗 1 轮确认下同一帧重读一次即判完成，返程前
+    has_task 复查又落在同一干扰窗口（实测 4 次误判，全在灵兽村→北俱
+    芦洲路上、无战斗）。开启后：面板在场（标题条命中）且条带已无任务
+    的判定帧，对同一帧再做一次 3x 对比度增强 OCR（ocr_track_enhanced，
+    ~155ms，仅判定帧付一次）——标题或兜底链接行检出即视为任务仍在，
+    返回 False 继续跟踪。战斗结束路径不开启（完成由战斗驱动，返程
+    快路径保持原样，2026-11-19 用户设计）。
+
     战斗结束后的延迟优化（实测战斗画面已清 → 返程启动等 3~4s）：
     战斗线程的 2s 结束确认（防回合间隙误判）与任务消失确认原本串行，
     合计 4~6s。现在战斗画面已清但战斗线程确认未完成时先行收集证据
@@ -285,6 +297,27 @@ def _confirm_task_gone(win, title, fallback_texts=(), first_img=None,
     仍以战斗线程确认为门——回合间隙的画面空档期间计数会被「战斗画面
     再出现」分支清零，不会累积成误判。
     """
+    def _low_contrast_found(frame):
+        """判定帧低对比度复核：3x 对比度增强后能检出任务 → 任务仍在。
+
+        只在面板在场却条带无任务的判定帧调用（见 low_contrast_recheck
+        说明），同一帧重识别、不重新截帧。标题行或兜底链接行检出即
+        「仍在」；异常按未检出处理（不阻塞完成判定）。
+        """
+        if frame is None:
+            return False
+        try:
+            img_np = np.asarray(frame)
+            enh_items = task_tracker.ocr_track_enhanced(img_np)
+            if enh_items and task_tracker.has_task_in(
+                    enh_items, img_np, title, fallback_texts):
+                log("[任务追踪] 低对比复核：任务仍在面板（普通 OCR 漏检，"
+                    "对比度增强后检出），不判定任务消失", "INFO")
+                return True
+        except Exception as e:
+            log(f"[任务追踪] 低对比复核异常: {e}", "WARN")
+        return False
+
     deadline = time.time() + TASK_GONE_CONFIRM_TIMEOUT
     # 延长总上限：战斗/截窗失败不断延长窗口的硬顶（约为基本窗口 4 倍）。
     # 超过上限仍未决 → 返回 False 让调用方继续跟踪（由外层战斗检查
@@ -295,6 +328,8 @@ def _confirm_task_gone(win, title, fallback_texts=(), first_img=None,
     panel_missing_logged = False
     occluded_logged = False  # 遮挡负条件命中日志（限一次）
     occluded_by_panel = False  # 最近一次判定因遮挡被推迟（窗口耗尽时不得视为完成）
+    last_absent = False      # 最近一帧是否走面板缺席回退条带（窗口耗尽兜底用）
+    img = None               # 最近一帧（窗口耗尽路径的低对比复核用）
     while time.time() < deadline and time.time() < hard_deadline:
         # 屏幕已不是队长 Tab（用户手动切走 / pass 中途开始）：队员屏本来
         # 就没有任务追踪，面板缺席不构成完成证据——放弃本次确认，交回
@@ -337,6 +372,7 @@ def _confirm_task_gone(win, title, fallback_texts=(), first_img=None,
                 panel_missing_logged = True
                 log("[任务追踪] 追踪面板不在场，按任务消失判定", "INFO")
         panel_seen = True
+        last_absent = gone_absent
         items, img_np = game_map.ocr_regions(img, (gone_region,))
         if task_tracker.find_task(
                 task_tracker.group_tasks(
@@ -383,6 +419,12 @@ def _confirm_task_gone(win, title, fallback_texts=(), first_img=None,
                         "（被遮挡），不判定任务消失", "INFO")
                 time.sleep(TASK_GONE_POLL_INTERVAL)
                 continue
+            if not gone_absent and low_contrast_recheck \
+                    and _low_contrast_found(img):
+                # 面板在场但条带无任务：可能是半透明面板压在明亮/复杂背景
+                # 上的整行漏检（走路期高发）。增强 OCR 检出任务即视为仍在，
+                # 回去继续跟踪（2026-11-19 修罗走路误判完成教训）
+                return False
             return True
         time.sleep(TASK_GONE_POLL_INTERVAL)
     if time.time() >= hard_deadline:
@@ -404,6 +446,8 @@ def _confirm_task_gone(win, title, fallback_texts=(), first_img=None,
         log("[任务追踪] 任务消失确认：追踪面板未在场或其它面板在场，"
             "本次不判定任务消失", "INFO")
         return False
+    if low_contrast_recheck and not last_absent and _low_contrast_found(img):
+        return False  # 面板在场且增强 OCR 检出任务：按仍在处理
     return True  # 确认窗口内始终未见任务：视为完成
 
 
@@ -788,6 +832,7 @@ def follow_task(win, title, timeout=FOLLOW_TIMEOUT, prefix="",
                 time.sleep(FOLLOW_POLL_INTERVAL)
                 continue
             items, img_np = task_tracker.ocr_follow(img)
+        just_ended = battle_just_ended  # 本拍是否为战斗结束后首拍（先取后清）
         if battle_just_ended:
             # 战斗结束回调（默认 None 零开销）：须先于任务消失判定——
             # 死亡落轮回司时追踪面板可能被收起，直接走消失确认会误判
@@ -807,7 +852,8 @@ def follow_task(win, title, timeout=FOLLOW_TIMEOUT, prefix="",
             # 2026-11-11 确认）——否则要空等 6s 后不判定（战斗结束
             # 返程慢 10s）
             if _confirm_task_gone(win, title, fallback_keywords,
-                first_img=img, polls=_gone_polls()):
+                first_img=img, polls=_gone_polls(),
+                low_contrast_recheck=not just_ended):
                 if _task_gone_dialog_guard(win, extra_dialog_handler,
                     tpl_gate=dialog_tpl_gate,
                     extra_gate=dialog_extra_gate):
@@ -876,7 +922,8 @@ def follow_task(win, title, timeout=FOLLOW_TIMEOUT, prefix="",
             # 先做任务消失确认：确认消失即按完成返回（用户规则：任务追踪
             # 消失=任务结束），任务仍在才保持原失败。
             if _confirm_task_gone(win, title, fallback_keywords,
-                                  polls=_gone_polls()):
+                                  polls=_gone_polls(),
+                                  low_contrast_recheck=True):
                 if _task_gone_dialog_guard(win, extra_dialog_handler,
                     tpl_gate=dialog_tpl_gate,
                     extra_gate=dialog_extra_gate):
@@ -1030,7 +1077,8 @@ def follow_task(win, title, timeout=FOLLOW_TIMEOUT, prefix="",
                     title)
                 if task2 is None:
                     if _confirm_task_gone(win, title, fallback_keywords,
-                        first_img=img, polls=_gone_polls()):
+                        first_img=img, polls=_gone_polls(),
+                        low_contrast_recheck=not was_battle):
                         if _task_gone_dialog_guard(win, extra_dialog_handler,
                             tpl_gate=dialog_tpl_gate,
                             extra_gate=dialog_extra_gate):
@@ -1174,7 +1222,8 @@ def follow_task(win, title, timeout=FOLLOW_TIMEOUT, prefix="",
                 title)
             if task2 is None:
                 if _confirm_task_gone(win, title, fallback_keywords,
-                    first_img=img, polls=_gone_polls()):
+                    first_img=img, polls=_gone_polls(),
+                    low_contrast_recheck=True):
                     if _task_gone_dialog_guard(win, extra_dialog_handler,
                         tpl_gate=dialog_tpl_gate,
                         extra_gate=dialog_extra_gate):

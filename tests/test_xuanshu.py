@@ -443,6 +443,54 @@ def test_confirm_task_gone_panel_visible_no_task_is_done(monkeypatch):
     assert len(ocr_calls) >= engine.TASK_GONE_CONFIRM_POLLS
 
 
+# ---- 寻路期低对比复核（2026-11-19 修罗走路误判完成教训） ----
+
+
+def test_confirm_task_gone_low_contrast_saves_walking_false_alarm(monkeypatch):
+    """面板在场、条带漏读，但同帧 3x 对比度增强检出任务 → 不判完成。
+
+    半透明追踪面板背后的地形/建筑在走路时变化，白/绿字对比度不足会
+    整行漏检（与 2026-11-08 同类）。修罗 1 轮确认下同一帧重读一次即
+    判完成，实测灵兽村→北俱芦洲路上 4 次假完成（任务实际还在）。
+    """
+    ocr_calls, logs = _patch_gone_env(monkeypatch, region=(0, 210, 400, 470))
+    enh_calls = []
+    monkeypatch.setattr(
+        engine.task_tracker, "ocr_track_enhanced",
+        lambda img_np: enh_calls.append(1) or
+        [("前往大唐边境消灭修罗", [84, 258, 220, 280], 0.98)])
+    monkeypatch.setattr(
+        engine.task_tracker, "has_task_in",
+        lambda items, img_np, title, fb=():
+            any("消灭修罗" in t for t, _r, _s in items))
+    assert engine._confirm_task_gone(
+        _GuardWin(), "常规玩法", fallback_texts=("消灭修罗",),
+        polls=1, low_contrast_recheck=True) is False
+    assert enh_calls  # 判定帧对同一帧做一次增强复核
+    assert any("低对比复核" in m for m, _ in logs)
+
+
+def test_confirm_task_gone_low_contrast_off_by_default(monkeypatch):
+    """未开启（战斗结束/默认路径）不付增强 OCR，判完成保持原逻辑。"""
+    ocr_calls, _logs = _patch_gone_env(monkeypatch, region=(0, 210, 400, 470))
+    called = []
+    monkeypatch.setattr(engine.task_tracker, "ocr_track_enhanced",
+                        lambda img_np: called.append(1) or [])
+    assert engine._confirm_task_gone(_GuardWin(), "常规玩法", polls=1) is True
+    assert ocr_calls and not called
+
+
+def test_confirm_task_gone_low_contrast_skips_panel_absent(monkeypatch):
+    """面板缺席（游戏收起=任务结束）不走低对比复核，保留返程快路径。"""
+    ocr_calls, _logs = _patch_gone_env(monkeypatch, region=None)
+    called = []
+    monkeypatch.setattr(engine.task_tracker, "ocr_track_enhanced",
+                        lambda img_np: called.append(1) or [])
+    assert engine._confirm_task_gone(
+        _GuardWin(), "常规玩法", polls=1, low_contrast_recheck=True) is True
+    assert ocr_calls and not called
+
+
 def test_confirm_task_gone_post_battle_panel_missing_is_done(monkeypatch):
     """战斗结束路径：面板缺席即判任务消失、跳过遮挡检查（返程快路径）。
 
@@ -472,7 +520,7 @@ def test_follow_battle_gap_keeps_battle_end_fastpath(monkeypatch):
     battle_states = [False,              # 外层循环战斗门
                      True, True, False]  # 内层：间隙 ×2（线程仍在战斗）→ 结束
     frames = [True, False, False, False]  # 战斗帧 → 间隙帧 ×2 → 结束帧
-    confirms, confirm_at = [], []
+    confirms, confirm_at, confirm_kw = [], [], []
 
     class _Win:
         def capture(self, force_activate=False):
@@ -489,9 +537,10 @@ def test_follow_battle_gap_keeps_battle_end_fastpath(monkeypatch):
                         lambda img: frames.pop(0) if frames else False)
 
     def _confirm(win, title, fb=(), first_img=None, polls=2,
-                 check_occluders=True):
+                 check_occluders=True, **kwargs):
         confirms.append(check_occluders)
         confirm_at.append(clock.t)
+        confirm_kw.append(kwargs)
         return True
 
     monkeypatch.setattr(engine, "_confirm_task_gone", _confirm)
@@ -523,6 +572,8 @@ def test_follow_battle_gap_keeps_battle_end_fastpath(monkeypatch):
     # （check_occluders=False）
     assert confirms == [False]
     assert confirm_at == [2.0]
+    # 战斗结束路径不开启低对比复核（完成由战斗驱动，返程快路径不变）
+    assert "low_contrast_recheck" not in confirm_kw[0]
 
 
 # ---- follow 战斗结束回调：须先于任务消失确认（修罗战斗失败，2026-11-14） ----
@@ -621,6 +672,8 @@ def test_follow_task_confirm_no_per_task_flags(monkeypatch):
     assert ok is False  # 任务从未出现：假完成防护生效，回主循环重试
     assert "require_standing" not in confirms[0]
     assert "task_gone_require_standing" not in confirms[0]
+    # 寻路过程（非战斗结束首拍）开启低对比复核（2026-11-19 用户设计）
+    assert confirms[0].get("low_contrast_recheck") is True
 
 
 # ---- follow 点击尝试失败但任务已完成：按完成返回（2026-11-13） ----

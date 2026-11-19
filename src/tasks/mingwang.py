@@ -472,8 +472,8 @@ PICK_ITEM_FIND_TIMEOUT = 10.0           # 任务储物格中查找灵力镐的�
 # 技巧）**：开始后按钮为「长按」，长按推进极快（~2.4 刻度/秒）、目标带
 # 仅 ~1 刻度宽且进带不锁定——钓鱼式按住到结束必然冲过目标带、松手又
 # 整体回退判失败。改为：长按把填充推过带上缘 → 松手让它回落 → 回到
-# C（带中心）后改为点按维持（点击率伺服把填充保持在 [L,R] 内到窗口
-# 结束），掉出带下重新长按（见 pochufengyin.POCHU_CATCH_*）。「长按」
+# C（带中心）后改为短段长按 bang-bang 维持（P≤C-LO 按住、P≥C-HI 松手，
+# 围绕 C 振荡到窗口结束），掉出带下重新长按（见 pochufengyin.POCHU_CATCH_*）。「长按」
 # 按钮为小游戏通用美术，复用玄枢钓鱼模板 xuanshu_diaoyu_changan.png。
 # 窗口检测同蛟魔探秘钓鱼：armed 门控（用镐成功起 PICK_MINING_ARM_TIMEOUT
 # 内有效）+ 限频（每 PICK_MINING_CHECK_INTERVAL 在 POCHU_REGION 内匹配

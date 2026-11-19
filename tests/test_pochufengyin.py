@@ -204,24 +204,31 @@ class _FakeClock:
         return _t.strftime(fmt)
 
 
-def _install_mash(monkeypatch, *, per_click, decay=0.0, title_frames=14):
+def _install_mash(monkeypatch, *, per_click, decay=0.0, title_frames=14,
+                  lag_frames=0):
     """冲刺模式仿真：rapid_click_burst 每击把填充推进 per_click 刻度。
 
     decay>0 时每次测量（_fill）前先回退 decay 刻度，模拟真机
-    「填充条自动回退」（用户 2026-11-10 实测：不补点即掉出目标带）。
-    伪时钟让维持泵点击率积分器与速率伺服按轮询推进。
-    返回 (win, state, clicks)；state={"p": 当前刻度, "clicks": 总击数}；
-    clicks 记录 (x, y, times, 捕获轮次)。默认每击 0.1 刻度
-    （2026-11-10 真机日志 10 击 P≈1.06 实测）。
+    「填充条自动回退」（用户 2026-11-10 实测：不补点即掉出目标带）；
+    lag_frames>0 时点击效果延迟若干轮询才反映到填充条，模拟连点追帧
+    延迟（2026-11-10 实测 14 连点约 1s 后才到位；2026-11-19 破除封印
+    就是按显示值停泵后队列点击继续把游标推过右缘）。伪时钟让泵的
+    时间门按轮询推进。
+    返回 (win, state, clicks)；state={"p": 当前刻度, "clicks": 总击数,
+    "peak": 全程最高填充刻度}；clicks 记录 (x, y, times, 捕获轮次,
+    点击时 P)。默认每击 0.1 刻度（2026-11-10 真机日志 10 击 P≈1.06）。
     """
     win = _Win()
-    state = {"p": 0.0, "clicks": 0}
+    state = {"p": 0.0, "clicks": 0, "peak": 0.0, "queue": []}
     clicks = []
 
     def _burst(w, x, y, times=1, press=0.02):
-        state["p"] = min(10.0, state["p"] + per_click * times)
+        clicks.append((x, y, times, win.n, state["p"]))
         state["clicks"] += times
-        clicks.append((x, y, times, win.n))
+        if lag_frames:
+            state["queue"].append([win.n + lag_frames, per_click * times])
+        else:
+            state["p"] = min(10.0, state["p"] + per_click * times)
 
     def _match(bgr, icon, threshold=0.8, region=None, fallback=True):
         if icon == "title":
@@ -233,6 +240,11 @@ def _install_mash(monkeypatch, *, per_click, decay=0.0, title_frames=14):
         return None             # 「开始」按钮不出现（按钮已是流程态）
 
     def _fill(bgr):
+        for item in state["queue"]:
+            if len(item) == 2 and item[0] <= win.n:
+                state["p"] = min(10.0, state["p"] + item[1])
+                item.append(True)     # 已兑现，不再重复应用
+        state["peak"] = max(state["peak"], state["p"])
         if decay:
             state["p"] = max(0.0, state["p"] - decay)
         return int(round(pochufengyin.POCHU_SCALE_X0
@@ -255,12 +267,12 @@ def _install_mash(monkeypatch, *, per_click, decay=0.0, title_frames=14):
 
 
 def _mash_band():
-    """仿真目标带（含冲刺模式目标修正偏移）。"""
-    off = pochufengyin.POCHU_MASH_ZONE_OFFSET
+    """仿真目标带：target 模板白括号实测刻度，冲刺模式不偏移
+    （2026-11-19 破封失败标定：游戏判定的就是括号区间）。"""
     lo = pochufengyin.pochu_tick(
-        908 - pochufengyin.POCHU_ZONE_HALF) + off
+        908 - pochufengyin.POCHU_ZONE_HALF)
     hi = pochufengyin.pochu_tick(
-        908 + pochufengyin.POCHU_ZONE_HALF) + off
+        908 + pochufengyin.POCHU_ZONE_HALF)
     return lo, hi
 
 
@@ -334,12 +346,33 @@ def test_mash_mode_bursts_to_target_zone(monkeypatch):
     lo, hi = _mash_band()
     assert lo <= state["p"] <= hi
     assert clicks and clicks[0][:2] == (950, 600)
-    # 接近段两次大冲刺 → 进入维持泵（按速率小步补点）
+    # 接近段按估算推进量大冲刺（三档节奏到不了带）
     counts = [c[2] for c in clicks]
     assert counts[0] >= 20 and counts[1] >= 10
-    assert all(n in (1, 2) for n in counts[2:])
-    assert len(clicks) > 5                           # 到带后仍在维持
+    # 进带后只剩维持泵的小步补点（单轮 ≤ HOLD_MAX）：2026-11-19 失败
+    # 教训——进带后多击叠点 + 追帧滞后会把游标顶过右缘
+    lo, hi = _mash_band()
+    after = [c for c in clicks if c[4] >= lo]
+    assert after and all(c[2] <= pochufengyin.POCHU_MASH_HOLD_MAX
+                         for c in after)
+    assert all(c[4] <= hi + 0.05 for c in after)     # 补点时机都在带内
     assert _Hold.events == []
+
+
+def test_mash_mode_no_overshoot_with_click_lag(monkeypatch):
+    """连点追帧延迟（2026-11-19 客栈破除封印实机失败）：按显示值补点、
+    队列点击仍在途时，游标会被继续推过右缘（日志 6.91 → 7.50，游戏判
+    「超出目标范围」）。按有效位置（显示 P + 在途点击折算）决策后，
+    全程峰值不得越过右缘，结束时在带内。"""
+    win, state, clicks = _install_mash(monkeypatch, per_click=0.25,
+                                       lag_frames=3, title_frames=40)
+    ok, info = pochufengyin.play_pochufengyin(
+        win, "title", prefix="客栈", label="破除封印", mash=True)
+    lo, hi = _mash_band()
+    assert ok and "命中区间" in info
+    assert clicks
+    assert state["peak"] <= hi          # 全程不越过右缘
+    assert lo <= state["p"] <= hi
 
 
 def test_mash_mode_converges_when_click_advance_small(monkeypatch):

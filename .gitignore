@@ -42,6 +42,8 @@ capture_diag_*.bmp
 qi_debug/
 # 进度条小游戏维持段调试帧（POCHU_DEBUG_DUMP=True 时生成）
 pochu_debug/
+# 图标转换诊断渲染图（旧/新 logo 多尺寸对比，一次性中间产物；诊断脚本仍入库）
+.diag/icon/
 
 # 本地使用手册（HTML+图文素材，不入库）
 使用手册/
