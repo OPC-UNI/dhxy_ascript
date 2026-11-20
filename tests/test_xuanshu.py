@@ -299,13 +299,18 @@ def test_diaoyu_window_check_detects_and_plays(monkeypatch):
                         lambda bgr, icon, region=None: (0.99, (600, 500)))
 
     def _play(win, icon, prefix="客栈", label="破除封印",
-              hold=False, action_icon=None, hold_catch=False):
+              hold=False, action_icon=None, hold_catch=False,
+              fail_detect=False):
         seen.update(icon=icon, prefix=prefix, label=label, hold=hold,
                     action_icon=action_icon, hold_catch=hold_catch,
+                    fail_detect=fail_detect,
                     region=xuanshu._pochu_minigame.POCHU_REGION)
         return True, "钓鱼结束"
 
     monkeypatch.setattr(xuanshu._pochu_minigame, "play_pochufengyin", _play)
+    # 失败结果面板不在场（标题匹配用 best_match_np 桩，面板守卫用 match_frame_np）
+    monkeypatch.setattr(xuanshu.game_map, "match_frame_np",
+                        lambda *a, **k: None)
     img = np.zeros((831, 1378, 3), dtype=np.uint8)
     assert xuanshu._diaoyu_window_check(object(), img, prefix="玄枢轶闻") is True
     assert seen["icon"] == "xuanshu_diaoyu.png"
@@ -317,6 +322,8 @@ def test_diaoyu_window_check_detects_and_plays(monkeypatch):
     # 长按运输 + 短段长按维持：进带不锁定，长按推过带上缘→松手回落→
     # 回 C 后反复短按保持在 C 附近（2026-11-12 用户技巧）
     assert seen["hold_catch"] is True
+    # 失败检测开启（2026-11-20：判负提前返回 + 重试看门狗）
+    assert seen["fail_detect"] is True
     # 区域与客栈破除封印完全一致（用户要求）
     assert seen["region"] == (314, 458, 1058, 645)
     assert xuanshu._diaoyu_armed_at == 0.0  # 成功后关闭检测
@@ -331,9 +338,86 @@ def test_diaoyu_window_check_keeps_armed_on_failure(monkeypatch):
                         lambda bgr, icon, region=None: (0.99, (600, 500)))
     monkeypatch.setattr(xuanshu._pochu_minigame, "play_pochufengyin",
                         lambda *a, **k: (False, "战斗开始，钓鱼中断"))
+    monkeypatch.setattr(xuanshu.game_map, "match_frame_np",
+                        lambda *a, **k: None)
     img = np.zeros((831, 1378, 3), dtype=np.uint8)
     assert xuanshu._diaoyu_window_check(object(), img) is True
     assert xuanshu._diaoyu_armed_at > 0.0
+
+
+def test_diaoyu_fail_clears_armed_and_schedules_retry(monkeypatch):
+    """判负（游戏失败）：关闭 armed 并安排重试（面板由看门狗关闭）。"""
+    import numpy as np
+    xuanshu._reset_diaoyu_fail_state()
+    xuanshu._diaoyu_armed_at = time.time()
+    xuanshu._diaoyu_last_check = 0.0
+    monkeypatch.setattr(xuanshu.game_map, "best_match_np",
+                        lambda bgr, icon, region=None: (0.99, (600, 500)))
+    monkeypatch.setattr(xuanshu.game_map, "match_frame_np",
+                        lambda *a, **k: None)   # 失败面板不在场 → 进入闭环
+    monkeypatch.setattr(xuanshu._pochu_minigame, "play_pochufengyin",
+                        lambda *a, **k: (False, "钓鱼游戏失败（P=1.2）"))
+    img = np.zeros((831, 1378, 3), dtype=np.uint8)
+    assert xuanshu._diaoyu_window_check(object(), img) is True
+    assert xuanshu._diaoyu_armed_at == 0.0
+    assert xuanshu._diaoyu_fail_streak == 1
+    assert xuanshu._diaoyu_retry_at > 0.0
+    xuanshu._reset_diaoyu_fail_state()
+
+
+def test_diaoyu_retry_waits_dialog_then_close_and_track(monkeypatch):
+    """看门狗：失败对话在场先等；退场后关失败面板并重点任务链接一次。"""
+    import numpy as np
+
+    class _Win:
+        def capture(self, force_activate=False):
+            return np.zeros((831, 1378, 3), dtype=np.uint8)
+
+    win = _Win()
+    calls = {"track": 0, "closed": 0}
+    state = {"dialog": True, "panel": True}
+
+    monkeypatch.setattr(xuanshu.dialog_common, "dialog_frame_score",
+                        lambda img: 0.99 if state["dialog"] else 0.10)
+    monkeypatch.setattr(xuanshu, "_diaoyu_panel_present",
+                        lambda bgr: state["panel"])
+
+    def _close(w):
+        calls["closed"] += 1
+        return True, "失败面板已关闭"
+
+    monkeypatch.setattr(xuanshu, "_close_diaoyu_fail_panel", _close)
+
+    def _track(w, title, **kw):
+        calls["track"] += 1
+        return True, "已点击绿字"
+
+    monkeypatch.setattr(xuanshu.task_tracker, "track_task", _track)
+
+    xuanshu._reset_diaoyu_fail_state()
+    xuanshu._diaoyu_armed_at = 0.0
+    xuanshu._diaoyu_retry_at = 1.0  # 已到点
+    # 1) 失败对话仍在：不操作
+    xuanshu._diaoyu_retry_watch_at = 0.0
+    assert xuanshu._maybe_retry_diaoyu_fail(win) is False
+    assert calls == {"track": 0, "closed": 0}
+    # 2) 对话退场、失败面板在场：关面板 + 重走
+    state["dialog"] = False
+    xuanshu._diaoyu_retry_watch_at = 0.0
+    assert xuanshu._maybe_retry_diaoyu_fail(win) is True
+    assert calls == {"track": 1, "closed": 1}
+    assert xuanshu._diaoyu_retry_at == 0.0
+    xuanshu._reset_diaoyu_fail_state()
+
+
+def test_diaoyu_retry_streak_cap():
+    """连续失败超上限：停止自动重试（不安排重走）。"""
+    xuanshu._reset_diaoyu_fail_state()
+    for _ in range(xuanshu.DIAOYU_FAIL_RETRY_MAX + 1):
+        xuanshu._schedule_diaoyu_retry()
+    assert xuanshu._diaoyu_fail_streak == xuanshu.DIAOYU_FAIL_RETRY_MAX + 1
+    assert xuanshu._diaoyu_retry_at == 0.0
+    xuanshu._reset_diaoyu_fail_state()
 
 
 # ---- 领取链路危险选项过滤（2026-11-10 玄枢轶闻实测） ----

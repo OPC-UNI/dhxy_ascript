@@ -77,6 +77,10 @@ def _install(monkeypatch, *, p_values, title_frames, zone_frames=None,
     monkeypatch.setattr(pochufengyin, "_pochu_countdown", lambda *a, **k: None)
     monkeypatch.setattr(pochufengyin, "_pochu_ocr_gated", lambda *a, **k: None)
     monkeypatch.setattr(pochufengyin, "is_in_battle_frame", lambda bgr: False)
+    # 点击前新帧窗口复检默认放行；复检本身另有专门用例（_window_present
+    # 会多截一帧，仿真里的标题轮次按 capture 计数，不能让它改变时序）
+    monkeypatch.setattr(pochufengyin, "_window_present",
+                        lambda win, icon: True)
     monkeypatch.setattr(pochufengyin, "POCHU_TICK_PACE", 0.0)
     monkeypatch.setattr(pochufengyin, "POCHU_HOLD_TICK_PACE", 0.0)
     monkeypatch.setattr(pochufengyin, "POCHU_END_WINDOW", 0.0)
@@ -260,6 +264,9 @@ def _install_mash(monkeypatch, *, per_click, decay=0.0, title_frames=14,
     monkeypatch.setattr(pochufengyin, "_pochu_countdown", lambda *a, **k: None)
     monkeypatch.setattr(pochufengyin, "_pochu_ocr_gated", lambda *a, **k: None)
     monkeypatch.setattr(pochufengyin, "is_in_battle_frame", lambda bgr: False)
+    # 点击前窗口复检默认放行（专门用例单独覆盖）
+    monkeypatch.setattr(pochufengyin, "_window_present",
+                        lambda win, icon: True)
     monkeypatch.setattr(pochufengyin, "POCHU_TICK_PACE", 0.0)
     monkeypatch.setattr(pochufengyin, "POCHU_END_WINDOW", 0.0)
     monkeypatch.setattr(pochufengyin, "time", _FakeClock())
@@ -436,6 +443,55 @@ def test_click_mode_stops_at_countdown(monkeypatch):
         win, "title", prefix="客栈", label="破除封印")
     assert ok and "倒计时" in info
     assert clicks == []   # 倒计时 1s：完全停手不点
+
+
+def test_click_mode_stops_on_hold_button(monkeypatch):
+    """对照：普通点击模式「保持」仍是停手信号（非冲刺模式语义不变）。"""
+    clicks = []
+    win = _install(monkeypatch, p_values=[0.0, 0.0, 0.0], title_frames=6)
+    monkeypatch.setattr(pochufengyin, "human_click",
+                        lambda w, x, y: clicks.append((x, y)))
+    monkeypatch.setattr(
+        pochufengyin, "_pochu_ocr_gated",
+        lambda img, region, cache, force=False: "保持"
+        if tuple(region) == tuple(pochufengyin.POCHU_BTN_REGION) else None)
+    ok, _info = pochufengyin.play_pochufengyin(
+        win, "title", prefix="客栈", label="破除封印")
+    assert ok
+    assert clicks == []   # 保持 = 停手信号（非冲刺模式），一次都不点
+
+
+def test_mash_keeps_clicking_during_hold_phase(monkeypatch):
+    """冲刺模式「保持」不是停手信号（2026-11-20 客栈实机）：倒计时归零后
+    进入最后 3 秒「保持最后3秒」阶段（按钮变「保持」），停手会让填充
+    回退出带判失败；保持阶段必须继续维持到窗口结束。"""
+    win, state, clicks = _install_mash(monkeypatch, per_click=0.2,
+                                       decay=0.15, title_frames=40)
+    monkeypatch.setattr(
+        pochufengyin, "_pochu_ocr_gated",
+        lambda img, region, cache, force=False: "保持"
+        if tuple(region) == tuple(pochufengyin.POCHU_BTN_REGION) else None)
+    ok, info = pochufengyin.play_pochufengyin(
+        win, "title", prefix="客栈", label="破除封印", mash=True)
+    assert ok and "命中区间" in info
+    # 保持阶段仍持续补点：接近标题消失（轮次 41）仍有点击
+    assert max(c[3] for c in clicks) >= 35
+    lo, hi = _mash_band()
+    assert lo <= state["p"] <= hi
+
+
+def test_no_click_when_window_vanished_before_click(monkeypatch):
+    """点击前新帧复检窗口：标题模板不在即不点击（2026-11-20 用户规则：
+    窗口消失后残留点击落到世界画面会让角色走动，实测 [23,61]→[28,68]）。"""
+    win, _state, clicks = _install_mash(monkeypatch, per_click=0.2,
+                                        decay=0.1, title_frames=14)
+    monkeypatch.setattr(pochufengyin, "_window_present",
+                        lambda w, icon: w.n < 6)
+    pochufengyin.play_pochufengyin(
+        win, "title", prefix="客栈", label="破除封印", mash=True)
+    assert clicks
+    # 第 6 帧起复检失败：之后不再有任何点击（含缓存按钮坐标）
+    assert max(c[3] for c in clicks) < 6
 
 
 def test_mash_ignored_in_hold_mode(monkeypatch):

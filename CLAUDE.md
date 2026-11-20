@@ -59,6 +59,7 @@ Before every key decision step such as click, long press, text input, submit, pa
 - Check target uniqueness.
 - Check negative conditions such as blocking dialogs or error states.
 - Skip, wait, or report when preconditions fail.
+- Before any click/burst/long-press inside a **modal minigame window**, re-check the window title template on a fresh frame; never click cached button coordinates once the template is gone — a click on the world starts the character walking (2026-11-20 破除封印 real-device lesson: [23,61]→[28,68]).
 
 Auxiliary waits, swipes, and helper functions do not need heavyweight precondition checks.
 

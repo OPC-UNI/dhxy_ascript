@@ -46,8 +46,10 @@
 **冲刺连点（mash，与名望蛟魔探秘同款窗口同款打法）**：rapid_click_burst
 按在线估算的每击推进量连点冲进目标带（三档拟人节奏 ~2 击/秒 实测 7s
 只推到 P≈1.4，到不了目标带——2026-11-12 日志），到带后维持泵按有效
-位置（显示 P + 在途点击折算）补点、悬停在带中心，不按倒计时停手，
-按钮变「保持」或标题消失结束；
+位置（显示 P + 在途点击折算）补点、悬停在带中上段；**「保持」不是停手
+信号**（最后 3 秒保持阶段须继续维持，停手回退出带判失败，2026-11-20
+实机），一直维持到标题消失；判负 → 失败面板关闭/失败对话退场后看门狗
+重点任务追踪绿字重走（连续失败上限 5 次，2026-11-20 用户规则）；
 倒计时与按钮文字走差分门区域 OCR）；
 提交物品/无跟踪两类特殊任务后续单独处理。
 """
@@ -617,6 +619,22 @@ _pochu_armed_at = 0.0                  # 破除封印入口选项点击时间；
 # （条带匹配 <1ms）。标题仅在小游戏进行中出现，无需 armed 门控。
 _chuyijuebao_last_check = 0.0          # 上次 extras 面板检测时间（限频）
 _pochu_last_check = 0.0                # 上次 extras 窗口检测时间（限频）
+# ---- 破除封印失败重试（2026-11-20 用户规则）----
+# 判负后：失败结果面板**不会自己关闭**，必须先点右上角 X 关闭（面板在
+# 场时任务追踪点击会被拦住，不关面板重走无效——用户 2026-11-20 实测
+# 规则）→ 无选项失败对话由剧情兜底点屏关掉 → 看门狗重点任务追踪绿字
+# 重走（游戏重新寻路，到达后封印对话自动弹出）→ 入口选项「消耗灵气，
+# 破除封印」由对话表自动点击并重新 arm。旧行为要等 follow 300s 超时后
+# 的下一轮才重走（11-19 14:12→14:16 实测），这里把恢复时间压到数秒级。
+# 连续失败超上限停止自动重试并告警一次（防控制参数失准时无限空转）。
+POCHU_FAIL_RETRY_MAX = 5              # 同一轮任务连续失败自动重试上限（次）
+POCHU_FAIL_RETRY_DELAY = 2.0          # 判负后等待结果面板稳定再点 X（秒）
+POCHU_RETRY_WATCH_INTERVAL = 1.0      # 重试看门狗检测限频（秒）
+POCHU_FAIL_CLOSE_TIMEOUT = 4.0        # 点 X 后等待面板关闭的时限（秒）
+POCHU_FAIL_CLOSE_INTERVAL = 0.5       # 关闭确认轮询间隔（秒）
+_pochu_fail_streak = 0                # 连续失败次数（小游戏成功/新一轮跟踪复位）
+_pochu_retry_at = 0.0                 # >0 = 待重试（到点后看门狗执行一次重走）
+_pochu_retry_watch_at = 0.0           # 看门狗上次检测时间（限频）
 CLAIM_CHAIN_TIMEOUT = 30             # 整条领取对话链（含接取与任务对话）的总超时（秒）
 # ---- 特殊任务步骤：前往洛阳城大理寺墙外（追踪文案出现时手动寻路） ----
 DALI_TRACK_TEXT = "前往洛阳城大理寺墙外附近"   # 任务追踪文案（出现即需手动寻路）
@@ -1592,7 +1610,138 @@ def _play_pochufengyin(win):
     """
     return _pochu_minigame.play_pochufengyin(win, POCHU_TITLE_ICON,
                                              prefix="客栈", label="破除封印",
-                                             mash=True)
+                                             mash=True, fail_detect=True)
+
+
+def _reset_pochu_fail_state():
+    """破除封印失败重试状态复位（小游戏成功/新一轮跟踪开始时调用）。"""
+    global _pochu_fail_streak, _pochu_retry_at, _pochu_retry_watch_at
+    _pochu_fail_streak = 0
+    _pochu_retry_at = 0.0
+    _pochu_retry_watch_at = 0.0
+
+
+def _schedule_pochu_retry():
+    """判负 → 计数并安排一次重走；超上限停止自动重试并告警一次。"""
+    global _pochu_fail_streak, _pochu_retry_at, _pochu_retry_watch_at
+    _pochu_fail_streak += 1
+    if _pochu_fail_streak > POCHU_FAIL_RETRY_MAX:
+        _pochu_retry_at = 0.0  # 封顶后清掉残留的待重试
+        if _pochu_fail_streak == POCHU_FAIL_RETRY_MAX + 1:
+            log(f"[客栈] 破除封印连续失败 {POCHU_FAIL_RETRY_MAX} 次，"
+                f"停止自动重试（检查小游戏控制参数/站位）", "ERROR")
+        return
+    _pochu_retry_at = time.time() + POCHU_FAIL_RETRY_DELAY
+    _pochu_retry_watch_at = 0.0
+    log(f"[客栈] 破除封印失败，{POCHU_FAIL_RETRY_DELAY:.0f}s 后重点任务追踪"
+        f"重走（连续第 {_pochu_fail_streak}/{POCHU_FAIL_RETRY_MAX} 次）", "SYS")
+
+
+def _pochu_panel_present(bgr):
+    """破除封印小游戏窗口标题在场（标题模板命中）。"""
+    if bgr is None:
+        return False
+    return game_map.match_frame_np(
+        bgr, POCHU_TITLE_ICON, threshold=POCHU_THRESHOLD,
+        region=POCHU_REGION, fallback=False) is not None
+
+
+def _pochu_fail_panel_present(bgr):
+    """失败结果面板：标题 + 「游戏失败」双模板同一帧命中（场景锚点）。"""
+    if not _pochu_panel_present(bgr):
+        return False
+    return game_map.match_frame_np(
+        bgr, _pochu_minigame.POCHU_FAIL_ICON,
+        threshold=_pochu_minigame.POCHU_FAIL_THRESHOLD,
+        region=_pochu_minigame.POCHU_FAIL_REGION, fallback=False) is not None
+
+
+def _close_pochu_fail_panel(win):
+    """点面板右上角 X 关闭失败结果面板，轮询标题模板确认关闭。
+
+    用户 2026-11-20 实测规则：判负后失败面板不会自己关闭，必须点 X；
+    面板在场时任务追踪点击会被拦住，重走前必须先关面板。每轮点击前
+    复查「标题 + 游戏失败」双模板（场景锚点 + 目标唯一性；正常游戏中
+    的面板绝不点 X）。返回 (是否已关闭, 描述)。
+    """
+    deadline = time.time() + POCHU_FAIL_CLOSE_TIMEOUT
+    clicks = 0
+    while time.time() < deadline:
+        img = win.capture(force_activate=False)
+        if img is None:
+            time.sleep(POCHU_FAIL_CLOSE_INTERVAL)
+            continue
+        bgr = cv2.cvtColor(np.asarray(img)[:, :, :3], cv2.COLOR_RGB2BGR)
+        if not _pochu_panel_present(bgr):
+            return True, f"失败面板已关闭（X 点击 {clicks} 次）"
+        if not _pochu_fail_panel_present(bgr):
+            # 面板在场但不是失败结果态（防御：正常游戏中的面板不得点 X）
+            return False, "面板在场但非失败结果态，未点击 X"
+        score, pt = game_map.best_match_np(
+            bgr, _pochu_minigame.POCHU_CLOSE_ICON,
+            region=_pochu_minigame.POCHU_CLOSE_REGION)
+        if pt is None or score < _pochu_minigame.POCHU_FAIL_THRESHOLD:
+            log(f"[客栈] 破除封印失败：面板 X 未识别"
+                f"（分数 {score:.2f}），下轮重试", "WARN")
+            time.sleep(POCHU_FAIL_CLOSE_INTERVAL)
+            continue
+        human_click(win, pt[0], pt[1])
+        clicks += 1
+        log(f"[客栈] 破除封印失败：已点击面板 X 关闭 @({pt[0]},{pt[1]})"
+            f"（第 {clicks} 次）", "SYS")
+        time.sleep(POCHU_FAIL_CLOSE_INTERVAL)
+    return False, (f"点击 X {clicks} 次后面板仍未关闭"
+                   f"（{POCHU_FAIL_CLOSE_TIMEOUT:.0f}s 超时）")
+
+
+def _maybe_retry_pochu_fail(win):
+    """失败重试看门狗（extras 链每轮询调用，限频）。
+
+    判负后先点面板右上角 X 关闭失败结果面板（用户 2026-11-20 规则：
+    面板不自己关闭；不关面板，任务追踪点击会被拦住、重走无效），等
+    失败对话被剧情兜底点屏关掉，再重点任务追踪绿字重走：游戏重新寻路
+    （站在封印上也会重新计算路径），到达后封印对话自动弹出，入口选项
+    由对话表处理并重新 arm。每次失败只点一次链接（点击失败/未触发
+    对话由 follow 超时后的下一轮兜底）。返回是否已执行重试动作。
+    """
+    global _pochu_retry_at, _pochu_retry_watch_at
+    if _pochu_retry_at <= 0:
+        return False
+    if _pochu_armed_at > 0:
+        # 入口选项已被重新点击（新一局进行中/即将开始）：取消待重试，
+        # 防止重试链接在游戏窗口出现后被误点
+        _pochu_retry_at = 0.0
+        return False
+    now = time.time()
+    if now < _pochu_retry_at \
+            or now - _pochu_retry_watch_at < POCHU_RETRY_WATCH_INTERVAL:
+        return False
+    _pochu_retry_watch_at = now
+    img = win.capture(force_activate=False)
+    if img is None:
+        return False
+    bgr = cv2.cvtColor(np.asarray(img)[:, :, :3], cv2.COLOR_RGB2BGR)
+    # 失败结果面板必须先点 X 关闭（不关闭时任务追踪点击会被面板拦截）
+    if _pochu_panel_present(bgr):
+        if not _pochu_fail_panel_present(bgr):
+            # 窗口在场但非失败结果态：不动，等下一轮（防御）
+            return False
+        closed, cinfo = _close_pochu_fail_panel(win)
+        log(f"[客栈] 破除封印失败重试：{cinfo}", "SYS" if closed else "WARN")
+        if not closed:
+            _pochu_retry_at = 0.0  # 交由 follow 超时轮次兜底，避免空转
+        return True
+    # 失败对话仍在：交给剧情兜底点屏关闭，不叠操作（点在对话框上无意义）
+    if dialog_frame_score(img) >= DIALOG_FRAME_THRESHOLD:
+        return False
+    ok, info = task_tracker.track_task(win, TASK_TITLE,
+                                       green_order=GREEN_CLICK_ORDER,
+                                       green_picker=_pick_task_green)
+    _pochu_retry_at = 0.0  # 单次尝试：失败由 follow 超时轮次兜底
+    log(f"[客栈] 破除封印失败重试："
+        f"{'已点击任务追踪绿字重走' if ok else '任务追踪绿字点击失败'}"
+        f"（{info}）", "SYS" if ok else "WARN")
+    return True
 
 
 def _match_baoxiang(img):
@@ -1750,6 +1899,10 @@ def _handle_follow_extras(win, items, img_np):
     返回是否已处理。
     """
     global _dali_last_done, _biwu_last_done, _baoxiang_last_done
+    # 破除封印失败重试优先：判负后面板/对话退场即重点任务追踪重走
+    # （否则要等 follow 300s 超时后的下一轮才恢复）
+    if _maybe_retry_pochu_fail(win):
+        return True
     task = task_tracker.find_task(
         task_tracker.group_tasks(items, task_tracker.panel_row_xmax(img_np)),
         TASK_TITLE)
@@ -1809,10 +1962,16 @@ def _handle_follow_extras(win, items, img_np):
                 log(f"[客栈] 检测到破除封印窗口 @({wpt[0]},{wpt[1]})"
                     f"（匹配度 {score:.2f}）", "SYS")
                 ok, info = _play_pochufengyin(win)
-                if ok:
-                    # 小游戏完成 → 关闭检测（处理失败保持 armed，窗口
-                    # 仍在时下轮询重试）
+                if ok or "游戏失败" in info:
+                    # 完成或已判失败（结果面板随后自动关闭）→ 关闭检测；
+                    # 其余异常（点击失败等）保持 armed，窗口仍在时下轮询重试
                     _pochu_armed_at = 0.0
+                if ok:
+                    _reset_pochu_fail_state()
+                elif "游戏失败" in info:
+                    # 判负：安排失败重试看门狗（关面板/失败对话退场后
+                    # 重点任务追踪绿字重走，见 _maybe_retry_pochu_fail）
+                    _schedule_pochu_retry()
                 log(f"[客栈] {info}", "SYS" if ok else "WARN")
                 return True
         # 除异觉宝小游戏（玄石探秘分支）：面板标题模板在场即完整处理
@@ -2631,6 +2790,7 @@ def _claim_task(win, pt):
 def _follow_kezhan(win):
     """客栈 follow_task 统一参数调用（智戏成空/四象/三才顺序绿字点击 +
     附加对话处理）。"""
+    _reset_pochu_fail_state()  # 每轮跟踪重新计数（上一轮失败链不跨轮累积）
     ok, info = follow_task(win, TASK_TITLE, prefix="客栈",
                            extra_dialog_handler=_handle_follow_extras,
                            green_order=GREEN_CLICK_ORDER,

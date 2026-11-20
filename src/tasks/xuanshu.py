@@ -122,6 +122,23 @@ DIAOYU_ARM_TIMEOUT = _pochu_minigame.POCHU_ARM_TIMEOUT      # 入口选项点击
 DIAOYU_CHECK_INTERVAL = _pochu_minigame.POCHU_CHECK_INTERVAL  # 窗口检测限频（秒）
 _diaoyu_armed_at = 0.0        # 钓鱼入口选项点击时间；>0 且未超时=检测开启
 _diaoyu_last_check = 0.0      # 上次窗口检测时间（限频）
+# ---- 钓鱼失败重试（2026-11-20 用户规则）----
+# 长按钓鱼与破除封印同款窗口；fail_detect 检测「游戏失败」提前返回后，
+# 结果面板（标题仍在）由看门狗点右上角 X 关闭（面板不在场则直接跳过），
+# 再点任务追踪绿色链接重走：游戏重新寻路/原地重开 NPC 对话，入口选项
+# 「先钓一下再说！」由对话表处理并重新 arm。连续失败超上限停止重试并
+# 告警一次（防控制参数失准时无限空转）。
+DIAOYU_FAIL_RETRY_MAX = 5             # 同一轮任务连续失败自动重试上限（次）
+DIAOYU_FAIL_RETRY_DELAY = 2.0         # 判负后等待结果面板/失败对话稳定（秒）
+DIAOYU_RETRY_WATCH_INTERVAL = 1.0     # 看门狗检测限频（秒）
+DIAOYU_FAIL_CLOSE_ICON = _pochu_minigame.POCHU_CLOSE_ICON
+DIAOYU_FAIL_CLOSE_REGION = _pochu_minigame.POCHU_CLOSE_REGION
+DIAOYU_FAIL_CLOSE_THRESHOLD = _pochu_minigame.POCHU_FAIL_THRESHOLD
+DIAOYU_FAIL_CLOSE_TIMEOUT = 4.0       # 点 X 后等待面板关闭的时限（秒）
+DIAOYU_FAIL_CLOSE_INTERVAL = 0.5      # 关闭确认轮询间隔（秒）
+_diaoyu_fail_streak = 0               # 连续失败次数（成功/新一轮跟踪复位）
+_diaoyu_retry_at = 0.0                # >0 = 待重试（到点后看门狗关面板+重走）
+_diaoyu_retry_watch_at = 0.0          # 看门狗上次检测时间（限频）
 
 
 def _at_target(pos):
@@ -562,8 +579,11 @@ def _diaoyu_window_check(win, img, prefix="玄枢轶闻"):
     pochufengyin.play_pochufengyin，长按运输 + 短段长按维持：hold=True +
     hold_catch=True，长按推过目标带上缘→松手回落→回 C 后反复短按保持在
     C 附近到窗口结束，2026-11-12 用户技巧），标题消失（结束）或战斗
-    打断后返回。检测限频 DIAOYU_CHECK_INTERVAL（条带匹配 ~10ms）；
-    未 armed/限频未到/未命中均返回 False，热路径零成本。
+    打断后返回。fail_detect=True 检测「游戏失败」提前返回（2026-11-20：
+    判负 → 关闭 armed 并安排重试，失败面板由 _maybe_retry_diaoyu_fail
+    看门狗点 X 关闭后重点任务追踪重走，连续失败上限 5 次）。检测限频
+    DIAOYU_CHECK_INTERVAL（条带匹配 ~10ms）；未 armed/限频未到/未命中
+    均返回 False，热路径零成本。
     """
     global _diaoyu_last_check, _diaoyu_armed_at
     if _diaoyu_armed_at <= 0 \
@@ -578,16 +598,150 @@ def _diaoyu_window_check(win, img, prefix="玄枢轶闻"):
                                         region=_pochu_minigame.POCHU_REGION)
     if wpt is None or score < _pochu_minigame.POCHU_THRESHOLD:
         return False
+    if _diaoyu_fail_panel_present(bgr):
+        # 失败结果面板：交给看门狗关闭+重走，绝不再次进入闭环
+        # （结果态没有可玩内容，进入只会空点面板按钮）
+        return False
     log(f"[{prefix}] 检测到钓鱼窗口 @({wpt[0]},{wpt[1]})"
         f"（匹配度 {score:.2f}）", "SYS")
     ok, info = _pochu_minigame.play_pochufengyin(
         win, DIAOYU_TITLE_ICON, prefix=prefix, label="钓鱼",
-        hold=True, action_icon=DIAOYU_HOLD_ICON, hold_catch=True)
+        hold=True, action_icon=DIAOYU_HOLD_ICON, hold_catch=True,
+        fail_detect=True)
     if ok:
-        # 小游戏完成 → 关闭检测（处理失败保持 armed，窗口仍在时
-        # 下轮询重试）
+        # 小游戏完成 → 关闭检测并复位失败重试计数
         _diaoyu_armed_at = 0.0
+        _reset_diaoyu_fail_state()
+    elif "游戏失败" in info:
+        # 判负 → 关闭检测，看门狗关面板+重点任务追踪重走
+        _diaoyu_armed_at = 0.0
+        _schedule_diaoyu_retry()
     log(f"[{prefix}] {info}", "SYS" if ok else "WARN")
+    return True
+
+
+def _diaoyu_panel_present(bgr):
+    """钓鱼小游戏窗口标题在场（标题模板命中）。"""
+    if bgr is None:
+        return False
+    return game_map.match_frame_np(
+        bgr, DIAOYU_TITLE_ICON, threshold=_pochu_minigame.POCHU_THRESHOLD,
+        region=_pochu_minigame.POCHU_REGION, fallback=False) is not None
+
+
+def _diaoyu_fail_panel_present(bgr):
+    """失败结果面板：标题 + 「游戏失败」双模板同一帧命中（场景锚点）。"""
+    if not _diaoyu_panel_present(bgr):
+        return False
+    return game_map.match_frame_np(
+        bgr, _pochu_minigame.POCHU_FAIL_ICON,
+        threshold=_pochu_minigame.POCHU_FAIL_THRESHOLD,
+        region=_pochu_minigame.POCHU_FAIL_REGION, fallback=False) is not None
+
+
+def _close_diaoyu_fail_panel(win):
+    """点面板右上角 X 关闭失败结果面板，轮询标题模板确认关闭。
+
+    前置条件：每轮点击前复查「标题 + 游戏失败」双模板（场景锚点 +
+    目标唯一性）；X 点击无效时在 DIAOYU_FAIL_CLOSE_TIMEOUT 内重试。
+    返回 (是否已关闭, 描述)。
+    """
+    deadline = time.time() + DIAOYU_FAIL_CLOSE_TIMEOUT
+    clicks = 0
+    while time.time() < deadline:
+        img = win.capture(force_activate=False)
+        if img is None:
+            time.sleep(DIAOYU_FAIL_CLOSE_INTERVAL)
+            continue
+        bgr = cv2.cvtColor(np.asarray(img)[:, :, :3], cv2.COLOR_RGB2BGR)
+        if not _diaoyu_panel_present(bgr):
+            return True, f"失败面板已关闭（X 点击 {clicks} 次）"
+        if not _diaoyu_fail_panel_present(bgr):
+            # 面板在场但不是失败结果态（防御：正常游戏中的面板不得点 X）
+            return False, "面板在场但非失败结果态，未点击 X"
+        score, pt = game_map.best_match_np(
+            bgr, DIAOYU_FAIL_CLOSE_ICON, region=DIAOYU_FAIL_CLOSE_REGION)
+        if pt is None or score < DIAOYU_FAIL_CLOSE_THRESHOLD:
+            log(f"[{TASK_TITLE}] 钓鱼失败：面板 X 未识别"
+                f"（分数 {score:.2f}），下轮重试", "WARN")
+            time.sleep(DIAOYU_FAIL_CLOSE_INTERVAL)
+            continue
+        human_click(win, pt[0], pt[1])
+        clicks += 1
+        log(f"[{TASK_TITLE}] 钓鱼失败：已点击面板 X 关闭 @({pt[0]},{pt[1]})"
+            f"（第 {clicks} 次）", "SYS")
+        time.sleep(DIAOYU_FAIL_CLOSE_INTERVAL)
+    return False, (f"点击 X {clicks} 次后面板仍未关闭"
+                   f"（{DIAOYU_FAIL_CLOSE_TIMEOUT:.0f}s 超时）")
+
+
+def _reset_diaoyu_fail_state():
+    """钓鱼失败重试状态复位（小游戏成功/新一轮跟踪开始时调用）。"""
+    global _diaoyu_fail_streak, _diaoyu_retry_at, _diaoyu_retry_watch_at
+    _diaoyu_fail_streak = 0
+    _diaoyu_retry_at = 0.0
+    _diaoyu_retry_watch_at = 0.0
+
+
+def _schedule_diaoyu_retry():
+    """判负 → 计数并安排一次重走；超上限停止自动重试并告警一次。"""
+    global _diaoyu_fail_streak, _diaoyu_retry_at, _diaoyu_retry_watch_at
+    _diaoyu_fail_streak += 1
+    if _diaoyu_fail_streak > DIAOYU_FAIL_RETRY_MAX:
+        _diaoyu_retry_at = 0.0  # 封顶后清掉残留的待重试
+        if _diaoyu_fail_streak == DIAOYU_FAIL_RETRY_MAX + 1:
+            log(f"[{TASK_TITLE}] 钓鱼连续失败 {DIAOYU_FAIL_RETRY_MAX} 次，"
+                f"停止自动重试（检查小游戏控制参数/站位）", "ERROR")
+        return
+    _diaoyu_retry_at = time.time() + DIAOYU_FAIL_RETRY_DELAY
+    _diaoyu_retry_watch_at = 0.0
+    log(f"[{TASK_TITLE}] 钓鱼失败，{DIAOYU_FAIL_RETRY_DELAY:.0f}s 后关面板"
+        f"并重走任务（连续第 {_diaoyu_fail_streak}/{DIAOYU_FAIL_RETRY_MAX} 次）",
+        "SYS")
+
+
+def _maybe_retry_diaoyu_fail(win):
+    """失败重试看门狗（wait_handler 每轮询调用，限频）。返回是否已处理。
+
+    判负后：失败对话在场时先等剧情兜底点屏关闭（不叠操作）→ 失败结果
+    面板在场则点右上角 X 关闭 → 点任务追踪绿色链接重走（游戏重新寻路/
+    原地重开 NPC 对话，入口选项由对话表处理并重新 arm）。每次失败只
+    重走一次（点击失败/未触发对话由 follow 超时轮次兜底）。
+    """
+    global _diaoyu_retry_at, _diaoyu_retry_watch_at
+    if _diaoyu_retry_at <= 0:
+        return False
+    if _diaoyu_armed_at > 0:
+        # 入口选项已被重新点击（新一局进行中/即将开始）：取消待重试，
+        # 防止重试链接在游戏窗口出现后被误点
+        _diaoyu_retry_at = 0.0
+        return False
+    now = time.time()
+    if now < _diaoyu_retry_at \
+            or now - _diaoyu_retry_watch_at < DIAOYU_RETRY_WATCH_INTERVAL:
+        return False
+    _diaoyu_retry_watch_at = now
+    img = win.capture(force_activate=False)
+    if img is None:
+        return False
+    if dialog_common.dialog_frame_score(img) \
+            >= dialog_common.DIALOG_FRAME_THRESHOLD:
+        # 失败对话仍在：交给剧情兜底点屏关闭，不叠操作
+        return False
+    bgr = cv2.cvtColor(np.asarray(img)[:, :, :3], cv2.COLOR_RGB2BGR)
+    if _diaoyu_panel_present(bgr):
+        closed, cinfo = _close_diaoyu_fail_panel(win)
+        if not closed:
+            log(f"[{TASK_TITLE}] 钓鱼失败重试：{cinfo}", "WARN")
+            _diaoyu_retry_at = 0.0  # 交由 follow 超时轮次兜底，避免空转
+            return True
+    else:
+        cinfo = "失败面板已不在场"
+    ok, info = task_tracker.track_task(win, TASK_TITLE)
+    _diaoyu_retry_at = 0.0  # 单次尝试：失败由 follow 超时轮次兜底
+    log(f"[{TASK_TITLE}] 钓鱼失败重试：{cinfo}；"
+        f"{'已点击任务追踪绿字重走' if ok else '任务追踪绿字点击失败'}"
+        f"（{info}）", "SYS" if ok else "WARN")
     return True
 
 
@@ -597,6 +751,9 @@ def _follow_wait_handler(win, items, img_np, img):
     顺序与原引擎一致：钓鱼窗口 → 机关提示对话 → 锄遗聚宝模板。
     返回 True 表示本帧已处理，follow 下一轮询继续。
     """
+    # 钓鱼失败重试优先：判负后面板/失败对话退场即关面板并重点任务追踪重走
+    if _maybe_retry_diaoyu_fail(win):
+        return True
     if _diaoyu_window_check(win, img, TASK_TITLE):
         return True
     if _dialog_text_present(items, JIGUAN_DIALOG_TEXT):
@@ -628,6 +785,7 @@ def run_cycle(win):
 
     返回 (状态, 描述)；状态：done 完成一次任务 / daily_limit 每日次数已满 / fail 本轮失败
     """
+    _reset_diaoyu_fail_state()  # 每轮重新计数（上一轮失败链不跨轮累积）
     if is_in_battle(win):
         return "fail", "战斗中，跳过本轮（等待战斗结束）"
 

@@ -22,10 +22,18 @@ C 附近才停手——破除封印松手后填充会回落，停在左缘有掉
 点击模式 C≤P≤R 停手保持、P>R 过头永久停手；长按模式进入区间后继续按住
 （游戏锁定游标，松手会回退脱钩），仅 P>R 时松开让其回落；冲刺模式不按
 倒计时停手（填充条自动回退，须维持到窗口结束），按「显示 P + 在途点击
-折算」的有效位置补点，悬停在目标带中心。按钮变「保持」或倒计时 ≤3s
-（冲刺模式除外）完全停手等结算 → 标题消失即任务结束。目标区间一律是
-target 模板白括号（±29px）实测刻度，**不做偏移**——游戏判定的就是这段
-括号区间（2026-11-19 破除封印「超出目标范围」失败标定）。
+折算」的有效位置补点，悬停在目标带中上段。按钮变「保持」或倒计时 ≤3s
+（冲刺模式除外）完全停手等结算 → 标题消失即任务结束。**冲刺模式的
+「保持」不是停手信号**（2026-11-20 实机标定）：第一段 10s 倒计时归零后
+游戏进入最后 3 秒「保持」阶段（倒计时重置 3→0、按钮变「保持」、提示
+「请停留在N力量的区间保持最后3秒」），游标不在带内即判失败；停手会让
+填充条自动回退掉出带下（失败对话「还得再试一次」）。保持阶段须继续
+维持点击。目标区间一律是 target 模板白括号（±29px）实测刻度，**不做
+偏移**——游戏判定的就是这段括号区间（2026-11-19 破除封印「超出目标
+范围」失败标定）。
+所有点击/连点批次前用**新截帧**复检窗口标题模板，模板不在即放弃本次
+点击（2026-11-20 用户规则：窗口消失后残留点击会落到世界画面、人物开始
+走动——实测 [23,61]→[28,68]）。
 全部测量在 POCHU_REGION/进度条带内，坐标映射 1~10 刻度（x 435~992，
 7.png 实测刻度线间距 55.7px 吻合）。
 """
@@ -123,18 +131,28 @@ POCHU_MASH_STABLE_POLLS = 2       # 连续「不再上升」轮数确认停稳�
 POCHU_MASH_HOLD_ENTER = 0.15     # 进入维持泵：显示 P ≥ L-0.15（带口）才切换；
                                   # 旧 0.60 会让泵在带外就按显示值连点，残留在途
                                   # 点击直接把游标顶过整个目标带（2026-11-19 教训）
-POCHU_MASH_PUMP_AIM = 0.50       # 维持目标点 = L+0.50（带中心）：两端各留 ~0.5 刻度，
-                                  # 收尾阶段填充若有小幅回退/上涨都不出带（结算前
-                                  # 实测回退可达 ~0.5 刻度，2026-11-12 蛟魔探秘日志）
-POCHU_MASH_TOP_MARGIN = 0.25     # 硬上限：有效位置 ≥ R-0.25 不再补点
-POCHU_MASH_LAG = 1.0             # 在途点击窗口（秒）：连点后填充条约 1s 才追帧到位
-                                  # （2026-11-10 实测 14 连点 1s 后才升到 3.23；
-                                  # 2026-11-19 实测 6 连点 1s 内又涨 0.91）
-POCHU_MASH_PUMP_GAP = 0.10       # 两次补点最小间隔（秒；在途窗口已防重复计数，
+POCHU_MASH_PUMP_AIM = 0.60       # 维持目标点 = L+0.60（中上带）：2026-11-20 破除封印
+                                  # 实机标定——旧 0.50 泵偏弱，最后 3 秒保持阶段游标
+                                  # 衰减到左括号附近（P=L+0.03~0.12）被判失败；强维持
+                                  # 原型稳定在 L+0.36~0.81、任务推进
+POCHU_MASH_TOP_MARGIN = 0.20     # 硬上限：有效位置 ≥ R-0.20 不再补点
+POCHU_MASH_LAG = 1.0             # 冲刺段在途点击窗口（秒）：大批次连点后填充条
+                                  # 追帧延迟可达 ~1s（2026-11-10 实测 14 连点 1s
+                                  # 后才升到 3.23）——窗口过短会把在途批次当成
+                                  # 没点过、重复冲刺顶过右缘
+POCHU_MASH_LAG_HOLD = 0.35       # 维持段在途窗口（秒）：维持批次 ≤2 击，填充
+                                  # 追帧在 ~0.3s 内结算；2026-11-20 实机保持阶段
+                                  # 用 0.35 可及时补偿衰减，游标不再向左滑出带
+                                  # （旧 1.0 的未兑现点击台账让泵误以为位置够高、
+                                  # 少补点，保持阶段 P 从 6.55 滑到 6.03 判失败）
+POCHU_MASH_UNSHOWN_GATE = 0.20    # 落地门阈值（刻度）：在途批次估未兑现量超过
+                                  # 该值才等待；每击估算的安全系数 1.15 会
+                                  # 留下小尾巴，不能按 >0 卡死（会饿死维持泵）
+POCHU_MASH_PUMP_GAP = 0.08       # 两次补点最小间隔（秒；在途窗口已防重复计数，
                                   # 这里只做轻量限频——间隔过大（0.30 实测）
                                   # 会让衰减吃掉补点量、泵悬停点低于目标点）
 POCHU_MASH_CNT_GONE_POLLS = 3     # 倒计时连续消失轮数 → 已结算，停手
-POCHU_MASH_HOLD_MAX = 3           # 单轮补点上限（贴带口时通常 1 击）
+POCHU_MASH_HOLD_MAX = 2           # 单轮补点上限（贴带口时通常 1 击）
 POCHU_MASH_MAX_BURST = 90         # 单次冲刺点击上限（限制测量间隔）
 POCHU_MASH_MIN_CLICKS = 5         # 判定「点击未推进」所需最少点击数
 POCHU_MASH_PRESS = 0.02           # 冲刺点击按压时长（rapid_click 默认）
@@ -145,9 +163,9 @@ POCHU_MASH_PRESS_MAX = 0.05       # 连续未推进时加压上限（防漏注�
 # （pochu_youxishibai.png 85×34，OCR 框 (651,581)-(726,605) 外扩 5px），
 # 两条真机帧（13:00 失败画面 / 13:04 复现画面）交叉验证：正样本
 # 1.00/1.00，非面板帧（世界/战斗）0.09~0.10——阈值 0.8 余量充足。
-# 该提示只在进入结果态后渲染；fail_detect=True 的调用方（蛟魔探秘）
-# 检测到即停止全部操作提前返回失败，由调用方关闭面板重试；不检测
-# 时沿用旧行为（标题消失 + 位置猜测命中）。
+# 该提示只在进入结果态后渲染；fail_detect=True 的调用方（蛟魔探秘/
+# 客栈破除封印）检测到即停止全部操作提前返回失败，由调用方关闭面板
+# 重试；不检测时沿用旧行为（标题消失 + 位置猜测命中）。
 POCHU_FAIL_ICON = "pochu_youxishibai.png"
 POCHU_FAIL_REGION = (600, 545, 790, 640)  # 「游戏失败」搜索带（面板漂移余量）
 POCHU_FAIL_THRESHOLD = 0.8
@@ -316,6 +334,23 @@ def _pochu_countdown(img_pil, cache, force=False):
     return int(m.group(1)) if m else None
 
 
+def _window_present(win, title_icon):
+    """点击前新截帧复检小游戏窗口标题模板（模板不在=窗口已消失，绝不点击）。
+
+    2026-11-20 用户实机规则：破除封印窗口结算消失后，缓存按钮坐标上的
+    残留点击会落到世界画面，人物开始走动（实测 [23,61]→[28,68]）。
+    标题模板命中即窗口在场；不在即放弃本次点击/连点/长按，下一轮询走
+    标题消失确认。单次复检 ~10ms（条带匹配）+ 一次截窗，仅在点击前付。
+    """
+    img = win.capture(force_activate=False)
+    if img is None:
+        return False
+    bgr = cv2.cvtColor(np.asarray(img)[:, :, :3], cv2.COLOR_RGB2BGR)
+    return game_map.match_frame_np(bgr, title_icon,
+                                   threshold=POCHU_THRESHOLD,
+                                   region=POCHU_REGION, fallback=False) is not None
+
+
 def play_pochufengyin(win, title_icon, prefix="客栈", label="破除封印",
                       hold=False, action_icon=None, mash=False,
                       hold_catch=False, fail_detect=False):
@@ -355,8 +390,12 @@ def play_pochufengyin(win, title_icon, prefix="客栈", label="破除封印",
     实测刻度，不偏移），每次冲刺后等填充条停稳再决策（防按滞后值
     过量）；进带后切换「维持泵」：按**有效位置**（显示 P + 最近
     POCHU_MASH_LAG 秒内已投递点击的保守推进量）计算补点量，悬停在
-    目标带中心，在途点击不会被重复追加；不按倒计时停手、维持到
-    窗口标题消失。2026-11-19 客栈破除封印「超出目标范围」失败后
+    目标带中上段，在途点击不会被重复追加；不按倒计时停手、维持到
+    窗口标题消失。**mash 的「保持」按钮不是停手信号**：最后 3 秒
+    「保持最后3秒」阶段游标不在带内即判失败，停手会让填充回退出带
+    （2026-11-20 客栈实机：13:32 场保持阶段 P 6.55→6.03 判失败、
+    失败对话后任务卡住；保持阶段强维持原型 P 4.36~4.81 全程在带 →
+    任务推进）。2026-11-19 客栈破除封印「超出目标范围」失败后
     重做——旧实现按显示值决策 + 目标带 +0.2 偏移，追帧滞后把游标
     推过真实右缘且误报「命中区间」。
     hold_catch=True 为「长按运输 + 短段长按维持」模式（须配合
@@ -376,8 +415,9 @@ def play_pochufengyin(win, title_icon, prefix="客栈", label="破除封印",
     fail_detect=True：每轮询（同帧）匹配「游戏失败」结果模板，连续
     POCHU_FAIL_CONFIRM 轮命中即停止全部操作并**提前返回失败**——
     失败结果面板标题仍在、不会自动关闭，旧逻辑要等标题消失（或超时），
-    且结束时按位置猜命中会误报成功；调用方（蛟魔探秘）据失败返回关闭
-    面板并重走任务。仅蛟魔探秘开启，其他调用方行为不变。
+    且结束时按位置猜命中会误报成功；蛟魔探秘据失败返回关闭面板并
+    重走任务，客栈破除封印据失败停止点击（面板随后自动关闭，任务侧
+    等 follow 超时重试）。蛟魔探秘/客栈开启，其他调用方行为不变。
     """
     perf = {"n": 0, "sum": 0.0, "max": 0.0, "last": None}  # 采样间隔统计
 
@@ -455,6 +495,17 @@ def play_pochufengyin(win, title_icon, prefix="客栈", label="破除封印",
             holder.stop()
             holder = None
 
+    def _live():
+        """点击前新帧复检窗口在场（2026-11-20 用户规则：模板不在就不点）。
+
+        窗口消失后缓存按钮坐标上的点击会落到世界画面让人物走动；复检
+        失败时顺带释放长按（防止鼠标卡在按下状态），本帧不再操作。
+        """
+        if _window_present(win, title_icon):
+            return True
+        _release_hold()
+        return False
+
     def _mash_pos_eff(now, p):
         """有效位置 = 显示 P + 在途（显示尚未追上）点击的推进量。
 
@@ -464,26 +515,51 @@ def play_pochufengyin(win, title_icon, prefix="客栈", label="破除封印",
         每批点击按投递时显示的 P（p0）记账：**该批投递后显示的峰值**
         已涨到的部分视为已兑现，只把尚未兑现的击数折算进有效位置——
         既不重复追加在途点击，也不会因填充条自然回退把已兑现点击
-        重新算成在途（那会把泵饿死、掉出带下）。台账条目在
-        POCHU_MASH_LAG 秒后过期。
+        重新算成在途（那会把泵饿死、掉出带下）。台账条目统一在
+        POCHU_MASH_LAG 秒后过期（大批次追帧可达 1s）；**计入有效位置**
+        只取阶段窗口内：冲刺段 POCHU_MASH_LAG、维持段
+        POCHU_MASH_LAG_HOLD（≤2 击/批追帧 ~0.3s，太长会让泵误以为位置
+        够高、少补点，保持阶段向左滑出带）。过期出窗口但仍在台账内的
+        条目由 _mash_unshown 用作「落地门」——在途批次未兑现前不补点，
+        防按滞后值重复追加把游标顶过右缘（2026-11-19 教训）。
         """
         nonlocal mash_inflight
+        lag = POCHU_MASH_LAG_HOLD if mash_hold else POCHU_MASH_LAG
         ratio = (mash_ratio or POCHU_MASH_RATIO0) * POCHU_MASH_RATIO_SAFETY
         fresh = []
         pending = 0.0
         for t, n, p0, p_peak in mash_inflight:
-            if now - t >= POCHU_MASH_LAG:
+            age = now - t
+            if age >= POCHU_MASH_LAG:
                 continue
             p_peak = max(p_peak, p)
             fresh.append([t, n, p0, p_peak])
+            if age >= lag:
+                continue
             unshown = n * ratio - max(0.0, p_peak - p0)
             if unshown > 0:
                 pending += unshown
         mash_inflight = fresh
         return p + pending
 
+    def _mash_unshown(now, p):
+        """在途未兑现的点击量（POCHU_MASH_LAG 窗口）：>0 时维持泵不补点。
+
+        维持段信用窗口短（0.35s）能快速补偿衰减，但连点批次落地前若
+        重复补点，追帧滞后会把游标叠推过右缘；此处用完整窗口做落地门，
+        批次兑现（峰值上涨）后自然放行。
+        """
+        ratio = (mash_ratio or POCHU_MASH_RATIO0) * POCHU_MASH_RATIO_SAFETY
+        total = 0.0
+        for t, n, p0, p_peak in mash_inflight:
+            if now - t >= POCHU_MASH_LAG:
+                continue
+            p_peak = max(p_peak, p)
+            total += max(0.0, n * ratio - max(0.0, p_peak - p0))
+        return total
+
     def _maintain_pump(now, p, bgr, L, R):
-        """维持泵：按有效位置把填充悬停在目标带中心（mash 维持段）。
+        """维持泵：按有效位置把填充悬停在目标带中上段（mash 维持段）。
 
         2026-11-19 重做（原点击率伺服按显示值决策，追帧滞后叠点冲过
         右缘）：补点量 = 有效位置到目标点 L+POCHU_MASH_PUMP_AIM 的
@@ -502,6 +578,9 @@ def play_pochufengyin(win, title_icon, prefix="客栈", label="破除封印",
         pos_eff = _mash_pos_eff(now, p)
         if pos_eff >= aim or pos_eff >= top:
             return
+        if _mash_unshown(now, p) > POCHU_MASH_UNSHOWN_GATE:
+            # 上一批点击还没反映到填充条：等落地再补点，防追帧滞后叠推过右缘
+            return
         if now - last_click < POCHU_MASH_PUMP_GAP:
             return
         ratio = (mash_ratio or POCHU_MASH_RATIO0) * POCHU_MASH_RATIO_SAFETY
@@ -512,7 +591,7 @@ def play_pochufengyin(win, title_icon, prefix="客栈", label="破除封印",
             region=POCHU_REGION, fallback=False)
         if dpt is not None:
             btn_pt = dpt  # 命中刷新按钮位置（防窗口漂移）
-        if btn_pt is not None:
+        if btn_pt is not None and _live():
             rapid_click_burst(win, btn_pt[0], btn_pt[1], n,
                               press=mash_press)
             clicks += n
@@ -596,6 +675,9 @@ def play_pochufengyin(win, title_icon, prefix="客栈", label="破除封印",
                                               threshold=POCHU_THRESHOLD,
                                               region=POCHU_REGION, fallback=False)
                 if kpt is not None:
+                    if not _live():
+                        _pace(t0)
+                        continue
                     human_click(win, kpt[0], kpt[1])
                     btn_pt = kpt
                     started = True
@@ -674,7 +756,10 @@ def play_pochufengyin(win, title_icon, prefix="客栈", label="破除封印",
                 _pochu_debug_dump(bgr, p, px, zone, debug_seq, prefix)
             # 完全停手判定（优先；terminal 一旦建立不再恢复）
             if terminal is None:
-                if btn and "保持" in btn:
+                if btn and "保持" in btn and not mash:
+                    # 冲刺模式的「保持」是最后 3 秒保持阶段的指令（倒计时
+                    # 重置 3→0），不是停手信号——停手填充回退出带即判失败
+                    # （2026-11-20 实机教训），mash 继续由维持泵保持
                     terminal = f"按钮变为「{btn}」"
                 elif not mash and not hold_catch and cnt is not None \
                         and cnt <= POCHU_CNT_STOP:
@@ -761,7 +846,8 @@ def play_pochufengyin(win, title_icon, prefix="客栈", label="破除封印",
                         if dpt is not None:
                             btn_pt = dpt  # 命中刷新按钮位置（防漂移）
                         # 按下后按钮外观会变，模板不命中时仍按缓存坐标按
-                        if btn_pt is not None:
+                        # （窗口标题须在新帧仍在：消失后按空会拖世界画面）
+                        if btn_pt is not None and _live():
                             h = MouseHold(win, btn_pt[0], btn_pt[1])
                             if h.start():
                                 holder = h
@@ -803,7 +889,8 @@ def play_pochufengyin(win, title_icon, prefix="客栈", label="破除封印",
                             if dpt is not None:
                                 btn_pt = dpt  # 命中刷新按钮位置（防漂移）
                             # 按下后按钮外观会变，模板不命中时仍按缓存坐标按
-                            if btn_pt is not None:
+                            # （窗口标题须在新帧仍在：消失后按空会拖世界画面）
+                            if btn_pt is not None and _live():
                                 h = MouseHold(win, btn_pt[0], btn_pt[1])
                                 if h.start():
                                     holder = h
@@ -849,7 +936,8 @@ def play_pochufengyin(win, title_icon, prefix="客栈", label="破除封印",
                         btn_pt = dpt  # 命中刷新按钮位置（防窗口漂移）
                     # 按下后按钮外观会变（用户 2026-11-10 确认），模板
                     # 不命中时仍按缓存坐标按下/续按
-                    if btn_pt is not None:
+                    # （窗口标题须在新帧仍在：消失后按空会拖世界画面）
+                    if btn_pt is not None and _live():
                         h = MouseHold(win, btn_pt[0], btn_pt[1])
                         if h.start():
                             holder = h
@@ -938,7 +1026,7 @@ def play_pochufengyin(win, title_icon, prefix="客栈", label="破除封印",
                             region=POCHU_REGION, fallback=False)
                         if dpt is not None:
                             btn_pt = dpt  # 命中刷新按钮位置（防窗口漂移）
-                        if btn_pt is not None:
+                        if btn_pt is not None and _live():
                             # 整批一次定位/一把锁，逐击按下抬起（静默通道
                             # ~20ms/击；逐击 rapid_click 静默 ~150ms/击，
                             # 倒计时内推不到目标带）
@@ -970,7 +1058,8 @@ def play_pochufengyin(win, title_icon, prefix="客栈", label="破除封印",
                         btn_pt = dpt  # 命中刷新按钮位置（防窗口漂移）
                     # 按钮在过程中会变成其他外观但坐标不变（用户 2026-11-09
                     # 确认），模板不命中时仍按缓存坐标续点
-                    if btn_pt is not None:
+                    # （窗口标题须在新帧仍在：消失后点空会拖世界画面）
+                    if btn_pt is not None and _live():
                         human_click(win, btn_pt[0], btn_pt[1])
                         clicks += 1
                         last_click = now

@@ -537,14 +537,112 @@ def test_play_pochufengyin_delegates_shared_module(monkeypatch):
     """
     seen = {}
 
-    def _play(win, icon, prefix="客栈", label="破除封印", mash=False):
-        seen.update(icon=icon, prefix=prefix, label=label, mash=mash)
+    def _play(win, icon, prefix="客栈", label="破除封印", mash=False,
+              fail_detect=False):
+        seen.update(icon=icon, prefix=prefix, label=label, mash=mash,
+                    fail_detect=fail_detect)
         return True, "破除封印结束"
 
     monkeypatch.setattr(kezhan._pochu_minigame, "play_pochufengyin", _play)
     assert kezhan._play_pochufengyin(object()) == (True, "破除封印结束")
     assert seen == {"icon": "kezhan_pochufengyin.png",
-                    "prefix": "客栈", "label": "破除封印", "mash": True}
+                    "prefix": "客栈", "label": "破除封印", "mash": True,
+                    "fail_detect": True}
+
+
+# ---- 破除封印失败重试（2026-11-20 用户规则）----
+def test_pochu_fail_retry_schedule_and_reset():
+    """判负 → 计数并安排重走；成功/新一轮复位。"""
+    kezhan._reset_pochu_fail_state()
+    kezhan._schedule_pochu_retry()
+    assert kezhan._pochu_fail_streak == 1
+    assert kezhan._pochu_retry_at > 0.0
+    kezhan._reset_pochu_fail_state()
+    assert kezhan._pochu_fail_streak == 0
+    assert kezhan._pochu_retry_at == 0.0 and kezhan._pochu_retry_watch_at == 0.0
+
+
+def test_pochu_fail_retry_streak_cap():
+    """连续失败超上限：停止自动重试（不安排重走）。"""
+    kezhan._reset_pochu_fail_state()
+    for _ in range(kezhan.POCHU_FAIL_RETRY_MAX + 1):
+        kezhan._schedule_pochu_retry()
+    assert kezhan._pochu_fail_streak == kezhan.POCHU_FAIL_RETRY_MAX + 1
+    assert kezhan._pochu_retry_at == 0.0
+    kezhan._reset_pochu_fail_state()
+
+
+def test_pochu_retry_closes_fail_panel_before_tracking(monkeypatch):
+    """看门狗：失败面板必须先点 X 关闭（不关面板重走无效，2026-11-20
+    用户规则）；失败对话在场先等；都退场后重点任务链接一次。"""
+    import numpy as np
+
+    class _Win:
+        def capture(self, force_activate=False):
+            return np.zeros((831, 1378, 3), dtype=np.uint8)
+
+    win = _Win()
+    calls = {"track": 0, "close": 0}
+    state = {"panel": True, "fail": True, "dialog": False}
+
+    monkeypatch.setattr(kezhan, "_pochu_panel_present",
+                        lambda bgr: state["panel"])
+    monkeypatch.setattr(kezhan, "_pochu_fail_panel_present",
+                        lambda bgr: state["panel"] and state["fail"])
+    monkeypatch.setattr(kezhan, "dialog_frame_score",
+                        lambda img: 0.99 if state["dialog"] else 0.10)
+
+    def _close(w):
+        calls["close"] += 1
+        return True, "失败面板已关闭"
+
+    monkeypatch.setattr(kezhan, "_close_pochu_fail_panel", _close)
+
+    def _track(w, title, **kw):
+        calls["track"] += 1
+        return True, "已点击绿字"
+
+    monkeypatch.setattr(kezhan.task_tracker, "track_task", _track)
+
+    kezhan._reset_pochu_fail_state()
+    kezhan._pochu_armed_at = 0.0
+    kezhan._pochu_retry_at = 1.0  # 已到点（time.time() 恒远大于 1）
+    # 1) 失败面板在场：先关面板，不点任务追踪（面板会拦住点击）
+    kezhan._pochu_retry_watch_at = 0.0
+    assert kezhan._maybe_retry_pochu_fail(win) is True
+    assert calls == {"track": 0, "close": 1}
+    assert kezhan._pochu_retry_at > 0.0  # 面板关闭后仍待重走
+    # 2) 面板已关、失败对话仍在：等剧情兜底点屏，不叠操作
+    state["panel"] = False
+    state["dialog"] = True
+    kezhan._pochu_retry_watch_at = 0.0
+    assert kezhan._maybe_retry_pochu_fail(win) is False
+    assert calls == {"track": 0, "close": 1}
+    # 3) 面板/对话都退场：重点任务链接一次并清除待重试
+    state["dialog"] = False
+    kezhan._pochu_retry_watch_at = 0.0
+    assert kezhan._maybe_retry_pochu_fail(win) is True
+    assert calls == {"track": 1, "close": 1}
+    assert kezhan._pochu_retry_at == 0.0
+    kezhan._reset_pochu_fail_state()
+
+
+def test_close_pochu_fail_panel_refuses_normal_game(monkeypatch):
+    """面板在场但非失败结果态：绝不点 X（正常游戏中不得误关）。"""
+    import numpy as np
+    clicks = []
+
+    class _Win:
+        def capture(self, force_activate=False):
+            return np.zeros((831, 1378, 3), dtype=np.uint8)
+
+    monkeypatch.setattr(kezhan, "_pochu_panel_present", lambda bgr: True)
+    monkeypatch.setattr(kezhan, "_pochu_fail_panel_present", lambda bgr: False)
+    monkeypatch.setattr(kezhan, "human_click",
+                        lambda w, x, y: clicks.append((x, y)))
+    closed, info = kezhan._close_pochu_fail_panel(_Win())
+    assert closed is False and "非失败结果态" in info
+    assert clicks == []
 
 
 # ---- 诊断页找阿旺验证（2026-11-10）----
