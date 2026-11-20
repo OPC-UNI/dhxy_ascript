@@ -1364,3 +1364,245 @@ def test_relocate_arrival_filter_none_still_checks_dialog(monkeypatch):
     img = np.zeros((831, 1378, 3), np.uint8)
     desc = xiuluo._relocate_arrival(None, img, img, ("灵兽村", 60, 60))
     assert desc and "自动弹出" in desc
+
+
+# ---------------- 兼容无快捷寻路（手动寻路，用户 2026-11-20） ----------------
+
+def test_parse_claim_destination_normal(monkeypatch):
+    """领取对话框文案解析：全角括号/逗号 → (地图名, x, y)。"""
+    logged = []
+    monkeypatch.setattr(xiuluo, "log", lambda m, l="INFO": logged.append(m))
+    items = [("去往洛阳城（191，110）消灭修罗", (500, 300, 800, 330), 0.95)]
+    assert xiuluo._parse_claim_destination(None, items) == ("洛阳城", 191, 110)
+    assert any("领取对话框文案" in m for m in logged)  # 全文写日志便于调整
+
+
+def test_parse_claim_destination_layer(monkeypatch):
+    monkeypatch.setattr(xiuluo, "log", lambda m, l="INFO": None)
+    items = [("速去大雁塔四层(10, 20)消灭修罗", (500, 300, 800, 330), 0.95)]
+    assert xiuluo._parse_claim_destination(None, items) == ("大雁塔四层", 10, 20)
+
+
+def test_parse_claim_destination_ignores_panel_lines(monkeypatch):
+    """只认对话框区域行（x≥PANEL_MAX_X）；追踪面板行里的坐标不算。"""
+    monkeypatch.setattr(xiuluo, "log", lambda m, l="INFO": None)
+    items = [("洛阳城（191,110）", (10, 230, 380, 250), 0.95)]
+    assert xiuluo._parse_claim_destination(None, items) is None
+
+
+def test_parse_claim_destination_no_coords(monkeypatch):
+    monkeypatch.setattr(xiuluo, "log", lambda m, l="INFO": None)
+    items = [("阻止它为非作歹", (500, 300, 800, 330), 0.95)]
+    assert xiuluo._parse_claim_destination(None, items) is None
+
+
+def test_task_markers_dedupes_and_sorts(monkeypatch):
+    """多命中：重叠去重（24px 内视为同一标记），按 y/x 排序。"""
+    monkeypatch.setattr(
+        xiuluo.game_map, "find_all_template_in",
+        lambda img, icon, threshold=0.8, region=None: [
+            (100, 200), (106, 204), (300, 100)])
+    assert xiuluo._task_markers(_FakeWin()) == [(300, 100), (100, 200)]
+
+
+def test_manual_nav_round_without_dest(monkeypatch):
+    called = []
+    monkeypatch.setattr(xiuluo.map_nav, "navigate_to_map_coordinate",
+                        lambda *a, **k: called.append(1))
+    ok, info = xiuluo._manual_nav_round(_FakeWin(), None)
+    assert not ok and "未解析" in info
+    assert called == []
+
+
+def test_manual_nav_round_navigates_and_fights(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        xiuluo.map_nav, "navigate_to_map_coordinate",
+        lambda win, name, x, y, log_fn=None: (
+            calls.append((name, x, y)) or (True, "到达")))
+    monkeypatch.setattr(xiuluo, "_click_markers_and_fight",
+                        lambda win: (True, "战斗已结束"))
+    ok, _info = xiuluo._manual_nav_round(_FakeWin(), ("洛阳城", 191, 110))
+    assert ok and calls == [("洛阳城", 191, 110)]
+
+
+def test_click_markers_fight_flow(monkeypatch):
+    """单个标记 → 看打对话 → 战斗开始 → 等战斗结束。"""
+    monkeypatch.setattr(xiuluo, "is_in_battle", lambda win: False)
+    monkeypatch.setattr(xiuluo, "_task_markers",
+                        lambda win, img=None: [(300, 260)])
+    monkeypatch.setattr(xiuluo.time, "sleep", lambda s: None)
+    clicks = []
+    monkeypatch.setattr(xiuluo, "human_click",
+                        lambda win, x, y, **k: clicks.append((x, y)))
+    monkeypatch.setattr(xiuluo, "move_away", lambda win: None)
+    monkeypatch.setattr(xiuluo, "_wait_fight_dialog",
+                        lambda win, timeout: "dialog")
+    monkeypatch.setattr(xiuluo, "_wait_battle_start",
+                        lambda win, timeout: True)
+    monkeypatch.setattr(xiuluo, "_wait_manual_battle_end",
+                        lambda win: (True, "战斗已结束（手动寻路回合）"))
+    ok, info = xiuluo._click_markers_and_fight(_FakeWin())
+    assert ok and info.startswith("战斗已结束")
+    assert clicks == [(300, 260)]
+
+
+def test_click_markers_alt_fallback_fails(monkeypatch):
+    """无标记 → Alt+A → 仍无 → 点屏幕中间释放，判失败（用户第 7 条）。"""
+    monkeypatch.setattr(xiuluo, "is_in_battle", lambda win: False)
+    monkeypatch.setattr(xiuluo, "_task_markers", lambda win, img=None: [])
+    monkeypatch.setattr(xiuluo.time, "sleep", lambda s: None)
+    hotkeys = []
+    monkeypatch.setattr(xiuluo.app_utils, "press_alt_hotkey",
+                        lambda win, key, label, prefix="": (
+                            hotkeys.append(key) or (True, "alt")))
+    clicks = []
+    monkeypatch.setattr(xiuluo, "human_click",
+                        lambda win, x, y, **k: clicks.append((x, y)))
+    monkeypatch.setattr(xiuluo, "move_away", lambda win: None)
+    ok, info = xiuluo._click_markers_and_fight(_FakeWin())
+    assert not ok and "Alt+A" in info
+    assert hotkeys == ["a"]
+    assert CENTER in clicks
+
+
+def test_cancel_task_assume_task_skips_tracker(monkeypatch):
+    """无追踪取消：assume_task=True 不查面板；默认路径仍以面板为准。"""
+    monkeypatch.setattr(xiuluo, "is_in_battle", lambda win: False)
+    tracker_calls = []
+    monkeypatch.setattr(xiuluo.task_tracker, "has_task",
+                        lambda *a, **k: tracker_calls.append(1) or False)
+    monkeypatch.setattr(xiuluo, "_walk_to_claim_spot",
+                        lambda win, just_returned=False: (False, "测试停止"))
+    ok, info = xiuluo._cancel_task(_FakeWin(), assume_task=True)
+    assert not ok and "测试停止" in info
+    assert tracker_calls == []
+    ok, info = xiuluo._cancel_task(_FakeWin())
+    assert not ok and "无需取消" in info
+    assert tracker_calls == [1]
+
+
+def test_click_markers_battle_skips_alt(monkeypatch):
+    """进入战斗就不用 Alt+A：等战斗结束按原流程收尾（用户 2026-11-20）。"""
+    monkeypatch.setattr(xiuluo, "_fight_via_kanda", False)
+    state = {"battle": True}
+    monkeypatch.setattr(xiuluo, "is_in_battle", lambda win: state["battle"])
+    monkeypatch.setattr(xiuluo.time, "sleep", lambda s: None)
+    hotkeys = []
+    monkeypatch.setattr(xiuluo.app_utils, "press_alt_hotkey",
+                        lambda *a, **k: hotkeys.append(1) or (True, "alt"))
+    markers_called = []
+    monkeypatch.setattr(xiuluo, "_task_markers",
+                        lambda win, img=None: markers_called.append(1) or [])
+    monkeypatch.setattr(xiuluo, "human_click", lambda *a, **k: None)
+    monkeypatch.setattr(xiuluo, "move_away", lambda win: None)
+
+    def _wait_end_manual(win):
+        state["battle"] = False
+        return True, "战斗已结束（手动寻路回合）"
+
+    monkeypatch.setattr(xiuluo, "_wait_manual_battle_end", _wait_end_manual)
+    ok, info = xiuluo._click_markers_and_fight(_FakeWin())
+    assert ok and info.startswith("战斗已结束")
+    assert hotkeys == []          # 不再使用 Alt+A
+    assert markers_called == []   # 也不再找任务模板
+    assert xiuluo._fight_via_kanda is True  # 战后按原流程返程
+
+
+def test_force_manual_default_off():
+    """强制手动寻路开关默认关闭（测试用，用户 2026-11-20）。"""
+    from src.core import settings as core_settings
+    assert core_settings.load_xiuluo_force_manual() is False
+
+
+def test_parse_claim_destination_wait_retries(monkeypatch):
+    """强制模式：校验帧没解析到目的地时短窗轮询现场 OCR。"""
+    calls = []
+
+    def _parse(win, items=None):
+        calls.append(items)
+        return None if len(calls) < 2 else ("洛阳城", 191, 110)
+
+    monkeypatch.setattr(xiuluo, "_parse_claim_destination", _parse)
+    monkeypatch.setattr(xiuluo.time, "sleep", lambda s: None)
+    assert xiuluo._parse_claim_destination_wait(None) == ("洛阳城", 191, 110)
+    assert len(calls) == 2
+
+
+def test_parse_claim_destination_gates_dialog_template(monkeypatch):
+    """现场 OCR 前有对话框模板门控：对话框不在场不跑区域 OCR。"""
+    monkeypatch.setattr(xiuluo, "dialog_frame_score", lambda img: 0.1)
+
+    def _boom(*a, **k):  # pragma: no cover - 被调用即失败
+        raise AssertionError("对话框不在场不应 OCR")
+
+    monkeypatch.setattr(xiuluo.game_map, "ocr_region", _boom)
+    assert xiuluo._parse_claim_destination(_FakeWin(), None) is None
+
+
+def test_manual_nav_default_on():
+    """兼容无快捷寻路默认开启（有追踪时行为不变）。"""
+    from src.core import settings as core_settings
+    assert core_settings.load_xiuluo_manual_nav() is True
+
+
+def test_schemes_include_manual_nav_keys():
+    """两个新开关进入配置方案表（快照/应用/导出都覆盖）。"""
+    from src.core import schemes, settings as core_settings
+    spec = schemes._settings_spec()
+    assert spec[core_settings._XIULUO_MANUAL_NAV_KEY] is True
+    assert spec[core_settings._XIULUO_FORCE_MANUAL_KEY] is False
+
+
+def test_wait_fight_dialog_direct_battle_marks_kanda(monkeypatch):
+    """点标记直接进战斗：必须置 _fight_via_kanda（否则战后不返程）。"""
+    monkeypatch.setattr(xiuluo, "_fight_via_kanda", False)
+    monkeypatch.setattr(xiuluo, "is_in_battle_frame", lambda img: True)
+    res = xiuluo._wait_fight_dialog(_FakeWin(), 1.0)
+    assert res == "fight"
+    assert xiuluo._fight_via_kanda is True
+
+
+def test_wait_manual_battle_end_lunhuisi_fails(monkeypatch):
+    """战斗后落轮回司 = 战败（不能按本轮完成返程）。"""
+    monkeypatch.setattr(xiuluo, "_wait_battle_end",
+                        lambda win, timeout=60: (True, "战斗已结束"))
+    monkeypatch.setattr(xiuluo.time, "sleep", lambda s: None)
+    monkeypatch.setattr(xiuluo.game_map, "read_map_position",
+                        lambda *a, **k: ("轮回司", 10, 20))
+    monkeypatch.setattr(xiuluo.team, "is_in_lunhuisi",
+                        lambda pos: pos is not None and pos[0] == "轮回司")
+    ok, info = xiuluo._wait_manual_battle_end(_FakeWin())
+    assert not ok and "轮回司" in info
+
+
+def test_wait_manual_battle_end_task_still_tracked(monkeypatch):
+    """战斗后任务仍在追踪 = 战斗失败（防随机遭遇按本轮完成）。"""
+    monkeypatch.setattr(xiuluo, "_wait_battle_end",
+                        lambda win, timeout=60: (True, "战斗已结束"))
+    monkeypatch.setattr(xiuluo.time, "sleep", lambda s: None)
+    monkeypatch.setattr(xiuluo.game_map, "read_map_position",
+                        lambda *a, **k: ("龙窟一层", 10, 20))
+    monkeypatch.setattr(xiuluo.team, "is_in_lunhuisi", lambda pos: False)
+    monkeypatch.setattr(
+        xiuluo, "_task_absent_in_frame",
+        lambda img: (False, [("常规玩法", (10, 200, 200, 220), 0.9)]))
+    ok, info = xiuluo._wait_manual_battle_end(_FakeWin())
+    assert not ok and "仍在追踪" in info
+
+
+def test_parse_claim_destination_real_text(monkeypatch):
+    """用户提供的真机文案：请速去大雁塔四层(108, 37)处消灭修罗，阻止它为非作歹。"""
+    monkeypatch.setattr(xiuluo, "log", lambda m, l="INFO": None)
+    items = [("请速去大雁塔四层(108, 37)处消灭修罗，阻止它为非作歹。",
+              (430, 300, 950, 330), 0.96)]
+    assert xiuluo._parse_claim_destination(None, items) == ("大雁塔四层", 108, 37)
+
+
+def test_parse_claim_destination_real_text_split_lines(monkeypatch):
+    """真机文案被 OCR 拆成两行（换行在句尾）时仍能拼接解析。"""
+    monkeypatch.setattr(xiuluo, "log", lambda m, l="INFO": None)
+    items = [("请速去大雁塔四层(108, 37)处消灭修罗，阻止它为非作",
+              (430, 300, 950, 318), 0.95),
+             ("歹。", (430, 314, 470, 334), 0.92)]
+    assert xiuluo._parse_claim_destination(None, items) == ("大雁塔四层", 108, 37)

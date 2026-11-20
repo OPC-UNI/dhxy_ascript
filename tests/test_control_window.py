@@ -861,6 +861,28 @@ def test_moved_verify_methods_no_window_paths(monkeypatch):
     assert host.verify_silent_click("bogus")["status"] == "error"
 
 
+def test_cancel_map_navigate_only_when_running(monkeypatch):
+    """中断按钮：无导航时拒绝，导航中转发 map_nav.request_cancel。"""
+    import types
+
+    from src.app import diagnostics
+    from src.device import map_nav
+
+    class _Host(diagnostics.DiagnosticsMixin):
+        def __init__(self):
+            self._tm = types.SimpleNamespace(is_running=lambda: False)
+            self._verifying = False
+            self._map_nav_running = False
+
+    host = _Host()
+    assert host.cancel_map_navigate()["status"] == "ignored"
+    calls = []
+    monkeypatch.setattr(map_nav, "request_cancel", lambda: calls.append(1))
+    host._map_nav_running = True
+    r = host.cancel_map_navigate()
+    assert r["status"] == "success" and calls == [1]
+
+
 def test_mixin_methods_resolve_without_shadowing():
     """P3 拆分：四个 mixin 的每个方法在 ControlWindow 上原样解析（无遮蔽）。
 

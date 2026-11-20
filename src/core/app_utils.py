@@ -410,6 +410,25 @@ def human_click(win, x: int, y: int, button: str = "primary"):
         _mouse_call(Mouse.click, button=button)
 
 
+def human_scroll(win, x: int, y: int, lines: int):
+    """在窗口相对坐标 (x, y) 处滚轮；lines 正数向上、负数向下。
+
+    静默模式走窗口消息 WM_MOUSEWHEEL（不移动物理鼠标、窗口可后台）；
+    物理模式先把鼠标移到该点再发滚轮。用于寻路面板等自绘列表滚动。
+    返回是否成功投递。
+    """
+    if _SILENT_CLICK:
+        from ..device import silent_click  # 延迟导入防循环
+        return silent_click.send_silent_wheel(win, x, y, lines) is not None
+    with _INPUT_LOCK:
+        sx = win.rect.left + int(x)
+        sy = win.rect.top + int(y)
+        _mouse_call(Mouse.mouse_move, sx, sy,
+                    move_duration=random.uniform(0.04, 0.09))
+        _mouse_call(Mouse.scroll, int(lines), sx, sy)
+    return True
+
+
 def precise_click(win, x: int, y: int, times: int = 1, interval: float = 0.4,
                   move_duration: float = None):
     """精确点击：跳过拟人化落点抖动（±2px），支持原地连点（购买多件）。

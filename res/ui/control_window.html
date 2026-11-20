@@ -1146,6 +1146,16 @@
                     </label>
                     <div class="set-sect"><span>队长执行</span><span class="sect-hint">仅队长走 NPC，组号队员自动跟随；非队长开关无效</span></div>
                     <label class="switch-row">
+                        <input type="checkbox" id="xiuluo-manual-nav">
+                        <span class="switch-track"></span>
+                        <span>兼容无快捷寻路（手动寻路）</span>
+                    </label>
+                    <label class="switch-row">
+                        <input type="checkbox" id="xiuluo-force-manual">
+                        <span class="switch-track"></span>
+                        <span>强制手动寻路（忽略快捷寻路，测试用）</span>
+                    </label>
+                    <label class="switch-row">
                         <input type="checkbox" id="xiuluo-auto-wuyi">
                         <span class="switch-track"></span>
                         <span>自动巫医</span>
@@ -1992,6 +2002,22 @@
                     <div class="group-hint">机关模板：对当前游戏画面逐一测试黄/蓝/红三个机关模板，打印全帧最佳匹配度与位置日志（只读不点击），请将游戏画面停在封印机关场景再测试。坐标：读取游戏左上角当前地图名与坐标并打印日志（只读）。对话框识别：单帧模板匹配判定对话框是否在场并计时、同时计时对话区 OCR——请分别在有对话框（如巫医/任务对话）和无对话框场景各点一次，对照日志中模板分数与两段耗时（方案验证：模板未命中即跳过对话 OCR）。申请加入：单帧匹配申请加入面板并识别申请人行（名字+等级+点击点坐标，只读）——请打开申请加入面板（有人申请时点组队按钮出现）再点，对照日志中识别出的申请人是否与面板一致。四项任务运行中也可使用。</div>
                 </div>
                 <div class="group-box">
+                    <div class="group-title">地图导航</div>
+                    <div class="verify-row">
+                        <span class="group-label">地图</span>
+                        <select id="map-nav-map" class="skill-select"></select>
+                    </div>
+                    <div class="verify-row">
+                        <span class="group-label">坐标</span>
+                        <input id="map-nav-x" class="shout-input" type="number" min="0" max="9999" placeholder="X" style="width:72px;flex:none;">
+                        <input id="map-nav-y" class="shout-input" type="number" min="0" max="9999" placeholder="Y" style="width:72px;flex:none;">
+                        <button id="btn-map-nav-run" class="btn" onclick="mapNavRun()">执行导航</button>
+                        <button id="btn-map-nav-cancel" class="btn" onclick="mapNavCancel()" disabled>中断寻路</button>
+                        <span class="verify-result" id="map-nav-result"></span>
+                    </div>
+                    <div class="group-hint">打开世界地图 → 城市标签（层级图再点层块；大雁塔走「寻路」面板搜索目的地→点黄色链接）→ 在地图上悬停读坐标标定像素换算 → 悬停校验后点击地图点寻路 → 等待 HUD 地名 + 坐标 ±10 到达（2026-11-20 实机验证机制，普通图/龙窟/凤巢/大雁塔均免采样）。会真实移动人物，任务运行中不可用。执行中可点「中断寻路」（1-3 秒内停止自动操作并关闭地图；人物自身的自动寻路不会因此停止）。</div>
+                </div>
+                <div class="group-box">
                     <div class="group-title">截屏通道</div>
                     <div class="verify-row">
                         <button id="btn-verify-capture-diag" class="btn" onclick="verifyCaptureDiag()">开始诊断</button>
@@ -2118,6 +2144,8 @@
     const devTools = document.getElementById('nav-diag');  // 调试信息开关控制「诊断」导航显隐
     const xiuluoHezi = document.getElementById('xiuluo-hezi');
     const xiuluoCheckTeam = document.getElementById('xiuluo-check-team');
+    const xiuluoManualNav = document.getElementById('xiuluo-manual-nav');
+    const xiuluoForceManual = document.getElementById('xiuluo-force-manual');
     const xiuluoAutoCreateTeam = document.getElementById('xiuluo-auto-create-team');
     const xiuluoAutoRejoin = document.getElementById('xiuluo-auto-rejoin');
     const xiuluoAutoKickAway = document.getElementById('xiuluo-auto-kick-away');
@@ -2235,6 +2263,12 @@
     const jiguanVerifyResultEl = document.getElementById('jiguan-verify-result');
     const btnVerifyPosition = document.getElementById('btn-verify-position');
     const positionVerifyResultEl = document.getElementById('position-verify-result');
+    const mapNavMapEl = document.getElementById('map-nav-map');
+    const mapNavXEl = document.getElementById('map-nav-x');
+    const mapNavYEl = document.getElementById('map-nav-y');
+    const btnMapNavRun = document.getElementById('btn-map-nav-run');
+    const btnMapNavCancel = document.getElementById('btn-map-nav-cancel');
+    const mapNavResultEl = document.getElementById('map-nav-result');
     const btnVerifyDialogDetect = document.getElementById('btn-verify-dialog-detect');
     const dialogDetectVerifyResultEl = document.getElementById('dialog-detect-verify-result');
     const btnVerifyApplyPanel = document.getElementById('btn-verify-apply-panel');
@@ -2438,6 +2472,9 @@
         if (name === 'stats') refreshStats();
         if (name === 'message') refreshMessagePage();
         if (name === 'group') groupLoadLastScan();
+        // 诊断页地图下拉：首次加载失败（桥接异常/返回 null）后，
+        // 每次进诊断页重试，不必等切方案/重载整页
+        if (name === 'diag' && !mapNavOptionsLoaded) loadMapNavOptions();
     }
 
     /* ================= 运行看板渲染 ================= */
@@ -3844,6 +3881,12 @@
     xiuluoCheckTeam.addEventListener('change', () => {
         callPython('save_xiuluo_check_team', xiuluoCheckTeam.checked);
     });
+    xiuluoManualNav.addEventListener('change', () => {
+        callPython('save_xiuluo_manual_nav', xiuluoManualNav.checked);
+    });
+    xiuluoForceManual.addEventListener('change', () => {
+        callPython('save_xiuluo_force_manual', xiuluoForceManual.checked);
+    });
     xiuluoAutoCreateTeam.addEventListener('change', () => {
         callPython('save_xiuluo_auto_create_team', xiuluoAutoCreateTeam.checked);
     });
@@ -4302,6 +4345,8 @@
         applyDevTools();  // 调试信息开关：控制「诊断」导航入口显隐
         xiuluoHezi.checked = !!info.xiuluo_hezi;
         xiuluoCheckTeam.checked = !!info.xiuluo_check_team;
+        xiuluoManualNav.checked = !!info.xiuluo_manual_nav;
+        xiuluoForceManual.checked = !!info.xiuluo_force_manual;
         // 组号设置页：修罗/五倍/种族比武「检查队伍」未开启时提示（组号模式要求必须开启）
         if (info.group_check_team) {
             const allOn = info.group_check_team.xiuluo
@@ -4450,6 +4495,7 @@
             btn.innerText = open ? '▴' : '▾';
         });
         update();  // 应用老板键文案（启动/停止按钮后缀）
+        loadMapNavOptions();  // 诊断页地图下拉（异步填充，不阻塞首屏）
         await refreshProgress();
         refreshGroupState();  // 组号入口首屏即时刷新（其后 5s 兜底轮询）
         return true;
@@ -6481,6 +6527,94 @@
         btnVerifyPosition.disabled = false;
         positionVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         positionVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+    };
+
+    // ---- 地图导航（诊断）：地图下拉 + 坐标输入 + 执行/中断 ----
+    // 机制：世界地图→城市标签（层级图点层块；大雁塔走寻路面板）→
+    // 悬停标定地图窗口→悬停校验后点图→等 HUD 地名+坐标 ±10 到达；
+    // 执行中可点「中断寻路」协作式停止（1-3s 生效）。
+    let mapNavOptionsLoaded = false;
+    async function loadMapNavOptions() {
+        if (mapNavOptionsLoaded || !mapNavMapEl) return;
+        try {
+            const r = await callPython('get_navigate_maps');
+            if (!r || r.status !== 'success' || !Array.isArray(r.maps) || !r.maps.length) return;
+            mapNavMapEl.innerHTML = '';
+            for (const name of r.maps) {
+                const opt = document.createElement('option');
+                opt.value = name;
+                opt.textContent = name;
+                mapNavMapEl.appendChild(opt);
+            }
+            mapNavOptionsLoaded = true;
+        } catch (e) { /* 下次进入诊断页再试 */ }
+    }
+    async function mapNavRun() {
+        if (verifying) return;
+        const name = mapNavMapEl ? mapNavMapEl.value : '';
+        const x = mapNavXEl ? parseInt(mapNavXEl.value, 10) : NaN;
+        const y = mapNavYEl ? parseInt(mapNavYEl.value, 10) : NaN;
+        if (!name) {
+            mapNavResultEl.style.color = 'var(--danger-text)';
+            mapNavResultEl.innerText = '请先选择地图（下拉为空可稍候重进诊断页）';
+            return;
+        }
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            mapNavResultEl.style.color = 'var(--danger-text)';
+            mapNavResultEl.innerText = '请填写 X / Y 坐标（整数）';
+            return;
+        }
+        verifying = true;
+        btnMapNavRun.disabled = true;
+        // 中断按钮在导航线程确认启动后再启用（否则「已开始」前点中断
+        // 会被后端以 ignored 拒绝，按钮随后又不可再点）
+        if (btnMapNavCancel) btnMapNavCancel.disabled = true;
+        mapNavResultEl.style.color = 'var(--text)';
+        mapNavResultEl.innerText = '导航中...（过程见日志）';
+        try {
+            const r = await callPython('verify_map_navigate', name, x, y);
+            if (!r || r.status !== 'success') {
+                mapNavResultEl.style.color = 'var(--danger-text)';
+                mapNavResultEl.innerText = (r && r.msg) || '导航请求失败';
+                verifying = false;
+                btnMapNavRun.disabled = false;
+                if (btnMapNavCancel) btnMapNavCancel.disabled = true;
+            } else if (btnMapNavCancel) {
+                btnMapNavCancel.disabled = false;  // 线程已启动，允许中断
+            }
+            // 成功：等待 Python 侧 onMapNavigateResult 回推最终结果
+        } catch (e) {
+            mapNavResultEl.style.color = 'var(--danger-text)';
+            mapNavResultEl.innerText = '导航请求异常';
+            verifying = false;
+            btnMapNavRun.disabled = false;
+            if (btnMapNavCancel) btnMapNavCancel.disabled = true;
+        }
+    }
+    async function mapNavCancel() {
+        if (!verifying) return;
+        if (btnMapNavCancel) btnMapNavCancel.disabled = true;
+        try {
+            const r = await callPython('cancel_map_navigate');
+            mapNavResultEl.style.color = 'var(--text)';
+            mapNavResultEl.innerText = (r && r.msg) || '已发送中断请求';
+            // 后端拒绝（当前没有进行中的导航）：恢复按钮允许重试，
+            // 不能因为一次 ignored 就再也点不了中断
+            if ((!r || r.status !== 'success') && verifying && btnMapNavCancel) {
+                btnMapNavCancel.disabled = false;
+            }
+        } catch (e) {
+            mapNavResultEl.style.color = 'var(--danger-text)';
+            mapNavResultEl.innerText = '中断请求异常';
+            if (btnMapNavCancel) btnMapNavCancel.disabled = false;
+        }
+    }
+    window.onMapNavigateResult = function (ok, info) {
+        verifying = false;
+        btnMapNavRun.disabled = false;
+        if (btnMapNavCancel) btnMapNavCancel.disabled = true;
+        mapNavResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
+        mapNavResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
     async function verifyDialogDetect() {

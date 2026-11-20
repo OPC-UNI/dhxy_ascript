@@ -126,7 +126,10 @@ WORLD_MAP_OCR_ALIASES = str.maketrans({
 # 「长安」是任务的**位置识别地名**（五环/种族比武用 CHANGAN 做位置比对），
 # 世界地图标签名为「长安城」——不开别名表时只能靠相似度 0.8 与「长安东」
 # 打平（快照顺序决定胜负，不可依赖）。
-WORLD_MAP_NAME_ALIASES = {"长安": "长安城"}
+# 「长安城东」：HUD 位置地名（实测 2026-11-20 地图导航在长安东内），
+# 世界地图标签名为「长安东」——相似度与「长安城」打平（0.857），
+# 不开别名会被 difflib 归到「长安城」，导致到达判定地名不匹配。
+WORLD_MAP_NAME_ALIASES = {"长安": "长安城", "长安城东": "长安东"}
 # 世界地图打开标志模板（实测匹配 0.95，右键其位置可关闭）
 # 小地图面板匹配区域（右上区）：面板可拖动但 58 帧实测均在
 # (900-1100, 150-300)；锄遗聚宝小游戏等面板含相似图标，会误匹配到
@@ -206,7 +209,8 @@ def resolve_world_map_name(name):
 
     地图名来自固定地点表，OCR 误读多为个别字（蓬菜/繁体 龍宫 等）：
     先做繁体/形近归一（WORLD_MAP_OCR_ALIASES）与位置地名别名
-    （WORLD_MAP_NAME_ALIASES：长安→长安城），再精确匹配，最后取相似度
+    （WORLD_MAP_NAME_ALIASES：长安→长安城、长安城东→长安东），再精确
+    匹配，最后取相似度
     最高且 ≥0.6 的候选；短名（2 字）也按全名比对，不做部分包含匹配
     （长安东/长安城 相似度 0.667，取更高者）。未收录返回 None。
     """
@@ -471,6 +475,26 @@ def find_template_in(img, icon, threshold=0.8, region=None):
     if not results:
         return None
     return results[0].x + ox, results[0].y + oy
+
+
+def find_all_template_in(img, icon, threshold=0.8, region=None):
+    """在已捕获图像内查找模板的全部命中，返回 [(x, y), ...]。
+
+    find_template_in 的多目标版本（任务标记等需要逐个处理多个目标的
+    场景）；坐标语义与 find_template_in 一致（命中中心），region 语义
+    相同（裁剪后匹配、返回坐标仍为全图坐标）。
+    """
+    source = img
+    ox = oy = 0
+    if region is not None:
+        l, t, r, b = region
+        l, t = max(0, int(l)), max(0, int(t))
+        r, b = min(img.size[0], int(r)), min(img.size[1], int(b))
+        source = img.crop((l, t, r, b))
+        ox, oy = l, t
+    results = FindImages.find_all_template(R.img(icon), im_source=source,
+                                           threshold=threshold)
+    return [(r.x + ox, r.y + oy) for r in results]
 
 
 def best_match_in(img, icon):
@@ -1013,9 +1037,13 @@ def close_mini_map(win, quiet=False):
 def close_maps(win, quiet=False):
     """关闭打开的地图（小地图在上层，先关）。小地图与世界地图关闭均带
     1s 确认等待（见 close_mini_map / close_world_map），只在复检仍打开
-    时点击——关闭动画瞬态匹配不点击（点击会落到游戏世界取消寻路）。"""
-    close_mini_map(win, quiet=quiet)
-    close_world_map(win, quiet=quiet)
+    时点击——关闭动画瞬态匹配不点击（点击会落到游戏世界取消寻路）。
+
+    返回是否有地图处于打开/关闭动画中（调用方据此决定是否等关闭动画；
+    两个地图本来就没开时返回 False）。"""
+    mini, _ = close_mini_map(win, quiet=quiet)
+    world, _ = close_world_map(win, quiet=quiet)
+    return bool(mini or world)
 
 
 # ---- 场景小地图快捷导航（2026-11-16 用户要求下沉，任务共用）----

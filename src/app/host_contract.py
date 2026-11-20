@@ -20,6 +20,7 @@ if TYPE_CHECKING:
         _capture_lock: Any
         _game_op_lock: Any
         _verifying: bool
+        _map_nav_running: bool     # 诊断-地图导航线程进行中（中断/启动门控）
         _scheme_dialog_busy: bool
         _pending_import: Any
         webview_instance: Any

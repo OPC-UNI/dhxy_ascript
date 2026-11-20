@@ -177,6 +177,8 @@ def test_resolve_world_map_name():
     assert game_map.resolve_world_map_name("龍宫") == "龙宫"
     assert game_map.resolve_world_map_name("蓬菜") == "蓬莱"
     assert game_map.resolve_world_map_name("长安东") == "长安东"
+    # HUD 位置地名「长安城东」 → 世界地图标签「长安东」（2026-11-20 实测别名）
+    assert game_map.resolve_world_map_name("长安城东") == "长安东"
     assert game_map.resolve_world_map_name("不存在的地") is None
     assert game_map.resolve_world_map_name("") is None
 

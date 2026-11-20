@@ -106,7 +106,7 @@ def _get_data():
 # 覆盖 core.settings 设置键；默认值与各 load_* 函数首次默认相同：
 # 选中五环、次数 TASK_COUNT_DEFAULTS、摄妖香开、阈值 50、
 # 战斗 人物技能3-5/召唤兽攻击、修罗 5 人+男人男鬼、盒子关、
-# 检查队伍/自动创建队伍/自动归队/暂离超时自动请离/喊话（含各任务喊话
+# 检查队伍/兼容无快捷寻路/强制手动寻路/自动创建队伍/自动归队/暂离超时自动请离/喊话（含各任务喊话
 # 内容默认文案）/组号开、种族比武同款队伍开关与巫医/修理间隔、五环活力继续开、
 # 高性能开、补血蓝开、清屏开、巫医开+间隔 5、修理开+间隔 30、法门关。
 # 调试信息开关（debug_overlay）、「显示与调试」解锁标记、界面主题
@@ -125,6 +125,8 @@ def _settings_spec():
         cw._XIULUO_RACES_KEY: ",".join(cw.XIULUO_RACES_DEFAULT),
         cw._XIULUO_HEZI_KEY: False,
         cw._XIULUO_CHECK_TEAM_KEY: True,
+        cw._XIULUO_MANUAL_NAV_KEY: True,
+        cw._XIULUO_FORCE_MANUAL_KEY: False,
         cw._XIULUO_AUTO_CREATE_TEAM_KEY: True,
         cw._XIULUO_AUTO_REJOIN_KEY: True,
         cw._XIULUO_AUTO_KICK_AWAY_KEY: True,
@@ -194,6 +196,8 @@ def _snapshot_current():
         cw._XIULUO_RACES_KEY: ",".join(xl["races"]),
         cw._XIULUO_HEZI_KEY: cw.load_xiuluo_hezi(),
         cw._XIULUO_CHECK_TEAM_KEY: cw.load_xiuluo_check_team(),
+        cw._XIULUO_MANUAL_NAV_KEY: cw.load_xiuluo_manual_nav(),
+        cw._XIULUO_FORCE_MANUAL_KEY: cw.load_xiuluo_force_manual(),
         cw._XIULUO_AUTO_CREATE_TEAM_KEY: cw.load_xiuluo_auto_create_team(),
         cw._XIULUO_AUTO_REJOIN_KEY: cw.load_xiuluo_auto_rejoin(),
         cw._XIULUO_AUTO_KICK_AWAY_KEY: cw.load_xiuluo_auto_kick_away(),

@@ -572,6 +572,43 @@ def save_xiuluo_check_team(on):
     return {"status": "success"}
 
 
+# ---- 修罗兼容无快捷寻路（UI 开关，角色设置持久化；默认开启。
+#      领取后追踪面板没有修罗任务（快捷寻路被消耗）时：从领取对话框
+#      解析目的地 → 手动寻路（map_nav）→ 到达后点任务标记开打；
+#      有任务追踪时完全走原 follow 流程，不受影响。实现见
+#      xiuluo._manual_nav_round） ----
+_XIULUO_MANUAL_NAV_KEY = "xiuluo_manual_nav"
+
+
+def load_xiuluo_manual_nav():
+    """读取修罗兼容无快捷寻路开关（首次默认开启）。"""
+    return bool(role_settings.get(_XIULUO_MANUAL_NAV_KEY, True))
+
+
+def save_xiuluo_manual_nav(on):
+    """保存修罗兼容无快捷寻路开关，返回操作结果。"""
+    role_settings.set_value(_XIULUO_MANUAL_NAV_KEY, bool(on))
+    return {"status": "success"}
+
+
+# ---- 修罗强制手动寻路（UI 开关，角色设置持久化；默认关闭。
+#      即使有任务追踪（快捷寻路可用）也强制走手动寻路——角色通常都有
+#      快捷寻路次数，否则很难测试手动链路。实现见 xiuluo.run_loop 的
+#      manual_enabled / force_manual 分支） ----
+_XIULUO_FORCE_MANUAL_KEY = "xiuluo_force_manual"
+
+
+def load_xiuluo_force_manual():
+    """读取修罗强制手动寻路开关（首次默认关闭）。"""
+    return bool(role_settings.get(_XIULUO_FORCE_MANUAL_KEY, False))
+
+
+def save_xiuluo_force_manual(on):
+    """保存修罗强制手动寻路开关，返回操作结果。"""
+    role_settings.set_value(_XIULUO_FORCE_MANUAL_KEY, bool(on))
+    return {"status": "success"}
+
+
 # ---- 修罗自动创建队伍（UI 开关，角色设置持久化；默认开启。开启时
 #      任务启动若无队伍自动创建——点组队按钮 → 菜单「创建队伍」，
 #      创建成功后走正常队伍检查与补人流程；已有队伍无操作。

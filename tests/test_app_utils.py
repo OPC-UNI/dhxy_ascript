@@ -38,6 +38,11 @@ class _FakeMouse:
         if self.exc is not None:
             raise self.exc
 
+    def scroll(self, lines, x=None, y=None, direction="v"):
+        self.calls.append(("scroll", lines, x, y))
+        if self.exc is not None:
+            raise self.exc
+
     def mouse_down(self, button="primary"):
         self.calls.append(("mouse_down", button))
         if self.exc is not None:
@@ -140,6 +145,28 @@ def test_human_click_silent_mode_delegates(monkeypatch):
     app_utils.human_click(win, 50, 60, button="secondary")
     assert calls == [(win, 100, 200, "primary"), (win, 50, 60, "secondary")]
     assert fake_mouse.calls == []  # 物理鼠标零操作
+
+
+def test_human_scroll_silent_mode_delegates(monkeypatch):
+    """滚轮同样吃静默开关：静默走窗口消息，不动物理鼠标。"""
+    monkeypatch.setattr(app_utils, "_SILENT_CLICK", True)
+    calls = []
+    monkeypatch.setattr("src.device.silent_click.send_silent_wheel",
+                        lambda w, x, y, notches=-1: calls.append(
+                            (w, x, y, notches)) or True)
+    fake_mouse = _FakeMouse()
+    monkeypatch.setattr(app_utils, "Mouse", fake_mouse)
+    win = _FakeWin()
+    assert app_utils.human_scroll(win, 680, 470, -4) is True
+    assert calls == [(win, 680, 470, -4)]
+    assert fake_mouse.calls == []
+
+
+def test_human_scroll_physical_moves_and_wheels(monkeypatch, fake_mouse):
+    monkeypatch.setattr(app_utils, "_SILENT_CLICK", False)
+    assert app_utils.human_scroll(_FakeWin(), 680, 470, -4) is True
+    assert ("mouse_move", 678 + 680, 68 + 470) in fake_mouse.calls
+    assert ("scroll", -4, 678 + 680, 68 + 470) in fake_mouse.calls
 
 
 def test_precise_click_silent_mode_repeats(monkeypatch):

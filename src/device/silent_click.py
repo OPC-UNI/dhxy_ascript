@@ -35,6 +35,7 @@ user32 = ctypes.WinDLL("user32", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
 WM_MOUSEMOVE = 0x0200
+WM_MOUSEWHEEL = 0x020A
 WM_LBUTTONDOWN = 0x0201
 WM_LBUTTONUP = 0x0202
 WM_RBUTTONDOWN = 0x0204
@@ -70,6 +71,7 @@ _KEY_CODES = {
     "enter": (0x0D, 0x1C),
     "esc": (0x1B, 0x01),
     "e": (0x45, 0x12),
+    "a": (0x41, 0x1E),  # Alt+A 隐藏界面（修罗手动寻路看任务标记，2026-11-20）
     "c": (0x43, 0x2E),
     "d": (0x44, 0x20),  # Alt+D 随机遇敌（蛟魔复仇催战兜底，2026-11-15）
     "u": (0x55, 0x16),  # 飞行驭器高性能路径（Alt+U 直接打开面板）
@@ -184,6 +186,51 @@ def _resolve_point(win, x=None, y=None):
         sx, sy = base_x + int(x), base_y + int(y)
         cx, cy = sx - tr.left, sy - tr.top
     return target, cx, cy, sx, sy, cl.right, cl.bottom
+
+
+def send_silent_move(win, x, y):
+    """只投递 WM_MOUSEMOVE（不点击、不移动物理鼠标）——悬停读取地图
+    坐标等只读探索场景（2026-11-20 实测：地图窗口悬停即浮出黄色
+    「x,y」坐标标签）。x/y 为 human_click 同空间窗口相对坐标。
+    返回投递描述 dict；窗口/坐标换算失败返回 None。
+    """
+    pt = _resolve_point(win, x, y)
+    if pt is None:
+        return None
+    target, cx, cy, _sx, _sy, _cw, _ch = pt
+    lp = (int(cy) << 16) | (int(cx) & 0xFFFF)
+    with app_utils._INPUT_LOCK:
+        r = user32.SendMessageW(target, WM_MOUSEMOVE, 0, lp)
+    return {"hwnd": target, "client": (int(cx), int(cy)),
+            "msg_result": int(r)}
+
+
+def send_silent_wheel(win, x, y, notches=-1):
+    """静默滚轮：光标先移到 (x,y)，再投递 notches 次 WM_MOUSEWHEEL。
+
+    x/y 为 human_click 同空间窗口相对坐标，先换算成屏幕坐标放进
+    lParam（WM_MOUSEWHEEL 的 lParam 按 Win32 约定是屏幕坐标）。
+    notches 负数向下滚、正数向上滚。2026-11-20 实测大雁塔寻路面板的
+    结果列表可被该通道滚动。返回投递描述 dict；窗口不可用返回 None。
+    """
+    pt = _resolve_point(win, x, y)
+    if pt is None:
+        return None
+    target, cx, cy, sx, sy, _cw, _ch = pt
+    steps = abs(int(notches))
+    delta = 120 if notches > 0 else -120
+    lp_screen = (int(sy) << 16) | (int(sx) & 0xFFFF)
+    results = []
+    with app_utils._INPUT_LOCK:
+        user32.SendMessageW(target, WM_MOUSEMOVE, 0,
+                            (int(cy) << 16) | (int(cx) & 0xFFFF))
+        for _ in range(steps):
+            results.append(int(user32.SendMessageW(
+                target, WM_MOUSEWHEEL, ((delta & 0xFFFF) << 16),
+                lp_screen)))
+            time.sleep(0.08)
+    return {"hwnd": target, "notches": int(notches),
+            "msg_results": tuple(results)}
 
 
 def send_silent_click(win, x=None, y=None, button="primary"):

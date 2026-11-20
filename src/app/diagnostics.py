@@ -1688,6 +1688,108 @@ class DiagnosticsMixin(ControlHost):
             except Exception:
                 pass
 
+    def get_navigate_maps(self):
+        """诊断-地图导航下拉选项：常规地图 + 龙窟/凤巢/大雁塔各层。
+
+        层级图只提供具体层名（基名 龙窟/凤巢/大雁塔 无法直接进入）；
+        海底迷宫/地狱迷宫用户暂缓，不在下拉中。
+        """
+        from ..device import map_nav  # 延迟导入：与其余验证模块一致
+        return {"status": "success", "maps": map_nav.all_navigate_maps()}
+
+    def verify_map_navigate(self, map_name=None, x=None, y=None):
+        """诊断-地图导航按钮：打开目标地图（含层级图）→ 地图窗口悬停
+        读坐标标定像素换算 → 悬停校验后点击地图点寻路 → 等待 HUD
+        地名+坐标 ±10 到达。
+
+        2026-11-20 实机验证机制（层级图先点层块进层，层内小地图同样
+        支持悬停读坐标）。会真实移动人物，任务运行中拒绝执行，避免与
+        任务子进程互抢游戏操作。
+        """
+        from ..device import map_nav  # 延迟导入：与其余验证模块一致
+        name = (map_name or "").strip()
+        if name not in map_nav.all_navigate_maps():
+            return {"status": "error", "msg": "请选择有效的地图"}
+        try:
+            x, y = int(x), int(y)
+        except (TypeError, ValueError):
+            return {"status": "error", "msg": "坐标必须是整数"}
+        if not (0 <= x <= 9999 and 0 <= y <= 9999):
+            return {"status": "error", "msg": "坐标超出范围（0-9999）"}
+        if self._tm.is_running():
+            return {"status": "error", "msg": "任务运行中，请先停止任务再导航"}
+        if self._verifying:
+            return {"status": "error", "msg": "验证进行中，请稍候"}
+        win = game.find_main_window()
+        if win is None:
+            return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
+        if not _game_window_clickable(win):
+            return {"status": "error",
+                    "msg": "游戏窗口被其他窗口遮挡，请将游戏窗口置于前台后再导航"}
+        self._verifying = True
+        self._map_nav_running = True
+        try:
+            threading.Thread(target=self._run_map_navigate,
+                             args=(win, name, x, y),
+                             daemon=True, name="map-navigate").start()
+        except Exception as e:  # noqa: BLE001 —— 线程启动失败须复位标志
+            self._map_nav_running = False
+            self._verifying = False
+            return {"status": "error", "msg": f"启动导航线程失败：{e}"}
+        return {"status": "success",
+                "msg": f"已开始：导航到 {name} ({x},{y})，过程见日志"}
+
+    def cancel_map_navigate(self):
+        """中断正在进行的诊断-地图导航（协作式，最长约 1-3s 生效）。
+
+        只在确有导航线程时生效；中断后导航线程负责关地图/寻路面板并
+        回推结果「已中断寻路」。人物身上的客户端自动寻路不会停止。
+        """
+        from ..device import map_nav  # 延迟导入：与其余验证模块一致
+        if not getattr(self, "_map_nav_running", False):
+            return {"status": "ignored", "msg": "当前没有进行中的地图导航"}
+        map_nav.request_cancel()
+        return {"status": "success", "msg": "已发送中断请求（1-3 秒内停止）"}
+
+    def _run_map_navigate(self, win, name, x, y):
+        """地图导航线程体：逐行写本地日志文件与日志窗，结束回推页面。"""
+        from ..device import map_nav  # 延迟导入：与其余验证模块一致
+
+        def emit(msg):
+            app_utils.log(f"[诊断] {msg}")
+            try:
+                self.add_logs([f"[诊断] {msg}"])
+            except Exception:
+                pass
+
+        # 整个函数体兜 finally：UserAbort 等 BaseException 逃出时也要复位
+        # 标志（否则 _verifying 永久 True，所有诊断验证都报「验证进行中」）
+        try:
+            try:
+                ok, info = map_nav.navigate_to_map_coordinate(
+                    win, name, x, y, log_fn=emit)
+            except Exception as e:
+                ok, info = False, f"导航异常: {e}"
+            try:
+                app_utils.log(f"[诊断] 地图导航结果: {info}")
+                self.add_logs([f"[诊断] 地图导航结果: {info}"])
+            except Exception:
+                pass
+            self._notify_map_navigate_result(ok, info)
+        finally:
+            self._map_nav_running = False
+            self._verifying = False
+
+    def _notify_map_navigate_result(self, ok, info):
+        """地图导航结果回推页面（诊断-地图导航行的结果文案）。"""
+        if self.webview_instance:
+            try:
+                ok_js = "true" if ok else "false"
+                self.webview_instance.evaluate_js(
+                    f"if(window.onMapNavigateResult){{window.onMapNavigateResult({ok_js}, {json.dumps(info)});}}")
+            except Exception:
+                pass
+
     def verify_dialog_detect(self):
         """诊断-测试对话框识别按钮：单帧模板判定对话框在场 + 对话区
         OCR 计时（只读不点击）。有/无对话框场景各点一次，对照日志

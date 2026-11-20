@@ -53,6 +53,7 @@ from ..core.app_utils import human_click, human_move, precise_click, log, move_a
 from ..core import app_utils  # 高性能模式共享设施（固定位置缓存点击）
 from ..device import task_tracker  # 任务追踪面板操作
 from ..device import map as game_map  # 地图操作（世界地图/小地图/位置识别）
+from ..device import map_nav  # 手动寻路引擎（兼容无快捷寻路，用户 2026-11-20）
 from ..device import team  # 组队检查（领取前队伍人数检查，仅队长生效）
 from ..core import debug_overlay  # 调试信息悬浮层（任务进度更新）
 from ..device import status_bars  # 血蓝检测（自动巫医前置条件）
@@ -73,7 +74,9 @@ from ..core.settings import (load_task_counts, load_xiuluo_settings,
                              load_xiuluo_wuyi_interval,
                              load_xiuluo_auto_repair,
                              load_xiuluo_repair_interval,
-                             load_xiuluo_tab_group)  # 任务次数上限/修罗设置/自动巫医/自动修理/自动归队/暂离请离/组号开关
+                             load_xiuluo_tab_group,
+                             load_xiuluo_manual_nav,
+                             load_xiuluo_force_manual)  # 任务次数上限/修罗设置/自动巫医/自动修理/自动归队/暂离请离/组号开关/手动寻路
 from ..workflows.team_flow import TeamFlow  # 组队流程编排（检查/建队/补人/喊话/归队）
 from ..workflows import return_flow  # 返程流程编排（开箱/回程道具/清屏/归位）
 from ..workflows import claim_flow  # 领取共享流程（选项/地图门控/校验探针）
@@ -82,7 +85,8 @@ from ..device.dialog_common import (_dialog_text_present, _norm_dialog_present,
                             _click_green_option_once, _fuzzy_contains,
                             SCREEN_CENTER_POS,
                             dialog_frame_score,
-                            DIALOG_FRAME_THRESHOLD)  # 对话框共享组件
+                            DIALOG_FRAME_THRESHOLD,
+                            WalkGuard)  # 对话框共享组件
 
 # 任务模式与追踪面板标题（2026-10-08 日志+截图实测确认）
 TASK_MODE = "修罗"           # 控制面板任务模式名（任务次数配置键）
@@ -261,6 +265,10 @@ _battle_failed_reason = None    # 战斗失败原因（None=未失败；"task"=�
                                 # 追踪；"dead"=战后落轮回司）：follow 的
                                 # battle_end_handler 置位、主循环消费后走
                                 # 队长取消重领 / 非队长归队恢复（用户 2026-11-14）
+_manual_recovery_pending = False  # 手动寻路失败恢复未完成（回灵兽村/取消
+                                # 任务失败）：下一轮开头先重试恢复，不得
+                                # 直接进入领取（任务可能仍存在，入口只剩
+                                # 取消选项，会每轮空转 15s）
 _battle_recovery_pending = False  # 战斗失败恢复未完成（回灵兽村/取消任务失败）：
                                 # 下一轮开始先重试恢复，不得回到任务跟踪——
                                 # 旧任务仍在追踪，直接继续跟踪会反复打同一
@@ -302,6 +310,26 @@ _claim_arrive_dialog_frame = None  # 到达检查（_arrival_claim_dialog_up）�
 #      选项固定位置缓存点击 + 效果校验 + 识别回退；背包按钮缓存已下沉
 #      到 bag.open_bag，各任务模块共用） ----
 _fight_cached_used = False       # 当前这次看打对话框出现已试过缓存点击
+
+# ---- 兼容无快捷寻路（手动寻路，用户 2026-11-20 接入）----
+# 开关：修罗设置「兼容无快捷寻路」默认开。领取后追踪面板有修罗任务 →
+# 原 follow 流程不受影响；没有（快捷寻路按次数被消耗）→ 从领取对话框
+# 解析目的地 → map_nav 手动寻路 → 到达后点任务标记（xiuluo_lingqu
+# 模板，用户后续调整）→ 看打；被面板挡住时 Alt+A 隐藏界面再找标记，
+# 点击直接进战斗同样算「看打进入」；战后回城符返程；失败回灵兽村
+# 取消任务重新领取。
+_claim_manual_dialog = False     # 本次领取是否以「对话框证据」确认（无任务
+                                 # 追踪）：True → 主循环改走手动寻路分支
+MANUAL_DEST_COORD_RE = re.compile(
+    r"[（(]\s*(\d{1,4})\s*[,，]\s*(\d{1,4})\s*[)）]")
+XIULUO_MARKER_ICON = LINGQU_ICON  # 任务标记模板（用户 2026-11-20：先用
+                                  # xiuluo_lingqu，后续会调整）
+MARKER_THRESHOLD = 0.8            # 标记匹配阈值（同 find_template 默认）
+MARKER_MIN_GAP = 24               # 多命中重叠去重的最小中心间距（像素）
+MARKER_DIALOG_WAIT = 1.5          # 点标记后等对话框/战斗的窗口（秒）
+MARKER_BATTLE_START_TIMEOUT = 10.0  # 点「看打！」后等战斗场景出现超时
+MANUAL_BATTLE_TIMEOUT = 300.0     # 手动寻路回合等战斗结束超时（战斗线程自动操作）
+MANUAL_ALT_KEY = "a"              # Alt+A 隐藏界面（用户指定：释放面板遮挡看标记）
 
 # ---- 返程（任务储物格 → 修罗回城符右键 → 回灵兽村；共享实现在
 #      workflows/return_flow.py） ----
@@ -1416,7 +1444,8 @@ def _arrival_claim_dialog_up(win, timeout=CLAIM_ARRIVE_DIALOG_WAIT):
     return True
 
 
-def _claim_task(win, allow_fill=False, create_team_if_missing=False):
+def _claim_task(win, allow_fill=False, create_team_if_missing=False,
+                manual_nav=False):
     """在领取点附近领取修罗任务（前提：已走到领取点附近）。
 
     识图 liuluo_lingqu.png 点击 → 对话框点绿色选项「闲来无事，要我帮忙吗」
@@ -1435,8 +1464,15 @@ def _claim_task(win, allow_fill=False, create_team_if_missing=False):
        窗口从未命中，每轮空转）
     3. 校验循环内确认新任务渲染即返回（领取前有旧任务遗留面板时须
        签名变化才确认），不再重复一次 has_task 全量检查
+
+    manual_nav=True（兼容无快捷寻路开关开启）：等待任务进追踪的同时
+    逐轮 OCR 对话区；超 2 轮（~2s）仍无追踪但「阻止它为非作歹」
+    对话框已出现（且无队伍确认/警告）→ 按领取成功处理并置
+    _claim_manual_dialog，主循环改走手动寻路（用户 2026-11-20）。
     """
     global _claim_map_kept_open, _claim_arrive_dialog_frame
+    global _claim_manual_dialog
+    _claim_manual_dialog = False
     # 决策点单帧化：先截一帧，战斗判定与领取前面板签名共用（原
     # is_in_battle 内截一帧 + 面板签名再截一帧）。组号 pass 期间与
     # is_in_battle 同语义按「战斗中等待」处理（屏幕可能是队员 Tab）
@@ -1596,7 +1632,8 @@ def _claim_task(win, allow_fill=False, create_team_if_missing=False):
         # 绿字点击只用面板区，对话框区域缺席不产生误动作（extras
         # 无对话框行即不介入）
         need_dialog = polls <= 2 or used_cached or (count is None and polls <= 4) \
-            or 0 < reclick_poll < polls <= reclick_poll + 1
+            or 0 < reclick_poll < polls <= reclick_poll + 1 \
+            or (manual_nav and polls <= 5)
         # 面板差分门：任务进追踪必然改变面板核心像素（门必开）；
         # 对话框区域（队伍确认/警告、完成次数、缓存补点）逐轮新鲜 OCR
         track_items = track_gate.ocr(img)
@@ -1613,6 +1650,25 @@ def _claim_task(win, allow_fill=False, create_team_if_missing=False):
         if need_dialog and block_first_at is None \
                 and _dialog_text_present(items, WUYI_BLOCK_DIALOG_TEXT):
             block_first_at = time.time()
+        if manual_nav and polls >= 2 \
+                and _dialog_text_present(items, WUYI_BLOCK_DIALOG_TEXT) \
+                and not task_tracker.has_task_in(
+                    items, img_np, TASK_TITLE, TASK_FALLBACK_TEXTS) \
+                and not _dialog_text_present(items, TEAM_WARNING_TEXT) \
+                and not _dialog_text_present(items, TEAM_CONFIRM_TEXT):
+            # 无任务追踪（本帧面板无任务）+ 领取对话框（阻止它为非作歹）
+            # 本帧在场 → 领取成功。必须同帧判定：有追踪的正常领取要让
+            # has_new_task_in 正常确认（2026-11-20 审查：旧条件只看
+            # block_first_at，会让有追踪的领取也先命中这里）
+            _claim_manual_dialog = True
+            found_frame = (items, img_np)
+            t_confirm = t_cap
+            confirm_polls = polls
+            confirm_dialog_ocr = True
+            confirm_block = True
+            log("[修罗] 无任务追踪：领取对话框已出现，按领取成功处理"
+                "（走手动寻路）", "SYS")
+            break
         if task_tracker.has_new_task_in(items, img_np, TASK_TITLE,
                                         TASK_FALLBACK_TEXTS, pre_sig):
             found_frame = (items, img_np)
@@ -1727,6 +1783,20 @@ def _claim_task(win, allow_fill=False, create_team_if_missing=False):
         log("[修罗] 重走领取点后新任务已出现在追踪面板", "SYS")
         tail = f"（{CLAIM_COUNT_TEXT}：{count}）" if count is not None else ""
         return True, f"修罗任务已领取{tail}", None
+    # 手动寻路（用户 2026-11-20）：领取选项已点、追踪面板始终无任务，
+    # 但领取对话框（阻止它为非作歹）在场 = 任务其实已发放——按对话框
+    # 证据补判成功。否则后续每轮领取都会因「入口只剩取消选项」空转。
+    if manual_nav:
+        img = win.capture(force_activate=False)
+        if img is not None and dialog_frame_score(img) >= DIALOG_FRAME_THRESHOLD:
+            items, img_np = game_map.ocr_region(img, task_tracker.DIALOG_REGION)
+            if _dialog_text_present(items, WUYI_BLOCK_DIALOG_TEXT) \
+                    and not _dialog_text_present(items, TEAM_WARNING_TEXT):
+                _claim_manual_dialog = True
+                log("[修罗] 领取选项已点、追踪面板无任务，领取对话框在场，"
+                    "按领取成功处理（走手动寻路）", "SYS")
+                return (True, "修罗任务已领取（无任务追踪，手动寻路）",
+                        (items, img_np))
     # 重走后仍无：不再重试，直接失败（下一轮 has_task 检查兜底，
     # 任务若随后渲染出现会以续跑方式被拾起）
     try:
@@ -1744,8 +1814,8 @@ def _task_absent_in_frame(img):
         img, TASK_TITLE, TASK_FALLBACK_TEXTS)
 
 
-def _cancel_task(win):
-    """取消当前修罗任务（战斗失败恢复 _recover_battle_failure 调用）。
+def _cancel_task(win, assume_task=False):
+    """取消当前修罗任务（战斗失败恢复/手动寻路失败恢复调用）。
 
     用户指定（2026-11-14）：与领取流程一致——先走到灵兽村领取点、
     点击领取入口模板（领取任务按钮/灵兽村使者）打开对话框，区别是
@@ -1755,12 +1825,16 @@ def _cancel_task(win):
 
     前置：任务追踪中已有修罗任务（无任务时领取入口不出现，无取消
     对象，且防止把其他对话框选项当取消选项点掉）；战斗中跳过。
+    assume_task=True：兼容无快捷寻路（无任务追踪）——跳过追踪前置，
+    由对话框里是否出现「我想取消任务」选项判定任务是否存在（用户
+    2026-11-20 手动寻路失败恢复用）。
     返回 (是否成功, 描述)；「无需取消」表示任务已不存在。
     """
     global _cancel_confirmed_at
     if is_in_battle(win):
         return False, "战斗中，跳过取消任务"
-    if not task_tracker.has_task(win, TASK_TITLE, TASK_FALLBACK_TEXTS):
+    if not assume_task and not task_tracker.has_task(
+            win, TASK_TITLE, TASK_FALLBACK_TEXTS):
         return False, "任务追踪中无修罗任务，无需取消"
     # 1. 走位到领取点（与领取流程一致）
     ok, info = _walk_to_claim_spot(win)
@@ -2019,6 +2093,354 @@ def _on_battle_end(win, img=None):
             log("[修罗] 战斗结束但任务仍在追踪面板，判定战斗失败", "WARN")
             return True
     return False
+
+
+def _parse_claim_destination(win, items=None):
+    """从领取对话框 OCR 行解析目的地，返回 (地图名, x, y) 或 None。
+
+    用户 2026-11-20：领取成功后的对话框与「阻止它为非作歹」是同一个，
+    实测原文（用户提供）：「请速去大雁塔四层(108, 37)处消灭修罗，
+    阻止它为非作歹。」——地图名紧跟半角括号坐标（逗号后可能带空格），
+    层名同样适用。OCR 全文先写日志（文案随版本可能调整，便于对照）。
+    地图名取「坐标前最近的已知地名」（含 龙窟/凤巢/大雁塔 层名与别名）。
+    """
+    if items is None:
+        img = win.capture(force_activate=False)
+        if img is None:
+            return None
+        # 对话区 OCR 前先对话框模板门控（~9ms）：对话框尚未渲染时跳过
+        # 区域 OCR（性能规则：轮询类 OCR 必须先做像素/模板预过滤）
+        if dialog_frame_score(img) < DIALOG_FRAME_THRESHOLD:
+            return None
+        items, _ = game_map.ocr_region(img, task_tracker.DIALOG_REGION)
+    lines = [t for t, r, s in (items or [])
+             if s >= 0.55 and r[0] >= task_tracker.PANEL_MAX_X]
+    raw = " ".join(t for t in lines if t).strip()
+    if not raw:
+        log("[修罗][手动] 领取对话框无文字，无法解析目的地", "WARN")
+        return None
+    log(f"[修罗][手动] 领取对话框文案: {raw}", "SYS")
+    plain = re.sub(r"\s", "", raw)
+    m = MANUAL_DEST_COORD_RE.search(plain)
+    if m is None:
+        log("[修罗][手动] 对话框未找到「（x,y）」坐标", "WARN")
+        return None
+    x, y = int(m.group(1)), int(m.group(2))
+    names = set(map_nav.all_navigate_maps())
+    aliases = getattr(game_map, "WORLD_MAP_NAME_ALIASES", None) or {}
+    names |= set(aliases.keys())
+
+    def _nearest_before(limit):
+        """坐标（x,y）之前最近的已知地名（同位置取更长者）。
+
+        按「紧邻坐标」定位而不是全文最长命中：对话框里出现「灵兽村使者」
+        这类更长的无关地名时，全文最长会把目的地图选错（2026-11-20
+        审查：天宫/瑶池等 2 字地名会被更长地名抢走）。
+        """
+        best = None
+        for n in names:
+            if not n:
+                continue
+            pos = plain.rfind(n, 0, limit)
+            if pos < 0:
+                continue
+            key = (pos, len(n))
+            if best is None or key > best[0]:
+                best = (key, n)
+        return best[1] if best else None
+
+    name = _nearest_before(m.start())
+    if name is None:
+        # 兜底：坐标在前、地名在后的罕见文案——全文最长命中
+        name = next((n for n in sorted(names, key=len, reverse=True)
+                     if n and n in plain), None)
+    if name is None:
+        log("[修罗][手动] 对话框未匹配到已知地图名", "WARN")
+        return None
+    return name, x, y
+
+
+def _parse_claim_destination_wait(win, items=None, timeout=3.0):
+    """强制手动寻路：等领取对话框渲染并解析目的地。
+
+    追踪正常时领取校验可能在对话框渲染前就确认成功（不必等 2 轮），
+    校验帧里可能还没有目的地文案——先复用校验帧，未解析到则短窗
+    轮询现场 OCR 对话框区域（对话框实测领取后 ~1s 出现）。
+    """
+    dest = _parse_claim_destination(win, items)
+    if dest is not None:
+        return dest
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        time.sleep(0.5)
+        dest = _parse_claim_destination(win)
+        if dest is not None:
+            return dest
+    return None
+
+
+def _task_markers(win, img=None):
+    """当前帧上的任务标记点（多命中去重，按从上到下、从左到右排序）。"""
+    if img is None:
+        img = win.capture(force_activate=False)
+    if img is None:
+        return []
+    pts = game_map.find_all_template_in(img, XIULUO_MARKER_ICON,
+                                        threshold=MARKER_THRESHOLD)
+    uniq = []
+    for p in sorted(pts, key=lambda q: (q[1], q[0])):
+        if all((p[0] - q[0]) ** 2 + (p[1] - q[1]) ** 2 >= MARKER_MIN_GAP ** 2
+               for q in uniq):
+            uniq.append(p)
+    return uniq
+
+
+def _wait_battle_start(win, timeout):
+    """等战斗场景出现（点标记/看打后）；出现即标记本轮经看打进入。"""
+    global _fight_via_kanda
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if is_in_battle(win):
+            _fight_via_kanda = True  # 用户规则：点标记直接进战斗也算看打进入
+            return True
+        time.sleep(0.5)
+    return False
+
+
+def _wait_fight_dialog(win, timeout):
+    """点标记后等待结果：直接进战斗 / 看打对话 / 其他对话框 / 无反应。
+
+    返回 "fight"（已进战斗）、"dialog"（已点看打）、"other"（有对话框
+    但没有看打选项，调用方需关闭换下一个标记）或 None（无反应）。
+    "fight"/"dialog" 都置 _fight_via_kanda：点标记直接进战斗同样算
+    「看打」进入（用户 2026-11-20 规则），战后据此返程。
+    """
+    global _fight_via_kanda
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        img = win.capture(force_activate=False)
+        if img is None:
+            time.sleep(0.3)
+            continue
+        if is_in_battle_frame(img):
+            _fight_via_kanda = True  # 直接进战斗也算看打进入（战后返程）
+            return "fight"
+        if dialog_frame_score(img) < DIALOG_FRAME_THRESHOLD:
+            time.sleep(0.3)
+            continue
+        items, img_np = game_map.ocr_region(img, task_tracker.DIALOG_REGION)
+        if _handle_fight_dialog(win, items, img_np):
+            return "dialog"
+        return "other"
+    return None
+
+
+_WALK_GUARD = WalkGuard()  # 手动回合点屏保护（CLAUDE.md 规则 13）
+
+
+def _click_screen_center_safe(win, img=None, timeout=4.0):
+    """点屏幕中间前确认人物站定（寻路中点屏会取消自动寻路）。
+
+    到达判据 ±10 格，返回时可能仍在走最后一段；WalkGuard 用地图位置
+    文字区像素差分判定移动，连续「移动」最多等 timeout 秒，超时或无
+    帧可查按未寻路放行（与 dialog_common 共享组件的约定一致）。
+    返回是否执行了点击。
+    """
+    deadline = time.time() + timeout
+    frame = img
+    while True:
+        if frame is None:
+            frame = win.capture(force_activate=False)
+        state = _WALK_GUARD.walking(win, frame)
+        frame = None
+        if state is not True or time.time() >= deadline:
+            break
+        time.sleep(0.3)
+    human_click(win, SCREEN_CENTER_POS[0], SCREEN_CENTER_POS[1])
+    move_away(win)
+    return True
+
+
+def _dismiss_current_dialog(win):
+    """关闭当前普通对话框（仅在对话框模板在场时点屏幕中间一次）。"""
+    img = win.capture(force_activate=False)
+    if img is None or dialog_frame_score(img) < DIALOG_FRAME_THRESHOLD:
+        return False
+    _click_screen_center_safe(win, img=img)
+    time.sleep(0.4)
+    return True
+
+
+def _wait_manual_battle_end(win):
+    """等本轮战斗结束并判定成败（战斗操作由 battle.watch_loop 线程完成）。
+
+    判定对齐 follow 的 _on_battle_end：
+    - 战斗结束首帧位置可能尚未渲染：位置补读最多 3 次（0.5s 间隔）再判；
+    - 落点轮回司 = 战斗失败；
+    - 战斗结束后任务仍在追踪面板（仅强制手动/有追踪时可见）= 战斗失败
+      ——否则会把「随机遭遇/没打中的战斗」当成本轮完成，下一轮跳过任务
+      检查直接领取，导致任务卡死。
+    返回 (ok, info)。失败由主循环走取消任务重领。
+    """
+    ok, info = _wait_battle_end(win, timeout=MANUAL_BATTLE_TIMEOUT)
+    if not ok:
+        return False, info
+    pos = None
+    for _ in range(3):
+        pos = game_map.read_map_position(win)
+        if pos is not None:
+            break
+        time.sleep(0.5)
+    if pos is not None and team.is_in_lunhuisi(pos):
+        return False, f"战斗后落在轮回司（{pos[0]}[{pos[1]},{pos[2]}]），判定战斗失败"
+    img = win.capture(force_activate=False)
+    if img is not None:
+        absent, items = _task_absent_in_frame(img)
+        if items is not None and not absent:
+            # 首帧任务行可能仍在退出动画中：短窗复核一次（同 _on_battle_end）
+            time.sleep(0.5)
+            img2 = win.capture(force_activate=False)
+            absent2, items2 = _task_absent_in_frame(img2) \
+                if img2 is not None else (absent, items)
+            if items2 is not None and not absent2:
+                return False, "战斗结束后任务仍在追踪面板，判定战斗失败"
+    return True, "战斗已结束（手动寻路回合）"
+
+
+def _click_markers_and_fight(win):
+    """到达目的地后：点任务标记 → 看打 → 等战斗结束。
+
+    用户 2026-11-20 规则：可能有多个标记，逐个点；点了要看到对话框且
+    含「看打！」才有效，没有就换下一个。全部没中（标记可能被任务追踪/
+    其他面板挡住）→ Alt+A 隐藏界面再识别；还有标记就直接点（直接进入
+    战斗，同样算看打进入）。Alt+A 后也没有 → 点屏幕中间释放 Alt+A，
+    判失败（主循环回灵兽村取消重领）。
+    返回 (ok, info)。
+    """
+    global _fight_via_kanda
+    # 用户 2026-11-20：进入战斗就不再用 Alt+A 找标记——等这场战斗结束，
+    # 按原流程收尾（战斗结束返程）；Alt+A 只用于非战斗时标记被面板遮挡
+    if is_in_battle(win):
+        _fight_via_kanda = True  # 本回合的战斗已发生：战后走返程收尾
+        log("[修罗][手动] 到达时已在战斗中，等战斗结束后按原流程收尾", "WARN")
+        return _wait_manual_battle_end(win)
+    markers = _task_markers(win)
+    log(f"[修罗][手动] 到达后识别到任务标记 {len(markers)} 个", "SYS")
+    for i, pt in enumerate(markers, 1):
+        human_click(win, pt[0], pt[1])
+        move_away(win)
+        res = _wait_fight_dialog(win, MARKER_DIALOG_WAIT)
+        if res in ("fight", "dialog"):
+            log(f"[修罗][手动] 标记 {i}/{len(markers)} 命中"
+                f"{'直接进战斗' if res == 'fight' else '看打对话'}", "SYS")
+            if res == "fight" or _wait_battle_start(
+                    win, MARKER_BATTLE_START_TIMEOUT):
+                return _wait_manual_battle_end(win)
+            log("[修罗][手动] 已点看打但未进入战斗，尝试下一个标记", "WARN")
+            continue
+        if res == "other":
+            log(f"[修罗][手动] 标记 {i}/{len(markers)} 对话框无看打选项，"
+                f"关闭换下一个", "INFO")
+            _dismiss_current_dialog(win)
+        else:
+            log(f"[修罗][手动] 标记 {i}/{len(markers)} 无反应", "INFO")
+    # 用户 2026-11-20：扫描期间进入战斗同样不再用 Alt+A——等战斗
+    # 结束按原流程收尾
+    if is_in_battle(win):
+        _fight_via_kanda = True
+        log("[修罗][手动] 标记扫描期间进入战斗，等战斗结束后按原流程收尾",
+            "WARN")
+        return _wait_manual_battle_end(win)
+    # 标记可能被任务追踪等面板挡住：Alt+A 隐藏界面后再识别（用户第 6 条）
+    sent, sinfo = app_utils.press_alt_hotkey(
+        win, MANUAL_ALT_KEY, "隐藏界面看任务标记", prefix="[修罗][手动]")
+    time.sleep(0.6)
+    markers2 = _task_markers(win)
+    log(f"[修罗][手动] Alt+A 后识别到任务标记 {len(markers2)} 个"
+        f"（{sinfo}）", "SYS")
+    for i, pt in enumerate(markers2, 1):
+        human_click(win, pt[0], pt[1])
+        move_away(win)
+        res = _wait_fight_dialog(win, MARKER_DIALOG_WAIT + 2.0)
+        if res == "fight" or (res == "dialog" and _wait_battle_start(
+                win, MARKER_BATTLE_START_TIMEOUT)):
+            log(f"[修罗][手动] Alt+A 标记 {i}/{len(markers2)} 已进战斗", "SYS")
+            return _wait_manual_battle_end(win)
+        if res == "other":
+            _dismiss_current_dialog(win)
+    # Alt+A 后也没有更多标记：点屏幕中间释放 Alt+A，判失败（用户第 7 条）
+    _click_screen_center_safe(win)
+    return False, ("Alt+A 兜底后仍未找到可点击的任务标记"
+                   "（已点屏幕中间释放），按失败处理")
+
+
+def _manual_nav_round(win, dest):
+    """无任务追踪的手动寻路回合：寻路 → 点标记开打 → 等战斗结束。
+
+    dest：_parse_claim_destination 的 (地图名, x, y)；None 表示解析失败。
+    返回 (ok, info)。ok=True 表示战斗已结束（_fight_via_kanda 已置位，
+    主循环继续返程）；ok=False 需回灵兽村取消任务重领（用户第 7 条）。
+    """
+    global _fight_via_kanda
+    _fight_via_kanda = False
+    if dest is None:
+        return False, "领取对话框未解析出目的地（对话框全文见日志）"
+    map_name, gx, gy = dest
+    log(f"[修罗][手动] 目的地: {map_name} ({gx},{gy})，开始手动寻路", "SYS")
+    debug_overlay.set_phase("手动寻路")
+    ok, info = map_nav.navigate_to_map_coordinate(
+        win, map_name, gx, gy,
+        log_fn=lambda m: log(f"[修罗][手动] {m}", "INFO"))
+    if not ok:
+        return False, f"手动寻路失败: {info}"
+    return _click_markers_and_fight(win)
+
+
+def _manual_recover(win, check_team):
+    """手动寻路失败恢复（用户第 7 条）：回灵兽村 → 取消任务 → 重新领取。
+
+    与战斗失败恢复的区别：无任务追踪，_cancel_task 不能靠 has_task
+    前置判断（会误判「无需取消」把失败当完成）——用 assume_task=True，
+    由对话框里是否出现「我想取消任务」选项决定成败。
+    战斗中顺延（队伍面板/取消对话框都会干扰战斗，2026-11-20 审查）。
+    返回 (是否已取消并进入重领等待, 描述)。
+    """
+    global _team_checked, _task_gone_last_round, _returned_last_round, \
+        _cancel_confirmed_at
+    if is_in_battle(win):
+        return False, "战斗中，手动寻路失败恢复顺延到战斗结束后重试"
+    if check_team:
+        status, info = _check_team_with_retry(win)
+        if status == "not_leader":
+            if team.is_definitive_not_leader(info):
+                log(f"[修罗][手动] 非队长：转保持模式并自动归队（{info}）",
+                    "WARN")
+                _keep_alive(win, info)
+                return False, f"保持模式异常退出（{info}）"
+            return False, f"手动寻路失败后队伍身份无法判定（{info}）"
+    img = win.capture(force_activate=False)
+    pos = game_map.read_map_position(win, img=img) if img is not None else None
+    if not (pos is not None and pos[0].strip() == LINGSHOUCUN):
+        ok, info = (_return_to_npc(win) if team.is_in_lunhuisi(pos)
+                    else _walk_to_claim_spot(win, just_returned=False))
+        if not ok:
+            ok, info = _return_to_npc(win)
+        if not ok:
+            return False, f"回灵兽村失败: {info}"
+        _returned_last_round = True
+    ok, info = _cancel_task(win, assume_task=True)
+    if not ok:
+        return False, f"取消任务失败: {info}"
+    _team_checked = False  # 重新领取前强制队伍检查（与战斗失败恢复一致）
+    elapsed = (time.time() - _cancel_confirmed_at
+               if _cancel_confirmed_at is not None else 0.0)
+    wait = max(0.0, CANCEL_RE_CLAIM_DELAY - elapsed)
+    if wait > 0:
+        time.sleep(wait)
+    _cancel_confirmed_at = None
+    _task_gone_last_round = True
+    return True, (f"手动寻路失败：已取消任务（{info}），"
+                  f"{CANCEL_RE_CLAIM_DELAY}s 后重新领取")
 
 
 def _follow_to_done(win, first_items=None):
@@ -2411,13 +2833,28 @@ def run_loop(win, cycle_interval=1.0):
     返回结束原因描述。
     """
     global _fight_via_kanda, _battle_failed_reason, _battle_recovery_pending, \
-        _team_checked, _task_gone_last_round, _returned_last_round, _shout_text
+        _manual_recovery_pending, _team_checked, _task_gone_last_round, \
+        _returned_last_round, _shout_text
     max_rounds = load_task_counts().get(TASK_MODE, 0)
     log(f"[修罗] 任务次数上限: {max_rounds if max_rounds > 0 else '不限'}", "SYS")
     # 高性能模式开关由 main.task_start 按通用设置置位（共享设施）
     # 检查队伍开关（通用设置-修罗设置，默认开启）：关闭时领取前跳过
     # 全部队伍检查（非队长判定/人数监控），直接走位领取
     check_team = load_xiuluo_check_team()
+    # 兼容无快捷寻路（修罗设置开关，默认开启，用户 2026-11-20）：领取后
+    # 追踪面板没有修罗任务（快捷寻路被消耗）时，从领取对话框解析目的地
+    # 走手动寻路；有追踪时完全走原 follow 流程，不受影响
+    manual_nav = load_xiuluo_manual_nav()
+    # 强制手动寻路（修罗设置，默认关闭，测试用）：即使有任务追踪
+    # （快捷寻路可用）也走手动寻路；开启时视同打开兼容无快捷寻路
+    force_manual = load_xiuluo_force_manual()
+    manual_enabled = manual_nav or force_manual
+    if force_manual and not manual_nav:
+        log("[修罗] 强制手动寻路已开启（兼容无快捷寻路开关关闭，"
+            "按开启处理）", "SYS")
+    log(f"[修罗] 兼容无快捷寻路: "
+        f"{'开（无追踪时手动寻路）' if manual_enabled else '关'}"
+        + ("；强制手动寻路: 开（忽略任务追踪）" if force_manual else ""), "SYS")
     # 自动巫医（通用设置开关，默认开、每 5 轮一次）：每 N 轮领取后
     # 无条件前往巫医 NPC 医治，血蓝正常也照常（对话框处理复用战斗线程逻辑）
     auto_wuyi = load_xiuluo_auto_wuyi()
@@ -2578,12 +3015,27 @@ def run_loop(win, cycle_interval=1.0):
                 log(f"[修罗] {rinfo}", "WARN")
                 time.sleep(cycle_interval)
                 continue
+        # 0b. 上一轮手动寻路失败恢复未完成（回灵兽村/取消任务失败）：
+        #     任务可能仍存在且无追踪，直接进领取只会空转——先重试恢复
+        #     （2026-11-20 审查：此前失败后没有重试入口）
+        if _manual_recovery_pending and not is_in_battle(win):
+            debug_overlay.set_phase("手动寻路失败恢复")  # 看板阶段
+            rok, rinfo = _manual_recover(win, check_team)
+            if rok:
+                _manual_recovery_pending = False
+                log(f"[修罗][手动] {rinfo}", "SYS")
+            else:
+                log(f"[修罗][手动] {rinfo}", "WARN")
+            time.sleep(cycle_interval)
+            continue
         # 1. 领任务：任务追踪中已有修罗任务（续跑）→ 跳过领取，直接跟踪。
         #    上一轮已确认任务完成（follow_task 以任务消失为完成判据）时，
         #    本轮开始必然无任务——has_task（区域 OCR ~0.9s）只在可能
         #    续跑时检查（进程首轮或上轮跟踪失败未确认完成）
         claim_items = None  # 领取校验帧（续跑路径无，跟踪首轮自行截图+OCR）
         repair_round = False  # 本轮是否执行了自动修理（续跑路径不修理）
+        manual_round = False  # 本轮是否走无追踪手动寻路（兼容无快捷寻路）
+        manual_dest = None    # 手动寻路目的地 (地图名, x, y)，来自领取对话框
         # 续跑检查（一次截帧）：追踪面板是否有修罗任务。面板门控只用于
         # 「任务存在」判定（防静态区域浮字误命中），面板缺席/战斗帧按
         # 无任务放行进入领取分支——用户 2026-11-11：领取被拒→补人→
@@ -2726,7 +3178,8 @@ def run_loop(win, cycle_interval=1.0):
             debug_overlay.set_phase("领取任务")  # 看板阶段
             ok, info, claim_items = _claim_task(
                 win, allow_fill=check_team,
-                create_team_if_missing=pending_create)
+                create_team_if_missing=pending_create,
+                manual_nav=manual_enabled)
             if not ok:
                 log(f"[修罗] {info}", "WARN")
                 time.sleep(cycle_interval)
@@ -2746,6 +3199,34 @@ def run_loop(win, cycle_interval=1.0):
             # 领取校验确认帧的 OCR 行（取帧失败路径为 None）：实测已含该
             # 对话框（2026-11-10 3/3 轮），直接复用取消免一次截图+OCR
             claim_dialog_items = claim_items[0] if claim_items else None
+            # 兼容无快捷寻路（用户 2026-11-20）：领取以「对话框证据」确认
+            # 时再看追踪面板——有任务走原 follow，没有则本轮回合改走
+            # 手动寻路（目的地先于对话框关闭解析，动作在下方 follow 处分叉）
+            if manual_enabled and (force_manual or _claim_manual_dialog):
+                tracker_has = task_tracker.has_task(
+                    win, TASK_TITLE, TASK_FALLBACK_TEXTS)
+                if tracker_has and not force_manual:
+                    log("[修罗] 兼容无快捷寻路：追踪面板已有任务，"
+                        "走原跟踪流程", "SYS")
+                else:
+                    manual_round = True
+                    if force_manual:
+                        # 强制模式：领取刚结束，校验帧可能早于对话框渲染，
+                        # 短窗等对话框出现再解析目的地
+                        manual_dest = _parse_claim_destination_wait(
+                            win, claim_dialog_items)
+                        log("[修罗][手动] 强制手动寻路：忽略任务追踪，"
+                            "改走手动寻路"
+                            + (f"（目的地 {manual_dest[0]} "
+                               f"({manual_dest[1]},{manual_dest[2]})）"
+                               if manual_dest else "（目的地解析失败）"), "SYS")
+                    else:
+                        manual_dest = _parse_claim_destination(
+                            win, claim_dialog_items)
+                        log("[修罗][手动] 本轮无任务追踪，改走手动寻路"
+                            + (f"（目的地 {manual_dest[0]} "
+                               f"({manual_dest[1]},{manual_dest[2]})）"
+                               if manual_dest else "（目的地解析失败）"), "SYS")
             if wuyi_round:
                 debug_overlay.set_phase("自动巫医")  # 看板阶段
                 _dismiss_wuyi_block_dialog(win, items=claim_dialog_items)
@@ -2768,9 +3249,24 @@ def run_loop(win, cycle_interval=1.0):
         #      战斗由战斗监控线程自动操作、跟踪中自动跳过）；
         #     领取校验帧传入后首轮跳过截图+OCR 立即点击绿字
         #     （修理行程后旧帧已过期——重新截帧识别）
-        ok, info = _follow_to_done(
-            win, first_items=None if repair_round else claim_items)
+        if manual_round:
+            # 无任务追踪：手动寻路 → 点任务标记 → 看打/直接进战斗 → 等战斗结束
+            ok, info = _manual_nav_round(win, manual_dest)
+        else:
+            ok, info = _follow_to_done(
+                win, first_items=None if repair_round else claim_items)
         completed_via_failure = False
+        if not ok and manual_round:
+            # 手动寻路失败（解析/寻路/找不到标记）：回灵兽村取消任务重领
+            # （用户 2026-11-20 第 7 条；无追踪不能用战斗失败恢复的
+            # has_task 前置，_manual_recover 内用 assume_task 取消）。
+            # 恢复失败置 pending，下一轮开头先重试（防每轮 15s 领取空转）
+            debug_overlay.set_phase("手动寻路失败恢复")
+            rok, rinfo = _manual_recover(win, check_team)
+            _manual_recovery_pending = not rok
+            log(f"[修罗][手动] {rinfo}", "SYS" if rok else "WARN")
+            time.sleep(cycle_interval)
+            continue
         if not ok:
             failed_by_battle = _battle_failed_reason is not None
             if not failed_by_battle:

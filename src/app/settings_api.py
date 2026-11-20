@@ -163,6 +163,14 @@ class SettingsApiMixin(ControlHost):
         """修罗设置变更：保存暂离超时（分钟）。"""
         return settings_module.save_xiuluo_kick_away_minutes(value)
 
+    def save_xiuluo_force_manual(self, on):
+        """修罗设置变更：保存强制手动寻路（忽略快捷寻路）开关状态。"""
+        return settings_module.save_xiuluo_force_manual(on)
+
+    def save_xiuluo_manual_nav(self, on):
+        """修罗设置变更：保存兼容无快捷寻路（手动寻路）开关状态。"""
+        return settings_module.save_xiuluo_manual_nav(on)
+
     def save_xiuluo_min(self, value):
         """修罗设置变更：保存最少人数。"""
         return settings_module.save_xiuluo_min(value)

@@ -68,6 +68,7 @@ from ..core.settings import (
     load_xiuluo_auto_kick_away, load_xiuluo_kick_away_minutes, load_xiuluo_auto_repair,
     load_xiuluo_auto_wuyi, load_xiuluo_check_team, load_xiuluo_hezi, load_xiuluo_repair_interval,
     load_xiuluo_settings, load_xiuluo_shout_switch, load_xiuluo_shout_text, load_xiuluo_tab_group,
+    load_xiuluo_manual_nav, load_xiuluo_force_manual,
     load_xiuluo_wuyi_interval, load_zhongzu_auto_create_team, load_zhongzu_auto_rejoin,
     load_zhongzu_auto_repair, load_zhongzu_auto_wuyi, load_zhongzu_check_team,
     load_zhongzu_repair_interval, load_zhongzu_shout_switch, load_zhongzu_shout_text,
@@ -185,6 +186,7 @@ class ControlWindow(DiagnosticsMixin, SettingsApiMixin, MessageApiMixin,
         self._visible = True  # 启动时直接可见
         self._real_close = threading.Event()  # 置位后 X/销毁真正放行（退出路径）
         self._verifying = False  # 修罗回程验证进行中标记（防连点）
+        self._map_nav_running = False  # 诊断-地图导航线程进行中标记（中断按钮用）
         self._group_checking = False  # 组号设置页「检查当前队伍」进行中标记（防连点）
         self._scheme_dialog_busy = False  # 方案导入导出文件对话框在途标记（防连点）
         self._pending_import = None  # 待确认的导入（{"name", "settings"}；同名冲突时挂起）
@@ -226,6 +228,8 @@ class ControlWindow(DiagnosticsMixin, SettingsApiMixin, MessageApiMixin,
         self.expose(self.save_wuhuan_vitality_continue)
         self.expose(self.save_xiuluo_hezi)
         self.expose(self.save_xiuluo_check_team)
+        self.expose(self.save_xiuluo_manual_nav)
+        self.expose(self.save_xiuluo_force_manual)
         self.expose(self.save_xiuluo_auto_create_team)
         self.expose(self.save_xiuluo_auto_rejoin)
         self.expose(self.save_xiuluo_auto_kick_away)
@@ -305,6 +309,9 @@ class ControlWindow(DiagnosticsMixin, SettingsApiMixin, MessageApiMixin,
         self.expose(self.verify_shout)
         self.expose(self.verify_jiguan)
         self.expose(self.verify_position)
+        self.expose(self.get_navigate_maps)
+        self.expose(self.verify_map_navigate)
+        self.expose(self.cancel_map_navigate)
         self.expose(self.verify_dialog_detect)
         self.expose(self.verify_apply_panel)
         self.expose(self.verify_team_check)
@@ -712,6 +719,8 @@ class ControlWindow(DiagnosticsMixin, SettingsApiMixin, MessageApiMixin,
                 "wuhuan_vitality_continue": load_wuhuan_vitality_continue(),
                 "xiuluo_hezi": load_xiuluo_hezi(),
                 "xiuluo_check_team": load_xiuluo_check_team(),
+                "xiuluo_manual_nav": load_xiuluo_manual_nav(),
+                "xiuluo_force_manual": load_xiuluo_force_manual(),
                 "xiuluo_auto_create_team": load_xiuluo_auto_create_team(),
                 "xiuluo_auto_rejoin": load_xiuluo_auto_rejoin(),
                 "xiuluo_auto_kick_away": load_xiuluo_auto_kick_away(),
@@ -912,6 +921,12 @@ class ControlWindow(DiagnosticsMixin, SettingsApiMixin, MessageApiMixin,
         with self._start_lock:
             if self._tm.is_running():
                 return {"status": "success", "running": True}
+            # 诊断-地图导航进行中（会持续点击/OCR 游戏窗口，最长数分钟）：
+            # 拒绝启动任务，避免控制进程导航线程与任务子进程互抢操作
+            # （2026-11-20 审查）。用户可先点「中断寻路」再启动。
+            if getattr(self, "_map_nav_running", False):
+                return {"status": "error",
+                        "msg": "地图导航进行中，请先点「中断寻路」或等待完成后再启动任务"}
             if self._license_gate is not None:
                 try:
                     result = self._license_gate() or {}
