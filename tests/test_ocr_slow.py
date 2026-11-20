@@ -1,8 +1,9 @@
 """OCR 引擎烟测（slow 标记：模型加载 ~1-2s，CI 默认排除）。
 
 本地跑：python -m pytest -m slow
-验证仓库内模型可加载、三引擎（全帧/区域/2x 放大）参数构造正确
-（曾踩过 det_* 参数漏传 det_model_path 的 KeyError 坑）。
+验证仓库内模型可加载、区域/2x 引擎参数构造正确（曾踩过 det_* 参数
+漏传 det_model_path 的 KeyError 坑）；全帧引擎不参与预热，单独验证
+首次 ocr_image 的懒创建路径。
 """
 import numpy as np
 import pytest
@@ -19,6 +20,15 @@ def test_ocr_engines_construct_and_infer():
     # 2x 放大快引擎（max/1600）
     items2, _ = game_map.ocr_zoom(blank)
     assert isinstance(items2, list)
+
+
+@pytest.mark.slow
+def test_full_frame_engine_lazy_construct():
+    """全帧引擎不随 warmup 创建：首次 ocr_image 时懒创建并可用。"""
+    game_map._engine = None
+    items, _ = game_map.ocr_image(np.zeros((64, 64, 3), dtype=np.uint8))
+    assert isinstance(items, list)
+    assert game_map._engine is not None
 
 
 @pytest.mark.slow

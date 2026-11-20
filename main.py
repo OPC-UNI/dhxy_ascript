@@ -27,6 +27,20 @@ import threading
 import time
 import traceback
 
+# ---- OpenBLAS 线程数限制（必须早于任何 numpy 导入）----
+# numpy 自带的 OpenBLAS 默认按逻辑核数建线程池，导入时每线程提交
+# ~32MB（实测 16 核 ≈ 499MB、32 线程 ≈ 1GB），本项目没有任何 BLAS
+# 调用（无 np.dot/matmul/linalg/einsum），这些缓冲永远不会被访问，
+# 却计入系统提交额度：主进程 + 任务子进程各一份，多开再翻倍。低配/
+# 关闭页面文件/多开机器上可能挤占提交空间（内存申请失败或被迫扩
+# 页面文件）。固定为 1 线程后每进程提交 499MB→17MB、线程 19→4，
+# 结果与速度不受影响（BLAS 未被调用）。必须放在 import ascript
+# 之前：AScript SDK 会间接导入 numpy（实测导入其 windows.system 前
+# 提交 24MB、导入后 521MB）。spawn 任务子进程重导入本模块同样生效。
+# 直接赋值而非 setdefault：本程序不调用 BLAS，必须保证用户全局环境
+# 里别的工具设的线程数不会把这份提交开销带回来。
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+
 # ---- 打包环境路径引导 ----
 # 打包后本文件位于 site-packages/dhxy2/main.py，src 子包随包安装为
 # dhxy2/src，不在模块搜索路径上；将本文件所在目录插入 sys.path，使
@@ -382,8 +396,9 @@ def _task_start_body():
     debug_overlay.set_task("、".join(modes) if modes else "未选择任务")
     debug_overlay.set_config(battle_actions["char"], battle_actions["beast"])
 
-    # OCR 引擎预热：首次调用需加载 det/cls/rec 三个模型（一次性约 1s），
-    # 提前完成避免拖慢任务首轮识别
+    # OCR 引擎预热：区域 + 2x 快引擎（首次调用加载 det/rec 模型，一次性
+    # 约 1s），提前完成避免拖慢任务首轮识别。全帧引擎只服务兜底路径
+    # （2026-11-13~20 日志实测 0 次触发），首次使用 ocr_image 时懒加载。
     game_map.warmup_ocr()
 
     # uiautomation 需要线程内 COM 初始化：任务运行在子进程的工作线程中，
@@ -705,9 +720,10 @@ if __name__ == '__main__':
     control_win.schedule_update_check()
 
     # OCR 引擎预热（主进程，后台线程）：高级设置的验证/测试按钮在主进程
-    # 跑 OCR，首次调用冷启动加载 det/cls/rec 模型实测阻塞约 30s
-    # （2026-10-30 白龙马模板验证：点候选后第一次 OCR 卡 30s 才检测到
-    # 对话框）。任务子进程另有 task_start 内预热；此处覆盖主进程。
+    # 跑 OCR，首次调用冷启动加载 det/rec 模型（本地模型实测约 1s；
+    # 2026-10-30 曾因联网下载模型卡 30s）。预热范围 = 区域 + 2x 快引擎；
+    # 全帧引擎只服务任务侧兜底路径，首次使用时懒加载。
+    # 任务子进程另有 task_start 内预热；此处覆盖主进程。
     threading.Thread(target=game_map.warmup_ocr,
                      daemon=True, name="ocr-warmup").start()
 

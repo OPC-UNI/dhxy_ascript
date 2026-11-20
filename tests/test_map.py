@@ -46,6 +46,38 @@ def test_engine_items_format():
     assert items == [("测试", [10, 20, 50, 40], 0.99)]
 
 
+# ---- OCR 引擎预热/懒加载 ----
+
+def test_warmup_warms_region_zoom_not_full_frame(monkeypatch):
+    """全帧引擎只服务兜底路径（2026-11-13~20 日志实测 0 次触发）。
+
+    warmup 只建区域 + 2x 引擎；全帧引擎首次 ocr_image 时才懒创建，
+    避免任务进程常驻一个几乎不用的引擎（约 12MB 提交）。
+    """
+    created = []
+
+    class _FakeEngine:
+        def __init__(self, params=None):
+            created.append(params)
+
+        def __call__(self, img):
+            return None  # _engine_items(None) -> []
+
+    monkeypatch.setattr(game_map, "RapidOCR", _FakeEngine)
+    monkeypatch.setattr(game_map, "_engine", None)
+    monkeypatch.setattr(game_map, "_region_engine", None)
+    monkeypatch.setattr(game_map, "_zoom_engine", None)
+
+    game_map.warmup_ocr()
+    assert game_map._region_engine is not None
+    assert game_map._zoom_engine is not None
+    assert game_map._engine is None          # 全帧引擎不预热
+
+    items, _ = game_map.ocr_image(np.zeros((32, 32, 3), dtype=np.uint8))
+    assert items == []
+    assert game_map._engine is not None      # 首次使用时才创建
+
+
 # ---- 模板快速接口（真实模板） ----
 
 def test_match_frame_np_finds_center():

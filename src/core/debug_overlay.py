@@ -36,6 +36,14 @@ import threading
 import time
 from datetime import datetime, timedelta
 
+# ---- OpenBLAS 线程数限制（源码模式绘制进程不经过 main.py）----
+# 任务进程以 `python -c "from src.core.debug_overlay import _helper_main"`
+# 启动本模块（见 _spawn_helper），不执行 main.py 的入口环境设置；下面
+# 的 app_utils 会经 ascript 间接导入 numpy，默认 OpenBLAS 按核数每线程
+# 提交 ~32MB（与 main.py 同因：本程序无 BLAS 调用）。必须放在 app_utils
+# 导入之前。冻结态走「exe --overlay-helper」，由 main.py 顶部设置。
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+
 from .app_utils import log
 from . import user_data
 

@@ -19,6 +19,7 @@
 """
 import difflib
 import re
+import threading
 import time
 from pathlib import Path
 
@@ -190,6 +191,15 @@ _ZOOM_OCR_PARAMS = dict(_REGION_OCR_PARAMS)
 _ZOOM_OCR_PARAMS["Det.limit_side_len"] = 1600
 _zoom_engine = None
 
+# 引擎创建锁（双重检查）：区域/2x 引擎在任务启动时预热，正常不会走到
+# 懒创建；全帧引擎自 2026-11-20 起不再预热——它只服务 xiuluo 任务块
+# 2x/队伍弹窗、mingwang 种族条带三条兜底路径（2026-11-13~20 日志实测
+# 全帧 0 次成功触发），首次 ocr_image 时懒创建。任务线程与战斗线程
+# 存在同时首次触发的可能，无锁会建出两份引擎、白占内存。
+_engine_lock = threading.Lock()
+_region_engine_lock = threading.Lock()
+_zoom_engine_lock = threading.Lock()
+
 
 def resolve_world_map_name(name):
     """地图名 → WORLD_MAP_LABELS 键（精确 → 别名 → 繁体归一 → 相似度）。
@@ -249,8 +259,10 @@ def ocr_regions(img, regions):
     global _engine, _region_engine
     full_np = np.asarray(img)
     if not regions:
-        if _engine is None:
-            _engine = RapidOCR(params=_OCR_PARAMS)
+        if _engine is None:  # 全帧引擎：仅兜底路径，首次使用时懒创建
+            with _engine_lock:
+                if _engine is None:
+                    _engine = RapidOCR(params=_OCR_PARAMS)
         img_np = full_np
         items = _engine_items(_engine(img_np))
         items.sort(key=lambda x: x[1][1])
@@ -262,7 +274,9 @@ def ocr_regions(img, regions):
     # use_cls=False：游戏 UI 全是水平文本，角度分类只判 0/180 度翻转，
     # 关掉实测双区域 277→138ms（-50%），识别框数不变
     if _region_engine is None:
-        _region_engine = RapidOCR(params=_REGION_OCR_PARAMS)
+        with _region_engine_lock:
+            if _region_engine is None:
+                _region_engine = RapidOCR(params=_REGION_OCR_PARAMS)
     img_np = np.zeros_like(full_np)
     items = []
     for l, t, r, b in regions:
@@ -295,7 +309,9 @@ def ocr_zoom(img):
     """
     global _zoom_engine
     if _zoom_engine is None:
-        _zoom_engine = RapidOCR(params=_ZOOM_OCR_PARAMS)
+        with _zoom_engine_lock:
+            if _zoom_engine is None:
+                _zoom_engine = RapidOCR(params=_ZOOM_OCR_PARAMS)
     full_np = np.asarray(img)
     items = _engine_items(_zoom_engine(full_np))
     items.sort(key=lambda x: x[1][1])
@@ -303,18 +319,26 @@ def ocr_zoom(img):
 
 
 def warmup_ocr():
-    """预热 OCR 引擎（首次调用需加载 det/cls/rec 模型，一次性约 1s；
-    新版引擎首次会下载官方模型，网络耗时另计——建议首次运行前联网）。"""
-    global _engine, _region_engine, _zoom_engine
-    if _engine is None:
-        _engine = RapidOCR(params=_OCR_PARAMS)
-        _engine(np.zeros((32, 32, 3), dtype=np.uint8))
+    """预热 OCR 引擎（区域 + 2x 快引擎，一次性约 1s；本地模型已随包
+    分发，缺失时新版引擎会联网下载，网络耗时另计）。
+
+    全帧引擎不预热：它只服务 xiuluo 任务块 2x/队伍弹窗、mingwang 种族
+    条带三条兜底路径（2026-11-13~20 日志实测全帧 0 次成功触发；名望
+    12 轮判定全部由区域引擎完成、22 次直接走当日缓存），首次 ocr_image
+    时按 _engine_lock 懒创建（约 0.4-0.8s，每进程一次）。区域引擎是
+    所有轮询热路径，2x 引擎在修罗/客栈/五倍有实测使用，二者必须预热。
+    """
+    global _region_engine, _zoom_engine
     if _region_engine is None:
-        _region_engine = RapidOCR(params=_REGION_OCR_PARAMS)
-        _region_engine(np.zeros((32, 32, 3), dtype=np.uint8))
+        with _region_engine_lock:
+            if _region_engine is None:
+                _region_engine = RapidOCR(params=_REGION_OCR_PARAMS)
+                _region_engine(np.zeros((32, 32, 3), dtype=np.uint8))
     if _zoom_engine is None:
-        _zoom_engine = RapidOCR(params=_ZOOM_OCR_PARAMS)
-        _zoom_engine(np.zeros((32, 32, 3), dtype=np.uint8))
+        with _zoom_engine_lock:
+            if _zoom_engine is None:
+                _zoom_engine = RapidOCR(params=_ZOOM_OCR_PARAMS)
+                _zoom_engine(np.zeros((32, 32, 3), dtype=np.uint8))
 
 
 def _clean_map_pos(text):

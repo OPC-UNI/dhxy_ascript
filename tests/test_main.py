@@ -93,6 +93,18 @@ def test_battle_only_loop_runs_battle_until_thread_exits(monkeypatch):
     assert any("战斗监控线程已退出" in msg for msg, _ in calls)
 
 
+def test_openblas_threads_limited_before_numpy_import():
+    """OpenBLAS 默认按逻辑核数建线程池，导入 numpy 时每线程提交 ~32MB
+    （16 核实测 ≈ 499MB），而本项目没有任何 BLAS 调用。main.py 必须在
+    导入 numpy（经 ascript SDK 间接导入）之前固定为 1 线程，否则主进程
+    与任务子进程各占 ~0.5–1GB 提交额度——低配/关闭页面文件/多开机器上
+    会挤压系统提交空间（2026-11-20 实测：499MB→17MB、线程 19→4）。
+    """
+    import os
+
+    assert os.environ.get("OPENBLAS_NUM_THREADS") == "1"
+
+
 def test_ascript_project_root_points_to_repo_root():
     """AScript SDK R 资源根目录（2026-11-18 v2.13.0 白屏教训）。
 
