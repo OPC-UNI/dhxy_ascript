@@ -4,10 +4,18 @@
 play：提示对话框关闭 → 座骑降落（飞行驭器面板「降落」，2026-11-18
 用户规则取代 Alt+C）→ OCR 机关标签「封印机关·黄/蓝/红」定位三个机关
 → 按 黄→蓝→红 点标签上方的剑身 → 按解除结果决定：换一处=换下一个
-机关；已被破解/已完成任务=结束；超时无结果=按点击落空换下一个
-（绝不按成功处理）。import 期零副作用。封印按序开启（面板链接按序
-点击）的进度键与链接定位逻辑见 minigames/fengyin_link.py
+机关；已被破解/已完成任务/剧情式结局=结束；超时无结果=按点击落空
+换下一个（绝不按成功处理）。import 期零副作用。封印按序开启（面板
+链接按序点击）的进度键与链接定位逻辑见 minigames/fengyin_link.py
 （2026-11-17 拆分，代码逐字节未变）。
+
+遮挡处理（2026-11-20 流洲实机 + 用户规则）：人物站在封印中心时可能
+正好挡住某个机关标签，区域 OCR 完全读不出（2x 放大也读不出残字），
+已有标签全部点过而仍缺机关（尝试数 < 3）时走开一小步再重扫
+（JIGUAN_REVEAL_*）。用户确认：走开拉开后从稍远处点剑身能直接触发
+破解，人物不必先走到剑前。点对机关的结局除「已被破解」外还有剧情式
+结局（玩家「怎么没有反应？」→ 神秘人「玄宝已被人抢先一步取走了」，
+任务随即结束），结果为非「换一处」的对话框即按成功处理。
 """
 import time
 
@@ -58,10 +66,26 @@ JIGUAN_COLOR_ALIASES = str.maketrans({"黃": "黄", "藍": "蓝", "紅": "红"})
 JIGUAN_FAIL_TEXT = "换一处"
 JIGUAN_SUCCESS_TEXTS = ("已被破解", "解除封印")
 JIGUAN_DONE_TEXT = "已完成玄枢轶闻任务"
-JIGUAN_RESULT_WAIT = 10       # 等待解除结果的上限（秒）。实机结果对话框
-                              # 约 5-6s 出现（2026-11-18 实测 5.5s）；
-                              # 固定时延只作超时上限，任一方命中即返回
+# 剧情式结局（2026-11-20 流洲实机）：点对机关后先出「正在破解封印」
+# 读条，随后进剧情对话——玩家「怎么没有反应？」→ 神秘人「看来这玄石
+# 中的玄宝已被人抢先一步取走了」→ 任务结束。文案不写死（可能随结局
+# 变化），只要结果是**非「换一处」的对话框**即按点对处理。
+JIGUAN_RESULT_WAIT = 20       # 等待解除结果的上限（秒）。「换一处」约
+                              # 5-7s 出现（2026-11-18 实测 5.5s）；剧情
+                              # 式结局需读完条再出对话（2026-11-20 实测
+                              # ≤20s）。固定时延只作超时上限，任一方命中即返回
 JIGUAN_DIALOG_POLL = 0.5      # 等待结果的轮询间隔（秒）
+# ---- 标签被人物遮挡时的走开拉开（2026-11-20 用户规则）----
+# 人物站在封印中心可能正好挡住某个机关标签（流洲实测：红标签被角色
+# 身体盖住，区域 OCR 与 2x 放大均读不出），已有标签全部点过而仍缺
+# 机关时按步点走开一小步再重扫。用户确认：走开拉开后从稍远处直接点
+# 剑身即可触发破解（无需人物先走到剑前）。
+JIGUAN_REVEAL_STEPS = ((150, 40), (-150, 40), (0, 170))  # 步点（屏幕中心偏移）
+JIGUAN_REVEAL_BOUNDS = (150, 200, 1230, 700)  # 步点允许范围（避开标题/底栏 UI）
+JIGUAN_REVEAL_CLEAR = 130     # 步点与已知机关剑身的最小曼哈顿距离（防点到剑）
+JIGUAN_REVEAL_MAX = 2         # 每次 play 最多走开次数（防来回走动）
+JIGUAN_REVEAL_SETTLE = 4.0    # 等人物走完的上限（秒）
+JIGUAN_REVEAL_POLL = 0.3      # 走位轮询间隔（秒，位置 OCR ≈0.1-0.2s/次）
 
 
 def _jiguan_result_dialog(win, timeout=JIGUAN_RESULT_WAIT):
@@ -70,8 +94,10 @@ def _jiguan_result_dialog(win, timeout=JIGUAN_RESULT_WAIT):
     标准对话框模板先门控（条带匹配 ~9ms/帧，无对话框时不 OCR），命中
     后才对对话区做区域 OCR 判文案。返回：
     - "fail"：出现「换一处再试试」，应换下一个机关；
-    - "success"：出现「已被破解」/「解除封印」，或最后一处的任务完成
-      提示「已完成玄枢轶闻任务」；
+    - "success"：出现「已被破解」/「解除封印」，最后一处的任务完成
+      提示「已完成玄枢轶闻任务」，或剧情式结局——结果是对话框但文案
+      不是「换一处」（2026-11-20 实机：玩家「怎么没有反应？」→ 神秘人
+      「玄宝已被人抢先一步取走了」，任务随即结束）；
     - None：超时未出现任何结果（点击可能落空，调用方换下一个机关，
       **不得按成功处理**）。
     """
@@ -87,6 +113,12 @@ def _jiguan_result_dialog(win, timeout=JIGUAN_RESULT_WAIT):
                    for t in JIGUAN_SUCCESS_TEXTS):
                 return "success"
             if _dialog_text_present(items, JIGUAN_DONE_TEXT):
+                return "success"
+            # 结果对话框但不是「换一处」：本机关被接受（剧情式结局）。
+            # 触发提示对话（play 开头已点一次关闭）渲染残留时不算结果；
+            # 对话区需有可读文案（防渲染过渡帧误判）。
+            if not _dialog_text_present(items, JIGUAN_DIALOG_TEXT) \
+                    and any(t.strip() for t, _r, _s in items):
                 return "success"
         if time.time() >= deadline:
             return None
@@ -145,16 +177,79 @@ def _wait_labels(win):
         time.sleep(JIGUAN_LABEL_POLL)
 
 
-def _ordered_positions(labels):
-    """按 黄→蓝→红 排点击顺序；颜色识别不出的位置放最后（仍会尝试）。"""
+def _ordered_labels(labels):
+    """按 黄→蓝→红 排点击顺序，返回 [(颜色或 None, (x, y))]；同色取首个。
+
+    颜色识别不出的位置放最后（仍会尝试）。
+    """
     known = {}
     unknown = []
     for color, pos in labels:
         if color is None:
-            unknown.append(pos)
+            unknown.append((None, pos))
         elif color not in known:
             known[color] = pos
-    return ([known[c] for c in JIGUAN_CLICK_ORDER if c in known] + unknown)
+    return ([(c, known[c]) for c in JIGUAN_CLICK_ORDER if c in known]
+            + unknown)
+
+
+def _ordered_positions(labels):
+    """按 黄→蓝→红 排点击顺序；颜色识别不出的位置放最后（仍会尝试）。"""
+    return [pos for _c, pos in _ordered_labels(labels)]
+
+
+def _step_aside(win, labels, prefix):
+    """走开一小步拉开人物对机关标签的遮挡（2026-11-20 用户规则）。
+
+    被人物身体挡住的标签 OCR 完全读不出（2x 放大也不行），已有标签
+    全部点过而仍缺机关时调用：按 JIGUAN_REVEAL_STEPS 选一个离已知
+    机关剑身够远、在画面范围内的空地点一下，等人物走完返回 True，
+    调用方重新扫描标签。所有方向都走不动/途中进战斗返回 False。
+    """
+    from ..device.battle import is_in_battle
+    known = [pos for _c, pos in labels]
+    start = game_map.read_map_position(win)
+    left, top, right, bottom = JIGUAN_REVEAL_BOUNDS
+    cx, cy = SCREEN_CENTER_POS
+    for dx, dy in JIGUAN_REVEAL_STEPS:
+        x, y = cx + dx, cy + dy
+        if not (left <= x <= right and top <= y <= bottom):
+            continue
+        if any(abs(x - px) + abs(y - py) < JIGUAN_REVEAL_CLEAR
+               for px, py in known):
+            continue  # 步点离机关剑身太近：换个方向
+        human_click(win, x, y)
+        moved = _wait_settle(win, start)
+        if is_in_battle(win):
+            log(f"[{prefix}] 走位拉开遮挡时进入战斗，放弃本次破解", "WARN")
+            return False
+        if moved:
+            log(f"[{prefix}] 机关标签被遮挡，已走开拉开视角 @({x},{y})", "SYS")
+            return True
+        start = game_map.read_map_position(win)
+    return False
+
+
+def _wait_settle(win, start_pos):
+    """等走位结束：位置先出现变化、再连续两次相同即站定。
+
+    start_pos 为点击前的地图位置（(地图,x,y) 或 None）。返回是否发生
+    过位移——未位移说明点到了不可行走处，调用方换方向重试。
+    """
+    deadline = time.time() + JIGUAN_REVEAL_SETTLE
+    last = start_pos
+    moved = start_pos is None
+    while time.time() < deadline:
+        time.sleep(JIGUAN_REVEAL_POLL)
+        pos = game_map.read_map_position(win)
+        if pos is None:
+            continue
+        if start_pos is not None and pos != start_pos:
+            moved = True
+        if moved and pos == last:
+            return True
+        last = pos
+    return moved
 
 
 def _land(win, prefix):
@@ -170,15 +265,18 @@ def _land(win, prefix):
 
 
 def play(win, prefix="玄枢轶闻"):
-    """封印机关破解（用户 2026-10-15 流程，2026-11-18 实机重标定）：
+    """封印机关破解（用户 2026-10-15 流程，2026-11-18/11-20 实机重标定）：
 
     提示对话框点击一次关闭 → 座骑降落 → OCR 机关标签定位三个机关 →
     按 黄→蓝→红 点标签上方的剑身 → 轮询解除结果：
     - 「换一处再试试」：本机关不对，关闭对话框后换下一个；
-    - 「已被破解」/「解除封印」/「已完成玄枢轶闻任务」：结束；
+    - 「已被破解」/「解除封印」/「已完成玄枢轶闻任务」/剧情式结局
+      （非「换一处」的结果对话框）：结束；
     - 超时无结果：点击落空，换下一个机关（不按成功处理）。
     每次点击前重新扫描标签（点击落空可能让角色走动、视角变化），同一
-    位置不重复点；轮次上限 JIGUAN_LABEL_ROUNDS。
+    机关（按颜色/位置）不重复点；已有标签全部点过而仍缺机关（标签被
+    人物身体挡住，OCR 读不出）时走开一小步再重扫（2026-11-20 用户
+    规则，JIGUAN_REVEAL_*）；轮次上限 JIGUAN_LABEL_ROUNDS。
     返回 (是否成功, 描述)。
     """
     # 1. 点击一次关闭提示对话框（屏幕中间；该对话框无选项）
@@ -190,6 +288,8 @@ def play(win, prefix="玄枢轶闻"):
     # 3. 标签定位 → 逐个尝试（每轮点击前重扫，位置随视角更新）
     clicked = 0
     tried = []
+    failed_colors = set()   # 明确提示「换一处」的机关颜色（落空的不记，防误杀）
+    reveals = 0
     max_attempts = JIGUAN_LABEL_ROUNDS * len(JIGUAN_CLICK_ORDER)
     while clicked < max_attempts:
         labels = _wait_labels(win)
@@ -197,20 +297,33 @@ def play(win, prefix="玄枢轶闻"):
             log(f"[{prefix}] 未找到封印机关标签（区域 {JIGUAN_LABEL_REGION}），"
                 f"放弃本轮破解", "WARN")
             break
-        cands = [p for p in _ordered_positions(labels)
-                 if all(abs(p[0] - t[0]) + abs(p[1] - t[1]) > JIGUAN_SAME_SPOT
-                        for t in tried)]
+        cands = [(color, pos) for color, pos in _ordered_labels(labels)
+                 if color not in failed_colors
+                 and all(abs(pos[0] - t[0]) + abs(pos[1] - t[1])
+                         > JIGUAN_SAME_SPOT for t in tried)]
         if not cands:
+            # 已知标签都点过了但机关没凑齐：某个标签被人物身体挡住，
+            # 区域 OCR 读不出（2026-11-20 流洲实测，2x 放大也读不出）。
+            # 走开一小步拉开遮挡后重扫（用户规则）。
+            if len(tried) < len(JIGUAN_CLICK_ORDER) \
+                    and reveals < JIGUAN_REVEAL_MAX \
+                    and _step_aside(win, labels, prefix):
+                reveals += 1
+                continue
             break
-        x, y = cands[0]
+        color, (x, y) = cands[0]
         tried.append((x, y))
         clicked += 1
         human_click(win, x, y)
-        log(f"[{prefix}] 已点击封印机关 @({x},{y})，等待解除结果", "SYS")
+        color_tag = f"·{color}" if color else ""
+        log(f"[{prefix}] 已点击封印机关{color_tag} @({x},{y})，等待解除结果",
+            "SYS")
         result = _jiguan_result_dialog(win)
         if result == "fail":
             log(f"[{prefix}] 机关 @({x},{y}) 提示「换一处再试试」，改点下一个",
                 "SYS")
+            if color is not None:
+                failed_colors.add(color)  # 明确不对：之后不再点该颜色
             clear_blocking_dialog(win, prefix=prefix, max_clicks=5)
             continue
         if result == "success":

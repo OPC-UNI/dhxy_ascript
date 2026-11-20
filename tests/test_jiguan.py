@@ -5,6 +5,11 @@
 人物原地卡死。改为 OCR 标签「封印机关·黄/蓝/红」定位（剑身 = 标签上方
 JIGUAN_SWORD_DY），结果只认三种直接信号：换一处 / 已被破解 / 已完成
 玄枢轶闻任务；超时按落空换下一个机关，绝不按成功处理。
+
+2026-11-20 流洲实机补两处：①人物身体可能挡住某个机关标签（OCR 与
+2x 放大都读不出），已有标签全部点过而仍缺机关时走开一小步再重扫；
+②点对机关的结局可能是剧情式（玩家「怎么没有反应？」→ 神秘人「玄宝
+已被人抢先一步取走」），非「换一处」的结果对话框按成功处理。
 """
 import numpy as np
 
@@ -100,6 +105,21 @@ def test_result_dialog_timeout_returns_none(monkeypatch):
     assert jiguan._jiguan_result_dialog(_Win(), timeout=0.01) is None
 
 
+def test_result_dialog_story_outcome_is_success(monkeypatch):
+    """点对机关后的剧情式结局（2026-11-20 实机帧）→ 非「换一处」即成功。"""
+    _patch_result(monkeypatch,
+                  [("怎么没有反应？", [434, 378, 545, 405], 1.0)])
+    assert jiguan._jiguan_result_dialog(_Win()) == "success"
+
+
+def test_result_dialog_trigger_text_is_not_result(monkeypatch):
+    """触发提示对话渲染残留不算结果（不得误判成功）。"""
+    _patch_result(monkeypatch,
+                  [("看来要破解的便是此地的封印了。", [0, 0, 1, 1], 0.99)])
+    monkeypatch.setattr(jiguan.time, "sleep", lambda s: None)
+    assert jiguan._jiguan_result_dialog(_Win(), timeout=0.01) is None
+
+
 # ---- play 主流程 ----
 
 def _install(monkeypatch, labels, results):
@@ -177,22 +197,78 @@ def test_play_no_labels_reports_failure(monkeypatch):
 
 
 def test_play_retries_new_positions_after_scene_change(monkeypatch):
-    """一轮三个位置都落空后再扫一轮：新位置会继续尝试（旧位置不重点）。"""
+    """一轮三个位置都落空（超时无结果）后再扫一轮：新位置继续尝试。
+
+    落空不按颜色拉黑（只有明确「换一处」的机关才不再点），场景变化后
+    同色机关的新位置仍会点。
+    """
     scans = iter([LABELS, LABELS, LABELS, [("黄", (900, 500))]])
+    ok, clicks, steps = _play_with_scans(monkeypatch, scans, [None] * 4)
+    assert not ok and not steps                  # 落空不走开：只按位置去重
+    assert clicks[1:] == [(760, 400), (620, 470), (800, 560), (900, 500)]
+
+
+def _play_with_scans(monkeypatch, scans, results, step_ok=True):
+    """play 替身：scans/results 按次数消费，_step_aside 按 step_ok 返回。
+
+    返回 (是否成功, 点击坐标列表, 走开次数)。results 耗尽即断言失败。
+    """
+    clicks = []
+    steps = []
+    outcomes = iter(results)
     monkeypatch.setattr(jiguan, "log", lambda *a, **k: None)
     monkeypatch.setattr(jiguan.time, "sleep", lambda s: None)
-    clicks = []
     monkeypatch.setattr(jiguan, "human_click",
                         lambda win, x, y: clicks.append((x, y)))
     monkeypatch.setattr(jiguan, "_wait_labels", lambda win: next(scans, []))
     monkeypatch.setattr(jiguan, "_jiguan_result_dialog",
-                        lambda win, timeout=None: "fail")
+                        lambda win, timeout=None: next(outcomes))
     monkeypatch.setattr(jiguan, "clear_blocking_dialog",
                         lambda win, prefix="", max_clicks=3: (True, True))
     monkeypatch.setattr(jiguan.zuoqi, "ensure_landed",
                         lambda win: (True, "已降落"))
     monkeypatch.setattr(jiguan.zuoqi, "close_feixingyuqi_panel",
                         lambda win: (True, "面板已关闭"))
-    ok, info = jiguan.play(_Win())
+
+    def fake_step(win, labels, prefix=""):
+        steps.append(list(labels))
+        return step_ok
+
+    monkeypatch.setattr(jiguan, "_step_aside", fake_step)
+    ok, _info = jiguan.play(_Win())
+    return ok, clicks, steps
+
+
+def test_play_steps_aside_when_label_occluded(monkeypatch):
+    """标签被人物挡住只读出黄/蓝（2026-11-20 流洲实机）：两个都换一处后
+    走开一步重扫，读出红机关并点中成功。"""
+    occluded = [("黄", (760, 400)), ("蓝", (620, 470))]
+    revealed = [("黄", (610, 440)), ("蓝", (470, 510)), ("红", (514, 280))]
+    scans = iter([occluded, occluded, occluded, revealed])
+    ok, clicks, steps = _play_with_scans(
+        monkeypatch, scans, ["fail", "fail", "success"])
+    assert ok
+    assert len(steps) == 1                       # 走开一次
+    assert clicks[1:] == [(760, 400), (620, 470), (514, 280)]
+
+
+def test_play_reveal_failure_gives_up(monkeypatch):
+    """走开一步失败（人物走不动）→ 不无限试，按尝试 2 个机关收尾。"""
+    occluded = [("黄", (760, 400)), ("蓝", (620, 470))]
+    scans = iter([occluded, occluded, occluded])
+    ok, clicks, steps = _play_with_scans(
+        monkeypatch, scans, ["fail", "fail"], step_ok=False)
     assert not ok
-    assert clicks[1:] == [(760, 400), (620, 470), (800, 560), (900, 500)]
+    assert len(steps) == 1
+    assert clicks[1:] == [(760, 400), (620, 470)]
+
+
+def test_play_reveal_bounded_twice(monkeypatch):
+    """走开后仍未读出第三机关：最多走开 JIGUAN_REVEAL_MAX 次后放弃。"""
+    occluded = [("黄", (760, 400)), ("蓝", (620, 470))]
+    scans = iter([occluded] * 6)
+    ok, clicks, steps = _play_with_scans(
+        monkeypatch, scans, ["fail", "fail"], step_ok=True)
+    assert not ok
+    assert len(steps) == jiguan.JIGUAN_REVEAL_MAX
+    assert clicks[1:] == [(760, 400), (620, 470)]
