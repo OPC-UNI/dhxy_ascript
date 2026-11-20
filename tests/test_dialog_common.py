@@ -363,12 +363,12 @@ def test_walking_false_positive_verified_by_position(monkeypatch):
     import time as _time
     from src.device import dialog_common as dc
     d = dc.StoryDialogDismisser()
-    monkeypatch.setattr(d._move, "walking", lambda *a, **k: True)
+    monkeypatch.setattr(d._walk._move, "walking", lambda *a, **k: True)
     monkeypatch.setattr(dc.game_map, "read_map_position",
                         lambda win, img=None: ("五庄观", 7, 31))
-    d._moving_since = _time.time() - dc.STORY_MOVE_VERIFY_AFTER - 1
-    d._verify_at = 0.0
-    d._verify_pos = ("五庄观", 7, 31)
+    d._walk._moving_since = _time.time() - dc.STORY_MOVE_VERIFY_AFTER - 1
+    d._walk._verify_at = 0.0
+    d._walk._verify_pos = ("五庄观", 7, 31)
     assert d._walking(None) is False  # 坐标一致 → 站定放行
 
 
@@ -377,12 +377,12 @@ def test_walking_still_true_when_position_changes(monkeypatch):
     import time as _time
     from src.device import dialog_common as dc
     d = dc.StoryDialogDismisser()
-    monkeypatch.setattr(d._move, "walking", lambda *a, **k: True)
+    monkeypatch.setattr(d._walk._move, "walking", lambda *a, **k: True)
     monkeypatch.setattr(dc.game_map, "read_map_position",
                         lambda win, img=None: ("五庄观", 8, 31))
-    d._moving_since = _time.time() - dc.STORY_MOVE_VERIFY_AFTER - 1
-    d._verify_at = 0.0
-    d._verify_pos = ("五庄观", 7, 31)
+    d._walk._moving_since = _time.time() - dc.STORY_MOVE_VERIFY_AFTER - 1
+    d._walk._verify_at = 0.0
+    d._walk._verify_pos = ("五庄观", 7, 31)
     assert d._walking(None) is True
 
 
@@ -391,11 +391,11 @@ def test_walking_verify_not_run_early(monkeypatch):
     import time as _time
     from src.device import dialog_common as dc
     d = dc.StoryDialogDismisser()
-    monkeypatch.setattr(d._move, "walking", lambda *a, **k: True)
+    monkeypatch.setattr(d._walk._move, "walking", lambda *a, **k: True)
     called = []
     monkeypatch.setattr(dc.game_map, "read_map_position",
                         lambda win, img=None: called.append(1) or None)
-    d._moving_since = _time.time() - 1.0
+    d._walk._moving_since = _time.time() - 1.0
     assert d._walking(None) is True
     assert called == []
 

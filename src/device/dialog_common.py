@@ -591,6 +591,66 @@ class MoveWatch:
         return self._static_polls < STORY_MOVE_STATIC_POLLS
 
 
+class WalkGuard:
+    """寻路点屏保护：MoveWatch 像素直接信号 + 长时「移动」坐标 OCR 复核。
+
+    2026-11-17 五庄观实机：位置文字区是半透明标签条，背后世界动画
+    （雾气/粒子）让像素差分持续超过阈值——对话在场时连续 3 分钟判
+    「寻路中」、点屏兜底永不触发，任务空转到 follow 超时。像素判定
+    连续「移动」≥STORY_MOVE_VERIFY_AFTER 秒后用地图坐标 OCR 复核：
+    两次间隔 ≥STORY_MOVE_VERIFY_INTERVAL 读到相同坐标即人物站定，
+    放行点屏；坐标变化/读不到仍按移动处理。复核只在长时「移动」+
+    对话在场的稀有路径付 ~0.1s/次。
+    剧情点屏（StoryDialogDismisser）与任务状态机点屏（五庄封印）共用。
+    """
+
+    def __init__(self):
+        self._move = MoveWatch()
+        self._moving_since = None
+        self._verify_at = 0.0
+        self._verify_pos = None
+
+    def reset(self):
+        """重置判定状态（对话关闭/守卫失败/场景切换时调用）。"""
+        self._move.reset()
+        self._moving_since = None
+        self._verify_at = 0.0
+        self._verify_pos = None
+
+    def walking(self, win=None, img=None):
+        """人物是否仍在寻路。True=禁止点屏 / False=站定 / None=无法判断。
+
+        无帧可查（截窗失败/调用方无窗口）返回 None，默认方向由调用方
+        决定：剧情点屏按未寻路放行（保持旧行为）。
+        """
+        walking = self._move.walking(win, img)
+        if walking is None:
+            return None
+        if not walking:
+            self._moving_since = None
+            self._verify_pos = None
+            return False
+        now = time.time()
+        if self._moving_since is None:
+            self._moving_since = now
+        if now - self._moving_since < STORY_MOVE_VERIFY_AFTER:
+            return True
+        if now - self._verify_at < STORY_MOVE_VERIFY_INTERVAL:
+            return True
+        self._verify_at = now
+        pos = game_map.read_map_position(win, img=img)
+        if pos is None:
+            return True
+        if self._verify_pos is not None and pos == self._verify_pos:
+            # 坐标两次一致：像素差分来自背景动画，人物实际站定
+            self._move.reset()
+            self._moving_since = None
+            self._verify_pos = None
+            return False
+        self._verify_pos = pos
+        return True
+
+
 class PositionStillness:
     """位置文字区连续静止计时（逐轮像素比对，零 OCR，~0.1ms/次）。
 
@@ -808,7 +868,8 @@ class StoryDialogDismisser:
        次不变）——寻路中点屏幕中间会取消自动寻路、人物停下不再走
        （2026-11-11 用户实机教训）。刚点过任务追踪的
        STORY_MOVE_TRACK_GRACE 秒内一律按寻路中处理（坐标显示有刷新
-       间隔，起步瞬间读不到变化）。
+       间隔，起步瞬间读不到变化）。背景动画导致像素差分误判「寻路中」
+       时由 WalkGuard 的坐标 OCR 复核兜底（2026-11-17 五庄观实机）。
     一个任务阶段一个实例（状态随实例重置，不跨任务泄漏）。
 
     img：调用方已截帧（PIL，可选）——寻路判定复用同一帧省一次截窗；
@@ -820,62 +881,23 @@ class StoryDialogDismisser:
         self.allow_dismiss = allow_dismiss
         self.streak = 0
         self.last_click_at = 0.0
-        self._move = MoveWatch()    # 寻路判定（位置区像素直接信号）
+        self._walk = WalkGuard()    # 寻路判定（像素直接信号 + 坐标 OCR 复核）
         self._move_log_at = 0.0     # 寻路抑制日志限频时间戳
-        # 像素判移动中持续较久时的坐标 OCR 复核（背景动画误判兜底）
-        self._moving_since = None
-        self._verify_at = 0.0
-        self._verify_pos = None
 
     def _reset_walk(self):
         """重置寻路判定状态（对话关闭/守卫失败时调用）。"""
-        self._move.reset()
-        self._moving_since = None
-        self._verify_at = 0.0
-        self._verify_pos = None
+        self._walk.reset()
 
     def _walking(self, win, img=None):
-        """人物是否仍在寻路（位置区像素仍在变化）。True = 禁止点屏。
+        """人物是否仍在寻路。True = 禁止点屏（判定见 WalkGuard）。
 
-        判定见 MoveWatch（2026-11-11 用户实机：寻路中点屏幕中间会
-        取消自动寻路，人物停下不再走）。无帧可查（截窗失败/调用方
-        无窗口）按未寻路放行：保持旧行为，防无坐标场景的剧情对话
-        永不推进（模板/绿字守卫仍在）。
-
-        坐标 OCR 复核（2026-11-17 五庄观实机）：位置文字区是半透明
-        标签条，背后世界动画（雾气/粒子）会让像素差分持续超过阈值——
-        对话在场时连续 3 分钟判「寻路中」、点屏兜底永不触发，任务空转
-        到 follow 超时。像素判定连续「移动」≥STORY_MOVE_VERIFY_AFTER
-        秒后用地图坐标 OCR 复核：两次间隔 ≥STORY_MOVE_VERIFY_INTERVAL
-        读到相同坐标即人物站定，放行点屏；坐标变化/读不到仍按移动处理。
-        复核只在长时「移动」+ 对话在场的稀有路径付 ~0.1s/次。
+        2026-11-11 用户实机：寻路中点屏幕中间会取消自动寻路，人物停下
+        不再走。无帧可查（截窗失败/调用方无窗口）按未寻路放行：保持
+        旧行为，防无坐标场景的剧情对话永不推进（模板/绿字守卫仍在）。
+        背景动画导致像素差分误判「寻路中」时由 WalkGuard 的坐标 OCR
+        复核兜底（2026-11-17 五庄观实机）。
         """
-        walking = self._move.walking(win, img)
-        if walking is None:
-            return None
-        if not walking:
-            self._moving_since = None
-            self._verify_pos = None
-            return False
-        now = time.time()
-        if self._moving_since is None:
-            self._moving_since = now
-        if now - self._moving_since < STORY_MOVE_VERIFY_AFTER:
-            return True
-        if now - self._verify_at < STORY_MOVE_VERIFY_INTERVAL:
-            return True
-        self._verify_at = now
-        pos = game_map.read_map_position(win, img=img)
-        if pos is None:
-            return True
-        if self._verify_pos is not None and pos == self._verify_pos:
-            # 坐标两次一致：像素差分来自背景动画，人物实际站定
-            self._move.reset()
-            self._moving_since = None
-            self._verify_pos = None
-            return False
-        self._verify_pos = pos
-        return True
+        return self._walk.walking(win, img)
 
     def try_dismiss(self, win, items, img_np, prefix="", img=None):
         """满足全部守卫时点屏幕中间一次，返回是否已点击。"""

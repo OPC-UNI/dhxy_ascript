@@ -1656,23 +1656,89 @@ def test_seal_green_picker_follows_current_link(monkeypatch):
     assert abs(mingwang._seal_green_picker(SEAL_ITEMS_LIVE, frame)[0] - 203) <= 10
 
 
-def test_seal_wait_arrival_uses_item_after_stable(monkeypatch):
-    """位置连续稳定 3 轮 → 使用唤风符并进入等结果阶段（同显形镜）。"""
-    mingwang._reset_seal_state()
+def _patch_seal_sm(monkeypatch, pos=("五庄观", 100, 100)):
+    """五庄封印状态机替换：位置可变、用符/点链接记录、对话门关闭。"""
+    state = {"pos": pos, "use": 0, "click": 0}
     monkeypatch.setattr(mingwang, "_seal_pos",
-                        lambda w, items: ("五庄观", 100, 100))
+                        lambda w, items: state["pos"])
     monkeypatch.setattr(mingwang, "_seal_frame",
                         lambda w, items: (None, None))
-    used = []
-    monkeypatch.setattr(mingwang, "_use_huanfengfu",
-                        lambda w: used.append(True) or (True, "已使用唤风符"))
+    monkeypatch.setattr(mingwang, "_seal_dialog_blocking",
+                        lambda w, items, img: (False, False))
+
+    def _use(win):
+        state["use"] += 1
+        return True, "已使用唤风符"
+
+    def _click(win, items, img, link_idx=None):
+        state["click"] += 1
+        return True
+
+    monkeypatch.setattr(mingwang, "_use_huanfengfu", _use)
+    monkeypatch.setattr(mingwang, "_click_seal_link", _click)
+    return state
+
+
+def test_seal_wait_arrival_uses_item_after_stable(monkeypatch):
+    """封印链接出现 → 寻路位移 → 位置连续稳定 3 轮 → 用符（同显形镜）。"""
+    state = _patch_seal_sm(monkeypatch)
+    mingwang._reset_seal_state()
     frame = _seal_frame_red_green(fire_red=False)  # 两个链接均绿
     win = object()
+    # 链接首次出现：武装位移门，原地不动不用符
     assert mingwang._handle_wuzhuang_seal(win, SEAL_ITEMS_LIVE, frame) is False
+    assert state["use"] == 0 and mingwang._seal_need_move is True
+    state["pos"] = ("五庄观", 130, 120)   # 寻路启动：位移
     assert mingwang._handle_wuzhuang_seal(win, SEAL_ITEMS_LIVE, frame) is False
-    assert not used and mingwang._seal_phase == 0
+    assert mingwang._seal_need_move is False
+    for _ in range(2):
+        assert mingwang._handle_wuzhuang_seal(
+            win, SEAL_ITEMS_LIVE, frame) is False
+    assert state["use"] == 0
     assert mingwang._handle_wuzhuang_seal(win, SEAL_ITEMS_LIVE, frame) is True
-    assert used == [True] and mingwang._seal_phase == 1
+    assert state["use"] == 1 and mingwang._seal_phase == 1
+    mingwang._reset_seal_state()
+
+
+def test_seal_no_use_when_stationary_at_start(monkeypatch):
+    """封印链接出现时人物静止在清风对话点（同五庄观）→ 不得原地用符。
+
+    2026-11-20 实机：链接出现 7 秒内就在对话点右键唤风符，白耗一张，
+    15s 后重试才在真封印点生效。无位移 → 点当前封印链接启动寻路。
+    """
+    state = _patch_seal_sm(monkeypatch, pos=("五庄观", 160, 50))
+    mingwang._reset_seal_state()
+    frame = _seal_frame_red_green(fire_red=False)
+    for _ in range(6):
+        assert mingwang._handle_wuzhuang_seal(
+            object(), SEAL_ITEMS_LIVE, frame) is False
+    assert state["use"] == 0
+    assert state["click"] == 1            # 4 轮询无位移 → 点当前封印链接
+    assert mingwang._seal_need_move is True
+    mingwang._reset_seal_state()
+
+
+def test_seal_forced_use_after_stuck_cycles(monkeypatch):
+    """断点续跑人物已站在封印点：多次重点仍无位移 → 放行用符。"""
+    state = _patch_seal_sm(monkeypatch, pos=("五庄观", 100, 100))
+    mingwang._reset_seal_state()
+    frame = _seal_frame_red_green(fire_red=False)
+    for _ in range(20):                   # 3 个重点周期（12 轮询）后放行
+        mingwang._handle_wuzhuang_seal(object(), SEAL_ITEMS_LIVE, frame)
+    assert mingwang._seal_need_move is False
+    assert state["use"] >= 1 and mingwang._seal_phase == 1
+    mingwang._reset_seal_state()
+
+
+def test_seal_no_use_before_links_appear(monkeypatch):
+    """「看看五庄观的清风」阶段（追踪无封印链接）：站定也不得用符。"""
+    state = _patch_seal_sm(monkeypatch, pos=("五庄观", 100, 100))
+    mingwang._reset_seal_state()
+    items = [("[日常]五庄封印[山河名望]", [18, 230, 205, 253], 0.97),
+             ("看看五庄观的清风遇到什么麻", [22, 251, 222, 271], 1.0)]
+    for _ in range(20):
+        assert mingwang._handle_wuzhuang_seal(object(), items, None) is False
+    assert state["use"] == 0
     mingwang._reset_seal_state()
 
 
@@ -1926,6 +1992,65 @@ def test_seal_dialog_with_green_option_not_advanced(monkeypatch):
     for _ in range(6):
         assert mingwang._seal_dialog_blocking(
             object(), items, frame) == (True, False)
+    mingwang._reset_seal_state()
+
+
+def test_seal_dialog_not_advanced_while_walking(monkeypatch):
+    """寻路中不点屏推进：点屏幕中间会取消自动寻路，人物停在半路。
+
+    2026-11-17 实机：封印状态机在引擎判定「人物寻路中」时仍点屏，
+    寻路被打断；点屏推进须确认人物站定（MoveWatch）。
+    """
+    mingwang._reset_seal_state()
+    frame = np.zeros((831, 1378, 3), dtype=np.uint8)
+    monkeypatch.setattr(mingwang, "_seal_frame",
+                        lambda w, items: (frame, frame))
+    monkeypatch.setattr(mingwang, "dialog_frame_score", lambda bgr: 0.99)
+    monkeypatch.setattr(mingwang._seal_walk_guard, "walking",
+                        lambda *a, **k: True)
+    monkeypatch.setattr(mingwang, "_click_screen_center",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("寻路中不应点屏")))
+    items = [("这该怎么办呢，好担心", [500, 300, 800, 330], 0.95)]
+    for _ in range(6):
+        assert mingwang._seal_dialog_blocking(
+            object(), items, frame) == (True, True)
+    mingwang._reset_seal_state()
+
+
+def test_seal_dialog_advances_after_walk_false_positive(monkeypatch):
+    """五庄观位置标签条背后动画致像素误判「寻路中」：坐标 OCR 复核放行。
+
+    2026-11-20 实机回归：裸 MoveWatch 让战后剧情对话空等 56 秒
+    （15:30:52~15:31:48 连续「人物寻路中」）；WalkGuard 在持续
+    移动 ≥STORY_MOVE_VERIFY_AFTER 后读坐标，两次一致即按站定点屏。
+    """
+    import time as _time
+    from src.device import dialog_common as dc
+    mingwang._reset_seal_state()
+    frame = np.zeros((831, 1378, 3), dtype=np.uint8)
+    monkeypatch.setattr(mingwang, "_seal_frame",
+                        lambda w, items: (frame, frame))
+    monkeypatch.setattr(mingwang, "dialog_frame_score", lambda bgr: 0.99)
+    guard = mingwang._seal_walk_guard
+    monkeypatch.setattr(guard._move, "walking", lambda *a, **k: True)
+    monkeypatch.setattr(mingwang.game_map, "read_map_position",
+                        lambda win, img=None: ("五庄观", 7, 31))
+    guard._moving_since = _time.time() - dc.STORY_MOVE_VERIFY_AFTER - 1
+    guard._verify_at = 0.0
+    guard._verify_pos = ("五庄观", 7, 31)
+    clicked = []
+    monkeypatch.setattr(mingwang, "_click_screen_center",
+                        lambda w, times=1, prefix="": clicked.append(times))
+    items = [("跑得真快，但是一瞬间，那人的人皮怎么好像掉了",
+              [500, 300, 940, 330], 0.98)]
+    for _ in range(3):
+        assert mingwang._seal_dialog_blocking(
+            object(), items, frame) == (True, True)
+    assert clicked == []                 # 未达 4 轮询：留足选项渲染时间
+    assert mingwang._seal_dialog_blocking(
+        object(), items, frame) == (True, True)
+    assert clicked == [1]                # 坐标复核一致 → 站定放行点屏
     mingwang._reset_seal_state()
 
 

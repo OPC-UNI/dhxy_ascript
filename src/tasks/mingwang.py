@@ -163,6 +163,7 @@ from ..device.dialog_common import (_click_green_option_once,  # 绿色选项点
                             clear_blocking_dialog,     # 对话框门控 + 点屏幕中间关闭
                             dialog_frame_score,        # 对话框模板门控分数
                             green_option_row_present,  # 独立绿字选项行判定（行内高亮不算）
+                            WalkGuard,                 # 寻路中点屏保护（像素 + 坐标 OCR 复核）
                             DIALOG_FRAME_THRESHOLD,
                             close_scene_panels)       # 场景面板清理（地图/物品栏）
 from ..workflows.follow import follow_task  # 共享任务跟踪引擎（跨任务零互引）
@@ -385,6 +386,13 @@ SEAL_ARRIVE_POLLS = 3                   # 位置连续稳定轮询数判定到�
 SEAL_POS_TOLERANCE = 3                  # 坐标稳定容差（像素，同显形镜）
 SEAL_MOVE_DELTA = 5                     # 判定寻路已启动的位移阈值（同显形镜）
 SEAL_MOVE_STUCK_MAX = 4                 # 点链接后位置连续不变轮询数 → 重点链接
+# 封印链接出现后必须先见位移（寻路启动）才允许用符：清风对话点在五庄观，
+# 领取/对话后站在原地同样「位置稳定」，旧逻辑会把它当到达封印点直接
+# 右键唤风符（2026-11-20 实机：封印点文案出现 7 秒内原地用符，白耗一张，
+# 15s 后重试才到真封印点生效）——同灵力镐「领取点防打空」教训。连续
+# SEAL_STUCK_CYCLES_USE 个重点周期仍无位移视为已在封印点（断点续跑时人物
+# 就站在封印点、点链接也不走动），放行到达判定。
+SEAL_STUCK_CYCLES_USE = 3               # 连续重点周期仍无位移 → 放行用符
 SEAL_USE_GRACE = 3.0                    # 用符后等待链接变红/传送的宽限（秒）
 SEAL_USE_RETRY_AFTER = 15.0             # 链接仍未变红时的用符重试间隔（秒）
 SEAL_USE_RETRY_MAX = 2                  # 每个封印点最多重试用符次数
@@ -392,9 +400,12 @@ SEAL_USE_RETRY_MAX = 2                  # 每个封印点最多重试用符次�
 # 无绿字选项的对话框，story 兜底因「已知对话表」抑制不点、用符等待被
 # 阻塞 65s，须人工点屏才继续）：到达/切换链接遇对话框时，若对话区连续
 # SEAL_DIALOG_ADVANCE_POLLS 次无绿字选项，主动点屏幕中间推进（≈2s，
-# 留足选项渲染时间；有绿字选项时由选项表处理，不点屏）。
+# 留足选项渲染时间；有绿字选项时由选项表处理，不点屏）。点屏前须确认
+# 人物站定（MoveWatch 位置文字区像素比对，同剧情点屏的寻路保护）——
+# 寻路中点屏幕中间会取消自动寻路，人物停在半路（2026-11-17 实机）。
 SEAL_DIALOG_ADVANCE_POLLS = 4           # 无绿字选项连续轮询数（约 2s）
 SEAL_DIALOG_ADVANCE_INTERVAL = 1.0      # 点屏推进最小间隔（秒）
+SEAL_MOVE_LOG_INTERVAL = 5.0            # 寻路中点屏抑制日志限频（秒）
 # 用符后残留背包清理：对话框遮挡 bag_box 时 close_bag 会误报「背包未
 # 打开」而实际仍开着（用户 2026-11-10 实测）；等对话框消失后按帧检测
 # bag_box 再关，限频重试。
@@ -411,9 +422,10 @@ _seal_elems = []            # 封印点元素（规范字，按追踪文案顺�
 _seal_link_idx = 0          # 当前目标在 _seal_elems 中的下标
 _seal_stable = 0            # 位置连续稳定轮询数
 _seal_last_pos = None       # 上次位置
-_seal_need_move = False     # 点链接后须位置先变化才允许用符
+_seal_need_move = True      # 封印链接出现后须先见位移才允许用符（防原地打空）
 _seal_walk_from = None      # 点链接时的位置（移动验证起点）
 _seal_move_stuck = 0        # 点链接后位置连续不变轮询数
+_seal_stuck_cycles = 0      # 连续重点周期数（无位移 → 视为已在封印点）
 _seal_use_at = 0.0          # 上次用符时间（宽限窗口起点）
 _seal_use_retries = 0       # 当前封印点用符重试次数
 _seal_missing = 0           # 追踪文案不含五庄的连续轮询数（≥5 复位）
@@ -421,6 +433,8 @@ _seal_both_warned = False   # 两处完成/任务消失仅告警一次
 _seal_dlg_streak = 0        # 到达后无绿字选项对话框连续轮询数
 _seal_dlg_click_at = 0.0    # 上次点屏推进时间（冷却）
 _seal_bag_close_at = 0.0    # 上次残留背包检测时间（限频）
+_seal_walk_guard = WalkGuard()  # 点屏推进的寻路保护（像素 + 坐标 OCR 复核）
+_seal_move_log_at = 0.0     # 寻路中点屏抑制日志限频时间
 # extras 链共享帧缓存（同五倍显形镜的 extras 帧复用做法）：follow 每轮询调一次
 # extras，本处理器按 id(items) 共享一帧，位置 OCR/对话框模板检测免重复截窗
 _SEAL_POS_UNSET = object()
@@ -1983,16 +1997,18 @@ def _reset_seal_state():
     """五庄封印状态机复位（新任务领取成功/跨任务防残留）。"""
     global _seal_phase, _seal_elems, _seal_link_idx, _seal_stable, \
         _seal_last_pos, _seal_need_move, _seal_walk_from, _seal_move_stuck, \
-        _seal_use_at, _seal_use_retries, _seal_missing, _seal_both_warned, \
-        _seal_dlg_streak, _seal_dlg_click_at, _seal_bag_close_at
+        _seal_stuck_cycles, _seal_use_at, _seal_use_retries, _seal_missing, \
+        _seal_both_warned, _seal_dlg_streak, _seal_dlg_click_at, \
+        _seal_bag_close_at, _seal_move_log_at
     _seal_phase = 0
     _seal_elems = []
     _seal_link_idx = 0
     _seal_stable = 0
     _seal_last_pos = None
-    _seal_need_move = False
+    _seal_need_move = True
     _seal_walk_from = None
     _seal_move_stuck = 0
+    _seal_stuck_cycles = 0
     _seal_use_at = 0.0
     _seal_use_retries = 0
     _seal_missing = 0
@@ -2000,6 +2016,8 @@ def _reset_seal_state():
     _seal_dlg_streak = 0
     _seal_dlg_click_at = 0.0
     _seal_bag_close_at = 0.0
+    _seal_walk_guard.reset()
+    _seal_move_log_at = 0.0
 
 
 def _seal_frame(win, items):
@@ -2301,9 +2319,12 @@ def _seal_maybe_advance_dialog(win, items, img_np):
     story 兜底因「已知对话表」抑制不点、用符等待被阻塞 65s，须人工
     点屏才继续。有绿字选项时不动（交给选项表）；连续 4 轮询（~2s）
     无绿字才点一次，多屏对话逐页推进（点击后计数清零）。
+    **点屏前须确认人物站定**（MoveWatch 位置文字区像素比对，同剧情
+    点屏的寻路保护）：寻路中点屏幕中间会取消自动寻路、人物停在半路
+    （2026-11-17 实机），到达判定随之误判。
     返回 (是否无绿字选项剧情对话, 是否本帧点屏推进)。
     """
-    global _seal_dlg_streak, _seal_dlg_click_at
+    global _seal_dlg_streak, _seal_dlg_click_at, _seal_move_log_at
     dl, dt = task_tracker.DIALOG_REGION[0], task_tracker.DIALOG_REGION[1]
     region_items = [it for it in items
                     if it[2] >= 0.55 and it[1][0] >= dl and it[1][1] >= dt]
@@ -2317,6 +2338,14 @@ def _seal_maybe_advance_dialog(win, items, img_np):
     now = time.time()
     if _seal_dlg_streak < SEAL_DIALOG_ADVANCE_POLLS \
             or now - _seal_dlg_click_at < SEAL_DIALOG_ADVANCE_INTERVAL:
+        return True, False
+    rgb, _bgr = _seal_frame(win, items)
+    if rgb is not None and _seal_walk_guard.walking(win, img=rgb) is True:
+        # 寻路中：点屏会取消自动寻路，等人物站定后再推进
+        if now - _seal_move_log_at >= SEAL_MOVE_LOG_INTERVAL:
+            _seal_move_log_at = now
+            log("[名望] 五庄封印：人物寻路中，暂不点屏推进剧情对话",
+                "INFO")
         return True, False
     _seal_dlg_streak = 0
     _seal_dlg_click_at = now
@@ -2414,12 +2443,16 @@ def _seal_wait_arrival(win, items, img_np, now):
     """phase 0：等寻路到达（位置连续稳定）→ 用唤风符。
 
     到达判定同五倍显形镜：连续 SEAL_ARRIVE_POLLS 次坐标差 ≤3 即到达；
-    点链接后须位置先变化（寻路启动）才允许用符，位置连续不变达上限
-    则重新点当前链接。到达（且在五庄观）后打开任务储物格用符。
-    启动续跑/上一点已完成时当前链接已是红色 → 先自动前进到下一个。
+    **封印链接出现后须位置先变化（寻路启动）才允许用符**（同灵力镐
+    领取点防打空：清风对话点与封印点同在五庄观，站在对话点同样
+    「位置稳定」，旧逻辑链接一出现原地就用符白耗一张——2026-11-20
+    实机）。无位移达 SEAL_MOVE_STUCK_MAX 轮询 → 重点当前封印链接；
+    连续 SEAL_STUCK_CYCLES_USE 个周期仍无位移（断点续跑时人物就站在
+    封印点）→ 视为已到达放行。到达（且在五庄观）后打开任务储物格
+    用符。启动续跑/上一点已完成时当前链接已是红色 → 先自动前进。
     """
     global _seal_stable, _seal_last_pos, _seal_need_move, _seal_walk_from, \
-        _seal_move_stuck, _seal_phase, _seal_use_at
+        _seal_move_stuck, _seal_stuck_cycles, _seal_phase, _seal_use_at
     if _seal_advance_if_done(win, items, img_np):
         return True
     pos = _seal_pos(win, items)
@@ -2433,17 +2466,29 @@ def _seal_wait_arrival(win, items, img_np, now):
         _seal_stable = 1
     _seal_last_pos = pos
     if _seal_need_move:
-        if _seal_walk_from is not None and (
-                abs(pos[1] - _seal_walk_from[1]) > SEAL_MOVE_DELTA
-                or abs(pos[2] - _seal_walk_from[2]) > SEAL_MOVE_DELTA):
+        if _seal_walk_from is None:
+            _seal_walk_from = pos
+        if abs(pos[1] - _seal_walk_from[1]) > SEAL_MOVE_DELTA \
+                or abs(pos[2] - _seal_walk_from[2]) > SEAL_MOVE_DELTA:
             _seal_need_move = False
             _seal_stable = 0
             _seal_move_stuck = 0
+            _seal_stuck_cycles = 0
         else:
             _seal_move_stuck += 1
             if _seal_move_stuck >= SEAL_MOVE_STUCK_MAX:
                 _seal_move_stuck = 0
-                if _click_seal_link(win, items, img_np):
+                # 对话框在场先让对话处理（点击链接会被对话框吞掉）
+                blocking, no_option = _seal_dialog_blocking(win, items, img_np)
+                if blocking:
+                    return no_option
+                _seal_stuck_cycles += 1
+                if _seal_stuck_cycles >= SEAL_STUCK_CYCLES_USE:
+                    _seal_need_move = False
+                    _seal_stable = 0
+                    log("[名望] 五庄封印：多次点击链接仍无位移，"
+                        "视为已在封印点", "WARN")
+                elif _click_seal_link(win, items, img_np):
                     log("[名望] 五庄封印：寻路未启动，已重新点击当前链接",
                         "WARN")
                     _seal_walk_from = pos
@@ -2456,6 +2501,10 @@ def _seal_wait_arrival(win, items, img_np, now):
     blocking, no_option = _seal_dialog_blocking(win, items, img_np)
     if blocking:
         return no_option
+    if not _seal_elems:
+        # 封印链接还没解析出来（「看看五庄观的清风」阶段，人物在对话点）：
+        # 不得用符；链接出现时由状态机重新武装位移门
+        return False
     ok, info = _use_huanfengfu(win)
     if not ok:
         _seal_stable = 0
@@ -2550,7 +2599,9 @@ def _handle_wuzhuang_seal(win, items, img_np):
     稳定）→ 用符；1=已用符等结果。不做战斗判定：战斗由 follow_task
     跳过、battle 线程托管；战斗结束任务消失即完成（用户 2026-11-10）。
     """
-    global _seal_missing, _seal_phase, _seal_elems, _seal_link_idx
+    global _seal_missing, _seal_phase, _seal_elems, _seal_link_idx, \
+        _seal_stable, _seal_last_pos, _seal_need_move, _seal_walk_from, \
+        _seal_move_stuck, _seal_stuck_cycles
     if _seal_phase == 1:
         # 用符后对话框可能遮挡背包导致关闭失败：残留背包限频补关
         # （放在 tracker 文案判定之前——背包遮挡追踪面板时也要能关）
@@ -2567,10 +2618,22 @@ def _handle_wuzhuang_seal(win, items, img_np):
         # 覆盖（否则当前目标会被重置、可能重复点已完成链接）
         if elems and (not _seal_elems or len(elems) >= len(_seal_elems)) \
                 and elems != _seal_elems:
+            first_seen = not _seal_elems
             old = _seal_elems[_seal_link_idx] \
                 if 0 <= _seal_link_idx < len(_seal_elems) else None
             _seal_elems = elems
             _seal_link_idx = elems.index(old) if old in elems else 0
+            if first_seen:
+                # 清风对话结束、封印链接刚出现：到达判定重新武装——此前
+                # 的稳定/位移记账属于「走到清风」阶段，五庄观内站立不动
+                # 会被误当到达封印点（2026-11-20 实机：链接出现 7 秒内
+                # 原地用符，白耗一张）
+                _seal_stable = 0
+                _seal_last_pos = None
+                _seal_need_move = True
+                _seal_walk_from = None
+                _seal_move_stuck = 0
+                _seal_stuck_cycles = 0
             log(f"[名望] 五庄封印：封印点 "
                 f"{'、'.join(_seal_link_name(i) for i in range(len(elems)))}",
                 "SYS")
