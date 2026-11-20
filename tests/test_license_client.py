@@ -1,6 +1,7 @@
 """雪松授权客户端单测：验签、过期/撤销/指纹、激活、心跳降级。"""
 import base64
 import json
+import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -189,15 +190,88 @@ def test_activate_rate_limited(client):
 
 
 def test_check_offline_fallback(client, rsa_key):
+    """宽限期内断网：本地许可证有效即放行（不误伤正常用户）。"""
     lic = make_license(rsa_key, "fp-test")
     client._save_record({
         "license_key": "LIC-DEVICE-TEST", "license_file": lic,
-        "public_key": client.public_key_pem, "last_heartbeat": 0,
+        "public_key": client.public_key_pem,
+        "last_heartbeat": time.time() - 60,  # 宽限期内，且已到心跳间隔
     })
     client._session = FakeSession([__import__("requests").ConnectionError("down")])
     info = client.check(online=True)
     assert info["status"] == lc.STATUS_ACTIVE
     assert info["offline"] is True
+
+
+def test_check_offline_beyond_grace_blocks(client, rsa_key):
+    """离线超过宽限期：必须联网校验成功，网络失败直接拦截。
+
+    last_heartbeat 可被改文件冻结在线撤销/过期检查（2026-11-20 实测），
+    超过 MAX_OFFLINE_SECONDS 后不允许再按离线放行。
+    """
+    lic = make_license(rsa_key, "fp-test")
+    client._save_record({
+        "license_key": "LIC-DEVICE-TEST", "license_file": lic,
+        "public_key": client.public_key_pem,
+        "last_heartbeat": time.time() - lc.MAX_OFFLINE_SECONDS - 60,
+    })
+    client._session = FakeSession([__import__("requests").ConnectionError("down")])
+    with pytest.raises(lc.LicenseError) as ei:
+        client.check(online=True)
+    assert ei.value.code == "network"
+    assert "联网" in ei.value.message
+
+
+def test_check_future_heartbeat_forces_online(client, rsa_key):
+    """last_heartbeat 在未来 = 记录被改/时钟回拨：不信任，强制联网。
+
+    旧实现下未来时间戳让 elapsed 为负、心跳永不发送，撤销检查被冻结。
+    """
+    lic = make_license(rsa_key, "fp-test")
+    client._save_record({
+        "license_key": "LIC-DEVICE-TEST", "license_file": lic,
+        "public_key": client.public_key_pem,
+        "last_heartbeat": time.time() + 10 ** 9,
+    })
+    client._session = FakeSession([__import__("requests").ConnectionError("down")])
+    with pytest.raises(lc.LicenseError) as ei:
+        client.check(online=True)
+    assert ei.value.code == "network"  # 未按离线放行（stale 强制在线）
+    # 联网成功时正常放行并刷新心跳
+    client._session = FakeSession([(200, {"code": lc.CODE_OK, "data": {
+        "status": "active", "heartbeat_interval": 300}})])
+    info = client.check(online=True)
+    assert info["status"] == lc.STATUS_ACTIVE
+    assert info["offline"] is False
+
+
+def test_embedded_public_key_is_valid():
+    """产品公钥内嵌在 license_config（编译进 exe），且必须是可用 RSA 公钥。
+
+    信任锚不能是安装目录里的明文 pem（可被替换后自签）；本用例防止手工
+    改坏常量导致所有客户端验签失败（发布前 CI 即拦截）。
+    """
+    from src.app.license_config import LICENSE_PUBLIC_KEY_PEM
+    key = RSA.import_key(LICENSE_PUBLIC_KEY_PEM)
+    assert key.size_in_bits() == 2048
+
+
+def test_record_public_key_not_trusted(client):
+    """整份 license.json 换成攻击者公钥 + 自签许可证不通过。
+
+    信任锚是随包分发的产品公钥；记录文件里的 public_key 只是历史字段，
+    参与验签等于把钥匙和锁放在同一个可改的抽屉里（2026-11-20 实测）。
+    """
+    forged_key = RSA.generate(2048)
+    forged_lic = make_license(forged_key, "fp-test", end_delta=3650)
+    client._save_record({
+        "license_key": "LIC-DEVICE-FORGED", "license_file": forged_lic,
+        "public_key": forged_key.publickey().export_key().decode(),
+        "last_heartbeat": time.time() - 60,
+    })
+    with pytest.raises(lc.LicenseError) as ei:
+        client.check(online=False)
+    assert ei.value.code == "bad_license"
 
 
 def test_heartbeat_updates_license(client, rsa_key):

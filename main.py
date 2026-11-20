@@ -117,7 +117,7 @@ from src.app import env_check  # 启动环境自检（DPI/屏幕/首帧统计，
 from src.core.license_client import (LicenseClient,  # 雪松授权（设备绑定）
                                      LicenseError)
 from src.app.license_config import (LICENSE_SERVER_URL, LICENSE_PRODUCT_NAME,
-                                    LICENSE_PUBLIC_KEY_FILE)
+                                    LICENSE_PUBLIC_KEY_PEM)
 
 
 def _setup_tray(icon_path, control_win):
@@ -572,15 +572,10 @@ if __name__ == '__main__':
         startup_logs.append(_line)
 
     from src import __version__ as _app_version
-    _public_key = ""
-    try:
-        with open(os.path.join(_PROJECT_ROOT, "res", LICENSE_PUBLIC_KEY_FILE),
-                  "r", encoding="utf-8") as _f:
-            _public_key = _f.read()
-    except Exception as e:
-        log(f"[授权] 读取产品公钥失败（将无法校验许可证）: {e}", "WARN")
+    # 产品公钥内嵌在 license_config（编译进 exe），不读安装目录下的明文
+    # pem——外置文件可被替换后自签许可证（2026-11-20 实测）。
     license_client = LicenseClient(
-        LICENSE_SERVER_URL, _public_key,
+        LICENSE_SERVER_URL, LICENSE_PUBLIC_KEY_PEM,
         product_name=LICENSE_PRODUCT_NAME, app_version=_app_version)
     license_info = license_client.info()
     if debug_auth:

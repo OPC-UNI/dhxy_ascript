@@ -10,9 +10,15 @@
   返回 ``{code:"000000", data:{status, config_updated, license_file?}}``
 
 ``license_file`` 是 base64 后的 JSON：``{data: "<json 字符串>", signature, algorithm}``，
-签名算法 RSA-PSS-SHA256（salt 长度 = SHA256 摘要长度 32），公钥为产品公钥
-（随客户端 ``res/license_public_key.pem`` 分发；服务端首次激活响应未返回
-公钥时使用它）。
+签名算法 RSA-PSS-SHA256（salt 长度 = SHA256 摘要长度 32）。验签**固定**使用随
+客户端内置的产品公钥（``src/app/license_config.py`` 的
+``LICENSE_PUBLIC_KEY_PEM``，编译进 exe）：``data/_license/license.json``
+是可被本地篡改的明文文件，其中的 ``public_key`` 字段以及激活响应里的公钥都
+不能作为信任锚（否则换个公钥自签许可证即可绕过）；换密钥必须随客户端发版。
+
+离线策略：本地许可证有效时断网可用，但距上次成功心跳超过
+``MAX_OFFLINE_SECONDS`` 视为离线超期，必须联网校验一次——防止改
+``last_heartbeat`` 把在线撤销/过期检查永久冻结。
 
 设计约束（与项目现有授权门一致）：
 
@@ -37,6 +43,13 @@ from Crypto.PublicKey import RSA
 from Crypto.Signature import pss
 
 CODE_OK = "000000"
+
+# 离线宽限：距上次成功心跳超过该时长必须联网校验一次（网络失败即拦截）。
+# 本地 license.json 可被篡改，last_heartbeat 不能作为可信依据无限离线；
+# 宽限期内的网络异常仍按离线放行（断网不误伤正常用户）。
+MAX_OFFLINE_SECONDS = 7 * 86400
+# last_heartbeat 允许的未来偏差；超出视为记录被改/系统时钟回拨，不信任该值。
+HEARTBEAT_CLOCK_SKEW = 60.0
 
 # 服务端错误码 → 用户可读文案（zh-CN 语言包）
 ERROR_MESSAGES = {
@@ -260,8 +273,15 @@ class LicenseClient:
             _atomic_write(self.record_path, json.dumps(
                 record, ensure_ascii=False, indent=1))
 
-    def _license_pem(self, record):
-        return (record or {}).get("public_key") or self.public_key_pem
+    def _license_pem(self):
+        """验签公钥：固定用随包分发的产品公钥，不信任本地记录里的字段。
+
+        license.json 是明文文件，若把其中 ``public_key`` 当作信任锚，
+        改文件的人换一把自己的公钥、自签一张远期许可证即可全部通过
+        （2026-11-20 实测）。因此 record（以及服务端响应）里的公钥一律
+        忽略；服务端换 RSA 密钥必须随客户端发版（docs/license-server.md）。
+        """
+        return self.public_key_pem
 
     def cached_code(self):
         record = self._read_record() or {}
@@ -302,7 +322,7 @@ class LicenseClient:
         license_key = body.get("license_key")
         if not license_file or not license_key:
             raise LicenseError("激活响应缺少许可证文件", code="server")
-        public_key = body.get("public_key") or self.public_key_pem
+        public_key = self.public_key_pem
         if not public_key:
             raise LicenseError("缺少产品公钥，无法校验许可证", code="bad_license")
         payload_inner = verify_license_file(license_file, public_key, fingerprint)
@@ -349,11 +369,11 @@ class LicenseClient:
             raise LicenseError("许可证状态异常：%s" % status, code="status")
         new_payload = None
         if body.get("license_file"):
-            public_key = self._license_pem(record)
+            public_key = self._license_pem()
             new_payload = verify_license_file(
                 body["license_file"], public_key, fingerprint)
             record["license_file"] = body["license_file"]
-        record["public_key"] = self._license_pem(record)
+        record["public_key"] = self._license_pem()
         # 续期/改配置后服务端返回新许可证；用新许可证的 config_updated_at
         # 回传，避免下一轮心跳继续判定“配置有更新”而重复下发。
         if new_payload is not None:
@@ -379,24 +399,45 @@ class LicenseClient:
 
         本地无效直接抛错；网络失败降级为 offline（本地许可证仍有效）；
         服务端明确撤销/过期时抛错，不会被离线宽松策略吞掉。
+
+        离线宽限：距上次成功心跳超过 ``MAX_OFFLINE_SECONDS``（或记录里的
+        ``last_heartbeat`` 在未来、不可信）时必须联网校验成功才能继续，
+        网络失败直接抛错——防止改 last_heartbeat 把在线撤销/过期检查
+        永久冻结（2026-11-20 实测：未来时间戳可让心跳永不发送）。
         """
         record = self._read_record()
         if not record:
             raise LicenseError("未激活，请先输入卡密激活", code="not_activated")
         fingerprint = machine_fingerprint()
         verify_license_file(record.get("license_file"),
-                            self._license_pem(record), fingerprint)
+                            self._license_pem(), fingerprint)
         if online:
-            elapsed = time.time() - float(record.get("last_heartbeat") or 0)
+            now = time.time()
+            try:
+                last = float(record.get("last_heartbeat") or 0)
+            except (TypeError, ValueError):
+                last = 0.0
+            stale = False
+            if last > now + HEARTBEAT_CLOCK_SKEW:
+                # 未来时间戳只可能来自改文件/系统时钟回拨，不信任该值
+                last = 0.0
+                stale = True
+            elif now - last > MAX_OFFLINE_SECONDS:
+                stale = True
             interval = max(5, min_heartbeat_interval)
-            if elapsed >= interval:
+            if stale or now - last >= interval:
                 try:
                     return self.heartbeat(record)
                 except LicenseError as e:
-                    if e.code == "network":
+                    if e.code == "network" and not stale:
                         info = self.info()
                         info["offline"] = True
                         return info
+                    if e.code == "network":
+                        raise LicenseError(
+                            "离线已超过 %d 天，需联网校验授权后才能继续使用"
+                            "（%s）" % (MAX_OFFLINE_SECONDS // 86400, e.message),
+                            code="network")
                     raise
         info = self.info()
         info["offline"] = False
@@ -422,7 +463,7 @@ class LicenseClient:
                     "server": self.server_url}
         try:
             payload = verify_license_file(
-                record.get("license_file"), self._license_pem(record),
+                record.get("license_file"), self._license_pem(),
                 fingerprint)
         except LicenseError as e:
             status = STATUS_INACTIVE
