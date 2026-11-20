@@ -673,7 +673,7 @@ def test_navigate_timing_summary(monkeypatch):
                         lambda *a: (True, (500, 400), ""))
     monkeypatch.setattr(map_nav, "_wait_movement", lambda *a, **k: True)
     monkeypatch.setattr(map_nav, "_wait_arrival",
-                        lambda *a: (True, "到达 洛阳城 (10,20)"))
+                        lambda *a, **k: (True, "到达 洛阳城 (10,20)"))
     monkeypatch.setattr(map_nav.game_map, "close_maps",
                         lambda *a, **k: None)
     monkeypatch.setattr(map_nav, "_close_xunlu_panel_if_open",
@@ -719,7 +719,7 @@ def test_navigate_timing_layer_entry(monkeypatch):
                         lambda *a: (True, (500, 400), ""))
     monkeypatch.setattr(map_nav, "_wait_movement", lambda *a, **k: True)
     monkeypatch.setattr(map_nav, "_wait_arrival",
-                        lambda *a: (True, "到达 龙窟一层 (10,20)"))
+                        lambda *a, **k: (True, "到达 龙窟一层 (10,20)"))
     monkeypatch.setattr(map_nav.game_map, "close_maps",
                         lambda *a, **k: None)
     monkeypatch.setattr(map_nav, "_close_xunlu_panel_if_open",
@@ -749,7 +749,7 @@ def _patch_nav_happy(monkeypatch):
                         lambda *a: (True, (500, 400), ""))
     monkeypatch.setattr(map_nav, "_wait_movement", lambda *a, **k: True)
     monkeypatch.setattr(map_nav, "_wait_arrival",
-                        lambda *a: (True, "到达 洛阳城 (10,20)"))
+                        lambda *a, **k: (True, "到达 洛阳城 (10,20)"))
     monkeypatch.setattr(map_nav.game_map, "close_maps",
                         lambda *a, **k: None)
     monkeypatch.setattr(map_nav, "_close_xunlu_panel_if_open",
@@ -1032,3 +1032,105 @@ def test_aim_and_click_corrects_stale_affine_direction(monkeypatch):
     assert clicks and clicks[0] == pt
     # 真实目标像素 = (300+1.5*100, 600-1.5*100) = (450, 450)
     assert abs(pt[0] - 450) <= 2 and abs(pt[1] - 450) <= 2
+
+
+# ---------------- 到达等待：停滞补寻路 + 生产日志降噪 ----------------
+
+def _arrival_win():
+    class _AW:
+        def capture(self, force_activate=False):
+            return object()
+    return _AW()
+
+
+def test_wait_arrival_restart_hint_when_stalled(monkeypatch):
+    """位置 5s 不变 → 返回补寻路提示（由上层重新开图再点一次）。"""
+    map_nav._CANCEL.clear()
+    monkeypatch.setattr(map_nav, "is_in_battle_frame", lambda img: False)
+    monkeypatch.setattr(map_nav.game_map, "read_map_position",
+                        lambda win, img=None: ("灵兽村", 10, 10))
+    monkeypatch.setattr(map_nav, "ARRIVE_RESTART_STALL", 0.0)
+    monkeypatch.setattr(map_nav, "ARRIVE_STALL_TIMEOUT", 99.0)
+    monkeypatch.setattr(map_nav, "ARRIVE_POLL_INTERVAL", 0.0)
+    ok, info = map_nav._wait_arrival(
+        _arrival_win(), "大雁塔四层", "大雁塔四层", 108, 37,
+        lambda m: None, allow_restart=True)
+    assert not ok and info == map_nav.ARRIVE_RESTART_TEXT
+
+
+def test_wait_arrival_stall_failure_without_restart(monkeypatch):
+    """补过一次后（allow_restart=False）仍停滞 → 按不可达失败。"""
+    map_nav._CANCEL.clear()
+    monkeypatch.setattr(map_nav, "is_in_battle_frame", lambda img: False)
+    monkeypatch.setattr(map_nav.game_map, "read_map_position",
+                        lambda win, img=None: ("灵兽村", 10, 10))
+    monkeypatch.setattr(map_nav, "ARRIVE_STALL_TIMEOUT", 0.0)
+    monkeypatch.setattr(map_nav, "ARRIVE_POLL_INTERVAL", 0.0)
+    ok, info = map_nav._wait_arrival(
+        _arrival_win(), "大雁塔四层", "大雁塔四层", 108, 37,
+        lambda m: None, allow_restart=False)
+    assert not ok and "未变化" in info and "最后位置" in info
+
+
+def test_navigate_retries_once_after_stall(monkeypatch):
+    """停滞提示 → 自动重新导航一次；补过仍失败不无限重试。"""
+    calls = []
+
+    def fake_impl(win, target, x, y, emit, verbose=False, allow_restart=False):
+        calls.append(allow_restart)
+        if len(calls) == 1:
+            return False, map_nav.ARRIVE_RESTART_TEXT
+        return True, "到达 大雁塔四层 (105,36)"
+
+    monkeypatch.setattr(map_nav, "_navigate_impl", fake_impl)
+    emits = []
+    ok, info = map_nav.navigate_to_map_coordinate(
+        object(), "大雁塔四层", 108, 37, log_fn=emits.append)
+    assert ok and "到达" in info
+    assert calls == [True, False]
+    assert any("重新开图补一次" in m for m in emits)
+
+
+def test_navigate_no_retry_when_second_stall(monkeypatch):
+    calls = []
+
+    def fake_impl(win, target, x, y, emit, verbose=False, allow_restart=False):
+        calls.append(allow_restart)
+        return False, map_nav.ARRIVE_RESTART_TEXT
+
+    monkeypatch.setattr(map_nav, "_navigate_impl", fake_impl)
+    ok, info = map_nav.navigate_to_map_coordinate(
+        object(), "大雁塔四层", 108, 37, log_fn=lambda m: None)
+    assert not ok and info == map_nav.ARRIVE_RESTART_TEXT
+    assert calls == [True, False]   # 只补一次
+
+
+def test_wait_arrival_position_log_quiet_without_verbose(monkeypatch):
+    """生产默认只在地名变化时输出位置；诊断 verbose=True 逐次输出。"""
+    map_nav._CANCEL.clear()
+    seq = [("灵兽村", 10, 10), ("灵兽村", 11, 10), ("灵兽村", 12, 11),
+           ("冰窟", 5, 5), ("冰窟", 6, 6)]
+
+    def fake_pos(win, img=None):
+        return seq.pop(0) if seq else ("大雁塔四层", 108, 37)
+
+    monkeypatch.setattr(map_nav, "is_in_battle_frame", lambda img: False)
+    monkeypatch.setattr(map_nav.game_map, "read_map_position", fake_pos)
+    monkeypatch.setattr(map_nav, "ARRIVE_POLL_INTERVAL", 0.0)
+    emits = []
+    ok, _info = map_nav._wait_arrival(
+        _arrival_win(), "大雁塔四层", "大雁塔四层", 108, 37, emits.append)
+    assert ok
+    pos_lines = [m for m in emits if m.startswith("位置")]
+    assert pos_lines == ["位置: ('灵兽村', 10, 10)",
+                         "位置: ('冰窟', 5, 5)",
+                         "位置: ('大雁塔四层', 108, 37)"]
+
+    map_nav._CANCEL.clear()
+    seq = [("灵兽村", 10, 10), ("灵兽村", 11, 10), ("灵兽村", 12, 11)]
+    emits2 = []
+    ok, _info = map_nav._wait_arrival(
+        _arrival_win(), "大雁塔四层", "大雁塔四层", 108, 37,
+        emits2.append, verbose=True)
+    assert ok
+    assert len([m for m in emits2 if m.startswith("位置")]) == 4

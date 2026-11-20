@@ -1767,7 +1767,7 @@ class DiagnosticsMixin(ControlHost):
         try:
             try:
                 ok, info = map_nav.navigate_to_map_coordinate(
-                    win, name, x, y, log_fn=emit)
+                    win, name, x, y, log_fn=emit, verbose=True)
             except Exception as e:
                 ok, info = False, f"导航异常: {e}"
             try:

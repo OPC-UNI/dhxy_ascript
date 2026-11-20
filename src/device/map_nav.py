@@ -180,6 +180,12 @@ ARRIVE_TOLERANCE = 10
 ARRIVE_TIMEOUT = 240.0
 ARRIVE_STALL_TIMEOUT = 12.0  # 位置连续不变判停滞（目标不可达）
 ARRIVE_POLL_INTERVAL = 1.0
+# 位置停滞 5s 先按「寻路被打断」补一次寻路（2026-11-21 用户需求）：
+# 客户端寻路被点世界/其它操作打断时人物原地站住，重新开图再点一次
+# 目标点即恢复；补过一次仍停滞才按 ARRIVE_STALL_TIMEOUT 判失败。
+# 主动中断（request_cancel/诊断「中断寻路」）不补——那是用户要停。
+ARRIVE_RESTART_STALL = 5.0
+ARRIVE_RESTART_TEXT = "位置 5s 未变化（寻路可能被打断，补一次寻路）"
 
 
 def layer_map_names():
@@ -1205,14 +1211,20 @@ def _arrived(pos, target, layer, x, y):
                 and abs(pos[2] - y) <= ARRIVE_TOLERANCE)
 
 
-def _wait_arrival(win, target, layer, x, y, emit):
+def _wait_arrival(win, target, layer, x, y, emit, verbose=False,
+                  allow_restart=False):
     """轮询 HUD 位置直到到达目标地图坐标 ±ARRIVE_TOLERANCE。
 
     位置连续 ARRIVE_STALL_TIMEOUT 秒不变 → 提前判失败（目标点不可达
-    时客户端会站在最近可达点不动）。
+    时客户端会站在最近可达点不动）。allow_restart=True 时改为 5s 停滞
+    就返回 ARRIVE_RESTART_TEXT，由调用方重新开图补一次寻路。
+
+    verbose=False（生产）：位置日志只在地名变化（过场景）时输出，
+    避免行走期每 1s 一条刷屏；诊断卡片传 verbose=True 保留逐次位置。
     """
     deadline = time.time() + ARRIVE_TIMEOUT
     last = None
+    last_name = None
     last_change = time.time()
     while time.time() < deadline:
         _check_cancel()
@@ -1226,12 +1238,18 @@ def _wait_arrival(win, target, layer, x, y, emit):
             continue
         pos = game_map.read_map_position(None, img=img) if img is not None else None
         if pos is not None and pos != last:
-            emit(f"位置: {pos}")
+            name = str(pos[0]).strip()
+            if verbose or name != last_name:
+                emit(f"位置: {pos}")
+            last_name = name
             last = pos
             last_change = time.time()
         if pos is not None and _arrived(pos, target, layer, x, y):
             return True, (f"到达 {pos[0]} ({pos[1]},{pos[2]})，"
                           f"误差 ({pos[1] - x:+d},{pos[2] - y:+d})")
+        if allow_restart and pos is not None \
+                and time.time() - last_change > ARRIVE_RESTART_STALL:
+            return False, ARRIVE_RESTART_TEXT
         if pos is not None and time.time() - last_change > ARRIVE_STALL_TIMEOUT:
             near = (abs(pos[1] - x) <= ARRIVE_TOLERANCE
                     and abs(pos[2] - y) <= ARRIVE_TOLERANCE)
@@ -1313,21 +1331,32 @@ def _open_target_map(win, base, layer, pos, emit, timing=None):
     return True, "地图已打开"
 
 
-def navigate_to_map_coordinate(win, target, x, y, log_fn=None):
+def navigate_to_map_coordinate(win, target, x, y, log_fn=None, verbose=False):
     """导航到 target 地图 (x, y)：打开地图 → 悬停标定 → 校验点击 → 到达。
 
     target：WORLD_MAP_LABELS 地图名（经 resolve 归一）或层级图全名
     （龙窟一层…凤巢七层）。返回 (ok, info)，过程经 log_fn 输出。
     每个关键阶段 emit 一行累计/分段耗时，最终 info 附完整耗时汇总。
-    可被 request_cancel() 中断（诊断面板「中断寻路」）：各轮询循环
-    每轮检查（最长约 1-3s 生效），中断时关地图/寻路面板并返回
-    (False, "已中断寻路")。注意：人物身上的客户端自动寻路不会因此
-    停止，仍会走到最后一次点击的目标点。
+    verbose=True（诊断卡片）逐次输出行走位置；生产默认只在地名变化
+    （过场景）时输出，避免每 1s 一条刷屏。
+    行走中位置停滞 5s（寻路被点世界/其它操作打断）会自动重新开图补点
+    一次；主动 request_cancel() 中断（诊断「中断寻路」）不补——那是用户
+    要停：各轮询循环每轮检查（1-3s 生效），中断时关地图/寻路面板并返回
+    (False, "已中断寻路")。注意：人物身上的客户端自动寻路不会因此停止，
+    仍会走到最后一次点击的目标点。
     """
     emit = log_fn or (lambda m: log(f"[地图导航] {m}", "INFO"))
     _CANCEL.clear()
     try:
-        return _navigate_impl(win, target, x, y, emit)
+        ok, info = _navigate_impl(win, target, x, y, emit, verbose=verbose,
+                                  allow_restart=True)
+        if not ok and info == ARRIVE_RESTART_TEXT:
+            # 人物原地站了 5s：多半是客户端寻路被打断（点世界/其它操作），
+            # 重新走一遍开图 + 点目标点补一次；补过仍不行按失败返回
+            emit("位置 5s 未变化（寻路可能被打断）——重新开图补一次")
+            ok, info = _navigate_impl(win, target, x, y, emit,
+                                      verbose=verbose, allow_restart=False)
+        return ok, info
     except NavigationCancelled:
         emit("已中断寻路（用户手动中断），关闭地图/寻路面板")
         try:
@@ -1349,7 +1378,7 @@ def navigate_to_map_coordinate(win, target, x, y, log_fn=None):
         raise
 
 
-def _navigate_impl(win, target, x, y, emit):
+def _navigate_impl(win, target, x, y, emit, verbose=False, allow_restart=False):
     """导航主流程（navigate_to_map_coordinate 的实现，emit 已就绪）。"""
     t_start = time.time()
 
@@ -1452,7 +1481,8 @@ def _navigate_impl(win, target, x, y, emit):
         _wait_movement(win, before)
     emit(f"位移启动（点击后 {time.time() - t_click:.1f}s）")
 
-    ok, info = _wait_arrival(win, base, layer, x, y, emit)
+    ok, info = _wait_arrival(win, base, layer, x, y, emit,
+                             verbose=verbose, allow_restart=allow_restart)
     t_end = time.time()
     parts = [f"开图 {open_dt:.1f}s"
              + (f"（含预走路 {prewalk_dt:.1f}s）" if prewalk_dt > 0 else "")]
