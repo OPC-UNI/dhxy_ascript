@@ -9,6 +9,14 @@ rapidocr==3.10.0
 onnxruntime==1.30.0
 # 授权客户端（src/core/license_client.py）直接使用；ascript 已传递依赖，
 # 显式声明避免上游依赖调整时静默丢失。
-pycryptodome>=3.20
+# pycryptodome 必须锁 3.x（2026-11-20 v2.14.0 打包事故）：4.x 的
+# Crypto.IO.PEM 新增 ctypes 动态加载的原生模块 Crypto.Util._base64
+# （大数也改用 Crypto.Math._nat），Nuitka ImplicitImports 插件的原生
+# 模块清单是硬编码的、不认识这两个新模块，打包后 RSA.import_key 按需
+# 导入 PEM 时抛 OSError("Cannot load native module 'Crypto.Util._base64'")，
+# 被验签宽泛 except 吞成「签名校验失败」——源码版正常、打包版全部无法
+# 激活。升级到 4.x 前必须改为 --include-package=Crypto 或显式
+# --include-module 补齐原生模块，并在打包版实测激活。
+pycryptodome==3.23.0
 requests>=2.28
 nuitka

@@ -89,6 +89,50 @@ def test_verify_tampered(rsa_key, public_pem):
     with pytest.raises(lc.LicenseError) as ei:
         lc.verify_license_file(bad, public_pem, "fp-test")
     assert ei.value.code == "bad_license"
+    assert "签名校验失败" in ei.value.message
+
+
+def test_verify_component_error_not_reported_as_tampered(rsa_key, public_pem,
+                                                        monkeypatch):
+    """打包缺原生模块（OSError）须带出底层原因，不能误报签名被篡改。
+
+    2026-11-20 v2.14.0 打包事故：pycryptodome 4.x 的 Crypto.Util._base64
+    未被 Nuitka 收录，RSA.import_key 抛 OSError，旧实现统一报「签名校验
+    失败」，SOURCE 正常、打包版全部无法激活且看不出原因。
+    """
+    lic = make_license(rsa_key, "fp-test")
+
+    def _broken(_pem):
+        raise OSError("Cannot load native module 'Crypto.Util._base64'")
+
+    monkeypatch.setattr(lc.RSA, "import_key", _broken)
+    with pytest.raises(lc.LicenseError) as ei:
+        lc.verify_license_file(lic, public_pem, "fp-test")
+    assert ei.value.code == "crypto"
+    assert "Crypto.Util._base64" in ei.value.message
+
+
+def test_verify_bad_public_key(rsa_key, public_pem):
+    lic = make_license(rsa_key, "fp-test")
+    with pytest.raises(lc.LicenseError) as ei:
+        lc.verify_license_file(lic, "not a pem", "fp-test")
+    assert ei.value.code == "bad_license"
+    assert "公钥" in ei.value.message
+
+
+def test_pycryptodome_pinned_below_4_for_nuitka():
+    """pycryptodome 必须锁 3.x，否则打包版验签全部失败。
+
+    4.x 的 Crypto.IO.PEM 依赖 ctypes 动态加载的 Crypto.Util._base64
+    （RSA.import_key 按需导入），Nuitka ImplicitImports 的原生模块清单
+    是硬编码的、不认识它，打包后抛 OSError（2026-11-20 v2.14.0 打包版
+    全部无法激活）。依赖被升级/放宽时让 CI 先失败，而不是带着坏包发版。
+    """
+    import Crypto
+    major = int(str(Crypto.__version__).split(".")[0])
+    assert major < 4, (
+        "pycryptodome %s 与 Nuitka 打包不兼容（见 requirements.txt 注释）"
+        % Crypto.__version__)
 
 
 def test_verify_expired(rsa_key, public_pem):

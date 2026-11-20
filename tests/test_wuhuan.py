@@ -226,7 +226,8 @@ def _buy_env(monkeypatch, land_ok=True):
     state = {"shop_open": False}
     monkeypatch.setattr(wuhuan.game_map, "is_in_map", lambda win, name: True)
     monkeypatch.setattr(wuhuan.game_map, "is_mini_map_open", lambda win: True)
-    monkeypatch.setattr(wuhuan, "close_scene_panels", lambda win, prefix: None)
+    monkeypatch.setattr(wuhuan, "close_scene_panels",
+                        lambda win, prefix: events.append("panels"))
     monkeypatch.setattr(wuhuan, "_wait_near",
                         lambda win, target, timeout, desc, interval:
                         events.append("arrived") or (True, "已到达"))
@@ -256,12 +257,12 @@ def _buy_env(monkeypatch, land_ok=True):
 
 
 def test_buy_equipments_lands_before_enter(monkeypatch):
-    """到达布店门口后：先降落检查（ensure_landed → 关面板），
+    """到达布店门口后：先清理面板，再做降落检查（ensure_landed → 关面板），
     再点进店入口——顺序不可颠倒（飞行中进店点击无效）。"""
     events, clicks = _buy_env(monkeypatch, land_ok=True)
     ok, desc = wuhuan._buy_equipments(None)
     assert ok
-    assert events == ["arrived", "landed", "closed"]
+    assert events == ["arrived", "panels", "landed", "closed"]
     assert wuhuan.CLOTH_SHOP_ENTER_POS in clicks
 
 
@@ -271,8 +272,44 @@ def test_buy_equipments_enter_proceeds_when_land_check_fails(monkeypatch):
     events, clicks = _buy_env(monkeypatch, land_ok=False)
     ok, desc = wuhuan._buy_equipments(None)
     assert ok
-    assert events == ["arrived", "landed", "closed"]
+    assert events == ["arrived", "panels", "landed", "closed"]
     assert wuhuan.CLOTH_SHOP_ENTER_POS in clicks
+
+
+def test_yunyou_walk_closes_panels_only_after_arrival(monkeypatch):
+    """点小地图寻路后不得立即关闭小地图：那次点击会终止自动寻路。
+
+    2026-11-20 用户实机（wuhuan 必现）：跨地图到长安 → 点小地图云游
+    大师位置 → 关闭小地图左键点击 @(1098,217) 落到世界，人物停下不再
+    走。清理必须等寻路结束（到达站定）之后再做。
+    """
+    events = []
+    clicks = []
+    monkeypatch.setattr(wuhuan.game_map, "is_in_map",
+                        lambda win, name: True)
+    monkeypatch.setattr(wuhuan.game_map, "is_mini_map_open",
+                        lambda win: True)
+    monkeypatch.setattr(wuhuan, "human_click",
+                        lambda win, x, y: clicks.append((x, y)))
+    monkeypatch.setattr(wuhuan, "close_scene_panels",
+                        lambda win, prefix: events.append("panels"))
+
+    def _wait_near(win, target, timeout, desc, interval):
+        events.append("arrived")
+        return True, "已到达"
+    monkeypatch.setattr(wuhuan, "_wait_near", _wait_near)
+    monkeypatch.setattr(wuhuan, "_wait_template",
+                        lambda win, icon, timeout: True)
+    monkeypatch.setattr(wuhuan.game_map, "find_template",
+                        lambda win, icon, threshold=None: (300, 300))
+    monkeypatch.setattr(wuhuan, "log", lambda msg, level="INFO": None)
+
+    ok, _info = wuhuan._walk_to_yunyou_claim_btn(None)
+    assert ok
+    # 寻路点击之后到到达之前不得有任何额外点击/清理（多余点击会终止寻路）
+    assert clicks[0] == wuhuan.YUNYOU_MAP_POS
+    assert clicks[1] == (300, 300)  # 到达后点领取按钮
+    assert events == ["arrived", "panels"]  # 先到达，再清理面板
 
 
 def test_buy_equipments_waits_shop_panel_render(monkeypatch):

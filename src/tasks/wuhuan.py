@@ -267,14 +267,16 @@ def _enter_cloth_shop(win, tag="[五环]"):
             return False, info
     human_click(win, CLOTH_SHOP_WALK_POS[0], CLOTH_SHOP_WALK_POS[1])
     log(f"{tag} 已点击小地图布店位置，自动寻路中", "SYS")
-    time.sleep(1.0)  # 等待自动寻路启动
-    close_scene_panels(win, "五环")
+    # 寻路期间不得再点击关闭小地图（2026-11-20 用户实机：点小地图寻路后
+    # 关闭小地图的那一次点击会落到游戏世界、终止自动寻路）——到达站定后
+    # 再清理场景面板，点击才安全。
     # 等待到达布店门口（长安 130,128 附近）后再进入，避免未到位就点击
     ok, info = _wait_near(win, CLOTH_SHOP_TARGET_POS, CLOTH_SHOP_ARRIVE_TIMEOUT,
                           "布店", 1.0)
     if not ok:
         return False, info
     log(f"{tag} 已到达布店门口", "SYS")
+    close_scene_panels(win, "五环")
     # 飞行中无法点击进入服装店（空中进店点击无效，用户 2026-11-07 确认）：
     # 进店前先确保降落——开飞行驭器面板识别飞行状态（降落按钮在场=飞行中，
     # 点降落；未飞行空操作），再关面板防遮挡进店点击。仅在任务开始买装备
@@ -496,14 +498,16 @@ def _walk_to_yunyou_claim_btn(win, tag="[五环]"):
             return False, info
     human_click(win, YUNYOU_MAP_POS[0], YUNYOU_MAP_POS[1])
     log(f"{tag} 已点击小地图云游大师位置，自动寻路中", "SYS")
-    time.sleep(1.0)  # 等待自动寻路启动
-    close_scene_panels(win, "五环")
+    # 寻路期间不得再点击关闭小地图（2026-11-20 用户实机：跨地图到长安后
+    # 点小地图寻路，关闭小地图的那一次点击终止了自动寻路）——到达站定后
+    # 再清理场景面板。
     # 等待到达云游大师附近（长安 88,175 附近）后再点击领取按钮，避免未到位就点击
     ok, info = _wait_near(win, YUNYOU_TARGET_POS, CLAIM_ARRIVE_TIMEOUT,
                           "云游大师", 2.0)
     if not ok:
         return False, info
     log(f"{tag} 已到达云游大师附近", "SYS")
+    close_scene_panels(win, "五环")
     # 等待领取任务按钮出现并点击
     if not _wait_template(win, TASK_LINGQU_CHANGAN_ICON, CLAIM_BUTTON_TIMEOUT):
         return False, "到达后未出现领取任务按钮"

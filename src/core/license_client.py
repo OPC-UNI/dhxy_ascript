@@ -112,8 +112,8 @@ def verify_license_file(license_file, public_key_pem, fingerprint, now=None):
     """验签并校验本地许可证，返回许可证 payload（dict）。
 
     校验顺序：签名 → 状态 → 硬件指纹 → 生效/到期时间。
-    失败抛 ``LicenseError``，``code`` 为 bad_license/revoked/fingerprint/
-    not_started/expired。
+    失败抛 ``LicenseError``，``code`` 为 bad_license/crypto/revoked/
+    fingerprint/not_started/expired。
     """
     if not license_file:
         raise LicenseError("许可证文件为空", code="bad_license")
@@ -132,10 +132,23 @@ def verify_license_file(license_file, public_key_pem, fingerprint, now=None):
         raise LicenseError("许可证文件缺少签名数据", code="bad_license")
     try:
         key = RSA.import_key(public_key_pem)
+    except (ImportError, OSError) as e:
+        # 打包缺原生模块等环境问题（如 pycryptodome 4.x 的
+        # Crypto.Util._base64 未被 Nuitka 收录，2026-11-20 打包事故），
+        # 不能误报成「签名被篡改」——把底层原因带出来便于定位。
+        raise LicenseError("许可证校验组件异常（%s: %s）"
+                           % (type(e).__name__, e), code="crypto")
+    except Exception:  # noqa: BLE001
+        raise LicenseError("产品公钥格式错误（公钥文件可能损坏）",
+                           code="bad_license")
+    try:
         sig = base64.b64decode(signature)
         pss.new(key, salt_bytes=32).verify(
             SHA256.new(data.encode("utf-8")), sig)
-    except Exception as e:  # noqa: BLE001
+    except (ImportError, OSError) as e:
+        raise LicenseError("许可证校验组件异常（%s: %s）"
+                           % (type(e).__name__, e), code="crypto")
+    except Exception:  # noqa: BLE001
         raise LicenseError("许可证签名校验失败（可能被篡改或公钥不匹配）",
                            code="bad_license")
     try:
