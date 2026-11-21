@@ -178,6 +178,11 @@ AXIS_RATIO_TOLERANCE = 0.25
 AFFINE_INLIER_PX = 8.0
 # 悬停校验误差（格）：超过则按误差修正点击点重试
 AIM_TOLERANCE = 2
+# 内置标定点的悬停无浮层小偏移恢复（px）：点落到图标/地图边缘/窗口外时
+# 浮层不出——先试 4 个方向的小偏移找回地图内容，避免直接回退完整采样
+# （2026-11-21 实机：大雁塔五层内置标定点 (864,388) 无浮层，偏移 4px
+# 的 (868,388) 正常；完整采样耗时 6.3s）
+AIM_NOHOVER_OFFSETS = ((14, 0), (-14, 0), (0, 14), (0, -14))
 AIM_ATTEMPTS = 3
 
 # ---- 点击与到达 ----
@@ -517,13 +522,24 @@ def _aim_and_click(win, affine, anchor_pt, tx, ty, emit,
         got = _hover_coord(win, px, py)
         if got is None:
             if anchor_pt is None:
-                # 内置标定热启动：无采样锚点，交由调用方回退完整采样
-                return False, None, "瞄准点悬停无浮层（标定可能过期）"
-            # 不在图内容上（窗外/被浮层遮挡）：向已知有效采样点收缩
-            emit(f"瞄准点 ({int(px)},{int(py)}) 悬停无浮层，向采样点收缩")
-            px = (px + anchor_pt[0]) / 2
-            py = (py + anchor_pt[1]) / 2
-            continue
+                # 内置标定热启动：标定点悬停无浮层（点落在图标/地图边缘/
+                # 窗口外）——先试小偏移找回地图内容，避免直接回退完整采样
+                for dx, dy in AIM_NOHOVER_OFFSETS:
+                    got = _hover_coord(win, px + dx, py + dy)
+                    if got is not None:
+                        px += dx
+                        py += dy
+                        emit(f"瞄准点悬停无浮层，偏移 ({dx:+d},{dy:+d}) 恢复")
+                        break
+                if got is None:
+                    # 交由调用方回退完整采样
+                    return False, None, "瞄准点悬停无浮层（标定可能过期）"
+            else:
+                # 不在图内容上（窗外/被浮层遮挡）：向已知有效采样点收缩
+                emit(f"瞄准点 ({int(px)},{int(py)}) 悬停无浮层，向采样点收缩")
+                px = (px + anchor_pt[0]) / 2
+                py = (py + anchor_pt[1]) / 2
+                continue
         ex, ey = got[0] - tx, got[1] - ty
         emit(f"瞄准 ({int(px)},{int(py)}) 读回 ({got[0]},{got[1]})，"
              f"偏差 ({ex:+d},{ey:+d})，用时 {time.time() - t0:.1f}s")
@@ -565,9 +581,12 @@ def _wait_map_name(win, name, timeout, emit):
     途中遇战斗（随机遭遇）：战斗期坐标不可读、人物不动，战斗时间不计入
     超时（deadline 逐轮顺延），战斗由战斗线程自动操作（CLAUDE.md 规则 6
     同源：战斗等待不得计入跟踪超时）。
+    位置日志降噪（2026-11-21）：只在地名变化（逐层过场景）时输出「位置」
+    行——进层是逐层步行，原实现每个位置变化都输出（凤巢四层走两步就
+    两行「凤巢四层」），生产日志刷屏。
     """
     deadline = time.time() + timeout
-    last = None
+    last_name = None
     while time.time() < deadline:
         _check_cancel()
         img = win.capture(force_activate=False)
@@ -577,10 +596,11 @@ def _wait_map_name(win, name, timeout, emit):
             continue
         pos = game_map.read_map_position(None, img=img) if img is not None else None
         if pos is not None:
-            if pos != last:
+            name_now = str(pos[0]).strip()
+            if name_now != last_name:
                 emit(f"位置: {pos}")
-                last = pos
-            if pos[0].strip() == name:
+            last_name = name_now
+            if name_now == name:
                 return True
         time.sleep(0.8)
     return False
@@ -1484,7 +1504,8 @@ def _start_impl(win, target, x, y, emit, on_map_open=None):
     成功时地图保持打开（调用方决定关闭时机），返回 (True, "", ctx)；
     失败已清理残留地图（寻路面板不会自动关闭，必须统一收尾）。
     ctx：base/layer/point/t_start/t_map/t_bar/t_click/open_dt/prewalk_dt/
-    layer_entry。
+    layer_entry/xunlu_entry（大雁塔跨层走寻路面板：面板被目的地地图窗口
+    遮住，需等点击起点、位移启动后先关地图再补关面板）。
     """
     t_start = time.time()
 
@@ -1500,6 +1521,11 @@ def _start_impl(win, target, x, y, emit, on_map_open=None):
         base = resolved
     pos = _read_pos(win)
     emit(f"目标 {layer or base} ({x},{y})；起点位置 {pos}")
+    # 大雁塔跨层走「世界地图→寻路」面板（与 _open_target_map 同一判据）：
+    # 面板在目的地地图窗口打开时被遮住、点不到 X，需等地图窗口收起后补关
+    # （2026-11-21 实机：面板一直留到行走/战斗中，见 _navigate_impl）。
+    xunlu_entry = (layer is not None and base == "大雁塔"
+                   and not (pos is not None and pos[0].strip() == layer))
     prewalk_dt = _prewalk_if_configured(win, pos, base, layer, emit)
 
     phases = {}
@@ -1601,6 +1627,7 @@ def _start_impl(win, target, x, y, emit, on_map_open=None):
         "t_start": t_start, "t_map": t_map, "t_bar": t_bar,
         "t_click": t_click, "open_dt": open_dt,
         "prewalk_dt": prewalk_dt, "layer_entry": layer_entry,
+        "xunlu_entry": xunlu_entry,
     }
 
 
@@ -1625,6 +1652,7 @@ def _navigate_impl(win, target, x, y, emit, verbose=False, allow_restart=False,
     open_dt = ctx["open_dt"]
     prewalk_dt = ctx["prewalk_dt"]
     layer_entry = ctx["layer_entry"]
+    xunlu_entry = ctx.get("xunlu_entry", False)
 
     before = _read_pos(win)
     if not _wait_movement(win, before):
@@ -1636,6 +1664,15 @@ def _navigate_impl(win, target, x, y, emit, verbose=False, allow_restart=False,
         human_click(win, min(point[0] + CLICK_OFFSET_RETRY, 1377), point[1])
         _wait_movement(win, before)
     emit(f"位移启动（点击后 {time.time() - t_click:.1f}s）")
+    if xunlu_entry:
+        # 大雁塔特殊入口：开图阶段目的地地图窗口压在「寻路」面板上，面板
+        # 在场判定看不到内容、X 点不到（2026-11-21 实机：面板一直留到
+        # 行走/战斗中才被看见）。起点点击已完成、人物已起步，此时地图
+        # 窗口不再需要（客户端可能已自动收起）——先关地图让面板露出，
+        # 再补关面板，避免行走与战斗期间一直挡屏。
+        game_map.close_maps(win, quiet=True)
+        if _close_xunlu_panel_if_open(win):
+            emit("已关闭残留「寻路」面板")
     if on_walk_start is not None:
         # 行走期插队回调（修罗手动寻路 → 组号队员血蓝 pass）：人物已在走，
         # 回调期间客户端寻路继续；异常只记日志，不拖垮导航

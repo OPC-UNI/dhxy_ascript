@@ -1438,11 +1438,27 @@ def test_parse_claim_destination_no_coords(monkeypatch):
 
 def test_task_markers_dedupes_and_sorts(monkeypatch):
     """多命中：重叠去重（24px 内视为同一标记），按 y/x 排序。"""
-    monkeypatch.setattr(
-        xiuluo.game_map, "find_all_template_in",
-        lambda img, icon, threshold=0.8, region=None: [
-            (100, 200), (106, 204), (300, 100)])
+    seen = {}
+
+    def _find(img, icon, threshold=0.8, region=None):
+        seen["icon"] = icon
+        return [(100, 200), (106, 204), (300, 100)]
+
+    monkeypatch.setattr(xiuluo.game_map, "find_all_template_in", _find)
     assert xiuluo._task_markers(_FakeWin()) == [(300, 100), (100, 200)]
+    assert seen["icon"] == "xiuluo_renwu_marker.png"
+
+
+def test_task_marker_template_is_user_provided_sign():
+    """手动寻路任务标记模板：用户 2026-11-21 提供的「任务」小牌（41x19 RGB）。"""
+    from pathlib import Path
+    from PIL import Image
+    path = (Path(__file__).resolve().parent.parent / "res/img"
+            / xiuluo.XIULUO_MARKER_ICON)
+    assert path.is_file()
+    im = Image.open(path)
+    assert im.size == (41, 19)
+    assert im.mode == "RGB"
 
 
 def test_manual_nav_round_without_dest(monkeypatch):

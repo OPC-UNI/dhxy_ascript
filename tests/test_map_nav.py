@@ -1076,6 +1076,45 @@ def test_aim_and_click_caches_correction(monkeypatch):
     assert got["ax"] == 92.0 and got["ay"] == 498.0
 
 
+def test_aim_and_click_recovers_blocked_point_with_offset(monkeypatch):
+    """内置标定点悬停无浮层：小偏移找回地图内容，不回退完整采样。"""
+    map_nav._CANCEL.clear()
+    aff = {"sx": 2.0, "sy": -2.0, "ax": 100.0, "ay": 500.0}
+
+    def fake_hover(win, px, py):
+        if (int(px), int(py)) == (200, 300):
+            return None  # 标定原点落在图标/边缘
+        return (50, 100)
+
+    monkeypatch.setattr(map_nav, "_hover_coord", fake_hover)
+    clicks = []
+    monkeypatch.setattr(map_nav, "human_click",
+                        lambda w, x, y: clicks.append((x, y)))
+    got = {}
+    ok, pt, err = map_nav._aim_and_click(
+        object(), aff, None, 50, 100, lambda m: None,
+        on_affine_corrected=lambda a: got.update(a))
+    assert ok, err
+    assert pt == (214, 300) and clicks == [(214, 300)]
+    assert got == {}  # 偏移恢复无偏差修正，不写缓存
+
+
+def test_aim_and_click_blocked_point_all_offsets_fail(monkeypatch):
+    """四方向偏移仍无浮层 → 返回失败，交由调用方完整采样。"""
+    map_nav._CANCEL.clear()
+    aff = {"sx": 2.0, "sy": -2.0, "ax": 100.0, "ay": 500.0}
+    calls = []
+    monkeypatch.setattr(
+        map_nav, "_hover_coord",
+        lambda w, px, py: calls.append((px, py)) or None)
+    clicks = []
+    monkeypatch.setattr(map_nav, "human_click", lambda *a: clicks.append(1))
+    ok, pt, err = map_nav._aim_and_click(
+        object(), aff, None, 50, 100, lambda m: None)
+    assert ok is False and "无浮层" in err and clicks == []
+    assert len(calls) == 1 + len(map_nav.AIM_NOHOVER_OFFSETS)
+
+
 def test_aim_and_click_no_correction_no_cache(monkeypatch):
     """首次悬停即命中：不回调缓存。"""
     aff = {"sx": 2.0, "sy": -2.0, "ax": 100.0, "ay": 500.0}
@@ -1086,6 +1125,76 @@ def test_aim_and_click_no_correction_no_cache(monkeypatch):
         object(), aff, None, 50, 100, lambda m: None,
         on_affine_corrected=lambda a: called.append(a))
     assert ok and pt == (200, 300) and called == []
+
+
+def test_start_impl_flags_dayan_pagoda_xunlu_entry(monkeypatch):
+    """大雁塔跨层标记 xunlu_entry（面板被地图窗口遮住，需行走后补关）。"""
+    _patch_start_env(monkeypatch)
+    ok, _info, ctx = map_nav._start_impl(
+        object(), "大雁塔四层", 105, 36, lambda m: None)
+    assert ok and ctx["xunlu_entry"] is True
+
+    # 已在目标层：直接开小地图，不涉及寻路面板
+    monkeypatch.setattr(map_nav, "_read_pos",
+                        lambda win: ("大雁塔四层", 1, 2))
+    ok, _info, ctx = map_nav._start_impl(
+        object(), "大雁塔四层", 105, 36, lambda m: None)
+    assert ok and ctx["xunlu_entry"] is False
+
+    # 其他层级图（龙窟）走层块页，不涉及寻路面板
+    monkeypatch.setattr(map_nav, "_read_pos", lambda win: ("灵兽村", 1, 2))
+    monkeypatch.setattr(map_nav, "_prewalk_if_configured",
+                        lambda *a, **k: 0.0)
+    ok, _info, ctx = map_nav._start_impl(
+        object(), "龙窟一层", 10, 20, lambda m: None)
+    assert ok and ctx["xunlu_entry"] is False
+
+
+def test_navigate_closes_xunlu_panel_after_walk_start(monkeypatch):
+    """大雁塔：位移启动后先关地图再补关寻路面板，然后才等到达。
+
+    2026-11-21 实机：开图阶段目的地地图窗口遮住面板，X 点不到，
+    面板会一直留到行走/战斗中（用户截图确认）。
+    """
+    _patch_nav_happy(monkeypatch)
+    order = []
+    monkeypatch.setattr(map_nav, "_open_target_map",
+                        lambda *a, **k: (True, "目的地地图已打开"))
+    monkeypatch.setattr(map_nav, "_wait_movement",
+                        lambda *a, **k: order.append("move") or True)
+    monkeypatch.setattr(map_nav.game_map, "close_maps",
+                        lambda *a, **k: order.append("maps"))
+    monkeypatch.setattr(map_nav, "_close_xunlu_panel_if_open",
+                        lambda *a: order.append("panel") or True)
+    monkeypatch.setattr(map_nav, "_wait_arrival",
+                        lambda *a, **k: order.append("arrive") or (True, "到达"))
+    emits = []
+    ok, _info = map_nav.navigate_to_map_coordinate(
+        object(), "大雁塔四层", 105, 36, log_fn=emits.append)
+    assert ok
+    assert (order.index("move") < order.index("maps")
+            < order.index("panel") < order.index("arrive"))
+    assert any("已关闭残留「寻路」面板" in m for m in emits)
+
+
+def test_navigate_normal_map_no_early_panel_close(monkeypatch):
+    """普通地图不触发提前关面板（只在收尾统一清理一次）。"""
+    _patch_nav_happy(monkeypatch)
+    order = []
+    monkeypatch.setattr(map_nav, "_open_target_map",
+                        lambda *a, **k: (True, "地图已打开"))
+    monkeypatch.setattr(map_nav, "_wait_movement",
+                        lambda *a, **k: order.append("move") or True)
+    monkeypatch.setattr(map_nav.game_map, "close_maps",
+                        lambda *a, **k: order.append("maps"))
+    monkeypatch.setattr(map_nav, "_close_xunlu_panel_if_open",
+                        lambda *a: order.append("panel") or False)
+    monkeypatch.setattr(map_nav, "_wait_arrival",
+                        lambda *a, **k: order.append("arrive") or (True, "到达"))
+    ok, _info = map_nav.navigate_to_map_coordinate(
+        object(), "洛阳城", 10, 20, log_fn=lambda m: None)
+    assert ok
+    assert order == ["move", "arrive", "maps", "panel"]
 
 
 def test_start_impl_caches_corrected_affine(monkeypatch):
@@ -1334,6 +1443,31 @@ def test_prewalk_skips_without_affine(monkeypatch):
         object(), ("灵兽村", 1, 2), "长安城", None, lambda m: None)
     assert dt == 0
     assert clicks == []
+
+
+def test_wait_map_name_logs_only_name_changes(monkeypatch):
+    """进层等待只在地名变化时输出位置（凤巢逐层步行不刷屏）。"""
+    map_nav._CANCEL.clear()
+    seq = [("凤巢二层", 59, 48), ("凤巢二层", 66, 52), ("凤巢三层", 26, 22),
+           ("凤巢三层", 21, 18), ("凤巢四层", 106, 49),
+           ("凤巢四层", 110, 53), ("凤巢五层", 30, 24)]
+
+    class _W:
+        def capture(self, force_activate=False):
+            return object()
+
+    monkeypatch.setattr(map_nav, "is_in_battle_frame", lambda img: False)
+    monkeypatch.setattr(
+        map_nav.game_map, "read_map_position",
+        lambda win, img=None: seq.pop(0) if seq else ("凤巢五层", 30, 24))
+    monkeypatch.setattr(map_nav.time, "sleep", lambda s: None)
+    emits = []
+    assert map_nav._wait_map_name(_W(), "凤巢五层", 10, emits.append) is True
+    pos_lines = [m for m in emits if m.startswith("位置")]
+    assert pos_lines == ["位置: ('凤巢二层', 59, 48)",
+                         "位置: ('凤巢三层', 26, 22)",
+                         "位置: ('凤巢四层', 106, 49)",
+                         "位置: ('凤巢五层', 30, 24)"]
 
 
 def test_wait_arrival_position_log_quiet_without_verbose(monkeypatch):

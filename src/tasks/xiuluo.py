@@ -318,16 +318,18 @@ _fight_cached_used = False       # 当前这次看打对话框出现已试过缓
 # ---- 兼容无快捷寻路（手动寻路，用户 2026-11-20 接入）----
 # 开关：修罗设置「兼容无快捷寻路」默认开。领取后追踪面板有修罗任务 →
 # 原 follow 流程不受影响；没有（快捷寻路按次数被消耗）→ 从领取对话框
-# 解析目的地 → map_nav 手动寻路 → 到达后点任务标记（xiuluo_lingqu
-# 模板，用户后续调整）→ 看打；被面板挡住时 Alt+A 隐藏界面再找标记，
+# 解析目的地 → map_nav 手动寻路 → 到达后点任务标记（xiuluo_renwu_marker
+# 模板，用户 2026-11-21 提供的「任务」小牌）→ 看打；被面板挡住时
+# Alt+A 隐藏界面再找标记，
 # 点击直接进战斗同样算「看打进入」；战后回城符返程；失败回灵兽村
 # 取消任务重新领取。
 _claim_manual_dialog = False     # 本次领取是否以「对话框证据」确认（无任务
                                  # 追踪）：True → 主循环改走手动寻路分支
 MANUAL_DEST_COORD_RE = re.compile(
     r"[（(]\s*(\d{1,4})\s*[,，]\s*(\d{1,4})\s*[)）]")
-XIULUO_MARKER_ICON = LINGQU_ICON  # 任务标记模板（用户 2026-11-20：先用
-                                  # xiuluo_lingqu，后续会调整）
+XIULUO_MARKER_ICON = "xiuluo_renwu_marker.png"  # 任务标记模板（用户
+                                  # 2026-11-21 实测素材：NPC 头顶「任务」
+                                  # 小牌，41x19 RGB）
 MARKER_THRESHOLD = 0.8            # 标记匹配阈值（同 find_template 默认）
 MARKER_MIN_GAP = 24               # 多命中重叠去重的最小中心间距（像素）
 MARKER_DIALOG_WAIT = 1.5          # 点标记后等对话框/战斗的窗口（秒）

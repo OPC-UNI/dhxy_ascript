@@ -209,7 +209,7 @@ class _FakeClock:
 
 
 def _install_mash(monkeypatch, *, per_click, decay=0.0, title_frames=14,
-                  lag_frames=0):
+                  lag_frames=0, target_x=908):
     """冲刺模式仿真：rapid_click_burst 每击把填充推进 per_click 刻度。
 
     decay>0 时每次测量（_fill）前先回退 decay 刻度，模拟真机
@@ -240,7 +240,7 @@ def _install_mash(monkeypatch, *, per_click, decay=0.0, title_frames=14,
         if icon in ("action", pochufengyin.POCHU_CLICK_ICON):
             return (950, 600)
         if icon == pochufengyin.POCHU_TARGET_ICON:
-            return (908, 500)   # C≈8.49，L≈7.97 R≈9.01
+            return (target_x, 500)   # 默认 C≈8.49，L≈7.97 R≈9.01
         return None             # 「开始」按钮不出现（按钮已是流程态）
 
     def _fill(bgr):
@@ -411,6 +411,32 @@ def test_mash_mode_maintains_zone_against_decay(monkeypatch):
     assert max(c[3] for c in clicks) > 30
     # 全程维持住，不因回退掉出目标带
     assert state["p"] >= lo
+
+
+def test_mash_mode_beats_fill_decay_below_far_zone(monkeypatch):
+    """带下拉扯补偿（2026-11-21 蛟魔探秘第一次失败）：目标带随机到远带
+    （C≈5.5），带外填充 ~0.5 刻度/秒自动回退。旧控制器按在途点击信用
+    决策——回退把兑现吃掉但信用一直算成「已推进」，落地门每秒只放
+    2 击，恰好与回退持平：18 击冲到 4.49 后 12 击只换回 +0.07，P 从
+    4.49 一路阴跌判失败。0.6s 内有点击但 P 未上涨 = 拉扯，放宽补点
+    目标并跳过落地门，压过回退把填充顶进带内。"""
+    target_x = 741                       # C≈5.5，L≈5.0 R≈6.0
+    win, state, clicks = _install_mash(monkeypatch, per_click=0.25,
+                                       decay=0.13, target_x=target_x,
+                                       title_frames=40, lag_frames=2)
+    lines = []
+    monkeypatch.setattr(pochufengyin, "log",
+                        lambda msg, level="INFO": lines.append(msg))
+    ok, info = pochufengyin.play_pochufengyin(
+        win, "title", prefix="名望", label="蛟魔探秘钓鱼", mash=True)
+    lo = pochufengyin.pochu_tick(target_x - pochufengyin.POCHU_ZONE_HALF)
+    hi = pochufengyin.pochu_tick(target_x + pochufengyin.POCHU_ZONE_HALF)
+    assert ok and lo <= state["p"] <= hi
+    # 压过回退但不得反过来冲过右缘
+    assert state["peak"] <= hi + 0.05
+    # 补偿确实触发（P 卡住时被判定为拉扯），而不是靠运气冲进去
+    assert any("拉扯" in m or "回退" in m for m in lines)
+    assert clicks and state["clicks"] > 30
 
 
 def test_mash_stops_when_countdown_gone(monkeypatch):
