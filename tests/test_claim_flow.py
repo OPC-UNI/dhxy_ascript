@@ -306,6 +306,9 @@ def _patch_open_env(monkeypatch, pos=("宝象国", 1, 2), battle=False,
         lambda win: calls["filter"].append(1) or filter_state)
     monkeypatch.setattr(claim_flow, "human_click",
                         lambda win, x, y: calls["click"].append((x, y)))
+    monkeypatch.setattr(
+        claim_flow.game_map, "uncheck_minimap_task_filter",
+        lambda win: (True, "「任务」筛选未勾选"))
     monkeypatch.setattr(claim_flow, "log", lambda *a, **k: None)
     return calls
 
@@ -323,6 +326,19 @@ def test_open_claim_map_in_map_opens_minimap_and_clicks(monkeypatch):
     assert calls["click"] == [(517, 488)]
     assert win.captures == 1  # 决策帧只截一次
     assert len(calls["read_pos"]) == 1  # pos=None 时自行读一次位置
+
+
+def test_open_claim_map_unchecks_task_filter(monkeypatch):
+    """开图后取消小地图「任务」筛选（仅名望需要勾选；用户 2026-11-21）。"""
+    _patch_open_env(monkeypatch)
+    checked = []
+    monkeypatch.setattr(
+        claim_flow.game_map, "uncheck_minimap_task_filter",
+        lambda win: checked.append(1) or (True, "未勾选"))
+    ok, _info = claim_flow.open_claim_map(
+        _FrameWin(), ("宝象国", 1, 2), map_name="宝象国",
+        map_pos=(517, 488), prefix="[测试]")
+    assert ok is True and checked == [1]
 
 
 def test_open_claim_map_other_map_goes_through_world_map(monkeypatch):
@@ -401,6 +417,47 @@ def test_open_claim_map_custom_click_fn_and_no_filter_read(monkeypatch):
     assert calls["filter"] == []  # 未读筛选状态（省一次截图+标记匹配）
     assert calls["read_pos"] == []  # pos 已给：省一次位置 OCR
     assert win.captures == 1
+
+
+def test_open_claim_map_coord_nav_uses_start_navigation(
+        monkeypatch, coord_nav_enabled):
+    """坐标化开关开启且给出 map_coord：走 map_nav 坐标点击（不开旧地图）。"""
+    calls = _patch_open_env(monkeypatch)
+    from src.device import map_nav
+    started = {}
+
+    def _start(win, map_name, x, y, log_fn=None, on_map_open=None):
+        started["args"] = (map_name, x, y)
+        if on_map_open is not None:
+            on_map_open()  # 模拟「地图已打开、点击前」的筛选读取时机
+        return True, "已点击目标点 (627,396)，开始寻路", (627, 396)
+
+    monkeypatch.setattr(map_nav, "start_navigation", _start)
+    states = []
+    win = _FrameWin()
+    ok, info = claim_flow.open_claim_map(
+        win, None, map_name="灵兽村", map_pos=(627, 396),
+        prefix="[测试]", on_filter_state=states.append,
+        map_coord=(120, 88))
+    assert ok is True and "坐标" in info
+    assert started["args"] == ("灵兽村", 120, 88)
+    assert states == [True] and calls["filter"] == [1]
+    assert calls["mini"] == [] and calls["city"] == []  # 不走旧开图
+    assert calls["click"] == []  # 不走固定像素点击
+
+
+def test_open_claim_map_coord_nav_failure(monkeypatch, coord_nav_enabled):
+    """坐标化寻路失败原样返回，不回落固定像素路径。"""
+    calls = _patch_open_env(monkeypatch)
+    from src.device import map_nav
+    monkeypatch.setattr(
+        map_nav, "start_navigation",
+        lambda *a, **k: (False, "地图窗口未出现搜索条", None))
+    ok, info = claim_flow.open_claim_map(
+        _FrameWin(), None, map_name="灵兽村", map_pos=(1, 2),
+        prefix="[测试]", map_coord=(120, 88))
+    assert ok is False and "搜索条" in info
+    assert calls["click"] == [] and calls["mini"] == []
 
 
 def test_open_claim_map_pos_reused_skips_position_read(monkeypatch):

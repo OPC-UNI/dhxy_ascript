@@ -861,6 +861,73 @@ def test_moved_verify_methods_no_window_paths(monkeypatch):
     assert host.verify_silent_click("bogus")["status"] == "error"
 
 
+def test_site_nav_points_maps_known():
+    """坐标化测试点位的地图必须都在导航地图表里（按钮点了不能报错）。"""
+    from src.app import diagnostics
+    from src.device import map_nav
+
+    known = set(map_nav.all_navigate_maps())
+    missing = {spec[1] for spec in diagnostics.SITE_NAV_POINTS.values()} - known
+    assert missing == set()
+
+
+def test_verify_site_navigate_guards(monkeypatch):
+    """点位导航：未知点位/无窗口给出错误，不抛异常。"""
+    import types
+
+    from src.app import diagnostics
+
+    class _Host(diagnostics.DiagnosticsMixin):
+        def __init__(self):
+            self._tm = types.SimpleNamespace(is_running=lambda: False)
+            self._verifying = False
+            self._map_nav_running = False
+
+    host = _Host()
+    r = host.verify_site_navigate("bogus")
+    assert r["status"] == "error" and "未知点位" in r["msg"]
+    monkeypatch.setattr(diagnostics.game, "find_main_window", lambda: None)
+    r = host.verify_site_navigate("repair")
+    assert r["status"] == "error"
+    assert "未检测到游戏窗口" in r["msg"]
+
+
+def test_verify_site_navigate_starts_thread(monkeypatch):
+    """点位导航线程参数：预置点位表 → (win, 地图, x, y, 点位 key)。"""
+    import types
+
+    from src.app import diagnostics
+
+    class _Host(diagnostics.DiagnosticsMixin):
+        def __init__(self):
+            self._tm = types.SimpleNamespace(is_running=lambda: False)
+            self._verifying = False
+            self._map_nav_running = False
+
+    host = _Host()
+    fake_win = object()
+    monkeypatch.setattr(diagnostics.game, "find_main_window",
+                        lambda: fake_win)
+    monkeypatch.setattr(diagnostics, "_game_window_clickable",
+                        lambda win: True)
+    started = {}
+
+    class _FakeThread:
+        def __init__(self, target=None, args=(), daemon=None, name=None):
+            started["target"] = target
+            started["args"] = args
+
+        def start(self):
+            started["started"] = True
+
+    monkeypatch.setattr(diagnostics.threading, "Thread", _FakeThread)
+    r = host.verify_site_navigate("repair")
+    assert r["status"] == "success"
+    assert started["started"] is True
+    assert started["args"] == (fake_win, "洛阳城", 321, 110, "repair")
+    assert host._map_nav_running is True and host._verifying is True
+
+
 def test_cancel_map_navigate_only_when_running(monkeypatch):
     """中断按钮：无导航时拒绝，导航中转发 map_nav.request_cancel。"""
     import types

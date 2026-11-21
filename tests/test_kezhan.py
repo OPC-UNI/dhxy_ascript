@@ -905,6 +905,41 @@ def test_near_luoyang_accepts_either_fallback_landing():
     assert kezhan._near_luoyang(None, tgt) is False
 
 
+def test_walk_to_luoyang_pos_coord_nav(monkeypatch, coord_nav_enabled):
+    """坐标化开关开启：客栈走位改走 map_nav 坐标点击（单落点取目标坐标）。"""
+    from src.device import map_nav
+
+    class _NavWin:
+        def capture(self, force_activate=False):
+            return None
+
+    started = {}
+    near_calls = {"n": 0}
+
+    def _near(pos, targets):
+        near_calls["n"] += 1
+        return near_calls["n"] > 1  # 首次不在附近；寻路后判到达
+
+    def _start(w, map_name, x, y, log_fn=None, on_map_open=None):
+        started["args"] = (map_name, x, y)
+        return True, "已点击", (623, 317)
+
+    monkeypatch.setattr(kezhan, "is_in_battle", lambda w: False)
+    monkeypatch.setattr(kezhan.game_map, "read_position_with_recovery",
+                        lambda w: ("长安", 1, 2))
+    monkeypatch.setattr(kezhan.game_map, "read_map_position",
+                        lambda w, img=None: ("洛阳城", 223, 195))
+    monkeypatch.setattr(kezhan, "close_scene_panels", lambda *a, **k: None)
+    monkeypatch.setattr(kezhan, "_near_luoyang", _near)
+    monkeypatch.setattr(map_nav, "start_navigation", _start)
+    monkeypatch.setattr(kezhan.time, "sleep", lambda s: None)
+    monkeypatch.setattr(kezhan, "log", lambda *a, **k: None)
+    ok, _info = kezhan._walk_to_luoyang_pos(
+        _NavWin(), (623, 317), (223, 195), 10, "大理寺墙外")
+    assert ok is True
+    assert started["args"] == (kezhan.LUOYANG_CITY, 223, 195)
+
+
 def test_near_luoyang_single_target_still_works():
     """单点目标（大理寺墙外等）行为不变。"""
     assert kezhan._near_luoyang(("洛阳城", 223, 195),
@@ -1464,3 +1499,84 @@ def test_extras_chuyijuebao_rate_limited(monkeypatch):
                         lambda *a, **k: False)
     assert kezhan._handle_follow_extras(object(), [], None) is False
     assert calls == []
+
+
+def test_try_flag_dialog_only_for_inn_destination(monkeypatch):
+    """飞行旗对话框仅当目的地含洛阳客栈时点确认选项。"""
+    clicked = []
+    monkeypatch.setattr(kezhan, "log", lambda *a, **k: None)
+    monkeypatch.setattr(
+        kezhan, "_click_green_option_fuzzy",
+        lambda w, items, img_np, text: clicked.append(text) or text == "使用")
+
+    items = [("你是否使用飞行旗前往洛阳客栈？", [500, 300, 900, 340], 0.95),
+             ("使用", [600, 380, 660, 400], 0.95)]
+    assert kezhan._try_flag_dialog(object(), items, None) is True
+    assert clicked[:2] == ["快送", "使用"]  # 按候选顺序尝试
+
+    clicked.clear()
+    items2 = [("你是否使用飞行旗前往长安城？", [500, 300, 900, 340], 0.95)]
+    assert kezhan._try_flag_dialog(object(), items2, None) is False
+    assert clicked == []
+
+
+def test_pos_is_inn_and_near_spot():
+    """客栈地名繁简兼容；24,7 附近判定。"""
+    assert kezhan._pos_is_inn(("洛阳客栈", 24, 7)) is True
+    assert kezhan._pos_is_inn(("洛陽客棧", 24, 7)) is True  # 繁体兼容
+    assert kezhan._pos_is_inn(("洛阳城", 24, 7)) is False
+    assert kezhan._pos_is_inn(None) is False
+    assert kezhan._near_inn_spot(("洛阳客栈", 24, 7)) is True
+    assert kezhan._near_inn_spot(("洛阳客栈", 29, 11)) is True
+    assert kezhan._near_inn_spot(("洛阳客栈", 40, 20)) is False
+
+
+def test_go_to_inn_waits_for_inn_landing(monkeypatch, coord_nav_enabled):
+    """点击快送/飞行旗后按「洛阳客栈 24,7」确认到达，不提前返回成功。"""
+    from src.device import map_nav
+
+    class _Win:
+        def capture(self, force_activate=False):
+            return object()
+
+    monkeypatch.setattr(map_nav, "start_navigation",
+                        lambda *a, **k: (True, "已点击", (884, 600)))
+    monkeypatch.setattr(kezhan, "is_in_battle", lambda w: False)
+    monkeypatch.setattr(kezhan, "is_in_battle_frame", lambda img: False)
+    monkeypatch.setattr(kezhan, "_clear_qiyu_popup", lambda w: False)
+    monkeypatch.setattr(kezhan, "close_scene_panels", lambda *a, **k: None)
+    monkeypatch.setattr(kezhan, "log", lambda *a, **k: None)
+    monkeypatch.setattr(kezhan, "_try_fast_travel",
+                        lambda w, img: True)  # 首次即命中快送/飞行旗
+    monkeypatch.setattr(kezhan.game_map, "read_map_position",
+                        lambda w, img=None: (kezhan.KEZHAN_MAP,
+                                             *kezhan.INN_SPOT))
+    monkeypatch.setattr(kezhan.time, "sleep", lambda s: None)
+    monkeypatch.setattr(map_nav, "cancel_requested", lambda: False)
+    ok, info = kezhan._go_to_inn(_Win())
+    assert ok is True and "24,7" in info
+
+
+def test_try_fast_travel_handles_waypoint_menu(monkeypatch):
+    """玩家路标/飞行旗菜单（你要到洛阳客栈(24,7)去吗？/快送我去）可处理。"""
+    items = [("你要到洛阳客栈(24,7)去吗？", [450, 370, 930, 395], 0.99),
+             ("快送我去", [430, 400, 520, 425], 0.99),
+             ("重做路标（将路标修改为当前站立的坐标）",
+              [430, 430, 900, 455], 0.99)]
+    monkeypatch.setattr(kezhan.game_map, "ocr_regions",
+                        lambda img, regions: (list(items), None))
+    clicked = []
+    monkeypatch.setattr(
+        kezhan, "_click_green_option_once",
+        lambda w, it, img_np, text, prefix="": clicked.append(text) or True)
+    assert kezhan._try_fast_travel(object(), object()) is True
+    assert clicked == [kezhan.FAST_DIALOG_OPTION]
+
+
+def test_verify_go_to_inn_delegates(monkeypatch):
+    """诊断-客栈入口按钮走真实 _go_to_inn 链路。"""
+    calls = []
+    monkeypatch.setattr(kezhan, "_go_to_inn",
+                        lambda w: calls.append(w) or (True, "ok"))
+    assert kezhan.verify_go_to_inn(object()) == (True, "ok")
+    assert len(calls) == 1

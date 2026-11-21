@@ -55,6 +55,13 @@ class SettingsApiMixin(ControlHost):
         """通用设置变更：保存高性能模式开关状态。"""
         return settings_module.save_high_perf(on)
 
+    def save_site_coord_nav(self, on):
+        """通用设置变更：保存任务点位坐标化寻路开关。
+
+        关闭时任务点位寻路回滚为原固定小地图像素点击逻辑（默认开启）。
+        """
+        return settings_module.save_site_coord_nav(on)
+
     def save_silent_mode(self, on):
         """通用设置变更：保存静默操作开关状态（主进程立即生效）。"""
         return settings_module.save_silent_mode(on)

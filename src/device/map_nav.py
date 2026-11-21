@@ -50,6 +50,15 @@ def request_cancel():
     _CANCEL.set()
 
 
+def cancel_requested():
+    """是否已收到协作式中断请求（诊断「中断寻路」）。
+
+    供任务侧等待循环（如客栈 _go_to_inn）在诊断验证场景下响应中断；
+    任务子进程与主进程的中断标记相互独立，生产流程不受影响。
+    """
+    return _CANCEL.is_set()
+
+
 def _check_cancel():
     """中断检查点：各轮询循环每轮调用，命中即抛 NavigationCancelled。"""
     if _CANCEL.is_set():
@@ -482,16 +491,24 @@ def _read_pos(win):
     return game_map.read_map_position(None, img=img)
 
 
-def _aim_and_click(win, affine, anchor_pt, tx, ty, emit):
+def _aim_and_click(win, affine, anchor_pt, tx, ty, emit,
+                   on_affine_corrected=None):
     """计算目标像素 → 悬停校验 → 点击。返回 (ok, 点, 错误描述)。
 
     anchor_pt：采样锚点；None=内置标定热启动（无采样点可收缩，浮层不
     出现直接判失败，由调用方回退完整采样）。
     校验不到或偏差修正 3 次仍不达标 → 不点击。
+    on_affine_corrected：本次发生偏差修正且点击成功时，回传修正后的
+    标定 dict。调用方写入会话缓存（remember_affine）后，同图后续导航
+    首次悬停即命中——内置表个别地图原点有 ~4 格偏差，不缓存会每次
+    导航都多一次「瞄准→修正→再瞄准」的 0.8s 悬停（用户 2026-11-21
+    日志：宝象国巫医每次瞄准两次）。
     """
-    sx, sy = affine["sx"], affine["sy"]
-    px = affine["ax"] + sx * tx
-    py = affine["ay"] + sy * ty
+    aff = dict(affine)
+    sx, sy = aff["sx"], aff["sy"]
+    px = aff["ax"] + sx * tx
+    py = aff["ay"] + sy * ty
+    corrected = False
     t0 = time.time()
     for _attempt in range(1, AIM_ATTEMPTS + 1):
         _check_cancel()
@@ -512,12 +529,19 @@ def _aim_and_click(win, affine, anchor_pt, tx, ty, emit):
              f"偏差 ({ex:+d},{ey:+d})，用时 {time.time() - t0:.1f}s")
         if abs(ex) <= AIM_TOLERANCE and abs(ey) <= AIM_TOLERANCE:
             human_click(win, int(px), int(py))
+            if corrected and on_affine_corrected is not None:
+                on_affine_corrected(dict(aff))
             return True, (int(px), int(py)), ""
         # 偏差修正：读回值比目标大 ex → 该点对应的真实坐标偏大 →
         # 像素点要往小坐标方向移（px -= ex*sx）。符号写反会越修越偏，
         # 3 次用尽报「不收敛」（2026-11-20 审查发现）。
         px -= ex * sx
         py -= ey * sy
+        # 把修正吸收进标定（px = ax + sx*tx → ax -= ex*sx）：点击成功后
+        # 回传会话缓存，下次同图导航一次命中，不再重复修正
+        aff["ax"] -= ex * sx
+        aff["ay"] -= ey * sy
+        corrected = True
     return False, None, "点击点悬停校验不收敛（读回坐标与目标偏差过大）"
 
 
@@ -1141,10 +1165,15 @@ def _open_xunlu_destination(win, dest, emit):
 # 开图/寻路面板阶段角色原地等待（大雁塔入口实测 ~4.4s）。出发地图配置
 # 一个「先走起来」的小地图点位：开图前先开小地图点一下，让角色在这段
 # 时间里赶路；目的地地图打开后再点最终目标点自然改道。
-# 灵兽村 (317,616)：悬停实测坐标 (14,13)，即冰熊守卫出口（出村去冰窟/
-# 北俱芦洲/各大城市的必经点），实机验证点后角色立即起步（(103,77) →
-# (73,54)/2.4s）。同图导航不预走；未配置的地图跳过。
-PREWALK_POINTS = {"灵兽村": (317, 616)}
+# 点位用**地图坐标**（2026-11-21 坐标化，原固定像素 (317,616) 的标定
+# 反算值）：灵兽村 (14,13) 即冰熊守卫出口（出村去冰窟/北俱芦洲/各大城市
+# 的必经点），实机验证点后角色立即起步（(103,77) → (73,54)/2.4s）。
+# 点击像素由该地图标定换算（与导航同一套 affine）；无标定/越界跳过预走。
+# **仅修罗任务启用**（2026-11-21 用户规则）：从灵兽村出发去做五环等
+# 其他任务不需要预走——预走点是为修罗出村赶路设计的优化。
+# 同图导航不预走；未配置的地图跳过。
+PREWALK_POINTS = {"灵兽村": (14, 13)}
+PREWALK_TASK_MODES = ("修罗",)
 
 
 def _open_mini_map_quick(win, timeout=1.2):
@@ -1184,11 +1213,26 @@ def _prewalk_if_configured(win, pos, base, layer, emit):
         return 0.0
     if layer is None and names_match(cur, base):
         return 0.0
+    mode = app_utils.current_task_mode()
+    if mode not in PREWALK_TASK_MODES:
+        return 0.0  # 非修罗任务（如五环/五倍）不预走
+    # 坐标 → 小地图像素（与主导航同一套标定）：无标定/换算越界跳过预走，
+    # 不按旧固定像素硬点（窗口尺寸/布局变化时只会点错位置）
+    affine = affine_for(win, cur)
+    if affine is None:
+        emit(f"预走路跳过：{cur}无标定（不影响导航）")
+        return 0.0
+    px = affine["ax"] + affine["sx"] * pt[0]
+    py = affine["ay"] + affine["sy"] * pt[1]
+    if not (0 <= px <= 1377 and 0 <= py <= 830):
+        emit(f"预走路跳过：{cur}坐标 {pt} 换算点 "
+             f"({px:.0f},{py:.0f}) 超出窗口")
+        return 0.0
     t0 = time.time()
     if not _open_mini_map_quick(win):
         emit("预走路跳过：小地图未打开（不影响导航）")
         return 0.0
-    human_click(win, pt[0], pt[1])
+    human_click(win, int(px), int(py))
     # 快速关小地图：刚由本流程打开、无自动关闭动画风险，不等 1s 确认；
     # 世界地图流程需要它先关（窗口重叠）
     game_map.close_map_if_open(win, game_map.MINI_MAP_OPEN_ICON, "小地图",
@@ -1196,8 +1240,8 @@ def _prewalk_if_configured(win, pos, base, layer, emit):
                                match_region=game_map.MINI_MAP_REGION,
                                confirm_wait=0.0, quiet=True)
     dt = time.time() - t0
-    emit(f"预走路：{cur}小地图点 ({pt[0]},{pt[1]}) → 角色先走起来"
-         f"（{dt:.1f}s）")
+    emit(f"预走路：{cur}坐标 {pt} → 小地图点 ({int(px)},{int(py)})"
+         f" → 角色先走起来（{dt:.1f}s）")
     return dt
 
 
@@ -1331,7 +1375,8 @@ def _open_target_map(win, base, layer, pos, emit, timing=None):
     return True, "地图已打开"
 
 
-def navigate_to_map_coordinate(win, target, x, y, log_fn=None, verbose=False):
+def navigate_to_map_coordinate(win, target, x, y, log_fn=None, verbose=False,
+                               on_walk_start=None):
     """导航到 target 地图 (x, y)：打开地图 → 悬停标定 → 校验点击 → 到达。
 
     target：WORLD_MAP_LABELS 地图名（经 resolve 归一）或层级图全名
@@ -1339,6 +1384,10 @@ def navigate_to_map_coordinate(win, target, x, y, log_fn=None, verbose=False):
     每个关键阶段 emit 一行累计/分段耗时，最终 info 附完整耗时汇总。
     verbose=True（诊断卡片）逐次输出行走位置；生产默认只在地名变化
     （过场景）时输出，避免每 1s 一条刷屏。
+    on_walk_start：可选无参回调，位移启动确认后、到达等待前调用一次
+    （行走期插队任务，如修罗手动寻路的组号队员血蓝 pass——与 follow
+    点任务绿字后的寻路期 pass 对齐）。回调异常只记日志、不影响导航；
+    停滞重启会再走一遍流程，回调可能被调用第二次（调用方自行节流）。
     行走中位置停滞 5s（寻路被点世界/其它操作打断）会自动重新开图补点
     一次；主动 request_cancel() 中断（诊断「中断寻路」）不补——那是用户
     要停：各轮询循环每轮检查（1-3s 生效），中断时关地图/寻路面板并返回
@@ -1349,13 +1398,15 @@ def navigate_to_map_coordinate(win, target, x, y, log_fn=None, verbose=False):
     _CANCEL.clear()
     try:
         ok, info = _navigate_impl(win, target, x, y, emit, verbose=verbose,
-                                  allow_restart=True)
+                                  allow_restart=True,
+                                  on_walk_start=on_walk_start)
         if not ok and info == ARRIVE_RESTART_TEXT:
             # 人物原地站了 5s：多半是客户端寻路被打断（点世界/其它操作），
             # 重新走一遍开图 + 点目标点补一次；补过仍不行按失败返回
             emit("位置 5s 未变化（寻路可能被打断）——重新开图补一次")
             ok, info = _navigate_impl(win, target, x, y, emit,
-                                      verbose=verbose, allow_restart=False)
+                                      verbose=verbose, allow_restart=False,
+                                      on_walk_start=on_walk_start)
         return ok, info
     except NavigationCancelled:
         emit("已中断寻路（用户手动中断），关闭地图/寻路面板")
@@ -1378,12 +1429,66 @@ def navigate_to_map_coordinate(win, target, x, y, log_fn=None, verbose=False):
         raise
 
 
-def _navigate_impl(win, target, x, y, emit, verbose=False, allow_restart=False):
-    """导航主流程（navigate_to_map_coordinate 的实现，emit 已就绪）。"""
+def site_coord_nav_enabled():
+    """任务点位坐标化寻路开关（通用设置，默认开启）。
+
+    关闭时各任务回滚为原固定小地图像素点击逻辑。任务侧分支统一调用
+    本函数（测试可 monkeypatch map_nav.site_coord_nav_enabled）。
+    """
+    from ..core.settings import load_site_coord_nav
+    return load_site_coord_nav()
+
+
+def start_navigation(win, target, x, y, log_fn=None, on_map_open=None):
+    """坐标化寻路（只开图/标定/点击，不等到达）：任务点位迁移用。
+
+    与 navigate_to_map_coordinate 前半段一致：同图直开小地图/跨图经
+    世界地图标签 → 搜索条定位 → 标定换算 → 悬停校验 → 点击地图点。
+    点击成功后**地图保持打开**，由调用方按原逻辑决定关闭时机并等待到达
+    （保留各任务自己的「附近」判据：按钮/NPC/对话框/位置消失）。
+    失败/中断路径清理残留地图与寻路面板。
+    on_map_open：目标地图打开后、点击前回调（领取流程读小地图「任务」
+    筛选状态等）。回调异常只记日志、不影响寻路。
+    返回 (ok, info, point)。
+    """
+    emit = log_fn or (lambda m: log(f"[地图导航] {m}", "INFO"))
+    _CANCEL.clear()
+    try:
+        ok, info, ctx = _start_impl(win, target, x, y, emit,
+                                    on_map_open=on_map_open)
+        if not ok:
+            return False, info, None
+        return True, f"已点击目标点 {ctx['point']}，开始寻路", ctx["point"]
+    except NavigationCancelled:
+        emit("已中断寻路（用户手动中断），关闭地图/寻路面板")
+        try:
+            # 先关地图再关面板：面板可能被目的地地图窗口遮住
+            game_map.close_maps(win, quiet=True)
+            _close_xunlu_panel_if_open(win)
+        except Exception:  # noqa: BLE001 —— 中断收尾不得再抛
+            pass
+        return False, "已中断寻路", None
+    except BaseException:
+        # 非预期异常：清掉可能打开的地图/寻路面板再原样抛出
+        try:
+            game_map.close_maps(win, quiet=True)
+            _close_xunlu_panel_if_open(win)
+        except Exception:  # noqa: BLE001 —— 收尾不得掩盖原始异常
+            pass
+        raise
+
+
+def _start_impl(win, target, x, y, emit, on_map_open=None):
+    """开图 + 标定 + 点击前半段（start_navigation / _navigate_impl 共用）。
+
+    成功时地图保持打开（调用方决定关闭时机），返回 (True, "", ctx)；
+    失败已清理残留地图（寻路面板不会自动关闭，必须统一收尾）。
+    ctx：base/layer/point/t_start/t_map/t_bar/t_click/open_dt/prewalk_dt/
+    layer_entry。
+    """
     t_start = time.time()
 
     def _cleanup():
-        """统一收尾：先关地图（寻路面板可能被地图窗口遮住），再关面板。"""
         game_map.close_maps(win, quiet=True)
         _close_xunlu_panel_if_open(win)
 
@@ -1391,7 +1496,7 @@ def _navigate_impl(win, target, x, y, emit, verbose=False, allow_restart=False):
     if layer is None:
         resolved = game_map.resolve_world_map_name(base)
         if resolved is None:
-            return False, f"地图「{target}」未收录世界地图标签"
+            return False, f"地图「{target}」未收录世界地图标签", None
         base = resolved
     pos = _read_pos(win)
     emit(f"目标 {layer or base} ({x},{y})；起点位置 {pos}")
@@ -1403,8 +1508,22 @@ def _navigate_impl(win, target, x, y, emit, verbose=False, allow_restart=False):
         # 寻路面板不会自动关闭（用户 2026-11-20）：失败路径也清理残留
         _cleanup()
         emit(f"耗时: 打开目标地图失败（总计 {time.time() - t_start:.1f}s）")
-        return False, info
+        return False, info, None
     _check_cancel()  # 开图期间收到中断：不再继续标定/点击
+    # 任务筛选统一取消勾选（用户 2026-11-21）：仅名望快捷领取需要勾选
+    # 任务筛选点黄色任务名；修罗/五倍/五环/修理等点位都是普通地形点，
+    # 勾选时黄色任务名/任务点可能与点击点重叠，触发自动寻路或误开对话框。
+    try:
+        ok_f, info_f = game_map.uncheck_minimap_task_filter(win)
+    except Exception as e:  # noqa: BLE001 —— 辅助检查不得阻断寻路
+        ok_f, info_f = False, f"任务筛选检查异常: {e}"
+    if not ok_f:
+        emit(f"任务筛选: {info_f}")
+    if on_map_open is not None:
+        try:
+            on_map_open()
+        except Exception as e:  # noqa: BLE001 —— 回调异常不影响寻路
+            emit(f"开图回调异常: {e}")
     t_map = time.time()
     layer_entry = phases.get("layer_entry", 0.0)
     open_dt = (t_map - t_start) - layer_entry
@@ -1427,7 +1546,7 @@ def _navigate_impl(win, target, x, y, emit, verbose=False, allow_restart=False):
     if bar is None:
         _cleanup()
         emit(f"耗时: 地图窗口未出现（总计 {time.time() - t_start:.1f}s）")
-        return False, "地图窗口未出现搜索条（无法定位地图窗口）"
+        return False, "地图窗口未出现搜索条（无法定位地图窗口）", None
     t_bar = time.time()
     emit(f"搜索条锚点: ({bar['x']},{bar['y']})"
          f"（定位 {t_bar - t_map:.1f}s）")
@@ -1436,9 +1555,16 @@ def _navigate_impl(win, target, x, y, emit, verbose=False, allow_restart=False):
     affine = affine_for(win, key)
     point = None
     err = ""
+
+    def _cache_corrected(aff):
+        """偏差修正后的标定写入会话缓存：同图下次导航一次命中。"""
+        remember_affine(win, key, aff)
+        emit("标定已按悬停校验修正并缓存（同图后续导航直接命中）")
+
     if affine is not None:
         emit("使用内置/会话标定（悬停校验）")
-        ok, point, err = _aim_and_click(win, affine, None, x, y, emit)
+        ok, point, err = _aim_and_click(win, affine, None, x, y, emit,
+                                        on_affine_corrected=_cache_corrected)
         if not ok:
             emit(f"标定未通过校验（{err}），回退完整采样")
             affine = None
@@ -1448,27 +1574,57 @@ def _navigate_impl(win, target, x, y, emit, verbose=False, allow_restart=False):
         if len(samples) < 2:
             _cleanup()
             emit(f"耗时: 悬停采样不足（总计 {time.time() - t_start:.1f}s）")
-            return False, f"悬停采样不足（{len(samples)} 个有效点，浮层未出现）"
+            return False, f"悬停采样不足（{len(samples)} 个有效点，浮层未出现）", None
         affine = solve_affine(samples)
         if affine is None:
             _cleanup()
             emit(f"耗时: 标定求解失败（总计 {time.time() - t_start:.1f}s）")
-            return False, "悬停样本无法解出线性变换（两轴比例异常）"
+            return False, "悬停样本无法解出线性变换（两轴比例异常）", None
         remember_affine(win, key, affine)
         emit(f"标定: 比例 {affine['sx']:.3f}/{affine['sy']:.3f} px/格，"
              f"原点 ({affine['ax']:.1f},{affine['ay']:.1f})"
              f"（采样+求解 {time.time() - t_sample:.1f}s）")
         ok, point, err = _aim_and_click(win, affine,
                                         (samples[0][0], samples[0][1]),
-                                        x, y, emit)
+                                        x, y, emit,
+                                        on_affine_corrected=_cache_corrected)
     if not ok or point is None:
         _cleanup()
         emit(f"耗时: 瞄准点击失败（总计 {time.time() - t_start:.1f}s）")
-        return False, err
+        return False, err, None
     assert point is not None  # 类型收窄：ok=True 时 point 非 None
     t_click = time.time()
     emit(f"点击地图点 {point} 开始寻路"
          f"（标定+瞄准点击 {t_click - t_bar:.1f}s）")
+    return True, "", {
+        "base": base, "layer": layer, "point": point,
+        "t_start": t_start, "t_map": t_map, "t_bar": t_bar,
+        "t_click": t_click, "open_dt": open_dt,
+        "prewalk_dt": prewalk_dt, "layer_entry": layer_entry,
+    }
+
+
+def _navigate_impl(win, target, x, y, emit, verbose=False, allow_restart=False,
+                   on_walk_start=None):
+    """导航主流程（navigate_to_map_coordinate 的实现，emit 已就绪）。"""
+    def _cleanup():
+        """统一收尾：先关地图（寻路面板可能被地图窗口遮住），再关面板。"""
+        game_map.close_maps(win, quiet=True)
+        _close_xunlu_panel_if_open(win)
+
+    ok, info, ctx = _start_impl(win, target, x, y, emit)
+    if not ok:
+        return False, info
+    base = ctx["base"]
+    layer = ctx["layer"]
+    point = ctx["point"]
+    t_start = ctx["t_start"]
+    t_map = ctx["t_map"]
+    t_bar = ctx["t_bar"]
+    t_click = ctx["t_click"]
+    open_dt = ctx["open_dt"]
+    prewalk_dt = ctx["prewalk_dt"]
+    layer_entry = ctx["layer_entry"]
 
     before = _read_pos(win)
     if not _wait_movement(win, before):
@@ -1480,6 +1636,13 @@ def _navigate_impl(win, target, x, y, emit, verbose=False, allow_restart=False):
         human_click(win, min(point[0] + CLICK_OFFSET_RETRY, 1377), point[1])
         _wait_movement(win, before)
     emit(f"位移启动（点击后 {time.time() - t_click:.1f}s）")
+    if on_walk_start is not None:
+        # 行走期插队回调（修罗手动寻路 → 组号队员血蓝 pass）：人物已在走，
+        # 回调期间客户端寻路继续；异常只记日志，不拖垮导航
+        try:
+            on_walk_start()
+        except Exception as e:  # noqa: BLE001 —— 回调异常不影响导航
+            emit(f"行走起步回调异常: {e}")
 
     ok, info = _wait_arrival(win, base, layer, x, y, emit,
                              verbose=verbose, allow_restart=allow_restart)

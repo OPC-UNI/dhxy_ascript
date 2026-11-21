@@ -437,6 +437,24 @@ def is_at_position(pos, name, x, y, tolerance=5):
             and abs(py - y) <= tolerance)
 
 
+def near_and_still(win, name, x, y, tolerance=5, wait=0.8):
+    """在指定地图坐标附近且站定（间隔 wait 两次位置读数相同）。
+
+    任务点位「已在附近则跳过寻路」的安全判定：附近但仍在走动返回
+    False，调用方照常寻路让角色走到目标点停稳——走动中提前点进店/
+    领取按钮/扫描 NPC 的时机不对。位置读不到按未站定处理。
+    返回 (是否附近且站定, 最新位置)；未在附近时只读一次位置（~100ms），
+    在附近时才多等 wait + 一次读数。
+    """
+    pos = read_map_position(win)
+    if not is_at_position(pos, name, x, y, tolerance):
+        return False, pos
+    time.sleep(wait)
+    pos2 = read_map_position(win)
+    return bool(pos2 is not None and pos2 == pos
+                and is_at_position(pos2, name, x, y, tolerance)), pos2
+
+
 def find_template(win, icon, threshold=0.8, region=None):
     """在游戏窗口内查找模板，返回首个匹配的 (x, y) 窗口相对坐标或 None。
 
@@ -1095,20 +1113,15 @@ def minimap_task_filter_checked(img, cx, cy):
     return int(white.sum()) >= MINI_MAP_TASK_CHECKED_MIN_WHITE
 
 
-def minimap_task_filter_state(win, img=None):
-    """小地图底部「任务」筛选勾选状态（模板匹配勾选框，跨场景通用）。
+def _minimap_task_filter_box(img):
+    """定位小地图底部「任务」勾选框，返回 (是否勾选, cx, cy) 或 None。
 
     底部五个勾选框（全部/传送/普通/任务/商业）是同一控件：勾选模板只
     命中「任务」框，未勾选模板命中其余四个；合并两类命中按 x 排序取
-    第 4 个即「任务」框，按命中模板判定状态。2026-11-16 实机标定：
-    大唐边境 勾选 1.000 / 未勾选 0.889~0.924，天宫 勾选 0.947；两类
-    模板互不命中。返回 True（已勾选）/ False（未勾选）/ None（地图
-    未打开或筛选行未识别）。
+    第 4 个即「任务」框。2026-11-16 实机标定：大唐边境 勾选 1.000 /
+    未勾选 0.889~0.924，天宫 勾选 0.947；两类模板互不命中。
+    返回模板中心（点击点）；地图未打开或筛选行未识别返回 None。
     """
-    if img is None:
-        img = win.capture(force_activate=False)
-        if img is None:
-            return None
     bgr = bgr_frame(img)
     # 绝对搜索带（小地图窗口位置固定，见 MINI_MAP_TASK_BAND 注释）：
     # 地图未打开时带内无勾选框行，命中不足 5 个自然返回 None
@@ -1132,7 +1145,77 @@ def minimap_task_filter_state(win, img=None):
             merged.append(h)
     if len(merged) < 5:
         return None
-    return merged[3][0]
+    state, _score, x, y = merged[3]
+    return state, x, y
+
+
+def minimap_task_filter_state(win, img=None):
+    """小地图底部「任务」筛选勾选状态（模板匹配勾选框，跨场景通用）。
+
+    返回 True（已勾选）/ False（未勾选）/ None（地图未打开或筛选行
+    未识别）。详见 _minimap_task_filter_box。
+    """
+    if img is None:
+        img = win.capture(force_activate=False)
+        if img is None:
+            return None
+    box = _minimap_task_filter_box(img)
+    return None if box is None else box[0]
+
+
+def uncheck_minimap_task_filter(win, img=None):
+    """确保小地图底部「任务」筛选**未勾选**（用户 2026-11-21 规则）。
+
+    失败（截图/识别/点击异常）一律返回 (False, 描述)，绝不向上抛——
+    调用方（开图寻路链路）不能因任务筛选检查而中断。
+    """
+    try:
+        return _uncheck_minimap_task_filter(win, img)
+    except Exception as e:  # noqa: BLE001 —— 辅助检查不得阻断寻路
+        return False, f"任务筛选检查异常: {e}"
+
+
+def _uncheck_minimap_task_filter(win, img=None):
+    """uncheck_minimap_task_filter 的实现（异常由外层兜底）。
+
+    仅名望快捷领取需要勾选任务筛选（点击黄色任务 NPC 名触发自动寻路/
+    对话框，minimap_quick_navigate 自行勾选）；其余任务（修罗/五倍/
+    五环/修理等）的小地图点击点都是普通地形点——勾选时黄色任务 NPC
+    名/任务点可能与点击点重叠，触发自动寻路或误开对话框。开图后统一
+    取消勾选；已取消/本就未勾选直接返回。
+    返回 (是否已取消/本就未勾选, 描述)；地图未打开/筛选行未识别返回
+    (False, 描述)，调用方可忽略（不阻断寻路）。
+    """
+    if img is None:
+        img = win.capture(force_activate=False)
+        if img is None:
+            return False, "截图失败"
+    box = _minimap_task_filter_box(img)
+    if box is None:
+        # 地图刚打开时筛选行可能尚未渲染：短轮询再试（最多 ~0.9s）
+        for _ in range(3):
+            time.sleep(0.3)
+            img = win.capture(force_activate=False)
+            if img is None:
+                continue
+            box = _minimap_task_filter_box(img)
+            if box is not None:
+                break
+    if box is None:
+        return False, "筛选行未识别（地图可能未打开）"
+    state, cx, cy = box
+    if not state:
+        return True, "「任务」筛选未勾选"
+    human_click(win, cx, cy)
+    log(f"[地图] 小地图「任务」筛选已勾选，取消勾选 @({cx},{cy})", "SYS")
+    time.sleep(MINI_MAP_FILTER_WAIT)
+    img2 = win.capture(force_activate=False)
+    if img2 is None:
+        return False, "取消任务筛选后截图失败"
+    box2 = _minimap_task_filter_box(img2)
+    if box2 is not None and not box2[0]:
+        return True, "「任务」筛选已取消勾选"
+    return False, "点击后仍未取消勾选"
 
 
 def ensure_minimap_task_filter(win, filter_pos):

@@ -33,6 +33,7 @@ import numpy as np
 from ..core.app_utils import log, human_click, norm_text
 from ..core import app_utils  # 高性能模式共享设施（固定位置缓存点击）
 from ..device import map as game_map  # 地图操作（世界地图/小地图/位置识别）
+from ..device import map_nav  # 坐标化寻路（通用设置开关，关闭回滚固定像素）
 from ..minigames import pochufengyin as _pochu_minigame  # 破除封印/钓鱼共用小游戏（闭环实现）
 from ..minigames import chuyijuebao as _chuyijuebao_minigame  # 锄遗聚宝阻塞循环
 from ..minigames.jiguan import (JIGUAN_DIALOG_TEXT, JIGUAN_TEMPLATES,
@@ -324,18 +325,34 @@ def _handle_jiantianpan(win, items, img_np):
     log("[玄枢轶闻] 检测到「使用监天盘寻找石妖踪迹」，执行监天盘流程", "SYS")
     pos = game_map.read_map_position(win)
     if not _at_huoyun_target(pos):
-        # 已在火云戈壁但未到目标点：直接开当前地图小地图（免世界地图
-        # 中转，2026-11-18 用户规则）；不在该图才经世界地图点标签。
-        if _on_huoyungebi(pos):
-            ok, info = game_map.open_mini_map(win)
+        if map_nav.site_coord_nav_enabled():
+            # 坐标化寻路（2026-11-21 默认开）：按监天盘目标坐标开图标定
+            # 点击，等同原固定像素点位；关闭开关回滚下方固定像素逻辑。
+            ok, info, _pt = map_nav.start_navigation(
+                win, JIANTIANPAN_MAP_NAME, JIANTIANPAN_TARGET_POS[0],
+                JIANTIANPAN_TARGET_POS[1],
+                log_fn=lambda m: log(f"[玄枢轶闻][坐标] {m}", "INFO"))
+            if not ok:
+                log(f"[玄枢轶闻] 监天盘流程寻路失败: {info}", "WARN")
+                game_map.close_maps(win)
+                return True
+            log(f"[玄枢轶闻] 已按坐标 {JIANTIANPAN_TARGET_POS} 点击"
+                f"火云戈壁地图点，自动寻路中", "SYS")
         else:
-            ok, info = game_map.open_mini_map_by_name(win, JIANTIANPAN_MAP_NAME)
-        if not ok:
-            log(f"[玄枢轶闻] 监天盘流程寻路失败: {info}", "WARN")
-            game_map.close_maps(win)
-            return True
-        human_click(win, JIANTIANPAN_MAP_CLICK_POS[0], JIANTIANPAN_MAP_CLICK_POS[1])
-        log("[玄枢轶闻] 已点击火云戈壁小地图寻路点，自动寻路中", "SYS")
+            # 已在火云戈壁但未到目标点：直接开当前地图小地图（免世界地图
+            # 中转，2026-11-18 用户规则）；不在该图才经世界地图点标签。
+            if _on_huoyungebi(pos):
+                ok, info = game_map.open_mini_map(win)
+            else:
+                ok, info = game_map.open_mini_map_by_name(
+                    win, JIANTIANPAN_MAP_NAME)
+            if not ok:
+                log(f"[玄枢轶闻] 监天盘流程寻路失败: {info}", "WARN")
+                game_map.close_maps(win)
+                return True
+            human_click(win, JIANTIANPAN_MAP_CLICK_POS[0],
+                        JIANTIANPAN_MAP_CLICK_POS[1])
+            log("[玄枢轶闻] 已点击火云戈壁小地图寻路点，自动寻路中", "SYS")
         time.sleep(1.0)  # 等待自动寻路启动
         game_map.close_maps(win)  # 关闭残留地图，避免遮挡监天盘
         ok, info = _wait_jiantianpan_arrive(win)
@@ -405,9 +422,15 @@ def navigate_to_task(win):
         loc = f"{name}[{x},{y}]"
 
     at_target = _at_target(pos)
+    # 坐标化寻路开关（通用设置，默认开）：任务坐标为坐标点时走 map_nav
+    # 开图标定点击（等同原固定像素点位）；关闭回滚固定像素逻辑。
+    coord_nav = TASK_MAP_POS is not None \
+        and map_nav.site_coord_nav_enabled()
     cross_city = False  # 经世界地图跨地图前往（飞行旗传送）
     if at_target:
         log(f"[玄枢轶闻] 已在任务位置附近（{loc}），跳过寻路", "SYS")
+    elif coord_nav:
+        pass  # 开图/点击由下方 start_navigation 统一完成
     elif name == LUOYANG_CITY:
         ok, info = game_map.open_mini_map(win)
         if not ok:
@@ -421,8 +444,18 @@ def navigate_to_task(win):
         log(f"[玄枢轶闻] 不在洛阳城（{loc}），经世界地图前往洛阳城", "SYS")
 
     if not at_target:
-        human_click(win, MAP_CLICK_POS[0], MAP_CLICK_POS[1])
-        log(f"[玄枢轶闻] 已点击小地图任务点，自动寻路中", "SYS")
+        if coord_nav:
+            ok, info, _pt = map_nav.start_navigation(
+                win, LUOYANG_CITY, TASK_MAP_POS[0], TASK_MAP_POS[1],
+                log_fn=lambda m: log(f"[玄枢轶闻][坐标] {m}", "INFO"))
+            if not ok:
+                return False, info, None
+            log(f"[玄枢轶闻] 已按坐标 {TASK_MAP_POS} 点击洛阳城地图点，"
+                f"自动寻路中", "SYS")
+            cross_city = name != LUOYANG_CITY
+        else:
+            human_click(win, MAP_CLICK_POS[0], MAP_CLICK_POS[1])
+            log(f"[玄枢轶闻] 已点击小地图任务点，自动寻路中", "SYS")
         time.sleep(1.0)  # 等待自动寻路/传送启动
         # 清理：城内轮主动关闭仍打开的小地图（点击任务点后仍打开）；跨地图
         # 轮等小地图随传送自动关闭（主动关会点到世界把人带走，2026-11-15）

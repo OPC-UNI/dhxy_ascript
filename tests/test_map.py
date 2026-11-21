@@ -536,3 +536,94 @@ def test_minimap_task_filter_state_no_map():
     frame = make_bgr_frame(seed=7)
     img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
     assert game_map.minimap_task_filter_state(None, img=img) is None
+
+
+def test_near_and_still_requires_same_position(monkeypatch):
+    """附近且两次读数相同才算站定；移动中/不在附近/读不到都不成立。"""
+    seq = [("长安", 130, 128), ("长安", 130, 128)]
+    monkeypatch.setattr(game_map, "read_map_position",
+                        lambda win: seq.pop(0))
+    still, pos = game_map.near_and_still(None, "长安", 130, 128, 5)
+    assert still is True and pos == ("长安", 130, 128)
+
+    seq[:] = [("长安", 130, 128), ("长安", 133, 129)]
+    still, _pos = game_map.near_and_still(None, "长安", 130, 128, 5)
+    assert still is False  # 附近但仍在走
+
+    seq[:] = [("长安", 200, 200), ("长安", 200, 200)]
+    still, pos = game_map.near_and_still(None, "长安", 130, 128, 5)
+    assert still is False and pos == ("长安", 200, 200)
+    assert len(seq) == 1  # 不在附近只读一次
+
+    monkeypatch.setattr(game_map, "read_map_position", lambda win: None)
+    still, pos = game_map.near_and_still(None, "长安", 130, 128, 5)
+    assert still is False and pos is None
+
+
+def test_near_and_still_waits_between_reads(monkeypatch):
+    slept = []
+    monkeypatch.setattr(game_map.time, "sleep", lambda s: slept.append(s))
+    monkeypatch.setattr(game_map, "read_map_position",
+                        lambda win: ("长安", 130, 128))
+    still, _pos = game_map.near_and_still(None, "长安", 130, 128, 5, wait=0.8)
+    assert still is True and slept == [0.8]
+
+
+def test_uncheck_minimap_task_filter_clicks_when_checked(monkeypatch):
+    """已勾选 → 点「任务」勾选框 → 复检未勾选；点击点在第 4 个框。"""
+    frames = [_minimap_filter_frame(checked=True),
+              _minimap_filter_frame(checked=False)]
+    imgs = [Image.fromarray(cv2.cvtColor(f, cv2.COLOR_BGR2RGB))
+            for f in frames]
+
+    class _Win:
+        def __init__(self):
+            self.n = 0
+
+        def capture(self, force_activate=False):
+            img = imgs[min(self.n, len(imgs) - 1)]
+            self.n += 1
+            return img
+
+    clicks = []
+    monkeypatch.setattr(game_map, "human_click",
+                        lambda w, x, y: clicks.append((x, y)))
+    monkeypatch.setattr(game_map.time, "sleep", lambda s: None)
+    monkeypatch.setattr(game_map, "log", lambda *a, **k: None)
+    ok, info = game_map.uncheck_minimap_task_filter(_Win())
+    assert ok is True and "取消勾选" in info
+    assert len(clicks) == 1
+    x, y = clicks[0]
+    assert 120 <= x <= 1120 and 630 <= y <= 700  # 筛选行内
+
+
+def test_uncheck_minimap_task_filter_already_off(monkeypatch):
+    """本就未勾选：不点击，直接成功。"""
+    img = Image.fromarray(cv2.cvtColor(
+        _minimap_filter_frame(checked=False), cv2.COLOR_BGR2RGB))
+
+    class _Win:
+        def capture(self, force_activate=False):
+            return img
+
+    clicks = []
+    monkeypatch.setattr(game_map, "human_click",
+                        lambda w, x, y: clicks.append((x, y)))
+    monkeypatch.setattr(game_map.time, "sleep", lambda s: None)
+    ok, info = game_map.uncheck_minimap_task_filter(_Win())
+    assert ok is True and "未勾选" in info
+    assert clicks == []
+
+
+def test_uncheck_minimap_task_filter_no_map(monkeypatch):
+    """地图未打开/筛选行未识别：短轮询后返回 False，不抛异常。"""
+    img = Image.fromarray(cv2.cvtColor(
+        make_bgr_frame(seed=7), cv2.COLOR_BGR2RGB))
+
+    class _Win:
+        def capture(self, force_activate=False):
+            return img
+
+    monkeypatch.setattr(game_map.time, "sleep", lambda s: None)
+    ok, info = game_map.uncheck_minimap_task_filter(_Win())
+    assert ok is False and "未识别" in info

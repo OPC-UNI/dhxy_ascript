@@ -137,6 +137,32 @@ def test_configured_requires_all_materials(monkeypatch):
     assert repair._configured() is False
 
 
+def test_repair_chain_coord_nav(win, monkeypatch, coord_nav_enabled):
+    """坐标化开关开启：修理走位改走 map_nav 坐标点击（洛阳城修理点）。"""
+    started = {}
+
+    def _start(w, map_name, x, y, log_fn=None, on_map_open=None):
+        started["args"] = (map_name, x, y)
+        return True, "已点击", (783, 458)
+
+    monkeypatch.setattr(repair, "_configured", lambda: True)
+    monkeypatch.setattr(repair.tab_group, "pass_active", False)
+    monkeypatch.setattr(repair.battle, "is_in_battle", lambda w: False)
+    monkeypatch.setattr(repair.game_map, "read_map_position",
+                        lambda w: ("凤巢五层", 38, 46))  # 不在修理点
+    monkeypatch.setattr(repair.map_nav, "start_navigation", _start)
+    monkeypatch.setattr(repair.game_map, "close_maps",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(repair.time, "sleep", lambda s: None)
+    monkeypatch.setattr(repair, "_wait_arrive", lambda w, p: (True, ""))
+    monkeypatch.setattr(repair, "_find_repair_npc",
+                        lambda w, p: (None, "到达后未识别到修理 NPC"))
+    monkeypatch.setattr(repair, "log", lambda *a, **k: None)
+    ok, info = repair._run_repair_chain(win)
+    assert ok is False and "未识别" in info
+    assert started["args"] == (repair.LUOYANG, *repair.REPAIR_SPOT)
+
+
 def test_repair_map_failure_closes_residual_maps(win, monkeypatch):
     """地图打开失败 → 清理场景面板（残留世界地图污染 follow 追踪 OCR）。
 

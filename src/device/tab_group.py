@@ -1321,6 +1321,10 @@ def _repair_one(win, tab_id):
 def member_bars_pass(win):
     """回血回蓝 pass：队长点完任务追踪后（寻路中）触发，60s 节流。
 
+    触发点：follow 的 post_track_handler（点任务绿字后的寻路期），以及
+    修罗手动寻路的 map_nav on_walk_start（位移启动后的行走期）——两条
+    寻路链路都有队员补血蓝时机；五倍黄袍怪多杀在重点追踪链接后显式
+    补调一次（战斗间隙没有领取/跟踪环节）。
     逐个队员切过去检查血蓝条：战斗中跳过（战斗中不右键血蓝条）；
     低于阈值右键回满（复用 status_bars.check_all_bars，阈值沿用
     通用设置）。队长自己的战后补血蓝不受影响（战斗线程原逻辑）。

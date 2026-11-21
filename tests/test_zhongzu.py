@@ -189,6 +189,103 @@ def test_find_claim_npc_single_and_none(monkeypatch):
     assert zhongzu._find_claim_npc_np(IMG) is None
 
 
+def test_find_claim_npc_name_prefers_short_line(monkeypatch):
+    """名称行：优先「昊天」短名行；长名与玩家称号粘行时不用其坐标。"""
+    items = [
+        ("入门御童比武大会活动使者", [656, 448, 868, 470], 0.95),
+        ("昊天", [787, 466, 820, 485], 0.99),
+    ]
+    monkeypatch.setattr(zhongzu.game_map, "ocr_regions",
+                        lambda img, regions: (list(items), None))
+    assert zhongzu._find_claim_npc_name(object()) == (803, 475, True)
+
+
+def test_find_claim_npc_name_long_only_and_tracker_filter(monkeypatch):
+    """短名不可读时返回长名行（不用于算点击点）；追踪面板同名被过滤。"""
+    items = [
+        ("比武大会活动使者", [763, 446, 895, 471], 0.99),
+        ("昊天", [100, 466, 130, 485], 0.99),  # 追踪面板区域
+    ]
+    monkeypatch.setattr(zhongzu.game_map, "ocr_regions",
+                        lambda img, regions: (list(items), None))
+    assert zhongzu._find_claim_npc_name(object()) == (829, 458, False)
+
+
+def test_find_claim_npc_name_none(monkeypatch):
+    monkeypatch.setattr(zhongzu.game_map, "ocr_regions",
+                        lambda img, regions: ([], None))
+    assert zhongzu._find_claim_npc_name(object()) is None
+    assert zhongzu._find_claim_npc_name(None) is None
+
+
+def test_decide_claim_npc_click_rules():
+    """点击点必须在精灵模板上：名称只用于分选；不对齐时的取舍规则。"""
+    # 两候选（同模型侍卫 + 昊天）：名称 x 对齐昊天候选 → 点昊天
+    cands = [(0.92, 700, 320), (0.88, 812, 417)]
+    pt, _why = zhongzu._decide_claim_npc_click(cands, (830, 476, True))
+    assert pt == (812, 417)
+    # 只有侍卫候选、短名指向别处 → 按短名行正上方（88px）点击
+    pt, _why = zhongzu._decide_claim_npc_click([(0.92, 700, 320)],
+                                               (830, 476, True))
+    assert pt == (830, 388)
+    # 只有长名行且不对齐 → 不点（长名会粘行漂移）
+    pt, _why = zhongzu._decide_claim_npc_click([(0.92, 700, 320)],
+                                               (600, 450, False))
+    assert pt is None
+    # 无候选：无可靠名称不点；有短名按短名上方
+    assert zhongzu._decide_claim_npc_click([], None)[0] is None
+    assert zhongzu._decide_claim_npc_click(
+        [], (830, 476, True))[0] == (830, 388)
+    # 无名称：取最右侧候选（原规则）
+    assert zhongzu._decide_claim_npc_click(cands, None)[0] == (812, 417)
+
+
+def _name_entry_win():
+    frame = np.zeros((831, 1378, 3), dtype=np.uint8)
+
+    class _Win:
+        def capture(self, force_activate=False):
+            return frame
+
+    return _Win()
+
+
+def _patch_name_entry_env(monkeypatch, cands, name_info):
+    here = (zhongzu.CHANGAN, *zhongzu.CLAIM_SPOT)
+    monkeypatch.setattr(zhongzu, "is_in_battle_frame", lambda img: False)
+    monkeypatch.setattr(zhongzu, "_claim_npc_candidates",
+                        lambda frame: list(cands))
+    monkeypatch.setattr(zhongzu.game_map, "read_map_position",
+                        lambda win, img=None: here)
+    monkeypatch.setattr(zhongzu, "_find_claim_npc_name",
+                        lambda img: name_info)
+    monkeypatch.setattr(zhongzu, "log", lambda *a, **k: None)
+    return here
+
+
+def test_wait_claim_entry_keeps_template_when_name_aligned(monkeypatch):
+    """实机 2026-11-21：长名行与候选 x 对齐时保留模板点击点。
+
+    旧逻辑直接用名称行中心 -90px 点击，长名粘行时点到了精灵上方；
+    现在名称只用于分选，点击点取模板中心 (812,417)。
+    """
+    here = _patch_name_entry_env(
+        monkeypatch, [(0.869, 812, 417)], (792, 457, False))
+    assert zhongzu._wait_claim_entry(_name_entry_win(), 1.0) ==         ((812, 417), here)
+
+
+def test_wait_claim_entry_prefers_name_over_mismatched_template(monkeypatch):
+    """模板只有同模型侍卫、短名指向别处 → 按短名行正上方点击。"""
+    here = _patch_name_entry_env(
+        monkeypatch, [(0.90, 700, 320)], (830, 476, True))
+    assert zhongzu._wait_claim_entry(_name_entry_win(), 1.0) ==         ((830, 388), here)
+
+
+def test_claim_npc_template4_exists():
+    """第 4 姿态模板（用户 2026-11-21 实机截图裁剪）已随仓库提供。"""
+    assert zhongzu._template_exists("zhongzu_claim_npc4.png")
+
+
 def test_claim_npc_icons_skips_missing(monkeypatch):
     """模板缺失时跳过且只告警一次（其余模板照常参与匹配）。"""
     logs = []
@@ -224,6 +321,7 @@ def test_wait_claim_entry_reads_position_on_hit_frame(monkeypatch):
         return here
 
     monkeypatch.setattr(zhongzu.game_map, "read_map_position", _read_pos)
+    monkeypatch.setattr(zhongzu, "_find_claim_npc_name", lambda img: None)
     assert zhongzu._wait_claim_entry(_Win(), 1.0) == ((818, 358), here)
     assert seen["img"] is frame  # 同帧复用，不重复截窗
 
@@ -280,6 +378,7 @@ def test_wait_claim_entry_gates_click_by_coordinate(monkeypatch):
     monkeypatch.setattr(zhongzu, "is_in_battle_frame", lambda img: False)
     monkeypatch.setattr(zhongzu, "_claim_npc_candidates",
                         lambda frame: [(0.98, 818, 358)])
+    monkeypatch.setattr(zhongzu, "_find_claim_npc_name", lambda img: None)
     monkeypatch.setattr(zhongzu.game_map, "read_map_position",
                         lambda win, img=None: (zhongzu.CHANGAN, far_x,
                                                zhongzu.CLAIM_SPOT[1]))
@@ -298,7 +397,7 @@ def test_claim_configured_with_provided_assets():
     assert zhongzu.CLAIM_MAP_POS is not None
     assert zhongzu.CLAIM_NPC_ICONS == (
         "zhongzu_claim_npc.png", "zhongzu_claim_npc2.png",
-        "zhongzu_claim_npc3.png")
+        "zhongzu_claim_npc3.png", "zhongzu_claim_npc4.png")
     assert zhongzu._claim_configured() is True
 
 

@@ -62,6 +62,7 @@ from ..core.app_utils import human_click, human_move, log, move_away, norm_text
 from ..core import app_utils  # 高性能模式共享设施（固定位置缓存点击）
 from ..device import task_tracker  # 任务追踪面板操作
 from ..device import map as game_map  # 地图操作（世界地图/小地图/位置识别）
+from ..device import map_nav  # 坐标化寻路（通用设置开关，关闭回滚固定像素）
 from ..device import team  # 组队检查（领取前队伍人数检查，仅队长生效）
 from ..device import status_bars  # 血蓝检测（巫医验证模式血蓝报告）
 from ..core import debug_overlay  # 调试信息悬浮层（任务进度更新）
@@ -176,6 +177,9 @@ BAOXIANG_MAP_POS = (517, 488)                      # 宝象国小地图上领取
                                                    # 位置固定——即使被拖走，下次打开也会恢复到
                                                    # 默认位置，固定绝对坐标即可，锚点相对偏移
                                                    # 反而会因关闭按钮所在面板宽度变化点偏）
+BAOXIANG_CLAIM_COORD = (91, 84)                    # 领取点坐标化寻路坐标（旧固定像素 517,488 的
+                                                   # 标定反算值——与黄字「降魔侍卫」同点位；坐标化
+                                                   # 开关关闭时回滚用 BAOXIANG_MAP_POS）
 CLAIM_DIALOG_OPTION = "除魔卫国，义不容辞"           # 领取对话框绿色选项（游戏内原文，实测用字）
 FULL_TEAM_DIALOG_TEXT = "前途凶险，还是请阁下组满5人队伍再来吧！"  # 领取被拒：队伍人数不足
                                                                    # （游戏要求组满 5 人）
@@ -637,14 +641,30 @@ def _run_wuyi_chain(win, hover_before_click=False, report_condition=False,
     # （位置 ±11 或 NPC 模板可见均算到达——坐标 OCR 不可靠时
     # 模板兜底，修罗原实现教训）
     if need_walk:
-        ok, info = game_map.open_mini_map(win)
-        if not ok:
-            return False, info
-        human_click(win, WUYI_MAP_POS[0], WUYI_MAP_POS[1])
-        log(f"[五倍][巫医] 已点击小地图巫医位置 {WUYI_MAP_POS}，自动寻路中",
-            "SYS")
-        time.sleep(1.0)
-        game_map.close_maps(win)
+        if map_nav.site_coord_nav_enabled():
+            # 坐标化寻路（2026-11-21 默认开）：按巫医坐标开图标定点击，
+            # 等同原固定像素点位；关闭开关回滚下方固定像素逻辑。
+            ok, info, _pt = map_nav.start_navigation(
+                win, BAOXIANGGUO, WUYI_SPOT[0], WUYI_SPOT[1],
+                log_fn=lambda m: log(f"[五倍][巫医][坐标] {m}", "INFO"))
+            if not ok:
+                return False, info
+            log(f"[五倍][巫医] 已按坐标 {WUYI_SPOT} 点击宝象国地图点，"
+                f"自动寻路中", "SYS")
+            time.sleep(1.0)
+            game_map.close_maps(win)
+        else:
+            ok, info = game_map.open_mini_map(win)
+            if not ok:
+                return False, info
+            # 任务筛选取消勾选（用户 2026-11-21）：仅名望需要勾选任务
+            # 筛选；巫医点是普通地形点，避免黄色任务名与点击点重叠误触。
+            game_map.uncheck_minimap_task_filter(win)
+            human_click(win, WUYI_MAP_POS[0], WUYI_MAP_POS[1])
+            log(f"[五倍][巫医] 已点击小地图巫医位置 {WUYI_MAP_POS}，自动寻路中",
+                "SYS")
+            time.sleep(1.0)
+            game_map.close_maps(win)
         deadline = time.time() + WUYI_ARRIVE_TIMEOUT
         arrived = False
         pos_seen = False
@@ -1188,7 +1208,8 @@ def _open_claim_map(win, pos=None):
     return claim_flow.open_claim_map(
         win, pos, map_name=BAOXIANGGUO,
         map_pos=BAOXIANG_MAP_POS, prefix="[五倍]",
-        on_filter_state=_set_claim_task_filter)
+        on_filter_state=_set_claim_task_filter,
+        map_coord=BAOXIANG_CLAIM_COORD)
 
 
 def _close_claim_map_before_arrival(win):

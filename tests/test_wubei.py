@@ -1331,6 +1331,7 @@ def test_claim_flow_open_map_wiring(monkeypatch):
     assert captured["map_pos"] == wubei.BAOXIANG_MAP_POS
     assert captured["prefix"] == "[五倍]"
     assert captured["on_filter_state"] is wubei._set_claim_task_filter
+    assert captured["map_coord"] == wubei.BAOXIANG_CLAIM_COORD
 
 
 def test_claim_flow_set_filter_state_writes_global(monkeypatch):

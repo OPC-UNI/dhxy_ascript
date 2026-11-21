@@ -505,6 +505,26 @@ def save_high_perf(on):
 _AUTO_REFILL_KEY = "auto_refill"
 
 
+# ---- 任务点位坐标化寻路（UI 开关，通用设置，角色设置持久化，默认开启；
+#      开启后领取/巫医/修理/五环/沙都/客栈/玄枢/种族等任务点位改走
+#      map_nav 坐标导航（开图标定后按坐标点击，等同原固定小地图像素
+#      点击）；关闭回滚为原固定像素寻路逻辑——坐标化现场出问题一键
+#      回滚，无需回退版本。实现见 map_nav.start_navigation 与各任务
+#      「load_site_coord_nav()」分支） ----
+_SITE_COORD_NAV_KEY = "site_coord_nav"
+
+
+def load_site_coord_nav():
+    """读取任务点位坐标化寻路开关（首次默认开启）。"""
+    return bool(role_settings.get(_SITE_COORD_NAV_KEY, True))
+
+
+def save_site_coord_nav(on):
+    """保存任务点位坐标化寻路开关，返回操作结果。"""
+    role_settings.set_value(_SITE_COORD_NAV_KEY, bool(on))
+    return {"status": "success"}
+
+
 def load_auto_refill():
     """读取战斗结束自动补血量蓝量开关（首次默认开启）。"""
     return bool(role_settings.get(_AUTO_REFILL_KEY, True))

@@ -236,6 +236,46 @@ def test_wuyi_chain_timeout_no_click_self_clicks(wuyi_chain):
     assert wuyi_chain["clicks"] == [NPC_PT, OPTION_PT]  # 点 NPC + 兜底点选项
 
 
+def test_wuyi_chain_coord_nav_uses_map_coord(
+        wuyi_chain, monkeypatch, coord_nav_enabled):
+    """坐标化开关开启：巫医走位改走 map_nav 坐标点击，到达判据不变。"""
+    from src.device import map_nav
+    started = {}
+
+    def _start(win, map_name, x, y, log_fn=None, on_map_open=None):
+        started["args"] = (map_name, x, y)
+        return True, "已点击", (610, 442)
+
+    monkeypatch.setattr(map_nav, "start_navigation", _start)
+    monkeypatch.setattr(xiuluo.game_map, "close_maps", lambda *a, **k: None)
+    seq = [("灵兽村", 1, 2)]  # 首次判定不在巫医旁 → 走位
+
+    def _pos(win):
+        return seq.pop(0) if seq else ("灵兽村", *xiuluo.WUYI_SPOT)
+
+    monkeypatch.setattr(xiuluo.game_map, "read_map_position", _pos)
+    xiuluo.battle.last_wuyi_option_at = 1000.5
+    ok, info = xiuluo._run_wuyi_chain(_FakeWin())
+    assert ok is True
+    assert started["args"] == (xiuluo.LINGSHOUCUN, *xiuluo.WUYI_SPOT)
+
+
+def test_claim_map_wrapper_passes_coord(monkeypatch):
+    """修罗领取包装：坐标化坐标随 map_coord 传给共享实现。"""
+    captured = {}
+    win = _FakeWin()
+
+    def fake(win, pos=None, **kwargs):
+        captured.update(kwargs)
+        return True, "ok"
+
+    monkeypatch.setattr(xiuluo.claim_flow, "open_claim_map", fake)
+    assert xiuluo._open_claim_map(win, ("灵兽村", 111, 90)) == (True, "ok")
+    assert captured["map_name"] == xiuluo.LINGSHOUCUN
+    assert captured["map_pos"] == xiuluo.LINGSHOU_MAP_POS
+    assert captured["map_coord"] == xiuluo.CLAIM_COORD
+
+
 def test_wuyi_chain_timeout_self_click_uses_cached_pos(wuyi_chain, monkeypatch):
     """兜底自点优先用绿字校验过的本弹窗缓存位置，不重新识别。"""
     import numpy as np
@@ -1418,12 +1458,35 @@ def test_manual_nav_round_navigates_and_fights(monkeypatch):
     calls = []
     monkeypatch.setattr(
         xiuluo.map_nav, "navigate_to_map_coordinate",
-        lambda win, name, x, y, log_fn=None: (
+        lambda win, name, x, y, log_fn=None, on_walk_start=None: (
             calls.append((name, x, y)) or (True, "到达")))
     monkeypatch.setattr(xiuluo, "_click_markers_and_fight",
                         lambda win: (True, "战斗已结束"))
     ok, _info = xiuluo._manual_nav_round(_FakeWin(), ("洛阳城", 191, 110))
     assert ok and calls == [("洛阳城", 191, 110)]
+
+
+def test_manual_nav_round_wires_bars_pass_to_walk_start(monkeypatch):
+    """手动寻路回合：组号队员血蓝 pass 挂在 on_walk_start（行走期触发）。"""
+    captured = {}
+
+    def _fake_nav(win, name, x, y, log_fn=None, on_walk_start=None):
+        captured["cb"] = on_walk_start
+        return True, "到达"
+
+    monkeypatch.setattr(
+        xiuluo.map_nav, "navigate_to_map_coordinate", _fake_nav)
+    monkeypatch.setattr(xiuluo, "_click_markers_and_fight",
+                        lambda win: (True, "战斗已结束"))
+    bars = []
+    monkeypatch.setattr(xiuluo, "_maybe_tab_bars_pass",
+                        lambda win: bars.append(win))
+    ok, _info = xiuluo._manual_nav_round(_FakeWin(), ("洛阳城", 191, 110))
+    assert ok
+    assert callable(captured.get("cb"))
+    assert bars == []  # 回调只在位移启动后由 map_nav 调用
+    captured["cb"]()
+    assert len(bars) == 1
 
 
 def test_click_markers_fight_flow(monkeypatch):

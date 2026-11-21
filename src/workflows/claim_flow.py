@@ -13,6 +13,7 @@ import numpy as np
 from ..core import app_utils
 from ..core.app_utils import human_click, log, move_away, norm_text
 from ..device import map as game_map
+from ..device import map_nav
 from ..device import task_tracker
 from ..device.battle import is_in_battle, is_in_battle_frame
 from ..device.dialog_common import (DIALOG_FRAME_THRESHOLD,
@@ -149,8 +150,29 @@ def near_claim_spot(pos, map_name, spot, tolerance):
         pos, map_name, spot[0], spot[1], tolerance)
 
 
+def _read_minimap_task_filter(win, prefix, on_filter_state):
+    """读取小地图「任务」筛选状态并回调/记录（开图后、点击前调用）。
+
+    用户 2026-11-16：仅勾选时小地图走位到达可能自动弹领取对话框；
+    未勾选则不做自动对话框检查。模板匹配勾选框（跨场景通用，~10ms），
+    调用时地图窗口仍打开。
+    """
+    state = game_map.minimap_task_filter_state(win)
+    if on_filter_state is not None:
+        on_filter_state(state)
+    if state is True:
+        log(f"{prefix} 小地图「任务」筛选已勾选"
+            f"（到达可能自动弹领取对话框）", "INFO")
+    elif state is False:
+        log(f"{prefix} 小地图「任务」筛选未勾选"
+            f"（跳过自动对话框检查）", "INFO")
+    else:
+        log(f"{prefix} 小地图「任务」筛选状态未知（仍做门控检查）",
+            "INFO")
+
+
 def open_claim_map(win, pos=None, *, map_name, map_pos, prefix,
-                   on_filter_state=None, click_fn=None):
+                   on_filter_state=None, click_fn=None, map_coord=None):
     """地图感知导航到领取地图的小地图领取点（世界地图/小地图自动选择）。
 
     位置读为 map_name → 直接打开小地图；其他地图或位置不可读 → 世界
@@ -166,12 +188,30 @@ def open_claim_map(win, pos=None, *, map_name, map_pos, prefix,
 
     click_fn：小地图点击实现（如种族比武的坐标夹取）；None 时直接按
     map_pos 绝对坐标点击。
+
+    map_coord：领取点地图坐标 (x, y)——坐标化寻路开关（通用设置，默认
+    开）开启且给出时改走 map_nav 坐标点击（开图标定后按坐标换算像素，
+    与固定像素同点位）；关闭/未给定时走原固定像素逻辑（回滚路径）。
     """
     img = win.capture(force_activate=False)
     if img is None:
         return False, "截图失败"
     if is_in_battle_frame(img):
         return False, "战斗中，跳过地图导航"
+    if map_coord is not None and map_nav.site_coord_nav_enabled():
+        # 坐标化寻路（2026-11-21 默认开）：同点位坐标换算点击像素，点击
+        # 行为与固定像素一致；「任务」筛选状态在地图打开后、点击前读取
+        # （与原流程时机一致，供到达时判断是否检查自动对话框）。
+        ok, info, _pt = map_nav.start_navigation(
+            win, map_name, map_coord[0], map_coord[1],
+            log_fn=lambda m: log(f"{prefix}{m}", "INFO"),
+            on_map_open=lambda: _read_minimap_task_filter(
+                win, prefix, on_filter_state))
+        if not ok:
+            return False, info
+        log(f"{prefix} 已按坐标 {map_coord} 点击{map_name}地图点，"
+            f"自动寻路中", "SYS")
+        return True, f"已点击{map_name}地图点坐标 {map_coord}"
     if pos is None:
         pos = game_map.read_map_position(win, img=img)
     if pos is not None and pos[0].strip() == map_name:
@@ -186,21 +226,12 @@ def open_claim_map(win, pos=None, *, map_name, map_pos, prefix,
         ok, info = game_map.open_mini_map_by_name(win, map_name)
         if not ok:
             return False, info
+    # 任务筛选取消勾选（用户 2026-11-21）：仅名望需要勾选任务筛选点黄色
+    # 任务名；领取点点击是普通地形点，勾选时黄色任务名可能与点击点重叠
+    # 触发自动寻路/误开对话框。失败不阻断（仅少数场景筛选行未渲染）。
+    game_map.uncheck_minimap_task_filter(win)
     if on_filter_state is not None:
-        # 记录小地图「任务」筛选状态（用户 2026-11-16）：仅勾选时小地图
-        # 走位到达可能自动弹领取对话框；未勾选则不做自动对话框检查。
-        # 模板匹配勾选框（跨场景通用，~10ms），地图窗口此刻仍打开。
-        state = game_map.minimap_task_filter_state(win)
-        on_filter_state(state)
-        if state is True:
-            log(f"{prefix} 小地图「任务」筛选已勾选"
-                f"（到达可能自动弹领取对话框）", "INFO")
-        elif state is False:
-            log(f"{prefix} 小地图「任务」筛选未勾选"
-                f"（跳过自动对话框检查）", "INFO")
-        else:
-            log(f"{prefix} 小地图「任务」筛选状态未知（仍做门控检查）",
-                "INFO")
+        _read_minimap_task_filter(win, prefix, on_filter_state)
     # 小地图窗口位置固定（用户 2026-11-16 规则：即使被拖走，下次打开也
     # 会恢复到默认位置）→ 直接点绝对坐标，不做锚点相对换算（关闭按钮
     # 所在面板宽度随状态变化，锚点不是稳定的内容参照，实机 19:04 实测

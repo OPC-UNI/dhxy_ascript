@@ -39,6 +39,41 @@ _SILENT_KEY_HOTKEYS = {
 }
 
 
+# 诊断-任务点位导航（坐标化测试）：key → (标签, 地图, x, y)
+# 用于逐个验证「任务点位改用地图坐标导航」的效果（落点是否在任务的
+# 「附近」判定内、是否仍触发黄字/POI 行为、到达耗时）。
+# 坐标来源（2026-11-21）：
+# - 领取/快送等**点黄字/POI 的固定像素**用内置标定反算，保证点击像素
+#   与现流程一致（±1px）：修罗领取 627,396→120,88；五倍领取
+#   517,488→91,84；客栈入口 884,600→381,26；客栈阿旺兜底
+#   548,297→180,208。
+# - 其余用任务常量里的目标坐标：巫医/修理/五环/沙都路点/大理寺/比武场/
+#   种族领取/玄枢/预走路。
+SITE_NAV_POINTS = {
+    "prewalk": ("预走路点", "灵兽村", 14, 13),
+    "xiuluo_claim": ("修罗领取", "灵兽村", 120, 88),
+    "xiuluo_wuyi": ("修罗巫医", "灵兽村", 111, 72),
+    "wubei_claim": ("五倍领取", "宝象国", 91, 84),
+    "wubei_wuyi": ("五倍巫医", "宝象国", 93, 122),
+    "repair": ("修理", "洛阳城", 321, 110),
+    "wuhuan_cloth": ("五环布店", "长安城", 130, 128),
+    "wuhuan_yunyou": ("五环云游大师", "长安城", 95, 175),
+    "shadu_1": ("沙都路点1", "蟠桃园", 126, 32),
+    "shadu_2": ("沙都路点2", "蟠桃园", 66, 87),
+    "shadu_3": ("沙都路点3", "蟠桃园", 27, 112),
+    "shadu_4": ("沙都路点4", "蟠桃园", 33, 171),
+    "shadu_5": ("沙都路点5", "蟠桃园", 111, 130),
+    "shadu_6": ("沙都路点6", "蟠桃园", 138, 111),
+    "kezhan_dali": ("客栈大理寺", "洛阳城", 223, 195),
+    "kezhan_awang": ("客栈阿旺兜底", "洛阳城", 180, 208),
+    "kezhan_biwu": ("客栈比武场", "洛阳城", 244, 12),
+    "kezhan_inn": ("客栈入口(快送POI)", "洛阳城", 381, 26),
+    "zhongzu_claim": ("种族领取", "长安城", 285, 160),
+    "xuanshu_task": ("玄枢任务点", "洛阳城", 93, 125),
+    "xuanshu_jiantianpan": ("玄枢监天盘", "火云戈壁", 180, 86),
+}
+
+
 def _game_window_clickable(win):
     """检查游戏窗口中心点是否被其他窗口遮挡（点击会落到遮挡窗口上）。
 
@@ -1739,11 +1774,53 @@ class DiagnosticsMixin(ControlHost):
         return {"status": "success",
                 "msg": f"已开始：导航到 {name} ({x},{y})，过程见日志"}
 
+    def verify_site_navigate(self, site=None):
+        """诊断-任务点位导航（坐标化测试）：按预置点位执行地图导航。
+
+        与「地图导航」共用执行/中断机制（_map_nav_running、中断寻路
+        按钮、日志逐行输出）。点位表见模块级 SITE_NAV_POINTS——用于
+        逐个验证任务点位坐标化的实际效果：落点是否在任务「附近」判定
+        内、点黄字/POI 是否仍触发游戏行为、到达耗时。真实点击并移动
+        人物，任务运行中拒绝执行。
+        """
+        from ..device import map_nav  # 延迟导入：与其余验证模块一致
+        key = (site or "").strip()
+        spec = SITE_NAV_POINTS.get(key)
+        if spec is None:
+            return {"status": "error", "msg": f"未知点位: {key or '(空)'}"}
+        label, name, x, y = spec
+        if name not in map_nav.all_navigate_maps():
+            return {"status": "error",
+                    "msg": f"{label}: 地图「{name}」不在导航地图表"}
+        if self._tm.is_running():
+            return {"status": "error", "msg": "任务运行中，请先停止任务再导航"}
+        if self._verifying:
+            return {"status": "error", "msg": "验证进行中，请稍候"}
+        win = game.find_main_window()
+        if win is None:
+            return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
+        if not _game_window_clickable(win):
+            return {"status": "error",
+                    "msg": "游戏窗口被其他窗口遮挡，请将游戏窗口置于前台后再导航"}
+        self._verifying = True
+        self._map_nav_running = True
+        try:
+            threading.Thread(target=self._run_map_navigate,
+                             args=(win, name, x, y, key),
+                             daemon=True, name="site-navigate").start()
+        except Exception as e:  # noqa: BLE001 —— 线程启动失败须复位标志
+            self._map_nav_running = False
+            self._verifying = False
+            return {"status": "error", "msg": f"启动导航线程失败：{e}"}
+        return {"status": "success",
+                "msg": f"已开始：{label} → {name} ({x},{y})，过程见日志"}
+
     def cancel_map_navigate(self):
         """中断正在进行的诊断-地图导航（协作式，最长约 1-3s 生效）。
 
-        只在确有导航线程时生效；中断后导航线程负责关地图/寻路面板并
-        回推结果「已中断寻路」。人物身上的客户端自动寻路不会停止。
+        只在确有导航线程时生效（普通地图导航与任务点位测试共用）；
+        中断后导航线程负责关地图/寻路面板并回推结果「已中断寻路」。
+        人物身上的客户端自动寻路不会停止。
         """
         from ..device import map_nav  # 延迟导入：与其余验证模块一致
         if not getattr(self, "_map_nav_running", False):
@@ -1751,8 +1828,11 @@ class DiagnosticsMixin(ControlHost):
         map_nav.request_cancel()
         return {"status": "success", "msg": "已发送中断请求（1-3 秒内停止）"}
 
-    def _run_map_navigate(self, win, name, x, y):
-        """地图导航线程体：逐行写本地日志文件与日志窗，结束回推页面。"""
+    def _run_map_navigate(self, win, name, x, y, site=None):
+        """地图导航线程体：逐行写本地日志文件与日志窗，结束回推页面。
+
+        site 非空 = 任务点位测试（回推 onSiteNavResult，按点位行显示）。
+        """
         from ..device import map_nav  # 延迟导入：与其余验证模块一致
 
         def emit(msg):
@@ -1766,16 +1846,27 @@ class DiagnosticsMixin(ControlHost):
         # 标志（否则 _verifying 永久 True，所有诊断验证都报「验证进行中」）
         try:
             try:
-                ok, info = map_nav.navigate_to_map_coordinate(
-                    win, name, x, y, log_fn=emit, verbose=True)
+                if site == "kezhan_inn":
+                    # 客栈入口走真实任务链路：坐标点击会命中玩家路标/
+                    # 飞行旗菜单，需要点「快送我去」后再按客栈地名确认
+                    from ..tasks import kezhan
+                    ok, info = kezhan.verify_go_to_inn(win)
+                else:
+                    ok, info = map_nav.navigate_to_map_coordinate(
+                        win, name, x, y, log_fn=emit, verbose=True)
             except Exception as e:
                 ok, info = False, f"导航异常: {e}"
+            label = SITE_NAV_POINTS[site][0] if site else ""
+            result_line = f"{label}: {info}" if label else info
             try:
-                app_utils.log(f"[诊断] 地图导航结果: {info}")
-                self.add_logs([f"[诊断] 地图导航结果: {info}"])
+                app_utils.log(f"[诊断] 地图导航结果: {result_line}")
+                self.add_logs([f"[诊断] 地图导航结果: {result_line}"])
             except Exception:
                 pass
-            self._notify_map_navigate_result(ok, info)
+            if site:
+                self._notify_site_nav_result(site, ok, info)
+            else:
+                self._notify_map_navigate_result(ok, info)
         finally:
             self._map_nav_running = False
             self._verifying = False
@@ -1787,6 +1878,16 @@ class DiagnosticsMixin(ControlHost):
                 ok_js = "true" if ok else "false"
                 self.webview_instance.evaluate_js(
                     f"if(window.onMapNavigateResult){{window.onMapNavigateResult({ok_js}, {json.dumps(info)});}}")
+            except Exception:
+                pass
+
+    def _notify_site_nav_result(self, site, ok, info):
+        """任务点位导航结果回推页面（对应点位行的结果文案）。"""
+        if self.webview_instance:
+            try:
+                ok_js = "true" if ok else "false"
+                self.webview_instance.evaluate_js(
+                    f"if(window.onSiteNavResult){{window.onSiteNavResult({json.dumps(site)}, {ok_js}, {json.dumps(info)});}}")
             except Exception:
                 pass
 

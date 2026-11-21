@@ -11,7 +11,7 @@
    → 轮询等待商店面板打开（项链图标出现）→ 匹配项链图标后鼠标移过去
      左键点击两次 → 点购买（购买 2 件 2 级装备）
 2. 任务循环（次数按通用设置-任务次数）：
-   - 到云游大师：长安小地图点击 (408,362) 寻路 → 等待到达长安 88,175 附近
+   - 到云游大师：长安小地图点击 (408,362) 寻路 → 等待到达长安 95,175 附近
      → 点击领取任务按钮 → 对话框点绿色选项「我可以帮助这些人」→ 任务出现在追踪面板
    - 点击五环任务追踪绿字 → 战斗（战斗线程自动处理）或提交装备
      （对话点「刚好我这里有，送你啦」→ 给与面板检索项链并点击选中
@@ -30,6 +30,7 @@ from ..core.app_utils import log, human_click, precise_click, move_away, norm_te
 from ..core import app_utils  # 高性能模式共享设施（固定位置缓存点击）
 from ..device import bag  # 背包操作（储物格切换搜索）
 from ..device import map as game_map  # 地图操作（世界地图/小地图/位置识别）
+from ..device import map_nav  # 坐标化寻路（通用设置开关，关闭回滚固定像素）
 from ..device import task_tracker  # 任务追踪面板操作
 from ..device.battle import is_in_battle, is_in_battle_frame  # 战斗状态判定（统一在 battle.py 中实现）
 from ..core import debug_overlay  # 调试信息悬浮层（任务进度更新）
@@ -74,7 +75,9 @@ CHANGAN_CITY = "长安"                              # 位置识别地名（模�
 CLOTH_SHOP_WALK_POS = (475, 443)                   # 长安小地图上布店位置的点击点（寻路到服装店门口）
 CLOTH_SHOP_ENTER_POS = (750, 373)                  # 进入服装店的点击点
 CLOTH_SHOP_TARGET_POS = (130, 128)                 # 布店门口地图坐标（长安 130,128）
-YUNYOU_TARGET_POS = (88, 175)                      # 云游大师附近地图坐标（长安 88,175）
+YUNYOU_TARGET_POS = (95, 175)                      # 云游大师附近地图坐标（长安 95,175；
+                                                   # 2026-11-21 用户按坐标化实测微调，
+                                                   # 原 88,175）
 MAP_POS_TOLERANCE = 5                              # 到达判定容差（坐标 OCR 噪声）
 SHOP_OWNER_POS = (643, 463)                         # 牛记布店老板坐标（进店后点击开始对话）
 FUZHUANGDIAN_XIANGLIAN_ICON = "fuzhuangdian_xianglian.png"  # 服装店项链（21.png）
@@ -257,16 +260,40 @@ def _enter_cloth_shop(win, tag="[五环]"):
     诊断页「测试进入布店」复用本链路（tag 加验证标记）。
     """
     # 打开长安小地图点击布店位置寻路（走到服装店门口）
-    if not game_map.is_in_map(win, CHANGAN_CITY):
-        ok, info = game_map.open_mini_map_by_name(win, CHANGAN_CITY)
-        if not ok:
-            return False, info
-    if not game_map.is_mini_map_open(win):
-        ok, info = game_map.open_mini_map(win)
-        if not ok:
-            return False, info
-    human_click(win, CLOTH_SHOP_WALK_POS[0], CLOTH_SHOP_WALK_POS[1])
-    log(f"{tag} 已点击小地图布店位置，自动寻路中", "SYS")
+    if map_nav.site_coord_nav_enabled():
+        # 已在布店门口且站定（±MAP_POS_TOLERANCE，与 _wait_near 到达判据
+        # 同容差）：跳过开图+标定点击（省 ~2s，且不在地图上重复点自己脚下
+        # 重新寻路）。仍在走动不跳过——进店点击需要停稳，照常寻路到点。
+        still, pos = game_map.near_and_still(
+            win, CHANGAN_CITY, *CLOTH_SHOP_TARGET_POS, MAP_POS_TOLERANCE)
+        if still:
+            log(f"{tag} 已在布店门口附近"
+                f"（{pos[0]}[{pos[1]},{pos[2]}]），跳过寻路", "SYS")
+        else:
+            # 坐标化寻路（2026-11-21 默认开）：按布店坐标开图标定点击，等同
+            # 原固定像素点位；关闭开关回滚下方固定像素逻辑。
+            ok, info, _pt = map_nav.start_navigation(
+                win, CHANGAN_CITY, CLOTH_SHOP_TARGET_POS[0],
+                CLOTH_SHOP_TARGET_POS[1],
+                log_fn=lambda m: log(f"{tag}[坐标] {m}", "INFO"))
+            if not ok:
+                return False, info
+            log(f"{tag} 已按坐标 {CLOTH_SHOP_TARGET_POS} 点击长安城地图点，"
+                f"自动寻路中", "SYS")
+    else:
+        if not game_map.is_in_map(win, CHANGAN_CITY):
+            ok, info = game_map.open_mini_map_by_name(win, CHANGAN_CITY)
+            if not ok:
+                return False, info
+        if not game_map.is_mini_map_open(win):
+            ok, info = game_map.open_mini_map(win)
+            if not ok:
+                return False, info
+        # 任务筛选取消勾选（用户 2026-11-21）：仅名望需要勾选任务筛选；
+        # 布店是普通地形点，避免黄色任务名与点击点重叠误触自动寻路。
+        game_map.uncheck_minimap_task_filter(win)
+        human_click(win, CLOTH_SHOP_WALK_POS[0], CLOTH_SHOP_WALK_POS[1])
+        log(f"{tag} 已点击小地图布店位置，自动寻路中", "SYS")
     # 寻路期间不得再点击关闭小地图（2026-11-20 用户实机：点小地图寻路后
     # 关闭小地图的那一次点击会落到游戏世界、终止自动寻路）——到达站定后
     # 再清理场景面板，点击才安全。
@@ -481,27 +508,50 @@ def _walk_to_yunyou_claim_btn(win, tag="[五环]"):
     """走到云游大师并点击领取任务按钮（打开领取对话框）。
 
     与领取流程的走位段一致：小地图点云游大师位置寻路 → 等待到达
-    （长安 88,175 附近）→ 等待领取任务按钮出现并点击（按钮随站位
+    （长安 95,175 附近）→ 等待领取任务按钮出现并点击（按钮随站位
     渲染位置变化，必须识图定位，不缓存）。返回 (是否成功, 描述)；
     成功时对话框由调用方轮询处理。诊断页「测试领取五环」复用本链路
     （tag 加验证标记）。
     """
-    # 确保在长安：不在则世界地图点长安（打开长安小地图）
-    if not game_map.is_in_map(win, CHANGAN_CITY):
-        ok, info = game_map.open_mini_map_by_name(win, CHANGAN_CITY)
-        if not ok:
-            return False, info
-    # 打开长安小地图并点击云游大师位置寻路
-    if not game_map.is_mini_map_open(win):
-        ok, info = game_map.open_mini_map(win)
-        if not ok:
-            return False, info
-    human_click(win, YUNYOU_MAP_POS[0], YUNYOU_MAP_POS[1])
-    log(f"{tag} 已点击小地图云游大师位置，自动寻路中", "SYS")
+    if map_nav.site_coord_nav_enabled():
+        # 已在云游大师附近且站定（±MAP_POS_TOLERANCE，与 _wait_near 同
+        # 容差）：跳过开图+标定点击（省 ~2s，且不在地图上重复点自己脚下
+        # 重新寻路）。仍在走动不跳过——领取按钮点击需要停稳。
+        still, pos = game_map.near_and_still(
+            win, CHANGAN_CITY, *YUNYOU_TARGET_POS, MAP_POS_TOLERANCE)
+        if still:
+            log(f"{tag} 已在云游大师附近"
+                f"（{pos[0]}[{pos[1]},{pos[2]}]），跳过寻路", "SYS")
+        else:
+            # 坐标化寻路（2026-11-21 默认开）：按云游大师坐标开图标定点击，
+            # 等同原固定像素点位；关闭开关回滚下方固定像素逻辑。
+            ok, info, _pt = map_nav.start_navigation(
+                win, CHANGAN_CITY, YUNYOU_TARGET_POS[0], YUNYOU_TARGET_POS[1],
+                log_fn=lambda m: log(f"{tag}[坐标] {m}", "INFO"))
+            if not ok:
+                return False, info
+            log(f"{tag} 已按坐标 {YUNYOU_TARGET_POS} 点击长安城地图点，"
+                f"自动寻路中", "SYS")
+    else:
+        # 确保在长安：不在则世界地图点长安（打开长安小地图）
+        if not game_map.is_in_map(win, CHANGAN_CITY):
+            ok, info = game_map.open_mini_map_by_name(win, CHANGAN_CITY)
+            if not ok:
+                return False, info
+        # 打开长安小地图并点击云游大师位置寻路
+        if not game_map.is_mini_map_open(win):
+            ok, info = game_map.open_mini_map(win)
+            if not ok:
+                return False, info
+        # 任务筛选取消勾选（用户 2026-11-21）：仅名望需要勾选任务筛选；
+        # 云游大师是普通地形点，避免黄色任务名与点击点重叠误触。
+        game_map.uncheck_minimap_task_filter(win)
+        human_click(win, YUNYOU_MAP_POS[0], YUNYOU_MAP_POS[1])
+        log(f"{tag} 已点击小地图云游大师位置，自动寻路中", "SYS")
     # 寻路期间不得再点击关闭小地图（2026-11-20 用户实机：跨地图到长安后
     # 点小地图寻路，关闭小地图的那一次点击终止了自动寻路）——到达站定后
     # 再清理场景面板。
-    # 等待到达云游大师附近（长安 88,175 附近）后再点击领取按钮，避免未到位就点击
+    # 等待到达云游大师附近（长安 95,175 附近）后再点击领取按钮，避免未到位就点击
     ok, info = _wait_near(win, YUNYOU_TARGET_POS, CLAIM_ARRIVE_TIMEOUT,
                           "云游大师", 2.0)
     if not ok:

@@ -84,9 +84,30 @@ CHANGAN = "长安"                              # 位置识别地名（精确匹
 CLAIM_NPC_ICONS = ("zhongzu_claim_npc.png",   # 领取 NPC 模板（用户提供 29x55）
                    "zhongzu_claim_npc2.png",  # 第二外观模板（用户 2026-11-12
                                               # 提供 20x23）
-                   "zhongzu_claim_npc3.png")  # 第三外观模板（用户 2026-11-12
+                   "zhongzu_claim_npc3.png",  # 第三外观模板（用户 2026-11-12
                                               # 提供 24x27）
+                   "zhongzu_claim_npc4.png")  # 昊天待机/朝向第 2 姿态（用户
+                                              # 2026-11-21 两帧实机截图裁剪
+                                              # 29x55：NPC 转身后旧模板漏检）
 CLAIM_NPC_THRESHOLD = 0.8                     # NPC 模板组统一匹配阈值
+# ---- 名称定位兜底（2026-11-21 用户两帧实机）----
+# 昊天是通用侍卫模型：同屏可能有同模型侍卫（模板互匹配）、NPC 朝向/
+# 待机姿态变化会让模板偶尔漏检。名称行不受姿态影响——点击前用名称
+# OCR 复核/定位，优先「昊天」短名行（x 中心与精灵对齐；玩家称号与
+# 长名行粘行时「比武大会活动使者」行中心会偏左），长名行仅兜底。
+CLAIM_NPC_NAME_SHORT = "昊天"
+CLAIM_NPC_NAME_LONG = "比武大会活动使者"
+CLAIM_NPC_NAME_REGION = (500, 300, 1150, 620)   # 领取点附近世界区域条带
+                                                # （两帧名称行均在
+                                                # (763,446)-(895,488)）
+CLAIM_NPC_NAME_SCORE = 0.55                   # 名称行 OCR 置信度下限
+CLAIM_NPC_NAME_CLICK_DY = 88                  # 仅名称行定位时：点击点 = 短名
+                                              # 行中心正上方 ~88px（两帧实测
+                                              # 精灵中心在短名行中心上方 85~93px）
+CLAIM_NPC_NAME_MATCH_X = 60                   # 名称行中心与模板候选中心的 x
+                                              # 对齐容差（同模型侍卫分选）
+CLAIM_NPC_NAME_OCR_EVERY = 3                  # 模板未命中时每 N 轮询补一次
+                                              # 名称 OCR（轮询 1.5s ≈ 4.5s）
 CLAIM_SPOT = (285, 160)                       # 领取点地图坐标（长安 286,159）
 CLAIM_MAP_POS = (737, 387)                    # 小地图领取点点击点（用户提供）
 CLAIM_NEAR_TOLERANCE = 3                     # 领取点坐标容差（到达判定 +
@@ -240,6 +261,67 @@ def _find_claim_npc_np(frame, verbose=False):
     return pt
 
 
+def _find_claim_npc_name(img):
+    """OCR 领取 NPC 名称行，返回 (中心 x, 中心 y, 是否短名行) 或 None。
+
+    用户 2026-11-21 三帧实机：昊天是通用侍卫模型，同屏可能有同模型
+    侍卫（模板互匹配），NPC 朝向/待机姿态变化会让旧模板漏检；名称行
+    不受姿态影响。**优先只认「昊天」短名行**——「比武大会活动使者」
+    长名行会与玩家称号/相邻 NPC 名粘行（实机三帧里两帧被并成一行，
+    中心 x/y 都会漂），只作为分选辅助、不用于计算点击点。
+    img：PIL 帧（区域 OCR 走 RGB）。名称不可读返回 None。
+    """
+    if img is None:
+        return None
+    items, _ = game_map.ocr_regions(img, (CLAIM_NPC_NAME_REGION,))
+    short_rect = None
+    long_rect = None
+    for text, rect, score in items:
+        if score < CLAIM_NPC_NAME_SCORE or rect[0] < task_tracker.PANEL_MAX_X:
+            continue  # 限定对话框/世界区，排除左侧任务追踪面板同名文案
+        t = norm_text(text)
+        if CLAIM_NPC_NAME_SHORT in t:
+            short_rect = rect
+        elif CLAIM_NPC_NAME_LONG in t:
+            long_rect = rect
+    rect = short_rect or long_rect
+    if rect is None:
+        return None
+    cx = (rect[0] + rect[2]) // 2
+    cy = (rect[1] + rect[3]) // 2
+    return int(cx), int(cy), short_rect is not None
+
+
+def _decide_claim_npc_click(cands, name_info):
+    """综合模板候选与名称行决定点击点，返回 ((x, y) 或 None, 说明)。
+
+    用户 2026-11-21 实机（点击点必须在精灵上，名称行只用于分选）：
+    - 有候选且名称行 x 与某候选对齐（≤CLAIM_NPC_NAME_MATCH_X）：
+      点该候选中心——模板中心是可靠点击点（同模型侍卫按名称分选）；
+    - 有候选但名称行（短名）与所有候选都不对齐：点短名行正上方
+      CLAIM_NPC_NAME_CLICK_DY（真正要点的昊天姿态未被模板覆盖）；
+    - 有候选但只有长名行且不对齐：不点击（长名会粘行漂移，等下一轮）；
+    - 无候选但有短名行：点短名行正上方；
+    - 无候选且无可靠名称行：不点击（等下一轮，防点错侍卫）。
+    """
+    if not cands:
+        if name_info is not None and name_info[2]:
+            return (name_info[0], name_info[1] - CLAIM_NPC_NAME_CLICK_DY), \
+                "名称短名定位"
+        return None, "无模板候选且无可靠名称行"
+    if name_info is None:
+        pt = _pick_claim_npc(cands)
+        return pt, "取最右侧模板候选"
+    nx, ny, short = name_info
+    nearest = min(cands, key=lambda c: abs(int(c[1]) - nx))
+    if abs(int(nearest[1]) - nx) <= CLAIM_NPC_NAME_MATCH_X:
+        tag = "名称对齐最近候选" if len(cands) > 1 else "名称复核通过"
+        return (int(nearest[1]), int(nearest[2])), tag
+    if short:
+        return (nx, ny - CLAIM_NPC_NAME_CLICK_DY), "名称短名定位（候选不匹配）"
+    return None, "长名行与模板候选不对齐（疑似同模型侍卫），等待下一轮"
+
+
 def _pos_text(pos):
     """位置日志文本：长安[280,160]；识别失败。"""
     return f"{pos[0].strip()}[{pos[1]},{pos[2]}]" if pos else "识别失败"
@@ -344,7 +426,8 @@ def _open_claim_map(win, pos=None):
     return claim_flow.open_claim_map(
         win, pos, map_name=CHANGAN,
         map_pos=CLAIM_MAP_POS, prefix="[种族比武]",
-        click_fn=_click_claim_map_pos)
+        click_fn=_click_claim_map_pos,
+        map_coord=CLAIM_SPOT)
 
 
 def _walk_to_claim_spot(win):
@@ -476,7 +559,9 @@ def _wait_claim_entry(win, timeout):
     """
     deadline = time.time() + timeout
     gate_logged = False
+    polls = 0
     while time.time() < deadline:
+        polls += 1
         img = win.capture(force_activate=False)
         if img is None:
             time.sleep(1.5)
@@ -486,7 +571,15 @@ def _wait_claim_entry(win, timeout):
             continue
         frame = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
         cands = _claim_npc_candidates(frame)
+        name_info = None
         pt = _pick_claim_npc(cands)
+        if pt is None and polls % CLAIM_NPC_NAME_OCR_EVERY == 0:
+            # 模板未命中（NPC 朝向/待机姿态未覆盖）：限频名称 OCR 兜底
+            name_info = _find_claim_npc_name(img)
+            pt, why = _decide_claim_npc_click(cands, name_info)
+            if pt is not None:
+                log(f"[种族比武] 模板未命中，{why} @({pt[0]},{pt[1]})",
+                    "INFO")
         if pt is None:
             time.sleep(1.5)
             continue
@@ -500,9 +593,20 @@ def _wait_claim_entry(win, timeout):
                     f"±{CLAIM_NEAR_TOLERANCE}），暂不点击", "WARN")
             time.sleep(1.5)
             continue
-        if len(cands) > 1:
-            log(f"[种族比武] 领取 NPC 候选 {len(cands)} 个，"
-                f"取最右侧 ({pt[0]}, {pt[1]}) 点击", "INFO")
+        # 点击前名称复核/分选（2026-11-21 用户实机）：模板可能命中同模型
+        # 侍卫；名称行用于从候选里选对「昊天」，不直接用名称行坐标点击
+        # （长名行会粘行漂移，实机曾点到精灵上方）。
+        if name_info is None:
+            name_info = _find_claim_npc_name(img)
+        decided, why = _decide_claim_npc_click(cands, name_info)
+        if decided is None:
+            log(f"[种族比武] {why}，暂不点击", "WARN")
+            time.sleep(1.5)
+            continue
+        if decided != pt:
+            log(f"[种族比武] {why}：按 ({decided[0]},{decided[1]}) 点击"
+                f"（模板候选 ({pt[0]},{pt[1]})）", "INFO")
+        pt = decided
         return pt, pos
     return None, None
 

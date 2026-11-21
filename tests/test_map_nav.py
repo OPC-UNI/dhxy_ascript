@@ -606,9 +606,26 @@ def test_prewalk_skips_same_map(monkeypatch):
     assert opened == [] and emits == []
 
 
+def test_prewalk_skips_non_xiuluo_task(monkeypatch):
+    """预走路仅修罗任务启用：五环等其他任务从灵兽村出发不预走。"""
+    opened = []
+    monkeypatch.setattr(map_nav.app_utils, "current_task_mode",
+                        lambda: "五环")
+    monkeypatch.setattr(map_nav, "_open_mini_map_quick",
+                        lambda win: opened.append(1) or True)
+    assert map_nav._prewalk_if_configured(
+        object(), ("灵兽村", 1, 2), "长安城", None, lambda m: None) == 0.0
+    assert opened == []
+
+
 def test_prewalk_clicks_configured_point(monkeypatch):
-    """灵兽村→外地：开小地图点 (317,616) 让角色先走，再快速关图。"""
+    """灵兽村→外地：按标定把坐标 (14,13) 换算成小地图点，再快速关图。"""
     calls = []
+    monkeypatch.setattr(map_nav.app_utils, "current_task_mode",
+                        lambda: "修罗")
+    monkeypatch.setattr(map_nav, "affine_for",
+                        lambda win, target: {"sx": 2.9268, "sy": -2.9268,
+                                             "ax": 275.3, "ay": 654.8})
     monkeypatch.setattr(map_nav, "_open_mini_map_quick", lambda win: True)
     monkeypatch.setattr(map_nav, "human_click",
                         lambda win, x, y: calls.append(("click", x, y)))
@@ -618,13 +635,19 @@ def test_prewalk_clicks_configured_point(monkeypatch):
     dt = map_nav._prewalk_if_configured(
         object(), ("灵兽村", 1, 2), "大雁塔", "大雁塔一层", emits.append)
     assert dt >= 0.0
-    assert ("click", 317, 616) in calls
+    # 原固定像素 (317,616) 的坐标反算值 → 换算回来同一像素（±1px）
+    assert ("click", 316, 616) in calls
     assert any(c[0] == "close" for c in calls)
     assert any("预走路" in m for m in emits)
 
 
 def test_prewalk_skips_when_minimap_unavailable(monkeypatch):
     """小地图打不开时跳过预走（不点任何东西）。"""
+    monkeypatch.setattr(map_nav.app_utils, "current_task_mode",
+                        lambda: "修罗")
+    monkeypatch.setattr(map_nav, "affine_for",
+                        lambda win, target: {"sx": 2.9268, "sy": -2.9268,
+                                             "ax": 275.3, "ay": 654.8})
     monkeypatch.setattr(map_nav, "_open_mini_map_quick", lambda win: False)
     clicked = []
     monkeypatch.setattr(map_nav, "human_click",
@@ -670,7 +693,7 @@ def test_navigate_timing_summary(monkeypatch):
                         lambda win, key: {"sx": 3.0, "sy": -3.0,
                                           "ax": 10.0, "ay": 600.0})
     monkeypatch.setattr(map_nav, "_aim_and_click",
-                        lambda *a: (True, (500, 400), ""))
+                        lambda *a, **k: (True, (500, 400), ""))
     monkeypatch.setattr(map_nav, "_wait_movement", lambda *a, **k: True)
     monkeypatch.setattr(map_nav, "_wait_arrival",
                         lambda *a, **k: (True, "到达 洛阳城 (10,20)"))
@@ -716,7 +739,7 @@ def test_navigate_timing_layer_entry(monkeypatch):
                         lambda win, key: {"sx": 3.0, "sy": -3.0,
                                           "ax": 10.0, "ay": 600.0})
     monkeypatch.setattr(map_nav, "_aim_and_click",
-                        lambda *a: (True, (500, 400), ""))
+                        lambda *a, **k: (True, (500, 400), ""))
     monkeypatch.setattr(map_nav, "_wait_movement", lambda *a, **k: True)
     monkeypatch.setattr(map_nav, "_wait_arrival",
                         lambda *a, **k: (True, "到达 龙窟一层 (10,20)"))
@@ -746,7 +769,7 @@ def _patch_nav_happy(monkeypatch):
                         lambda win, key: {"sx": 3.0, "sy": -3.0,
                                           "ax": 10.0, "ay": 600.0})
     monkeypatch.setattr(map_nav, "_aim_and_click",
-                        lambda *a: (True, (500, 400), ""))
+                        lambda *a, **k: (True, (500, 400), ""))
     monkeypatch.setattr(map_nav, "_wait_movement", lambda *a, **k: True)
     monkeypatch.setattr(map_nav, "_wait_arrival",
                         lambda *a, **k: (True, "到达 洛阳城 (10,20)"))
@@ -1034,6 +1057,56 @@ def test_aim_and_click_corrects_stale_affine_direction(monkeypatch):
     assert abs(pt[0] - 450) <= 2 and abs(pt[1] - 450) <= 2
 
 
+def test_aim_and_click_caches_correction(monkeypatch):
+    """偏差修正并点击成功 → 回传修正后的标定（会话缓存，下次一次命中）。"""
+    aff = {"sx": 2.0, "sy": -2.0, "ax": 100.0, "ay": 500.0}
+    seq = iter([(54, 99), (50, 100)])  # 首次读回偏 (+4,-1)，修正后命中
+    monkeypatch.setattr(map_nav, "_hover_coord",
+                        lambda win, px, py: next(seq))
+    clicks = []
+    monkeypatch.setattr(map_nav, "human_click",
+                        lambda win, x, y: clicks.append((x, y)))
+    got = {}
+    ok, pt, err = map_nav._aim_and_click(
+        object(), aff, None, 50, 100, lambda m: None,
+        on_affine_corrected=lambda a: got.update(a))
+    assert ok, err
+    assert pt == (192, 298) and clicks == [(192, 298)]
+    # 修正后原点：ax=100-4*2=92，ay=500-(-1)*(-2)=498
+    assert got["ax"] == 92.0 and got["ay"] == 498.0
+
+
+def test_aim_and_click_no_correction_no_cache(monkeypatch):
+    """首次悬停即命中：不回调缓存。"""
+    aff = {"sx": 2.0, "sy": -2.0, "ax": 100.0, "ay": 500.0}
+    monkeypatch.setattr(map_nav, "_hover_coord", lambda *a: (50, 100))
+    monkeypatch.setattr(map_nav, "human_click", lambda *a: None)
+    called = []
+    ok, pt, _err = map_nav._aim_and_click(
+        object(), aff, None, 50, 100, lambda m: None,
+        on_affine_corrected=lambda a: called.append(a))
+    assert ok and pt == (200, 300) and called == []
+
+
+def test_start_impl_caches_corrected_affine(monkeypatch):
+    """_start_impl 把修正后的标定写入会话缓存（remember_affine）。"""
+    _patch_start_env(monkeypatch)
+
+    def _aim(win, aff, anchor, x, y, emit, on_affine_corrected=None):
+        if on_affine_corrected is not None:
+            on_affine_corrected(dict(aff, ax=1.0))
+        return True, (500, 400), ""
+
+    monkeypatch.setattr(map_nav, "_aim_and_click", _aim)
+    saved = []
+    monkeypatch.setattr(
+        map_nav, "remember_affine",
+        lambda win, key, aff: saved.append((key, aff["ax"])))
+    ok, _info, _pt = map_nav.start_navigation(
+        object(), "洛阳城", 10, 20, log_fn=lambda m: None)
+    assert ok and saved == [("洛阳城", 1.0)]
+
+
 # ---------------- 到达等待：停滞补寻路 + 生产日志降噪 ----------------
 
 def _arrival_win():
@@ -1076,7 +1149,8 @@ def test_navigate_retries_once_after_stall(monkeypatch):
     """停滞提示 → 自动重新导航一次；补过仍失败不无限重试。"""
     calls = []
 
-    def fake_impl(win, target, x, y, emit, verbose=False, allow_restart=False):
+    def fake_impl(win, target, x, y, emit, verbose=False, allow_restart=False,
+                  on_walk_start=None):
         calls.append(allow_restart)
         if len(calls) == 1:
             return False, map_nav.ARRIVE_RESTART_TEXT
@@ -1094,7 +1168,8 @@ def test_navigate_retries_once_after_stall(monkeypatch):
 def test_navigate_no_retry_when_second_stall(monkeypatch):
     calls = []
 
-    def fake_impl(win, target, x, y, emit, verbose=False, allow_restart=False):
+    def fake_impl(win, target, x, y, emit, verbose=False, allow_restart=False,
+                  on_walk_start=None):
         calls.append(allow_restart)
         return False, map_nav.ARRIVE_RESTART_TEXT
 
@@ -1103,6 +1178,162 @@ def test_navigate_no_retry_when_second_stall(monkeypatch):
         object(), "大雁塔四层", 108, 37, log_fn=lambda m: None)
     assert not ok and info == map_nav.ARRIVE_RESTART_TEXT
     assert calls == [True, False]   # 只补一次
+
+
+def test_navigate_on_walk_start_hook_before_arrival(monkeypatch):
+    """位移启动后、到达等待前调用 on_walk_start（行走期插队回调）。"""
+    _patch_nav_happy(monkeypatch)
+    monkeypatch.setattr(map_nav, "_open_target_map",
+                        lambda *a, **k: (True, "地图已打开"))
+    order = []
+
+    def _arrive(*a, **k):
+        order.append("arrive")
+        return True, "到达 洛阳城 (10,20)"
+
+    monkeypatch.setattr(map_nav, "_wait_arrival", _arrive)
+    ok, _info = map_nav.navigate_to_map_coordinate(
+        object(), "洛阳城", 10, 20, log_fn=lambda m: None,
+        on_walk_start=lambda: order.append("hook"))
+    assert ok
+    assert order == ["hook", "arrive"]
+
+
+def test_navigate_on_walk_start_exception_ignored(monkeypatch):
+    """回调异常只记日志，不拖垮导航。"""
+    _patch_nav_happy(monkeypatch)
+    monkeypatch.setattr(map_nav, "_open_target_map",
+                        lambda *a, **k: (True, "地图已打开"))
+    emits = []
+
+    def _boom():
+        raise RuntimeError("boom")
+
+    ok, _info = map_nav.navigate_to_map_coordinate(
+        object(), "洛阳城", 10, 20, log_fn=emits.append, on_walk_start=_boom)
+    assert ok
+    assert any("行走起步回调异常" in m for m in emits)
+
+
+def _patch_start_env(monkeypatch, aim=None):
+    """打桩 start_navigation 前半段（开图/搜索条/标定/点击）。"""
+    monkeypatch.setattr(map_nav.game_map, "resolve_world_map_name",
+                        lambda n: n)
+    monkeypatch.setattr(map_nav, "_read_pos", lambda win: ("长安", 1, 2))
+    monkeypatch.setattr(map_nav, "_prewalk_if_configured",
+                        lambda *a, **k: 0.0)
+    monkeypatch.setattr(map_nav, "_open_target_map",
+                        lambda *a, **k: (True, "地图已打开"))
+    monkeypatch.setattr(map_nav, "locate_search_bar",
+                        lambda win: {"x": 100, "y": 200})
+    monkeypatch.setattr(map_nav, "affine_for",
+                        lambda win, key: {"sx": 3.0, "sy": -3.0,
+                                          "ax": 10.0, "ay": 600.0})
+    monkeypatch.setattr(map_nav, "_aim_and_click",
+                        aim or (lambda *a, **k: (True, (500, 400), "")))
+    monkeypatch.setattr(map_nav.game_map, "close_maps",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(map_nav, "_close_xunlu_panel_if_open",
+                        lambda *a: None)
+
+
+def test_start_navigation_clicks_without_waiting_arrival(monkeypatch):
+    """只开图/标定/点击：不等位移/到达、不在成功路径关地图。"""
+    _patch_start_env(monkeypatch)
+    called = []
+    monkeypatch.setattr(map_nav, "_wait_movement",
+                        lambda *a, **k: called.append("move") or True)
+    monkeypatch.setattr(map_nav, "_wait_arrival",
+                        lambda *a, **k: called.append("arrival") or (True, ""))
+    closed = []
+    monkeypatch.setattr(map_nav.game_map, "close_maps",
+                        lambda *a, **k: closed.append(1))
+    ok, info, pt = map_nav.start_navigation(
+        object(), "洛阳城", 321, 110, log_fn=lambda m: None)
+    assert ok and pt == (500, 400)
+    assert "已点击目标点" in info
+    assert called == []  # 既不等位移也不等到达
+    assert closed == []  # 成功时地图保持打开，交任务侧关闭
+
+
+def test_start_navigation_on_map_open_before_click(monkeypatch):
+    """on_map_open 在地图打开后、点击前调用；回调异常不影响寻路。"""
+    order = []
+
+    def _aim(*a, **k):
+        order.append("click")
+        return True, (500, 400), ""
+
+    _patch_start_env(monkeypatch, aim=_aim)
+    ok, _info, _pt = map_nav.start_navigation(
+        object(), "洛阳城", 321, 110, log_fn=lambda m: None,
+        on_map_open=lambda: order.append("map_open"))
+    assert ok and order == ["map_open", "click"]
+
+    order.clear()
+
+    def _boom():
+        raise RuntimeError("boom")
+
+    ok, _info, _pt = map_nav.start_navigation(
+        object(), "洛阳城", 321, 110, log_fn=lambda m: None,
+        on_map_open=_boom)
+    assert ok and order == ["click"]  # 回调异常被吞，点击照常
+
+
+def test_start_navigation_failure_cleans_maps(monkeypatch):
+    """开图失败：清理残留地图（寻路面板不会自动关闭）。"""
+    _patch_start_env(monkeypatch)
+    monkeypatch.setattr(map_nav, "_open_target_map",
+                        lambda *a, **k: (False, "地图打不开"))
+    closed = []
+    monkeypatch.setattr(map_nav.game_map, "close_maps",
+                        lambda *a, **k: closed.append(1))
+    ok, info, pt = map_nav.start_navigation(
+        object(), "洛阳城", 321, 110, log_fn=lambda m: None)
+    assert ok is False and info == "地图打不开" and pt is None
+    assert closed == [1]
+
+
+def test_prewalk_point_is_map_coordinate(monkeypatch):
+    """预走路点坐标化：灵兽村 (14,13) 按标定换算成小地图点击像素。
+
+    原固定像素 (317,616) 的标定反算即 (14,13)；换算后点击点应回到
+    同一像素（灵兽村内置标定 sx 2.9268/ax 275.3 下为 (316.3,616.8)）。
+    """
+    clicks = []
+    monkeypatch.setattr(map_nav.app_utils, "current_task_mode",
+                        lambda: "修罗")
+    monkeypatch.setattr(map_nav, "affine_for",
+                        lambda win, target: {"sx": 2.0, "sy": -2.0,
+                                             "ax": 275.0, "ay": 655.0})
+    monkeypatch.setattr(map_nav, "names_match", lambda a, b: False)
+    monkeypatch.setattr(map_nav, "_open_mini_map_quick", lambda win: True)
+    monkeypatch.setattr(map_nav, "human_click",
+                        lambda win, x, y: clicks.append((x, y)))
+    monkeypatch.setattr(map_nav.game_map, "close_map_if_open",
+                        lambda *a, **k: None)
+    dt = map_nav._prewalk_if_configured(
+        object(), ("灵兽村", 1, 2), "长安城", None, lambda m: None)
+    assert dt > 0
+    assert map_nav.PREWALK_POINTS["灵兽村"] == (14, 13)
+    assert clicks == [(275 + 2 * 14, 655 - 2 * 13)]
+
+
+def test_prewalk_skips_without_affine(monkeypatch):
+    """无标定（窗口尺寸/布局不匹配）时不按旧像素硬点，直接跳过预走。"""
+    clicks = []
+    monkeypatch.setattr(map_nav.app_utils, "current_task_mode",
+                        lambda: "修罗")
+    monkeypatch.setattr(map_nav, "affine_for", lambda win, target: None)
+    monkeypatch.setattr(map_nav, "names_match", lambda a, b: False)
+    monkeypatch.setattr(map_nav, "_open_mini_map_quick", lambda win: True)
+    monkeypatch.setattr(map_nav, "human_click",
+                        lambda win, x, y: clicks.append((x, y)))
+    dt = map_nav._prewalk_if_configured(
+        object(), ("灵兽村", 1, 2), "长安城", None, lambda m: None)
+    assert dt == 0
+    assert clicks == []
 
 
 def test_wait_arrival_position_log_quiet_without_verbose(monkeypatch):
@@ -1134,3 +1365,15 @@ def test_wait_arrival_position_log_quiet_without_verbose(monkeypatch):
         emits2.append, verbose=True)
     assert ok
     assert len([m for m in emits2 if m.startswith("位置")]) == 4
+
+
+def test_start_navigation_unchecks_task_filter(monkeypatch):
+    """开图后、点击前取消小地图「任务」筛选（仅名望需要勾选）。"""
+    _patch_start_env(monkeypatch)
+    calls = []
+    monkeypatch.setattr(
+        map_nav.game_map, "uncheck_minimap_task_filter",
+        lambda win: calls.append(1) or (True, "「任务」筛选未勾选"))
+    ok, _info, _pt = map_nav.start_navigation(
+        object(), "洛阳城", 321, 110, log_fn=lambda m: None)
+    assert ok and calls == [1]

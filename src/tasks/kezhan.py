@@ -64,6 +64,7 @@ from ..core.app_utils import log, human_click, move_away, norm_text
 from ..core import app_utils  # 高性能模式共享设施（固定位置缓存点击）
 from ..device import bag  # 物品栏开关
 from ..device import map as game_map  # 地图操作（世界地图/小地图/位置识别）
+from ..device import map_nav  # 坐标化寻路（通用设置开关，关闭回滚固定像素）
 from ..minigames import pochufengyin as _pochu_minigame  # 破除封印/钓鱼共用小游戏（闭环实现）
 from ..minigames import duchong as _duchong_minigame  # 拍毒虫阻塞循环
 from ..minigames.duchong import _bug_button_pt  # 拍毒虫面板按钮定位
@@ -108,6 +109,15 @@ ZHANGGUI_ICON2 = "zhanggui2.png"     # 掌柜模板 2（另一种外观/状态�
 ZHANGGUI_THRESHOLD = 0.75            # 双模板共用阈值（模板 1 实测 0.806，0.7 以上无误匹配留余量）
 ZHANGGUI_FALLBACK_CLICK_POS = (530, 593)  # 找不到掌柜时的兜底点击点（用户实测：点击后重试可找到）
 INN_MAP_CLICK_POS = (884, 600)       # 洛阳小地图上客栈位置的点击点（窗口相对坐标）
+INN_COORD = (381, 26)                # 客栈坐标化寻路坐标（旧固定像素 884,600 的
+                                     # 标定反算值——点同一 POI，仍触发「快送我去」
+                                     # 对话框；坐标化开关关闭时回滚 INN_MAP_CLICK_POS）
+INN_SPOT = (24, 7)                   # 洛阳客栈内落点（用户 2026-11-21：坐标化点击
+                                     # 可能命中玩家飞行旗，经快送/飞行旗传送落到
+                                     # 客栈内 24,7 附近同样算到达）
+INN_SPOT_TOLERANCE = 5               # 客栈内落点判定容差
+FLAG_DIALOG_HINT = "洛阳客栈"         # 飞行旗对话框目的地文案（含客栈名才处理）
+FLAG_DIALOG_OPTION_NEEDLES = ("快送", "使用", "前往", "确定", "洛阳客栈")
 FAST_DIALOG_TEXT = "你要到洛阳客栈"    # 点击后可能出现的快送对话框文案
 FAST_DIALOG_OPTION = "快送我去"       # 快送对话框绿色选项
 ARRIVE_TIMEOUT = 120                  # 等待寻路完成的超时（秒）
@@ -708,9 +718,9 @@ _baoxiang_last_done = 0.0                    # 上次宝箱流程结束时间（
 
 
 def _at_inn(win):
-    """判断是否已在洛阳客栈（位置地名精确匹配）。"""
+    """判断是否已在洛阳客栈（位置地名精确匹配，繁简兼容）。"""
     pos = game_map.read_position_with_recovery(win)
-    return pos is not None and pos[0].strip() == KEZHAN_MAP
+    return _pos_is_inn(pos)
 
 
 def _zhanggui_on_frame(img):
@@ -786,13 +796,50 @@ def _click_fast_travel_option(win, items, img_np):
 
 
 def _try_fast_travel(win, img):
-    """在当前帧检测快送对话框并点击「快送我去」；点击成功返回 True。
+    """检测快送/飞行旗对话框并点击前往选项；点击成功返回 True。
 
     快送对话框为居中对话框，区域 OCR（全帧 930ms → 区域 ~100ms）；
     帧由调用方提供（清理前预查与等待循环两处共用）。
+    2026-11-21 用户实机：坐标化点击可能命中玩家飞行旗（客栈点位与
+    旗图标重叠），弹出「使用飞行旗前往…」类对话框——文案含「洛阳
+    客栈」时按「快送/使用/前往/确定/洛阳客栈」顺序点绿色选项，传送
+    到达由调用方按客栈地名（含客栈内 24,7 附近）确认。
     """
     items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
-    return _click_fast_travel_option(win, items, img_np)
+    if _click_fast_travel_option(win, items, img_np):
+        return True
+    return _try_flag_dialog(win, items, img_np)
+
+
+def _try_flag_dialog(win, items, img_np):
+    """飞行旗对话框兜底：目的地含「洛阳客栈」时点确认选项。
+
+    只处理目的地为客栈的对话框（其他飞行旗/奇遇/系统对话框不点，防
+    误操作）；选项按「快送/使用/前往/确定/客栈名」顺序尝试点绿色选项。
+    """
+    if not _norm_dialog_present(items, FLAG_DIALOG_HINT):
+        return False
+    for needle in FLAG_DIALOG_OPTION_NEEDLES:
+        if _click_green_option_fuzzy(win, items, img_np, needle):
+            log(f"[客栈] 飞行旗/传送对话框（目的地洛阳客栈）"
+                f"已点「{needle}」", "SYS")
+            return True
+    return False
+
+
+def _pos_is_inn(pos):
+    """位置地名是否为洛阳客栈（繁简兼容：陽→阳、棧→栈）。"""
+    if pos is None:
+        return False
+    name = pos[0].strip().replace("陽", "阳").replace("棧", "栈")
+    return name == KEZHAN_MAP
+
+
+def _near_inn_spot(pos):
+    """是否在洛阳客栈 (24,7)±INN_SPOT_TOLERANCE 内。"""
+    return (_pos_is_inn(pos)
+            and abs(pos[1] - INN_SPOT[0]) <= INN_SPOT_TOLERANCE
+            and abs(pos[2] - INN_SPOT[1]) <= INN_SPOT_TOLERANCE)
 
 
 def _go_to_inn(win):
@@ -801,9 +848,12 @@ def _go_to_inn(win):
     已在洛阳城直接开当前地图小地图（open_mini_map），不在才经世界地图
     点洛阳城标签（open_mini_map_by_name，2026-11-18 用户规则）。
 
-    点击后两种走向：
-    - 出现「你要到洛阳客栈」对话框 → 点击「快送我去」快送到达
-    - 未出现 → 等待寻路结束（到达洛阳客栈；位置稳定即视为寻路结束）
+    点击后走向（2026-11-21 坐标化后可能命中玩家飞行旗）：
+    - 出现「你要到洛阳客栈」快送对话框 → 点击「快送我去」
+    - 出现目的地含「洛阳客栈」的飞行旗/传送对话框 → 点确认选项
+    - 均未出现 → 等待寻路结束（到达洛阳客栈；位置稳定即视为寻路结束）
+    点击快送/飞行旗后继续等待，按「洛阳客栈」地名（含客栈内 24,7 附近，
+    繁简兼容）确认传送到达，不提前返回成功。
     返回 (是否成功, 描述)。
     """
     if is_in_battle(win):
@@ -815,45 +865,67 @@ def _go_to_inn(win):
     close_scene_panels(win, "客栈")
     # 已在洛阳城：直接打开当前地图小地图（免世界地图中转，2026-11-18
     # 用户规则）；位置不可读按跨图处理（世界地图 → 洛阳城标签兜底）
-    pos = game_map.read_map_position(win)
-    if pos is not None and pos[0].strip() == LUOYANG_CITY:
-        ok, info = game_map.open_mini_map(win)
+    if map_nav.site_coord_nav_enabled():
+        # 坐标化寻路（2026-11-21 默认开）：坐标是旧像素的反算值，点击
+        # 像素不变，客栈 POI 的「快送我去」对话框行为保持；关闭开关回滚。
+        ok, info, _pt = map_nav.start_navigation(
+            win, LUOYANG_CITY, INN_COORD[0], INN_COORD[1],
+            log_fn=lambda m: log(f"[客栈][坐标] {m}", "INFO"))
+        if not ok:
+            return False, info
+        log(f"[客栈] 已按坐标 {INN_COORD} 点击洛阳城地图点，前往洛阳客栈",
+            "SYS")
     else:
-        ok, info = game_map.open_mini_map_by_name(win, LUOYANG_CITY)
-    if not ok:
-        return False, info
-    human_click(win, INN_MAP_CLICK_POS[0], INN_MAP_CLICK_POS[1])
-    log("[客栈] 已点击洛阳小地图 (884,600)，前往洛阳客栈", "SYS")
+        pos = game_map.read_map_position(win)
+        if pos is not None and pos[0].strip() == LUOYANG_CITY:
+            ok, info = game_map.open_mini_map(win)
+        else:
+            ok, info = game_map.open_mini_map_by_name(win, LUOYANG_CITY)
+        if not ok:
+            return False, info
+        human_click(win, INN_MAP_CLICK_POS[0], INN_MAP_CLICK_POS[1])
+        log("[客栈] 已点击洛阳小地图 (884,600)，前往洛阳客栈", "SYS")
     time.sleep(1.0)  # 等待寻路/对话框响应
-    # 先查快送对话框再清理地图：清理的右键回退点可能落在对话框上将其点掉
+    # 先查快送/飞行旗对话框再清理地图：清理的右键回退点可能落在对话框上
+    clicked = False
     img = win.capture(force_activate=False)
     if img is not None and _try_fast_travel(win, img):
-        log("[客栈] 已点击「快送我去」，等待传送", "SYS")
+        clicked = True
+        log("[客栈] 已点击快送/飞行旗选项，等待传送", "SYS")
         time.sleep(2.0)  # 等待传送完成
-        return True, "已点击快送选项，传送洛阳客栈"
-    close_scene_panels(win, "客栈")
+    if not clicked:
+        close_scene_panels(win, "客栈")
 
-    # 等待：快送对话框 / 到达洛阳客栈 / 寻路结束（位置稳定）。
-    # 每轮询截一帧：战斗跳过、快送对话框判定与位置识别同帧复用
-    # （原每轮询 3 次截图；性能规则 1 决策点单帧三件套）
+    # 等待：到达洛阳客栈 / 寻路结束（位置稳定）。
+    # 每轮询截一帧：战斗跳过、快送/飞行旗对话框判定与位置识别同帧复用
+    # （原每轮询 3 次截图；性能规则 1 决策点单帧三件套）。
+    # 点击快送/飞行旗后不直接返回成功：按「洛阳客栈」地名（含客栈内
+    # 24,7 附近）确认传送到达，防传送未完成就返回、外层重复导航
+    # （2026-11-21 用户：坐标化可能命中飞行旗，落到客栈内 24,7 亦可）。
     deadline = time.time() + ARRIVE_TIMEOUT
     last = None
     unchanged = 0
     polls = 0
     while time.time() < deadline:
+        if map_nav.cancel_requested():
+            # 诊断验证场景的「中断寻路」：任务子进程不受影响
+            return False, "已中断寻路（用户手动中断）"
         img = win.capture(force_activate=False)
         if img is not None and is_in_battle_frame(img):
             time.sleep(2.0)
             continue
-        if img is not None and _try_fast_travel(win, img):
-            log("[客栈] 已点击「快送我去」，等待传送", "SYS")
+        if not clicked and img is not None and _try_fast_travel(win, img):
+            clicked = True
+            log("[客栈] 已点击快送/飞行旗选项，等待传送", "SYS")
             time.sleep(2.0)  # 等待传送完成
-            return True, "已点击快送选项，传送洛阳客栈"
+            continue
         # 位置识别（寻路等待期间不做 Alt+C 恢复：Alt+C 会打断自动寻路，
         # 失败跳过本轮即可），同时判定是否已到客栈；复用本轮已截帧
         # （截帧与使用之间无点击，帧未过期）
         pos = game_map.read_map_position(win, img=img)
-        if pos is not None and pos[0].strip() == KEZHAN_MAP:
+        if _pos_is_inn(pos):
+            if _near_inn_spot(pos):
+                return True, "已到达洛阳客栈（客栈内 24,7 附近）"
             return True, "已到达洛阳客栈"
         if pos is not None and pos == last:
             unchanged += 1
@@ -1096,7 +1168,8 @@ def _check_awang(win):
     return True, "已点击阿旺"
 
 
-def _walk_to_luoyang_pos(win, click_pos, target_pos, timeout, desc):
+def _walk_to_luoyang_pos(win, click_pos, target_pos, timeout, desc,
+                         map_coord=None):
     """洛阳城寻路通用流程：已在目标附近则跳过；已在洛阳城直接开小地图，
     否则世界地图 → 洛阳城 → 小地图；点击 click_pos 后等待到达目标附近。
     返回 (是否成功, 描述)。
@@ -1104,25 +1177,42 @@ def _walk_to_luoyang_pos(win, click_pos, target_pos, timeout, desc):
     target_pos 支持单点 (x, y) 或多落点序列 ((x1,y1), (x2,y2), ...)，
     落在任一点附近即算到达（见 _near_luoyang）。
 
+    map_coord：坐标化寻路坐标（通用设置开关，默认开）。单落点默认取
+    target_pos；多落点（阿旺兜底）由调用方传旧像素反算坐标（180,208）。
+    关闭开关/未给定时回滚固定像素 click_pos 逻辑。
+
     等待期间只用普通位置读取：Alt+C 恢复会打断自动寻路
     （实测按 Alt+C 后角色停在原地不再移动），识别失败跳过本轮即可。
     """
     targets = (target_pos,) if isinstance(target_pos[0], int) else target_pos
+    if map_coord is None and len(targets) == 1:
+        map_coord = targets[0]
     if is_in_battle(win):
         return False, "战斗中，跳过本轮寻路"
     pos = game_map.read_position_with_recovery(win)
     if _near_luoyang(pos, targets):
         return True, f"已在{desc}附近"
     close_scene_panels(win, "客栈")
-    if pos is not None and pos[0].strip() == LUOYANG_CITY:
-        # 已在洛阳城：无需打开世界地图，直接打开小地图
-        ok, info = game_map.open_mini_map(win)
+    if map_coord is not None and map_nav.site_coord_nav_enabled():
+        # 坐标化寻路（2026-11-21 默认开）：按目标坐标开图标定点击，等同
+        # 原固定像素点位；关闭开关回滚下方固定像素逻辑。
+        ok, info, _pt = map_nav.start_navigation(
+            win, LUOYANG_CITY, map_coord[0], map_coord[1],
+            log_fn=lambda m: log(f"[客栈][坐标] {m}", "INFO"))
+        if not ok:
+            return False, info
+        log(f"[客栈] 已按坐标 {map_coord} 点击洛阳城地图点，前往{desc}",
+            "SYS")
     else:
-        ok, info = game_map.open_mini_map_by_name(win, LUOYANG_CITY)
-    if not ok:
-        return False, info
-    human_click(win, click_pos[0], click_pos[1])
-    log(f"[客栈] 已点击洛阳小地图 {click_pos}，前往{desc}", "SYS")
+        if pos is not None and pos[0].strip() == LUOYANG_CITY:
+            # 已在洛阳城：无需打开世界地图，直接打开小地图
+            ok, info = game_map.open_mini_map(win)
+        else:
+            ok, info = game_map.open_mini_map_by_name(win, LUOYANG_CITY)
+        if not ok:
+            return False, info
+        human_click(win, click_pos[0], click_pos[1])
+        log(f"[客栈] 已点击洛阳小地图 {click_pos}，前往{desc}", "SYS")
     time.sleep(1.0)  # 等待自动寻路启动
     close_scene_panels(win, "客栈")
     # 等待到达目标附近
@@ -1171,10 +1261,10 @@ def _walk_to_dali(win):
     # 大理寺墙外未找到阿旺：兜底点击小地图 (548,297) 前往洛阳城
     # (185,207)/(176,207) 附近再找一轮（找到后的点击逻辑同 _check_awang）
     log(f"[客栈] {info}，兜底前往洛阳城 (185,207)/(176,207) 附近重找阿旺", "WARN")
-    ok2, info2 = _walk_to_luoyang_pos(win, AWANG_FALLBACK_MAP_CLICK_POS,
-                                      AWANG_FALLBACK_TARGET_POS,
-                                      AWANG_FALLBACK_ARRIVE_TIMEOUT,
-                                      "阿旺出现点")
+    ok2, info2 = _walk_to_luoyang_pos(
+        win, AWANG_FALLBACK_MAP_CLICK_POS, AWANG_FALLBACK_TARGET_POS,
+        AWANG_FALLBACK_ARRIVE_TIMEOUT, "阿旺出现点",
+        map_coord=(180, 208))  # 旧固定像素 548,297 的标定反算坐标（双落点取中点相邻点）
     if not ok2:
         return False, info2
     ok3, info3 = _check_awang(win)
@@ -1192,6 +1282,17 @@ def _walk_to_biwu(win):
     if not ok:
         return False, info
     return _check_awang(win)
+
+
+def verify_go_to_inn(win):
+    """诊断页-客栈入口（坐标化）验证：走真实前往客栈链路。
+
+    与任务 _go_to_inn 完全一致：坐标化点击洛阳城客栈点位 → 处理
+    「你要到洛阳客栈」快送对话框，或玩家路标/飞行旗菜单里的
+    「快送我去」→ 按「洛阳客栈」地名（含客栈内 24,7 附近）确认传送
+    到达。支持诊断「中断寻路」（等待循环 1.5s 内响应）。
+    """
+    return _go_to_inn(win)
 
 
 def verify_find_awang(win):

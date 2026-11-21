@@ -1460,6 +1460,11 @@
                     <span>战斗结束自动补血量蓝量（默认开启）</span>
                 </label>
                 <label class="switch-row">
+                    <input type="checkbox" id="site-coord-nav">
+                    <span class="switch-track"></span>
+                    <span>任务点位坐标化寻路（按地图坐标导航；关闭回滚固定像素寻路，默认开启；切换后重启任务生效）</span>
+                </label>
+                <label class="switch-row">
                     <input type="checkbox" id="clear-screen">
                     <span class="switch-track"></span>
                     <span>启动时自动清屏（屏蔽其他玩家和摊位，默认开启）</span>
@@ -2018,6 +2023,98 @@
                     <div class="group-hint">打开世界地图 → 城市标签（层级图再点层块；大雁塔走「寻路」面板搜索目的地→点黄色链接）→ 在地图上悬停读坐标标定像素换算 → 悬停校验后点击地图点寻路 → 等待 HUD 地名 + 坐标 ±10 到达（2026-11-20 实机验证机制，普通图/龙窟/凤巢/大雁塔均免采样）。会真实移动人物，任务运行中不可用。执行中可点「中断寻路」（1-3 秒内停止自动操作并关闭地图；人物自身的自动寻路不会因此停止）。</div>
                 </div>
                 <div class="group-box">
+                    <div class="group-title">任务点位导航（坐标化测试）</div>
+                    <div class="verify-row">
+                        <button id="btn-site-nav-cancel" class="btn" onclick="siteNavCancel()" disabled>中断寻路</button>
+                        <span class="verify-result" id="site-nav-common-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="site-nav-prewalk-btn" class="btn" onclick="siteNavRun('prewalk')">预走路点 · 灵兽村 (14,13)</button>
+                        <span class="verify-result" id="site-nav-prewalk-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="site-nav-xiuluo_claim-btn" class="btn" onclick="siteNavRun('xiuluo_claim')">修罗领取 · 灵兽村 (120,88)</button>
+                        <span class="verify-result" id="site-nav-xiuluo_claim-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="site-nav-xiuluo_wuyi-btn" class="btn" onclick="siteNavRun('xiuluo_wuyi')">修罗巫医 · 灵兽村 (111,72)</button>
+                        <span class="verify-result" id="site-nav-xiuluo_wuyi-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="site-nav-wubei_claim-btn" class="btn" onclick="siteNavRun('wubei_claim')">五倍领取 · 宝象国 (91,84)</button>
+                        <span class="verify-result" id="site-nav-wubei_claim-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="site-nav-wubei_wuyi-btn" class="btn" onclick="siteNavRun('wubei_wuyi')">五倍巫医 · 宝象国 (93,122)</button>
+                        <span class="verify-result" id="site-nav-wubei_wuyi-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="site-nav-repair-btn" class="btn" onclick="siteNavRun('repair')">修理 · 洛阳城 (321,110)</button>
+                        <span class="verify-result" id="site-nav-repair-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="site-nav-wuhuan_cloth-btn" class="btn" onclick="siteNavRun('wuhuan_cloth')">五环布店 · 长安城 (130,128)</button>
+                        <span class="verify-result" id="site-nav-wuhuan_cloth-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="site-nav-wuhuan_yunyou-btn" class="btn" onclick="siteNavRun('wuhuan_yunyou')">五环云游大师 · 长安城 (95,175)</button>
+                        <span class="verify-result" id="site-nav-wuhuan_yunyou-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="site-nav-shadu_1-btn" class="btn" onclick="siteNavRun('shadu_1')">沙都路点1 · 蟠桃园 (126,32)</button>
+                        <span class="verify-result" id="site-nav-shadu_1-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="site-nav-shadu_2-btn" class="btn" onclick="siteNavRun('shadu_2')">沙都路点2 · 蟠桃园 (66,87)</button>
+                        <span class="verify-result" id="site-nav-shadu_2-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="site-nav-shadu_3-btn" class="btn" onclick="siteNavRun('shadu_3')">沙都路点3 · 蟠桃园 (27,112)</button>
+                        <span class="verify-result" id="site-nav-shadu_3-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="site-nav-shadu_4-btn" class="btn" onclick="siteNavRun('shadu_4')">沙都路点4 · 蟠桃园 (33,171)</button>
+                        <span class="verify-result" id="site-nav-shadu_4-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="site-nav-shadu_5-btn" class="btn" onclick="siteNavRun('shadu_5')">沙都路点5 · 蟠桃园 (111,130)</button>
+                        <span class="verify-result" id="site-nav-shadu_5-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="site-nav-shadu_6-btn" class="btn" onclick="siteNavRun('shadu_6')">沙都路点6 · 蟠桃园 (138,111)</button>
+                        <span class="verify-result" id="site-nav-shadu_6-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="site-nav-kezhan_dali-btn" class="btn" onclick="siteNavRun('kezhan_dali')">客栈大理寺 · 洛阳城 (223,195)</button>
+                        <span class="verify-result" id="site-nav-kezhan_dali-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="site-nav-kezhan_awang-btn" class="btn" onclick="siteNavRun('kezhan_awang')">客栈阿旺兜底 · 洛阳城 (180,208)</button>
+                        <span class="verify-result" id="site-nav-kezhan_awang-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="site-nav-kezhan_biwu-btn" class="btn" onclick="siteNavRun('kezhan_biwu')">客栈比武场 · 洛阳城 (244,12)</button>
+                        <span class="verify-result" id="site-nav-kezhan_biwu-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="site-nav-kezhan_inn-btn" class="btn" onclick="siteNavRun('kezhan_inn')">客栈入口(快送POI) · 洛阳城 (381,26)</button>
+                        <span class="verify-result" id="site-nav-kezhan_inn-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="site-nav-zhongzu_claim-btn" class="btn" onclick="siteNavRun('zhongzu_claim')">种族领取 · 长安城 (285,160)</button>
+                        <span class="verify-result" id="site-nav-zhongzu_claim-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="site-nav-xuanshu_task-btn" class="btn" onclick="siteNavRun('xuanshu_task')">玄枢任务点 · 洛阳城 (93,125)</button>
+                        <span class="verify-result" id="site-nav-xuanshu_task-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="site-nav-xuanshu_jiantianpan-btn" class="btn" onclick="siteNavRun('xuanshu_jiantianpan')">玄枢监天盘 · 火云戈壁 (180,86)</button>
+                        <span class="verify-result" id="site-nav-xuanshu_jiantianpan-result"></span>
+                    </div>
+                    <div class="group-hint">逐个验证任务点位改用地图坐标导航（与「地图导航」同一机制，共用中断按钮）：真实点击/移动人物，任务运行中不可用。领取/快送 POI 点位用现固定像素的标定反算坐标（点击像素与现流程一致）；其余为任务常量里的目标坐标。黄字/POI 点位（修罗/五倍领取、客栈入口）请对照：人物是否走到位、是否触发自动任务对话框/快送对话框；纯地形点位（巫医/修理/五环/沙都/玄枢）到达即可。落点或行为不符合请反馈对应点位名。从灵兽村测「修理」会顺带验证预走路坐标化。生产任务点位可经通用设置「任务点位坐标化寻路」开关回滚固定像素寻路（默认开启）。「客栈入口」按钮走真实客栈链路：点击命中玩家路标/飞行旗时自动点「快送我去」，并按客栈内 24,7 附近确认到达。</div>
+                </div>
+                <div class="group-box">
                     <div class="group-title">截屏通道</div>
                     <div class="verify-row">
                         <button id="btn-verify-capture-diag" class="btn" onclick="verifyCaptureDiag()">开始诊断</button>
@@ -2155,6 +2252,7 @@
     const xiuluoTabGroup = document.getElementById('xiuluo-tab-group');
     const highPerf = document.getElementById('high-perf');
     const autoRefill = document.getElementById('auto-refill');
+    const siteCoordNav = document.getElementById('site-coord-nav');
     const clearScreen = document.getElementById('clear-screen');
     const silentMode = document.getElementById('silent-mode');
     const autoFamen = document.getElementById('auto-famen');
@@ -2269,6 +2367,8 @@
     const btnMapNavRun = document.getElementById('btn-map-nav-run');
     const btnMapNavCancel = document.getElementById('btn-map-nav-cancel');
     const mapNavResultEl = document.getElementById('map-nav-result');
+    const btnSiteNavCancel = document.getElementById('btn-site-nav-cancel');
+    const siteNavCommonResultEl = document.getElementById('site-nav-common-result');
     const btnVerifyDialogDetect = document.getElementById('btn-verify-dialog-detect');
     const dialogDetectVerifyResultEl = document.getElementById('dialog-detect-verify-result');
     const btnVerifyApplyPanel = document.getElementById('btn-verify-apply-panel');
@@ -3945,6 +4045,9 @@
     autoRefill.addEventListener('change', () => {
         callPython('save_auto_refill', autoRefill.checked);
     });
+    siteCoordNav.addEventListener('change', () => {
+        callPython('save_site_coord_nav', siteCoordNav.checked);
+    });
     clearScreen.addEventListener('change', () => {
         callPython('save_clear_screen', clearScreen.checked);
     });
@@ -4364,6 +4467,7 @@
         xiuluoTabGroup.checked = !!info.xiuluo_tab_group;
         highPerf.checked = !!info.high_perf;
         autoRefill.checked = !!info.auto_refill;
+        siteCoordNav.checked = !!info.site_coord_nav;
         clearScreen.checked = !!info.clear_screen;
         silentMode.checked = !!info.silent_mode;
         autoFamen.checked = !!info.auto_famen;
@@ -6615,6 +6719,91 @@
         if (btnMapNavCancel) btnMapNavCancel.disabled = true;
         mapNavResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         mapNavResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+    };
+
+    // ---- 任务点位导航（坐标化测试）：一键导航到各任务点位 ----
+    // 与地图导航共用后端线程/中断标志；每行独立显示结果，便于逐点
+    // 对照落点与游戏行为（黄字/POI 是否触发）。
+    let siteNavRunningKey = null;
+    async function siteNavRun(key) {
+        if (verifying) return;
+        const btn = document.getElementById('site-nav-' + key + '-btn');
+        const el = document.getElementById('site-nav-' + key + '-result');
+        verifying = true;
+        siteNavRunningKey = key;
+        if (btn) btn.disabled = true;
+        if (btnSiteNavCancel) btnSiteNavCancel.disabled = true;
+        if (siteNavCommonResultEl) siteNavCommonResultEl.innerText = '';
+        if (el) {
+            el.style.color = 'var(--text)';
+            el.innerText = '导航中...（过程见日志）';
+        }
+        try {
+            const r = await callPython('verify_site_navigate', key);
+            if (!r || r.status !== 'success') {
+                verifying = false;
+                siteNavRunningKey = null;
+                if (btn) btn.disabled = false;
+                if (el) {
+                    el.style.color = 'var(--danger-text)';
+                    el.innerText = (r && r.msg) || '导航请求失败';
+                }
+                return;
+            }
+            // 线程已启动：等待 Python 侧 onSiteNavResult 回推最终结果
+            if (btnSiteNavCancel) btnSiteNavCancel.disabled = false;
+        } catch (e) {
+            verifying = false;
+            siteNavRunningKey = null;
+            if (btn) btn.disabled = false;
+            if (el) {
+                el.style.color = 'var(--danger-text)';
+                el.innerText = '导航请求异常';
+            }
+        }
+    }
+    async function siteNavCancel() {
+        if (!verifying) return;
+        if (btnSiteNavCancel) btnSiteNavCancel.disabled = true;
+        try {
+            const r = await callPython('cancel_map_navigate');
+            if (r && r.status === 'success') {
+                // 中断已受理：在正在跑的点位行上提示，等最终结果回推
+                const el = siteNavRunningKey
+                    ? document.getElementById('site-nav-' + siteNavRunningKey + '-result')
+                    : null;
+                if (el) {
+                    el.style.color = 'var(--text)';
+                    el.innerText = r.msg || '已发送中断请求';
+                }
+            } else {
+                // 后端拒绝（当前没有进行中的导航）：恢复按钮允许重试
+                if (siteNavCommonResultEl) {
+                    siteNavCommonResultEl.style.color = 'var(--danger-text)';
+                    siteNavCommonResultEl.innerText = (r && r.msg) || '中断请求失败';
+                }
+                if (verifying && btnSiteNavCancel) {
+                    btnSiteNavCancel.disabled = false;
+                }
+            }
+        } catch (e) {
+            if (siteNavCommonResultEl) {
+                siteNavCommonResultEl.style.color = 'var(--danger-text)';
+                siteNavCommonResultEl.innerText = '中断请求异常';
+            }
+            if (btnSiteNavCancel) btnSiteNavCancel.disabled = false;
+        }
+    }
+    window.onSiteNavResult = function (key, ok, info) {
+        verifying = false;
+        siteNavRunningKey = null;
+        const btn = document.getElementById('site-nav-' + key + '-btn');
+        const el = document.getElementById('site-nav-' + key + '-result');
+        if (btn) btn.disabled = false;
+        if (btnSiteNavCancel) btnSiteNavCancel.disabled = true;
+        if (!el) return;
+        el.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
+        el.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
     async function verifyDialogDetect() {

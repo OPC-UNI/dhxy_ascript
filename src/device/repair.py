@@ -40,6 +40,7 @@ from ..core import user_data
 from . import task_tracker
 from . import dialog_common
 from . import map as game_map
+from . import map_nav  # 坐标化寻路（通用设置开关，关闭回滚固定像素）
 from . import battle  # 修理弹窗预期窗口 / 点击信号（battle 内延迟导入本模块，无顶层环）
 from . import tab_group  # 组号模式：修理 pass
 
@@ -420,24 +421,42 @@ def _run_repair_chain(win, prefix="修理", hover_before_click=False,
     pos = game_map.read_map_position(win)
     need_walk = not _near_repair_spot(pos)
     if need_walk:
-        if pos is not None and pos[0].strip() == LUOYANG:
-            # 同图：直接打开当前地图小地图（免世界地图中转）
-            ok, info = game_map.open_mini_map(win)
+        if map_nav.site_coord_nav_enabled():
+            # 坐标化寻路（2026-11-21 默认开）：按修理点坐标开图标定点击，
+            # 等同原固定像素点位；关闭开关回滚下方固定像素逻辑。
+            ok, info, _pt = map_nav.start_navigation(
+                win, LUOYANG, REPAIR_SPOT[0], REPAIR_SPOT[1],
+                log_fn=lambda m: log(f"[{prefix}][修理][坐标] {m}", "INFO"))
+            if not ok:
+                dialog_common.close_scene_panels(win, prefix, quiet=True)
+                return False, info
+            log(f"[{prefix}][修理] 已按坐标 {REPAIR_SPOT} 点击洛阳城地图点，"
+                f"自动寻路中", "SYS")
+            time.sleep(1.0)
+            game_map.close_maps(win)
         else:
-            # 跨图（含位置读不到）：世界地图 → 洛阳城 → 洛阳小地图
-            ok, info = game_map.open_mini_map_by_name(win, LUOYANG)
-        if not ok:
-            # 失败兜底：open_mini_map_by_name 失败时世界地图可能仍开着（地图
-            # 打开失败路径不关地图）。残留地图的左缘竖排「世界地图」文字
-            # 会被 follow 的追踪面板 OCR 读进任务签名——误判任务变化、
-            # 多余点击追踪绿字、空转一轮（2026-11-16 实机：修理失败后
-            # follow 空转 62s，直到跨图寻路把地图关掉）。
-            dialog_common.close_scene_panels(win, prefix, quiet=True)
-            return False, info
-        human_click(win, REPAIR_MAP_POS[0], REPAIR_MAP_POS[1])
-        log(f"[{prefix}][修理] 已点击洛阳小地图修理位置，自动寻路中", "SYS")
-        time.sleep(1.0)
-        game_map.close_maps(win)
+            if pos is not None and pos[0].strip() == LUOYANG:
+                # 同图：直接打开当前地图小地图（免世界地图中转）
+                ok, info = game_map.open_mini_map(win)
+            else:
+                # 跨图（含位置读不到）：世界地图 → 洛阳城 → 洛阳小地图
+                ok, info = game_map.open_mini_map_by_name(win, LUOYANG)
+            if not ok:
+                # 失败兜底：open_mini_map_by_name 失败时世界地图可能仍开着
+                # （地图打开失败路径不关地图）。残留地图的左缘竖排「世界
+                # 地图」文字会被 follow 的追踪面板 OCR 读进任务签名——误判
+                # 任务变化、多余点击追踪绿字、空转一轮（2026-11-16 实机：
+                # 修理失败后 follow 空转 62s，直到跨图寻路把地图关掉）。
+                dialog_common.close_scene_panels(win, prefix, quiet=True)
+                return False, info
+            # 任务筛选取消勾选（用户 2026-11-21）：修理点是普通地形点，
+            # 勾选时黄色任务名可能与点击点重叠触发自动寻路/误开对话框。
+            game_map.uncheck_minimap_task_filter(win)
+            human_click(win, REPAIR_MAP_POS[0], REPAIR_MAP_POS[1])
+            log(f"[{prefix}][修理] 已点击洛阳小地图修理位置，自动寻路中",
+                "SYS")
+            time.sleep(1.0)
+            game_map.close_maps(win)
         ok, info = _wait_arrive(win, prefix)
         if not ok:
             return False, info

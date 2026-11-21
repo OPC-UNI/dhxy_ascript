@@ -33,6 +33,26 @@ def _isolate_role_settings(tmp_path, monkeypatch):
     role_settings._CACHE.clear()
 
 
+@pytest.fixture(autouse=True)
+def _rollback_site_coord_nav(monkeypatch):
+    """任务点位默认走旧固定像素寻路（回滚路径），保持既有测试语义。
+
+    坐标化寻路是通用设置开关（生产默认开启）；既有流程测试覆盖的是
+    回滚路径（旧像素点击 + 任务到达判据），这里统一把 map_nav 的开关
+    读取函数 patch 为 False。需要验证新路径的测试显式使用
+    `coord_nav_enabled` 夹具或自行 patch 回 True。
+    """
+    from src.device import map_nav
+    monkeypatch.setattr(map_nav, "site_coord_nav_enabled", lambda: False)
+
+
+@pytest.fixture
+def coord_nav_enabled(monkeypatch):
+    """显式打开任务点位坐标化寻路（覆盖 conftest 的回滚默认）。"""
+    from src.device import map_nav
+    monkeypatch.setattr(map_nav, "site_coord_nav_enabled", lambda: True)
+
+
 @pytest.fixture
 def rng():
     return np.random.default_rng(20261027)

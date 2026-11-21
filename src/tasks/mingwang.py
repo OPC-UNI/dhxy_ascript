@@ -141,6 +141,7 @@ from ascript.windows.hardware.keyboard import Keyboard
 from ..core.app_utils import log, human_click, norm_text
 from ..core import app_utils  # 静默模式判定（Esc 兜底按键通道）
 from ..device import map as game_map  # 地图操作（世界地图/小地图/位置识别）
+from ..device import map_nav  # 坐标化寻路（通用设置开关，关闭回滚固定像素）
 from ..device.map import bgr_frame as _bgr_frame  # PIL→BGR（模板匹配用）
 from ..device import task_tracker  # 任务追踪面板（对话框区域常量）
 from ..device import bag  # 背包操作（五庄封印任务储物格用唤风符）
@@ -1851,6 +1852,13 @@ def _shadu_npc_point(items, panel_rect=None):
     return None
 
 
+def _shadu_near(pos, target):
+    """当前位置是否已在搜索点容差内（跳过重复寻路与到达判定共用）。"""
+    return (pos is not None and pos[0].strip() == SHADU_MAP
+            and abs(pos[1] - target[0]) <= SHADU_POS_TOLERANCE
+            and abs(pos[2] - target[1]) <= SHADU_POS_TOLERANCE)
+
+
 def _shadu_wait_arrive(win, target, timeout=SHADU_ARRIVE_TIMEOUT):
     """等待寻路到达搜索点（坐标进入容差）。每轮只截一帧并复用战斗判定。"""
     deadline = time.time() + timeout
@@ -1864,11 +1872,9 @@ def _shadu_wait_arrive(win, target, timeout=SHADU_ARRIVE_TIMEOUT):
         if is_in_battle_frame(_bgr_frame(img)):
             return False, "战斗中，暂停搜索"
         pos = game_map.read_map_position(win, img=img)
+        if _shadu_near(pos, target):
+            return True, f"已到达{SHADU_MAP}[{target[0]},{target[1]}]附近"
         if pos is not None:
-            if (pos[0].strip() == SHADU_MAP
-                    and abs(pos[1] - target[0]) <= SHADU_POS_TOLERANCE
-                    and abs(pos[2] - target[1]) <= SHADU_POS_TOLERANCE):
-                return True, f"已到达{SHADU_MAP}[{target[0]},{target[1]}]附近"
             if pos == last:
                 unchanged += 1
             else:
@@ -1920,22 +1926,48 @@ def _shadu_scan_npc(win, timeout=SHADU_NPC_SCAN_TIMEOUT):
 def _shadu_search_npc(win):
     """按用户标定的各路点依次寻找并点击沙都修罗，返回 (是否已点击, 描述)。"""
     close_scene_panels(win, "名望")
+    coord_nav = map_nav.site_coord_nav_enabled()
     pos = game_map.read_map_position(win)
     if pos is None or pos[0].strip() != SHADU_MAP:
         loc = "识别失败" if pos is None else f"{pos[0]}[{pos[1]},{pos[2]}]"
-        ok, info = game_map.open_mini_map_by_name(win, SHADU_MAP)
-        if not ok:
-            return False, f"前往{SHADU_MAP}失败（当前 {loc}）：{info}"
-        log(f"[名望] 沙都修罗：不在{SHADU_MAP}（{loc}），已打开"
-            f"{SHADU_MAP}小地图", "SYS")
-    for idx, (mini_click, target) in enumerate(SHADU_WAYPOINTS, 1):
-        if not game_map.is_mini_map_open(win):
-            ok, info = game_map.open_mini_map(win)
+        if coord_nav:
+            # 坐标化寻路（2026-11-21 默认开）：跨图由 start_navigation
+            # 自动经世界地图进入，这里不预开地图。
+            log(f"[名望] 沙都修罗：不在{SHADU_MAP}（{loc}），"
+                f"坐标寻路将自动前往", "SYS")
+        else:
+            ok, info = game_map.open_mini_map_by_name(win, SHADU_MAP)
             if not ok:
-                return False, f"打开小地图失败：{info}"
-        human_click(win, mini_click[0], mini_click[1])
-        log(f"[名望] 沙都修罗：点击第 {idx}/{len(SHADU_WAYPOINTS)} 个搜索点 "
-            f"{mini_click}，前往{SHADU_MAP}[{target[0]},{target[1]}]", "SYS")
+                return False, f"前往{SHADU_MAP}失败（当前 {loc}）：{info}"
+            log(f"[名望] 沙都修罗：不在{SHADU_MAP}（{loc}），已打开"
+                f"{SHADU_MAP}小地图", "SYS")
+    for idx, (mini_click, target) in enumerate(SHADU_WAYPOINTS, 1):
+        if coord_nav:
+            # 已在当前搜索点容差内且站定：跳过开图+标定点击，直接扫描 NPC
+            still, _pos = game_map.near_and_still(
+                win, SHADU_MAP, target[0], target[1], SHADU_POS_TOLERANCE)
+            if still:
+                log(f"[名望] 沙都修罗：已在第 {idx}/{len(SHADU_WAYPOINTS)} 个"
+                    f"搜索点 {target} 附近，跳过寻路", "INFO")
+            else:
+                # 坐标化寻路：按路点目标坐标开图标定点击（等同原固定像素
+                # 点位）；关闭开关回滚下方固定像素逻辑。
+                ok, info, _pt = map_nav.start_navigation(
+                    win, SHADU_MAP, target[0], target[1],
+                    log_fn=lambda m: log(f"[名望][坐标] {m}", "INFO"))
+                if not ok:
+                    return False, f"前往{SHADU_MAP}失败：{info}"
+                log(f"[名望] 沙都修罗：按坐标 {target} 点击第 "
+                    f"{idx}/{len(SHADU_WAYPOINTS)} 个搜索点，"
+                    f"前往{SHADU_MAP}[{target[0]},{target[1]}]", "SYS")
+        else:
+            if not game_map.is_mini_map_open(win):
+                ok, info = game_map.open_mini_map(win)
+                if not ok:
+                    return False, f"打开小地图失败：{info}"
+            human_click(win, mini_click[0], mini_click[1])
+            log(f"[名望] 沙都修罗：点击第 {idx}/{len(SHADU_WAYPOINTS)} 个搜索点 "
+                f"{mini_click}，前往{SHADU_MAP}[{target[0]},{target[1]}]", "SYS")
         time.sleep(1.0)  # 等自动寻路启动
         close_scene_panels(win, "名望")
         arrived, ainfo = _shadu_wait_arrive(win, target)

@@ -123,6 +123,9 @@ LINGSHOU_MAP_POS = (627, 396)                 # 灵兽村小地图上领取点�
                                               # 用户实测。2026-11-16 用户规则：小地图窗口位置
                                               # 固定——即使被拖走，下次打开也会恢复默认位置，
                                               # 固定绝对坐标即可）
+CLAIM_COORD = (120, 88)                       # 领取点坐标化寻路坐标（旧固定像素 627,396 的
+                                              # 标定反算值——点同一黄字任务点；坐标化开关
+                                              # 关闭时回滚用 LINGSHOU_MAP_POS）
 CLAIM_DIALOG_OPTION = "闲来无事，要我帮忙吗"    # 领取对话框绿色选项（游戏内原文，实测用字）
 CLAIM_OPTION_TAIL = "要我帮忙吗"               # 选项换行渲染时的尾部匹配串（实测完整文案
                                               # 永不单行命中，两次全靠尾部/兜底）
@@ -208,9 +211,10 @@ _lunhuisi_retry_count = 3                     # 战斗失败后回灵兽村的�
 # ---- 自动巫医（用户流程：领取后每 N 轮一次，无条件医治——血蓝正常
 #      也照常巫医，2026-10-09 用户确认；对话框处理复用战斗线程逻辑） ----
 WUYI_NPC_ICON = "xiuluo_lingshoucunwuyi.png"  # 巫医 NPC（点击打开医治对话框）
-WUYI_SPOT = (115, 72)                         # 巫医 NPC 位置（用户实测）
+WUYI_SPOT = (111, 72)                         # 巫医 NPC 位置（用户实测；2026-11-21
+                                              # 按坐标化实测微调，原 115,72）
 WUYI_MAP_POS = (610, 442)                     # 小地图上巫医位置的点击点（窗口相对坐标，用户实测）
-WUYI_NEAR_TOLERANCE = 11                       # 巫医附近的判定容差（严格：小距离移动，
+WUYI_NEAR_TOLERANCE = 7                       # 巫医附近的判定容差（严格：小距离移动，
                                               # 宽松容差会漏判偏移——用户确认）
 WUYI_ARRIVE_TIMEOUT = 8                       # 走到巫医坐标附近的超时（领取点距巫医很近，
                                               # 实测走位 2~3s；位置 ±5/NPC 模板可见/位置由
@@ -348,7 +352,7 @@ _CLAIM_COUNT_RE = re.compile(re.escape(CLAIM_COUNT_TEXT) + r"\s*[:：]?\s*(\d+)"
 
 
 def _near_wuyi_spot(pos):
-    """判断位置是否在巫医 NPC (115,72) 附近（严格容差 ±5）。
+    """判断位置是否在巫医 NPC（WUYI_SPOT_REAL）附近（容差 ±WUYI_NEAR_TOLERANCE）。
 
     小距离移动场景：附近定义必须严格，宽松容差会漏判偏移（用户确认）。
     """
@@ -499,9 +503,11 @@ def _run_wuyi_chain(win, hover_before_click=False, report_condition=False,
        执行，血蓝正常也照常巫医——不再以血蓝为门槛；
        report_condition=True（验证模式）时检查召唤兽红条/蓝条并仅
        报告（不影响执行，只读检查不触发右键回满）
-    2. 位置检查：是否在灵兽村 (115,72) 附近（严格容差 ±5）
-    3. 不在 → 打开小地图点击 (610,442) 寻路 → 等待走到坐标附近
-       （位置 ±5 / NPC 模板可见 / 位置由可读变缺失均算到达，超时 8s
+    2. 位置检查：是否在灵兽村巫医附近（WUYI_SPOT_REAL，容差
+       ±WUYI_NEAR_TOLERANCE）
+    3. 不在 → 坐标化寻路按巫医坐标 WUYI_SPOT 开图标定点击（关闭
+       坐标化开关回滚小地图点击 (610,442)）→ 等待走到坐标附近
+       （位置 ±11 / NPC 模板可见 / 位置由可读变缺失均算到达，超时 8s
        即取消）→ 到达后 3s 窗口识别 NPC 模板（未识别到即本次取消，
        下次轮到再试——用户 2026-10-09 确认）
     4. 点击巫医 NPC（xiuluo_lingshoucunwuyi.png）打开医治对话框。
@@ -542,14 +548,30 @@ def _run_wuyi_chain(win, hover_before_click=False, report_condition=False,
     #    （位置 ±5 或 NPC 模板可见均算到达——坐标 OCR 不可靠时
     #    模板兜底，原实现教训）
     if need_walk:
-        ok, info = game_map.open_mini_map(win)
-        if not ok:
-            return False, info
-        human_click(win, WUYI_MAP_POS[0], WUYI_MAP_POS[1])
-        log(f"[修罗][巫医] 已点击小地图巫医位置 {WUYI_MAP_POS}，自动寻路中",
-            "SYS")
-        time.sleep(1.0)
-        game_map.close_maps(win)
+        if map_nav.site_coord_nav_enabled():
+            # 坐标化寻路（2026-11-21 默认开）：按巫医坐标开图标定点击，
+            # 等同原固定像素点位；关闭开关回滚下方固定像素逻辑。
+            ok, info, _pt = map_nav.start_navigation(
+                win, LINGSHOUCUN, WUYI_SPOT[0], WUYI_SPOT[1],
+                log_fn=lambda m: log(f"[修罗][巫医][坐标] {m}", "INFO"))
+            if not ok:
+                return False, info
+            log(f"[修罗][巫医] 已按坐标 {WUYI_SPOT} 点击灵兽村地图点，"
+                f"自动寻路中", "SYS")
+            time.sleep(1.0)
+            game_map.close_maps(win)
+        else:
+            ok, info = game_map.open_mini_map(win)
+            if not ok:
+                return False, info
+            # 任务筛选取消勾选（用户 2026-11-21）：仅名望需要勾选任务
+            # 筛选；巫医点是普通地形点，避免黄色任务名与点击点重叠误触。
+            game_map.uncheck_minimap_task_filter(win)
+            human_click(win, WUYI_MAP_POS[0], WUYI_MAP_POS[1])
+            log(f"[修罗][巫医] 已点击小地图巫医位置 {WUYI_MAP_POS}，自动寻路中",
+                "SYS")
+            time.sleep(1.0)
+            game_map.close_maps(win)
         deadline = time.time() + WUYI_ARRIVE_TIMEOUT
         arrived = False
         pos_seen = False
@@ -1028,7 +1050,8 @@ def _open_claim_map(win, pos=None):
     return claim_flow.open_claim_map(
         win, pos, map_name=LINGSHOUCUN,
         map_pos=LINGSHOU_MAP_POS, prefix="[修罗]",
-        on_filter_state=_set_claim_task_filter)
+        on_filter_state=_set_claim_task_filter,
+        map_coord=CLAIM_COORD)
 
 
 def _close_claim_map_before_arrival(win):
@@ -2378,6 +2401,9 @@ def _manual_nav_round(win, dest):
     """无任务追踪的手动寻路回合：寻路 → 点标记开打 → 等战斗结束。
 
     dest：_parse_claim_destination 的 (地图名, x, y)；None 表示解析失败。
+    组号队员血蓝 pass 走 map_nav 的 on_walk_start 回调：位移启动后、
+    到达等待前插入（与 follow 点任务绿字后的寻路期 pass 同语义——
+    行走期不占主流程时间；60s 节流与 pass 互斥在 tab_group 内部）。
     返回 (ok, info)。ok=True 表示战斗已结束（_fight_via_kanda 已置位，
     主循环继续返程）；ok=False 需回灵兽村取消任务重领（用户第 7 条）。
     """
@@ -2390,7 +2416,8 @@ def _manual_nav_round(win, dest):
     debug_overlay.set_phase("手动寻路")
     ok, info = map_nav.navigate_to_map_coordinate(
         win, map_name, gx, gy,
-        log_fn=lambda m: log(f"[修罗][手动] {m}", "INFO"))
+        log_fn=lambda m: log(f"[修罗][手动] {m}", "INFO"),
+        on_walk_start=lambda: _maybe_tab_bars_pass(win))
     if not ok:
         return False, f"手动寻路失败: {info}"
     return _click_markers_and_fight(win)

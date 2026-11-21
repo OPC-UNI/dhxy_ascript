@@ -58,6 +58,7 @@ from ..core.settings import (
     build_group_last_scan_payload, load_auto_famen, load_auto_refill, load_battle_actions,
     load_battle_only_auto_rejoin, load_battle_only_hezi, load_clear_screen, load_debug_overlay,
     load_debug_ui_unlocked, load_high_perf, load_selected_modes, load_silent_mode,
+    load_site_coord_nav,
     load_task_counts, load_thresholds, load_ui_theme, load_update_auto_check, load_update_feed_url,
     load_update_last_check, load_update_skipped_version, load_use_sheyaoxiang,
     load_wubei_auto_create_team, load_wubei_auto_kick_away, load_wubei_kick_away_minutes,
@@ -246,6 +247,7 @@ class ControlWindow(DiagnosticsMixin, SettingsApiMixin, MessageApiMixin,
         self.expose(self.get_role_info)
         self.expose(self.save_high_perf)
         self.expose(self.save_auto_refill)
+        self.expose(self.save_site_coord_nav)
         self.expose(self.save_clear_screen)
         self.expose(self.save_silent_mode)
         self.expose(self.save_wubei_hezi)
@@ -311,6 +313,7 @@ class ControlWindow(DiagnosticsMixin, SettingsApiMixin, MessageApiMixin,
         self.expose(self.verify_position)
         self.expose(self.get_navigate_maps)
         self.expose(self.verify_map_navigate)
+        self.expose(self.verify_site_navigate)
         self.expose(self.cancel_map_navigate)
         self.expose(self.verify_dialog_detect)
         self.expose(self.verify_apply_panel)
@@ -732,6 +735,7 @@ class ControlWindow(DiagnosticsMixin, SettingsApiMixin, MessageApiMixin,
                 "xiuluo_tab_group": load_xiuluo_tab_group(),
                 "high_perf": load_high_perf(),
                 "auto_refill": load_auto_refill(),
+                "site_coord_nav": load_site_coord_nav(),
                 "clear_screen": load_clear_screen(),
                 "silent_mode": load_silent_mode(),
                 "wubei": {"hezi": load_wubei_hezi(),

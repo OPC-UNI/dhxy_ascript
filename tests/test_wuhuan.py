@@ -226,6 +226,9 @@ def _buy_env(monkeypatch, land_ok=True):
     state = {"shop_open": False}
     monkeypatch.setattr(wuhuan.game_map, "is_in_map", lambda win, name: True)
     monkeypatch.setattr(wuhuan.game_map, "is_mini_map_open", lambda win: True)
+    monkeypatch.setattr(
+        wuhuan.game_map, "uncheck_minimap_task_filter",
+        lambda win: (True, "「任务」筛选未勾选"))
     monkeypatch.setattr(wuhuan, "close_scene_panels",
                         lambda win, prefix: events.append("panels"))
     monkeypatch.setattr(wuhuan, "_wait_near",
@@ -289,6 +292,9 @@ def test_yunyou_walk_closes_panels_only_after_arrival(monkeypatch):
                         lambda win, name: True)
     monkeypatch.setattr(wuhuan.game_map, "is_mini_map_open",
                         lambda win: True)
+    monkeypatch.setattr(
+        wuhuan.game_map, "uncheck_minimap_task_filter",
+        lambda win: (True, "「任务」筛选未勾选"))
     monkeypatch.setattr(wuhuan, "human_click",
                         lambda win, x, y: clicks.append((x, y)))
     monkeypatch.setattr(wuhuan, "close_scene_panels",
@@ -483,3 +489,44 @@ def test_follow_wuhuan_uses_shared_confirm(monkeypatch):
     # 人物原地 93s 不动的实测教训）
     assert seen["stall_recheck"] is True
     assert seen["stall_recheck_target"] is None
+
+
+def test_enter_cloth_shop_coord_nav(monkeypatch, coord_nav_enabled):
+    """坐标化开关开启：进布店走位改走 map_nav 坐标点击（长安 130,128）。"""
+    from src.device import map_nav
+    started = []
+
+    def _start(w, name, x, y, log_fn=None, on_map_open=None):
+        started.append((name, x, y))
+        return True, "已点击", (475, 443)
+
+    monkeypatch.setattr(map_nav, "start_navigation", _start)
+    monkeypatch.setattr(wuhuan.game_map, "read_map_position",
+                        lambda w: ("长安", 1, 1))  # 不在布店门口
+    monkeypatch.setattr(wuhuan, "_wait_near",
+                        lambda *a, **k: (False, "自定义到达失败"))
+    monkeypatch.setattr(wuhuan, "log", lambda *a, **k: None)
+    ok, info = wuhuan._enter_cloth_shop(object(), tag="[五环]")
+    assert ok is False and "自定义到达失败" in info
+    assert started == [(wuhuan.CHANGAN_CITY,
+                        *wuhuan.CLOTH_SHOP_TARGET_POS)]
+
+
+def test_enter_cloth_shop_skips_nav_when_already_near(
+        monkeypatch, coord_nav_enabled):
+    """已在布店门口（±5）时不再开图/标定点击（省 ~2s，避免重复寻路）。"""
+    from src.device import map_nav
+    started = []
+    monkeypatch.setattr(
+        map_nav, "start_navigation",
+        lambda *a, **k: started.append(1) or (True, "", None))
+    monkeypatch.setattr(
+        wuhuan.game_map, "read_map_position",
+        lambda w: ("长安", *wuhuan.CLOTH_SHOP_TARGET_POS))
+    monkeypatch.setattr(wuhuan.time, "sleep", lambda s: None)  # 站定复读等待
+    monkeypatch.setattr(wuhuan, "_wait_near",
+                        lambda *a, **k: (False, "自定义到达失败"))
+    monkeypatch.setattr(wuhuan, "log", lambda *a, **k: None)
+    ok, info = wuhuan._enter_cloth_shop(object(), tag="[五环]")
+    assert ok is False and "自定义到达失败" in info
+    assert started == []  # 未走坐标导航

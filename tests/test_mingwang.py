@@ -1371,6 +1371,56 @@ def test_shadu_search_enters_map_via_world_map_label(monkeypatch):
     assert entered == [mingwang.SHADU_MAP]
 
 
+def test_shadu_search_coord_nav_uses_waypoint_coords(
+        monkeypatch, coord_nav_enabled):
+    """坐标化开关开启：沙都路点改走 map_nav 坐标点击（6 个路点全走一遍）。"""
+    from src.device import map_nav
+    calls = []
+
+    def _start(w, map_name, x, y, log_fn=None, on_map_open=None):
+        calls.append((map_name, x, y))
+        return True, "已点击", (0, 0)
+
+    monkeypatch.setattr(map_nav, "start_navigation", _start)
+    monkeypatch.setattr(mingwang, "close_scene_panels", lambda *a, **k: None)
+    monkeypatch.setattr(mingwang.game_map, "read_map_position",
+                        lambda w: (mingwang.SHADU_MAP, 1, 1))
+    monkeypatch.setattr(mingwang, "_shadu_wait_arrive",
+                        lambda w, t: (True, "已到达"))
+    monkeypatch.setattr(mingwang, "_shadu_scan_npc",
+                        lambda w, timeout=None: (None, "未找到"))
+    monkeypatch.setattr(mingwang, "log", lambda *a, **k: None)
+    monkeypatch.setattr(mingwang.time, "sleep", lambda s: None)
+    ok, info = mingwang._shadu_search_npc(object())
+    assert ok is False and "未找到" in info
+    assert calls == [(mingwang.SHADU_MAP, t[0], t[1])
+                     for _, t in mingwang.SHADU_WAYPOINTS]
+
+
+def test_shadu_search_skips_nav_when_already_at_waypoint(
+        monkeypatch, coord_nav_enabled):
+    """已在某搜索点容差内：该点跳过开图寻路，其余路点照常导航。"""
+    from src.device import map_nav
+    calls = []
+    monkeypatch.setattr(
+        map_nav, "start_navigation",
+        lambda *a, **k: calls.append(1) or (True, "已点击", None))
+    monkeypatch.setattr(mingwang, "close_scene_panels", lambda *a, **k: None)
+    monkeypatch.setattr(
+        mingwang.game_map, "read_map_position",
+        lambda w: (mingwang.SHADU_MAP, *mingwang.SHADU_WAYPOINTS[0][1]))
+    monkeypatch.setattr(mingwang, "_shadu_wait_arrive",
+                        lambda w, t: (True, "已到达"))
+    monkeypatch.setattr(mingwang, "_shadu_scan_npc",
+                        lambda w, timeout=None: (None, "未找到"))
+    monkeypatch.setattr(mingwang, "log", lambda *a, **k: None)
+    monkeypatch.setattr(mingwang.time, "sleep", lambda s: None)
+    ok, info = mingwang._shadu_search_npc(object())
+    assert ok is False and "未找到" in info
+    # 第 1 个路点已在附近跳过，第 2-6 个路点各导航一次
+    assert len(calls) == len(mingwang.SHADU_WAYPOINTS) - 1
+
+
 def _shadu_win():
     return _FakeWin([_pil(_noise_bgr(seed=20261115))])
 
