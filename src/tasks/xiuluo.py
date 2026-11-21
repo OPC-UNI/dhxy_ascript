@@ -27,8 +27,10 @@
    → 队长回灵兽村（轮回司世界地图不可用，走修罗回城符）→ 点「我想
    取消任务」→ 二次确认弹窗「你真的要取消任务？」点「是」（用户
    2026-11-15）→ 从「是」点击起 6s 后重新领取（重新领取前强制队伍检查：
-   暂离/组号队员归队/超时请离/补人）；非队长不取消/重领，转保持模式
-   并自动归队
+   暂离/组号队员归队/超时请离/补人）；身上已无任务时游戏提示「你身上
+   都没有任务，不要来烦我。」→ 点屏幕中间关闭并按任务不存在处理，
+   直接回正常领取（用户 2026-11-21，不判失败）；非队长不取消/重领，
+   转保持模式并自动归队
 5. 返程：战斗结束后用修罗回城符回灵兽村（仅「看打！」进入的战斗才返程，
    其他方式进入的战斗不自动返程）：返程前 has_task 复查任务确已消失
    （单轮消失确认的兜底）→ 打开背包 → 打开任务储物格
@@ -198,6 +200,17 @@ CANCEL_CONFIRM_TIMEOUT = 10                   # 等待确认弹窗并点「是�
                                              # 随取消选项点击即时出现，10s 覆盖
                                              # OCR 偶发漏检后的下一轮询
 CANCEL_CONFIRM_POLL_INTERVAL = 0.3            # 确认弹窗轮询间隔（同对话框选项轮询）
+
+# ---- 无任务提示（用户 2026-11-21 实机）：点「我想取消任务」时若身上
+#      没有修罗任务，游戏不弹「你真的要取消任务？」确认弹窗，而是提示
+#      「你身上都没有任务，不要来烦我。」——点屏幕中间关闭提示对话框，
+#      按任务已不存在处理并回到正常领取流程；不得判取消失败反复重走
+#      取消，把战斗失败/手动寻路失败恢复链路卡死 ----
+CANCEL_NO_TASK_TEXT = "你身上都没有任务"      # 游戏原文「你身上都没有任务，
+                                             # 不要来烦我。」的核心句（句首
+                                             # 已足够唯一：OCR 漏读尾部仍可
+                                             # 命中，完整句个别误读也可模糊
+                                             # 匹配）
 
 # ---- 战斗失败恢复（用户 2026-11-14 指定）：作为队长，任务战斗失败 →
 #      回灵兽村取消任务 → 6s 后重新领取；人数不足走既有检查暂离/补人流程 ----
@@ -1847,6 +1860,9 @@ def _cancel_task(win, assume_task=False):
     取消时点绿色选项「我想取消任务」，最后校验任务从追踪面板消失。
     用户 2026-11-15 补充：点「我想取消任务」后还有二次确认弹窗
     「你真的要取消任务？」，必须点「是」（点「不是」不取消）。
+    用户 2026-11-21 补充：身上实际没有任务时，点「我想取消任务」后
+    游戏提示「你身上都没有任务，不要来烦我。」——点屏幕中间关闭该
+    提示，按任务已不存在返回（不判失败），调用方继续正常领取。
 
     前置：任务追踪中已有修罗任务（无任务时领取入口不出现，无取消
     对象，且防止把其他对话框选项当取消选项点掉）；战斗中跳过。
@@ -1897,6 +1913,10 @@ def _cancel_task(win, assume_task=False):
     #    「你真的要取消任务？」，必须点「是」才真正取消；6s 重领间隔
     #    从这一点击开始计（_cancel_confirmed_at）。漏点/点成「不是」时
     #    任务继续存在，由下面的消失校验兜底判失败（下一轮恢复重试）。
+    #    身上没有任务时游戏改为提示「你身上都没有任务，不要来烦我。」
+    #    （用户 2026-11-21）：点屏幕中间关闭提示，按任务已不存在返回，
+    #    调用方回到正常领取流程——不得判失败，否则恢复链路每轮重走取消
+    #    永远卡在这条提示上。
     deadline = time.time() + CANCEL_CONFIRM_TIMEOUT
     confirmed = False
     while time.time() < deadline:
@@ -1906,6 +1926,14 @@ def _cancel_task(win, assume_task=False):
             continue
         items, img_np = game_map.ocr_regions(
             img, (task_tracker.DIALOG_REGION,))
+        if _norm_dialog_present(items, CANCEL_NO_TASK_TEXT):
+            _click_screen_center_safe(win, img=img)
+            log("[修罗] 游戏提示「你身上都没有任务，不要来烦我。」，"
+                "已点击屏幕中间关闭（按任务不存在处理，继续正常领取）",
+                "WARN")
+            _close_kept_claim_map(win)
+            return True, ("无需取消：游戏提示「你身上都没有任务，"
+                          "不要来烦我」（已关闭提示）")
         clicked_confirm = _click_cancel_confirm(win, items, img_np)
         if not clicked_confirm and _norm_dialog_present(
                 items, CANCEL_CONFIRM_TEXT):
@@ -2461,6 +2489,13 @@ def _manual_recover(win, check_team):
     if not ok:
         return False, f"取消任务失败: {info}"
     _team_checked = False  # 重新领取前强制队伍检查（与战斗失败恢复一致）
+    if "无需取消" in info:
+        # 游戏提示「你身上都没有任务，不要来烦我」（用户 2026-11-21）：
+        # 任务本就不存在，没有取消动作也就没有重领冷却——直接按无任务
+        # 处理，实机下一轮走正常领取（不得卡在取消恢复链路）
+        _cancel_confirmed_at = None
+        _task_gone_last_round = True
+        return True, f"手动寻路失败：任务已不存在（{info}），直接重新领取"
     elapsed = (time.time() - _cancel_confirmed_at
                if _cancel_confirmed_at is not None else 0.0)
     wait = max(0.0, CANCEL_RE_CLAIM_DELAY - elapsed)
@@ -2571,6 +2606,13 @@ def _recover_battle_failure(win, check_team):
         _returned_last_round = True
     # 3. 取消任务（任务已消失 = 本轮其实已完成）
     ok, info = _cancel_task(win)
+    if "无需取消" in info:
+        # 追踪中无任务，或游戏提示「你身上都没有任务，不要来烦我」
+        # （用户 2026-11-21）：任务已不存在，按本轮完成处理——无任务
+        # 提示不得判取消失败，否则恢复链路每轮重走取消永远卡住
+        _battle_recovery_pending = False
+        _task_gone_last_round = True
+        return "completed", f"战斗失败但任务已不在追踪（{info}），按本轮完成处理"
     if ok:
         _battle_recovery_pending = False
         _team_checked = False  # 重新领取前强制队伍检查（暂离/组号归队/补人）
@@ -2586,10 +2628,6 @@ def _recover_battle_failure(win, check_team):
         _task_gone_last_round = True
         return "canceled", (f"战斗失败：{info}，"
                             f"{CANCEL_RE_CLAIM_DELAY}s 后重新领取")
-    if "无需取消" in info:
-        _battle_recovery_pending = False
-        _task_gone_last_round = True
-        return "completed", f"战斗失败但任务已不在追踪（{info}），按本轮完成处理"
     _battle_recovery_pending = True
     return "failed", f"战斗失败后取消任务失败: {info}"
 

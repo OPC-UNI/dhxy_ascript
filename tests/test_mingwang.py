@@ -65,6 +65,7 @@ TEMPLATES = (
     (mingwang.SHAHAI_START_ICON, mingwang.SHAHAI_START_THRESHOLD),
     (mingwang.QINGXI_START_ICON, mingwang.QINGXI_START_THRESHOLD),
     (mingwang.TGQY_ITEM_ICON, mingwang.TGQY_ITEM_THRESHOLD),
+    (mingwang.REFRESH_ICON, mingwang.REFRESH_THRESHOLD),
     (moqu.MOQUSHENDAN_TITLE_ICON, moqu.MOQUSHENDAN_TITLE_THRESHOLD),
 )
 
@@ -3266,3 +3267,302 @@ def test_seal_left_map_with_green_link_advances(monkeypatch):
     assert clicked == [1]
     assert mingwang._seal_phase == 0
     mingwang._reset_seal_state()
+
+
+# ---- 任务栏刷新（用户 2026-11-21 规则：无已实现任务时刷新卡片）----
+def _cards_with_titles(titles):
+    """按实机卡片矩形构造指定标题的卡片列表（titles: {(row,col): 标题}）。"""
+    rects = _live_rects()
+    return [{"row": r, "col": c, "rect": rects[(r, c)],
+             "level": "高级", "title": title}
+            for (r, c), title in titles.items()]
+
+
+def _patch_refresh_state(monkeypatch):
+    """角色状态内存桩（隔离 user_data 文件）。"""
+    store = {}
+    monkeypatch.setattr(
+        mingwang.app_utils, "char_state_get",
+        lambda key, win, default=None: store.get(key, default))
+    monkeypatch.setattr(
+        mingwang.app_utils, "char_state_set",
+        lambda key, win, value: store.__setitem__(key, value))
+    return store
+
+
+def test_parse_refresh_used():
+    """顶部计数「任务已刷新：X/3」解析（整行/拆段/低置信度/无匹配）。"""
+    assert mingwang._parse_refresh_used(
+        [("今日已完成：3/5 任务已刷新：0/3",
+          [393, 261, 661, 282], 0.999)]) == 0
+    assert mingwang._parse_refresh_used(
+        [("今日已完成：3/5", [393, 261, 520, 282], 1.0),
+         ("任务已刷新：2/3", [530, 261, 661, 282], 1.0)]) == 2
+    assert mingwang._parse_refresh_used(
+        [("任务已刷新：1／3", [530, 261, 661, 282], 0.8)]) == 1
+    assert mingwang._parse_refresh_used([]) is None
+    assert mingwang._parse_refresh_used(
+        [("任务已刷新：X/3", [530, 261, 661, 282], 0.4)]) is None
+
+
+def test_refresh_header_strip():
+    """计数条带：锚点左缘向右 310px、锚点上下区域内。"""
+    assert mingwang._refresh_header_strip((392, 252, 425, 287),
+                                          (1378, 831)) == (392, 256, 702, 287)
+    assert mingwang._refresh_header_strip((1300, 500, 1330, 540),
+                                          (1378, 831)) == (1300, 504, 1378, 540)
+
+
+def test_card_refresh_point_live_offset():
+    """实机偏移：按钮中心 = 卡片右缘 -17 / 顶缘 +24；无按钮卡不命中。"""
+    tpl = cv2.imread(R.img(mingwang.REFRESH_ICON), cv2.IMREAD_COLOR)
+    frame = _noise_bgr(seed=20261122)
+    frame[300:300 + tpl.shape[0], 551:551 + tpl.shape[1]] = tpl
+    pt, score = mingwang._card_refresh_point(frame, (392, 290, 582, 444))
+    assert pt == (565, 314) and score >= mingwang.REFRESH_THRESHOLD
+    assert mingwang._card_refresh_point(
+        _noise_bgr(seed=20261123), (794, 451, 984, 605))[0] is None
+
+
+def test_refresh_state_roundtrip_and_cross_day(monkeypatch):
+    """当天状态往返；跨天自动重置（每角色每天 3 次）。"""
+    store = _patch_refresh_state(monkeypatch)
+    win = object()
+    today = time.strftime("%Y-%m-%d")
+    assert mingwang._load_refresh_state(win) == {
+        "date": today, "used": 0, "no_support": False}
+    assert mingwang._refresh_skip_reason(win) is None
+    mingwang._save_refresh_state(win, used=3, no_support=True)
+    assert mingwang._load_refresh_state(win)["used"] == 3
+    assert "今日不再领取" in mingwang._refresh_skip_reason(win)
+    # 未满 3 次 / 有已实现任务：不触发跳过门槛
+    store[mingwang.REFRESH_STATE_KEY] = {
+        "date": today, "used": 2, "no_support": True}
+    assert mingwang._refresh_skip_reason(win) is None
+    store[mingwang.REFRESH_STATE_KEY] = {
+        "date": today, "used": 3, "no_support": False}
+    assert mingwang._refresh_skip_reason(win) is None
+    # 跨天重置
+    store[mingwang.REFRESH_STATE_KEY] = {
+        "date": "2000-01-01", "used": 3, "no_support": True}
+    assert mingwang._load_refresh_state(win)["used"] == 0
+    assert mingwang._refresh_skip_reason(win) is None
+
+
+def test_refresh_skip_gate_in_run_loop(monkeypatch):
+    """刷新用尽且无已实现任务 → 任务启动直接跳过，不判种族/不领取。"""
+    monkeypatch.setattr(mingwang, "load_task_counts", lambda: {"名望": 5})
+    monkeypatch.setattr(mingwang.app_utils, "task_progress_done",
+                        lambda w, m: 0)
+    monkeypatch.setattr(mingwang, "_task_in_tracker", lambda w: False)
+    monkeypatch.setattr(
+        mingwang, "_refresh_skip_reason",
+        lambda w: "今日任务已刷新 3/3 次且无可领取的已实现任务，"
+                  "今日不再领取名望任务")
+    monkeypatch.setattr(
+        mingwang, "_detect_race_with_retries",
+        lambda w: (_ for _ in ()).throw(AssertionError("跳过时不应判种族")))
+    monkeypatch.setattr(
+        mingwang, "run_cycle",
+        lambda w, race=None: (_ for _ in ()).throw(
+            AssertionError("跳过时不应领取")))
+    info = mingwang.run_loop(object())
+    assert "今日不再领取" in info
+
+
+def test_refresh_until_supported_clicks_and_finds(monkeypatch):
+    """无已实现任务 → 点第一张可刷新卡 → 刷新后识别出现已实现任务。"""
+    store = _patch_refresh_state(monkeypatch)
+    monkeypatch.setattr(mingwang.time, "sleep", lambda s: None)
+    monkeypatch.setattr(mingwang, "_read_refresh_used", lambda img, a: 0)
+    monkeypatch.setattr(mingwang, "_card_refresh_point",
+                        lambda bgr, rect: ((565, 314), 1.0))
+    monkeypatch.setattr(
+        mingwang, "_wait_refresh_applied",
+        lambda w, a, card, used: (True, used + 1,
+                                  f"刷新计数 {used}→{used + 1}/3"))
+    before = _cards_with_titles({(0, 0): "安抚鹦鹉", (0, 1): "鬼祟仙族"})
+    after = _cards_with_titles({(0, 0): "蛟魔复仇", (0, 1): "鬼祟仙族"})
+    monkeypatch.setattr(
+        mingwang, "_scan_panel_cards",
+        lambda w, timeout=None: (after, LIVE_ANCHOR, _pil(_live_frame(True))))
+    clicks = []
+    monkeypatch.setattr(mingwang, "human_click",
+                        lambda w, x, y, button="primary":
+                        clicks.append((x, y, button)))
+    cards, _anchor, _img, info = mingwang._refresh_until_supported(
+        object(), LIVE_ANCHOR, before, _pil(_live_frame(True)))
+    assert cards is not None and "蛟魔复仇" in info
+    assert clicks == [(565, 314, "primary")]
+    state = store[mingwang.REFRESH_STATE_KEY]
+    assert state["used"] == 1 and state["no_support"] is False
+
+
+def test_refresh_until_supported_retries_on_next_card(monkeypatch):
+    """第一次刷新仍无已实现任务 → 换下一张卡刷新（最多 3 次）。"""
+    store = _patch_refresh_state(monkeypatch)
+    monkeypatch.setattr(mingwang.time, "sleep", lambda s: None)
+    monkeypatch.setattr(mingwang, "_read_refresh_used", lambda img, a: 0)
+    monkeypatch.setattr(mingwang, "_card_refresh_point",
+                        lambda bgr, rect: ((565, 314), 1.0))
+    monkeypatch.setattr(
+        mingwang, "_wait_refresh_applied",
+        lambda w, a, card, used: (True, used + 1, "刷新生效"))
+    before = _cards_with_titles({(0, 0): "安抚鹦鹉", (0, 1): "鬼祟仙族"})
+    mid = _cards_with_titles({(0, 0): "奇异蜘蛛", (0, 1): "鬼祟仙族"})
+    after = _cards_with_titles({(0, 0): "奇异蜘蛛", (0, 1): "沙海迷踪"})
+    scans = [mid, mid, after]  # 第一次刷新后首扫+复扫均无，第二次刷新后命中
+    monkeypatch.setattr(mingwang, "_scan_panel_cards",
+                        lambda w, timeout=None: (scans.pop(0), LIVE_ANCHOR,
+                                                 _pil(_live_frame(True))))
+    clicks = []
+    monkeypatch.setattr(mingwang, "human_click",
+                        lambda w, x, y, button="primary":
+                        clicks.append((x, y, button)))
+    cards, _anchor, _img, info = mingwang._refresh_until_supported(
+        object(), LIVE_ANCHOR, before, _pil(_live_frame(True)))
+    assert cards is not None and "沙海迷踪" in info
+    assert len(clicks) == 2
+    assert store[mingwang.REFRESH_STATE_KEY]["used"] == 2
+
+
+def test_refresh_until_supported_exhausted_marks_no_support(monkeypatch):
+    """最后一次刷新后仍无已实现任务 → 记录 no_support（下次启动跳过）。"""
+    store = _patch_refresh_state(monkeypatch)
+    monkeypatch.setattr(mingwang.time, "sleep", lambda s: None)
+    monkeypatch.setattr(mingwang, "_read_refresh_used", lambda img, a: 2)
+    monkeypatch.setattr(mingwang, "_card_refresh_point",
+                        lambda bgr, rect: ((565, 314), 1.0))
+    monkeypatch.setattr(mingwang, "_wait_refresh_applied",
+                        lambda w, a, card, used: (True, 3, "刷新计数 2→3/3"))
+    before = _cards_with_titles({(0, 0): "安抚鹦鹉", (0, 1): "鬼祟仙族"})
+    monkeypatch.setattr(
+        mingwang, "_scan_panel_cards",
+        lambda w, timeout=None: (before, LIVE_ANCHOR, _pil(_live_frame(True))))
+    monkeypatch.setattr(mingwang, "human_click", lambda *a, **k: None)
+    cards, _anchor, _img, info = mingwang._refresh_until_supported(
+        object(), LIVE_ANCHOR, before, _pil(_live_frame(True)))
+    assert cards is None and "刷新次数已用尽" in info
+    state = store[mingwang.REFRESH_STATE_KEY]
+    assert state["used"] == 3 and state["no_support"] is True
+
+
+def test_refresh_until_supported_already_exhausted(monkeypatch):
+    """进入刷新链时计数已 3/3 → 不点击，直接记录 no_support。"""
+    store = _patch_refresh_state(monkeypatch)
+    monkeypatch.setattr(mingwang, "_read_refresh_used", lambda img, a: 3)
+    monkeypatch.setattr(
+        mingwang, "human_click",
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("次数已用尽不应点击刷新")))
+    before = _cards_with_titles({(0, 0): "安抚鹦鹉"})
+    cards, _anchor, _img, info = mingwang._refresh_until_supported(
+        object(), LIVE_ANCHOR, before, _pil(_live_frame(True)))
+    assert cards is None and "3/3" in info
+    assert store[mingwang.REFRESH_STATE_KEY]["no_support"] is True
+
+
+def test_refresh_until_supported_no_icon_no_click(monkeypatch):
+    """找不到刷新按钮（面板变体/未渲染）：不点击、不误记 no_support。"""
+    store = _patch_refresh_state(monkeypatch)
+    monkeypatch.setattr(mingwang, "_read_refresh_used", lambda img, a: 0)
+    monkeypatch.setattr(mingwang, "_card_refresh_point",
+                        lambda bgr, rect: (None, 0.3))
+    monkeypatch.setattr(
+        mingwang, "human_click",
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("无刷新按钮不应点击")))
+    before = _cards_with_titles({(0, 0): "安抚鹦鹉"})
+    cards, _anchor, _img, info = mingwang._refresh_until_supported(
+        object(), LIVE_ANCHOR, before, _pil(_live_frame(True)))
+    assert cards is None and "未找到可点击的刷新按钮" in info
+    assert (mingwang.REFRESH_STATE_KEY not in store
+            or not store[mingwang.REFRESH_STATE_KEY]["no_support"])
+
+
+def test_claim_panel_task_claims_after_refresh(monkeypatch):
+    """刷新链返回已实现任务 → 正常点击该卡接取按钮领取。"""
+    _patch_cards_with(monkeypatch, {
+        (0, 0): [("高級", [399, 298, 422, 338], 0.9),
+                 ("黑水蛟王", [458, 307, 537, 333], 1.0),
+                 ("接取", [462, 409, 514, 437], 1.0)],
+        (1, 0): [("高級", [399, 459, 422, 499], 0.9),
+                 ("黑水精怪", [460, 470, 535, 493], 1.0),
+                 ("接取", [463, 571, 513, 596], 1.0)],
+    })
+    supported = _cards_with_titles({(0, 0): "蛟魔复仇"})
+    monkeypatch.setattr(
+        mingwang, "_refresh_until_supported",
+        lambda w, anchor, cards, img:
+        (supported, LIVE_ANCHOR, _pil(_live_frame(True)),
+         "刷新后出现已实现任务「蛟魔复仇」"))
+    clicks = []
+    monkeypatch.setattr(mingwang, "human_click",
+                        lambda w, x, y, button="primary":
+                        clicks.append((x, y, button)))
+    win = _FakeWin([
+        _pil(_live_frame(True)),
+        _pil(_live_frame(True, skip_buttons=((487, 423),))),
+    ])
+    status, info = mingwang.claim_panel_task(win)
+    assert status == "claimed" and "蛟魔复仇" in info
+    assert clicks == [(487, 423, "primary")]
+
+
+def test_claim_panel_task_refresh_not_found_includes_info(monkeypatch):
+    """刷新链未找到任务 → not_found 描述带刷新结论（供日志定位）。"""
+    _patch_cards_with(monkeypatch, {
+        (0, 0): [("高級", [399, 298, 422, 338], 0.9),
+                 ("黑水蛟王", [458, 307, 537, 333], 1.0),
+                 ("接取", [462, 409, 514, 437], 1.0)],
+        (1, 0): [("高級", [399, 459, 422, 499], 0.9),
+                 ("黑水精怪", [460, 470, 535, 493], 1.0),
+                 ("接取", [463, 571, 513, 596], 1.0)],
+    })
+    monkeypatch.setattr(
+        mingwang, "_refresh_until_supported",
+        lambda w, anchor, cards, img:
+        (None, None, None, "今日刷新次数已用尽（3/3），今日不再领取名望任务"))
+    monkeypatch.setattr(
+        mingwang, "human_click",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("不应点击")))
+    win = _FakeWin([_pil(_live_frame(True))])
+    status, info = mingwang.claim_panel_task(win)
+    assert status == "not_found" and "刷新次数已用尽" in info
+
+
+def test_wait_refresh_applied_by_count(monkeypatch):
+    """刷新生效主信号：顶部计数增加（权威）。"""
+    monkeypatch.setattr(mingwang.time, "sleep", lambda s: None)
+    monkeypatch.setattr(mingwang, "_read_refresh_used", lambda img, a: 1)
+    win = _FakeWin([_pil(_noise_bgr(seed=20261124))])
+    card = {"row": 0, "col": 0, "rect": (392, 290, 582, 444),
+            "level": "高级", "title": "安抚鹦鹉"}
+    applied, used, desc = mingwang._wait_refresh_applied(
+        win, LIVE_ANCHOR, card, 0)
+    assert applied and used == 1 and "0→1" in desc
+
+
+def test_wait_refresh_applied_by_title_change(monkeypatch):
+    """计数 OCR 失败时，卡片标题变化作为生效兜底信号。"""
+    monkeypatch.setattr(mingwang.time, "sleep", lambda s: None)
+    monkeypatch.setattr(mingwang, "_read_refresh_used", lambda img, a: None)
+    monkeypatch.setattr(
+        mingwang.game_map, "ocr_region",
+        lambda img, rect: ([("蛟魔复仇", [458, 307, 537, 333], 1.0)], None))
+    win = _FakeWin([_pil(_noise_bgr(seed=20261125))])
+    card = {"row": 0, "col": 0, "rect": (392, 290, 582, 444),
+            "level": "高级", "title": "安抚鹦鹉"}
+    applied, used, desc = mingwang._wait_refresh_applied(
+        win, LIVE_ANCHOR, card, 0)
+    assert applied and used == 1 and "蛟魔复仇" in desc
+
+
+def test_wait_refresh_applied_unconfirmed(monkeypatch):
+    """超时无变化 → 未确认（调用方不得重复点击，防白耗次数）。"""
+    monkeypatch.setattr(mingwang, "REFRESH_APPLY_TIMEOUT", 0.0)
+    applied, used, desc = mingwang._wait_refresh_applied(
+        object(), LIVE_ANCHOR, {"row": 0, "col": 0,
+                                "rect": (392, 290, 582, 444),
+                                "level": "高级", "title": "安抚鹦鹉"}, 1)
+    assert not applied and used == 1 and "未确认" in desc

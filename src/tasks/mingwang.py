@@ -130,6 +130,13 @@
    接取后出现「今日还请多加歇息，明日再来吧」→ 关闭山河名望面板后
    结束，2026-11-15 用户规则）；启动时追踪已有任务则跳过领取直接
    续跑。返程由领取寻路（世界地图/小地图）兜底。
+   **任务刷新（用户 2026-11-21 规则）**：任务栏没有已实现任务时不再
+   直接结束——逐卡点击卡片右上角刷新按钮（每次只重掷该卡）并重新
+   识别，出现已实现任务即领取；每角色每天最多刷新 3 次（面板顶部
+   「任务已刷新：X/3」权威计数）。刷新用尽仍无已实现任务 → 当天
+   记「无支持任务」，下次任务启动直接跳过名望领取（即使未完成配置
+   次数）；若刷新后出现过已实现任务并完成，下一轮照常领取（完成后
+   卡槽换新任务，可能仍是已实现的）。
 """
 import re
 import time
@@ -279,6 +286,28 @@ TRACK_TASK_TIMEOUT = 12.0   # 领取后等待追踪面板出现「山河名望�
 # OCR 单字误读/拆行），锚词按游戏原文维护（识别用有辨识度的整句片段，
 # 不要用「明日」这类泛词）。
 DAILY_FULL_TEXTS = ("今日还请多加歇息", "明日再来吧")
+# ---- 任务栏刷新（用户 2026-11-21 规则）----
+# 任务栏没有已实现任务时不再直接结束，先刷新卡片任务：每张**未解锁**
+# 卡片右上角有刷新按钮（实机 2026-11-21 标定：按钮中心 = 卡片右缘 -17px
+# / 顶缘 +24px；模板 mingwang_shanhemingwang_shuaxin 在 5 张可领卡上均
+# 命中 1.000、未解锁卡 0.371、噪声帧 0.155，阈值 0.9 余量充足）。点击
+# **只重掷该卡**（用户确认），随后重新识别全部卡片，出现已实现任务即
+# 返回领取。刷新次数每角色每天最多 3 次，面板顶部「任务已刷新：X/3」
+# 是权威计数（实机 OCR 置信度 1.000/置信度 0.999 两次读取均稳定）。
+# 次数用尽仍无已实现任务：写入当天「无支持任务」状态，**下次任务启动
+# 直接跳过名望领取**（用户规则：即使未完成配置的 5 次也不再空跑）；
+# 若刷新后出现过已实现任务并完成，则下一轮照常重新领取/识别——完成
+# 后的卡槽会换成新任务，可能又是已实现的（用户明确的歧义解释）。
+REFRESH_STATE_KEY = "mingwang_refresh"   # 角色维度当天状态 {"date","used","no_support"}
+REFRESH_LIMIT = 3                         # 每角色每天最多刷新次数（游戏规则）
+REFRESH_ICON = "mingwang_shanhemingwang_shuaxin.png"  # 卡片右上角刷新按钮（28x28）
+REFRESH_THRESHOLD = 0.9                   # 刷新按钮匹配阈值（实机 1.000 / 未解锁 0.371 / 噪声 0.155）
+REFRESH_HEADER_WIDTH = 310                # 顶部计数条带宽度（锚点左缘向右，覆盖「任务已刷新：X/3」）
+REFRESH_APPLY_TIMEOUT = 4.0               # 点击刷新后等待计数/卡片变化的时限（秒）
+REFRESH_APPLY_INTERVAL = 0.6              # 刷新生效轮询间隔（秒）
+REFRESH_RESCAN_TIMEOUT = 3.0              # 刷新后重新扫描任务栏的时限（秒）
+REFRESH_COUNT_RE = re.compile(            # 顶部计数解析（OCR 原文「任务已刷新：0/3」）
+    r"已刷新\s*[：:]?\s*(\d+)\s*[/／]\s*(\d+)")
 # 期望领取优先级（高→低）：后续实现各任务执行流程后按该顺序选卡
 LEVEL_PRIORITY = ("高级", "中级", "初级")
 LEVEL_OCR_ALIASES = str.maketrans({"級": "级"})  # OCR 常把「级」读成繁体「級」
@@ -1226,6 +1255,225 @@ def _card_summary(cards):
     return "、".join(parts)
 
 
+# ---- 任务栏刷新（用户 2026-11-21 规则）----
+
+def _refresh_header_strip(anchor_rect, img_size):
+    """顶部计数条带：锚点左缘向右 REFRESH_HEADER_WIDTH、锚点上下区域内。
+
+    实机 2026-11-21：锚点 (392,252,425,287)，计数行 OCR 框
+    (393,261,661,282)，条带 (392,256,702,287) 完整覆盖「今日已完成：
+    3/5 任务已刷新：0/3」，区域 OCR 约 0.1-0.4s（领取步骤一次性调用，
+    不在轮询热路径）。
+    """
+    l, t, _r, b = anchor_rect
+    w, h = img_size
+    return (max(0, l), max(0, t + 4),
+            min(w, l + REFRESH_HEADER_WIDTH), min(h, b))
+
+
+def _parse_refresh_used(items):
+    """从顶部计数行 OCR 结果解析「任务已刷新：X/3」的 X；失败返回 None。
+
+    items 可能被 OCR 拆成多段（「今日已完成：3/5」+「任务已刷新：0/3」），
+    按行序拼接后正则匹配；低置信度行不参与，避免噪声拼出假计数。
+    """
+    texts = [txt for txt, _rect, score in
+             sorted(items, key=lambda x: (x[1][1], x[1][0]))
+             if score >= 0.5]
+    m = REFRESH_COUNT_RE.search("".join(texts))
+    if m is None:
+        return None
+    try:
+        return int(m.group(1))
+    except (TypeError, ValueError):
+        return None
+
+
+def _read_refresh_used(img, anchor_rect):
+    """读取面板顶部「任务已刷新：X/3」的已用次数；未读到返回 None。"""
+    strip = _refresh_header_strip(anchor_rect, img.size)
+    items, _ = game_map.ocr_region(img, strip)
+    return _parse_refresh_used(items)
+
+
+def _load_refresh_state(win):
+    """读取当天刷新状态（角色维度持久化）：{"date","used","no_support"}。
+
+    面板计数是游戏权威值；本状态用于跨启动记忆「次数用尽且无已实现
+    任务」（下次任务启动直接跳过领取，用户 2026-11-21 规则）与 OCR
+    读取失败时的兜底。跨天自动重置（每天 3 次）。
+    """
+    today = time.strftime("%Y-%m-%d")
+    state = {"date": today, "used": 0, "no_support": False}
+    entry = app_utils.char_state_get(REFRESH_STATE_KEY, win)
+    if not isinstance(entry, dict) or entry.get("date") != today:
+        return state
+    try:
+        state["used"] = max(0, min(REFRESH_LIMIT,
+                                   int(entry.get("used") or 0)))
+    except (TypeError, ValueError):
+        pass
+    state["no_support"] = entry.get("no_support") is True
+    return state
+
+
+def _save_refresh_state(win, used=None, no_support=None):
+    """合并写入当天刷新状态（只更新传入字段；跨天从当天新状态起算）。"""
+    state = _load_refresh_state(win)
+    if used is not None:
+        state["used"] = max(0, min(REFRESH_LIMIT, int(used)))
+    if no_support is not None:
+        state["no_support"] = bool(no_support)
+    state["date"] = time.strftime("%Y-%m-%d")
+    app_utils.char_state_set(REFRESH_STATE_KEY, win, state)
+
+
+def _refresh_skip_reason(win):
+    """任务启动门槛：当天刷新次数用尽且无已实现任务 → 不再领取。
+
+    用户 2026-11-21 规则：3 次刷新用完仍没有已实现任务时，下次任务再
+    启动即使未完成配置次数也不应再领取名望任务（卡片不会自己变化，
+    再走一遍领取链路只会空跑）。刷新后出现过已实现任务时 no_support
+    会被清除，下一轮仍正常领取。
+    """
+    state = _load_refresh_state(win)
+    if state["used"] >= REFRESH_LIMIT and state["no_support"]:
+        return (f"今日任务已刷新 {state['used']}/{REFRESH_LIMIT} 次"
+                f"且无可领取的已实现任务，今日不再领取名望任务")
+    return None
+
+
+def _note_supported_found(win):
+    """观察到已实现任务时清除「无支持任务」标记（跨启动跳过门槛失效）。"""
+    if _load_refresh_state(win)["no_support"]:
+        _save_refresh_state(win, no_support=False)
+
+
+def _card_refresh_point(bgr, card_rect):
+    """卡片右上角刷新按钮中心；未命中返回 (None, 分数)。
+
+    实机 2026-11-21 标定：按钮中心 = (卡片右缘 -17, 卡片顶缘 +24)，
+    模板 28x28 在 5 张可领卡上均 1.000；未解锁卡无按钮（0.371）。
+    搜索条带只取卡片右上角 44x46，未命中不回退全帧（面板其余位置
+    不会出现该按钮）。
+    """
+    _l, t, r, _b = card_rect
+    region = (r - 45, t + 2, r - 1, t + 48)
+    score, pt = game_map.best_match_np(bgr, REFRESH_ICON, region=region)
+    if score < REFRESH_THRESHOLD:
+        return None, score
+    return pt, score
+
+
+def _wait_refresh_applied(win, anchor_rect, card, used_before):
+    """等待刷新点击生效，返回 (是否生效, 已用次数, 描述)。
+
+    生效信号（实测二选一）：顶部计数 X 增加（权威）或该卡标题变化
+    （计数 OCR 偶发失败时兜底）。超时未生效**不得重复点击**——点击
+    可能已扣次数只是界面未刷新，重试会白耗当天次数；调用方直接结束
+    刷新链，下一轮任务启动重新判定。
+    """
+    deadline = time.time() + REFRESH_APPLY_TIMEOUT
+    while time.time() < deadline:
+        time.sleep(REFRESH_APPLY_INTERVAL)
+        img = win.capture(force_activate=False)
+        if img is None:
+            continue
+        used = _read_refresh_used(img, anchor_rect)
+        if used is not None and used > used_before:
+            return True, used, f"刷新计数 {used_before}→{used}/{REFRESH_LIMIT}"
+        items, _ = game_map.ocr_region(img, card["rect"])
+        title = _card_title(items, card["rect"])
+        if title and title != card["title"]:
+            return True, used_before + 1, (
+                f"卡片 r{card['row']}c{card['col']} 已刷新为「{title}」")
+    return False, used_before, "刷新点击未确认（计数与卡片均未变化）"
+
+
+def _refresh_until_supported(win, anchor_rect, cards, img):
+    """任务栏无已实现任务时逐卡刷新，直到出现已实现任务或次数用尽。
+
+    用户 2026-11-21 规则：刷新按钮在每个卡片右上角、每次只重掷该卡；
+    刷新后重新识别面板全部卡片。优先刷新尚未刷过的可领卡（5 张卡 ×
+    每天 3 次足够覆盖），出现已实现任务立即返回。次数用尽仍无已实现
+    任务 → 写入当天 no_support 状态（下次启动跳过领取）。
+    返回 (cards, anchor, img, 描述)；cards=None 表示仍未找到。
+    """
+    state = _load_refresh_state(win)
+    used = state["used"]
+    used_ocr = _read_refresh_used(img, anchor_rect)
+    if used_ocr is not None:
+        used = max(used, used_ocr)  # 面板权威值；OCR 低读时以本地记录兜底
+    if used >= REFRESH_LIMIT:
+        _save_refresh_state(win, used=REFRESH_LIMIT, no_support=True)
+        return None, None, None, (
+            f"今日任务已刷新 {used}/{REFRESH_LIMIT} 次，仍无已实现任务"
+            f"——今日不再领取名望任务")
+    log(f"[名望] 任务栏无已实现任务，开始刷新卡片"
+        f"（今日已刷新 {used}/{REFRESH_LIMIT}）", "SYS")
+    tried = set()
+    notes = []
+    while used < REFRESH_LIMIT:
+        bgr = _bgr_frame(img)  # 复用最近一次扫描帧（调用方已截，不重复截窗）
+        target = None
+        # 标题未读出的卡最后再刷（可能恰是 OCR 漏读的已实现任务，
+        # 先刷可读的其它卡，仍未找到再动它）
+        ordered = sorted(cards, key=lambda c: (0 if c["title"] else 1,
+                                               c["row"], c["col"]))
+        for c in ordered:
+            key = (c["row"], c["col"])
+            if key in tried:
+                continue
+            pt, score = _card_refresh_point(bgr, c["rect"])
+            if pt is None:
+                continue
+            target = (c, pt, score)
+            break
+        if target is None:
+            notes.append("未找到可点击的刷新按钮")
+            break
+        card, pt, score = target
+        tried.add((card["row"], card["col"]))
+        human_click(win, pt[0], pt[1])
+        log(f"[名望] 已点击卡片 r{card['row']}c{card['col']} 刷新按钮 "
+            f"@({pt[0]},{pt[1]})（匹配 {score:.3f}，"
+            f"今日第 {used + 1} 次）", "SYS")
+        applied, used, desc = _wait_refresh_applied(win, anchor_rect, card,
+                                                    used)
+        notes.append(desc)
+        if not applied:
+            break  # 结果未知：不重复点击，防白耗当天次数
+        _save_refresh_state(win, used=used)
+        time.sleep(0.5)  # 刷新动画落定（计数可能先于卡片重绘更新）
+        cards2, anchor2, img2 = _scan_panel_cards(
+            win, timeout=REFRESH_RESCAN_TIMEOUT)
+        if cards2 is None:
+            notes.append("刷新后面板扫描失败")
+            break
+        cards, anchor_rect, img = cards2, anchor2, img2
+        _target, task = _pick_card(cards)
+        if task is None:
+            # OCR 瞬态复扫（同领取首扫）：刷新后卡片重绘可能让首扫读不出
+            # 标题；已实现任务必须扫到才能停止消耗当天刷新次数
+            time.sleep(0.8)
+            cards3, anchor3, img3 = _scan_panel_cards(
+                win, timeout=REFRESH_RESCAN_TIMEOUT)
+            if cards3 is not None:
+                cards, anchor_rect, img = cards3, anchor3, img3
+                _target, task = _pick_card(cards)
+        log(f"[名望] 刷新后任务栏识别: {_card_summary(cards) or '(无)'}",
+            "SYS")
+        if task is not None:
+            _save_refresh_state(win, used=used, no_support=False)
+            notes.append(f"刷新后出现已实现任务「{task['title']}」")
+            return cards, anchor_rect, img, "；".join(notes)
+    if used >= REFRESH_LIMIT:
+        _save_refresh_state(win, used=used, no_support=True)
+        notes.append(f"今日刷新次数已用尽（{used}/{REFRESH_LIMIT}），"
+                     f"今日不再领取名望任务")
+    return None, None, None, "；".join(notes)
+
+
 def _verify_claim(win, title, card_rect):
     """点击接取后的确认：接取按钮消失 或 任务进入追踪面板。
 
@@ -1369,7 +1617,7 @@ def claim_panel_task(win):
     关闭山河名望面板，用户 2026-11-15 规则）/ not_found 无已实现任务 /
     fail 面板或接取按钮未找到。
     """
-    cards, _anchor, img = _scan_panel_cards(win)
+    cards, anchor, img = _scan_panel_cards(win)
     if cards is None:
         return "fail", f"未找到山河名望任务栏（锚点 {PANEL_MAODIAN_ICON} 未命中）"
     summary = _card_summary(cards)
@@ -1381,16 +1629,28 @@ def claim_panel_task(win):
         log(f"[名望] 首次扫描未找到已实现任务（{_task_list_desc()}），"
             f"1s 后复扫", "WARN")
         time.sleep(0.8)
-        cards2, _anchor2, img2 = _scan_panel_cards(win, timeout=3.0)
+        cards2, anchor2, img2 = _scan_panel_cards(win, timeout=3.0)
         if cards2 is not None:
-            cards, img = cards2, img2
+            cards, anchor, img = cards2, anchor2, img2
             summary = _card_summary(cards)
             log(f"[名望] 任务栏复扫识别: {summary or '(无)'}", "SYS")
             target, task = _pick_card(cards)
+    refresh_info = ""
+    if target is None:
+        # 无已实现任务：先刷新卡片（每角色每天 3 次，用户 2026-11-21 规则）
+        rcards, ranchor, rimg, refresh_info = _refresh_until_supported(
+            win, anchor, cards, img)
+        if rcards is not None:
+            cards, anchor, img = rcards, ranchor, rimg
+            summary = _card_summary(cards)
+            target, task = _pick_card(cards)
+    if target is not None:
+        _note_supported_found(win)
     if target is None:
         return "not_found", (f"任务栏未找到已实现任务"
                              f"（{_task_list_desc()}），"
-                             f"当前卡片: {summary or '(无)'}")
+                             f"当前卡片: {summary or '(无)'}"
+                             + (f"；{refresh_info}" if refresh_info else ""))
 
     title, level = task["title"], task["level"]
     level_desc = level or "不限级别"
@@ -3860,7 +4120,9 @@ def run_loop(win, cycle_interval=3.0):
 
     结束条件（满足其一即返回结束原因，同玄枢轶闻）：
     1. 完成任务次数达到设置的次数上限（通用设置-任务次数）
-    2. 任务栏不存在当前已实现的任务（如「蛟魔复仇」「五庄封印」「沙都修罗」）
+    2. 任务栏不存在当前已实现的任务且当天刷新次数已用尽（刷新流程见
+       _refresh_until_supported；用尽后当天再次启动直接跳过领取，用户
+       2026-11-21 规则）
     3. 种族不在已实现领取点内（当前实现魔族/仙族）
     4. 今日任务全部完成：点击接取后出现「今日还请多加歇息，明日再来吧」
        （2026-11-15 用户规则，面板已由领取链路关闭）
@@ -3889,6 +4151,12 @@ def run_loop(win, cycle_interval=3.0):
         round_no += 1
         log(f"[名望] ==== 第 {round_no} 轮 ====", "SYS")
         if not _task_in_tracker(win):
+            # 当天刷新次数已用尽且无已实现任务：不再领取（用户 2026-11-21
+            # 规则——卡片不会自己变化，再走领取链路只会空跑）
+            skip_reason = _refresh_skip_reason(win)
+            if skip_reason:
+                log(f"[名望] {skip_reason}", "SYS")
+                return skip_reason
             if race is None:
                 debug_overlay.set_phase("种族判定")
                 race, info = _detect_race_with_retries(win)

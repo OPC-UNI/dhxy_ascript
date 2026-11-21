@@ -836,6 +836,88 @@ def test_cancel_task_confirm_dialog_timeout(monkeypatch):
     assert xiuluo._cancel_confirmed_at is None
 
 
+def test_cancel_task_no_task_message_closes_and_succeeds(monkeypatch):
+    """身上无任务：游戏提示「你身上都没有任务，不要来烦我。」→ 点屏幕
+    中间关闭并按任务不存在返回（用户 2026-11-21），不判失败、不进
+    消失校验、不计 6s 重领冷却。"""
+    clock = _FakeClock()
+    monkeypatch.setattr(xiuluo, "time", clock)
+    monkeypatch.setattr(xiuluo, "is_in_battle", lambda w: False)
+    monkeypatch.setattr(xiuluo.task_tracker, "has_task", lambda *a, **k: True)
+    monkeypatch.setattr(xiuluo, "_walk_to_claim_spot", lambda w: (True, ""))
+    monkeypatch.setattr(xiuluo, "_click_entry_ensuring_dialog",
+                        lambda w, **k: (True, "ok", "使者", (1, 1), ([], None)))
+    monkeypatch.setattr(xiuluo, "_click_cancel_option",
+                        lambda w, items, img_np: True)
+
+    def _unexpected(*a, **k):
+        raise AssertionError("无任务提示不应点确认「是」/进消失校验")
+
+    monkeypatch.setattr(xiuluo, "_click_cancel_confirm", _unexpected)
+    monkeypatch.setattr(xiuluo, "_task_absent_in_frame", _unexpected)
+    monkeypatch.setattr(
+        xiuluo.game_map, "ocr_regions",
+        lambda img, regions: ([("你身上都没有任务，不要来烦我。",
+                               (500, 330, 880, 352), 0.95)], None))
+    dismissed = []
+    monkeypatch.setattr(xiuluo, "_click_screen_center_safe",
+                        lambda w, img=None: dismissed.append(1) or True)
+    monkeypatch.setattr(xiuluo, "log", lambda *a, **k: None)
+    monkeypatch.setattr(xiuluo, "_cancel_confirmed_at", None)
+    ok, info = xiuluo._cancel_task(_FakeWin())
+    assert ok is True and "无需取消" in info
+    assert "你身上都没有任务" in info
+    assert dismissed == [1]  # 点屏幕中间关闭提示对话框
+    assert xiuluo._cancel_confirmed_at is None  # 未点「是」：不计重领冷却
+
+
+def test_recover_battle_failure_no_task_message_is_completed(monkeypatch):
+    """取消时游戏提示身上无任务（_cancel_task 返回无需取消）：按本轮
+    完成处理，不等待 6s 重领冷却（用户 2026-11-21）。"""
+    clock = _FakeClock()
+    monkeypatch.setattr(xiuluo, "time", clock)
+    monkeypatch.setattr(xiuluo, "log", lambda *a, **k: None)
+    monkeypatch.setattr(xiuluo, "_check_team_with_retry",
+                        lambda w, **k: ("ready", "队伍满足"))
+    monkeypatch.setattr(xiuluo.game_map, "read_map_position",
+                        lambda w, img=None: ("灵兽村", 117, 95))
+    monkeypatch.setattr(
+        xiuluo, "_cancel_task",
+        lambda w: (True, "无需取消：游戏提示「你身上都没有任务，"
+                         "不要来烦我」（已关闭提示）"))
+    monkeypatch.setattr(xiuluo, "_task_gone_last_round", False)
+    monkeypatch.setattr(xiuluo, "_battle_recovery_pending", True)
+    status, info = xiuluo._recover_battle_failure(_FakeWin(), True)
+    assert status == "completed" and "按本轮完成" in info
+    assert clock.t == 0  # 无取消动作：不等待重领间隔
+    assert xiuluo._task_gone_last_round is True
+    assert xiuluo._battle_recovery_pending is False
+
+
+def test_manual_recover_no_task_message_reclaims_without_wait(monkeypatch):
+    """手动寻路失败恢复：游戏提示身上无任务 → 直接按无任务重新领取，
+    不等待 6s 重领间隔、不置待恢复标记（用户 2026-11-21）。"""
+    clock = _FakeClock()
+    monkeypatch.setattr(xiuluo, "time", clock)
+    monkeypatch.setattr(xiuluo, "log", lambda *a, **k: None)
+    monkeypatch.setattr(xiuluo, "is_in_battle", lambda w: False)
+    monkeypatch.setattr(xiuluo.game_map, "read_map_position",
+                        lambda w, img=None: ("灵兽村", 117, 95))
+    monkeypatch.setattr(
+        xiuluo, "_cancel_task",
+        lambda w, assume_task=False: (
+            True,
+            "无需取消：游戏提示「你身上都没有任务，不要来烦我」（已关闭提示）"))
+    monkeypatch.setattr(xiuluo, "_team_checked", True)
+    monkeypatch.setattr(xiuluo, "_task_gone_last_round", False)
+    monkeypatch.setattr(xiuluo, "_cancel_confirmed_at", None)
+    ok, info = xiuluo._manual_recover(_FakeWin(), check_team=False)
+    assert ok is True and "任务已不存在" in info
+    assert clock.t == 0  # 无取消动作：不等待重领间隔
+    assert xiuluo._team_checked is False  # 重新领取前强制队伍检查
+    assert xiuluo._task_gone_last_round is True
+
+
 # ---- 取消二次确认弹窗（2026-11-15 用户实机：你真的要取消任务？→「是」） ----
 
 def _confirm_dialog_items():
