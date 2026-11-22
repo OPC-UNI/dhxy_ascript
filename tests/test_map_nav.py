@@ -25,6 +25,17 @@ class _Win:
         self.rect = types.SimpleNamespace(width=w, height=h)
 
 
+@pytest.fixture(autouse=True)
+def _isolate_affine_caches(monkeypatch, tmp_path):
+    """标定缓存隔离：持久化文件指向 tmp 目录，不读写真实角色数据。"""
+    monkeypatch.setattr(
+        map_nav, "_persisted_affines_path",
+        lambda: tmp_path / "map_nav_affines.json")
+    map_nav.reset_affine_cache()
+    yield
+    map_nav.reset_affine_cache()
+
+
 # ---------------- 层级图与下拉 ----------------
 
 def test_parse_layer_target():
@@ -390,6 +401,63 @@ def test_session_affine_cache_roundtrip():
     # 会话缓存按窗口尺寸隔离
     assert map_nav.affine_for(_Win(1280, 720), "测试图") is None
     map_nav.reset_affine_cache()
+
+
+# ---------------- 标定修正的角色持久化（2026-11-22 用户需求） ----------------
+
+def test_affine_persisted_across_restart(tmp_path):
+    """修正/采样解写角色数据：进程重启（内存清空）后仍直接命中。"""
+    win = _Win(1378, 831)
+    aff = {"sx": 1.9459, "sy": -1.954, "ax": 339.0, "ay": 653.1}
+    map_nav.remember_affine(win, "宝象国", aff)
+    path = tmp_path / "map_nav_affines.json"
+    assert path.exists()
+    # 模拟进程重启：只清内存缓存，磁盘文件保留
+    map_nav.reset_affine_cache()
+    got = map_nav.affine_for(win, "宝象国")
+    assert got is not None
+    assert abs(got["ax"] - 339.0) < 0.01 and abs(got["ay"] - 653.1) < 0.01
+    # 游戏窗口尺寸不同（布局不匹配）不得套用
+    assert map_nav.affine_for(_Win(1280, 720), "宝象国") is None
+
+
+def test_persisted_affine_overrides_stale_builtin(monkeypatch, tmp_path):
+    """持久化修正值优先于内置表（窗口漂移后内置原点已过期）。"""
+    builtin = tmp_path / "builtin.json"
+    builtin.write_text(json.dumps({
+        "layout": [1378, 831],
+        "maps": {"洛阳城": {"sx": 1.667, "sy": -1.667,
+                           "ax": 249.0, "ay": 643.7}},
+    }, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(map_nav, "_affine_table_path", lambda: builtin)
+    map_nav.reset_affine_cache()
+    assert map_nav.affine_for(_Win(1378, 831), "洛阳城")["ax"] == 249.0
+    map_nav.remember_affine(_Win(1378, 831), "洛阳城",
+                            {"sx": 1.667, "sy": -1.667,
+                             "ax": 258.0, "ay": 641.0})
+    map_nav.reset_affine_cache()  # 模拟重启
+    got = map_nav.affine_for(_Win(1378, 831), "洛阳城")
+    assert got is not None and abs(got["ax"] - 258.0) < 0.01
+
+
+def test_persisted_invalid_entry_falls_back_to_builtin(monkeypatch, tmp_path):
+    """持久化条目损坏/方向错误：忽略并回退内置表（不能带坏方向去点击）。"""
+    builtin = tmp_path / "builtin.json"
+    builtin.write_text(json.dumps({
+        "layout": [1378, 831],
+        "maps": {"洛阳城": {"sx": 1.667, "sy": -1.667,
+                           "ax": 249.0, "ay": 643.7}},
+    }, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(map_nav, "_affine_table_path", lambda: builtin)
+    path = tmp_path / "map_nav_affines.json"
+    path.write_text(json.dumps({
+        "version": 1,
+        "layouts": {"1378x831": {"洛阳城": {
+            "sx": -1.0, "sy": 1.0, "ax": 0.0, "ay": 0.0}}},
+    }, ensure_ascii=False), encoding="utf-8")
+    map_nav.reset_affine_cache()
+    got = map_nav.affine_for(_Win(1378, 831), "洛阳城")
+    assert got is not None and abs(got["sx"] - 1.667) < 1e-9
 
 
 # ---------------- 大雁塔寻路面板：目的地链接 ----------------

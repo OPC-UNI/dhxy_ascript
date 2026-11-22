@@ -75,6 +75,16 @@ AFFINE_TABLE_FILE = "map_nav_affines.json"
 _AFFINE_TABLE = None
 _AFFINE_TABLE_MTIME = None
 _SESSION_AFFINES = {}
+# ---- 标定修正的角色持久化（2026-11-22 用户需求）----
+# 会话缓存跨进程重启即丢：内置表按旧窗口几何采集，窗口被拖动/缩放后
+# 首个导航要「瞄准→修正→再瞄准」多付 0.8~1.6s（如宝象国 19:00 锚点
+# (460,217)→(479,229)，首瞄差 5 格）。修正/采样得到的标定写角色数据
+# data/<角色>/map_nav_affines.json（布局 → 地图 → 解），重启后直接命中；
+# 每次导航仍保留悬停校验，持久化值过期时会自动修正并刷新。
+# 文件格式：{"version":1,"layouts":{"1378x831":{"宝象国":{"sx","sy","ax","ay","at"}}}}
+AFFINE_CACHE_VERSION = 1
+_PERSISTED_AFFINES = None
+_PERSISTED_AFFINES_MTIME = None
 
 # ---- 搜索条定位（仅作锚点：确定地图窗口水平位置/条带高度）----
 # 搜索条 OCR 区域（窗口相对）：大图详情图搜索条 y≈217-229、层内小图
@@ -419,11 +429,17 @@ def _affine_table_path():
 
 
 def reset_affine_cache():
-    """清空标定缓存（内置表 + 会话；测试用）。"""
+    """清空标定缓存（内置表 + 会话 + 持久化内存镜像；测试用）。
+
+    不删除角色持久化文件（生产重启动时要继续用）。
+    """
     global _AFFINE_TABLE, _AFFINE_TABLE_MTIME
+    global _PERSISTED_AFFINES, _PERSISTED_AFFINES_MTIME
     _AFFINE_TABLE = None
     _AFFINE_TABLE_MTIME = None
     _SESSION_AFFINES.clear()
+    _PERSISTED_AFFINES = None
+    _PERSISTED_AFFINES_MTIME = None
 
 
 def _load_affine_table():
@@ -468,12 +484,96 @@ def _valid_affine(entry):
     return aff
 
 
+def _persisted_affines_path():
+    """角色持久化标定文件路径（测试可注入临时路径）。"""
+    from ..core import user_data
+    return user_data.map_nav_affines_path()
+
+
+def _load_persisted_affines():
+    """加载角色持久化标定（按 mtime 热更新）；缺失/损坏返回 {}。"""
+    global _PERSISTED_AFFINES, _PERSISTED_AFFINES_MTIME
+    from ..core import user_data
+    path = None
+    mtime = None
+    try:
+        path = _persisted_affines_path()
+        mtime = path.stat().st_mtime
+    except Exception:
+        mtime = None
+    if _PERSISTED_AFFINES is not None and mtime == _PERSISTED_AFFINES_MTIME:
+        return _PERSISTED_AFFINES
+    data = {}
+    if path is not None and mtime is not None:
+        try:
+            data = user_data.read_map_nav_affines(path=path)
+        except Exception:
+            data = {}
+    _PERSISTED_AFFINES = data
+    _PERSISTED_AFFINES_MTIME = mtime
+    return data
+
+
+def _persist_affine(target, affine, w, h):
+    """把标定写角色数据（读-改-写，失败只影响跨重启热启动）。
+
+    与上次记录差异 <0.05px 不写盘——悬停修正常在 1 格以内反复触发，
+    避免每次导航都产生一次磁盘写。
+    """
+    global _PERSISTED_AFFINES, _PERSISTED_AFFINES_MTIME
+    from ..core import user_data
+    try:
+        entry = {"sx": round(float(affine["sx"]), 4),
+                 "sy": round(float(affine["sy"]), 4),
+                 "ax": round(float(affine["ax"]), 2),
+                 "ay": round(float(affine["ay"]), 2),
+                 "at": round(time.time(), 1)}
+        data = dict(_load_persisted_affines())
+        layouts = data.get("layouts")
+        layouts = dict(layouts) if isinstance(layouts, dict) else {}
+        key = f"{int(w)}x{int(h)}"
+        per = layouts.get(key)
+        per = dict(per) if isinstance(per, dict) else {}
+        prev = per.get(target)
+        if isinstance(prev, dict):
+            try:
+                if all(abs(float(prev[k]) - entry[k]) < 0.05
+                       for k in ("sx", "sy", "ax", "ay")):
+                    return
+            except (KeyError, TypeError, ValueError):
+                pass
+        per[target] = entry
+        layouts[key] = per
+        data["version"] = AFFINE_CACHE_VERSION
+        data["layouts"] = layouts
+        path = _persisted_affines_path()
+        user_data.write_map_nav_affines(data, path=path)
+        _PERSISTED_AFFINES = data
+        try:
+            _PERSISTED_AFFINES_MTIME = path.stat().st_mtime
+        except Exception:
+            _PERSISTED_AFFINES_MTIME = None
+    except Exception:
+        pass  # 持久化失败不影响本次导航（下次再尝试写）
+
+
 def affine_for(win, target):
-    """取目标地图标定：会话缓存 → 内置表；布局不匹配/无记录返回 None。"""
+    """取目标地图标定：会话缓存 → 角色持久化 → 内置表。
+
+    布局（游戏窗口尺寸）不匹配/无记录返回 None。持久化值只是热启动，
+    点击前仍做悬停校验——窗口几何再变时会自动修正并刷新持久化。
+    """
     size = [int(win.rect.width), int(win.rect.height)]
     cached = _SESSION_AFFINES.get((target, size[0], size[1]))
     if cached is not None:
         return dict(cached)
+    layouts = _load_persisted_affines().get("layouts")
+    if isinstance(layouts, dict):
+        per = layouts.get(f"{size[0]}x{size[1]}")
+        if isinstance(per, dict) and per.get(target):
+            aff = _valid_affine(per[target])
+            if aff is not None:
+                return aff
     table = _load_affine_table()
     if list(table.get("layout") or []) != size:
         return None
@@ -484,9 +584,10 @@ def affine_for(win, target):
 
 
 def remember_affine(win, target, affine):
-    """把采样解记录到会话缓存（下次同图导航直接热启动）。"""
-    _SESSION_AFFINES[(target, int(win.rect.width),
-                      int(win.rect.height))] = dict(affine)
+    """把采样/修正解记录到会话缓存 + 角色持久化（重启后直接热启动）。"""
+    w, h = int(win.rect.width), int(win.rect.height)
+    _SESSION_AFFINES[(target, w, h)] = dict(affine)
+    _persist_affine(target, affine, w, h)
 
 
 def _read_pos(win):

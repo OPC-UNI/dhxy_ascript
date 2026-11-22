@@ -8,6 +8,7 @@
     data/<角色ID>/schemes.json          # 该角色的配置方案
     data/<角色ID>/task_stats.json       # 该角色的成就统计
     data/<角色ID>/high_perf_cache.json  # 该角色的高性能坐标缓存
+    data/<角色ID>/map_nav_affines.json  # 该角色的地图悬停标定修正缓存
 
 角色 ID 取窗口绑定记录的账号 ID（「这个窗口的这个角色」语义）；未绑定时
 退实时窗口标题「（ID：数字）」；再退 _default。绑定优先而非标题优先：
@@ -45,6 +46,7 @@ SETTINGS_NAME = "settings.json"
 SCHEMES_NAME = "schemes.json"
 STATS_NAME = "task_stats.json"
 HIGH_PERF_NAME = "high_perf_cache.json"
+MAP_AFFINE_NAME = "map_nav_affines.json"
 
 # 旧版 config.json 里按角色键控的运行时状态（键 = 「（ID：xxx）」）
 ROLE_STATE_KEYS = ("task_progress", "sheyaoxiang_last_use",
@@ -223,6 +225,10 @@ def high_perf_path(role=None):
     return role_dir(role) / HIGH_PERF_NAME
 
 
+def map_nav_affines_path(role=None):
+    return role_dir(role) / MAP_AFFINE_NAME
+
+
 # ==================== JSON 读写 ====================
 
 def _read_json(path, default=None):
@@ -296,6 +302,23 @@ def read_high_perf(role=None):
 def write_high_perf(data, role=None):
     with _LOCK:
         _atomic_write(high_perf_path(role), data if isinstance(data, dict) else {})
+
+
+# ==================== 地图悬停标定修正缓存 ====================
+# 内置标定表（res/map_nav_affines.json）只对采集时的地图窗口几何有效；
+# 窗口被拖动/缩放后原点会偏，map_nav 的悬停校验会修正并写回这里
+# （2026-11-22 用户需求：进程重启后也直接命中，不必再付一次修正悬停）。
+# path 参数供单测注入临时文件，生产不传。
+
+def read_map_nav_affines(role=None, path=None):
+    data = _read_json(path or map_nav_affines_path(role), {})
+    return data if isinstance(data, dict) else {}
+
+
+def write_map_nav_affines(data, role=None, path=None):
+    with _LOCK:
+        _atomic_write(path or map_nav_affines_path(role),
+                      data if isinstance(data, dict) else {})
 
 
 # ==================== 迁移元数据 ====================
