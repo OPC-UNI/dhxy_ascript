@@ -47,7 +47,7 @@ from PIL import Image
 from ascript.windows.window.Window import WindowCaptureFormat
 
 from ..core.app_utils import (log, human_click, human_move, move_away,
-                        current_task_mode, UserAbort,
+                        current_task_mode, UserAbort, session_abort_reason,
                         fixed_pos_get, fixed_pos_set, fixed_pos_clear)
 from . import map as game_map
 from . import status_bars  # 血蓝条检测回满（每场战斗结束后调用）
@@ -884,6 +884,8 @@ def _handle_wuyi_dialog(win, img=None, idle=False):
     _wuyi_prev_roi = roi
     _wuyi_last_ocr = time.time()
     items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
+    if dialog_common.abort_if_kicked(items):
+        return False  # 顶号：本帧 OCR 即证据，置中止标志后由主任务线程退出
     # 命中文案用于分键缓存（不同弹窗=不同文案=不同选项位置，
     # 2026-11-05 五倍复用修罗坐标教训）与点击日志标识
     # _dialog_text_present 定义在 dialog_common（battle 已顶层依赖该模块，
@@ -1102,6 +1104,8 @@ def _handle_repair_dialog(win, img=None):
     if dialog_common.dialog_ocr_skip(img, win):
         return False  # 高性能+模板未命中：无对话框，跳过修理 OCR
     items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
+    if dialog_common.abort_if_kicked(items):
+        return False  # 顶号：置中止标志后由主任务线程退出
     spec = repair.match_dialog(items)
     if spec is None:
         _repair_option_missing_warned = False
@@ -1267,6 +1271,11 @@ def watch_loop(win):
     bars_pending = False   # 坐标路径结束时血蓝检查延后到首个场景帧执行
     while True:
         try:
+            # 会话级中止（顶号等）：检测点已置标志，战斗线程自行退出，
+            # 主任务线程下一轮询 raise_if_aborted 抛 SessionAbort
+            if session_abort_reason():
+                log("[战斗] 会话已中止（顶号），战斗监控退出", "WARN")
+                break
             if tab_group.pass_active:
                 # 任务线程的 pass 进行中：跳过本轮处理（屏幕是队员 Tab）
                 time.sleep(WATCH_POLL_INTERVAL)

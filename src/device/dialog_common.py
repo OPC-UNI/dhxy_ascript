@@ -472,6 +472,47 @@ def _norm_dialog_present(items, dtxt):
     return _dialog_text_present(norm_items, norm_text(dtxt))
 
 
+# ---- 顶号提示（账号在别处登录，2026-11-22 用户方案 A） ----
+# 账号被顶号时游戏弹出标准对话框「其它玩家已经用这个账号登录，请立即
+# 退出游戏」，客户端标题仍保留角色（ID），任务进程无法继续操作该窗口。
+# 检测点复用 follow/战斗线程**已有的对话区 OCR 结果**（零额外截图/OCR），
+# 命中只置进程级会话中止标志并记一条 ERROR（app_utils.abort_session），
+# 主任务线程在下一轮询 raise_if_aborted 抛出 SessionAbort 干净退出。
+# 文案取短片段，容忍 OCR 漏字/「账/帐」「录/陆」误读；置信度门槛 0.55
+# 与对话区 OCR 各调用方一致。
+KICKED_DIALOG_MARKERS = ("账号登录", "帐号登录", "账号登陆", "帐号登陆",
+                         "立即退出")
+KICKED_DIALOG_OCR_MIN_SCORE = 0.55
+KICKED_DIALOG_REASON = ("检测到「其它玩家已经用这个账号登录，请立即退出游戏」"
+                        "对话框（账号被顶号）")
+
+
+def kicked_dialog_in_items(items):
+    """OCR 行中是否含顶号提示文案（norm_text 后按关键标记匹配）。"""
+    for txt, _rect, score in items:
+        if score < KICKED_DIALOG_OCR_MIN_SCORE:
+            continue
+        norm = norm_text(txt)
+        if any(marker in norm for marker in KICKED_DIALOG_MARKERS):
+            return True
+    return False
+
+
+def abort_if_kicked(items, where=""):
+    """顶号提示命中则记录会话中止（ERROR 仅一次）；返回是否命中。
+
+    where：调用方标识（如 "[修罗]"），拼进错误日志便于多任务定位。
+    只置标志不抛异常——战斗监控等非主线程抛异常只会死一条 daemon
+    线程，主任务线程由 app_utils.raise_if_aborted() 统一收口。
+    """
+    if not kicked_dialog_in_items(items):
+        return False
+    reason = f"{where} {KICKED_DIALOG_REASON}".strip() if where \
+        else KICKED_DIALOG_REASON
+    app_utils.abort_session(reason)
+    return True
+
+
 def close_scene_panels(win, prefix="", quiet=False):
     """关闭场景中可能打开的界面：小地图、世界地图、物品栏。
 

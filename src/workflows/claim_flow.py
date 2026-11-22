@@ -17,6 +17,7 @@ from ..device import map_nav
 from ..device import task_tracker
 from ..device.battle import is_in_battle, is_in_battle_frame
 from ..device.dialog_common import (DIALOG_FRAME_THRESHOLD,
+                                    abort_if_kicked,
                                     dialog_frame_score,
                                     green_option_center,
                                     _option_target_center)
@@ -57,6 +58,7 @@ def probe_task_block(win, title, fallbacks, region_fn):
 def claim_verify_wait(win, pre_sig, t_opt, polls, *, prefix, interval,
                       probe_fn):
     """校验轮询等待：探针命中即跳过等待，未命中补足 interval。"""
+    app_utils.raise_if_aborted()  # 顶号等会话中止：领取阶段也及时退出
     if pre_sig is not None:
         time.sleep(interval)
         return
@@ -124,6 +126,7 @@ def wait_auto_claim_dialog(win, needles, timeout=AUTO_DIALOG_GRACE,
     """
     deadline = time.time() + timeout
     while True:
+        app_utils.raise_if_aborted()  # 顶号等会话中止：等待弹窗阶段及时退出
         img = win.capture(force_activate=False)
         if img is not None:
             # 对话框模板门控（~9ms）：无标准对话框边框直接跳过对话区
@@ -132,6 +135,8 @@ def wait_auto_claim_dialog(win, needles, timeout=AUTO_DIALOG_GRACE,
             if dialog_frame_score(img) >= DIALOG_FRAME_THRESHOLD:
                 items, img_np = game_map.ocr_region(
                     img, task_tracker.DIALOG_REGION)
+                if abort_if_kicked(items):
+                    app_utils.raise_if_aborted()  # 顶号：主任务线程直接中止
                 if find_claim_option(items, img_np, needles) is not None:
                     return items, img_np
         if time.time() >= deadline:

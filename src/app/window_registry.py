@@ -1,15 +1,15 @@
 """多窗口注册表：枚举游戏主窗口 + 按角色勾选/选中持久化 + 选中目标注入。
 
 多窗口（2026-11-22，见 docs/multi-window.md）：
-- 行 = 检测到的游戏主窗口 ∪ 已勾选但未检测到的角色（灰行）∪ 未登录窗口
-  （灰行、不可选）。
+- 行 = 当前检测到的游戏主窗口（含未登录窗口）。窗口关闭即从窗口管理
+  移除，重开自动重新出现；勾选状态按角色持久化，重开恢复。
 - 勾选/选中状态按角色 ID 持久化在 config.json 的 `multi_window_state`；
   主进程唯一写者（worker 不碰）。
 - 选中行 = 主进程当前窗口：apply_selection 把角色注入 user_data，并把
   目标窗口（句柄优先、角色兜底）注入 game——find_main_window /
   设置页 / 成就 / 组号入口全部跟随选中行。
-- 选中窗口关闭时保持选中角色（目标退化为仅角色，find_main_window 返回
-  None，UI 显示灰行），不自动跳到其他窗口；窗口重开同角色后自动回真。
+- 选中窗口关闭时选中回落到其他活窗口（已勾选优先、Tab 固定顺序）；
+  全部关闭则清空选中，重开任一窗口后自动选中。
 
 旧单窗口绑定迁移：首次启动把 bound_window_id 的角色迁移为「勾选 + 选中」；
 无旧绑定则选第一个已登录窗口（此后新窗口默认不勾选）。
@@ -139,6 +139,36 @@ def _row_label(info, meta=None):
     return str(info.get("role_id") or info.get("title") or "")
 
 
+def _apply_role_silent(rid):
+    """主进程静默标志跟随选中角色（验证/诊断/多窗口前置检查共用）。"""
+    try:
+        from ..core.settings import load_silent_mode
+        app_utils.set_silent_mode(load_silent_mode(rid))
+    except Exception:
+        pass
+
+
+def _pick_live_info(state, infos):
+    """从活窗口里挑一个作为当前窗口（已勾选优先，再按 Tab 固定顺序）。"""
+    candidates = [i for i in infos
+                  if i.get("role_id") and i.get("logged_in", True)]
+    if not candidates:
+        return None
+    roles = state.get("roles") or {}
+    order = state.get("order") or []
+
+    def _key(info):
+        rid = str(info["role_id"])
+        enabled = bool((roles.get(rid) or {}).get("enabled"))
+        try:
+            idx = order.index(rid)
+        except ValueError:
+            idx = len(order)
+        return (0 if enabled else 1, idx)
+
+    return min(candidates, key=_key)
+
+
 # ==================== 初始化 / 选中 ====================
 
 @_locked
@@ -178,12 +208,17 @@ def ensure_initialized():
             state["selected_hwnd"] = int(info["hwnd"]) if info is not None else 0
         state["initialized"] = True
         _save(state)
-    # 选中项落在缺失角色上时补一条（当前窗口被手动改号等）
+    # 选中窗口已关闭（上次退出后未重开）时不保留选中：sync_live 回落到
+    # 其他活窗口或清空，并在窗口重新出现后自动选中。句柄窗口直接复用
+    # （组号 pass 标题显示队员时按角色找不到窗口）。
+    state = sync_live(infos)
     rid = state.get("selected")
     if rid and rid not in state["roles"]:
+        # 选中项落在未登记角色上（自动选中/手动改号）：补一条以便勾选可读
         state["roles"][rid] = {"enabled": False, "label": rid, "title": ""}
         _save(state)
-    apply_selection(rid)
+    win = _win_by_hwnd(state.get("selected_hwnd") or 0)
+    apply_selection(rid, win)
     try:
         label = (state["roles"].get(rid) or {}).get("label") if rid else ""
         app_utils.log(
@@ -209,7 +244,8 @@ def apply_selection(role_id, win=None):
                                 title=getattr(win, "title", "") or "",
                                 strict=False)
         return win
-    # 选中窗口已关闭：保留角色目标（find_main_window 返回 None，不回退）
+    # 兜底：句柄窗口未找到时退回仅角色目标（正常路径 sync_live 已回落/
+    # 清空选中，不会停在已关闭窗口上）
     game.set_process_target(rid, hwnd=0, title="", strict=False)
     return None
 
@@ -228,14 +264,14 @@ def select(role_id, hwnd=None):
                      if int(i.get("hwnd") or 0) == int(hwnd)), None)
     if info is None:
         info = _info_for_role(rid, infos)
+    if info is None:
+        # 窗口关闭即从窗口管理移除：不存在/已关闭的行不能选中
+        return {"status": "error", "msg": "该窗口已关闭，无法选择"}
     state["selected"] = rid
-    state["selected_hwnd"] = int(info["hwnd"]) if info is not None else 0
+    state["selected_hwnd"] = int(info["hwnd"])
     meta = state["roles"].setdefault(rid, {})
-    if info is not None:
-        meta["label"] = _row_label(info, meta)
-        meta["title"] = info["title"]
-    else:
-        meta.setdefault("label", rid)
+    meta["label"] = _row_label(info, meta)
+    meta["title"] = info["title"]
     _save(state)
     win = _win_by_hwnd(state["selected_hwnd"]) if state["selected_hwnd"] else None
     if win is None:
@@ -277,29 +313,28 @@ def _role_in_window(win, role_id):
 def sync_live(infos=None):
     """把选中目标对齐到活窗口（句柄优先、同角色重开兜底），刷新标签。
 
-    不切换选中角色（用户选谁就是谁）；唯一例外：同一句柄的标题账号
-    已换登（且选中角色不在该窗口的已登录 Tab 里）——此时跟随当前账号，
-    避免面板按旧角色读写、实际却操作新账号（旧版自动改绑语义）。
-    选中窗口关闭 → 仅角色目标，find_main_window 返回 None。返回 state。
+    窗口关闭即从窗口管理移除（2026-11-22 用户确认）：选中窗口消失时
+    不再保留灰行，而是回落到其他活窗口（已勾选优先、Tab 固定顺序）；
+    全部窗口关闭则清空选中（面板显示未选择窗口），重开任一窗口后自动
+    选中。组号 pass（标题变成队员 Tab、句柄仍在）期间选中角色不变。
+
+    唯一跟随标题账号的情形：同一句柄已换登，且选中角色不在该窗口的
+    已登录 Tab 里——跟随当前账号，避免面板按旧角色读写、实际却操作
+    新账号（旧版自动改绑语义）。返回 state。
     """
     state = _state()
-    rid = state.get("selected")
-    if not rid:
-        return state
     infos = infos if infos is not None else game.list_main_window_infos()
     changed = False
+    rid = state.get("selected")
     selected_hwnd = int(state.get("selected_hwnd") or 0)
     info = None
-    if selected_hwnd:
+    if rid and selected_hwnd:
         info = next((i for i in infos
                      if int(i.get("hwnd") or 0) == selected_hwnd), None)
-    if (info is not None and info.get("role_id")
+    if (rid and info is not None and info.get("role_id")
             and str(info["role_id"]) != str(rid)):
         win = _win_by_hwnd(info["hwnd"])
-        if win is not None and _role_in_window(win, rid):
-            # 组号 pass / 手动切到队员 Tab：窗口身份仍是选中角色
-            pass
-        else:
+        if win is None or not _role_in_window(win, rid):
             # 同一窗口换登账号：选中角色跟随标题账号
             new_rid = str(info["role_id"])
             meta = state["roles"].setdefault(new_rid, {
@@ -313,18 +348,32 @@ def sync_live(infos=None):
             rid = new_rid
             changed = True
             user_data.set_selected_role(new_rid)
-            try:
-                from ..core.settings import load_silent_mode
-                app_utils.set_silent_mode(load_silent_mode(new_rid))
-            except Exception:
-                pass
-    if info is None:
+            _apply_role_silent(new_rid)
+    if rid and info is None:
         info = _info_for_role(rid, infos)
-        new_hwnd = int(info["hwnd"]) if info is not None else 0
-        if new_hwnd != selected_hwnd:
-            state["selected_hwnd"] = new_hwnd
+        if info is not None:
+            new_hwnd = int(info["hwnd"])
+            if new_hwnd != selected_hwnd:
+                state["selected_hwnd"] = new_hwnd
+                changed = True
+        else:
+            # 选中窗口已关闭：移除该窗口，选中不留在已关闭窗口上
+            rid = None
+            state["selected"] = None
+            state["selected_hwnd"] = 0
             changed = True
-    # 已勾选角色的标签/完整标题跟随活窗口（灰行可读）
+            user_data.set_selected_role(None)
+    if rid is None:
+        # 无选中（游戏刚启动 / 窗口全部关闭后重开）：自动选中活窗口
+        info = _pick_live_info(state, infos)
+        if info is not None:
+            rid = str(info["role_id"])
+            state["selected"] = rid
+            state["selected_hwnd"] = int(info["hwnd"])
+            changed = True
+            user_data.set_selected_role(rid)
+            _apply_role_silent(rid)
+    # 已登记角色的标签/完整标题跟随活窗口（重开时标签保持可读）
     for info2 in infos:
         rid2 = info2.get("role_id")
         meta = state["roles"].get(rid2) if rid2 else None
@@ -348,7 +397,7 @@ def sync_live(infos=None):
 
 @_locked
 def list_rows(infos=None):
-    """多窗口行数据（不跑任务状态——由 ControlWindow 补充）。"""
+    """多窗口行数据（只含当前活窗口；关闭的窗口不出行）。"""
     state = sync_live(infos)
     infos = infos if infos is not None else game.list_main_window_infos()
     roles = state["roles"]
@@ -409,25 +458,37 @@ def list_rows(infos=None):
                      "server": info.get("server") or "",
                      "name": info.get("name") or "",
                      "hwnd": info["hwnd"], "title": info.get("title") or "",
-                     "live": True, "logged_in": True,
+                     "live": True,
+                     # 标题含 ID ≠ 已登录：被顶号时画面弹出顶号对话框，
+                     # list_main_window_infos 已按未登录返回（2026-11-22）
+                     "logged_in": bool(info.get("logged_in", True)),
                      "enabled": bool(meta.get("enabled")),
                      "selected": is_selected,
                      "selectable": True, "duplicate": duplicate,
                      "seq": role_order.get(rid, 100000 + info_idx)})
 
     live_roles = {i.get("role_id") for i in infos if i.get("role_id")}
-    for rid, meta in roles.items():
-        if rid in live_roles:
-            continue
-        rows.append({"key": rid, "role_id": rid,
-                     "label": meta.get("label") or rid,
-                     "server": "", "name": "",
-                     "hwnd": 0, "title": meta.get("title") or "",
-                     "live": False, "logged_in": False,
-                     "enabled": bool(meta.get("enabled")),
-                     "selected": rid == selected and not seen_selected,
-                     "selectable": True, "duplicate": False,
-                     "seq": role_order.get(rid, 100000)})
+    # 组号 pass：选中角色的窗口还在，但标题显示的是另一个登录 Tab 的角色。
+    # 不能把它当「已关闭」移除——保留一行选中行，否则面板会显示未选择
+    # 窗口，而设置/方案仍跟随该角色。真正关闭的窗口不再出行。
+    if (selected and not seen_selected and selected not in live_roles
+            and selected_hwnd):
+        win_info = next((i for i in infos
+                         if int(i.get("hwnd") or 0) == selected_hwnd), None)
+        win = _win_by_hwnd(selected_hwnd) if win_info is not None else None
+        if win is not None and _role_in_window(win, selected):
+            meta = roles.get(selected) or {}
+            rows.append({"key": f"{selected}:{selected_hwnd}",
+                         "role_id": selected,
+                         "label": meta.get("label") or selected,
+                         "server": "", "name": "",
+                         "hwnd": selected_hwnd,
+                         "title": win_info.get("title") or "",
+                         "live": True, "logged_in": True,
+                         "enabled": bool(meta.get("enabled")),
+                         "selected": True, "selectable": True,
+                         "duplicate": False,
+                         "seq": role_order.get(selected, 100000)})
 
     rows.sort(key=lambda r: (
         0 if r["selected"] else 1,
@@ -476,7 +537,12 @@ def enabled_roles():
 
 @_locked
 def resolve_target(role_id=None, hwnd=None):
-    """解析启动目标（角色 + 活窗口句柄/标题）；窗口不存在返回 None。"""
+    """解析启动目标（角色 + 活窗口句柄/标题 + 实时登录态）。
+
+    登录态 fresh 复检（标题 + 顶号对话框画面判定）：调用方为启动守卫，
+    不复用看板 5s 缓存，避免在缓存窗口内拉起已被顶号的窗口。
+    窗口不存在返回 None。
+    """
     state = _state()
     rid = str(role_id or state.get("selected") or "")
     if not re.fullmatch(r"\d+", rid):
@@ -488,4 +554,5 @@ def resolve_target(role_id=None, hwnd=None):
         return None
     return {"role_id": rid,
             "hwnd": int(getattr(win, "hwnd", 0) or 0),
-            "title": getattr(win, "title", "") or ""}
+            "title": getattr(win, "title", "") or "",
+            "logged_in": game.window_logged_in(win, fresh=True)}

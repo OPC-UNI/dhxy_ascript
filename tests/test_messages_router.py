@@ -616,13 +616,19 @@ def test_window_switch_by_name_id_and_already_selected():
     assert len(host.select_calls) == 2
 
 
-def test_window_switch_rejects_closed_and_unknown():
+def test_window_list_hides_closed_and_switch_rejects_unknown():
+    """窗口关闭即从清单移除：列表只显示活窗口，切换按未知窗口处理。"""
     host = FakeHost()
     host.fleet_rows[1]["live"] = False
     router, _ = _router(host)
     adapter = FakeAdapter()
+    router.dispatch(adapter, _incoming("/window"), ["42"])
+    text = adapter.texts[-1][1]
+    assert text.startswith("多窗口（1 个 / 1 个运行中）")
+    assert "角色B" not in text
+    assert "窗口已关闭" not in text
     router.dispatch(adapter, _incoming("/window 2"), ["42"])
-    assert "窗口已关闭，无法切换" in adapter.texts[-1][1]
+    assert "未找到该窗口" in adapter.texts[-1][1]
     assert host.select_calls == []
     router.dispatch(adapter, _incoming("/window 不存在"), ["42"])
     assert "未找到该窗口" in adapter.texts[-1][1]

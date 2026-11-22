@@ -1,6 +1,8 @@
 """游戏窗口相关操作：窗口查找、登录 Tab 读取、多开窗口绑定。"""
 import ctypes
 import re
+import threading
+import time
 from ctypes import wintypes
 
 from ascript.windows.window import Window
@@ -82,11 +84,95 @@ def _target_window(wins):
     return None
 
 
+# ---- 已登录窗口的「顶号」判定（2026-11-22） ----
+# 账号在别处登录时客户端标题仍显示角色（ID），只有画面弹出标准对话框：
+# 「其它玩家已经用这个账号登录，请立即退出游戏」——只看标题会误判为
+# 已登录（多开看板仍允许启动）。判定 = 标准对话框模板门控（~9ms，
+# 无对话框不 OCR）+ 对话区 OCR 关键文案（匹配器与任务侧共用，
+# 见 dialog_common.kicked_dialog_in_items）；每窗口结果缓存复检间隔，
+# 启动前由调用方 fresh 强制复检（防缓存窗口内拉起已顶号窗口）。
+# 同窗口画面复检间隔（秒）：2026-11-22 由 3s 调为 5s——主进程看板成本
+# （每窗口一次截图+模板匹配，实测 ~50ms）降 40%，检测延迟 ≤6s；启动前
+# resolve_target 的 fresh 复检不受影响，正确性不降
+KICKED_CHECK_INTERVAL = 5.0
+_KICKED_CACHE = {}           # hwnd -> (checked_at, kicked)
+_KICKED_LOCK = threading.RLock()
+
+
+def _detect_kicked_dialog(win):
+    """画面是否显示顶号标准对话框（模板未命中直接跳过 OCR）。
+
+    截图/OCR 失败按未命中处理（继续按标题判定已登录）：偶发截图失败
+    不应把正常窗口误报成未登录，启动前另有 fresh 复检兜底。
+    """
+    try:
+        from . import dialog_common
+        from . import task_tracker
+        from . import map as game_map
+        img = win.capture(force_activate=False)
+        if img is None:
+            return False
+        score = dialog_common.dialog_frame_score(img)
+        if score < dialog_common.DIALOG_FRAME_THRESHOLD:
+            return False
+        items, _ = game_map.ocr_region(img, task_tracker.DIALOG_REGION)
+        return dialog_common.kicked_dialog_in_items(items)
+    except Exception:
+        return False
+
+
+def kicked_dialog_visible(win, fresh=False):
+    """窗口画面是否显示「账号在别处登录」提示对话框。
+
+    结果按窗口句柄缓存 KICKED_CHECK_INTERVAL 秒（多开看板 1s 轮询，
+    每个已登录窗口 5s 最多一次截图/模板匹配，无对话框零 OCR 开销）；
+    fresh=True 跳过缓存强制复检（启动前守卫）。
+    """
+    hwnd = int(getattr(win, "hwnd", 0) or 0)
+    now = time.time()
+    with _KICKED_LOCK:
+        cached = _KICKED_CACHE.get(hwnd)
+        if (not fresh and cached is not None
+                and now - cached[0] < KICKED_CHECK_INTERVAL):
+            return cached[1]
+        hit = _detect_kicked_dialog(win)
+        prev = cached[1] if cached else False
+        _KICKED_CACHE[hwnd] = (now, hit)
+        if len(_KICKED_CACHE) > 64:  # 窗口重开句柄变化：清理过期项
+            for key in list(_KICKED_CACHE):
+                if now - _KICKED_CACHE[key][0] >= KICKED_CHECK_INTERVAL * 4:
+                    _KICKED_CACHE.pop(key, None)
+        if hit and not prev:
+            title = getattr(win, "title", "") or f"hwnd {hwnd}"
+            app_utils.log(
+                f"[多开] {title} 弹出「其它玩家已经用这个账号登录，"
+                "请立即退出游戏」，按未登录处理", "WARN")
+        return hit
+
+
+def window_logged_in(win, fresh=False):
+    """窗口是否已登录：标题含账号 ID，且画面无顶号提示对话框。
+
+    被顶号（标题仍带 ID、画面弹出「其它玩家已经用这个账号登录」标准
+    对话框）一律按未登录处理（2026-11-22 用户规则）。
+    """
+    if win is None or role_id_from_title(getattr(win, "title", "")) is None:
+        return False
+    return not kicked_dialog_visible(win, fresh=fresh)
+
+
+def reset_kicked_cache():
+    """测试用：清空顶号检查缓存。"""
+    with _KICKED_LOCK:
+        _KICKED_CACHE.clear()
+
+
 def list_main_window_infos():
     """所有游戏主窗口的结构化信息（多窗口面板/绑定用，只读）。
 
     返回 [{"hwnd", "title", "role_id", "server", "name", "logged_in"}]，
-    未登录窗口 role_id/logged_in 为空/False。
+    未登录窗口 role_id/logged_in 为空/False；标题含 ID 但画面弹出顶号
+    对话框的窗口同样 logged_in=False（窗口仍保留 role_id 供重登恢复）。
     """
     infos = []
     for w in list_main_windows():
@@ -102,7 +188,7 @@ def list_main_window_infos():
                       "role_id": rid,
                       "server": server,
                       "name": name,
-                      "logged_in": bool(rid)})
+                      "logged_in": window_logged_in(w)})
     return infos
 
 

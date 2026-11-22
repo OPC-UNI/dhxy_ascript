@@ -360,16 +360,14 @@ class MessageRouter:
             state = reader() or {}
         except Exception as e:
             return f"多窗口状态读取失败：{type(e).__name__}: {e}"
-        rows = [r for r in (state.get("rows") or []) if r.get("role_id")]
+        rows = [r for r in (state.get("rows") or [])
+                if r.get("role_id") and r.get("live", True)]
         if not rows:
             return "未检测到已登录的游戏窗口。"
         running = sum(1 for r in rows if r.get("running"))
         lines = [f"多窗口状态：{len(rows)} 个窗口 / {running} 个运行中"]
         for row in rows:
             label = row.get("label") or str(row.get("role_id"))
-            if not row.get("live"):
-                lines.append(f"· {label}：窗口已关闭")
-                continue
             if row.get("running"):
                 st = row.get("status") or {}
                 bits = [str(st.get(key)) for key in ("task", "phase")
@@ -399,7 +397,8 @@ class MessageRouter:
             state = reader() or {}
         except Exception as e:
             return f"多窗口进度读取失败：{type(e).__name__}: {e}"
-        rows = [r for r in (state.get("rows") or []) if r.get("role_id")]
+        rows = [r for r in (state.get("rows") or [])
+                if r.get("role_id") and r.get("live", True)]
         if not rows:
             return "未检测到已登录的游戏窗口。"
         lines = [f"多窗口进度：{len(rows)} 个窗口"]
@@ -462,7 +461,11 @@ class MessageRouter:
 
     @staticmethod
     def _render_window_list(rows):
-        """窗口列表：序号 + 状态点 + 角色 + ID + 状态/当前任务。"""
+        """窗口列表：序号 + 状态点 + 角色 + ID + 状态/当前任务。
+
+        只列当前打开的窗口（关闭即从窗口管理移除，重开重新出现）。
+        """
+        rows = [r for r in rows if r.get("live", True)]
         if not rows:
             return "未检测到已登录的游戏窗口。"
         running = sum(1 for r in rows if r.get("running"))
@@ -472,9 +475,7 @@ class MessageRouter:
             bits = [f"ID {row.get('role_id')}"]
             if row.get("selected"):
                 bits.append("当前")
-            if not row.get("live"):
-                bits.append("窗口已关闭")
-            elif not row.get("logged_in", True):
+            if not row.get("logged_in", True):
                 bits.append("未登录")
             elif row.get("running"):
                 bits.append("运行中")
@@ -535,7 +536,8 @@ class MessageRouter:
             return self._send(adapter, chat_id,
                               f"读取窗口失败：{type(e).__name__}: {e}",
                               decorate=False)
-        rows = [r for r in (state.get("rows") or []) if r.get("role_id")]
+        rows = [r for r in (state.get("rows") or [])
+                if r.get("role_id") and r.get("live", True)]
         rows.sort(key=lambda r: (r.get("seq") if r.get("seq") is not None
                                  else 1e9))
         text = str(arg or "").strip()
@@ -553,10 +555,6 @@ class MessageRouter:
                               "未找到该窗口，发送 /window 查看列表。",
                               decorate=False)
         label = target.get("label") or target.get("role_id")
-        if not target.get("live"):
-            return self._send(adapter, chat_id,
-                              f"「{label}」窗口已关闭，无法切换。",
-                              decorate=False)
         if not target.get("logged_in", True):
             return self._send(adapter, chat_id, "该窗口未登录，无法切换。",
                               decorate=False)

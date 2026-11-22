@@ -243,6 +243,7 @@ def _battle_only_loop(win):
     next_rejoin_at = 0.0
     while battle_thread.is_alive():  # 驻留直至停止或战斗线程退出
         time.sleep(1)
+        app_utils.raise_if_aborted()  # 顶号：战斗线程置标志后主线程退出
         if not auto_rejoin or tab_group.pass_active:
             continue
         now = time.time()
@@ -281,6 +282,7 @@ def _run_selected_tasks(win, modes):
     时，单测可直接捕获 (win, mode)。
     """
     for mode in modes:
+        app_utils.raise_if_aborted()  # 顶号等会话中止（战斗线程置位）：不再启动下一任务
         app_utils.set_current_task_mode(mode)
         debug_overlay.set_task(mode)
         log(f"[任务] 开始执行: {mode}", "SYS")
@@ -320,6 +322,10 @@ def task_start(role_id=None, hwnd=None, title=None):
             pass
     try:
         _task_start_body()
+    except app_utils.SessionAbort:
+        # 顶号等会话级中止：abort_session 已打 ERROR（含原因），
+        # 这里只需干净返回——wrapper 执行 task_stop 后进程自然退出
+        pass
     except app_utils.UserAbort as e:
         log(f"[系统] {e}，任务中止（鼠标移出屏幕角落后可重新启动）", "WARN")
     except Exception:

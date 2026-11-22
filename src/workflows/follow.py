@@ -32,8 +32,8 @@ from ..device.dialog_common import (DIALOG_FRAME_THRESHOLD, DIALOG_LOSE_TEXTS,
                              PositionStillness, StoryDialogDismisser,
                              _click_dialog_option_by_index,
                              _click_screen_center, _dialog_text_present,
-                             click_green_option_safe, dialog_frame_score,
-                             dialog_ocr_skip)
+                             abort_if_kicked, click_green_option_safe,
+                             dialog_frame_score, dialog_ocr_skip)
 
 # ---- 共享默认对话表（自玄枢轶闻迁移；保持既有调用方行为）----
 # 任务过程中出现的对话框绿色选项（跟踪期间检测到则点击，按顺序）
@@ -473,6 +473,9 @@ def _confirm_guard_dialog(win, img, extra_dialog_handler, tpl_gate=True,
         return False  # 高性能+标准模板未命中且无补充门：无对话框，跳过 OCR 与 extras
     try:
         items_d, _ = game_map.ocr_region(img, task_tracker.DIALOG_REGION)
+        if abort_if_kicked(items_d):
+            # 顶号：置中止标志，本帧不放行后续结论，下一轮循环头退出
+            return True
         return bool(extra_dialog_handler(win, items_d, np.asarray(img)))
     except Exception:
         return False
@@ -505,6 +508,9 @@ def _task_gone_dialog_guard(win, extra_dialog_handler, tpl_gate=True,
                           # OCR ~0.4~2s，2026-11-06 开打 2x 放大重识别
                           # 白耗教训）
         items_d, _ = game_map.ocr_region(img, task_tracker.DIALOG_REGION)
+        if abort_if_kicked(items_d):
+            # 顶号：置中止标志，本帧不放行后续结论，下一轮循环头退出
+            return True
         return bool(extra_dialog_handler(win, items_d, np.asarray(img)))
     except Exception:
         return False
@@ -792,6 +798,9 @@ def follow_task(win, title, timeout=FOLLOW_TIMEOUT, prefix="",
         return TASK_GONE_CONFIRM_POLLS if task_gone_polls is None \
             else task_gone_polls
     while time.time() < deadline:
+        # 会话级中止（顶号等）：检测线程只置标志，主任务线程在此抛出，
+        # 穿透任务循环由 task_start 干净收口（2026-11-22 方案 A）
+        app_utils.raise_if_aborted()
         # 组号 pass 进行中（战斗线程在切队员 Tab）：屏幕不是队长，
         # 跳过本轮识别防误点队员账号
         if tab_group.pass_active:
@@ -832,6 +841,10 @@ def follow_task(win, title, timeout=FOLLOW_TIMEOUT, prefix="",
                 time.sleep(FOLLOW_POLL_INTERVAL)
                 continue
             items, img_np = task_tracker.ocr_follow(img)
+            # 顶号检测：双区域 OCR 已含对话区，命中即中止（零额外成本）。
+            # 内层等待循环也有同款检查（外层每轮会重新 OCR 双区域）
+            if abort_if_kicked(items, where=f"[{prefix}]" if prefix else ""):
+                app_utils.raise_if_aborted()
         just_ended = battle_just_ended  # 本拍是否为战斗结束后首拍（先取后清）
         if battle_just_ended:
             # 战斗结束回调（默认 None 零开销）：须先于任务消失判定——
@@ -981,6 +994,9 @@ def follow_task(win, title, timeout=FOLLOW_TIMEOUT, prefix="",
         reclick_watch = PositionStillness() if battle_resume_reclick else None
 
         while time.time() < deadline:
+            # 会话级中止（顶号）：检测线程只置标志（战斗帧/守卫内 OCR
+            # 命中），内层等待循环可能长时间不回外层，必须每轮检查
+            app_utils.raise_if_aborted()
             poll_interval = CONFIRM_POLL_INTERVAL if changed_once else FOLLOW_POLL_INTERVAL
             time.sleep(poll_interval)
             # 组号 pass 进行中：屏幕是队员 Tab，跳过本轮识别（同外层护栏）
@@ -1049,6 +1065,10 @@ def follow_task(win, title, timeout=FOLLOW_TIMEOUT, prefix="",
                         continue
                     items_d, img_np_d = game_map.ocr_region(
                         img, task_tracker.DIALOG_REGION)
+                    # 顶号检测复用本帧对话区 OCR：命中即置中止标志，下一轮
+                    # 循环头 raise_if_aborted 抛出（战斗线程不在此抛）
+                    abort_if_kicked(items_d,
+                                    where=f"[{prefix}]" if prefix else "")
                     extra_dialog_handler(win, items_d, img_np_d)
                 continue
             if battle_since is not None:
@@ -1195,6 +1215,11 @@ def follow_task(win, title, timeout=FOLLOW_TIMEOUT, prefix="",
                 items = sorted(track_items + dialog_items, key=lambda x: x[1][1])
                 last_poll_items = (items, img_np)
                 last_poll_img = img
+            # 顶号检测：直接复用本帧对话区 OCR 结果（零额外截图/OCR），
+            # 命中即中止任务——顶号后客户端已不可操作，继续跟踪只会空耗
+            # 到 300s 超时并在登录界面反复失败（2026-11-22 用户方案 A）
+            if abort_if_kicked(items, where=f"[{prefix}]" if prefix else ""):
+                app_utils.raise_if_aborted()
             # 附加对话框处理优先（战斗中的任务对话已由循环头部战斗帧
             # 分支限频处理，此处处理非战斗帧的对话）
             extras_handled = False

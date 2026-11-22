@@ -210,6 +210,12 @@ class FleetApiMixin(ControlHost):
             if target is None:
                 return {"status": "error",
                         "msg": "窗口不存在或已关闭（请确认游戏仍在登录界面之后）"}
+            if not target.get("logged_in", True):
+                # 实时画面复检：标题带 ID 也可能已被顶号（标准对话框
+                # 「其它玩家已经用这个账号登录，请立即退出游戏」）
+                return {"status": "error",
+                        "msg": "该窗口已被其它玩家登录（游戏内弹出顶号提示），"
+                               "请重新登录后再启动"}
             # 窗口当前 Tab 必须就是该角色：组号客户端手动切到队员 Tab 时
             # 启动会让任务以队员为队长、角色数据却按选中角色写，状态会串。
             shown_rid = user_data.role_id_from_text(target.get("title") or "")
@@ -291,7 +297,8 @@ class FleetApiMixin(ControlHost):
                 role_index[key] = row
             else:
                 row["live"] = True
-                row["logged_in"] = True
+                # 登录态不强制覆盖：运行中也可能被顶号（顶号对话框 →
+                # list_rows 已按未登录返回），覆盖会把检测结果抹掉
                 if t.get("hwnd"):
                     row["hwnd"] = int(t["hwnd"])
                 if t.get("title"):

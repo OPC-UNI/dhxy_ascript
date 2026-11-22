@@ -460,7 +460,8 @@ class ControlWindow(DiagnosticsMixin, SettingsApiMixin, MessageApiMixin,
         self._sync_role_binding()
         rid = user_data.current_role_id(refresh=True)
         # 未绑定（游戏窗口全部关闭）时给页面一个可读文案，切换日志
-        # 不出现裸 _default（2026-11-19）；多窗口下选中行关闭也保留角色名
+        # 不出现裸 _default（2026-11-19）；多窗口下窗口关闭即清空选中，
+        # 不保留已关闭窗口的角色名
         label = (bound_short_label() or window_registry.selected_label()
                  or ("未绑定" if rid == user_data.DEFAULT_ROLE else ""))
         return {"id": rid, "label": label}
@@ -498,8 +499,8 @@ class ControlWindow(DiagnosticsMixin, SettingsApiMixin, MessageApiMixin,
             else:
                 bound_info = win.title  # 无绑定记录：自动选择窗口即操作目标
         self.refresh_window_title()  # 标题角色文案随解析结果刷新
-        # 多窗口：选中窗口关闭后仍展示选中角色（灰行语义，非旧绑定残留）；
-        # 未选择窗口/未绑定才退回状态行文案
+        # 多窗口：展示当前选中窗口角色；窗口全部关闭后选中已清空，
+        # 退回状态行文案（未绑定）
         short = bound_short_label() or window_registry.selected_label() or ""
         return {"theme": ENV_THEME,
                 "adapt_res": f"{ENV_ADAPT_RES[0]} × {ENV_ADAPT_RES[1]}",

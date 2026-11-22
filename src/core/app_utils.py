@@ -372,6 +372,57 @@ class UserAbort(BaseException):
     """
 
 
+class SessionAbort(BaseException):
+    """会话已不可继续（如账号被顶号）——任务进程应立即干净退出。
+
+    与 UserAbort 同理继承 BaseException：任务/战斗/领取循环中的
+    ``except Exception`` 不得吞掉。检测点在 follow/战斗线程（已有
+    对话区 OCR 结果上匹配，零额外截图），只置进程级中止标志；主任务
+    线程每轮询 ``raise_if_aborted()`` 抛出本异常，由 task_start 顶层
+    收口（2026-11-22 用户方案 A：顶号检测复用 OCR、立即中止任务）。
+    """
+
+
+_SESSION_ABORT = None          # 进程级会话中止原因（None=未中止）
+_SESSION_ABORT_LOCK = threading.Lock()
+
+
+def abort_session(reason):
+    """记录会话中止原因并返回 SessionAbort（首次记录时打一条 ERROR）。
+
+    同进程只记录/告警一次：follow/战斗线程/看板检查先后命中不会重复
+    刷错误日志。返回异常便于调用方 ``raise abort_session(...)``（主任务
+    线程）；非主线程（战斗监控）只调本函数置标志后自行退出。
+    """
+    global _SESSION_ABORT
+    with _SESSION_ABORT_LOCK:
+        first = _SESSION_ABORT is None
+        if first:
+            _SESSION_ABORT = str(reason)
+    if first:
+        log(f"[系统] {reason}，任务中止（请重新登录后再启动）", "ERROR")
+    return SessionAbort(str(reason))
+
+
+def session_abort_reason():
+    """当前进程的会话中止原因（未中止返回 None）。"""
+    return _SESSION_ABORT  # 字符串赋值/读取原子，无需持锁
+
+
+def raise_if_aborted():
+    """已记录会话中止原因时抛出 SessionAbort（主任务线程轮询调用）。"""
+    reason = _SESSION_ABORT
+    if reason:
+        raise SessionAbort(reason)
+
+
+def reset_session_abort():
+    """测试用：清除会话中止标志（生产进程命中即退出，无需重置）。"""
+    global _SESSION_ABORT
+    with _SESSION_ABORT_LOCK:
+        _SESSION_ABORT = None
+
+
 def _convert_failsafe(e):
     """鼠标输入异常识别：fail-safe 命中转 UserAbort，其余原样返回。
 

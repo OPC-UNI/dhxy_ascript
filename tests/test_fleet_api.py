@@ -41,3 +41,16 @@ def test_fleet_rows_stay_in_seq_order(monkeypatch):
     state = _Host().get_fleet_state()
     assert [r["role_id"] for r in state["rows"]] == ["111", "222", "333"]
     assert state["selected"] == "222"
+
+
+def test_start_rejects_kicked_window(monkeypatch):
+    """启动前 fresh 复检：标题已登录但被顶号 → 拒绝启动（2026-11-22）。"""
+    host = _Host()
+    monkeypatch.setattr(window_registry, "enabled_roles", lambda: ["111"])
+    monkeypatch.setattr(window_registry, "resolve_target",
+                        lambda rid, hwnd=None: {
+                            "role_id": "111", "hwnd": 1, "title": "t",
+                            "logged_in": False})
+    result = host._fleet_start_one("111", 1)
+    assert result["status"] == "error"
+    assert "顶号" in result["msg"]
