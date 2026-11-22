@@ -21,8 +21,12 @@
    → 屏幕浮字「已成功让X之星魂归位了！」。
 6. 点追踪「四象禁地」链接回到星魂附近，重复 3-5（六个顺序无要求；
    星魂数量固定 6，用户 2026-11-17 确认）。
-7. 六个全部归位后任务自动完成：传送回天宫、发奖励、追踪面板消失
-   （完成判定交给 follow 引擎，本模块不做完成判定）。
+7. 六个全部归位后任务自动完成：**最后一个归位后游戏自动把人物传出
+   四象禁地**（2026-11-22 用户确认），随后发奖励、追踪面板消失
+   （完成判定交给 follow 引擎，本模块不做完成判定）。传出瞬间追踪
+   文案可能尚未刷新：计数满 6（_done >= XH_SOUL_TOTAL）或地图名已
+   不是四象禁地时，`_return_phase` / `_search_phase` 回中心与游走
+   一律不点（_in_scene_pos 门控，位置读不出按离场处理）。
 
 实测要点（2026-11-17 用户实机逐条操作标定）：
 - 星魂=灰色石柱带青色光环，名字标签在石柱下方；点标签只会自动寻路，
@@ -36,7 +40,9 @@
   必须按关键词 + 下划线定位（task_tracker.underline_point），点行中心
   会落到两个链接之间。
 - 场景标签 OCR 只认「X之星魂」四字整行（对话「此乃X之星魂。」带
-  前缀，不得误认成场景标签）。
+  前缀，不得误认成场景标签）。两个星魂几乎重叠时标签叠绘成一行
+  （2026-11-22 实机「箕房星魂魂」0.63），由 _merged_soul_elements
+  拆分，点哪个石柱以对话文案为准。
 - 追踪文案在四象禁地阶段是**静态**的（归位不改变文字/颜色），follow
   引擎签名不变化、不会自行点链接；所有导航动作由本模块驱动。
   green_picker 在场景阶段返回「四象禁地」链接点（引擎万一要补点
@@ -111,6 +117,10 @@ XH_SEARCH_INTERVAL = 2.0             # 无星魂可见时游走搜索的最小�
 # 取人物四周约 200px（人物约在 (690,380)），全部落在世界区（x>410）。
 XH_SEARCH_OFFSETS = ((950, 300), (950, 520), (450, 300), (450, 520))
 XH_ABSENT_RESET = 5                  # 任务文案连续缺失轮询数 → 复位
+# 场景地图名：最后一个星魂归位后游戏会自动把人物传出四象禁地
+# （2026-11-22 用户实机），此时追踪文案往往还没刷新——凡是要点
+# 「四象禁地」链接/世界游走的位置，先确认地图名仍是四象禁地
+XH_SCENE_MAP = "四象禁地"
 
 # 状态机：0=找星魂/拿星魂；1=带星魂去星宿石（点链接/等到达）；2=归位后回中心
 _phase = 0
@@ -135,6 +145,7 @@ _scan_at = 0.0
 _scan_result = []
 _bad = set()              # 点不出对话的星魂元素（本轮跳过）
 _missing = 0
+_left_scene = False       # 已确认离开四象禁地（离场日志只打一次）
 # 场景阻挡对话点屏推进器（共享 StoryDialogDismisser：模板门 + 已知对话
 # 抑制 + 绿字选项保护 + 站定判定，性能规则 13）；懒创建，reset 时清空
 _dismisser = None
@@ -153,7 +164,8 @@ def reset():
         _walk_stable, _pillar_at, _pillar_tries, _link_at, _link_tries, \
         _link_pos, _link_still, _enh_link_at, _search_at, _search_idx, \
         _search_pos, _search_still, _scan_at, _scan_result, _bad, _missing, \
-        _dismisser, _frame_key, _frame_rgb, _frame_bgr, _frame_pos
+        _left_scene, _dismisser, _frame_key, _frame_rgb, _frame_bgr, \
+        _frame_pos
     _phase = 0
     _target = None
     _phase_at = 0.0
@@ -176,6 +188,7 @@ def reset():
     _scan_result = []
     _bad = set()
     _missing = 0
+    _left_scene = False
     _dismisser = None
     _frame_key = None
     _frame_rgb = _frame_bgr = None
@@ -230,6 +243,18 @@ def _pos(win, items, frame_fn):
     return _frame_pos
 
 
+def _in_scene_pos(pos):
+    """当前位置是否仍在四象禁地（位置读不出按离场处理，fail-closed）。
+
+    最后一个星魂归位后游戏自动把人物传出四象禁地（2026-11-22 用户
+    实机）：传送后追踪面板文案尚未刷新的一两秒里，状态机若照常点
+    「四象禁地」链接或点世界游走，会落到新地图上（误点/乱走）。
+    读不出地图名时同样不做世界点击——下一轮询会重读，任务完成由
+    follow 引擎按追踪面板消失判定。
+    """
+    return pos is not None and pos[0].strip() == XH_SCENE_MAP
+
+
 def _soul_labels(win, items, frame_fn, now, force=False):
     """场景 OCR 找视野内「X之星魂」标签，返回 [(元素, rect), ...]。
 
@@ -259,13 +284,47 @@ def _soul_labels(win, items, frame_fn, now, force=False):
         for txt, rect, score in sitems:
             if score < XH_SCAN_MIN_SCORE:
                 continue
-            el = exact.get(norm_text(txt))
+            n = norm_text(txt)
+            el = exact.get(n)
             if el is not None:
                 cands.append((el, rect))
+                continue
+            # 叠绘合并行（两个星魂几乎重叠，见 _merged_soul_elements）
+            for mel in _merged_soul_elements(n):
+                cands.append((mel, rect))
         if cands:
             break
     _scan_result = cands
     return cands
+
+
+def _merged_soul_elements(text):
+    """两星魂几乎重叠时标签叠绘成一行的解析（2026-11-22 实机）。
+
+    星魂位置随机，两个星魂可能几乎站在同一点：各自的「X之星魂」标签
+    叠绘在一起，OCR 读成一行「箕房星魂魂」（矩形为两者并集，实测
+    0.63）——四字整行匹配失败，模块误判「视野内无星魂」无限游走。
+    这里把该行拆回两个元素，共用并集 rect（点哪个石柱由对话文案
+    「此乃X之星魂」定夺，_dialog_soul_element 会覆盖 _target）。
+
+    只认「≥2 个不同元素别名 + 之星魂」且**去掉别名与「之星魂」后
+    无任何残余字符**的行：对话正文「此乃X之星魂」（单个别名 + 前缀）
+    与世界里的其他人名/怪物名（含别名但留残余字符）一律拒绝。
+    """
+    els = []
+    rest = text
+    for el, aliases in XH_ELEMENTS:
+        for a in aliases:
+            if a in rest:
+                els.append(el)
+                rest = rest.replace(a, "")
+                break
+    if len(els) < 2:
+        return []
+    rest = rest.replace("之", "")
+    if "魂" not in rest or set(rest) - set("星魂"):
+        return []
+    return els
 
 
 def _pillar_point(cands, el):
@@ -357,9 +416,15 @@ def green_picker(items, img_np):
     场景阶段追踪文案静态、星魂归化不改变文字——引擎正常不会点链接；
     万一补点（签名抖动/停滞看门狗），点中心链接只做「回星魂附近」，
     绝不点星宿石链接把人物带离搜索区。非本任务返回 None 走引擎默认。
+
+    全部归位或已确认离开四象禁地时返回 PICK_FAIL：返回 None 会让引擎
+    回落行级绿字点击，而面板上唯一的绿字仍是「四象禁地」链接——照样
+    会把人物派回已完成的任务点（2026-11-22 用户实机）。
     """
     if not scene_active(items):
         return None
+    if _done >= XH_SOUL_TOTAL or _left_scene:
+        return task_tracker.PICK_FAIL
     return _link_point(items, img_np, ("四象禁地",))
 
 
@@ -462,6 +527,8 @@ def _search_phase(win, items, img_np, frame_fn, now, prefix):
     # 游走点须等上一次走位结束（站定 2 轮）再点，防连环改道原地打转；
     # 回中心（idx 0）不受限——它本身就是「走到中心」
     pos = _pos(win, items, frame_fn)
+    if not _in_scene_pos(pos):
+        return False  # 已离开四象禁地（最后归位后自动传出）：不做世界点击
     if pos is not None and _search_pos is not None \
             and (abs(pos[1] - _search_pos[1]) > 2
                  or abs(pos[2] - _search_pos[2]) > 2):
@@ -553,9 +620,16 @@ def _stone_phase(win, items, img_np, frame_fn, now, prefix):
 
 
 def _return_phase(win, items, img_np, frame_fn, now, prefix):
-    """phase 2：点「四象禁地」链接回星魂附近 → 回 phase 0 继续找。"""
+    """phase 2：点「四象禁地」链接回星魂附近 → 回 phase 0 继续找。
+
+    两个不点回中心链接的前提（2026-11-22 用户实机）：
+    - 六个星魂已全部归位（_done >= 6）：任务自动完成并传出四象禁地，
+      无需再回中心；
+    - 当前地图已不是四象禁地（传送途中/已传出）：追踪文案尚未刷新时
+      点「四象禁地」链接会落到新地图上，等 follow 引擎按面板消失判定。
+    """
     global _phase, _phase_at, _link_at, _link_tries, _search_at, _search_idx, \
-        _search_pos, _search_still
+        _search_pos, _search_still, _left_scene
     if now - _phase_at < XH_PHASE_DELAY:
         return False
     if _link_tries >= 1:
@@ -568,6 +642,16 @@ def _return_phase(win, items, img_np, frame_fn, now, prefix):
         _search_idx = 0
         _search_pos = None
         _search_still = 0
+        return False
+    if _done >= XH_SOUL_TOTAL:
+        return False  # 全部归位：任务自动收尾，不再回中心（等面板消失）
+    pos = _pos(win, items, frame_fn)
+    if not _in_scene_pos(pos):
+        if not _left_scene:
+            _left_scene = True
+            name = pos[0] if isinstance(pos, tuple) else "位置未知"
+            log(f"{prefix}星魂归位：已不在四象禁地（{name}），"
+                f"不再点「四象禁地」链接，等待任务完成判定", "SYS")
         return False
     pt = _link_point(items, img_np, ("四象禁地",))
     if pt is None:

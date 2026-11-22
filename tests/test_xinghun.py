@@ -69,6 +69,22 @@ def test_green_picker_returns_center_link_only_in_scene(monkeypatch):
     assert xh.green_picker(ENTRY_ITEMS, _FRAME) is None
 
 
+def test_green_picker_refuses_click_after_done_or_left_scene(monkeypatch):
+    """全部归位/已离场：返回 PICK_FAIL，引擎不得回落行级绿字点击。
+
+    返回 None 会让引擎点面板上唯一的绿字（「四象禁地」链接），
+    正是最后一个星魂归位后该避免的动作（2026-11-22 用户实机）。
+    """
+    monkeypatch.setattr(xh, "_link_point", lambda *a, **k: (65, 261))
+    xh._done = xh.XH_SOUL_TOTAL
+    assert xh.green_picker(TRACKER_ITEMS, _FRAME) == xh.task_tracker.PICK_FAIL
+    xh._done = 2
+    xh._left_scene = True
+    assert xh.green_picker(TRACKER_ITEMS, _FRAME) == xh.task_tracker.PICK_FAIL
+    xh._left_scene = False
+    assert xh.green_picker(TRACKER_ITEMS, _FRAME) == (65, 261)
+
+
 def test_link_point_keyword_targets_right_link(monkeypatch):
     """一行两个星宿石链接：按关键词落在目标链接（尾在行右段）。"""
     seen = {}
@@ -147,6 +163,52 @@ def test_soul_labels_main_hit_skips_left_band(monkeypatch):
     cands = xh._soul_labels(object(), [], _frame_fn, time.time(), force=True)
     assert [c[0] for c in cands] == ["尾"]
     assert calls == [xh.XH_SCAN_REGION]
+
+
+def test_soul_labels_merged_stacked_labels(monkeypatch):
+    """两星魂几乎重叠 → 标签叠绘成一行「箕房星魂魂」（2026-11-22 实机）。
+
+    实拍帧主条带 OCR：星宿石标签正常读出，星魂标签只读出合并行
+    「箕房星魂魂」(0.63)，四字整行匹配失败 → 模块判定「视野内无星魂」
+    无限游走。合并行须拆回两个元素（共用并集 rect，石柱点击点相同，
+    点中哪个以「此乃X之星魂」对话为准）。
+    """
+    monkeypatch.setattr(xh.game_map, "ocr_region", lambda img, region: (
+        [("箕之星宿石", [985, 349, 1070, 375], 1.0),
+         ("箕房星魂魂", [452, 511, 535, 534], 0.63),
+         ("心之星宿石", [1272, 586, 1354, 616], 1.0)], None))
+    cands = xh._soul_labels(object(), [], _frame_fn, time.time(), force=True)
+    assert [c[0] for c in cands] == ["箕", "房"]
+    assert all(c[1] == [452, 511, 535, 534] for c in cands)
+    # 石柱点：并集 rect 中心、标签框顶上方 68px（实测命中前方石柱）
+    assert xh._pillar_point(cands, "房") == (493, 443)
+
+
+def test_merged_soul_elements_accepts_and_rejects():
+    """合并标签解析：只认「别名 + 之星魂、无残余字符」的多元素行。"""
+    assert xh._merged_soul_elements("箕房星魂魂") == ["箕", "房"]
+    assert xh._merged_soul_elements("箕之星房之星魂") == ["箕", "房"]
+    assert xh._merged_soul_elements("氐尾之星魂") == ["氐", "尾"]
+    # 单元素（普通标签/对话正文）不走合并解析
+    assert xh._merged_soul_elements("尾之星魂") == []
+    # 对话正带有前缀 → 残余字符拒绝
+    assert xh._merged_soul_elements("此乃箕房星魂魂") == []
+    # 无「星魂」残余（人名等）拒绝
+    assert xh._merged_soul_elements("箕房") == []
+    # 含别名但另有残余文字（怪物名/玩家名）拒绝
+    assert xh._merged_soul_elements("小心的尾房星魂魂") == []
+
+
+def test_search_clicks_merged_label_once(monkeypatch):
+    """合并标签帧：点并集 rect 中心寻路（不是「视野内无星魂」游走）。"""
+    clicks = []
+    monkeypatch.setattr(xh, "human_click", lambda w, x, y: clicks.append((x, y)))
+    monkeypatch.setattr(xh, "_soul_labels",
+                        lambda *a, **k: [("箕", [452, 511, 535, 534]),
+                                         ("房", [452, 511, 535, 534])])
+    assert xh.handle(_win(), TRACKER_ITEMS, _FRAME, frame_fn=_frame_fn) is True
+    assert clicks == [(493, 522)]
+    assert xh._target == "箕" and xh._walk_at > 0
 
 
 def test_pillar_point_offset_and_fallback():
@@ -374,12 +436,70 @@ def test_return_phase_clicks_center_link_then_back(monkeypatch):
     xh._phase_at = time.time() - xh.XH_PHASE_DELAY - 1
     monkeypatch.setattr(xh, "human_click", lambda w, x, y: clicks.append((x, y)))
     monkeypatch.setattr(xh, "_link_point", lambda *a, **k: (65, 261))
+    monkeypatch.setattr(xh, "_pos", lambda *a, **k: ("四象禁地", 160, 50))
     assert xh.handle(_win(), TRACKER_ITEMS, _FRAME, frame_fn=_frame_fn) is True
     assert clicks == [(65, 261)]
     assert xh._link_tries == 1
     xh._link_at = time.time() - xh.XH_RETURN_WAIT - 1
     assert xh.handle(_win(), TRACKER_ITEMS, _FRAME, frame_fn=_frame_fn) is False
     assert xh._phase == 0 and xh._link_tries == 0
+
+
+def test_return_phase_skips_after_all_souls_done(monkeypatch):
+    """六个全部归位：任务自动收尾，不再点「四象禁地」回中心链接。
+
+    2026-11-22 用户实机：最后一个星魂归位后游戏自动把人物传出四象
+    禁地，此时点回中心链接会落到新地图上。
+    """
+    clicks = []
+    xh._phase = 2
+    xh._done = xh.XH_SOUL_TOTAL
+    xh._phase_at = time.time() - xh.XH_PHASE_DELAY - 1
+    monkeypatch.setattr(xh, "human_click", lambda w, x, y: clicks.append((x, y)))
+    monkeypatch.setattr(xh, "_link_point", lambda *a, **k: (65, 261))
+    monkeypatch.setattr(xh, "_pos", lambda *a, **k: ("四象禁地", 160, 50))
+    assert xh.handle(_win(), TRACKER_ITEMS, _FRAME, frame_fn=_frame_fn) is False
+    assert clicks == []
+    assert xh._phase == 2 and xh._link_tries == 0
+
+
+def test_return_phase_skips_when_left_scene(monkeypatch):
+    """已不在四象禁地（自动传出后文案未刷新）→ 不点回中心链接。"""
+    clicks = []
+    xh._phase = 2
+    xh._done = 2
+    xh._phase_at = time.time() - xh.XH_PHASE_DELAY - 1
+    monkeypatch.setattr(xh, "human_click", lambda w, x, y: clicks.append((x, y)))
+    monkeypatch.setattr(xh, "_link_point", lambda *a, **k: (65, 261))
+    monkeypatch.setattr(xh, "_pos", lambda *a, **k: ("天宫", 13, 99))
+    assert xh.handle(_win(), TRACKER_ITEMS, _FRAME, frame_fn=_frame_fn) is False
+    assert clicks == [] and xh._left_scene is True
+    assert xh._phase == 2 and xh._link_tries == 0
+
+
+def test_return_phase_skips_when_pos_unknown(monkeypatch):
+    """位置读不出（传送/加载帧）按离场处理，fail-closed 不点链接。"""
+    clicks = []
+    xh._phase = 2
+    xh._phase_at = time.time() - xh.XH_PHASE_DELAY - 1
+    monkeypatch.setattr(xh, "human_click", lambda w, x, y: clicks.append((x, y)))
+    monkeypatch.setattr(xh, "_link_point", lambda *a, **k: (65, 261))
+    monkeypatch.setattr(xh, "_pos", lambda *a, **k: None)
+    assert xh.handle(_win(), TRACKER_ITEMS, _FRAME, frame_fn=_frame_fn) is False
+    assert clicks == [] and xh._left_scene is True
+
+
+def test_search_skips_world_clicks_out_of_scene(monkeypatch):
+    """找星魂阶段已不在四象禁地：回中心/游走一律不点。"""
+    clicks = []
+    xh._phase = 0
+    xh._search_at = 0.0
+    monkeypatch.setattr(xh, "human_click", lambda w, x, y: clicks.append((x, y)))
+    monkeypatch.setattr(xh, "_soul_labels", lambda *a, **k: [])
+    monkeypatch.setattr(xh, "_link_point", lambda *a, **k: (65, 261))
+    monkeypatch.setattr(xh, "_pos", lambda *a, **k: ("天宫", 13, 99))
+    assert xh.handle(_win(), TRACKER_ITEMS, _FRAME, frame_fn=_frame_fn) is False
+    assert clicks == []
 
 
 # ---- 复位 ----
