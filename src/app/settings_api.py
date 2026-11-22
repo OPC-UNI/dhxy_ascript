@@ -13,10 +13,16 @@ monkeypatch 请 patch `core.settings` 或本模块的 `settings_module`，
 patch `control_window` 上的同名导入不会影响这里的转发。
 """
 from ..core import settings as settings_module
+from ..core import user_data
+from . import window_registry
 from .host_contract import ControlHost
 
 
 class SettingsApiMixin(ControlHost):
+    def _selected_role_running(self):
+        """选中窗口自身的任务是否在跑（多窗口：只锁该角色设置）。"""
+        role = window_registry.selected_role() or user_data.current_role_id()
+        return self._tm.is_running(role)
     def save_auto_famen(self, on):
         """战斗设置变更：保存自动使用法门开关状态。"""
         return settings_module.save_auto_famen(on)
@@ -249,13 +255,13 @@ class SettingsApiMixin(ControlHost):
     def save_task_modes(self, modes):
         """任务多选变更：保存选中列表。任务运行中拒绝修改（只能停止后
         修改，用户要求；页面侧同样禁用控件，此为双保险）。"""
-        if self._tm.is_running():
-            return {"status": "error", "msg": "任务运行中，请先停止任务再修改"}
+        if self._selected_role_running():
+            return {"status": "error", "msg": "该窗口任务运行中，请先停止该窗口任务再修改"}
         return settings_module.save_selected_modes(modes)
 
     def save_task_count(self, mode, value):
         """任务次数变更：保存某模式的执行次数。任务运行中拒绝修改
         （只能停止后修改，用户要求；页面侧同样禁用控件，此为双保险）。"""
-        if self._tm.is_running():
-            return {"status": "error", "msg": "任务运行中，请先停止任务再修改"}
+        if self._selected_role_running():
+            return {"status": "error", "msg": "该窗口任务运行中，请先停止该窗口任务再修改"}
         return settings_module.save_task_count(mode, value)

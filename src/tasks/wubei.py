@@ -1080,11 +1080,16 @@ def _find_claim_option(items, img_np):
     return claim_flow.find_claim_option(items, img_np, CLAIM_OPTION_NEEDLES)
 
 
-def _click_claim_option(win, items, img_np):
-    """点击领取绿色选项（共享实现在 workflows/claim_flow.py）。"""
+def _click_claim_option(win, items, img_np, learn=True):
+    """点击领取绿色选项（共享实现在 workflows/claim_flow.py）。
+
+    learn=False：选项已点过/对话框过渡帧的识别补点只点不学（防止把
+    相邻选项的坐标写进领取缓存；同修罗 2026-11-22 实机教训）。
+    """
     return claim_flow.click_claim_option(
         win, items, img_np, needles=CLAIM_OPTION_NEEDLES,
-        prefix="[五倍]", cache_key=f"option_{CLAIM_DIALOG_OPTION}")
+        prefix="[五倍]", cache_key=f"option_{CLAIM_DIALOG_OPTION}",
+        learn=learn)
 
 
 def _find_decline_option(items, img_np):
@@ -1867,7 +1872,14 @@ def _claim_task(win, allow_fill=False, allow_existing=False,
                 else confirm_dlg_score  # 供 run_loop 同帧取消
             break
         if used_cached and _find_claim_option(items, img_np) is not None:
-            _click_claim_option(win, items, img_np)  # 识别补点并刷新缓存
+            # 缓存坐标没点中（选项还在）：清缓存回退识别路径，下一轮
+            # 重新学习；同帧识别补点只点不学——此帧可能处于选项按下/
+            # 对话框过渡渲染态，重新计算的中心会落到相邻选项行
+            # （同修罗 2026-11-22 实机教训）
+            app_utils.fixed_pos_clear(f"option_{CLAIM_DIALOG_OPTION}")
+            log("[五倍] 缓存坐标未点中领取选项（选项仍在），"
+                "清除缓存改识别补点", "WARN")
+            _click_claim_option(win, items, img_np, learn=False)
         _claim_verify_wait(win, pre_sig, t_opt, polls)
     if found_frame is not None:
         # 观测（[领取计时]，临时埋点）：确认帧截帧延迟 = 任务渲染延迟上界；
@@ -1880,6 +1892,13 @@ def _claim_task(win, allow_fill=False, allow_existing=False,
                 f"确认帧含领取选项={'是' if claim_option_still else '否'}）",
                 "INFO")
         return True, "五倍任务已领取", found_frame
+    # 校验窗口内任务未进追踪：缓存坐标点击没有换来任务（可能点到相邻
+    # 选项/对话框未开）→ 清除缓存，下一轮走识别路径重新学习；重走发放
+    # 的补判成功也不保留未经确认的缓存坐标（同修罗 2026-11-22 实机）
+    if used_cached:
+        app_utils.fixed_pos_clear(f"option_{CLAIM_DIALOG_OPTION}")
+        log("[五倍] 缓存坐标点击后任务未进追踪，已清除领取选项缓存"
+            "（下一轮识别重学）", "WARN")
     # 未检索到：小地图重走领取点坐标后再次检索（修罗同款，用户
     # 2026-10-09 确认：重走可能触发任务渲染，不直接判失败）。
     # 原 Alt+C 飞行重查已移除——多余逻辑
@@ -3026,7 +3045,7 @@ def verify_claim_flow(win):
         items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
         found = _find_claim_option(items, img_np)
         if found is not None:
-            cx, cy, txt, _ = found
+            cx, cy, txt, _fallback, _cacheable = found
             human_move(win.rect.left + cx, win.rect.top + cy)
             log(f"[五倍][验证] 已移动鼠标到绿色选项「{txt}」({cx}, {cy})，"
                 f"已定位到（不点击，验证时序与真实流程一致）", "SYS")

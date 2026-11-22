@@ -16,7 +16,8 @@ from ..core.app_utils import human_click, log
 from ..device import bag
 from ..device import map as game_map
 from ..device import tab_group
-from ..device.battle import is_in_battle
+from ..device.battle import (BATTLE_END_POS_AFTER, _end_poll_advance,
+                             is_in_battle, is_in_battle_frame)
 
 # 任务储物格按钮双模板（选中/未选中态）与搜索参数
 BOX_TASK_ICON = "box_task.png"
@@ -28,22 +29,58 @@ TASK_BOX_BAND_MARGIN = 55
 # 返程道具等待与轮询
 RETURN_ITEM_TIMEOUT = 15
 RETURN_POLL_INTERVAL = 0.5
-# 等待战斗结束
-BATTLE_END_POLL = 2.0
+# 等待战斗结束：与战斗线程 watch_loop 同一套结束证据（battle.
+# _end_poll_advance，CLAUDE.md 性能规则 6 的校准资产）：
+#   - 坐标快速信号（主）：进战斗满 BATTLE_END_POS_AFTER 后地图坐标
+#     可读（场景已恢复 = 战斗实质结束）连续 BATTLE_END_POS_POLLS 轮询
+#     确认（0.5s×2 ≈1s）；回合演出的操作条/回合横幅隐藏间隙坐标仍
+#     不可读，天然免疫误判（用户 2026-11-22 确认：坐标信号实机从未
+#     误判，如 12:05:03「第 1 场战斗结束（坐标信号）」）；
+#   - 模板路径（兜底）：非战斗帧连续 4 轮询（2s 窗口）确认，任一战斗
+#     帧清零（防回合间隙误判）。
+# 原实现 2s 单帧判非战斗，被 2026-11-22 12:28 修罗手动寻路回合的
+# 演出间隙骗过：开打 10s 后误判结束、返程在战斗中开背包连续失败。
+BATTLE_END_POLL = 0.5
 # 传送后位置识别窗口（实测加载超 3s 时 3s 时限会失败）
 POSITION_WAIT = 5
 
 
 def wait_battle_end(win, timeout=60):
-    """等待当前战斗结束（战斗操作由 battle.watch_loop 线程完成）。"""
+    """等待当前战斗结束（战斗操作由 battle.watch_loop 线程完成）。
+
+    结束证据与战斗线程同一套：坐标快速信号（2 轮询）+ 模板 2s 窗口
+    兜底，共享同一证据计数（battle._end_poll_advance）。本函数可能在
+    战斗中段才被调用（观测不到进场时刻），以本次等待中首次观测到
+    战斗帧作为 BATTLE_END_POS_AFTER 坐标启用门起点——门未开只走
+    模板路径（保守，不影响正确性）。
+    """
     deadline = time.time() + timeout
+    out_polls = 0
+    first_battle_at = None
     while True:
         if tab_group.pass_active:
             time.sleep(0.3)
             continue
-        if not is_in_battle(win):
+        img = win.capture(force_activate=False)
+        if img is None:
+            time.sleep(BATTLE_END_POLL)
+            continue
+        # 单帧复用：战斗判定用 BGR，地图位置 OCR 用原 PIL 帧（RGB）
+        battle_frame = is_in_battle_frame(
+            cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR))
+        now = time.time()
+        if battle_frame and first_battle_at is None:
+            first_battle_at = now
+        elapsed = now - first_battle_at if first_battle_at is not None else 0.0
+        pos_readable = False
+        if elapsed >= BATTLE_END_POS_AFTER:
+            # 进场满 10s 才启用坐标信号：防开场过渡帧坐标短暂可读误判
+            pos_readable = game_map.read_map_position(win, img=img) is not None
+        out_polls, ended = _end_poll_advance(
+            True, battle_frame, pos_readable, elapsed, out_polls)
+        if ended:
             return True, "战斗已结束"
-        if time.time() > deadline:
+        if now > deadline:
             return False, f"等待战斗结束超时（{timeout}s）"
         time.sleep(BATTLE_END_POLL)
 

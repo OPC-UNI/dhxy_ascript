@@ -37,6 +37,7 @@ _LOG_DIR = pathlib.Path(os.getcwd()) / "logs"
 _LOG_FILE = None       # 当前日志文件路径（按日期滚动）
 _LOG_FH = None         # 当前日志文件句柄（惰性打开，每行 flush）
 _LOG_DATE = ""         # 句柄对应的日期（跨天滚动用）
+_LOG_ROLE = ""         # 句柄对应的角色（worker 进程角色，空=主进程 system）
 _LOG_LOCK = threading.Lock()  # 战斗监控线程与任务主线程都会打日志
 
 # 单测进程不落盘本地日志：pytest 从工程根目录运行，log() 会写进
@@ -47,18 +48,29 @@ _UNDER_PYTEST = "pytest" in sys.modules \
     or bool(os.environ.get("PYTEST_CURRENT_TEST"))
 
 
-def _open_log_file():
-    """惰性打开本地日志文件（logs/YYYY-MM-DD.log），跨天自动滚动。
+def _log_role():
+    """日志归属角色：worker 进程角色；主进程空（system 日志）。"""
+    try:
+        return user_data.process_role_id() or ""
+    except Exception:
+        return ""
 
-    打开新一天的日志文件时顺带清理超过 7 天的旧日志（保留近 7 天，
-    用户 2026-10-15 要求；进程内每天至多清理一次）。单测进程跳过
-    （见 _UNDER_PYTEST）。
+
+def _open_log_file():
+    """惰性打开本地日志文件，跨天/跨角色自动滚动。
+
+    多窗口（2026-11-22）：worker 按角色分文件
+    `logs/YYYY-MM-DD/<角色ID>.log`；主进程系统日志
+    `logs/YYYY-MM-DD/system.log`。打开新文件时顺带清理超过 7 天的
+    旧日志（保留近 7 天，用户 2026-10-15 要求；进程内每天至多清理
+    一次）。单测进程跳过（见 _UNDER_PYTEST）。
     """
-    global _LOG_FILE, _LOG_FH, _LOG_DATE
+    global _LOG_FILE, _LOG_FH, _LOG_DATE, _LOG_ROLE
     if _UNDER_PYTEST:
         return
     today = time.strftime("%Y-%m-%d")
-    if _LOG_FH is not None and _LOG_DATE == today:
+    role = _log_role()
+    if _LOG_FH is not None and _LOG_DATE == today and _LOG_ROLE == role:
         return
     if _LOG_FH is not None:
         try:
@@ -67,21 +79,25 @@ def _open_log_file():
             pass
         _LOG_FH = None
     try:
-        _LOG_DIR.mkdir(parents=True, exist_ok=True)
-        path = _LOG_DIR / f"{today}.log"
+        day_dir = _LOG_DIR / today
+        day_dir.mkdir(parents=True, exist_ok=True)
+        path = day_dir / (f"{role}.log" if role else "system.log")
         _LOG_FH = open(path, "a", encoding="utf-8")
         _LOG_FILE = str(path)
         _LOG_DATE = today
+        _LOG_ROLE = role
         _cleanup_old_logs()
     except Exception:
         _LOG_FH = None
 
 
 def _cleanup_old_logs():
-    """删除 logs/ 下修改时间超过 7 天的日志文件（清理失败静默）。"""
+    """删除 logs/ 下修改时间超过 7 天的日志文件（含旧版根目录日期文件
+    与多窗口按日目录；清理失败静默）。"""
     try:
         cutoff = time.time() - 7 * 86400
-        for p in _LOG_DIR.glob("*.log"):
+        paths = list(_LOG_DIR.glob("*.log")) + list(_LOG_DIR.glob("*/*.log"))
+        for p in paths:
             try:
                 if p.stat().st_mtime < cutoff:
                     p.unlink()
@@ -96,6 +112,13 @@ def log_file_path():
     with _LOG_LOCK:
         _open_log_file()
         return _LOG_FILE
+
+
+def log_day_dir(day=None):
+    """当天日志目录（logs/YYYY-MM-DD/：system.log + 各角色 <ID>.log）。"""
+    with _LOG_LOCK:
+        _open_log_file()
+        return _LOG_DIR / (day or time.strftime("%Y-%m-%d"))
 
 
 def log(msg, level="INFO"):
@@ -829,7 +852,13 @@ def char_key(win):
     （bound_window_id）是「这个窗口的这个角色」的权威身份，仅当传入窗口
     就是绑定窗口（句柄一致）时采用；未绑定/非绑定窗口仍按标题解析
     （单测假窗口无 hwnd，自然走标题路径）。
+
+    多窗口（2026-11-22）：worker 进程角色/主进程选中行角色优先——
+    不依赖传入窗口标题，pass 期间也不会漂移到队员角色。
     """
+    role = user_data.process_role_id() or user_data.selected_role_id()
+    if role and re.fullmatch(r"\d+", role):
+        return f"（ID：{role}）"
     hwnd = int(getattr(win, "hwnd", 0) or 0)
     if hwnd:
         try:

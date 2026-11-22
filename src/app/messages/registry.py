@@ -66,10 +66,13 @@ assert tuple(EVENT_LABELS) == tuple(MESSAGE_EVENT_KEYS)
 COMMANDS = (
     {"cmd": "/help", "aliases": ["帮助", "指令", "菜单"],
      "desc": "显示本帮助"},
-    {"cmd": "/status", "aliases": ["状态", "运行状态"],
-     "desc": "任务运行状态"},
-    {"cmd": "/task", "aliases": ["进度", "任务", "今日进度"],
-     "desc": "今日任务进度"},
+    {"cmd": "/status [all]", "aliases": ["状态", "运行状态"],
+     "desc": "任务运行状态（all=全部窗口）"},
+    {"cmd": "/task [all]", "aliases": ["进度", "任务", "今日进度"],
+     "desc": "今日任务进度（all=全部窗口）"},
+    {"cmd": "/window [序号/角色名/ID]",
+     "aliases": ["窗口", "切换窗口", "选择窗口", "窗口列表"],
+     "desc": "查看/切换当前窗口（后续指令作用于该窗口）"},
     {"cmd": "/capture", "aliases": ["截图", "截屏", "拍照"],
      "desc": "截取游戏窗口并发回"},
     {"cmd": "/log [n]", "aliases": ["日志"],
@@ -78,10 +81,10 @@ COMMANDS = (
      "desc": "配置方案列表"},
     {"cmd": "/switch <名称>", "aliases": ["切换方案", "切换"],
      "desc": "切换配置方案（任务运行中不可切换）"},
-    {"cmd": "/start", "aliases": ["开始", "启动", "开始任务", "启动任务"],
-     "desc": "启动任务（与面板按钮同链路，含启动前授权校验）"},
-    {"cmd": "/stop", "aliases": ["停止", "停止任务"],
-     "desc": "停止任务"},
+    {"cmd": "/start [all]", "aliases": ["开始", "启动", "开始任务", "启动任务"],
+     "desc": "启动任务（all=全部窗口；含启动前授权校验）"},
+    {"cmd": "/stop [all]", "aliases": ["停止", "停止任务"],
+     "desc": "停止任务（all=全部窗口）"},
     {"cmd": "/disband", "aliases": ["解散队伍", "解散"],
      "desc": "解散/离开当前队伍（队长解散、队员离开；任务需先停止）"},
     {"cmd": "/shout [内容]", "aliases": ["喊话"],
@@ -94,7 +97,8 @@ HELP_TEXT = "\n".join(
     ["啄木鸟消息服务", ""]
     + [f"{item['cmd']}  {item['desc']}" for item in COMMANDS]
     + ["", "也可以直接发送中文关键字，例如「状态」「进度」「方案」「开始」「停止」「解散队伍」「喊话」。",
-       "查询、启停、切方案、解散队伍、喊话直接生效；/exitgame 需回复 confirm 二次确认。"])
+       "/status、/task、/start、/stop 加 all（或「全部」）作用于全部窗口；",
+       "查询、切窗口、启停、切方案、解散队伍、喊话直接生效；/exitgame 需回复 confirm 二次确认。"])
 
 SECRET_FIELD_KEYS = frozenset({"token"})
 

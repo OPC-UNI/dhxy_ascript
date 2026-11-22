@@ -118,7 +118,8 @@ def test_verify_claim_flow_hover_only(monkeypatch):
         lambda win: (True, "已打开领取对话框", ([], IMG)))
     monkeypatch.setattr(
         zhongzu, "_find_claim_option",
-        lambda items, img_np: (520, 300, zhongzu.CLAIM_DIALOG_OPTION, False))
+        lambda items, img_np:
+        (520, 300, zhongzu.CLAIM_DIALOG_OPTION, False, True))
     monkeypatch.setattr(zhongzu, "human_move",
                         lambda sx, sy: events["moves"].append((sx, sy)))
     monkeypatch.setattr(zhongzu, "human_click",

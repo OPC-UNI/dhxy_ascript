@@ -68,15 +68,16 @@ def _sanitize_modes(modes):
     return modes
 
 
-def load_selected_modes():
+def load_selected_modes(role=None):
     """读取选中的任务模式列表（首次默认五环；旧单选键自动迁移）。
 
     按保存顺序返回（= 面板已选任务的拖动顺序，执行顺序与列表一致）；
     旧数据本就按 TASK_MODES 固定顺序保存，读取结果与旧版一致。
+    role 指定时读取该角色（多窗口看板逐行进度用），默认当前角色。
     """
-    raw = role_settings.get(_MODES_KEY, None)
+    raw = role_settings.get(_MODES_KEY, None, role=role)
     if raw is None:
-        old = role_settings.get(_MODE_KEY_OLD)
+        old = role_settings.get(_MODE_KEY_OLD, None, role=role)
         raw = [old] if old in TASK_MODES else list(_DEFAULT_MODES)
     if not isinstance(raw, list):
         raw = []
@@ -206,10 +207,13 @@ def _clamp_count(mode, value):
     return min(value, TASK_COUNT_MAX[mode]) if mode in TASK_COUNT_MAX else value
 
 
-def load_task_counts():
-    """读取各任务模式的执行次数（首次使用各自默认值，并夹在上下限内）。"""
-    return {mode: _clamp_count(mode, role_settings.get(_COUNT_KEYS[mode],
-                                                  TASK_COUNT_DEFAULTS.get(mode, 0)))
+def load_task_counts(role=None):
+    """读取各任务模式的执行次数（首次使用各自默认值，并夹在上下限内）。
+
+    role 指定时读取该角色（多窗口看板逐行进度用），默认当前角色。
+    """
+    return {mode: _clamp_count(mode, role_settings.get(
+                _COUNT_KEYS[mode], TASK_COUNT_DEFAULTS.get(mode, 0), role=role))
             for mode in TASK_MODES}
 
 
@@ -562,9 +566,9 @@ def save_clear_screen(on):
 _SILENT_MODE_KEY = "silent_mode"
 
 
-def load_silent_mode():
-    """读取静默操作开关（首次默认开启）。"""
-    return bool(role_settings.get(_SILENT_MODE_KEY, True))
+def load_silent_mode(role=None):
+    """读取静默操作开关（首次默认开启；role 指定时读该角色）。"""
+    return bool(role_settings.get(_SILENT_MODE_KEY, True, role=role))
 
 
 def save_silent_mode(on):

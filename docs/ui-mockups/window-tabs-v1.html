@@ -1,0 +1,695 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>多窗口 UI 提案 v1 · 窗口为轴</title>
+<style>
+    /* ===== 设计稿说明：720×560 实机尺寸；沿用现有面板 design tokens ===== */
+    * { box-sizing: border-box; }
+    :root {
+        --bg: #0E1411; --panel: #161D18; --panel2: #1D261F;
+        --border: #2B352E; --border2: #3A463E;
+        --text: #D8DED8; --text-dim: #8B948C;
+        --accent: #2FBF71; --accent-dim: #1F8A53;
+        --gold: #C9A15C; --danger: #E5484D; --danger-text: #F2777A;
+        --seal: #C0392B; --team: #5C9BD1; --seal-ink: #0E1411;
+        --progress-tint: rgba(47, 191, 113, 0.12);
+    }
+    .light {
+        --bg: #F4F1E8; --panel: #FBF9F2; --panel2: #F0EDE0;
+        --border: #E2DCC9; --border2: #CFC8B0;
+        --text: #2E2B23; --text-dim: #6E6A5C;
+        --accent: #177A46; --accent-dim: #1E8F57;
+        --gold: #8A6A2E; --danger: #C23B33; --danger-text: #C23B33;
+        --seal: #B3352F; --team: #3A6EA5; --seal-ink: #FFFFFF;
+        --progress-tint: rgba(23, 122, 70, 0.10);
+    }
+    body {
+        margin: 0; padding: 22px 24px;
+        background: #26272b; color: #ddd;
+        font-family: "微软雅黑"; font-size: 13px;
+    }
+    .shot { width: 720px; margin: 0 0 26px; }
+    .shot-label {
+        font: 12px/1.4 Consolas, "微软雅黑"; color: #b9bdc4;
+        margin: 0 0 7px 2px; letter-spacing: 0.3px;
+    }
+    .shot-label b { color: #f0d8a8; font-weight: 600; }
+    .frame {
+        width: 720px; height: 560px; overflow: hidden; position: relative;
+        display: flex; background: var(--bg); color: var(--text);
+        border: 1px solid #3b3d43; border-radius: 4px;
+    }
+    .frame *, .frame *::before, .frame *::after { box-sizing: border-box; }
+    .frame ::-webkit-scrollbar { width: 6px; height: 6px; }
+    .frame ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
+
+    /* ---- 侧边导航（沿用） ---- */
+    .sidebar {
+        width: 148px; min-width: 148px; flex-shrink: 0;
+        background: var(--panel); border-right: 1px solid var(--border);
+        display: flex; flex-direction: column;
+    }
+    .brand { display: flex; align-items: center; gap: 8px; padding: 14px 12px 12px; }
+    .brand-seal {
+        width: 30px; height: 30px; flex-shrink: 0; border-radius: 5px;
+        background: var(--seal); color: #fff; display: flex; align-items: center;
+        justify-content: center; font-family: KaiTi, STKaiti, '楷体', serif;
+        font-size: 19px; transform: rotate(-3deg);
+    }
+    .brand-text { display: flex; flex-direction: column; line-height: 1.25; }
+    .brand-name { font-family: KaiTi, STKaiti, '楷体', serif; font-size: 16px; }
+    .brand-sub { font-size: 10px; color: var(--text-dim); }
+    .nav-items { flex: 1; display: flex; flex-direction: column; gap: 2px; padding: 4px 8px; }
+    .nav-item {
+        display: flex; align-items: center; gap: 9px; padding: 8px 10px;
+        border-radius: 6px; color: var(--text-dim); font-size: 13px;
+    }
+    .nav-item svg { width: 17px; height: 17px; flex-shrink: 0; }
+    .nav-item.active { color: var(--accent); background: var(--progress-tint); }
+    .side-footer {
+        padding: 10px 12px; border-top: 1px solid var(--border);
+        font-size: 11px; color: var(--text-dim); display: flex; flex-direction: column; gap: 4px;
+    }
+    .side-row { display: flex; align-items: center; justify-content: space-between; }
+    .join-groups { display: flex; gap: 4px; }
+    .join-group {
+        width: 20px; height: 20px; display: flex; align-items: center;
+        justify-content: center; color: var(--text-dim);
+    }
+    .join-group svg { width: 15px; height: 15px; }
+
+    /* ---- 主列 ---- */
+    .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+
+    /* ---- 顶栏：只剩全局动作与当前窗口方案 ---- */
+    .top-bar {
+        height: 46px; min-height: 46px; flex-shrink: 0;
+        display: flex; align-items: center; gap: 8px; padding: 0 12px;
+        background: var(--panel); border-bottom: 1px solid var(--border);
+    }
+    .fleet-status {
+        display: inline-flex; align-items: center; gap: 7px;
+        color: var(--text-dim); font-size: 12px; white-space: nowrap;
+    }
+    .fleet-status b { color: var(--text); font-weight: 600; }
+    .fleet-status .dot {
+        width: 7px; height: 7px; border-radius: 50%; background: var(--border2);
+    }
+    .fleet-status .dot.running { background: var(--accent); box-shadow: 0 0 5px var(--accent); }
+    .top-spacer { flex: 1; }
+    #scheme-select {
+        height: 28px; max-width: 132px; padding: 0 8px; border-radius: 6px;
+        background: var(--panel2); color: var(--text);
+        border: 1px solid var(--border2); font-size: 12px; font-family: "微软雅黑";
+    }
+    .icon-btn {
+        width: 30px; height: 28px; display: flex; align-items: center;
+        justify-content: center; border: 1px solid var(--accent); border-radius: 6px;
+        background: var(--panel2); color: var(--accent);
+    }
+    .icon-btn svg { width: 15px; height: 15px; }
+    .btn-primary {
+        min-width: 100px; height: 30px; padding: 0 14px; border-radius: 7px;
+        border: 1px solid var(--danger); background: var(--danger); color: #fff;
+        font-size: 13px; font-weight: bold; letter-spacing: 1.5px;
+        font-family: "微软雅黑"; cursor: pointer;
+    }
+    .btn-primary.start { border-color: var(--accent); background: var(--accent); color: #06200F; }
+
+    /* ---- 窗口 Tab 条（新增，全局窗口上下文） ---- */
+    .win-tabs {
+        height: 40px; min-height: 40px; flex-shrink: 0;
+        display: flex; align-items: center; gap: 4px;
+        padding: 5px 8px 5px 10px; background: var(--bg);
+        border-bottom: 1px solid var(--border);
+        overflow: hidden;
+    }
+    .win-tab {
+        display: flex; align-items: center; gap: 6px;
+        height: 30px; padding: 0 9px; border-radius: 6px;
+        border: 1px solid transparent; color: var(--text-dim);
+        font-size: 12px; white-space: nowrap; cursor: pointer;
+        min-width: 0; flex-shrink: 0;
+        transition: background .15s, border-color .15s, color .15s;
+    }
+    .win-tab:hover { background: var(--panel2); color: var(--text); }
+    .win-tab.active {
+        background: var(--panel); border-color: var(--accent);
+        color: var(--text); box-shadow: inset 0 -2px 0 0 var(--accent);
+    }
+    .win-tab .dot {
+        width: 7px; height: 7px; border-radius: 50%; background: var(--border2); flex-shrink: 0;
+    }
+    .win-tab .dot.running { background: var(--accent); box-shadow: 0 0 5px var(--accent); }
+    .win-tab .dot.error { background: var(--danger); }
+    .win-tab .tname {
+        max-width: 128px; overflow: hidden; text-overflow: ellipsis;
+    }
+    .win-tab .tprog {
+        font-family: Consolas, monospace; font-size: 10px; color: var(--text-dim);
+        flex-shrink: 0;
+    }
+    .win-tab.active .tprog { color: var(--accent); }
+    .win-tab.closed { opacity: .55; }
+    .tabs-spacer { flex: 1; }
+    .tabs-manage {
+        display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0;
+        height: 26px; padding: 0 8px; border-radius: 5px;
+        border: 1px solid var(--border2); background: var(--panel2);
+        color: var(--text-dim); font-size: 11px; cursor: pointer;
+    }
+    .tabs-manage svg { width: 13px; height: 13px; }
+    .tabs-manage:hover { color: var(--accent); border-color: var(--accent); }
+
+    /* ---- 页面容器 / 卡片（沿用） ---- */
+    .page {
+        flex: 1; min-height: 0; overflow: hidden;
+        display: flex; flex-direction: column; gap: 10px; padding: 12px;
+    }
+    .card {
+        width: 100%; display: flex; flex-direction: column; gap: 8px;
+        background: var(--panel); border: 1px solid var(--border);
+        border-radius: 8px; padding: 12px; flex-shrink: 0;
+    }
+
+    /* ---- 当前窗口状态卡 ---- */
+    .status-card {
+        flex-direction: row; align-items: center; gap: 12px; padding: 12px;
+    }
+    .seal {
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        width: 58px; height: 58px; border-radius: 6px; border: 2px solid;
+        font-family: KaiTi, STKaiti, '楷体', serif; font-size: 16px; line-height: 1.15;
+        transform: rotate(-3deg); flex-shrink: 0; user-select: none;
+    }
+    .seal.idle { color: var(--text-dim); border-color: var(--border2); }
+    .seal.running {
+        background: var(--seal); color: #fff; border-color: var(--seal);
+        box-shadow: 0 0 12px 2px rgba(192, 57, 43, 0.35);
+    }
+    .status-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+    .status-line1 { display: flex; align-items: center; gap: 7px; min-width: 0; }
+    .status-name {
+        font-size: 14px; font-weight: 600; color: var(--text);
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .rid { font-size: 10px; color: var(--text-dim); font-family: Consolas, monospace; flex-shrink: 0; }
+    .status-meta {
+        display: flex; align-items: center; gap: 7px; font-size: 12px;
+        color: var(--text-dim); min-width: 0;
+    }
+    .status-meta .task { color: var(--text); }
+    .status-meta .sep { opacity: .5; }
+    .phase-chip {
+        display: inline-block; padding: 0 8px; border-radius: 10px;
+        font-size: 11px; line-height: 17px; border: 1px solid var(--border2);
+        color: var(--text); background: var(--panel2); flex-shrink: 0;
+    }
+    .phase-chip.battle { color: var(--seal); border-color: var(--seal); }
+    .phase-chip.idle { color: var(--text-dim); }
+    .progress-line { display: flex; align-items: center; gap: 8px; }
+    .bar {
+        flex: 1; min-width: 0; height: 7px; border-radius: 4px;
+        background: var(--panel2); overflow: hidden;
+    }
+    .bar > i { display: block; height: 100%; background: var(--accent-dim); border-radius: 4px; }
+    .pnum { font: 11px Consolas, monospace; color: var(--text-dim); flex-shrink: 0; }
+    .status-actions {
+        display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex-shrink: 0;
+    }
+    .btn {
+        min-width: 64px; height: 28px; padding: 0 12px; border-radius: 6px;
+        border: 1px solid var(--border2); background: var(--panel2); color: var(--text);
+        font-size: 12px; font-family: "微软雅黑"; cursor: pointer;
+    }
+    .btn.stop { color: var(--danger-text); border-color: var(--danger); }
+    .btn:disabled { opacity: .4; }
+    .scheme-note { font-size: 10px; color: var(--text-dim); white-space: nowrap; }
+    .scheme-inline {
+        height: 24px; max-width: 118px; padding: 0 6px; border-radius: 5px;
+        background: var(--panel2); color: var(--text-dim);
+        border: 1px solid var(--border2); font-size: 11px; font-family: "微软雅黑";
+    }
+    .scheme-inline:disabled { opacity: .7; }
+
+    /* ---- 任务队列（沿用 + 本窗口合计） ---- */
+    .queue-card { flex: 1; min-height: 0; }
+    .queue-head { display: flex; align-items: center; gap: 8px; }
+    .card-title { color: var(--accent); font-size: 13px; }
+    .queue-owner {
+        font-size: 11px; color: var(--text-dim); padding: 0 6px; border-radius: 8px;
+        border: 1px solid var(--border2); white-space: nowrap;
+    }
+    .queue-summary {
+        margin-left: auto; font: 11px Consolas, monospace; color: var(--text-dim);
+        white-space: nowrap;
+    }
+    .queue-row {
+        display: flex; align-items: center; gap: 8px; padding: 7px 4px;
+        border-bottom: 1px solid var(--border); border-radius: 4px;
+    }
+    .queue-row:last-child { border-bottom: none; }
+    .queue-row.active { background: var(--progress-tint); }
+    .queue-state { width: 16px; text-align: center; flex-shrink: 0; font-size: 12px; color: var(--text-dim); }
+    .queue-row.done .queue-state, .queue-row.active .queue-state { color: var(--accent); }
+    .queue-name { width: 60px; flex-shrink: 0; font-size: 13px; }
+    .queue-row.active .queue-name { color: var(--accent); }
+    .queue-prog { flex: 1; min-width: 0; height: 7px; background: var(--panel2); border-radius: 4px; overflow: hidden; }
+    .queue-prog > i { display: block; height: 100%; background: var(--accent-dim); }
+    .queue-text { width: 74px; text-align: right; font: 12px Consolas, monospace; color: var(--text-dim); flex-shrink: 0; }
+    .queue-foot { margin-top: auto; font-size: 11px; color: var(--text-dim); }
+
+    /* ---- 日志（本窗口默认） ---- */
+    .log-card { padding: 0; overflow: hidden; }
+    .log-head {
+        height: 32px; display: flex; align-items: center; gap: 8px;
+        padding: 0 12px; font-size: 12px;
+    }
+    .log-title { color: var(--accent); }
+    .log-owner { font-size: 11px; color: var(--text-dim); }
+    .log-filter { display: inline-flex; gap: 4px; margin-left: 4px; }
+    .chip-btn {
+        height: 20px; padding: 0 8px; border-radius: 10px;
+        border: 1px solid var(--border2); background: var(--panel2);
+        color: var(--text-dim); font-size: 11px; font-family: "微软雅黑";
+    }
+    .chip-btn.on { color: var(--accent); border-color: var(--accent); background: var(--progress-tint); }
+    .log-meta { margin-left: auto; font: 10px Consolas, monospace; color: var(--text-dim); }
+    .link-btn { color: var(--text-dim); font-size: 11px; cursor: pointer; }
+    .log-body {
+        height: 118px; overflow: hidden; padding: 4px 12px 6px;
+        border-top: 1px solid var(--border);
+        font: 10.5px/1.65 Consolas, '微软雅黑', monospace; white-space: pre-wrap;
+        color: var(--text);
+    }
+    .log-body .t { color: var(--text-dim); }
+    .log-body .err { color: var(--danger-text); font-weight: 700; }
+    .log-body .ok { color: var(--accent); }
+
+    /* ---- 多开管理页 ---- */
+    .manage-head { display: flex; align-items: center; gap: 8px; }
+    .back-link { color: var(--text-dim); font-size: 12px; cursor: pointer; }
+    .manage-title { font-size: 14px; color: var(--text); font-weight: 600; }
+    .manage-sub { font-size: 11px; color: var(--text-dim); }
+    .manage-actions { margin-left: auto; display: flex; gap: 6px; }
+    .btn-sm {
+        height: 26px; padding: 0 10px; border-radius: 5px; font-size: 12px;
+        border: 1px solid var(--border2); background: var(--panel2); color: var(--text);
+        font-family: "微软雅黑"; cursor: pointer;
+    }
+    .btn-sm.primary { border-color: var(--accent); color: var(--accent); }
+    .btn-sm.danger { border-color: var(--danger); color: var(--danger-text); }
+    .manage-card { padding: 0; gap: 0; overflow: hidden; }
+    .manage-summary {
+        display: flex; align-items: center; gap: 8px; height: 34px;
+        padding: 0 12px; border-bottom: 1px solid var(--border);
+        font: 11px Consolas, "微软雅黑", monospace; color: var(--text-dim);
+    }
+    .manage-summary b { color: var(--text); font-weight: 600; }
+    .manage-row {
+        display: flex; align-items: center; gap: 8px;
+        padding: 10px 12px; border-bottom: 1px solid var(--border);
+        cursor: pointer; position: relative;
+    }
+    .manage-row:last-child { border-bottom: none; }
+    .manage-row.selected { background: var(--progress-tint); }
+    .manage-row.selected::before {
+        content: ""; position: absolute; left: 0; top: 7px; bottom: 7px;
+        width: 2px; border-radius: 1px; background: var(--accent);
+    }
+    .mcheck { accent-color: var(--accent); margin: 0; flex-shrink: 0; }
+    .manage-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+    .manage-line { display: flex; align-items: center; gap: 6px; min-width: 0; }
+    .mname { font-size: 13px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 150px; }
+    .manage-progress { font: 11px Consolas, monospace; color: var(--text-dim); white-space: nowrap; }
+    .badge {
+        font-size: 10px; padding: 0 6px; border-radius: 8px; line-height: 16px;
+        border: 1px solid var(--border2); color: var(--text-dim); white-space: nowrap;
+    }
+    .badge.warn { color: var(--gold); border-color: var(--gold); }
+    .manage-actions-row { display: flex; gap: 4px; flex-shrink: 0; }
+    .manage-actions-row .btn { min-width: 48px; height: 24px; padding: 0 8px; font-size: 12px; }
+    .manage-note { font-size: 11px; line-height: 1.6; color: var(--text-dim); }
+</style>
+</head>
+<body>
+
+<!-- ================= 画面 1：运行页 · 窗口 A 运行中 ================= -->
+<div class="shot">
+    <div class="shot-label"><b>① 运行页 · 一生所爱「长相思」</b> —— 窗口 Tab 是全局上下文；本页只讲这一个窗口的事，没有任何跨窗口合计</div>
+    <div class="frame light">
+        <nav class="sidebar">
+            <div class="brand">
+                <div class="brand-seal">啄</div>
+                <div class="brand-text">
+                    <span class="brand-name">啄木鸟</span>
+                    <span class="brand-sub">大话2自动化助手</span>
+                </div>
+            </div>
+            <div class="nav-items">
+                <div class="nav-item active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg><span>运 行</span></div>
+                <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg><span>任 务</span></div>
+                <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg><span>设 置</span></div>
+                <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg><span>成 就</span></div>
+                <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg><span>消 息</span></div>
+                <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg><span>系 统</span></div>
+            </div>
+            <div class="side-footer">
+                <div class="side-row"><span>● 授权：已激活</span></div>
+                <div class="side-row">
+                    <span>2.15.2</span>
+                    <span class="join-groups"><span class="join-group"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg></span></span>
+                </div>
+            </div>
+        </nav>
+
+        <div class="main">
+            <header class="top-bar">
+                <span class="fleet-status"><span class="dot running"></span>多开 <b>2</b> 窗口 · <b>1</b> 运行中</span>
+                <span class="top-spacer"></span>
+                <span class="icon-btn"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg></span>
+                <button class="btn-primary">全部停止</button>
+            </header>
+
+            <!-- 新增：窗口 Tab 条（所有页面共享的全局上下文） -->
+            <div class="win-tabs">
+                <div class="win-tab active">
+                    <span class="dot running"></span>
+                    <span class="tname">一生所爱「长相思」</span>
+                    <span class="tprog">51/100</span>
+                </div>
+                <div class="win-tab">
+                    <span class="dot"></span>
+                    <span class="tname">傲雪凌霜「可乐可口」</span>
+                    <span class="tprog">10/12</span>
+                </div>
+                <span class="tabs-spacer"></span>
+                <span class="tabs-manage" title="多开管理：勾选参与、全部启停">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+                    管理
+                </span>
+            </div>
+
+            <div class="page">
+                <!-- 当前窗口状态卡 -->
+                <div class="card status-card">
+                    <div class="seal running"><span>运</span><span>行</span><span>中</span></div>
+                    <div class="status-main">
+                        <div class="status-line1">
+                            <span class="status-name">一生所爱「长相思」</span>
+                            <span class="rid">ID 286958560</span>
+                        </div>
+                        <div class="status-meta">
+                            <span class="phase-chip battle">战斗中</span>
+                            <span class="task">修罗</span>
+                            <span class="sep">·</span>
+                            <span>第 37 场</span>
+                            <span class="sep">·</span>
+                            <span>队伍 5 人</span>
+                        </div>
+                        <div class="progress-line">
+                            <span class="bar"><i style="width:51%"></i></span>
+                            <span class="pnum">51/100 · 51%</span>
+                        </div>
+                    </div>
+                    <div class="status-actions">
+                        <button class="btn stop">停止本窗口</button>
+                        <select class="scheme-inline" disabled title="方案（运行中只读）"><option>修罗五倍双百</option></select>
+                    </div>
+                </div>
+
+                <!-- 该窗口任务队列 -->
+                <div class="card queue-card">
+                    <div class="queue-head">
+                        <span class="card-title">任务队列</span>
+                        <span class="queue-owner">本窗口</span>
+                        <span class="queue-summary">今日 51/200</span>
+                    </div>
+                    <div class="queue-row done">
+                        <span class="queue-state">✓</span><span class="queue-name">五环</span>
+                        <span class="queue-prog"><i style="width:100%"></i></span>
+                        <span class="queue-text">2/2</span>
+                    </div>
+                    <div class="queue-row active">
+                        <span class="queue-state">▶</span><span class="queue-name">修罗</span>
+                        <span class="queue-prog"><i style="width:51%"></i></span>
+                        <span class="queue-text">51/100</span>
+                    </div>
+                    <div class="queue-row">
+                        <span class="queue-state">·</span><span class="queue-name">五倍</span>
+                        <span class="queue-prog"><i style="width:0%"></i></span>
+                        <span class="queue-text">0/100</span>
+                    </div>
+                    <div class="queue-foot">按顺序执行 · 到「任务」页调整顺序与次数</div>
+                </div>
+
+                <!-- 该窗口日志 -->
+                <div class="card log-card">
+                    <div class="log-head">
+                        <span class="log-title">运行日志</span>
+                        <span class="log-owner">一生所爱「长相思」</span>
+                        <span class="log-filter">
+                            <button class="chip-btn on">本窗口</button>
+                            <button class="chip-btn">全部</button>
+                        </span>
+                        <span class="log-meta">1240 行</span>
+                        <span class="link-btn">清空</span>
+                        <span class="link-btn">收起</span>
+                    </div>
+                    <div class="log-body"><span class="t">14:22:07</span> [修罗] 第 37 场战斗开始
+<span class="t">14:22:19</span> [修罗] 战斗胜利，今日 51/100
+<span class="t">14:22:20</span> <span class="ok">[导航] 前往 灵兽村 (112, 48)</span>
+<span class="t">14:22:26</span> [巫医] 队伍状态良好，跳过</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ================= 画面 2：运行页 · 窗口 B 未启动 ================= -->
+<div class="shot">
+    <div class="shot-label"><b>② 切到另一个窗口</b> —— 同一套页面实例换成 B 的数据：状态 / 任务 / 方案 / 日志全部跟随，不需要在列表里找</div>
+    <div class="frame light">
+        <nav class="sidebar">
+            <div class="brand">
+                <div class="brand-seal">啄</div>
+                <div class="brand-text">
+                    <span class="brand-name">啄木鸟</span>
+                    <span class="brand-sub">大话2自动化助手</span>
+                </div>
+            </div>
+            <div class="nav-items">
+                <div class="nav-item active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg><span>运 行</span></div>
+                <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg><span>任 务</span></div>
+                <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg><span>设 置</span></div>
+                <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg><span>成 就</span></div>
+                <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg><span>消 息</span></div>
+                <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg><span>系 统</span></div>
+            </div>
+            <div class="side-footer">
+                <div class="side-row"><span>● 授权：已激活</span></div>
+                <div class="side-row"><span>2.15.2</span><span class="join-groups"><span class="join-group"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg></span></span></div>
+            </div>
+        </nav>
+
+        <div class="main">
+            <header class="top-bar">
+                <span class="fleet-status"><span class="dot running"></span>多开 <b>2</b> 窗口 · <b>1</b> 运行中</span>
+                <span class="top-spacer"></span>
+                <span class="icon-btn"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg></span>
+                <button class="btn-primary">全部停止</button>
+            </header>
+
+            <div class="win-tabs">
+                <div class="win-tab">
+                    <span class="dot running"></span>
+                    <span class="tname">一生所爱「长相思」</span>
+                    <span class="tprog">51/100</span>
+                </div>
+                <div class="win-tab active">
+                    <span class="dot"></span>
+                    <span class="tname">傲雪凌霜「可乐可口」</span>
+                    <span class="tprog">10/12</span>
+                </div>
+                <span class="tabs-spacer"></span>
+                <span class="tabs-manage">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+                    管理
+                </span>
+            </div>
+
+            <div class="page">
+                <div class="card status-card">
+                    <div class="seal idle"><span>待</span><span>命</span></div>
+                    <div class="status-main">
+                        <div class="status-line1">
+                            <span class="status-name">傲雪凌霜「可乐可口」</span>
+                            <span class="rid">ID 36096466</span>
+                            <span class="badge warn">未加入多开</span>
+                        </div>
+                        <div class="status-meta">
+                            <span class="phase-chip idle">未启动</span>
+                            <span class="task">单人任务-魔王</span>
+                            <span class="sep">·</span>
+                            <span>今日 10 轮</span>
+                        </div>
+                        <div class="progress-line">
+                            <span class="bar"><i style="width:83%"></i></span>
+                            <span class="pnum">10/12 · 83%</span>
+                        </div>
+                    </div>
+                    <div class="status-actions">
+                        <button class="btn stop" disabled>停止本窗口</button>
+                        <select class="scheme-inline" title="该窗口的方案"><option>默认</option></select>
+                    </div>
+                </div>
+
+                <div class="card queue-card">
+                    <div class="queue-head">
+                        <span class="card-title">任务队列</span>
+                        <span class="queue-owner">本窗口</span>
+                        <span class="queue-summary">今日 10/12</span>
+                    </div>
+                    <div class="queue-row">
+                        <span class="queue-state">·</span><span class="queue-name">魔王</span>
+                        <span class="queue-prog"><i style="width:83%"></i></span>
+                        <span class="queue-text">10/12</span>
+                    </div>
+                    <div class="queue-row">
+                        <span class="queue-state">·</span><span class="queue-name">五环</span>
+                        <span class="queue-prog"><i style="width:0%"></i></span>
+                        <span class="queue-text">0/2</span>
+                    </div>
+                    <div class="queue-foot">按顺序执行 · 到「任务」页调整顺序与次数</div>
+                </div>
+
+                <div class="card log-card">
+                    <div class="log-head">
+                        <span class="log-title">运行日志</span>
+                        <span class="log-owner">傲雪凌霜「可乐可口」</span>
+                        <span class="log-filter">
+                            <button class="chip-btn on">本窗口</button>
+                            <button class="chip-btn">全部</button>
+                        </span>
+                        <span class="log-meta">0 行</span>
+                        <span class="link-btn">清空</span>
+                        <span class="link-btn">展开</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ================= 画面 3：多开管理 ================= -->
+<div class="shot">
+    <div class="shot-label"><b>③ 多开管理（从 Tab 条右侧「管理」进入）</b> —— 勾选、全部启停、单窗口启停都收在这里；进度只按行显示，不再做跨窗口合计</div>
+    <div class="frame light">
+        <nav class="sidebar">
+            <div class="brand">
+                <div class="brand-seal">啄</div>
+                <div class="brand-text">
+                    <span class="brand-name">啄木鸟</span>
+                    <span class="brand-sub">大话2自动化助手</span>
+                </div>
+            </div>
+            <div class="nav-items">
+                <div class="nav-item active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg><span>运 行</span></div>
+                <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg><span>任 务</span></div>
+                <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg><span>设 置</span></div>
+                <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg><span>成 就</span></div>
+                <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg><span>消 息</span></div>
+                <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg><span>系 统</span></div>
+            </div>
+            <div class="side-footer">
+                <div class="side-row"><span>● 授权：已激活</span></div>
+                <div class="side-row"><span>2.15.2</span><span class="join-groups"><span class="join-group"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg></span></span></div>
+            </div>
+        </nav>
+
+        <div class="main">
+            <header class="top-bar">
+                <span class="fleet-status"><span class="dot running"></span>多开 <b>2</b> 窗口 · <b>1</b> 运行中</span>
+                <span class="top-spacer"></span>
+                <span class="icon-btn"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg></span>
+                <button class="btn-primary">全部停止</button>
+            </header>
+
+            <div class="win-tabs">
+                <div class="win-tab">
+                    <span class="dot running"></span>
+                    <span class="tname">一生所爱「长相思」</span>
+                    <span class="tprog">51/100</span>
+                </div>
+                <div class="win-tab">
+                    <span class="dot"></span>
+                    <span class="tname">傲雪凌霜「可乐可口」</span>
+                    <span class="tprog">10/12</span>
+                </div>
+                <span class="tabs-spacer"></span>
+                <span class="tabs-manage" style="color:var(--accent);border-color:var(--accent)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+                    管理
+                </span>
+            </div>
+
+            <div class="page">
+                <div class="manage-head">
+                    <span class="back-link">‹ 返回运行</span>
+                    <span class="manage-title">多开管理</span>
+                    <span class="manage-sub" style="margin-left:auto">全部启停见右上角 · 新窗口默认不勾选</span>
+                </div>
+                <div class="card manage-card">
+                    <div class="manage-summary">
+                        <span><b>2</b> 个窗口</span><span>·</span>
+                        <span><b>1</b> 个运行中</span><span>·</span>
+                        <span><b>1</b> 个已勾选</span>
+                    </div>
+                    <div class="manage-row selected">
+                        <input type="checkbox" class="mcheck" checked>
+                        <div class="manage-main">
+                            <div class="manage-line">
+                                <span class="mname">一生所爱「长相思」</span>
+                                <span class="rid">ID 286958560</span>
+                                <span class="badge">修罗五倍双百</span>
+                            </div>
+                            <div class="manage-line">
+                                <span class="phase-chip battle">战斗中</span>
+                                <span class="manage-progress">修罗 · 51/100</span>
+                                <span class="bar" style="max-width:120px;height:5px"><i style="width:51%"></i></span>
+                            </div>
+                        </div>
+                        <span class="manage-actions-row">
+                            <button class="btn stop">停止</button>
+                            <button class="btn">配置</button>
+                        </span>
+                    </div>
+                    <div class="manage-row">
+                        <input type="checkbox" class="mcheck">
+                        <div class="manage-main">
+                            <div class="manage-line">
+                                <span class="mname">傲雪凌霜「可乐可口」</span>
+                                <span class="rid">ID 36096466</span>
+                                <span class="badge">默认</span>
+                            </div>
+                            <div class="manage-line">
+                                <span class="phase-chip idle">未启动</span>
+                                <span class="manage-progress">魔王 · 10/12</span>
+                                <span class="badge warn">未加入多开</span>
+                            </div>
+                        </div>
+                        <span class="manage-actions-row">
+                            <button class="btn" disabled>启动</button>
+                            <button class="btn">配置</button>
+                        </span>
+                    </div>
+                </div>
+                <div class="manage-note">勾选的窗口参与「全部启动」；新检测到的窗口默认不勾选。<br>这里不再显示跨窗口进度合计——进度请看每个窗口自己的 Tab 与运行页。</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+</body>
+</html>

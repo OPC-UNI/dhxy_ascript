@@ -17,8 +17,8 @@ Runtime.wait 驻留线程防止程序自行退出（托盘「彻底退出」→ 
 - src/app/task_manager.py    任务子进程管理（启停、升级强杀、日志回流）
 - src/app/control_window.py  网页控制窗口（启动/停止/重置、任务多选与次数、总进度条、内嵌日志）
 - src/core/schemes.py         配置方案管理（多套设置快照一键切换 + 导入导出）
-- src/app/hotkey.py          全局老板键（默认 F8 一键启动/停止任务）
-- src/app/select_window.py   多开窗口绑定选择弹窗（启动时多开且无有效绑定时弹出）
+- src/app/hotkey.py          全局老板键（默认 F11，只停不起/全部停止）
+- src/app/window_registry.py 多窗口注册表（自动枚举/勾选持久化/选中目标注入）
 """
 import multiprocessing  # freeze_support：冻结打包下 spawn 子进程（任务/悬浮层）用
 import os
@@ -150,6 +150,7 @@ def _setup_tray(icon_path, control_win):
             pystray.MenuItem("显示/隐藏控制窗口",
                              lambda icon, item: control_win.toggle_visible(),
                              default=True),
+            pystray.MenuItem("全部停止", lambda icon, item: control_win.stop_all()),
             pystray.MenuItem("彻底退出", lambda icon, item: Runtime.stop()),
         ]
         tooltip = f"啄木鸟 - {label}" if label else "啄木鸟"
@@ -157,58 +158,6 @@ def _setup_tray(icon_path, control_win):
         tray.run()
     except Exception:
         pass
-
-
-def _ensure_window_binding():
-    """多开时弹框选择要绑定的游戏窗口（单窗口自动绑定、已有有效绑定时跳过）。
-
-    授权通过后、控制窗口创建前调用（webview 消息循环须独占一次，
-    与控制窗口分属两次 start——同授权窗口路径）。绑定保存到
-    KeyValue（bound_window_id = 句柄+账号 ID：句柄区分同账号多
-    窗口，ID 跨重启延续匹配），find_main_window 优先返回绑定窗口
-    （面板/任务子进程/悬浮层共用同一查找接缝）；绑定窗口不存在时
-    下次启动自动重新弹出。单窗口同样保存绑定：后续窗口变多时按
-    绑定延续匹配、不再弹框（2026-11-05 用户反馈——此前单窗口
-    直接返回不保存，下次多开又弹框）。
-    """
-    from src.app.select_window import SelectWindow  # 弹框按需导入
-    wins = game.list_main_windows()
-    if not wins:
-        return  # 游戏未启动，无窗口可绑定
-    # 已绑定窗口换了账号（同一窗口重新登录）：标题账号 ID 与绑定记录
-    # 不一致时更新绑定，角色数据目录随新账号走（2026-11-11 按角色隔离）。
-    bound = game.find_bound_window()
-    if bound is not None:
-        title_id = user_data.role_id_from_text(getattr(bound, "title", ""))
-        raw = game.bound_window_id()
-        bid = raw.get("id") if isinstance(raw, dict) else raw
-        # 旧版纯 ID 绑定（无句柄）升级为「句柄 + 账号 ID」：组号 pass 切
-        # 到队员 Tab 时标题短暂变成队员账号，按 ID 匹配会失配——角色解析
-        # 判定「绑定窗口是否仍在」依赖句柄匹配（2026-11-13 运行期换号）。
-        legacy = not isinstance(raw, dict) or not raw.get("hwnd")
-        if (title_id and bid and bid != f"（ID：{title_id}）") or legacy:
-            game.save_bound_window(bound)
-            log(f"[绑定] 更新绑定（账号变化/旧格式升级）: {bound.title}", "SYS")
-    if len(wins) == 1:
-        if game.find_bound_window() is None and "（ID：" in wins[0].title:
-            # 单窗口自动保存绑定（无选择歧义）。仅限已登录窗口：
-            # 未登录标题无账号 ID，save_bound_window 会退用完整标题
-            # 作 ID——那是任意游戏窗口标题的公共子串，保存后多开时
-            # 会被错误匹配到枚举到的第一个窗口
-            game.save_bound_window(wins[0])
-            log(f"[绑定] 单窗口自动绑定游戏窗口: {wins[0].title}", "SYS")
-        return
-    if game.find_bound_window() is not None:
-        return  # 已有绑定且窗口存在
-    log("[绑定] 检测到多个游戏窗口，弹出选择窗口", "SYS")
-    sel = SelectWindow(wins)
-    idx = sel.show(title="选择游戏窗口", block=True,
-                   width=560, height=max(220, 120 + 56 * len(wins)))
-    if idx is not None:
-        game.save_bound_window(wins[idx])
-        log(f"[绑定] 已绑定游戏窗口: {wins[idx].title}", "SYS")
-    else:
-        log("[绑定] 未选择窗口，本次按自动选择运行", "WARN")
 
 
 # 空闲期兜底：任务持续运行但该时长内无「点击追踪寻路」（连续回城符/
@@ -343,11 +292,15 @@ def _run_selected_tasks(win, modes):
         time.sleep(2)
 
 
-def task_start():
+def task_start(role_id=None, hwnd=None, title=None):
     """业务逻辑入口函数（顶层函数，spawn 按引用 pickle）。
 
-    由 TaskManager 在独立子进程的 daemon 线程中调用；
+    由多任务管理器在独立子进程的 daemon 线程中调用；
     停止/超限时进程被强杀，本函数内所有循环与线程随进程一并终止。
+
+    多窗口（2026-11-22）：接收目标角色/窗口句柄，先在本进程固化再
+    进入业务体——此后 find_main_window / current_role_id / 角色设置 /
+    日志文件全部锁定该窗口角色，不会回退或漂移到其他窗口。
 
     顶层兜底（2026-10-31 物理鼠标位于屏幕角落触发 fail-safe、任务
     线程裸崩且堆栈只留在控制台的教训）：
@@ -356,6 +309,15 @@ def task_start():
     - 其余未捕获异常：完整堆栈先落盘（log 双写日志文件）再重抛，
       控制台与日志文件均保留现场。
     """
+    if role_id or hwnd:
+        user_data.set_process_role(role_id)
+        game.set_process_target(role_id=role_id, hwnd=hwnd,
+                                title=title or "", strict=True)
+        try:
+            log(f"[进程] 多窗口目标：角色 {role_id or '-'}，"
+                f"句柄 {hwnd or '-'}，标题 {title or '-'}", "SYS")
+        except Exception:
+            pass
     try:
         _task_start_body()
     except app_utils.UserAbort as e:
@@ -569,6 +531,15 @@ if __name__ == '__main__':
         _helper_main()
         sys.exit(0)
 
+    # ---- 同一安装目录单实例锁（2026-11-22；不同目录允许并行） ----
+    # 第二实例：触发「显示面板」事件后退出，不共享 config/data/logs/热键。
+    from src.core import instance_lock
+    _instance_lock = instance_lock.acquire()
+    if _instance_lock is None:
+        instance_lock.signal_show()
+        log("[系统] 同一安装目录已有实例在运行，本次启动退出（已请求显示已有面板）", "WARN")
+        sys.exit(0)
+
     # ---- 授权守门员：雪松 License Manager（设备绑定 + 在线校验）----
     # 本地许可证优先（RSA-PSS 验签 + 状态/有效期/硬件指纹），每次启动和
     # 点「启动」任务前在线心跳；未激活不退出主程序——激活页输入卡密即可，
@@ -622,8 +593,11 @@ if __name__ == '__main__':
     log(pass_line, "SYS")
     startup_logs.append(pass_line)
 
-    # ---- 多开窗口绑定选择（弹框；须在控制窗口创建前独占一次消息循环） ----
-    _ensure_window_binding()
+    # ---- 多窗口注册表：自动枚举 + 旧绑定迁移 + 选中目标注入 ----
+    # 2026-11-22 起不再弹「选择游戏窗口」框：所有主窗口都进舰队看板，
+    # 勾选/选中按角色持久化；旧 bound_window_id 的角色迁移为默认勾选+选中。
+    from src.app import window_registry
+    window_registry.ensure_initialized()
 
     # ---- 角色数据目录迁移 + 按角色切换方案（2026-11-11） ----
     from src.core import schemes
@@ -714,6 +688,8 @@ if __name__ == '__main__':
     webview.windows.clear()
     # 面板重设计后默认尺寸 720×560（侧边导航 + 运行看板，见 docs/ui-redesign.md）
     control_win.prepare(width=720, height=560)            # 创建唯一窗口（uid='master'）
+    # 第二实例启动时唤起的监听（主实例隐藏到托盘也能拉回面板）
+    instance_lock.start_show_listener(_instance_lock, control_win.show_window)
 
     # 自动检查更新：后台线程、启动 8 秒后执行；24 小时节流，
     # 不阻塞启动，也不抢占 OCR 预热。手动检查在系统页「关于」。
@@ -744,21 +720,26 @@ if __name__ == '__main__':
     _TOGGLE_COOLDOWN = 3.0
 
     def _toggle_task():
-        """老板键回调（消息泵线程）：运行中→停止，已停止→启动。"""
+        """老板键回调（消息泵线程）：只停不起——运行中→全部停止。
+
+        多窗口（2026-11-22 用户确认）：老板键是 panic 停止，不能把一堆
+        后台窗口误拉起来；启动一律从面板操作。
+        """
         now = time.time()
         if now - _last_toggle_ts[0] < _TOGGLE_COOLDOWN:
             app_utils.log("[老板键] 冷却期内忽略本次触发", "SYS")
             return
         _last_toggle_ts[0] = now
         running = tm.is_running()
-        app_utils.log(f"[老板键] F11 触发（当前运行状态={running}）", "SYS")
-        if running:
-            result = tm.stop()
+        starting = bool(getattr(control_win, "is_fleet_starting", lambda: False)())
+        app_utils.log(
+            f"[老板键] F11 触发（运行状态={running}，全部启动在途={starting}）", "SYS")
+        if running or starting:
+            # stop_all 先取消未完成的全量启动再杀 worker（防错峰线程继续拉起）
+            result = control_win.stop_all()
             app_utils.log(f"[老板键] 停止结果={result}", "SYS")
         else:
-            # 与按钮共用 start_task：内部先在线校验授权（每次启动都校验到期）再启动
-            result = control_win.start_task()
-            app_utils.log(f"[老板键] 启动结果={result}", "SYS")
+            app_utils.log("[老板键] 已停止状态：老板键只停不起，请从面板启动", "SYS")
 
     hotkey.register(_toggle_task)
 
@@ -787,5 +768,6 @@ if __name__ == '__main__':
     # GUI 循环结束（窗口已销毁）后收尾：兜底清理消息服务与任务进程并退出
     control_win.stop_message_service()
     tm.stop()
+    instance_lock.release(_instance_lock)
     Runtime.stop()
     print("[系统] 程序已正常退出。")

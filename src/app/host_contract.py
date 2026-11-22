@@ -23,11 +23,20 @@ if TYPE_CHECKING:
         _map_nav_running: bool     # 诊断-地图导航线程进行中（中断/启动门控）
         _scheme_dialog_busy: bool
         _pending_import: Any
+        _start_lock: Any           # 启动动作锁（顶栏按钮/老板键）
+        _license_gate: Any         # 启动前在线授权校验闭包
+        _license_info: Any
+        _fleet_lock: Any           # 多窗口启动动作锁（按需创建）
+        _fleet_starting: bool      # 全部启动后台线程进行中
         webview_instance: Any
 
         # 宿主提供的方法
         def _push_js(self, js: str) -> None: ...
 
         def add_logs(self, lines: list) -> None: ...
+
+        def _set_license_info(self, info: Any) -> None: ...
+
+        def refresh_window_title(self) -> None: ...
 else:
     ControlHost = object

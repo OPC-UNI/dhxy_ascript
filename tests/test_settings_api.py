@@ -94,17 +94,17 @@ def test_every_delegate_forwards_args_and_result(monkeypatch, name):
 
 def test_guarded_saves_reject_while_running():
     host = settings_api.SettingsApiMixin()
-    host._tm = type("Tm", (), {"is_running": lambda self: True})()
+    host._tm = type("Tm", (), {"is_running": lambda self, role=None: True})()
     # 经 ControlWindow 解析调用，确保测的是生产路径而不是被遮蔽的死副本
     for result in (ControlWindow.save_task_modes(host, ["五环"]),
                    ControlWindow.save_task_count(host, "五环", 3)):
         assert result == {"status": "error",
-                          "msg": "任务运行中，请先停止任务再修改"}
+                          "msg": "该窗口任务运行中，请先停止该窗口任务再修改"}
 
 
 def test_guarded_saves_forward_when_stopped(monkeypatch):
     host = settings_api.SettingsApiMixin()
-    host._tm = type("Tm", (), {"is_running": lambda self: False})()
+    host._tm = type("Tm", (), {"is_running": lambda self, role=None: False})()
     monkeypatch.setattr(settings, "save_selected_modes",
                         lambda modes: {"modes": modes})
     monkeypatch.setattr(settings, "save_task_count",

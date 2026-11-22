@@ -337,6 +337,54 @@ def test_walk_step_opens_mini_map_directly(monkeypatch):
     assert calls["closed"] == 1
 
 
+class _FakeTime:
+    """假时钟：sleep 不真睡、time 每次前进 0.1s（避免真等 6s 超时）。"""
+    def __init__(self, start=1000.0):
+        self.t = start
+
+    def time(self):
+        self.t += 0.1
+        return self.t
+
+    def sleep(self, _s):
+        pass
+
+
+def test_walk_click_detects_small_step(monkeypatch):
+    """短位移（2 格）也必须算寻路启动（2026-11-22 狮驼岭死循环教训）。
+
+    详情图缩放随地图变化：adjacent 档 14px 在狮驼岭只有 ≈2.7 格，
+    点完 0.5s 内即到点；旧阈值「>2 格」把整次位移判成未启动，
+    人物实际每轮只挪 2 格、日志连续 20+ 轮「按提示寻路未启动」。
+    """
+    seq = [("狮驼岭", 50, 10), ("狮驼岭", 52, 10)]
+
+    def _pos(win, img=None):
+        return seq.pop(0) if seq else ("狮驼岭", 52, 10)
+
+    monkeypatch.setattr(mw.game_map, "read_map_position", _pos)
+    monkeypatch.setattr(mw, "human_click",
+                        lambda win, x, y, **kw: None)
+    monkeypatch.setattr(mw, "time", _FakeTime())
+    mw._walk = None
+    assert mw._walk_click(object(), 615, 609) is True
+    assert mw._walk is not None
+    assert mw._walk["from"] == ("狮驼岭", 50, 10)
+    assert mw._walk["last"] == ("狮驼岭", 52, 10)
+
+
+def test_walk_click_no_move_returns_false(monkeypatch):
+    """位置完全不变 → 未启动（无效点，如飞行旗/不可达地形）。"""
+    monkeypatch.setattr(mw.game_map, "read_map_position",
+                        lambda win, img=None: ("狮驼岭", 50, 10))
+    monkeypatch.setattr(mw, "human_click",
+                        lambda win, x, y, **kw: None)
+    monkeypatch.setattr(mw, "time", _FakeTime())
+    mw._walk = None
+    assert mw._walk_click(object(), 615, 609) is False
+    assert mw._walk is None
+
+
 def test_find_dot_color():
     """详情图红点定位：亮红圆点命中；无红点返回 None。"""
     frame = np.zeros((831, 1378, 3), dtype=np.uint8)

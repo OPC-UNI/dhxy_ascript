@@ -520,10 +520,16 @@ def test_get_role_info_returns_id_and_label(monkeypatch):
     基线比对，变化时页面全量重同步方案/设置）。角色强制重算（refresh=
     True），游戏关闭/启动的未绑定切换在轮询周期内生效（2026-11-19）。"""
     from src.core import user_data
+    from src.app import window_registry
 
     class _Stub:
         def _sync_role_binding(self):
             return False
+
+    # 多窗口：选中角色会持久化到 config（跨会话保留），未绑定断言需显式
+    # 清空选中；否则本机跑过面板后测试会读到上次选中的角色。
+    monkeypatch.setattr(window_registry, "selected_role", lambda: None)
+    monkeypatch.setattr(window_registry, "selected_label", lambda: "")
 
     calls = []
     monkeypatch.setattr(user_data, "current_role_id",
@@ -546,7 +552,10 @@ def test_get_task_stats_label_empty_when_unbound(monkeypatch):
     """游戏窗口全部关闭（角色 = _default）：成就页不带旧绑定角色名
     （2026-11-19 用户反馈：未打开游戏时不得展示上次绑定角色的数据）。"""
     from src.core import debug_overlay, user_data
+    from src.app import window_registry
 
+    # 多窗口：选中角色持久化，清空后才能断言绑定文案路径。
+    monkeypatch.setattr(window_registry, "selected_label", lambda: "")
     monkeypatch.setattr(debug_overlay, "read_task_stats",
                         lambda: {"total": {}, "daily": {}})
     monkeypatch.setattr(control_window, "bound_label_from_binding",
@@ -567,6 +576,7 @@ def test_env_info_unbound_when_no_game_window(monkeypatch):
     """游戏窗口全部关闭：系统页「绑定窗口」按未绑定展示，不回显上次
     绑定的窗口/角色（2026-11-19 用户反馈）。"""
     from src.device import game
+    from src.app import window_registry
 
     class _Stub:
         def _sync_role_binding(self):
@@ -574,6 +584,10 @@ def test_env_info_unbound_when_no_game_window(monkeypatch):
 
         def refresh_window_title(self):
             pass
+
+    # 多窗口：选中角色持久化；未绑定断言需清空选中角色。
+    monkeypatch.setattr(window_registry, "selected_role", lambda: None)
+    monkeypatch.setattr(window_registry, "selected_label", lambda: "")
 
     monkeypatch.setattr(game, "find_main_window", lambda: None)
     monkeypatch.setattr(game, "find_bound_window", lambda: None)
@@ -596,14 +610,27 @@ class _FakeWebview:
         self.scripts.append(script)
 
 
+class _FakeTaskManager:
+    def is_running(self, role=None):
+        return False
+
+
 class _FakeControlWindow:
     def __init__(self):
         self.calls = []
         self.webview_instance = None
+        self._tm = _FakeTaskManager()
         self.switch_result = {"status": "success", "active": "方案A"}
 
-    def is_running(self):
+    def is_running(self, role=None):
         return False
+
+    def is_fleet_starting(self):
+        return False
+
+    def get_fleet_state(self):
+        self.calls.append("get_fleet_state")
+        return {"rows": []}
 
     def get_schemes(self):
         self.calls.append("get_schemes")
@@ -617,9 +644,22 @@ class _FakeControlWindow:
         self.calls.append("start_task")
         return {"status": "success", "running": True}
 
-    def stop_task(self):
-        self.calls.append("stop_task")
+    def stop_window(self, role_id, hwnd=None):
+        self.calls.append(("stop_window", role_id))
         return {"status": "success", "running": False}
+
+    def start_all(self):
+        self.calls.append("start_all")
+        return {"status": "success", "running": True, "starting": 1}
+
+    def stop_all(self):
+        self.calls.append("stop_all")
+        return {"status": "success", "running": False}
+
+    def select_window(self, role_id, hwnd=None):
+        self.calls.append(("select_window", role_id, hwnd))
+        return {"status": "success", "selected": role_id,
+                "selected_hwnd": hwnd or 0}
 
     def _message_disband(self):
         self.calls.append("message_disband")
@@ -630,18 +670,36 @@ class _FakeControlWindow:
         return {"ok": True, "message": "已喊话"}
 
 
-def test_message_host_delegates_control_commands():
+def test_message_host_delegates_control_commands(monkeypatch):
     """消息指令必须转调控制窗口入口（启动含授权校验，不绕过面板链路）。"""
+    from src.app import window_registry
+
+    monkeypatch.setattr(window_registry, "selected_role", lambda: "111")
     host = control_window._ControlMessageHost(_FakeControlWindow())
     assert host.list_schemes()["active"] == "默认"
     assert host.switch_scheme("方案A")["status"] == "success"
     assert host.start_task()["running"] is True
     assert host.stop_task()["running"] is False
+    assert host.start_all()["running"] is True
+    assert host.stop_all()["running"] is False
+    assert host.is_any_running() is False
+    assert host.fleet_state()["rows"] == []
     assert host.disband_team()["ok"] is True
     assert host.shout("来人")["ok"] is True
     assert host._cw.calls == ["get_schemes", ("switch_scheme", "方案A"),
-                              "start_task", "stop_task", "message_disband",
-                              ("message_shout", "来人")]
+                              "start_task", ("stop_window", "111"),
+                              "start_all", "stop_all", "get_fleet_state",
+                              "message_disband", ("message_shout", "来人")]
+
+
+def test_message_host_select_window_refreshes_panel():
+    """远程切窗口成功后推面板全量跟随（Tab 高亮/任务页/设置等）。"""
+    cw = _FakeControlWindow()
+    cw.webview_instance = _FakeWebview()
+    host = control_window._ControlMessageHost(cw)
+    assert host.select_window("111", 1)["status"] == "success"
+    assert any("onRemoteWindowSelected" in script
+               for script in cw.webview_instance.scripts)
 
 
 def test_message_host_switch_refreshes_panel():
@@ -663,7 +721,7 @@ class _FakeTm:
     def __init__(self, running=False):
         self._running = running
 
-    def is_running(self):
+    def is_running(self, role=None):
         return self._running
 
 
@@ -844,7 +902,7 @@ def test_moved_verify_methods_no_window_paths(monkeypatch):
 
     class _Host(diagnostics.DiagnosticsMixin):
         def __init__(self):
-            self._tm = types.SimpleNamespace(is_running=lambda: False)
+            self._tm = types.SimpleNamespace(is_running=lambda role=None: False)
             self._verifying = False
             self.webview_instance = None
             self.logs = []
@@ -879,7 +937,7 @@ def test_verify_site_navigate_guards(monkeypatch):
 
     class _Host(diagnostics.DiagnosticsMixin):
         def __init__(self):
-            self._tm = types.SimpleNamespace(is_running=lambda: False)
+            self._tm = types.SimpleNamespace(is_running=lambda role=None: False)
             self._verifying = False
             self._map_nav_running = False
 
@@ -900,7 +958,7 @@ def test_verify_site_navigate_starts_thread(monkeypatch):
 
     class _Host(diagnostics.DiagnosticsMixin):
         def __init__(self):
-            self._tm = types.SimpleNamespace(is_running=lambda: False)
+            self._tm = types.SimpleNamespace(is_running=lambda role=None: False)
             self._verifying = False
             self._map_nav_running = False
 
@@ -937,7 +995,7 @@ def test_cancel_map_navigate_only_when_running(monkeypatch):
 
     class _Host(diagnostics.DiagnosticsMixin):
         def __init__(self):
-            self._tm = types.SimpleNamespace(is_running=lambda: False)
+            self._tm = types.SimpleNamespace(is_running=lambda role=None: False)
             self._verifying = False
             self._map_nav_running = False
 
@@ -982,3 +1040,68 @@ def test_scheme_import_confirm_without_pending():
     assert result["status"] == "error"
     assert "无待确认的导入" in result["msg"]
     assert host._scheme_dialog_busy is False  # 忙标记已释放
+
+
+def test_exit_game_continues_when_team_handling_fails(monkeypatch):
+    """队伍处理失败（未组队时组队菜单打不开）不得阻止退出游戏。
+
+    2026-11-22 用户实测：无队伍时 /exitgame confirm 停在
+    「队伍处理失败：组队菜单未打开」，客户端没有退出；队伍处理应是
+    尽力而为，失败记录并继续关闭客户端。
+    """
+    import threading
+
+    from src.device import exit_game as exit_game_mod
+
+    class _TM:
+        def is_running(self, role=None):
+            return False
+
+    class _Host(message_api.MessageApiMixin):
+        def __init__(self):
+            self._game_op_lock = threading.RLock()
+            self._tm = _TM()
+            self.logs = []
+
+        def _message_log(self, text, level="INFO"):
+            self.logs.append((level, text))
+
+    monkeypatch.setattr(message_api, "_selected_role", lambda: "111")
+    monkeypatch.setattr(message_api.game, "find_main_window", lambda: object())
+    monkeypatch.setattr(exit_game_mod, "leave_teams_for_exit",
+                        lambda win, progress=None: (False, "组队菜单未打开"))
+    monkeypatch.setattr(exit_game_mod, "exit_client",
+                        lambda win, progress=None: (True, "游戏客户端已关闭"))
+    result = _Host()._message_exit_game()
+    assert result["ok"] is True
+    assert "游戏客户端已关闭" in result["message"]
+    assert "队伍处理跳过：组队菜单未打开" in result["message"]
+
+
+def test_exit_game_reports_exit_failure(monkeypatch):
+    """队伍处理后客户端关闭失败：仍按失败返回关闭原因。"""
+    import threading
+
+    from src.device import exit_game as exit_game_mod
+
+    class _TM:
+        def is_running(self, role=None):
+            return False
+
+    class _Host(message_api.MessageApiMixin):
+        def __init__(self):
+            self._game_op_lock = threading.RLock()
+            self._tm = _TM()
+
+        def _message_log(self, text, level="INFO"):
+            pass
+
+    monkeypatch.setattr(message_api, "_selected_role", lambda: "111")
+    monkeypatch.setattr(message_api.game, "find_main_window", lambda: object())
+    monkeypatch.setattr(exit_game_mod, "leave_teams_for_exit",
+                        lambda win, progress=None: (True, "未组队，无需操作"))
+    monkeypatch.setattr(exit_game_mod, "exit_client",
+                        lambda win, progress=None: (False, "系统菜单未打开"))
+    result = _Host()._message_exit_game()
+    assert result["ok"] is False
+    assert result["message"] == "系统菜单未打开"

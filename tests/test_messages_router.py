@@ -40,6 +40,26 @@ class FakeHost:
         self.stop_result = {"status": "success", "running": False}
         self.start_calls = 0
         self.stop_calls = 0
+        # 多窗口 all：逐窗口行数据 + 全部启停
+        self.any_running = True
+        self.fleet_starting = False
+        self.fleet_rows = [
+            {"role_id": "111", "label": "角色A", "live": True, "enabled": True,
+             "running": True, "can_start": False, "selected": True,
+             "seq": 0, "hwnd": 111,
+             "status": {"task": "修罗", "phase": "战斗中 · 第 3 场"},
+             "progress": {"percent": 51, "done": 51, "total": 100}},
+            {"role_id": "222", "label": "角色B", "live": True, "enabled": True,
+             "running": False, "can_start": True, "selected": False,
+             "seq": 1, "hwnd": 222, "status": None,
+             "progress": {"percent": 83, "done": 10, "total": 12}},
+        ]
+        self.start_all_result = {"status": "success", "running": True,
+                                 "starting": 1}
+        self.stop_all_result = {"status": "success", "running": False}
+        self.start_all_calls = 0
+        self.stop_all_calls = 0
+        self.select_calls = []
         self.disband_result = {"ok": True, "message": "已解散队伍"}
         self.shout_result = {"ok": True, "message": "已喊话：百次五倍来人，效率队"}
         self.disband_calls = 0
@@ -90,6 +110,28 @@ class FakeHost:
         self.stop_calls += 1
         self.running = bool(self.stop_result.get("running"))
         return dict(self.stop_result)
+
+    def start_all(self):
+        self.start_all_calls += 1
+        return dict(self.start_all_result)
+
+    def stop_all(self):
+        self.stop_all_calls += 1
+        return dict(self.stop_all_result)
+
+    def is_any_running(self):
+        return self.any_running
+
+    def is_fleet_starting(self):
+        return self.fleet_starting
+
+    def fleet_state(self):
+        return {"rows": [dict(r) for r in self.fleet_rows]}
+
+    def select_window(self, role_id, hwnd=None):
+        self.select_calls.append((role_id, hwnd))
+        return {"status": "success", "selected": role_id,
+                "selected_hwnd": hwnd or 0}
 
     def disband_team(self):
         self.disband_calls += 1
@@ -468,6 +510,122 @@ def test_stop_task_not_running_and_success():
     router.dispatch(adapter, _incoming("/stop"), ["42"])
     assert host.stop_calls == 1
     assert "✔ 任务已停止" in adapter.texts[-1][1]
+
+
+def test_start_all_submits_all_windows():
+    """ /start all：走全部启动入口，不走单窗口 start_task。"""
+    host = FakeHost()
+    host.running = False
+    router, records = _router(host)
+    adapter = FakeAdapter()
+    router.dispatch(adapter, _incoming("/start all"), ["42"])
+    assert host.start_all_calls == 1
+    assert host.start_calls == 0
+    assert "已提交启动" in adapter.texts[-1][1]
+    assert adapter.texts[-1][1].startswith("✔")  # all 回复不带单角色前缀
+    assert records[-1]["ok"] is True
+
+
+def test_start_all_chinese_alias_and_no_candidates():
+    host = FakeHost()
+    host.running = False
+    router, _ = _router(host)
+    adapter = FakeAdapter()
+    router.dispatch(adapter, _incoming("启动 全部"), ["42"])
+    assert host.start_all_calls == 1
+    host.fleet_rows = [dict(r, can_start=False) for r in host.fleet_rows]
+    router.dispatch(adapter, _incoming("/start all"), ["42"])
+    assert host.start_all_calls == 1  # 没有可启动窗口时不调用
+    assert "没有可启动的窗口" in adapter.texts[-1][1]
+
+
+def test_stop_all_stops_everything_without_role_prefix():
+    host = FakeHost()
+    host.any_running = True
+    router, records = _router(host)
+    adapter = FakeAdapter()
+    router.dispatch(adapter, _incoming("/stop all"), ["42"])
+    assert host.stop_all_calls == 1
+    assert host.stop_calls == 0
+    assert "已停止全部窗口任务" in adapter.texts[-1][1]
+    assert adapter.texts[-1][1].startswith("✔")
+
+
+def test_stop_all_cancels_pending_start_and_skips_when_idle():
+    host = FakeHost()
+    host.any_running = False
+    host.fleet_starting = True
+    router, _ = _router(host)
+    adapter = FakeAdapter()
+    router.dispatch(adapter, _incoming("停止 全部"), ["42"])
+    assert host.stop_all_calls == 1  # 全部启动在途：stop_all 负责取消
+    host.any_running = False
+    host.fleet_starting = False
+    router.dispatch(adapter, _incoming("/stop all"), ["42"])
+    assert host.stop_all_calls == 1
+    assert "任务当前未运行" in adapter.texts[-1][1]
+
+
+def test_status_all_lists_each_window():
+    host = FakeHost()
+    router, _ = _router(host)
+    adapter = FakeAdapter()
+    router.dispatch(adapter, _incoming("/status all"), ["42"])
+    text = adapter.texts[-1][1]
+    assert text.startswith("多窗口状态：2 个窗口 / 1 个运行中")
+    assert "· 角色A：运行中 · 修罗 · 战斗中 · 第 3 场" in text
+    assert "· 角色B：未运行（今日 10/12）" in text
+
+
+def test_task_all_lists_each_window_progress():
+    host = FakeHost()
+    router, _ = _router(host)
+    adapter = FakeAdapter()
+    router.dispatch(adapter, _incoming("/task 全部"), ["42"])
+    text = adapter.texts[-1][1]
+    assert text.startswith("多窗口进度：2 个窗口")
+    assert "· 角色A：51%（51/100）" in text
+    assert "· 角色B：83%（10/12）" in text
+
+
+def test_window_list_and_switch_by_index():
+    """/window 列表（标记当前）与按序号切换；后续指令作用于新窗口。"""
+    host = FakeHost()
+    router, _ = _router(host)
+    adapter = FakeAdapter()
+    router.dispatch(adapter, _incoming("/window"), ["42"])
+    text = adapter.texts[-1][1]
+    assert text.startswith("多窗口（2 个 / 1 个运行中）")
+    assert "● 1. 角色A（ID 111 · 当前 · 运行中 · 修罗 · 战斗中 · 第 3 场）" in text
+    assert "○ 2. 角色B（ID 222 · 未运行）" in text
+    router.dispatch(adapter, _incoming("/window 2"), ["42"])
+    assert host.select_calls == [("222", 222)]
+    assert "已切换到「角色B」" in adapter.texts[-1][1]
+
+
+def test_window_switch_by_name_id_and_already_selected():
+    host = FakeHost()
+    router, _ = _router(host)
+    adapter = FakeAdapter()
+    router.dispatch(adapter, _incoming("切换窗口 角色B"), ["42"])
+    assert host.select_calls == [("222", 222)]
+    router.dispatch(adapter, _incoming("/window 222"), ["42"])
+    assert host.select_calls == [("222", 222), ("222", 222)]
+    router.dispatch(adapter, _incoming("/window 1"), ["42"])
+    assert "已是当前窗口" in adapter.texts[-1][1]
+    assert len(host.select_calls) == 2
+
+
+def test_window_switch_rejects_closed_and_unknown():
+    host = FakeHost()
+    host.fleet_rows[1]["live"] = False
+    router, _ = _router(host)
+    adapter = FakeAdapter()
+    router.dispatch(adapter, _incoming("/window 2"), ["42"])
+    assert "窗口已关闭，无法切换" in adapter.texts[-1][1]
+    assert host.select_calls == []
+    router.dispatch(adapter, _incoming("/window 不存在"), ["42"])
+    assert "未找到该窗口" in adapter.texts[-1][1]
 
 
 def test_disband_team_success_and_failure():

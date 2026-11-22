@@ -152,26 +152,36 @@ class MessageRouter:
             if command == "/help":
                 ok, error = self._send(adapter, incoming.chat_id, HELP_TEXT)
             elif command == "/status":
-                ok, error = self._send(adapter, incoming.chat_id,
-                                       self._render_status())
+                is_all = self._is_all(arg)
+                ok, error = self._send(
+                    adapter, incoming.chat_id,
+                    self._render_status_all() if is_all
+                    else self._render_status(),
+                    decorate=not is_all)
             elif command == "/task":
-                ok, error = self._send(adapter, incoming.chat_id,
-                                       self._render_task())
+                is_all = self._is_all(arg)
+                ok, error = self._send(
+                    adapter, incoming.chat_id,
+                    self._render_task_all() if is_all
+                    else self._render_task(),
+                    decorate=not is_all)
             elif command == "/log":
                 ok, error = self._send(adapter, incoming.chat_id,
                                        self._render_log(arg))
             elif command == "/capture":
                 ok, error = self._do_capture(adapter, incoming.chat_id,
                                              capture_cooldown)
+            elif command == "/window":
+                ok, error = self._handle_window(arg, adapter, incoming.chat_id)
             elif command == "/schemes":
                 ok, error = self._send(adapter, incoming.chat_id,
                                        self._render_schemes())
             elif command == "/switch":
                 ok, error = self._handle_switch(arg, adapter, incoming.chat_id)
             elif command == "/start":
-                ok, error = self._handle_start(adapter, incoming.chat_id)
+                ok, error = self._handle_start(adapter, incoming.chat_id, arg)
             elif command == "/stop":
-                ok, error = self._handle_stop(adapter, incoming.chat_id)
+                ok, error = self._handle_stop(adapter, incoming.chat_id, arg)
             elif command == "/disband":
                 ok, error = self._handle_disband(adapter, incoming.chat_id)
             elif command == "/shout":
@@ -261,9 +271,11 @@ class MessageRouter:
         identity = self._identity()
         return f"角色：{identity}\n{text}" if identity else text
 
-    def _send(self, adapter, chat_id, text):
+    def _send(self, adapter, chat_id, text, decorate=True):
+        """发送回复；decorate=False 用于 all 指令（多窗口回复不加单角色前缀）。"""
         try:
-            result = adapter.send_text(chat_id, self._decorate(text))
+            result = adapter.send_text(
+                chat_id, self._decorate(text) if decorate else text)
         except Exception as e:
             self._log(f"回复发送异常：{type(e).__name__}: {e}", "WARN")
             return False, str(e)
@@ -339,6 +351,73 @@ class MessageRouter:
             lines.append(f"血蓝：{status['bars']}")
         return "\n".join(lines)
 
+    def _render_status_all(self):
+        """多窗口状态一览（/status all）：逐窗口运行态/任务/阶段。"""
+        reader = getattr(self._host, "fleet_state", None)
+        if not callable(reader):
+            return "当前版本不支持多窗口查询。"
+        try:
+            state = reader() or {}
+        except Exception as e:
+            return f"多窗口状态读取失败：{type(e).__name__}: {e}"
+        rows = [r for r in (state.get("rows") or []) if r.get("role_id")]
+        if not rows:
+            return "未检测到已登录的游戏窗口。"
+        running = sum(1 for r in rows if r.get("running"))
+        lines = [f"多窗口状态：{len(rows)} 个窗口 / {running} 个运行中"]
+        for row in rows:
+            label = row.get("label") or str(row.get("role_id"))
+            if not row.get("live"):
+                lines.append(f"· {label}：窗口已关闭")
+                continue
+            if row.get("running"):
+                st = row.get("status") or {}
+                bits = [str(st.get(key)) for key in ("task", "phase")
+                        if st.get(key)]
+                suffix = " · ".join(bits) if bits else "状态暂不可用"
+                lines.append(f"· {label}：运行中 · {suffix}")
+                continue
+            if not row.get("enabled"):
+                lines.append(f"· {label}：未加入多开")
+                continue
+            prog = row.get("progress") or {}
+            if prog.get("total"):
+                tail = f"（今日 {prog.get('done', 0)}/{prog['total']}）"
+            elif prog.get("done"):
+                tail = f"（今日 {prog.get('done')} 轮）"
+            else:
+                tail = ""
+            lines.append(f"· {label}：未运行{tail}")
+        return "\n".join(lines)
+
+    def _render_task_all(self):
+        """多窗口今日进度一览（/task all）：每窗口合计，单窗口明细仍用 /task。"""
+        reader = getattr(self._host, "fleet_state", None)
+        if not callable(reader):
+            return "当前版本不支持多窗口查询。"
+        try:
+            state = reader() or {}
+        except Exception as e:
+            return f"多窗口进度读取失败：{type(e).__name__}: {e}"
+        rows = [r for r in (state.get("rows") or []) if r.get("role_id")]
+        if not rows:
+            return "未检测到已登录的游戏窗口。"
+        lines = [f"多窗口进度：{len(rows)} 个窗口"]
+        for row in rows:
+            label = row.get("label") or str(row.get("role_id"))
+            prog = row.get("progress") or {}
+            total = int(prog.get("total") or 0)
+            done = int(prog.get("done") or 0)
+            if total:
+                text = f"{prog.get('percent') or 0}%（{done}/{total}）"
+            elif done:
+                text = f"{done} 次（未设上限）"
+            else:
+                text = "未选择任务"
+            lines.append(f"· {label}：{text}")
+        lines.append("单窗口明细请发送 /task。")
+        return "\n".join(lines)
+
     def _render_task(self):
         try:
             data = self._host.task_progress() or {}
@@ -379,6 +458,134 @@ class MessageRouter:
         return ("最近 %d 行日志：\n%s\n（文件：%s）"
                 % (len(lines), "\n".join(lines), result.get("path") or ""))
 
+    # ---- 窗口切换（/window）----
+
+    @staticmethod
+    def _render_window_list(rows):
+        """窗口列表：序号 + 状态点 + 角色 + ID + 状态/当前任务。"""
+        if not rows:
+            return "未检测到已登录的游戏窗口。"
+        running = sum(1 for r in rows if r.get("running"))
+        lines = [f"多窗口（{len(rows)} 个 / {running} 个运行中）："]
+        for idx, row in enumerate(rows, 1):
+            label = row.get("label") or row.get("role_id")
+            bits = [f"ID {row.get('role_id')}"]
+            if row.get("selected"):
+                bits.append("当前")
+            if not row.get("live"):
+                bits.append("窗口已关闭")
+            elif not row.get("logged_in", True):
+                bits.append("未登录")
+            elif row.get("running"):
+                bits.append("运行中")
+                st = row.get("status") or {}
+                if st.get("task"):
+                    bits.append(str(st["task"]))
+                if st.get("phase"):
+                    bits.append(str(st["phase"]))
+            elif not row.get("enabled"):
+                bits.append("未加入多开")
+            else:
+                bits.append("未运行")
+            mark = "●" if row.get("selected") else "○"
+            lines.append(f"{mark} {idx}. {label}（" + " · ".join(bits) + "）")
+        lines.append("回复 /window 序号 或 /window 角色名 切换。")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _resolve_window(rows, text):
+        """序号 / 角色 ID / 短名 / 完整标题解析；多义返回 'ambiguous'。"""
+        text = str(text or "").strip()
+        if not text:
+            return None
+        if text.isdigit():
+            idx = int(text)
+            if 1 <= idx <= len(rows):
+                return rows[idx - 1]
+        low = text.lower()
+        exact = []
+        for row in rows:
+            values = (str(row.get("label") or "").lower(),
+                      str(row.get("title") or "").lower(),
+                      str(row.get("role_id") or "").lower())
+            if low in values:
+                exact.append(row)
+        if len(exact) == 1:
+            return exact[0]
+        if len(exact) > 1:
+            return "ambiguous"
+        partial = [row for row in rows
+                   if low in str(row.get("label") or "").lower()
+                   or low in str(row.get("title") or "").lower()]
+        if len(partial) == 1:
+            return partial[0]
+        if len(partial) > 1:
+            return "ambiguous"
+        return None
+
+    def _handle_window(self, arg, adapter, chat_id):
+        """查看/切换当前窗口；后续指令默认作用于该窗口（/shout 等）。"""
+        reader = getattr(self._host, "fleet_state", None)
+        if not callable(reader):
+            return self._send(adapter, chat_id,
+                              "当前版本不支持窗口切换。", decorate=False)
+        try:
+            state = reader() or {}
+        except Exception as e:
+            return self._send(adapter, chat_id,
+                              f"读取窗口失败：{type(e).__name__}: {e}",
+                              decorate=False)
+        rows = [r for r in (state.get("rows") or []) if r.get("role_id")]
+        rows.sort(key=lambda r: (r.get("seq") if r.get("seq") is not None
+                                 else 1e9))
+        text = str(arg or "").strip()
+        if not text or text.lower() in ("list", "列表"):
+            return self._send(adapter, chat_id,
+                              self._render_window_list(rows), decorate=False)
+        target = self._resolve_window(rows, text)
+        if target == "ambiguous":
+            return self._send(
+                adapter, chat_id,
+                "匹配到多个窗口，请用序号或角色 ID 指定：\n"
+                + self._render_window_list(rows), decorate=False)
+        if target is None:
+            return self._send(adapter, chat_id,
+                              "未找到该窗口，发送 /window 查看列表。",
+                              decorate=False)
+        label = target.get("label") or target.get("role_id")
+        if not target.get("live"):
+            return self._send(adapter, chat_id,
+                              f"「{label}」窗口已关闭，无法切换。",
+                              decorate=False)
+        if not target.get("logged_in", True):
+            return self._send(adapter, chat_id, "该窗口未登录，无法切换。",
+                              decorate=False)
+        if target.get("selected"):
+            return self._send(adapter, chat_id,
+                              f"「{label}」已是当前窗口。", decorate=False)
+        switcher = getattr(self._host, "select_window", None)
+        if not callable(switcher):
+            return self._send(adapter, chat_id,
+                              "当前版本不支持窗口切换。", decorate=False)
+        try:
+            result = switcher(str(target.get("role_id")),
+                              int(target.get("hwnd") or 0) or None) or {}
+        except Exception as e:
+            self._log(f"切换窗口异常：{type(e).__name__}: {e}", "WARN")
+            return self._send(adapter, chat_id,
+                              f"✘ 切换窗口异常：{type(e).__name__}: {e}",
+                              decorate=False)
+        if result.get("status") == "success":
+            return self._send(
+                adapter, chat_id,
+                f"✔ 已切换到「{label}」（ID {target.get('role_id')}）\n"
+                "后续 /status /task /start /stop /capture /log /shout "
+                "/disband /exitgame 默认作用于该窗口。",
+                decorate=False)
+        return self._send(adapter, chat_id,
+                          "✘ 切换失败：" + self._fail_text(result),
+                          decorate=False)
+
     # ---- 控制指令：配置方案 / 启停任务 ----
 
     def _scheme_data(self):
@@ -397,6 +604,11 @@ class MessageRouter:
             return "任务正在启停中，请稍后再试"
         return msg or default
 
+    @staticmethod
+    def _is_all(arg):
+        """指令参数是否要求作用于全部窗口（all / 全部 / 所有 / *）。"""
+        return str(arg or "").strip().lower() in ("all", "全部", "所有", "*")
+
     def _render_schemes(self):
         try:
             data = self._scheme_data()
@@ -405,7 +617,7 @@ class MessageRouter:
         names = [str(name) for name in data.get("names") or []]
         active = str(data.get("active") or "")
         if not names:
-            return "暂无配置方案（可在面板「系统」页新建）。"
+            return "暂无配置方案（可在面板「设置」页新建）。"
         lines = [f"配置方案 {len(names)} 个，当前：{active or '-'}"]
         for name in names:
             lines.append(f"· {name}（当前）" if name == active else f"· {name}")
@@ -446,8 +658,10 @@ class MessageRouter:
         return self._send(adapter, chat_id,
                           "✘ 切换失败：" + self._fail_text(result))
 
-    def _handle_start(self, adapter, chat_id):
-        """启动任务：走 ControlWindow.start_task（授权校验/窗口绑定对齐同面板）。"""
+    def _handle_start(self, adapter, chat_id, arg=""):
+        """/start [all]：启动选中窗口或全部已勾选窗口。"""
+        if self._is_all(arg):
+            return self._handle_start_all(adapter, chat_id)
         starter = getattr(self._host, "start_task", None)
         if not callable(starter):
             return self._send(adapter, chat_id, "当前版本不支持远程启动任务。")
@@ -472,8 +686,49 @@ class MessageRouter:
         return self._send(adapter, chat_id,
                           "✘ 启动失败：" + self._fail_text(result))
 
-    def _handle_stop(self, adapter, chat_id):
-        """停止任务：走 ControlWindow.stop_task（与面板停止按钮同一入口）。"""
+    def _handle_start_all(self, adapter, chat_id):
+        """启动全部已勾选窗口（与面板「全部启动」同一入口，后台错峰）。"""
+        starter = getattr(self._host, "start_all", None)
+        if not callable(starter):
+            return self._send(adapter, chat_id,
+                              "当前版本不支持远程全部启动。", decorate=False)
+        reader = getattr(self._host, "fleet_state", None)
+        candidates = None
+        if callable(reader):
+            try:
+                state = reader() or {}
+            except Exception:
+                state = {}
+            candidates = [r for r in (state.get("rows") or [])
+                          if r.get("can_start")]
+            if not candidates:
+                return self._send(
+                    adapter, chat_id,
+                    "没有可启动的窗口（需已勾选、已登录且未在运行）。",
+                    decorate=False)
+        try:
+            result = starter() or {}
+        except Exception as e:
+            self._log(f"全部启动异常：{type(e).__name__}: {e}", "WARN")
+            return self._send(adapter, chat_id,
+                              f"✘ 全部启动失败：{type(e).__name__}: {e}",
+                              decorate=False)
+        if result.get("status") == "success":
+            count = result.get("starting")
+            if count is None:
+                count = len(candidates) if candidates is not None else "?"
+            return self._send(
+                adapter, chat_id,
+                f"✔ 已提交启动 {count} 个窗口（后台错峰，用 /status all 查看）",
+                decorate=False)
+        return self._send(adapter, chat_id,
+                          "✘ 全部启动失败：" + self._fail_text(result),
+                          decorate=False)
+
+    def _handle_stop(self, adapter, chat_id, arg=""):
+        """/stop [all]：停止选中窗口或全部窗口任务。"""
+        if self._is_all(arg):
+            return self._handle_stop_all(adapter, chat_id)
         stopper = getattr(self._host, "stop_task", None)
         if not callable(stopper):
             return self._send(adapter, chat_id, "当前版本不支持远程停止任务。")
@@ -493,6 +748,39 @@ class MessageRouter:
             return self._send(adapter, chat_id, "✔ 任务已停止")
         return self._send(adapter, chat_id,
                           "✘ 停止失败：" + self._fail_text(result))
+
+    def _handle_stop_all(self, adapter, chat_id):
+        """停止全部窗口（与面板「全部停止」/F11 同一入口；同时取消未完成的全部启动）。"""
+        stopper = getattr(self._host, "stop_all", None)
+        if not callable(stopper):
+            return self._send(adapter, chat_id,
+                              "当前版本不支持远程全部停止。", decorate=False)
+        any_running = True
+        try:
+            any_running = bool(self._host.is_any_running())
+        except Exception:
+            pass
+        starting = False
+        try:
+            starting = bool(self._host.is_fleet_starting())
+        except Exception:
+            pass
+        if not any_running and not starting:
+            return self._send(adapter, chat_id, "任务当前未运行。",
+                              decorate=False)
+        try:
+            result = stopper() or {}
+        except Exception as e:
+            self._log(f"全部停止异常：{type(e).__name__}: {e}", "WARN")
+            return self._send(adapter, chat_id,
+                              f"✘ 全部停止失败：{type(e).__name__}: {e}",
+                              decorate=False)
+        if result.get("status") == "success":
+            return self._send(adapter, chat_id, "✔ 已停止全部窗口任务",
+                              decorate=False)
+        return self._send(adapter, chat_id,
+                          "✘ 全部停止失败：" + self._fail_text(result),
+                          decorate=False)
 
     def _handle_disband(self, adapter, chat_id):
         """解散/离开队伍：队长解散、队员离开（任务运行中在 host 侧拒绝）。"""

@@ -362,8 +362,11 @@ def list_schemes():
             "names": [k for k in data if k != "active" and isinstance(data[k], dict)]}
 
 
-def active_name():
-    """当前活动方案名。"""
+def active_name(role=None):
+    """活动方案名（默认当前角色；传 role 读取该角色，多窗口看板用）。"""
+    if role:
+        data = _load(role)
+        return data.get("active") if isinstance(data, dict) else DEFAULT_SCHEME_NAME
     return _get_data().get("active")
 
 

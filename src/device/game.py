@@ -17,6 +17,94 @@ MAIN_WINDOW_CLASS = "DHXYJYMainFrame"
 _BOUND_WINDOW_KEY = "bound_window_id"
 _ID_IN_TITLE_RE = re.compile(r"ID：(\d+)")
 
+# ---- 进程级目标窗口（多窗口模式） ----
+# 主进程：选中行 = 当前窗口（strict=False——选中窗口关闭后同角色重开可
+# 重新命中，但绝不回退到其他角色窗口）；worker：启动时注入目标
+# （strict=True——句柄失效即失效，不回退，由看门狗停该窗口任务）。
+# 未设置时沿用旧的「全局绑定 + 回退」语义，单窗口兼容路径不受影响。
+_PROCESS_TARGET = {"role_id": None, "hwnd": 0, "title": "", "strict": False}
+
+
+def set_process_target(role_id=None, hwnd=None, title="", strict=False):
+    """固化本进程的目标窗口（role_id/hwnd 至少一项）。"""
+    _PROCESS_TARGET.update({
+        "role_id": str(role_id) if role_id else None,
+        "hwnd": int(hwnd) if hwnd else 0,
+        "title": title or "",
+        "strict": bool(strict),
+    })
+
+
+def clear_process_target():
+    """清除进程级目标，回到旧单窗口绑定语义。"""
+    _PROCESS_TARGET.update({"role_id": None, "hwnd": 0, "title": "", "strict": False})
+
+
+def process_target():
+    """当前进程目标（未设置返回 None）。"""
+    if _PROCESS_TARGET["role_id"] or _PROCESS_TARGET["hwnd"]:
+        return dict(_PROCESS_TARGET)
+    return None
+
+
+def role_id_from_title(title):
+    """从窗口标题提取账号 ID（无返回 None）。"""
+    m = _ID_IN_TITLE_RE.search(str(title or ""))
+    return m.group(1) if m else None
+
+
+def window_role_id(win):
+    """窗口标题里的账号 ID（无返回 None）。"""
+    return role_id_from_title(getattr(win, "title", ""))
+
+
+def _target_window(wins):
+    """在窗口列表里解析进程目标；不存在返回 None（不回退其他窗口）。
+
+    句柄优先（组号 pass 期间标题会变成队员角色，句柄仍指向同一主窗口）；
+    主进程非 strict 模式允许按角色 ID 命中同角色重开的窗口，worker
+    strict 模式只认句柄。
+    """
+    t = _PROCESS_TARGET
+    hwnd = int(t.get("hwnd") or 0)
+    if hwnd:
+        for w in wins:
+            if int(getattr(w, "hwnd", 0) or 0) == hwnd:
+                return w
+    if t.get("strict"):
+        return None
+    rid = t.get("role_id")
+    if rid:
+        needle = f"（ID：{rid}）"
+        for w in wins:
+            if needle in (getattr(w, "title", "") or ""):
+                return w
+    return None
+
+
+def list_main_window_infos():
+    """所有游戏主窗口的结构化信息（多窗口面板/绑定用，只读）。
+
+    返回 [{"hwnd", "title", "role_id", "server", "name", "logged_in"}]，
+    未登录窗口 role_id/logged_in 为空/False。
+    """
+    infos = []
+    for w in list_main_windows():
+        title = getattr(w, "title", "") or ""
+        rid = role_id_from_title(title)
+        parts = [p.strip() for p in title.split(" - ")]
+        server = parts[-2] if len(parts) >= 3 else ""
+        name = ""
+        if parts:
+            name = re.sub(r"（ID：\d+）\s*$", "", parts[-1]).strip()
+        infos.append({"hwnd": int(getattr(w, "hwnd", 0) or 0),
+                      "title": title,
+                      "role_id": rid,
+                      "server": server,
+                      "name": name,
+                      "logged_in": bool(rid)})
+    return infos
+
 
 def check_game_window():
     """检查「大话西游2经典版」游戏窗口是否存在。
@@ -40,15 +128,36 @@ def bound_window_id():
     "hwnd": 窗口句柄, "title": 绑定时的完整标题}——绑定语义为
     「这个窗口的这个角色」：句柄区分同账号多窗口，ID 跨重启延续
     匹配。旧版纯 ID 字符串兼容读取（按 ID 匹配）。
+
+    进程目标存在时返回目标的合成绑定（worker/主进程选中行），
+    不再读全局 config——多窗口下每个进程的目标不同。
     """
+    t = process_target()
+    if t:
+        rid = t.get("role_id") or role_id_from_title(t.get("title"))
+        bid = f"（ID：{rid}）" if rid else (t.get("title") or "")
+        return {"id": bid, "hwnd": int(t.get("hwnd") or 0),
+                "title": t.get("title") or ""}
     return KeyValue.get(_BOUND_WINDOW_KEY, None)
 
 
 def save_bound_window(win):
     """保存窗口绑定：句柄 + 账号 ID（用户 2026-10-15 确认的绑定
-    语义）。无 ID 时（未登录窗口）ID 字段退完整标题。"""
+    语义）。无 ID 时（未登录窗口）ID 字段退完整标题。
+
+    进程目标存在时只更新进程内目标，不写全局 config（多窗口下全局
+    绑定归主进程管理，worker 不得改写）。
+    """
     title = win.title
     m = _ID_IN_TITLE_RE.search(title)
+    t = process_target()
+    if t:
+        _PROCESS_TARGET.update({
+            "role_id": m.group(1) if m else t.get("role_id"),
+            "hwnd": int(getattr(win, "hwnd", 0) or 0),
+            "title": title or "",
+        })
+        return {"status": "success"}
     bid = f"（ID：{m.group(1)}）" if m else title
     data = {"id": bid,
             "hwnd": int(getattr(win, "hwnd", 0) or 0),
@@ -60,7 +169,13 @@ def save_bound_window(win):
 
 
 def clear_bound_window():
-    """解除窗口绑定（下次启动多开时重新弹框选择）。"""
+    """解除窗口绑定（下次启动多开时重新弹框选择）。
+
+    进程目标存在时只清进程目标（多窗口面板的「解除选中」），不碰全局。
+    """
+    if process_target():
+        clear_process_target()
+        return {"status": "success", "msg": "已清除当前窗口目标"}
     app_utils.kv_remove_merged(_BOUND_WINDOW_KEY)  # 同 save_bound_window：防覆写子进程运行时状态
     return {"status": "success", "msg": "已解除窗口绑定，下次启动重新选择"}
 
@@ -86,11 +201,18 @@ def _bound_match(raw, wins):
 
 
 def find_bound_window():
-    """返回绑定的窗口（未绑定或已不存在时返回 None）。"""
+    """返回绑定的窗口（未绑定或已不存在时返回 None）。
+
+    进程目标存在时按目标解析（strict worker 句柄失效即 None；主进程
+    允许同角色重开窗口命中），不回退其他窗口。
+    """
+    wins = list_main_windows()
+    if process_target():
+        return _target_window(wins)
     raw = bound_window_id()
     if not raw:
         return None
-    return _bound_match(raw, list_main_windows())
+    return _bound_match(raw, wins)
 
 
 def _pick_main_window(wins, raw=None):
@@ -117,12 +239,22 @@ def find_main_window():
     None。多个主窗口并存时（多开客户端）：优先返回绑定的窗口；
     绑定窗口已不存在时回退到已登录窗口（标题含 $Revision），否则
     取第一个。
+
+    进程目标存在时只返回目标窗口（worker strict 句柄失效即 None；
+    主进程允许同角色重开窗口命中），不回退其他窗口——多窗口并行
+    时回退会操作错窗口。
     """
-    return _pick_main_window(list_main_windows(), bound_window_id())
+    wins = list_main_windows()
+    if process_target():
+        return _target_window(wins)
+    return _pick_main_window(wins, bound_window_id())
 
 
 def ensure_binding_follows_live_window():
     """绑定窗口已关闭时，把绑定记录对齐到实际回退操作的游戏窗口。
+
+    进程目标存在时（多窗口模式）不做自动改绑：选中/目标窗口关闭即
+    返回 None，由看门狗停该窗口任务、UI 显示灰行，绝不回退其他窗口。
 
     find_main_window 在绑定窗口消失后动态回退到其他游戏窗口（脚本
     实际就操作它），但绑定记录若不改写，按角色隔离的数据目录
@@ -135,6 +267,8 @@ def ensure_binding_follows_live_window():
     返回 (win, rebound)：win 为当前操作窗口（可能 None），rebound 表示
     本次是否写入了新绑定。
     """
+    if process_target():
+        return _target_window(list_main_windows()), False
     raw = bound_window_id()
     wins = list_main_windows()
     if not raw:

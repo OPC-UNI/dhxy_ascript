@@ -168,7 +168,21 @@ def _config_dir():
 
 
 def _state_path():
+    """运行时状态文件路径（多窗口：worker/绘制进程按进程角色分文件）。
+
+    未设置进程角色（主进程/旧单窗口兼容读取）时沿用配置目录根文件。
+    """
+    role = user_data.process_role_id()
+    if role:
+        return user_data.role_dir(role) / STATE_FILENAME
     return _config_dir() / STATE_FILENAME
+
+
+def runtime_state_path(role=None):
+    """指定角色的运行时状态文件路径（主进程聚合看板用）。"""
+    if role:
+        return user_data.role_dir(role) / STATE_FILENAME
+    return _state_path()
 
 
 def _read_switch():
@@ -206,11 +220,15 @@ def _read_state():
         return None
 
 
-def read_runtime_status():
+def read_runtime_status(role=None):
     """运行看板状态读取（主进程控制窗口调用）：返回状态文件的结构化
     status 字段；文件不存在或陈旧（>STATUS_STALE_TIMEOUT，任务未运行/
-    已停止）返回 None。仅读文件，不触碰绘制进程。"""
-    path = _state_path()
+    已停止）返回 None。仅读文件，不触碰绘制进程。
+
+    多窗口：传 role 读取该角色的状态文件（每个 worker 一份）；不传时
+    沿用旧单窗口路径（进程角色或配置目录根文件）。
+    """
+    path = runtime_state_path(role)
     try:
         if not path.exists() or time.time() - path.stat().st_mtime > STATUS_STALE_TIMEOUT:
             return None
@@ -400,7 +418,12 @@ def _spawn_helper():
                 "from src.core.debug_overlay import _helper_main; "
                 "_helper_main()").format(root=root)
         args = [sys.executable, "-c", code]
-    return subprocess.Popen(args, cwd=root,
+    # 多窗口：绘制进程必须读父 worker 的角色状态文件（每个窗口一份）
+    env = os.environ.copy()
+    role = user_data.process_role_id()
+    if role:
+        env["ZMN_OVERLAY_ROLE"] = role
+    return subprocess.Popen(args, cwd=root, env=env,
                             creationflags=subprocess.CREATE_NO_WINDOW)
 
 
@@ -410,8 +433,17 @@ def _helper_main():
     独立进程运行（见模块 docstring）；只在本进程内使用 DrawWindow，
     永不正常退出：父进程 terminate 回收，或心跳超时 os._exit 自尽。
     异常退出原因写入退出文件（硬崩溃时无文件），便于排查。
+
+    多窗口：父 worker 通过 ZMN_OVERLAY_ROLE 传入角色，本进程按该角色
+    读写状态文件（否则多个绘制进程会抢同一份全局状态）。
     """
     exit_reason = None
+    try:
+        _role = os.environ.get("ZMN_OVERLAY_ROLE")
+        if _role:
+            user_data.set_process_role(_role)
+    except Exception:
+        pass
     try:
         # 字体抗锯齿：DrawWindow 的 CreateFontW 用 DEFAULT_QUALITY（0），
         # 小字号文字发虚；在 ctypes DLL 单例层把绘制质量强制为

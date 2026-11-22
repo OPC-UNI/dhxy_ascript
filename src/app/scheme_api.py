@@ -8,7 +8,8 @@ mixin，callPython 名称与行为不变（纯搬迁）。
 import json
 import threading
 
-from ..core import schemes
+from ..core import schemes, user_data
+from . import window_registry
 from .host_contract import ControlHost
 
 
@@ -18,9 +19,14 @@ class SchemeApiMixin(ControlHost):
         return schemes.list_schemes()
 
     def _scheme_guard(self):
-        """方案操作前置检查：任务运行中拒绝。"""
-        if self._tm.is_running():
-            return {"status": "error", "msg": "任务运行中，请先停止任务再操作"}
+        """方案操作前置检查：仅拒绝选中窗口自身任务运行中的操作。
+
+        多窗口（2026-11-22）：方案按角色隔离，A 在跑不影响编辑 B 的方案；
+        A 运行中时 A 的方案只读。
+        """
+        role = window_registry.selected_role() or user_data.current_role_id()
+        if self._tm.is_running(role):
+            return {"status": "error", "msg": "该窗口任务运行中，请先停止该窗口任务再操作"}
         return None
 
     def switch_scheme(self, name):

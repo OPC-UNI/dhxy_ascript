@@ -101,13 +101,6 @@
             display: flex; align-items: center; gap: 8px; padding: 0 12px;
             background-color: var(--panel); border-bottom: 1px solid var(--border);
         }
-        .char-chip {
-            max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-            font-size: 12px; color: var(--gold); border: 1px solid var(--border2);
-            border-radius: 11px; padding: 2px 10px; cursor: pointer; user-select: none;
-            transition: border-color 0.15s;
-        }
-        .char-chip:hover { border-color: var(--gold); }
         .top-spacer { flex: 1; }
         .btn {
             min-width: 64px; height: 30px; padding: 0 12px; border-radius: 6px;
@@ -469,9 +462,12 @@
         .task-accordion .group-title + .set-sect { padding-top: 0; border-top: none; }
         .set-sect .sect-hint { color: var(--text-dim); font-size: 11px; }
         /* ---- 运行看板 ---- */
-        #page-dash { gap: 10px; }
-        /* 覆盖 .card 的 column 方向：印章/信息/操作横排 */
-        .dash-hero { display: flex; flex-direction: row; align-items: center; gap: 18px; padding: 16px; }
+        /* 页面自身不滚动（任务队列卡内部滚动）；底部 44px 预留收起态日志条
+           （30 标题 + 14 边距），展开的日志改为浮层，不参与 flex 布局——
+           任务队列高度恒定，不会被展开/收起挤压（2026-11-22）。 */
+        #page-dash {
+            gap: 10px; position: relative; overflow: hidden; padding-bottom: 44px;
+        }
         .seal {
             position: relative;  /* 光晕伪元素的定位锚点 */
             display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -555,16 +551,6 @@
             --glow: rgba(201, 161, 92, 0.6);
         }
         .seal.running.phase-claim::after { animation-duration: 2.4s; }
-        .dash-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
-        .info-row { font-size: 13px; color: var(--text); display: flex; gap: 8px; line-height: 1.4; }
-        .info-k { color: var(--text-dim); width: 58px; flex-shrink: 0; }
-        .info-v { flex: 1; min-width: 0; word-break: break-all; }
-        /* 配置行（方案 · 人物 · 召唤兽 单行摘要）：可点击跳设置页 */
-        .info-row.config-row { cursor: pointer; }
-        .info-row.config-row:hover .info-k,
-        .info-row.config-row:hover .info-v { color: var(--accent); }
-        /* 队伍行：摘要 + 悬浮看成员明细 */
-        .info-row.team-row { cursor: help; }
         /* 阶段徽章：与印章蘸色同源（战斗朱砂/巫医石绿/组队黛蓝/领取藤黄） */
         .phase-chip {
             display: inline-block; padding: 0 8px; border-radius: 10px;
@@ -577,12 +563,19 @@
         .phase-chip.claim { color: var(--gold); border-color: var(--gold); }
         .phase-chip.walk { color: var(--text-dim); }
         .phase-chip.talk { color: var(--accent-dim); }
-        /* 今日计划等长文案：单行省略不换行（明细在下方任务队列） */
-        .info-v.nowrap { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        /* 任务队列 */
-        .queue-card { flex: 1; min-height: 0; overflow-y: auto; }
+        /* 任务队列：内容超高时仍可滚轮滚动，但不显示滚动条 */
+        .queue-card {
+            flex: 1; min-height: 0; overflow-y: auto;
+            scrollbar-width: none; -ms-overflow-style: none;
+        }
+        .queue-card::-webkit-scrollbar { display: none; }
         .queue-head { display: flex; align-items: center; gap: 8px; }
         .queue-summary { font-size: 12px; color: var(--text-dim); font-family: 'Consolas', monospace; }
+        .queue-head #queue-role {
+            flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .queue-head #queue-summary { flex-shrink: 0; }
         .queue-row {
             display: flex; align-items: center; gap: 8px; padding: 7px 4px;
             border-bottom: 1px solid var(--border); border-radius: 4px;
@@ -600,32 +593,316 @@
         .queue-prog-fill { position: absolute; left: 0; top: 0; bottom: 0; width: 0%; background: var(--accent-dim); transition: width 0.4s; }
         .queue-text { width: 76px; flex-shrink: 0; text-align: right; font-family: 'Consolas', monospace; font-size: 12px; color: var(--text-dim); }
         .queue-empty { padding: 18px 0; text-align: center; color: var(--text-dim); font-size: 12px; }
-        /* 日志抽屉 */
-        .log-drawer { flex-shrink: 0; padding: 0; overflow: hidden; }
+        /* 日志抽屉：看板底部浮层（position:absolute），不参与 flex 布局——
+           展开/收起只改自身高度，任务队列高度恒定不被压缩 */
+        .log-drawer {
+            position: absolute; left: 14px; right: 14px; bottom: 14px; z-index: 20;
+            width: auto;  /* .card 的 width:100% 会压掉 right 定位，浮层须显式 auto */
+            flex-shrink: 0; padding: 0; gap: 0; overflow: hidden;
+            box-shadow: 0 -6px 18px rgba(0, 0, 0, 0.22);
+        }
+        body.light .log-drawer { box-shadow: 0 -6px 18px rgba(60, 50, 30, 0.14); }
         .log-head {
             height: 30px; display: flex; align-items: center; gap: 10px; padding: 0 12px;
             font-size: 12px; font-family: "微软雅黑"; flex-shrink: 0;
         }
         .log-title { color: var(--accent); }
+        .log-owner {
+            font-size: 11px; color: var(--text-dim); max-width: 150px;
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
         .log-meta { color: var(--text-dim); font-size: 11px; flex: 1; }
         .link-btn { color: var(--text-dim); cursor: pointer; user-select: none; font-size: 12px; }
         .link-btn:hover { color: var(--accent); }
+        /* 拖拽手柄：上下拖动调整日志高度（双击复位；高度记忆见 JS）。
+           收起时高度收拢到 0（保留在流内做高度动画，不做 display:none） */
+        .log-resize {
+            height: 6px; flex-shrink: 0; position: relative; cursor: ns-resize;
+            overflow: hidden; border-top: 1px solid var(--border);
+            transition: height 0.22s ease, opacity 0.15s ease;
+        }
+        .log-resize::after {
+            content: ""; position: absolute; left: 50%; top: 1px; width: 34px; height: 3px;
+            margin-left: -17px; border-radius: 2px;
+            background: var(--border2); transition: background 0.15s;
+        }
+        .log-resize:hover::after { background: var(--accent); }
+        .log-drawer.collapsed .log-resize {
+            height: 0; border-top-width: 0; opacity: 0;
+        }
+        body.log-resizing { user-select: none; cursor: ns-resize; }
+        /* 拖拽调高时不做高度过渡，否则日志会追着鼠标弹性延迟 */
+        body.log-resizing #dash-log-box { transition: none; }
+        /* 展开/收起：高度过渡（收起为 0），浮层自底部向上展开/回落 */
         #dash-log-box {
-            height: 156px; overflow-y: auto; margin: 0; padding: 2px 12px 8px;
-            border-top: 1px solid var(--border);
+            height: var(--log-h, 120px); overflow-y: auto; margin: 0; padding: 2px 12px 8px;
             font-family: 'Consolas', '微软雅黑', monospace; font-size: 11px; line-height: 1.5;
             color: var(--text); white-space: pre-wrap; word-break: break-all;
+            scrollbar-gutter: stable;  /* 动画期间滚动条不挤动文字宽度 */
+            transition: height 0.22s ease, padding 0.22s ease, opacity 0.15s ease;
         }
-        .log-drawer.collapsed #dash-log-box { display: none; }
+        .log-drawer.collapsed #dash-log-box {
+            height: 0; padding-top: 0; padding-bottom: 0; opacity: 0; overflow: hidden;
+        }
         /* ERROR 行显眼告警：红字加粗（[ERROR] 行到达时抽屉自动展开） */
         #dash-log-box .log-err { color: var(--danger-text); font-weight: 700; }
+        /* ---- 窗口上下文：顶栏状态 + 窗口 Tab 条（2026-11-22 v2 重设计） ----
+           窗口 = 全局上下文：切 Tab = 切选中窗口，所有页面跟随。
+           Tab 顺序固定（按注册表顺序 seq），运行/选中都不重排。 */
+        .fleet-status {
+            display: inline-flex; align-items: center; gap: 7px;
+            max-width: 230px; font-size: 12px; color: var(--text-dim);
+            cursor: pointer; user-select: none; white-space: nowrap;
+            border-radius: 5px; padding: 3px 6px;
+            transition: color 0.15s, background 0.15s;
+        }
+        .fleet-status:hover { color: var(--text); background: var(--panel2); }
+        .fleet-status-text { overflow: hidden; text-overflow: ellipsis; }
+        .fleet-status-more { color: var(--text-dim); font-size: 14px; line-height: 1; flex-shrink: 0; }
+        .fleet-status:hover .fleet-status-more { color: var(--accent); }
+        .fleet-status-dot {
+            width: 7px; height: 7px; border-radius: 50%;
+            background: var(--border2); flex-shrink: 0;
+        }
+        .fleet-status-dot.running { background: var(--accent); box-shadow: 0 0 5px var(--accent); }
+        .win-tabs {
+            height: 40px; min-height: 40px; flex-shrink: 0; display: none;
+            align-items: center; gap: 6px; padding: 5px 8px 5px 10px;
+            background: var(--bg); border-bottom: 1px solid var(--border);
+        }
+        .win-tabs.show { display: flex; }
+        body.license-locked .win-tabs { display: none !important; }
+        .win-tab-list {
+            display: flex; align-items: center; gap: 4px; min-width: 0;
+            overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
+            -ms-overflow-style: none;
+        }
+        .win-tab-list::-webkit-scrollbar { display: none; }
+        /* 横向溢出提示：可滚动一侧渐隐（滚动条隐藏，靠遮罩示意还有更多） */
+        .win-tab-list.fade-left {
+            -webkit-mask-image: linear-gradient(to right, transparent 0, #000 16px);
+            mask-image: linear-gradient(to right, transparent 0, #000 16px);
+        }
+        .win-tab-list.fade-right {
+            -webkit-mask-image: linear-gradient(to left, transparent 0, #000 16px);
+            mask-image: linear-gradient(to left, transparent 0, #000 16px);
+        }
+        .win-tab-list.fade-left.fade-right {
+            -webkit-mask-image: linear-gradient(to right, transparent 0, #000 16px,
+                #000 calc(100% - 16px), transparent 100%);
+            mask-image: linear-gradient(to right, transparent 0, #000 16px,
+                #000 calc(100% - 16px), transparent 100%);
+        }
+        .win-tab {
+            display: flex; align-items: center; gap: 6px; height: 30px;
+            padding: 0 9px; border-radius: 6px; border: 1px solid transparent;
+            color: var(--text-dim); font-size: 12px; white-space: nowrap;
+            cursor: pointer; flex-shrink: 0;
+            transition: background 0.15s, border-color 0.15s, color 0.15s;
+        }
+        .win-tab:hover { background: var(--panel2); color: var(--text); }
+        .win-tab.active {
+            background: var(--panel); border-color: var(--accent);
+            color: var(--text); box-shadow: inset 0 -2px 0 0 var(--accent);
+        }
+        .win-tab.closed { opacity: 0.55; }
+        /* 未勾选但保留的 Tab（当前选中/运行中）：非 active 时降透明提示未绑定 */
+        .win-tab.unbound:not(.active) { opacity: 0.55; }
+        .win-tab-dot {
+            width: 7px; height: 7px; border-radius: 50%;
+            background: var(--border2); flex-shrink: 0;
+        }
+        .win-tab-dot.running { background: var(--accent); box-shadow: 0 0 5px var(--accent); }
+        .win-tab-dot.error { background: var(--danger); }
+        .win-tab-name { max-width: 128px; overflow: hidden; text-overflow: ellipsis; }
+        .win-tab-prog {
+            font-family: 'Consolas', monospace; font-size: 10px;
+            color: var(--text-dim); flex-shrink: 0;
+        }
+        .win-tab.active .win-tab-prog { color: var(--accent); }
+        .tabs-spacer { flex: 1; }
+        .tabs-manage {
+            display: inline-flex; align-items: center; justify-content: center;
+            flex-shrink: 0; width: 26px; height: 26px; padding: 0; border-radius: 5px;
+            border: 1px solid var(--border2); background: var(--panel2);
+            color: var(--text-dim); cursor: pointer;
+            user-select: none; transition: color 0.15s, border-color 0.15s;
+        }
+        .tabs-manage svg { width: 15px; height: 15px; display: block; }
+        .tabs-manage:hover { color: var(--accent); border-color: var(--accent); }
+        /* 软件级页面：页面不跟窗口 Tab，Tab 条降透明 + 「全局页」标签；
+           页面顶部给归属提示（2026-11-22 用户确认的分层原则）。 */
+        .win-tabs.is-global .win-tab-list { opacity: 0.55; }
+        .tabs-scope {
+            display: none; align-items: center; height: 20px; padding: 0 8px;
+            border-radius: 10px; border: 1px solid var(--gold); color: var(--gold);
+            font-size: 10px; flex-shrink: 0; white-space: nowrap;
+        }
+        .win-tabs.is-global .tabs-scope { display: inline-flex; }
+        .page-scope {
+            flex-shrink: 0; display: flex; align-items: center; gap: 8px;
+            font-size: 11px; color: var(--text-dim); padding: 0 2px;
+        }
+        .scope-tag {
+            padding: 0 7px; line-height: 17px; border-radius: 9px;
+            border: 1px solid var(--gold); color: var(--gold); font-size: 10px;
+            flex-shrink: 0;
+        }
+        /* 顶栏内嵌窗口 Tab（2026-11-22）：取代独立 40px 一行；
+           ≥2 窗口时隐藏顶栏「多开 N 窗口」状态与占位，Tab 占满左侧。
+           单窗口仍走状态入口（has-tabs 由 renderWindowTabs 维护）。 */
+        .top-bar .win-tabs {
+            flex: 1; min-width: 0; width: auto; height: auto; min-height: 0;
+            padding: 0; gap: 6px; background: transparent; border-bottom: none;
+            overflow: hidden;
+        }
+        .top-bar .win-tabs:not(.show) { display: none; }
+        .top-bar .win-tab-list { flex: 1; min-width: 0; }
+        .top-bar .win-tab { height: 26px; padding: 0 8px; font-size: 11.5px; }
+        .top-bar .win-tab-name { max-width: 108px; }
+        .top-bar .tabs-spacer { display: none; }
+        .top-bar .tabs-manage { width: 24px; height: 24px; padding: 0; }
+        .top-bar .tabs-scope { height: 18px; }
+        .top-bar.has-tabs .fleet-status,
+        .top-bar.has-tabs .top-spacer { display: none; }
+        /* ---- 当前窗口状态卡（运行页） ---- */
+        .dash-status {
+            flex-direction: row; align-items: center; gap: 12px; padding: 12px;
+        }
+        .dash-status-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+        .dash-status-line1 { display: flex; align-items: center; gap: 7px; min-width: 0; }
+        .dash-status-name {
+            font-size: 14px; font-weight: 600; color: var(--text);
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .dash-rid {
+            font-size: 10px; color: var(--text-dim);
+            font-family: 'Consolas', monospace; flex-shrink: 0;
+        }
+        .dash-status-meta {
+            display: flex; align-items: center; gap: 7px; font-size: 12px;
+            color: var(--text-dim); min-width: 0; overflow: hidden;
+        }
+        .dash-status-meta .dash-task { color: var(--text); }
+        .dash-status-meta .dash-sep { opacity: 0.5; }
+        .dash-status-meta .dash-note {
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .dash-progress-line { display: flex; align-items: center; gap: 8px; }
+        .dash-bar {
+            flex: 1; min-width: 0; height: 7px; border-radius: 4px;
+            background: var(--panel2); overflow: hidden;
+        }
+        .dash-bar > i {
+            display: block; height: 100%; width: 0;
+            background: var(--accent-dim); border-radius: 4px; transition: width 0.4s;
+        }
+        .dash-pnum {
+            font-family: 'Consolas', monospace; font-size: 11px;
+            color: var(--text-dim); flex-shrink: 0; white-space: nowrap;
+        }
+        .dash-status-actions {
+            display: flex; flex-direction: column; align-items: stretch;
+            gap: 6px; flex-shrink: 0; width: 116px;
+        }
+        .dash-start-btn {
+            width: 100%; min-width: 0; height: 28px; padding: 0 10px; font-size: 12px;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .dash-start-btn.stop { color: var(--danger-text); border-color: var(--danger); }
+        /* 方案名长短不一：右列固定宽度、下拉撑满并省略号截断，避免卡片随方案名
+           改变布局；完整方案名见 title 提示。运行中只读但保持可读（默认 .35 太淡） */
+        .dash-status-actions #scheme-select {
+            width: 100%; min-width: 0; max-width: none;
+            text-overflow: ellipsis; white-space: nowrap;
+        }
+        .dash-status-actions #scheme-select:disabled { opacity: 0.75; }
+        /* ---- 多开管理页（Tab 条「管理」进入的二级页，不进侧边栏） ---- */
+        .manage-head { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+        .back-link { color: var(--text-dim); font-size: 12px; cursor: pointer; user-select: none; }
+        .back-link:hover { color: var(--accent); }
+        .manage-title { font-size: 14px; color: var(--text); font-weight: 600; }
+        .manage-note {
+            margin-left: auto; font-size: 11px; color: var(--text-dim);
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .manage-tip { font-size: 11px; line-height: 1.6; color: var(--text-dim); flex-shrink: 0; }
+        /* ---- 多窗口舰队（2026-11-22，docs/multi-window.md） ---- */
+        .fleet-card { flex: 1.2; min-height: 0; overflow-y: auto; padding: 0; }
+        .fleet-head {
+            height: 34px; display: flex; align-items: center; gap: 8px;
+            padding: 0 12px; border-bottom: 1px solid var(--border);
+            position: sticky; top: 0; background: var(--panel); z-index: 1;
+        }
+        .fleet-summary {
+            flex: 1; text-align: right; font-size: 11px; color: var(--text-dim);
+            font-family: 'Consolas', '微软雅黑', monospace;
+        }
+        .fleet-row {
+            display: flex; gap: 8px; padding: 8px 12px; cursor: pointer;
+            border-bottom: 1px solid var(--border); position: relative;
+            transition: background 0.15s;
+        }
+        .fleet-row:last-child { border-bottom: none; }
+        .fleet-row:hover { background: var(--panel2); }
+        .fleet-row.selected { background: var(--progress-tint); }
+        .fleet-row.selected::before {
+            content: ""; position: absolute; left: 0; top: 6px; bottom: 6px;
+            width: 2px; border-radius: 1px; background: var(--accent);
+        }
+        .fleet-row.offline { opacity: 0.72; }
+        .fleet-check { margin: 3px 0 0; flex-shrink: 0; accent-color: var(--accent); }
+        .fleet-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+        .fleet-line { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; }
+        .fleet-dot {
+            width: 8px; height: 8px; border-radius: 50%;
+            background: var(--border2); flex-shrink: 0;
+        }
+        .fleet-dot.running { background: var(--accent); box-shadow: 0 0 5px var(--accent); }
+        .fleet-dot.error { background: var(--danger); }
+        .fleet-name {
+            max-width: 150px; font-size: 13px; color: var(--text);
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .fleet-id { font-size: 10px; color: var(--text-dim); font-family: 'Consolas', monospace; }
+        .fleet-badge {
+            padding: 0 6px; border: 1px solid var(--border2); border-radius: 8px;
+            font-size: 10px; color: var(--text-dim); white-space: nowrap;
+        }
+        .fleet-badge.warn { color: var(--gold); border-color: var(--gold); }
+        .fleet-badge.err { color: var(--danger-text); border-color: var(--danger); }
+        .fleet-spacer { flex: 1; }
+        .fleet-phase { font-size: 11px; display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+        .fleet-phase .phase-chip { flex-shrink: 0; }
+        .fleet-progress {
+            font-family: 'Consolas', '微软雅黑', monospace; font-size: 12px;
+            color: var(--text-dim); white-space: nowrap;
+        }
+        .fleet-note {
+            font-size: 11px; color: var(--text-dim); white-space: nowrap;
+            overflow: hidden; text-overflow: ellipsis; min-width: 0;
+        }
+        .fleet-empty { padding: 28px 12px; text-align: center; color: var(--text-dim); font-size: 12px; }
+        .log-filter { display: inline-flex; gap: 4px; }
+        .chip-btn {
+            height: 20px; padding: 0 8px; border-radius: 10px;
+            border: 1px solid var(--border2); background: var(--panel2);
+            color: var(--text-dim); font-size: 11px; font-family: "微软雅黑";
+            cursor: pointer; transition: all 0.15s; max-width: 120px;
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
+        .chip-btn:hover { color: var(--text); }
+        .chip-btn.on { color: var(--accent); border-color: var(--accent); background: var(--progress-tint); }
+        .chip-btn:disabled { opacity: 0.4; cursor: default; }
+        /* 选中窗口任务运行中：该角色的设置卡片只读（顶部横幅另行提示） */
+        #page-general.locked .group-box,
+        #page-group.locked .group-box,
+        #page-task.locked .task-accordion { pointer-events: none; opacity: 0.55; }
         /* ---- 诊断页：双列工具卡 ---- */
         .tools-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: start; }
         .verify-row { display: flex; align-items: center; gap: 8px; }
         .verify-row .btn { min-width: 0; flex-shrink: 0; }
         .verify-result { color: var(--text); font-size: 12px; font-family: "微软雅黑"; flex: 1; min-width: 0; word-break: break-all; }
-        /* 绑定窗口长文本值：超宽省略号截断，不挤压标签换行 */
-        #env-bound { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         /* ---- 成就页：四 KPI + 7 日趋势折线 + 任务模式明细（docs/task-stats-design.md） ---- */
         .stat-kpis { display: flex; gap: 8px; flex-shrink: 0; }
         .stat-card {
@@ -936,21 +1213,30 @@
     <!-- ================= 主列 ================= -->
     <div class="main">
         <header class="top-bar">
-            <span class="char-chip" id="char-chip" title="绑定角色（点击前往系统页）" onclick="switchPage('system')">-</span>
+            <!-- 多开状态（全局）：点击进入多开管理；单窗口时这里也是管理入口 -->
+            <span class="fleet-status" id="fleet-status" title="多开管理"
+                  onclick="switchPage('manage')">
+                <span class="fleet-status-dot" id="fleet-status-dot"></span>
+                <span class="fleet-status-text" id="fleet-status-text">未检测到窗口</span>
+                <span class="fleet-status-more">›</span>
+            </span>
             <div class="top-spacer"></div>
-            <!-- 配置方案下拉：选中即切换（任务运行中禁用） -->
-            <select id="scheme-select" title="配置方案：选中即切换"></select>
-            <!-- 主题图标按钮：浅色显示月亮（目标深色）、深色显示太阳（目标浅色） -->
-            <button id="btn-theme" class="icon-btn" onclick="toggleTheme()" title="切换到深色">
-                <svg id="theme-icon-moon" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
-                </svg>
-                <svg id="theme-icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none">
-                    <circle cx="12" cy="12" r="5"/>
-                    <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
-                </svg>
-            </button>
+            <!-- 窗口 Tab 条：全局上下文（≥2 个窗口时显示；单窗口隐藏走顶栏入口） -->
+            <div class="win-tabs" id="win-tabs">
+                <div class="win-tab-list" id="win-tab-list"></div>
+                <span class="tabs-scope">全局页</span>
+                <span class="tabs-spacer"></span>
+                <span class="tabs-manage" id="tabs-manage" title="多开管理：勾选参与、全部启停"
+                      aria-label="多开管理" onclick="switchPage('manage')">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                         stroke-width="1.6" stroke-linecap="round">
+                        <rect x="3" y="3" width="7" height="7" rx="1"/>
+                        <rect x="14" y="3" width="7" height="7" rx="1"/>
+                        <rect x="3" y="14" width="7" height="7" rx="1"/>
+                        <rect x="14" y="14" width="7" height="7" rx="1"/>
+                    </svg>
+                </span>
+            </div>
             <button id="btn-start" class="btn-primary" onclick="toggleTask()">启 动</button>
         </header>
         <!-- 启动被拦截横幅（授权过期/网络异常等）：顶栏下全页面可见，10s 自动隐藏 -->
@@ -1009,15 +1295,34 @@
             </div>
         </section>
         <div id="license-toast" role="status" aria-live="polite"></div>
-        <!-- ============ 运行看板 ============ -->
+        <!-- ============ 运行看板（当前窗口视角，2026-11-22 v2） ============ -->
         <div class="page active" id="page-dash">
-            <div class="card dash-hero">
+            <!-- 当前窗口状态卡：只讲选中窗口的事（无跨窗口合计） -->
+            <div class="card dash-status">
                 <div class="seal idle" id="dash-seal"><span>待</span><span>命</span></div>
-                <div class="dash-info" id="dash-info"></div>
+                <div class="dash-status-main">
+                    <div class="dash-status-line1">
+                        <span class="dash-status-name" id="dash-name">未选择窗口</span>
+                        <span class="dash-rid" id="dash-rid"></span>
+                        <span id="dash-badges"></span>
+                    </div>
+                    <div class="dash-status-meta" id="dash-meta"></div>
+                    <div class="dash-progress-line">
+                        <span class="dash-bar"><i id="dash-bar-fill"></i></span>
+                        <span class="dash-pnum" id="dash-pnum"></span>
+                    </div>
+                </div>
+                <div class="dash-status-actions">
+                    <button class="btn dash-start-btn" id="dash-start"
+                            onclick="toggleDashWindow()">启动本窗口</button>
+                    <!-- 方案下拉：当前窗口属性（运行中只读） -->
+                    <select id="scheme-select" title="配置方案：选中即切换"></select>
+                </div>
             </div>
             <div class="card queue-card">
                 <div class="queue-head">
                     <span class="card-title">任务队列</span>
+                    <span class="queue-summary" id="queue-role"></span>
                     <span class="queue-summary" id="queue-summary"></span>
                 </div>
                 <div id="dash-queue"></div>
@@ -1025,16 +1330,41 @@
             <div class="card log-drawer collapsed" id="log-drawer">
                 <div class="log-head">
                     <span class="log-title">运 行 日 志</span>
+                    <span class="log-owner" id="log-owner"></span>
+                    <span class="log-filter">
+                        <button class="chip-btn on" id="log-filter-selected"
+                                onclick="setLogFilter('selected')">本窗口</button>
+                        <button class="chip-btn" id="log-filter-all"
+                                onclick="setLogFilter('all')">全部</button>
+                    </span>
                     <span class="log-meta" id="log-meta">0 行</span>
                     <span class="link-btn" onclick="clearPanelLogs()">清 空</span>
                     <span class="link-btn" id="log-toggle" onclick="toggleLogDrawer()">展 开</span>
                 </div>
+                <div class="log-resize" id="log-resize"
+                     title="上下拖动调整日志高度（双击复位）"></div>
                 <div id="dash-log-box"></div>
             </div>
         </div>
+        <!-- ============ 多开管理（Tab 条「管理」进入的二级页） ============ -->
+        <div class="page" id="page-manage">
+            <div class="manage-head">
+                <span class="back-link" onclick="switchPage('dash')">‹ 返回运行</span>
+                <span class="manage-title">多开管理</span>
+                <span class="manage-note">全部启停见顶栏右上角 · 新窗口默认不勾选</span>
+            </div>
+            <div class="card fleet-card">
+                <div class="fleet-head">
+                    <span class="card-title">窗 口</span>
+                    <span class="fleet-summary" id="fleet-summary"></span>
+                </div>
+                <div id="fleet-rows"></div>
+            </div>
+            <div class="manage-tip">勾选的窗口参与「全部启动」；进度按窗口显示，不做跨窗口合计。</div>
+        </div>
         <!-- ============ 任务页（待选/已选双区 + 拖动排序 + 次数 + 专属设置手风琴） ============ -->
         <div class="page" id="page-task">
-            <div class="banner warn" id="task-lock-banner" style="display:none">任务运行中：选择/顺序/次数不可修改；专属设置下次启动生效</div>
+            <div class="banner warn" id="task-lock-banner" style="display:none">该窗口任务运行中：选择/顺序/次数不可修改；专属设置下次启动生效</div>
             <div class="task-zone">
                 <div class="group-title">已选任务<span class="zone-hint">按顺序执行 · 拖动「≡」手柄或用 ↑↓ 调整</span></div>
                 <div id="task-selected-list" class="task-list"></div>
@@ -1417,6 +1747,7 @@
         </div>
         <!-- ============ 组号页（队伍成员检查 + 按账号战斗动作设置） ============ -->
         <div class="page" id="page-group">
+            <div class="banner warn" id="group-lock-banner" style="display:none">该窗口任务运行中：组号设置只读，停止该窗口任务后可修改</div>
             <div class="group-box">
                 <div class="group-title">组号设置</div>
                 <div class="group-hint">组号模式（修罗/五倍/种族比武任务设置里的「组号专用」开关）要求已开启「检查队伍」。本页枚举当前窗口已登录 Tab 中在队伍内的队员，为每个队员单独设置战斗动作；队长使用通用战斗设置或其账号的组号设置。启动任务时未设置的队员会停止任务并提示先设置。</div>
@@ -1440,8 +1771,67 @@
                 </div>
             </div>
         </div>
-        <!-- ============ 设置页（通用 + 显示与调试 + 血蓝阈值 + 战斗动作） ============ -->
+        <!-- ============ 设置页（角色级：配置方案 + 通用 + 血蓝阈值 + 战斗动作） ============ -->
         <div class="page" id="page-general">
+            <div class="banner warn" id="general-lock-banner" style="display:none">该窗口任务运行中：设置只读，停止该窗口任务后可修改</div>
+            <!-- 配置方案：多套设置快照管理（快速切换在运行页当前窗口卡）。
+                 当前方案行实时显示操作对象；重命名/删除按钮文案带方案名 -->
+            <div class="group-box">
+                <div class="group-title">配置方案</div>
+                <div class="group-row">
+                    <span class="group-label">当前方案</span>
+                    <span class="group-sub scheme-current" id="scheme-current">-</span>
+                </div>
+                <div class="group-row">
+                    <span class="group-label">方案名</span>
+                    <div class="group-ctrl scheme-ctrl">
+                        <!-- 输入框回填当前方案名：改名后点保存=重命名+保存；
+                             另存新方案=当前设置存为新方案（重名自动加序号） -->
+                        <input type="text" id="scheme-name-input" maxlength="20">
+                        <button class="btn-sm icon-btn-sm" id="btn-scheme-save"
+                                title="保存：当前设置写回本方案（改了名字则重命名）">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                                <polyline points="17 21 17 13 7 13 7 21"/>
+                                <polyline points="7 3 7 8 15 8"/>
+                            </svg>
+                        </button>
+                        <button class="btn-sm icon-btn-sm" id="btn-scheme-copy"
+                                title="另存新方案：当前设置另存为新方案，新方案成为当前方案">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                            </svg>
+                        </button>
+                        <button class="btn-sm icon-btn-sm" id="btn-scheme-delete"
+                                title="删除当前方案">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <polyline points="3 6 5 6 21 6"/>
+                                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                                <line x1="10" y1="11" x2="10" y2="17"/>
+                                <line x1="14" y1="11" x2="14" y2="17"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+                <div class="group-row">
+                    <span class="group-label">管理</span>
+                    <div class="group-ctrl">
+                        <button class="btn-sm" id="btn-scheme-import">导入</button>
+                        <button class="btn-sm" id="btn-scheme-export">导出</button>
+                    </div>
+                </div>
+                <div class="group-row" id="scheme-import-confirm" style="display:none">
+                    <span class="group-sub" id="scheme-import-confirm-text"></span>
+                    <div class="group-ctrl">
+                        <button class="btn-sm" id="btn-scheme-import-overwrite" onclick="schemeImportConfirm('overwrite')">覆盖</button>
+                        <button class="btn-sm" id="btn-scheme-import-rename" onclick="schemeImportConfirm('rename')">另存为</button>
+                        <button class="btn-sm" id="btn-scheme-import-confirm-cancel" onclick="schemeImportConfirm('cancel')">取消</button>
+                    </div>
+                </div>
+                <div class="group-hint" id="scheme-msg"></div>
+                <div class="group-hint">方案 = 全部设置的快照，运行页当前窗口卡的下拉选中即切换（切换前自动保存当前改动）；方案名输入框回填当前方案名，改名后点保存 = 重命名并保存；「默认」方案不可删除/重命名（导入覆盖也被拒绝）；导入的新方案需手动切换生效。任务运行中不可切换或管理。</div>
+            </div>
             <div class="group-box">
                 <div class="group-title">通用</div>
                 <label class="switch-row">
@@ -1587,7 +1977,8 @@
             </div>
         </div>
         <!-- ============ 消息服务（Telegram 通道 + 查询/控制指令 + 事件推送） ============ -->
-        <div class="page" id="page-message">
+        <div class="page" id="page-message" data-scope="global">
+            <div class="page-scope"><span class="scope-tag">全局</span>软件级页面 · 不随窗口 Tab 切换</div>
             <div class="banner warn" id="msg-banner" style="display:none"></div>
             <div class="group-box msg-hero">
                 <div class="msg-hero-top">
@@ -1644,8 +2035,9 @@
             </div>
             <div class="msg-toast" id="msg-save-hint" role="status" aria-live="polite"></div>
         </div>
-        <!-- ============ 系统页（环境 / 授权 / 配置方案 / 关于） ============ -->
-        <div class="page" id="page-system">
+        <!-- ============ 系统页（软件级：环境 / 授权 / 显示与调试 / 关于） ============ -->
+        <div class="page" id="page-system" data-scope="global">
+            <div class="page-scope"><span class="scope-tag">全局</span>软件级设置 · 不随窗口 Tab 切换</div>
             <div class="banner warn" id="license-banner" style="display:none">授权即将到期</div>
             <div class="group-box">
                 <div class="group-title">使用环境</div>
@@ -1658,14 +2050,19 @@
                     <span class="group-sub" id="env-adapt-res">1378 × 831</span>
                 </div>
                 <div class="group-row">
-                    <span class="group-label">绑定窗口</span>
-                    <span class="group-sub" id="env-bound">-</span>
+                    <span class="group-label">主题切换</span>
+                    <!-- 浅色显示月亮（目标深色）、深色显示太阳（目标浅色） -->
+                    <button id="btn-theme" class="icon-btn" onclick="toggleTheme()" title="切换到深色">
+                        <svg id="theme-icon-moon" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+                        </svg>
+                        <svg id="theme-icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                             stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none">
+                            <circle cx="12" cy="12" r="5"/>
+                            <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
+                        </svg>
+                    </button>
                 </div>
-                <div class="group-row">
-                    <span class="group-label">更换绑定</span>
-                    <button class="btn" id="btn-unbind-win" onclick="unbindWindow()">解除绑定</button>
-                </div>
-                <div class="group-hint" id="unbind-win-msg"></div>
             </div>
             <div class="group-box">
                 <div class="group-title">授权信息</div>
@@ -1699,64 +2096,6 @@
                     <span>调试信息（游戏窗口悬浮任务信息 + 显示「诊断」页）</span>
                 </label>
                 <div class="group-hint">开启后左侧导航出现「诊断」页，供验证各链路识别是否正常；任务运行中切换数秒生效。本开关为全局设置（config.json），不随配置方案切换。</div>
-            </div>
-            <!-- 配置方案：多套设置快照管理（一键切换在顶栏下拉）。
-                 当前方案行实时显示操作对象；重命名/删除按钮文案带方案名 -->
-            <div class="group-box">
-                <div class="group-title">配置方案</div>
-                <div class="group-row">
-                    <span class="group-label">当前方案</span>
-                    <span class="group-sub scheme-current" id="scheme-current">-</span>
-                </div>
-                <div class="group-row">
-                    <span class="group-label">方案名</span>
-                    <div class="group-ctrl scheme-ctrl">
-                        <!-- 输入框回填当前方案名：改名后点保存=重命名+保存；
-                             另存新方案=当前设置存为新方案（重名自动加序号） -->
-                        <input type="text" id="scheme-name-input" maxlength="20">
-                        <button class="btn-sm icon-btn-sm" id="btn-scheme-save"
-                                title="保存：当前设置写回本方案（改了名字则重命名）">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
-                                <polyline points="17 21 17 13 7 13 7 21"/>
-                                <polyline points="7 3 7 8 15 8"/>
-                            </svg>
-                        </button>
-                        <button class="btn-sm icon-btn-sm" id="btn-scheme-copy"
-                                title="另存新方案：当前设置另存为新方案，新方案成为当前方案">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
-                                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
-                            </svg>
-                        </button>
-                        <button class="btn-sm icon-btn-sm" id="btn-scheme-delete"
-                                title="删除当前方案">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                <polyline points="3 6 5 6 21 6"/>
-                                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
-                                <line x1="10" y1="11" x2="10" y2="17"/>
-                                <line x1="14" y1="11" x2="14" y2="17"/>
-                            </svg>
-                        </button>
-                    </div>
-                </div>
-                <div class="group-row">
-                    <span class="group-label">管理</span>
-                    <div class="group-ctrl">
-                        <button class="btn-sm" id="btn-scheme-import">导入</button>
-                        <button class="btn-sm" id="btn-scheme-export">导出</button>
-                    </div>
-                </div>
-                <div class="group-row" id="scheme-import-confirm" style="display:none">
-                    <span class="group-sub" id="scheme-import-confirm-text"></span>
-                    <div class="group-ctrl">
-                        <button class="btn-sm" id="btn-scheme-import-overwrite" onclick="schemeImportConfirm('overwrite')">覆盖</button>
-                        <button class="btn-sm" id="btn-scheme-import-rename" onclick="schemeImportConfirm('rename')">另存为</button>
-                        <button class="btn-sm" id="btn-scheme-import-confirm-cancel" onclick="schemeImportConfirm('cancel')">取消</button>
-                    </div>
-                </div>
-                <div class="group-hint" id="scheme-msg"></div>
-                <div class="group-hint">方案 = 全部设置的快照，顶部下拉选中即切换（切换前自动保存当前改动）；方案名输入框回填当前方案名，改名后点保存 = 重命名并保存；「默认」方案不可删除/重命名（导入覆盖也被拒绝）；导入的新方案需手动切换生效。任务运行中不可切换或管理。</div>
             </div>
             <div class="group-box">
                 <div class="group-title">关于</div>
@@ -2213,6 +2552,19 @@
     let runtimeStatus = null;   // 任务运行状态（get_runtime_status 轮询，看板展示）
     let progressData = null;    // 任务进度汇总（get_task_progress 轮询）
     let verifying = false;      // 验证请求在途标记（防连点，回程/领取/巫医共用）
+    /* ---- 多窗口舰队（2026-11-22） ---- */
+    let selectedRunning = false;   // 选中窗口自身任务在跑（任务页/方案/设置锁）
+    let fleetState = null;         // get_fleet_state 轮询结果
+    let fleetSig = '';             // 行渲染签名（无变化不重建 DOM）
+    let fleetLockSig = '';         // 运行/选中锁签名（变化才重渲染任务页/方案锁）
+    let fleetLogs = {};            // key → 行日志（选中行过滤）
+    let fleetLogLabels = {};       // key → 角色短文案
+    let fleetErrors = {};          // key → 出现过 ERROR（行内红点）
+    let logFilter = 'selected';    // 日志抽屉：selected=选中行 / all=全部
+    let panelLogs = [];            // 全部日志（系统 + 各角色合并）
+    let systemLogs = [];           // 非角色前缀的系统/多开/授权日志（选中视图也显示）
+    let lastSelectedLogKey = null; // 选中行切换时才重建日志 DOM（防滚动重置）
+    let lastTabRole = null;        // 已显示的 active Tab（变化时才自动滚入视野）
     const TASK_MODES = ['五环', '客栈', '修罗', '五倍', '种族比武', '玄枢轶闻', '名望', '仅战斗'];
     const BATTLE_ONLY = '仅战斗';   // 与其它任务互斥：勾选时禁用其它，勾选其它时禁用本项
     const COUNT_MAX = {'五环': 2, '客栈': 20, '种族比武': 100, '玄枢轶闻': 5, '名望': 5};
@@ -2222,10 +2574,26 @@
 
     const btnStart = document.getElementById('btn-start');
     const startErrorBanner = document.getElementById('start-error-banner');
+    // 窗口上下文（2026-11-22 v2）：顶栏多开状态 + 窗口 Tab 条 + 当前窗口卡
+    const fleetStatusDot = document.getElementById('fleet-status-dot');
+    const fleetStatusText = document.getElementById('fleet-status-text');
+    const winTabs = document.getElementById('win-tabs');
+    const winTabList = document.getElementById('win-tab-list');
     const dashSeal = document.getElementById('dash-seal');
-    const dashInfo = document.getElementById('dash-info');
+    const dashName = document.getElementById('dash-name');
+    const dashRid = document.getElementById('dash-rid');
+    const dashBadges = document.getElementById('dash-badges');
+    const dashMeta = document.getElementById('dash-meta');
+    const dashBarFill = document.getElementById('dash-bar-fill');
+    const dashPnum = document.getElementById('dash-pnum');
+    const dashStart = document.getElementById('dash-start');
     const dashQueue = document.getElementById('dash-queue');
     const queueSummary = document.getElementById('queue-summary');
+    const queueRoleEl = document.getElementById('queue-role');
+    const fleetRows = document.getElementById('fleet-rows');
+    const fleetSummary = document.getElementById('fleet-summary');
+    const generalLockBanner = document.getElementById('general-lock-banner');
+    const groupLockBanner = document.getElementById('group-lock-banner');
     const btnTheme = document.getElementById('btn-theme');
     const iconMoon = document.getElementById('theme-icon-moon');
     const iconSun = document.getElementById('theme-icon-sun');
@@ -2431,9 +2799,6 @@
     const licenseToast = document.getElementById('license-toast');
     const envThemeEl = document.getElementById('env-theme');
     const envAdaptResEl = document.getElementById('env-adapt-res');
-    const envBoundEl = document.getElementById('env-bound');
-    const charChip = document.getElementById('char-chip');
-    const unbindWinMsgEl = document.getElementById('unbind-win-msg');
     const schemeSelect = document.getElementById('scheme-select');
     const schemeInput = document.getElementById('scheme-name-input');
     const btnSchemeSave = document.getElementById('btn-scheme-save');
@@ -2563,12 +2928,27 @@
             showLicenseToast('请先激活授权');
             return;
         }
+        // 多开管理是多开 Tab 条下的二级页：侧边栏仍高亮「运行」
+        const navName = name === 'manage' ? 'dash' : name;
         document.querySelectorAll('.nav-item').forEach(n =>
-            n.classList.toggle('active', n.dataset.page === name));
+            n.classList.toggle('active', n.dataset.page === navName));
         document.querySelectorAll('.page').forEach(p =>
             p.classList.toggle('active', p.id === 'page-' + name));
+        // 软件级页面（data-scope="global"）：Tab 条标「全局页」并降透明，
+        // 本页内容不跟随窗口切换（切 Tab 仍会改变当前窗口供其他页使用）
+        const scopePage = document.getElementById('page-' + name);
+        if (winTabs) {
+            winTabs.classList.toggle('is-global',
+                !!(scopePage && scopePage.dataset.scope === 'global'));
+        }
         if (name === 'system') refreshEnv();
-        if (name === 'dash') { refreshProgress(); refreshRuntimeStatus(); }
+        if (name === 'dash') {
+            refreshProgress(); refreshRuntimeStatus(); pollFleetTick();
+            // 隐藏期间窗口可能变矮：回看板时重算浮层高度与队列滚动余量
+            applyLogHeight(logHeightCurrent(), false);
+            applyLogLayout();
+        }
+        if (name === 'manage') pollFleetTick();
         if (name === 'stats') refreshStats();
         if (name === 'message') refreshMessagePage();
         if (name === 'group') groupLoadLastScan();
@@ -2598,34 +2978,10 @@
             .map(c => c.dataset.mode);
     }
 
-    // 人物/召唤兽当前战斗动作（与设置页单选/技能下拉同源读值；看板展示用）
-    function currentCharAction() {
-        const type = charBattle.container.querySelector('input:checked');
-        if (!type) return '—';
-        return type.value === '法术' ? charBattle.skillSel.value : type.value;
-    }
-
-    function currentBeastAction() {
-        const type = beastBattle.container.querySelector('input:checked');
-        if (!type) return '—';
-        return type.value === '法术' ? beastBattle.skillSel.value : type.value;
-    }
-
-    // 启动配置摘要（单行：方案 · 人物 · 召唤兽）
-    function currentConfigText() {
-        return (schemeActive || '—') + ' · 人物 ' + currentCharAction()
-            + ' · 召唤兽 ' + currentBeastAction();
-    }
-
     // HTML 转义（状态文本来自任务进程，拼进 innerHTML 前必须转义）
     function esc(s) {
         return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
             .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-    }
-
-    function infoRowHtml(k, vHtml) {
-        return '<div class="info-row"><span class="info-k">' + k + '</span>'
-            + '<span class="info-v">' + vHtml + '</span></div>';
     }
 
     // 阶段 → 动效/徽章类（与印章蘸色同源；返回 '' 表示默认红章）
@@ -2649,71 +3005,22 @@
     function renderDash() {
         const sel = selectedModes();
         const per = (progressData && progressData.per_task) || {};
-        // ---- 状态印章与信息区（启停操作只在顶栏主按钮，看板不重复） ----
-        if (running) {
-            // 印章蘸色随阶段切换（动效语义化：战斗朱砂脉冲/巫医石绿柔光/
-            // 组队黛蓝汇聚/领取藤黄/移动轻摆/对话柔光/默认标准脉冲）；
-            // 类切换即重启动画，不依赖 animationend 状态
-            const ph = (runtimeStatus && runtimeStatus.phase) || '';
-            const phCls = phaseClassOf(ph);
-            dashSeal.className = 'seal running' + (phCls ? ' phase-' + phCls : '');
-            dashSeal.innerHTML = '<span>运</span><span>行</span><span>中</span>';
-            const cur = currentTaskMode();
-            const rowsHtml = [];
-            if (cur) {
-                const t = per[cur];
-                const progText = cur === BATTLE_ONLY ? ''
-                    : ((t && t.count > 0) ? `${t.done}/${t.count}` : (t ? `${t.done} 轮` : ''));
-                rowsHtml.push(infoRowHtml('当前任务',
-                    esc(cur + (progText ? '（' + progText + '）' : ''))));
-            }
-            // 阶段：结构化 phase 渲染为徽章（颜色与印章蘸色同源）；
-            // 空串（出战斗/无阶段信息）回退「执行中」
-            rowsHtml.push('<div class="info-row"><span class="info-k">阶段</span><span class="info-v">'
-                + '<span class="phase-chip' + (phCls ? ' ' + phCls : '') + '">'
-                + esc(ph || '执行中') + '</span></span></div>');
-            // 队伍：摘要「队长 · 5人」，成员明细悬浮提示（长名单不再占行）
-            const teamRaw = runtimeStatus && runtimeStatus.team;
-            const team = teamRaw ? parseTeam(teamRaw) : null;
-            if (team) {
-                rowsHtml.push('<div class="info-row team-row" title="队伍: '
-                    + esc(team.id) + ' · ' + esc(team.members) + '">'
-                    + '<span class="info-k">队伍</span><span class="info-v">'
-                    + esc(team.id) + ' · ' + esc(team.count) + '人</span></div>');
-            } else if (teamRaw) {
-                rowsHtml.push(infoRowHtml('队伍', esc(teamRaw.replace(/^队伍:\s*/, ''))));
-            }
-            // 配置回显：单行摘要（任务运行中不可切换，展示启动时所用配置）
-            rowsHtml.push('<div class="info-row config-row"><span class="info-k">配置</span>'
-                + '<span class="info-v nowrap">' + esc(currentConfigText()) + '</span></div>');
-            dashInfo.innerHTML = rowsHtml.join('');
-            // 配置行交互：点击跳设置页（人物/召唤兽动作调整处）
-            const cfgRow = dashInfo.querySelector('.config-row');
-            if (cfgRow) {
-                cfgRow.title = '点击前往设置页调整人物/召唤兽战斗动作';
-                cfgRow.addEventListener('click', () => switchPage('general'));
-            }
-        } else {
-            dashSeal.className = 'seal idle';
-            dashSeal.innerHTML = '<span>待</span><span>命</span>';
-            const plan = sel.length
-                ? sel.map(m => m === BATTLE_ONLY ? m + '（持续运行）'
-                        : m + ' ×' + document.getElementById('cnt-' + m).innerText).join(' · ')
-                : '未选择任务（请到「任务」页勾选）';
-            // 单行省略展示；今日合计在下方队列卡（与队列明细一处，不重复）。
-            // 配置为启动前预检单行摘要（与运行中同款）
-            dashInfo.innerHTML =
-                '<div class="info-row"><span class="info-k">今日计划</span><span class="info-v nowrap"></span></div>'
-                + '<div class="info-row config-row"><span class="info-k">配置</span><span class="info-v nowrap"></span></div>';
-            const vs = dashInfo.querySelectorAll('.info-v');
-            vs[0].textContent = plan;
-            vs[1].textContent = currentConfigText();
-            const cfgRow = dashInfo.querySelector('.config-row');
-            cfgRow.title = '点击前往设置页调整人物/召唤兽战斗动作';
-            cfgRow.addEventListener('click', () => switchPage('general'));
+        const row = fleetSelectedRow();
+        // ---- 当前窗口状态卡（只讲选中窗口的事，无跨窗口合计） ----
+        renderDashStatus(row, fleetState);
+        // ---- 任务队列（当前窗口） ----
+        const runSel = row ? !!row.running : running;
+        const cur = runSel ? currentTaskMode() : '';
+        if (queueRoleEl) {
+            queueRoleEl.innerText = row
+                ? (row.label || row.role_id || '') + (row.running ? ' · 运行中' : '')
+                : '未选择窗口';
         }
-        // ---- 任务队列 ----
-        const cur = running ? currentTaskMode() : '';
+        if (!row) {
+            dashQueue.innerHTML = '<div class="queue-empty">未选择窗口——请到「多开管理」选择或加入窗口</div>';
+            queueSummary.innerText = '';
+            return;
+        }
         if (!sel.length) {
             dashQueue.innerHTML = '<div class="queue-empty">未选择任务——到「任务」页勾选后即可启动</div>';
         } else {
@@ -2724,13 +3031,13 @@
                 const done = t ? t.done : 0;
                 const pct = (t && t.percent !== undefined) ? t.percent : 0;
                 let state = 'waiting', stateIcon = '·', cls = '';
-                if (running) {
+                if (runSel) {
                     if (t && t.count > 0 && t.done >= t.count) { state = 'done'; stateIcon = '✓'; cls = 'done'; }
                     else if (mode === cur) { state = 'active'; stateIcon = '▶'; cls = 'active'; }
                 }
                 const text = mode === BATTLE_ONLY ? '持续运行'
                     : (cnt > 0 ? `${Math.min(done, cnt)}/${cnt}` : `${done} 轮`);
-                const stateTitle = running ? (state === 'done' ? '已完成' : (state === 'active' ? '执行中' : '待执行')) : '';
+                const stateTitle = runSel ? (state === 'done' ? '已完成' : (state === 'active' ? '执行中' : '待执行')) : '';
                 return '<div class="queue-row ' + cls + '" title="' + stateTitle + '">' +
                     '<span class="queue-state">' + stateIcon + '</span>' +
                     '<span class="queue-name">' + mode + '</span>' +
@@ -2747,6 +3054,480 @@
         queueSummary.innerText = total > 0
             ? `今日合计 ${Math.min(done, total)}/${total}`
             : (sel.length ? '（不限次任务不汇总）' : '');
+    }
+
+    /* ================= 多窗口舰队（2026-11-22） ================= */
+    function fleetSelectedRow() {
+        if (!fleetState || !fleetState.rows) return null;
+        return fleetState.rows.find(function (r) { return r.selected; }) || null;
+    }
+
+    function fleetSelectedKey() {
+        // 日志按角色键控（TaskManager key = 角色 ID），行 key 含句柄不能直接用
+        const row = fleetSelectedRow();
+        return row && row.role_id ? String(row.role_id) : '';
+    }
+    function fleetRowErrorKey(r) {
+        return r.role_id ? String(r.role_id) : String(r.key || '');
+    }
+
+    function fleetStartReason(row) {
+        if (!row.live) return '窗口已关闭';
+        if (!row.logged_in) return '未登录';
+        if (!row.enabled) return '未勾选参与多开';
+        if (row.duplicate) return '同角色多窗口';
+        if (row.window_busy) return '该窗口已有其他角色的任务在运行';
+        if (row.other_instance) return '另一实例运行中';
+        if (row.running) return '运行中';
+        if (row.role_running) return '同角色已在运行';
+        if (fleetState && fleetState.starting) return '全部启动进行中';
+        return '';
+    }
+
+    function showStartError(msg) {
+        startErrorBanner.innerText = msg;
+        startErrorBanner.style.display = 'block';
+        if (startErrTimer) clearTimeout(startErrTimer);
+        startErrTimer = setTimeout(function () {
+            startErrorBanner.style.display = 'none';
+        }, 10000);
+    }
+
+    function renderFleet(state) {
+        if (!state) return;
+        const rows = state.rows || [];
+        const runningCount = state.running_count || 0;
+        const selected = rows.find(function (r) { return r.selected; }) || null;
+        // 设置只读按角色判定：同角色另一个窗口在跑时，选中行也不能编辑
+        selectedRunning = !!(selected && selected.role_running);
+
+        // ---- 顶栏全局状态（多开实例级；不放跨窗口进度合计） ----
+        if (fleetStatusText) {
+            fleetStatusText.innerText = '多开 ' + String(state.total || rows.length || 0)
+                + ' 窗口 · ' + runningCount + ' 运行中'
+                + (state.starting ? ' · 启动中…' : '');
+        }
+        if (fleetStatusDot) {
+            fleetStatusDot.className = 'fleet-status-dot'
+                + (runningCount ? ' running' : '');
+        }
+        renderWindowTabs(rows);
+        renderDashStatus(selected, state);
+        if (fleetSummary) {
+            fleetSummary.innerText = (state.starting ? '启动中… · ' : '')
+                + String(state.enabled_count || 0) + ' 个已勾选 · '
+                + String(runningCount) + ' 个运行中';
+        }
+        renderFleetRows(rows);
+        updateLogFilterChips();
+        // 阶段/进度 tick 不重建日志 DOM；仅选中行切换时刷新（防滚动/选区被重置）
+        const logKey = fleetSelectedKey();
+        if (logFilter === 'selected' && logKey !== lastSelectedLogKey) {
+            lastSelectedLogKey = logKey;
+            renderLogBox();
+        }
+    }
+
+    /* 窗口 Tab 条：全局上下文。≥2 个可选窗口才显示（单窗口走顶栏管理入口）。
+       顺序固定（get_fleet_state 行 seq，按注册表顺序），运行/选中都不重排。
+       窗口多时横向滚动：滚动条隐藏，靠两侧渐隐提示；轮询重建不重置滚动位置。 */
+    function tabRoleKey(r) {
+        return r ? (String(r.role_id || '') + ':' + (r.hwnd || 0)) : '';
+    }
+
+    /* 切窗成功后立即挪 Tab 高亮：非看板页不跑舰队轮询，等强制刷新
+       的往返会让点击「看起来无效」；随后 renderFleet 做权威重绘。 */
+    function markActiveTab(role, hwnd) {
+        if (!winTabList) return;
+        const rid = String(role || '');
+        const wantHwnd = parseInt(hwnd || '0', 10) || 0;
+        winTabList.querySelectorAll('.win-tab').forEach(function (t) {
+            const trole = t.getAttribute('data-role') || '';
+            const thwnd = parseInt(t.getAttribute('data-hwnd') || '0', 10) || 0;
+            const match = trole === rid
+                && (!wantHwnd || !thwnd || thwnd === wantHwnd);
+            t.classList.toggle('active', match);
+        });
+    }
+
+    function updateTabScrollHints() {
+        if (!winTabList) return;
+        const max = winTabList.scrollWidth - winTabList.clientWidth;
+        winTabList.classList.toggle('fade-left', winTabList.scrollLeft > 2);
+        winTabList.classList.toggle('fade-right',
+            max > 2 && winTabList.scrollLeft < max - 2);
+    }
+
+    function renderWindowTabs(rows) {
+        if (!winTabs || !winTabList) return;
+        // Tab 联动绑定勾选：只有已勾选窗口出 Tab；当前选中 / 运行中的窗口
+        // 即使反选也保留（避免失去上下文），其余反选即从 Tab 条移除。
+        const tabs = rows.filter(function (r) {
+            return r.selectable && r.role_id
+                && (r.enabled || r.selected || r.running);
+        }).sort(function (a, b) {
+            const sa = (a.seq === undefined ? 1e9 : a.seq);
+            const sb = (b.seq === undefined ? 1e9 : b.seq);
+            return sa - sb;
+        });
+        const show = tabs.length >= 2;
+        winTabs.classList.toggle('show', show);
+        // 顶栏内嵌：有 Tab 时隐藏「多开 N 窗口」状态与占位，让 Tab 占满左侧
+        const topBar = winTabs.closest('.top-bar');
+        if (topBar) topBar.classList.toggle('has-tabs', show);
+        if (!show) {
+            winTabList.innerHTML = '';
+            lastTabRole = null;
+            updateTabScrollHints();
+            return;
+        }
+        const active = tabs.find(function (r) { return r.selected; }) || null;
+        const activeKey = tabRoleKey(active);
+        const keepLeft = winTabList.scrollLeft;  // 重建前保存滚动位置
+        winTabList.innerHTML = tabs.map(function (r) {
+            const dot = fleetErrors[fleetRowErrorKey(r)] ? 'error'
+                : (r.running ? 'running' : '');
+            let prog = '—';
+            if (r.progress) {
+                if (r.progress.total > 0) {
+                    prog = Math.min(r.progress.done || 0, r.progress.total)
+                        + '/' + r.progress.total;
+                } else if (r.progress.done) {
+                    prog = r.progress.done + ' 轮';
+                }
+            }
+            const cls = ['win-tab'];
+            if (r.selected) cls.push('active');
+            if (!r.live) cls.push('closed');
+            if (!r.enabled) cls.push('unbound');
+            return '<div class="' + cls.join(' ') + '"'
+                + ' data-role="' + esc(r.role_id || '') + '"'
+                + ' data-hwnd="' + (r.hwnd || 0) + '"'
+                + ' onclick="selectFleetRow(this)"'
+                + ' title="' + esc(r.title || r.label || '') + '">'
+                + '<span class="win-tab-dot ' + dot + '"></span>'
+                + '<span class="win-tab-name">' + esc(r.label || r.role_id) + '</span>'
+                + '<span class="win-tab-prog">' + esc(prog) + '</span>'
+                + '</div>';
+        }).join('');
+        winTabList.scrollLeft = keepLeft;  // 轮询重建不把用户滚动位置冲回最左
+        // 选中窗口变化时才把 active Tab 滚进可视区（用户手动滚动不被抢）
+        if (activeKey && activeKey !== lastTabRole) {
+            const el = winTabList.querySelector('.win-tab.active');
+            if (el) {
+                const box = winTabList.getBoundingClientRect();
+                const rect = el.getBoundingClientRect();
+                if (rect.left < box.left) {
+                    winTabList.scrollLeft -= (box.left - rect.left) + 4;
+                } else if (rect.right > box.right) {
+                    winTabList.scrollLeft += (rect.right - box.right) + 4;
+                }
+            }
+            lastTabRole = activeKey;
+        }
+        updateTabScrollHints();
+    }
+
+    // 鼠标滚轮纵向 → Tab 条横向滚动（触控板横向手势交给浏览器原生处理）
+    if (winTabList) {
+        winTabList.addEventListener('wheel', function (e) {
+            if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+            const max = winTabList.scrollWidth - winTabList.clientWidth;
+            if (max <= 0) return;
+            winTabList.scrollLeft += e.deltaY;
+            updateTabScrollHints();
+            e.preventDefault();
+        }, { passive: false });
+        winTabList.addEventListener('scroll', updateTabScrollHints);
+    }
+
+    /* 当前窗口状态卡：印章 / 名称 / 阶段 / 今日进度 / 本窗口启停 / 方案。 */
+    function renderDashStatus(row, state) {
+        if (!dashSeal) return;
+        if (!row) {
+            dashSeal.className = 'seal idle';
+            dashSeal.innerHTML = '<span>待</span><span>命</span>';
+            dashName.innerText = '未选择窗口';
+            dashRid.innerText = '';
+            dashBadges.innerHTML = '';
+            dashMeta.innerHTML = '<span class="phase-chip">未选择窗口</span>';
+            dashBarFill.style.width = '0%';
+            dashPnum.innerText = '';
+            dashStart.innerText = '启动本窗口';
+            dashStart.disabled = true;
+            dashStart.title = '请先到「多开管理」选择窗口';
+            dashStart.classList.remove('stop');
+            if (schemeSelect) schemeSelect.disabled = true;
+            return;
+        }
+        const st = row.status || {};
+        const runningRow = !!row.running;
+        const phase = st.phase || '';
+        const phCls = runningRow ? phaseClassOf(phase) : '';
+        // 印章蘸色随阶段切换（沿用旧看板：战斗朱砂/巫医石绿/组队黛蓝/领取藤黄）
+        dashSeal.className = runningRow
+            ? ('seal running' + (phCls ? ' phase-' + phCls : ''))
+            : 'seal idle';
+        dashSeal.innerHTML = runningRow
+            ? '<span>运</span><span>行</span><span>中</span>'
+            : '<span>待</span><span>命</span>';
+        dashName.innerText = row.label || row.role_id || row.title || '未登录窗口';
+        dashRid.innerText = row.role_id ? ('ID ' + row.role_id) : '';
+        // 行级异常徽章（正常态不占位）
+        const badges = [];
+        if (!row.live) badges.push('<span class="fleet-badge">窗口已关闭</span>');
+        else if (!row.logged_in) badges.push('<span class="fleet-badge">未登录</span>');
+        if (row.role_id && row.live && !row.enabled) {
+            badges.push('<span class="fleet-badge warn">未加入多开</span>');
+        }
+        if (row.duplicate) badges.push('<span class="fleet-badge warn">同角色多窗口</span>');
+        if (row.other_instance) badges.push('<span class="fleet-badge warn">另一实例运行中</span>');
+        if (row.window_busy) badges.push('<span class="fleet-badge warn">窗口占用中</span>');
+        dashBadges.innerHTML = badges.join('');
+        // 阶段/任务/场次/队伍（运行中）；未启动给今日计划
+        const meta = [];
+        if (runningRow) {
+            // 阶段可能带场次（「战斗中 · 第 37 场」）：主态进徽章，余下进尾部备注
+            const phaseParts = String(phase || '执行中').split(' · ');
+            const phaseMain = phaseParts.shift() || '执行中';
+            const phaseRest = phaseParts.join(' · ');
+            meta.push('<span class="phase-chip ' + phCls + '">'
+                + esc(phaseMain) + '</span>');
+            if (st.task) meta.push('<span class="dash-task">' + esc(st.task) + '</span>');
+            if (phaseRest) {
+                meta.push('<span class="dash-sep">·</span>'
+                    + '<span class="dash-note">' + esc(phaseRest) + '</span>');
+            }
+            const team = st.team ? parseTeam(st.team) : null;
+            if (team) {
+                meta.push('<span class="dash-sep">·</span>'
+                    + '<span class="dash-note" title="队伍: ' + esc(team.id) + ' · '
+                    + esc(team.members) + '">' + esc(team.count) + ' 人</span>');
+            }
+        } else if (!row.live) {
+            meta.push('<span class="phase-chip">窗口已关闭</span>'
+                + '<span class="dash-note">重新登录后自动恢复</span>');
+        } else {
+            meta.push('<span class="phase-chip">'
+                + (row.enabled ? '未启动' : '未加入多开') + '</span>');
+            const plan = selectedModes().map(function (m) {
+                if (m === BATTLE_ONLY) return m + '（持续）';
+                const cntEl = document.getElementById('cnt-' + m);
+                return m + ' ×' + (cntEl ? cntEl.innerText : '?');
+            }).join(' · ');
+            meta.push('<span class="dash-note">'
+                + esc(plan || '未选择任务（到「任务」页勾选）') + '</span>');
+        }
+        dashMeta.innerHTML = meta.join(' ');
+        // 进度：运行中显示当前任务进度（与阶段/任务同一语义），未启动显示
+        // 该窗口今日总进度；均为该窗口自己的数据（跨窗口合计已移除）。
+        const prog = row.progress || null;
+        let shown = prog;
+        if (runningRow && st.task && prog && prog.per_task
+                && prog.per_task[st.task]) {
+            const t = prog.per_task[st.task];
+            shown = {done: t.done || 0, total: t.count || 0,
+                     percent: t.percent || 0};
+        }
+        const pct = shown && shown.total > 0
+            ? Math.min(100, shown.percent || 0) : 0;
+        dashBarFill.style.width = pct + '%';
+        if (shown && shown.total > 0) {
+            dashPnum.innerText = Math.min(shown.done || 0, shown.total)
+                + '/' + shown.total + ' · ' + pct + '%';
+        } else if (shown && shown.done) {
+            dashPnum.innerText = shown.done + ' 轮';
+        } else {
+            dashPnum.innerText = '今日 0 轮';
+        }
+        // 本窗口启停（不影响其他窗口；全部启停仍在顶栏）
+        const reason = fleetStartReason(row);
+        if (runningRow) {
+            dashStart.innerText = '停止本窗口';
+            dashStart.classList.add('stop');
+            dashStart.disabled = false;
+            dashStart.title = '停止该窗口任务（不影响其他窗口）';
+        } else {
+            dashStart.innerText = '启动本窗口';
+            dashStart.classList.remove('stop');
+            dashStart.disabled = !row.can_start || licenseLocked
+                || !!(state && state.starting);
+            dashStart.title = reason || '启动该窗口任务';
+        }
+        if (schemeSelect) {
+            schemeSelect.disabled = !!row.role_running || licenseLocked;
+        }
+    }
+
+    async function toggleDashWindow() {
+        const row = fleetSelectedRow();
+        if (!row || !row.role_id) return;
+        dashStart.disabled = true;
+        const r = row.running
+            ? await callPython('stop_window', row.role_id)
+            : await callPython('start_window', row.role_id, row.hwnd || null);
+        if (r && r.status === 'error' && r.msg) showStartError(r.msg);
+        fleetSig = '';
+        await pollFleetTick();
+    }
+
+    function renderFleetRows(rows) {
+        if (!fleetRows) return;
+        if (!rows.length) {
+            fleetRows.innerHTML =
+                '<div class="fleet-empty">未检测到游戏窗口——请启动游戏并登录</div>';
+            return;
+        }
+        const html = rows.map(function (r) {
+            const cls = ['fleet-row'];
+            if (r.selected) cls.push('selected');
+            if (!r.live) cls.push('offline');
+            const dot = fleetErrors[fleetRowErrorKey(r)] ? 'error'
+                : (r.running ? 'running' : '');
+            const badges = [];
+            if (r.duplicate) badges.push('<span class="fleet-badge warn">同角色多窗口</span>');
+            if (r.role_running && !r.running) {
+                badges.push('<span class="fleet-badge warn">同角色运行中</span>');
+            }
+            if (r.window_busy) badges.push('<span class="fleet-badge warn">窗口占用中</span>');
+            if (r.other_instance) badges.push('<span class="fleet-badge warn">另一实例运行中</span>');
+            if (!r.live) badges.push('<span class="fleet-badge">窗口已关闭</span>');
+            else if (!r.logged_in) badges.push('<span class="fleet-badge">未登录</span>');
+            if (r.status && r.status.team) badges.push('<span class="fleet-badge">组队</span>');
+            let phaseHtml = '';
+            if (r.running) {
+                const ph = (r.status && r.status.phase) || '';
+                const phCls = phaseClassOf(ph);
+                phaseHtml = '<span class="phase-chip ' + phCls + '">'
+                    + esc(ph || '执行中') + '</span>';
+                if (r.status && r.status.task) {
+                    phaseHtml += '<span class="fleet-note">' + esc(r.status.task) + '</span>';
+                }
+            } else if (r.live && r.logged_in) {
+                phaseHtml = '<span class="fleet-note">'
+                    + (r.enabled ? '未启动' : '未加入多开') + '</span>';
+            } else if (!r.live) {
+                phaseHtml = '<span class="fleet-note">窗口已关闭——重新登录后自动恢复</span>';
+            } else {
+                phaseHtml = '<span class="fleet-note">登录后即可加入多开</span>';
+            }
+            let prog = '';
+            if (r.progress) {
+                prog = r.progress.total > 0
+                    ? (r.progress.done + '/' + r.progress.total)
+                    : (r.progress.done + ' 轮');
+            }
+            // 多开管理只负责「是否绑定参与多开」：方案/启动/配置均已移出
+            // （方案在运行页状态卡，启停在顶栏/状态卡，任务配置走 Tab + 任务页）。
+            return '<div class="' + cls.join(' ') + '" data-key="' + esc(r.key)
+                + '" data-role="' + esc(r.role_id || '') + '" data-hwnd="' + (r.hwnd || 0)
+                + '" onclick="toggleFleetRow(this)">'
+                + '<input type="checkbox" class="fleet-check" ' + (r.enabled ? 'checked' : '')
+                + (r.role_id ? '' : ' disabled')
+                + ' onclick="event.stopPropagation(); toggleFleetEnabled(this)"'
+                + ' data-role="' + esc(r.role_id || '') + '" title="加入/移出多开">'
+                + '<div class="fleet-main"><div class="fleet-line">'
+                + '<span class="fleet-dot ' + dot + '"></span>'
+                + '<span class="fleet-name" title="' + esc(r.title || r.label || '') + '">'
+                + esc(r.label || r.role_id || '未登录窗口') + '</span>'
+                + (r.role_id ? '<span class="fleet-id">ID ' + esc(r.role_id) + '</span>' : '')
+                + badges.join('')
+                + '<span class="fleet-spacer"></span>'
+                + '<span class="fleet-progress">' + esc(prog) + '</span>'
+                + '</div><div class="fleet-line">' + phaseHtml + '</div></div></div>';
+        }).join('');
+        fleetRows.innerHTML = html;
+    }
+
+    async function selectFleetRow(el) {
+        const role = el.getAttribute('data-role') || '';
+        if (!role) return;
+        const hwnd = parseInt(el.getAttribute('data-hwnd') || '0', 10) || 0;
+        const r = await callPython('select_window', role, hwnd || null);
+        if (r && r.status === 'success') {
+            // 立即反馈：先挪 Tab 高亮（不等 syncInitData/舰队轮询，跨页点击也即时）
+            markActiveTab(role, hwnd);
+            await syncInitData();
+            refreshProgress();
+            refreshStats();
+            refreshGroupState();
+            fleetSig = '';
+            // 跨页切窗必须强制拉一次舰队状态：否则非看板页的 Tab 高亮、
+            // 运行态锁（selectedRunning）都停留在旧窗口。
+            await pollFleetTick(true);
+        } else if (r && r.msg) {
+            showStartError(r.msg);
+        }
+    }
+
+    async function toggleFleetEnabled(el) {
+        const role = el.getAttribute('data-role') || '';
+        if (!role) return;
+        const want = !!el.checked;
+        const r = await callPython('set_window_enabled', role, want);
+        if (!r || r.status !== 'success') {
+            el.checked = !want;
+            if (r && r.msg) showStartError(r.msg);
+        }
+        fleetSig = '';
+        pollFleetTick(true);  // 勾选/反选后 Tab 条即时联动（增/减 Tab）
+    }
+
+    /* 多开管理行点击 = 切换该窗口的绑定勾选（页面只负责绑定，不切选中窗口；
+       选中窗口请点顶部 Tab）。 */
+    function toggleFleetRow(el) {
+        const cb = el.querySelector('.fleet-check');
+        if (!cb || cb.disabled) return;
+        cb.checked = !cb.checked;
+        toggleFleetEnabled(cb);
+    }
+
+    async function pollFleetTick(force) {
+        if (document.visibilityState === 'hidden') return;
+        // 性能规则：非看板/多开管理页不每秒枚举窗口/读角色文件；启停由
+        // onFleetStatus/syncStatus 事件即时驱动，切回看板由 switchPage 补拉。
+        // force=true 用于一次性事件（切窗口/启停），跨页也要立即刷新 Tab 高亮。
+        if (!force && !pageIsActive('page-dash') && !pageIsActive('page-manage')) return;
+        try {
+            const s = await callPython('get_fleet_state');
+            if (!s || !Array.isArray(s.rows)) return;
+            fleetState = s;
+            const sel = s.rows.find(function (r) { return r.selected; }) || null;
+            runtimeStatus = sel ? sel.status : null;
+            const anyRunning = (s.running_count || 0) > 0;
+            const nextSelRunning = !!(sel && sel.role_running);
+            const lockSig = [anyRunning, nextSelRunning, s.selected,
+                             !!s.starting].join('|');
+            const changedRunning = anyRunning !== running;
+            running = anyRunning;
+            const sig = JSON.stringify({
+                st: !!s.starting, sel: s.selected,
+                rows: s.rows.map(function (r) {
+                    return [r.key, r.running, r.other_instance, r.enabled,
+                        r.selected, r.live, r.logged_in, r.duplicate, r.scheme,
+                        r.status && r.status.phase, r.status && r.status.task,
+                        r.progress && r.progress.done,
+                        r.progress && r.progress.total,
+                        !!fleetErrors[fleetRowErrorKey(r)]];
+                })
+            });
+            if (sig !== fleetSig) {
+                fleetSig = sig;
+                renderFleet(s);
+            }
+            // 只有运行/选中/启动中变化才重渲染任务页与方案锁；阶段/进度
+            // 变化仅刷新队列与行，避免每秒搬动任务卡打断编辑
+            if (lockSig !== fleetLockSig) {
+                fleetLockSig = lockSig;
+                update();
+            } else {
+                renderDash();
+            }
+            if (changedRunning) {
+                refreshProgress();
+                refreshGroupState();
+            }
+        } catch (e) { /* 桥接未就绪时忽略 */ }
     }
 
     async function refreshRuntimeStatus() {
@@ -2800,41 +3581,253 @@
 
     /* ================= 看板日志抽屉 ================= */
     const MAX_PANEL_LOG_LINES = 300;
+    // 多窗口（2026-11-22）：全量日志（系统 + 各角色，Python on_log 推送）
+    // 与按角色的结构化日志（onFleetLogs）分开缓存；抽屉按「选中/全部」过滤。
+    function isRoleLogLine(text) {
+        const labels = Object.keys(fleetLogLabels).map(function (k) {
+            return fleetLogLabels[k];
+        });
+        for (const label of labels) {
+            if (label && text.indexOf('[' + label + '] ') === 0) return true;
+        }
+        return false;
+    }
+
     function addPanelLogs(lines) {
         let hasError = false;
         for (const ln of lines) {
             const text = String(ln);
-            const div = document.createElement('div');
-            div.textContent = text;  // textContent 防注入
-            if (text.includes('[ERROR]')) {  // 显眼告警：红字加粗
-                div.className = 'log-err';
-                hasError = true;
+            panelLogs.push(text);
+            // 非角色前缀（系统/多开/授权/绑定）单独留存：选中视图也可见，
+            // 否则启动失败、授权拦截这些关键行会被默认过滤掉
+            if (!isRoleLogLine(text)) {
+                systemLogs.push(text);
+                while (systemLogs.length > MAX_PANEL_LOG_LINES) systemLogs.shift();
             }
-            logBox.appendChild(div);
+            if (text.includes('[ERROR]')) hasError = true;
         }
-        while (logBox.childNodes.length > MAX_PANEL_LOG_LINES) {
-            logBox.removeChild(logBox.firstChild);
-        }
-        logMeta.innerText = logBox.childNodes.length + ' 行';
+        while (panelLogs.length > MAX_PANEL_LOG_LINES) panelLogs.shift();
         if (hasError) expandLogDrawer();  // ERROR 到达自动展开（折叠态看不见）
+        if (logFilter === 'all') renderLogBox();
+        else updateLogMeta();
+    }
+    window.addPanelLogs = addPanelLogs;  // Python 侧 evaluate_js 推送入口
+
+    function currentLogLines() {
+        if (logFilter === 'all') return panelLogs;
+        const key = fleetSelectedKey();
+        const roleLines = key ? (fleetLogs[key] || []) : [];
+        return roleLines.concat(systemLogs).slice(-MAX_PANEL_LOG_LINES);
+    }
+
+    function renderLogBox() {
+        const key = fleetSelectedKey();
+        const lines = currentLogLines();
+        logBox.innerHTML = '';
+        if (!lines.length) {
+            const empty = document.createElement('div');
+            empty.className = 'queue-empty';
+            empty.textContent = logFilter === 'all'
+                ? '暂无日志'
+                : (key ? '该窗口暂无日志' : '暂无日志');
+            logBox.appendChild(empty);
+        } else {
+            for (const text of lines) {
+                const div = document.createElement('div');
+                div.textContent = text;  // textContent 防注入
+                if (text.includes('[ERROR]')) div.className = 'log-err';
+                logBox.appendChild(div);
+            }
+        }
+        logMeta.innerText = lines.length + ' 行';
         if (!logDrawer.classList.contains('collapsed')) {
             logBox.scrollTop = logBox.scrollHeight;  // 展开态自动跟随
         }
+        updateLogFilterChips();
     }
-    window.addPanelLogs = addPanelLogs;  // Python 侧 evaluate_js 推送入口
+
+    function updateLogMeta() {
+        logMeta.innerText = currentLogLines().length + ' 行';
+        updateLogFilterChips();
+    }
+
+    function updateLogFilterChips() {
+        const selBtn = document.getElementById('log-filter-selected');
+        const allBtn = document.getElementById('log-filter-all');
+        const owner = document.getElementById('log-owner');
+        if (!selBtn || !allBtn) return;
+        const row = fleetSelectedRow();
+        // 标题右侧显示当前窗口（日志内容按窗口过滤，chip 文案固定「本窗口」）
+        if (owner) owner.innerText = row ? (row.label || row.role_id || '') : '';
+        selBtn.innerText = '本窗口';
+        selBtn.classList.toggle('on', logFilter === 'selected');
+        allBtn.classList.toggle('on', logFilter === 'all');
+        selBtn.disabled = !row;
+    }
+
+    function setLogFilter(mode) {
+        logFilter = mode === 'all' ? 'all' : 'selected';
+        updateLogFilterChips();
+        renderLogBox();
+    }
+
     function clearPanelLogs() {
-        logBox.innerHTML = '';
-        logMeta.innerText = '0 行';
+        panelLogs = [];
+        systemLogs = [];
+        fleetLogs = {};
+        fleetErrors = {};
+        lastSelectedLogKey = null;
+        renderLogBox();
+        fleetSig = '';
+        pollFleetTick();
     }
+
+    // Python 侧结构化日志：key = 角色 ID / _default，label = 角色短文案
+    window.onFleetLogs = function (key, label, lines) {
+        key = String(key || '');
+        if (label) fleetLogLabels[key] = label;
+        if (!fleetLogs[key]) fleetLogs[key] = [];
+        for (const ln of (lines || [])) {
+            const text = String(ln);
+            fleetLogs[key].push(text);
+            if (text.includes('[ERROR]')) {
+                fleetErrors[key] = true;
+                expandLogDrawer();
+            }
+        }
+        while (fleetLogs[key].length > MAX_PANEL_LOG_LINES) fleetLogs[key].shift();
+        if (fleetErrors[key]) fleetSig = '';  // 行内红点重渲染
+        if (logFilter === 'selected' && key === fleetSelectedKey()) renderLogBox();
+        else updateLogMeta();
+    };
+
+    // Python 侧「全部启动」后台线程结束（完成/取消）：结束按钮「启动中...」
+    window.onFleetStartDone = function () {
+        if (fleetState) fleetState.starting = false;
+        fleetLockSig = '';
+        pollFleetTick(true);  // 跨页事件：强制刷新 Tab/多开状态
+        update();
+    };
+
+    // Python 侧「全部启动」单行失败：顶栏横幅 + 行内红点 + 选中日志可见
+    window.onFleetStartError = function (key, label, msg) {
+        key = String(key || '');
+        const line = '[多开] ' + (label || key) + ' 启动失败：' + msg;
+        showStartError(line);
+        if (!fleetLogs[key]) fleetLogs[key] = [];
+        fleetLogs[key].push(line);
+        while (fleetLogs[key].length > MAX_PANEL_LOG_LINES) fleetLogs[key].shift();
+        fleetErrors[key] = true;
+        fleetSig = '';
+        if (logFilter === 'selected' && key === fleetSelectedKey()) {
+            renderLogBox();
+        } else {
+            updateLogMeta();
+        }
+        pollFleetTick(true);  // 跨页事件：立即更新行内错误点/Tab 状态
+    };
+
+    // Python 侧行状态：启停即时刷新（轮询兜底）
+    window.onFleetStatus = function (key, isRunning) {
+        key = String(key || '');
+        if (isRunning) fleetErrors[key] = false;
+        // 非看板页舰队轮询被门控：用事件即时更新选中窗口的设置锁
+        if (currentRoleId !== null && key === String(currentRoleId)) {
+            selectedRunning = !!isRunning;
+            fleetLockSig = '';
+            update();
+        }
+        fleetSig = '';
+        pollFleetTick(true);  // 跨页事件：Tab 运行点与选中窗口锁即时刷新
+    };
     function toggleLogDrawer() {
         const collapsed = logDrawer.classList.toggle('collapsed');
         logToggle.innerText = collapsed ? '展 开' : '收 起';
         if (!collapsed) logBox.scrollTop = logBox.scrollHeight;
+        applyLogLayout();
     }
     function expandLogDrawer() {
         /* 折叠态展开：ERROR 告警到达时调用（已展开无操作） */
         if (logDrawer.classList.contains('collapsed')) toggleLogDrawer();
     }
+
+    /* ---- 浮层日志高度：拖拽调节 + 记忆（日志不再挤压任务队列，2026-11-22） ---- */
+    const logResize = document.getElementById('log-resize');
+    const LOG_H_KEY = 'dhxy2.log-height';
+    const LOG_H_MIN = 80;      // 约 4 行日志
+    const LOG_H_DEFAULT = 120; // 约 7 行日志（默认比旧的 156 矮，队列可见区更大）
+    let logDrag = null;
+
+    function logHeightCurrent() {
+        const v = parseInt(logDrawer.style.getPropertyValue('--log-h'), 10);
+        return Number.isFinite(v) && v > 0 ? v : LOG_H_DEFAULT;
+    }
+    function logHeightMax() {
+        const page = document.getElementById('page-dash');
+        if (!page || !page.clientHeight) return Infinity;  // 页面隐藏时不设上限
+        const status = page.querySelector('.dash-status');
+        const queueTop = 14 + (status ? status.offsetHeight : 90) + 10;
+        // 顶部至少保留 120px 队列可视区；抽屉总高 = 30 标题 + 6 手柄 + 日志高度
+        return Math.max(LOG_H_MIN, page.clientHeight - 14 - 36 - queueTop - 120);
+    }
+    function applyLogHeight(h, save) {
+        const clamped = Math.max(LOG_H_MIN, Math.min(logHeightMax(), h));
+        logDrawer.style.setProperty('--log-h', clamped + 'px');
+        if (save) {
+            try { localStorage.setItem(LOG_H_KEY, String(clamped)); } catch (_) {}
+        }
+    }
+    function applyLogLayout() {
+        if (!dashQueue) return;
+        const page = document.getElementById('page-dash');
+        if (!page || !page.clientHeight) return;
+        if (logDrawer.classList.contains('collapsed')) {
+            dashQueue.style.paddingBottom = '';
+            return;
+        }
+        // 浮层盖住队列卡下沿多少，就给列表补多少滚动余量：
+        // 队列卡底边 = 页面内容底边（页面底部预留 44px）；抽屉总高 = 30 标题
+        // + 6 手柄 + 日志高度，故覆盖高度 = 手柄 + 日志高度。
+        // 用静态算式而非 getBoundingClientRect：展开动画进行中量到的是中间态。
+        dashQueue.style.paddingBottom = (logHeightCurrent() + 6 + 10) + 'px';
+    }
+    logResize.addEventListener('pointerdown', function (e) {
+        if (logDrawer.classList.contains('collapsed')) return;
+        e.preventDefault();
+        logDrag = { startY: e.clientY, startH: logHeightCurrent() };
+        try { logResize.setPointerCapture(e.pointerId); } catch (_) {}
+        document.body.classList.add('log-resizing');
+    });
+    logResize.addEventListener('pointermove', function (e) {
+        if (!logDrag) return;
+        // 上拖变高、下拖变矮；拖拽中只改日志高度，松手后再补队列滚动余量
+        applyLogHeight(logDrag.startH + (logDrag.startY - e.clientY), false);
+    });
+    function endLogDrag(e) {
+        if (!logDrag) return;
+        logDrag = null;
+        document.body.classList.remove('log-resizing');
+        try { logResize.releasePointerCapture(e.pointerId); } catch (_) {}
+        applyLogHeight(logHeightCurrent(), true);  // 按上限收敛后持久化
+        applyLogLayout();
+    }
+    logResize.addEventListener('pointerup', endLogDrag);
+    logResize.addEventListener('pointercancel', endLogDrag);
+    logResize.addEventListener('dblclick', function () {
+        applyLogHeight(LOG_H_DEFAULT, true);
+        applyLogLayout();
+    });
+    window.addEventListener('resize', function () {
+        if (logDrag) return;
+        applyLogHeight(logHeightCurrent(), false);  // 窗口变矮时回收过高的浮层
+        applyLogLayout();
+    });
+    (function restoreLogHeight() {
+        let saved = NaN;
+        try { saved = parseInt(localStorage.getItem(LOG_H_KEY), 10); } catch (_) {}
+        applyLogHeight(Number.isFinite(saved) ? saved : LOG_H_DEFAULT, false);
+        applyLogLayout();
+    })();
 
     /* ================= 成就页（累计产出 + 效率 + 7 日趋势） ================= */
     const STATS_MODES = ['五环', '客栈', '修罗', '五倍', '种族比武', '玄枢轶闻', '名望', '仅战斗'];
@@ -3045,7 +4038,7 @@
         const view = statsTotals();
         const modes = view.modes || {};
         const sess = statsData && statsData.session;
-        const curMode = (running && sess && sess.mode) ? sess.mode : '';
+        const curMode = (selectedRunning && sess && sess.mode) ? sess.mode : '';
         const rows = ['<div class="stat-row head-row"><span class="mode">模式</span>'
             + '<span class="val">轮次</span><span class="val">战斗</span>'
             + '<span class="val">效率</span><span class="val">耗时</span></div>'];
@@ -3088,7 +4081,7 @@
     }
 
     async function clearStats() {
-        if (running) return;  // 运行中禁用（Python 侧同样有守卫）
+        if (selectedRunning) return;  // 该窗口运行中禁用（Python 侧同样有守卫）
         if (!statsClearArmed) {
             statsClearArmed = true;
             statClear.innerText = '再点一次确认清空';
@@ -3116,31 +4109,50 @@
 
     /* ================= 启动/停止 ================= */
     function update() {
-        // 启动/停止按钮文案带老板键提示（boss_hotkey 为 none 时不显示）
+        // 顶栏主按钮 = 全部启动/全部停止；老板键只停不起（仅停止文案带键名）
         const hotkeySuffix = bossHotkey ? '(' + bossHotkey.toUpperCase() + ')' : '';
-        btnStart.innerText = (running ? '停 止' : '启 动') + hotkeySuffix;
-        btnStart.classList.toggle('running', running);
+        const starting = !!(fleetState && fleetState.starting);
+        if (starting) {
+            btnStart.innerText = '启动中...';
+        } else {
+            btnStart.innerText = running
+                ? ('全部停止' + hotkeySuffix)
+                : '全部启动';
+        }
+        btnStart.classList.toggle('running', running && !starting);
         // 未激活/过期/撤销/设备不匹配：启动按钮禁用；运行中保留「停止」
         btnStart.disabled = !!licenseLocked && !running;
-        // 运行期间任务选择/顺序与次数不可更改（用户确认：只能停止后
-        // 修改）；停止后按仅战斗互斥重新启用可用项（渲染内已含）
+        // 运行期间只锁「选中窗口」的任务选择/顺序与次数（多窗口：A 在跑
+        // 不影响编辑 B；Python 侧守卫同样按选中角色判定）
         renderTaskZones();
-        countBtns.forEach(btn => { btn.disabled = running; });
-        taskLockBanner.classList.toggle('warn', running);
-        taskLockBanner.style.display = running ? 'block' : 'none';
-        // 运行期间配置方案不可切换/管理（Python 侧同样有守卫，双保险）；
-        // 删除还受「默认」不可删除约束（与 renderSchemeControls 一致）
-        schemeSelect.disabled = running;
-        schemeInput.disabled = running;
-        btnSchemeSave.disabled = running;
-        btnSchemeCopy.disabled = running;
-        btnSchemeDelete.disabled = running || schemeActive === '默认';
-        btnSchemeImport.disabled = running;
-        btnSchemeExport.disabled = running;
-        // 成就页清空按钮：运行中禁用（Python 侧同样有守卫）
-        statClear.style.opacity = running ? 0.35 : 1;
-        statClear.style.cursor = running ? 'not-allowed' : 'pointer';
-        statClear.title = running ? '任务运行中不可清空' : '';
+        countBtns.forEach(btn => { btn.disabled = selectedRunning; });
+        taskLockBanner.classList.toggle('warn', selectedRunning);
+        taskLockBanner.style.display = selectedRunning ? 'block' : 'none';
+        // 运行期间配置方案不可切换/管理（仅该窗口角色；双保险）
+        schemeSelect.disabled = selectedRunning;
+        schemeInput.disabled = selectedRunning;
+        btnSchemeSave.disabled = selectedRunning;
+        btnSchemeCopy.disabled = selectedRunning;
+        btnSchemeDelete.disabled = selectedRunning || schemeActive === '默认';
+        btnSchemeImport.disabled = selectedRunning;
+        btnSchemeExport.disabled = selectedRunning;
+        // 成就页清空按钮：选中窗口运行中禁用（Python 侧同样有守卫）
+        statClear.style.opacity = selectedRunning ? 0.35 : 1;
+        statClear.style.cursor = selectedRunning ? 'not-allowed' : 'pointer';
+        statClear.title = selectedRunning ? '该窗口任务运行中不可清空' : '';
+        // 选中窗口运行中：该角色的设置/组号页面只读（全局设置/主题不受影响）
+        const genPage = document.getElementById('page-general');
+        const grpPage = document.getElementById('page-group');
+        const taskPage = document.getElementById('page-task');
+        if (genPage) genPage.classList.toggle('locked', selectedRunning);
+        if (grpPage) grpPage.classList.toggle('locked', selectedRunning);
+        if (taskPage) taskPage.classList.toggle('locked', selectedRunning);
+        if (generalLockBanner) {
+            generalLockBanner.style.display = selectedRunning ? 'block' : 'none';
+        }
+        if (groupLockBanner) {
+            groupLockBanner.style.display = selectedRunning ? 'block' : 'none';
+        }
         renderDash();
     }
 
@@ -3151,29 +4163,32 @@
         if (switching) return;
         switching = true;
         btnStart.disabled = true;
-        if (!running) {
+        const wasStarting = !!(fleetState && fleetState.starting);
+        if (!running && !wasStarting) {
             btnStart.innerText = '校验中...';
             startErrorBanner.style.display = 'none';
             if (startErrTimer) { clearTimeout(startErrTimer); startErrTimer = null; }
         }
         try {
-            const r = await callPython(running ? 'stop_task' : 'start_task');
+            // 多窗口：顶栏 = 全部启动/全部停止（行内按钮走 start_window/stop_window）；
+            // 启动错峰期间 running 可能还是 false，仍必须走 stop_all 取消
+            const r = await callPython((running || wasStarting)
+                ? 'stop_all' : 'start_all');
             if (r && r.status === 'success' && typeof r.running === 'boolean') {
-                running = r.running;  // 立即反馈；后续 syncStatus 再校正
+                running = r.running;  // 立即反馈；后续 fleet 轮询再校正
             } else if (r && r.status === 'error' && r.msg) {
-                startErrorBanner.innerText = r.msg;
-                startErrorBanner.style.display = 'block';
-                if (startErrTimer) clearTimeout(startErrTimer);
-                startErrTimer = setTimeout(() => { startErrorBanner.style.display = 'none'; }, 10000);
+                showStartError(r.msg);
             }
         } finally {
             switching = false;
             btnStart.disabled = false;
+            fleetSig = '';
+            await pollFleetTick(true);  // 顶栏按钮任意页可用：强制刷新 Tab/行状态
             update();  // 还原按钮文案/状态（成功与错误路径统一在此）
         }
     }
 
-    /* ================= 配置方案（顶部下拉一键切换 + 系统页管理区） ================= */
+    /* ================= 配置方案（当前窗口卡下拉切换 + 设置页管理区） ================= */
     let schemeNames = [];
     let schemeActive = '';
     let currentRoleId = null;   // 角色基线（来自 get_init_data.role；换号检测用）
@@ -3203,9 +4218,9 @@
         btnSchemeDelete.classList.remove('armed');
         // 「默认」方案不可删除：直接置灰（Python 侧同样拒绝，双保险）
         const isDefault = schemeActive === '默认';
-        btnSchemeDelete.disabled = isDefault || running;
-        btnSchemeSave.disabled = running;
-        btnSchemeCopy.disabled = running;
+        btnSchemeDelete.disabled = isDefault || selectedRunning;
+        btnSchemeSave.disabled = selectedRunning;
+        btnSchemeCopy.disabled = selectedRunning;
         btnSchemeDelete.title = isDefault ? '「默认」方案不可删除'
             : '删除当前方案「' + (schemeActive || '') + '」';
     }
@@ -3219,9 +4234,9 @@
         schemeMsgTimer = setTimeout(() => { schemeMsgEl.innerText = ''; }, 6000);
     }
 
-    // 顶部下拉：选中即切换（无确认；运行中禁用）
+    // 当前窗口卡方案下拉：选中即切换（无确认；选中窗口运行中禁用）
     schemeSelect.addEventListener('change', async () => {
-        if (running) return;
+        if (selectedRunning) return;
         const name = schemeSelect.value;
         const r = await callPython('switch_scheme', name);
         if (r && r.status === 'success') {
@@ -3414,8 +4429,8 @@
         });
         [...taskSelectedList.querySelectorAll('.task-card')].forEach((card, i) => {
             const [up, down] = card.querySelectorAll('.task-move');
-            up.disabled = running || i === 0;
-            down.disabled = running || i === selModes.length - 1;
+            up.disabled = selectedRunning || i === 0;
+            down.disabled = selectedRunning || i === selModes.length - 1;
         });
         taskSelectedEmpty.style.display = selModes.length ? 'none' : '';
         taskAvailableEmpty.style.display =
@@ -3431,10 +4446,10 @@
         const anyOther = selModes.some(m => m !== BATTLE_ONLY);
         [...taskAvailableList.querySelectorAll('.task-card')].forEach(card => {
             const m = card.dataset.mode;
-            const disabled = running
+            const disabled = selectedRunning
                 || (battleOnly ? m !== BATTLE_ONLY : (anyOther && m === BATTLE_ONLY));
             card.classList.toggle('zone-disabled', disabled);
-            card.title = !running && disabled
+            card.title = !selectedRunning && disabled
                 ? (m === BATTLE_ONLY ? '与其它任务互斥：请先移出其它任务'
                                      : '与「仅战斗」互斥：请先移出仅战斗')
                 : '';
@@ -3459,7 +4474,7 @@
     let suppressClick = false;  // 拖动松手后抑制一次点击（防误触卡片移出）
     for (const list of [taskSelectedList, taskAvailableList]) {
         list.addEventListener('click', e => {
-            if (running) return;
+            if (selectedRunning) return;
             if (suppressClick) { suppressClick = false; return; }
             // 手风琴设置区（开关/种族多选等）点击不得触发卡片选区切换：
             // 开关是 label 包 input，点一次会产生「原始点击 + 合成点击」
@@ -3476,7 +4491,7 @@
 
     // ↑↓ 移动：相邻交换后保存（拖动的按钮替代操作，同为执行顺序调整）
     taskSelectedList.addEventListener('click', e => {
-        if (running) return;
+        if (selectedRunning) return;
         const btn = e.target.closest('.task-move');
         if (!btn) return;
         const mode = btn.closest('.task-card').dataset.mode;
@@ -3495,7 +4510,7 @@
     let dragState = null;   // {card, startY, moved}
     document.querySelectorAll('#page-task .drag-handle').forEach(handle => {
         handle.addEventListener('pointerdown', e => {
-            if (running) return;
+            if (selectedRunning) return;
             dragState = {card: handle.closest('.task-card'),
                          startY: e.clientY, moved: false};
             dragState.card.classList.add('dragging');
@@ -3548,7 +4563,7 @@
 
     // 任务次数步进：±1，下限 0，部分模式有上限（五环2/客栈20/玄枢轶闻5/名望5），变更立即保存
     async function count(mode, delta) {
-        if (running) return;  // 运行期间不可修改（按钮已禁用，双保险）
+        if (selectedRunning) return;  // 该窗口运行期间不可修改（按钮已禁用，双保险）
         const el = document.getElementById('cnt-' + mode);
         const cur = parseInt(el.innerText);
         const val = Math.min(COUNT_MAX[mode] || Infinity, Math.max(0, cur + delta));
@@ -3579,9 +4594,8 @@
     }
     function pollStatusTick() {
         if (document.visibilityState === 'hidden') return;
-        if (!running) return;  // 未启动：状态文件不存在、统计不再变化，无需跨桥
-        if (pageIsActive('page-dash')) refreshRuntimeStatus();
-        else if (pageIsActive('page-stats')) refreshStats();
+        if (!running) return;  // 未启动：统计不再变化，无需跨桥
+        if (pageIsActive('page-stats')) refreshStats();
     }
     function pollProgressTick() {
         if (document.visibilityState === 'hidden') return;
@@ -3592,12 +4606,14 @@
         refreshGroupState();  // 导航入口全局可见，慢节奏兜底（启停已即时刷新）
         refreshRoleInfo();    // 换号检测：绑定窗口关闭后自动跟随实际窗口
     }
-    setInterval(pollStatusTick, 1500);     // 看板状态 / 成就页 1.5s
+    setInterval(pollFleetTick, 1000);      // 舰队行状态 1s（签名不变不重建 DOM）
+    setInterval(pollStatusTick, 1500);     // 成就页 1.5s
     setInterval(pollProgressTick, 2500);   // 看板进度 2.5s
     setInterval(pollGroupTick, 5000);      // 组号入口 5s
     // 从托盘/最小化恢复可见：立即补一次当前页数据（隐藏期间轮询停摆）
     document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'hidden') return;
+        pollFleetTick(true);  // 恢复可见补一次（任意页都刷新全局 Tab）
         if (pageIsActive('page-dash')) {
             refreshProgress();
             refreshRuntimeStatus();
@@ -3616,18 +4632,6 @@
         if (!env) return;
         if (env.theme) envThemeEl.innerText = env.theme;
         if (env.adapt_res) envAdaptResEl.innerText = env.adapt_res;
-        envBoundEl.innerText = env.bound || '-';  // 短角色文案（完整标题在悬停提示）
-        envBoundEl.title = env.bound_full || env.bound || '';
-        charChip.innerText = env.bound_short || '未绑定角色';  // 短角色文案与窗口标题同源
-        charChip.title = '操作窗口：' + (env.bound_full || env.bound || '-') + '（点击前往系统页）';
-    }
-
-    // 解除窗口绑定：下次启动多开时重新弹框选择
-    async function unbindWindow() {
-        const r = await callPython('unbind_window');
-        if (!r) return;
-        unbindWinMsgEl.innerText = r.msg || (r.status === 'error' ? '操作失败' : '');
-        await refreshEnv();
     }
 
     /* ================= 授权信息 / 未激活门禁 ================= */
@@ -3658,7 +4662,7 @@
         });
         // 运行中即使授权异常也允许点「停止」，不能把正在跑的任务锁死
         if (btnStart) btnStart.disabled = licenseLocked && !running;
-        if (schemeSelect) schemeSelect.disabled = licenseLocked || running;
+        if (schemeSelect) schemeSelect.disabled = licenseLocked || selectedRunning;
         if (licText) licText.style.color = licenseLocked ? 'var(--gold)' : '';
         if (licenseLocked) {
             // 门禁页优先聚焦卡密输入
@@ -4433,7 +5437,7 @@
         const info = await callPython('get_init_data');
         if (!info) return;
         applyTheme(info.theme === 'light' ? 'light' : 'dark');
-        if (info.schemes) renderSchemes(info.schemes);  // 顶部方案下拉
+        if (info.schemes) renderSchemes(info.schemes);  // 当前窗口方案下拉
         if (info.role) currentRoleId = info.role;  // 本包数据的角色基线
         bossHotkey = info.boss_hotkey || '';  // 老板键名（按钮文案提示）
         if (info.modes) {
@@ -4475,10 +5479,6 @@
         const env = info.env || {};
         if (env.theme) envThemeEl.innerText = env.theme;
         if (env.adapt_res) envAdaptResEl.innerText = env.adapt_res;
-        envBoundEl.innerText = env.bound || '-';  // 短角色文案（完整标题在悬停提示）
-        envBoundEl.title = env.bound_full || env.bound || '';
-        charChip.innerText = env.bound_short || '未绑定角色';  // 短角色文案与窗口标题同源
-        charChip.title = '操作窗口：' + (env.bound_full || env.bound || '-') + '（点击前往系统页）';
         if (info.version) {
             // 侧栏底部与「授权：…」同格式（当前版本 2.13.0）；关于页保留 v 前缀
             appVersionEl.innerText = '当前版本 ' + info.version;
@@ -5675,13 +6675,16 @@
     // 页面初始化：恢复上次的所有设置
     window.addEventListener('onPythonReady', async () => {
         try { await syncInitData(); } catch (e) {}
+        try { await pollFleetTick(); } catch (e) {}
     });
 
     // 任务状态联动：同步页面显示（Python 侧 sync_status 调用）
     window.syncStatus = function (isActive) {
         running = isActive;
         update();
-        refreshProgress();  // 启停后进度立即刷新
+        fleetSig = '';
+        pollFleetTick(true);  // 行状态/Tab 即时刷新（任意页）
+        refreshProgress();    // 启停后进度立即刷新
         refreshRuntimeStatus();
         refreshGroupState();  // 启动检查写入组号识别结果后入口即时显隐
         // 成就页激活时启停立即刷新（轮询在未运行态会停摆；清空按钮与当前模式高亮需即时更新）
@@ -5690,6 +6693,17 @@
             logDrawer.classList.remove('collapsed');
             logToggle.innerText = '收 起';
         }
+    };
+
+    // 远程（Telegram /window）切换选中窗口后：面板全量跟随新窗口
+    // （Tab 高亮/任务页/设置/成就/组号/日志过滤/pollFleetTick 权威重绘）
+    window.onRemoteWindowSelected = function () {
+        syncInitData();
+        refreshProgress();
+        refreshStats();
+        refreshGroupState();
+        fleetSig = '';
+        pollFleetTick(true);
     };
 
     /* ================= 验证/测试（诊断页；与旧版行为一致） ================= */
@@ -7452,6 +8466,7 @@
     // 顶部栏与看板初始按钮态（syncInitData 完成后由 update() 校正）
     renderJoinGroups();
     update();
+    pollFleetTick();
 </script>
 </body>
 </html>

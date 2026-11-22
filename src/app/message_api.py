@@ -16,17 +16,22 @@ from typing import Any, cast
 
 from ascript.windows.hardware.keyboard import Keyboard
 
-from ..core import app_utils
+from ..core import app_utils, user_data
 from ..core.settings import (SHOUT_TEXT_MAX_LEN, load_message_config,
                              load_selected_modes, load_wubei_shout_text,
                              load_zhongzu_shout_text, mask_message_config,
                              merge_message_config)
 from ..core.settings import save_message_config as save_message_config_kv
 from ..device import game
-from . import env_check
+from . import env_check, window_registry
 from .host_contract import ControlHost
 from .messages import log_tail as message_log_tail
 from .messages import registry as message_registry
+
+
+def _selected_role():
+    """消息动作的作用角色 = 运行看板选中窗口（多窗口，2026-11-22）。"""
+    return window_registry.selected_role() or user_data.current_role_id()
 
 
 def _window_minimized(win):
@@ -157,18 +162,39 @@ class MessageApiMixin(ControlHost):
             self._capture_lock.release()
 
     def _message_log_tail(self, n=20):
-        """今天日志末尾 n 行（/log 指令）。"""
+        """今天日志末尾 n 行（/log 指令）。
+
+        多窗口（2026-11-22）：日志按角色分文件（logs/<日期>/<角色ID>.log
+        + system.log），这里合并当天全部文件按时间戳排序，角色文件行加
+        「[角色ID]」前缀；单角色/旧版单文件时与原来等价。
+        """
         try:
             count = max(1, min(100, int(n)))
         except (TypeError, ValueError):
             count = 20
-        path = app_utils.log_file_path()
+        day_dir = app_utils.log_day_dir()
         try:
-            lines = message_log_tail.read_tail_lines(path, count)
-            return {"ok": True, "lines": lines, "path": str(path)}
+            files = sorted(day_dir.glob("*.log"))
+            # 升级当天：旧版单文件 logs/<日期>.log 也并入（重启前的日志不丢）
+            legacy = day_dir.parent / (day_dir.name + ".log")
+            if legacy.exists():
+                files.append(legacy)
+            merged = []
+            for p in files:
+                try:
+                    tail = message_log_tail.read_tail_lines(p, count)
+                except OSError:
+                    continue
+                tag = p.stem
+                for line in tail:
+                    merged.append((line[:8], tag, line))
+            merged.sort(key=lambda item: (item[0], item[1]))
+            lines = [ln if tag == "system" else f"[{tag}] {ln}"
+                     for _ts, tag, ln in merged[-count:]]
+            return {"ok": True, "lines": lines, "path": str(day_dir)}
         except OSError as e:
             return {"ok": False, "reason": str(e), "lines": [],
-                    "path": str(path)}
+                    "path": str(day_dir)}
 
     def _message_exit_game(self, progress=None):
         """消息服务 /exitgame：停任务 → 解散/离开队伍 → 关闭游戏客户端。"""
@@ -177,31 +203,42 @@ class MessageApiMixin(ControlHost):
                     "message": "另一项游戏操作正在进行（退出/解散队伍/喊话），请稍后再试"}
         try:
             from ..device import exit_game as exit_game_mod
-            if self._tm.is_running():
-                self._message_log("退出游戏：先停止任务")
+            role = _selected_role()
+            if self._tm.is_running(role):
+                self._message_log("退出游戏：先停止该窗口任务")
                 if progress is not None:
                     try:
-                        progress("正在停止任务…")
+                        progress("正在停止该窗口任务…")
                     except Exception:
                         pass
-                self._tm.stop()
+                self._tm.stop(role)
                 deadline = time.time() + 10.0
-                while self._tm.is_running() and time.time() < deadline:
+                while self._tm.is_running(role) and time.time() < deadline:
                     time.sleep(0.2)
-                if self._tm.is_running():
+                if self._tm.is_running(role):
                     return {"ok": False,
-                            "message": "任务进程未在 10 秒内停止，已放弃退出游戏"}
+                            "message": "该窗口任务未在 10 秒内停止，已放弃退出游戏"}
             win = game.find_main_window()
             if win is None:
                 return {"ok": True, "message": "游戏窗口已关闭，无需退出"}
+            # 队伍处理是尽力而为：未组队时组队菜单可能根本打不开
+            # （2026-11-22 用户实测「组队菜单未打开」导致退出被中止）。
+            # 失败只记 WARN 并继续关闭客户端，回复里注明跳过原因。
             ok, info = exit_game_mod.leave_teams_for_exit(win, progress)
-            self._message_log(f"退出游戏-队伍：{info}",
-                              "SYS" if ok else "WARN")
-            if not ok:
-                return {"ok": False, "message": info}
+            team_note = ""
+            if ok:
+                self._message_log(f"退出游戏-队伍：{info}", "SYS")
+            else:
+                # 去掉 leave_teams_for_exit 已加的前缀，回复里只留具体原因
+                detail = str(info).replace("队伍处理失败：", "", 1)
+                team_note = f"（队伍处理跳过：{detail}）"
+                self._message_log(
+                    f"退出游戏-队伍：{info}，跳过队伍处理继续关闭客户端",
+                    "WARN")
             ok, info = exit_game_mod.exit_client(win, progress)
             self._message_log(f"退出游戏：{info}", "SYS" if ok else "WARN")
-            return {"ok": ok, "message": info}
+            return {"ok": ok,
+                    "message": (info + team_note) if ok else info}
         except Exception as e:
             self._message_log(
                 f"退出游戏异常：{type(e).__name__}: {e}", "ERROR")
@@ -215,10 +252,10 @@ class MessageApiMixin(ControlHost):
 
         与诊断页「检查队伍信息」同一套护栏：先切回绑定角色 Tab（错误 Tab
         上执行会操作错账号）；未组队时 leave_or_disband_team 直接返回无需
-        操作。任务运行中拒绝（任务自己管队伍，抢面板会打乱其检查/补人）。
+        操作。该窗口任务运行中拒绝（任务自己管队伍，抢面板会打乱其检查/补人）。
         """
-        if self._tm.is_running():
-            return {"ok": False, "message": "任务运行中，请先停止任务再解散队伍"}
+        if self._tm.is_running(_selected_role()):
+            return {"ok": False, "message": "该窗口任务运行中，请先停止该窗口任务再解散队伍"}
         if not self._game_op_lock.acquire(blocking=False):
             return {"ok": False,
                     "message": "另一项游戏操作正在进行（退出/解散队伍/喊话），请稍后再试"}
@@ -279,7 +316,7 @@ class MessageApiMixin(ControlHost):
         对话/战斗中，公屏可能显示不出来，回复里注明。
         """
         try:
-            running = bool(self._tm.is_running())
+            running = bool(self._tm.is_running(_selected_role()))
         except Exception:
             running = False
         if not self._game_op_lock.acquire(blocking=False):

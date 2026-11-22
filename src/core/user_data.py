@@ -63,6 +63,42 @@ _ROLE_ID_RE = re.compile(r"ID：(\d+)")
 _LOCK = threading.RLock()
 _ROLE_CACHE = {"id": None, "ts": 0.0}
 _ROLE_TTL = 30.0  # 角色解析缓存（状态读写每几秒一次，窗口枚举不必每次做）
+# 多窗口模式：worker 进程固化角色；主进程固化「选中行」角色。设置后
+# current_role_id 直接返回，不再走绑定/标题解析（worker 不随组号 pass
+# 漂移到队员角色；主进程选中窗口关闭时保持选中角色）。
+_PROCESS_ROLE = {"id": None}
+_SELECTED_ROLE = {"id": None}
+
+
+def _reset_role_cache():
+    _ROLE_CACHE["id"] = None
+    _ROLE_CACHE["ts"] = 0.0
+
+
+def set_process_role(role_id):
+    """worker 进程固化角色（None 清除）。"""
+    rid = str(role_id) if role_id else None
+    if _PROCESS_ROLE["id"] != rid:
+        _PROCESS_ROLE["id"] = rid
+        _reset_role_cache()
+
+
+def process_role_id():
+    """worker 进程固化角色（未设置返回 None）。"""
+    return _PROCESS_ROLE["id"]
+
+
+def set_selected_role(role_id):
+    """主进程选中行角色（多窗口面板；None 清除）。"""
+    rid = str(role_id) if role_id else None
+    if _SELECTED_ROLE["id"] != rid:
+        _SELECTED_ROLE["id"] = rid
+        _reset_role_cache()
+
+
+def selected_role_id():
+    """主进程选中行角色（未设置返回 None）。"""
+    return _SELECTED_ROLE["id"]
 
 
 # ==================== 路径与角色解析 ====================
@@ -112,7 +148,14 @@ def _probe_role_id():
     保留在 config.json，游戏重新打开后按绑定恢复该角色。窗口存在但
     标题无 ID（登录界面/客户端重启加载中）仍沿用绑定记录（角色信息
     不因登录状态丢失，与 device.binding.bound_short_label 同口径）。
+
+    多窗口（2026-11-22）：worker 的进程角色、主进程选中行角色优先，
+    直接返回（选中窗口关闭也保持选中角色，不做 _default 回退）。
     """
+    if _PROCESS_ROLE["id"]:
+        return _PROCESS_ROLE["id"]
+    if _SELECTED_ROLE["id"]:
+        return _SELECTED_ROLE["id"]
     try:
         from ..device import game
         raw = game.bound_window_id()

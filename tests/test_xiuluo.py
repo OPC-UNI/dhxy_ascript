@@ -1092,7 +1092,8 @@ def test_verify_cancel_flow_hovers_without_cancelling(monkeypatch):
         lambda w, **k: (True, "ok", "使者", (1, 1), ([], None)))
     monkeypatch.setattr(
         xiuluo, "_find_claim_option",
-        lambda items, img_np, needles=None: (600, 310, "我想取消任务", False))
+        lambda items, img_np, needles=None:
+        (600, 310, "我想取消任务", False, True))
     clicks = []
     monkeypatch.setattr(xiuluo, "human_click",
                         lambda w, x, y, **k: clicks.append((x, y)))
@@ -1446,6 +1447,7 @@ def test_relocate_arrival_button_requires_map_gate(monkeypatch):
     monkeypatch.setattr(xiuluo, "_claim_task_filter_on", False)
     monkeypatch.setattr(xiuluo.game_map, "match_frame_np", lambda *a, **k: (300, 300))
     monkeypatch.setattr(xiuluo, "_near_claim_spot", lambda pos, tol: False)
+    monkeypatch.setattr(xiuluo, "dialog_frame_score", lambda img: 0.0)
     img = np.zeros((831, 1378, 3), np.uint8)
     assert xiuluo._relocate_arrival(
         None, img, img, ("长安", 367, 27)) is None
@@ -1460,7 +1462,9 @@ def test_relocate_arrival_button_in_map(monkeypatch):
     assert desc and "领取按钮可见" in desc
 
 
-def test_relocate_arrival_filter_false_skips_dialog_ocr(monkeypatch):
+def test_relocate_arrival_dialog_checked_even_when_filter_off(monkeypatch):
+    """小地图「任务」未勾选时到达等待也要检查对话框（2026-11-22 实机：
+    上一轮领取滞留的确认/收尾对话框挡住领取入口，两轮到达各空耗 90s）。"""
     ocr = []
     monkeypatch.setattr(xiuluo, "_claim_task_filter_on", False)
     monkeypatch.setattr(xiuluo.game_map, "match_frame_np", lambda *a, **k: None)
@@ -1468,10 +1472,12 @@ def test_relocate_arrival_filter_false_skips_dialog_ocr(monkeypatch):
     monkeypatch.setattr(xiuluo, "dialog_frame_score", lambda img: 0.99)
     monkeypatch.setattr(xiuluo.game_map, "ocr_region",
                         lambda img, region: ocr.append(1) or ([], None))
+    monkeypatch.setattr(xiuluo, "_handle_team_confirm", lambda *a: None)
+    monkeypatch.setattr(xiuluo, "_handle_team_warning", lambda *a: False)
     img = np.zeros((831, 1378, 3), np.uint8)
     assert xiuluo._relocate_arrival(
         None, img, img, ("灵兽村", 60, 60)) is None
-    assert ocr == []
+    assert ocr == [1]
 
 
 def test_relocate_arrival_filter_none_still_checks_dialog(monkeypatch):
@@ -1482,10 +1488,110 @@ def test_relocate_arrival_filter_none_still_checks_dialog(monkeypatch):
     monkeypatch.setattr(xiuluo.game_map, "ocr_region",
                         lambda img, region: ([], None))
     monkeypatch.setattr(xiuluo, "_find_claim_option",
-                        lambda items, img_np: (1, 2, "选项", False))
+                        lambda items, img_np: (1, 2, "选项", False, True))
     img = np.zeros((831, 1378, 3), np.uint8)
     desc = xiuluo._relocate_arrival(None, img, img, ("灵兽村", 60, 60))
     assert desc and "自动弹出" in desc
+
+
+# ---------------- 到达等待对话框处理（2026-11-22 12:17 实机） ----------------
+
+class _Still:
+    """站定判定桩：seconds 固定值。"""
+
+    def __init__(self, sec):
+        self.sec = sec
+
+    def reset(self):
+        pass
+
+    def seconds(self, img):
+        return self.sec
+
+
+def _patch_arrival_dialog_env(monkeypatch, items, still_sec,
+                              confirm=None, warning=False,
+                              claim_found=False, green_row=False):
+    clicks = []
+    monkeypatch.setattr(xiuluo, "dialog_frame_score", lambda img: 0.99)
+    monkeypatch.setattr(xiuluo.game_map, "ocr_region",
+                        lambda img, region: (items, None))
+    monkeypatch.setattr(
+        xiuluo, "_find_claim_option",
+        lambda *a: (1, 2, "选项", False, True) if claim_found else None)
+    monkeypatch.setattr(xiuluo, "_handle_team_confirm", lambda *a: confirm)
+    monkeypatch.setattr(xiuluo, "_handle_team_warning", lambda *a: warning)
+    monkeypatch.setattr(xiuluo, "green_option_row_present",
+                        lambda img, its: green_row)
+    monkeypatch.setattr(xiuluo, "human_click",
+                        lambda w, x, y: clicks.append((x, y)))
+    monkeypatch.setattr(xiuluo, "move_away", lambda w: None)
+    monkeypatch.setattr(xiuluo.time, "sleep", lambda s: None)
+    monkeypatch.setattr(xiuluo, "log", lambda *a, **k: None)
+    monkeypatch.setattr(xiuluo, "_arrival_still", _Still(still_sec))
+    return clicks
+
+
+def test_arrival_dialog_signal_claim_option_is_arrival(monkeypatch):
+    """对话框含领取绿色选项：直接按到达处理（与筛选状态无关）。"""
+    _patch_arrival_dialog_env(monkeypatch, [], 5.0, claim_found=True)
+    img = np.zeros((831, 1378, 3), np.uint8)
+    arrived, stop = xiuluo._arrival_dialog_signal(
+        None, img, ("灵兽村", 60, 60))
+    assert stop is None and "领取对话框已自动弹出" in arrived
+
+
+def test_arrival_dialog_signal_team_confirm_stops(monkeypatch):
+    """队伍确认弹窗：已按设置点选项，提前结束到达等待（下轮重试）。"""
+    clicks = _patch_arrival_dialog_env(monkeypatch, [], 5.0,
+                                       confirm="declined")
+    img = np.zeros((831, 1378, 3), np.uint8)
+    arrived, stop = xiuluo._arrival_dialog_signal(
+        None, img, ("灵兽村", 60, 60))
+    assert arrived is None and "确认弹窗" in stop
+    assert clicks == []  # 选项点击由确认处理器完成，不点屏
+
+
+def test_arrival_dialog_signal_dismisses_no_option_dialog_when_still(
+        monkeypatch):
+    """站定 + 无选项对话框（上轮遗留收尾/提示）：点屏幕中间关闭。"""
+    items = [("请速去四圣庄消灭修罗，阻止它为非作歹。", [450, 400, 900, 420], 0.9)]
+    clicks = _patch_arrival_dialog_env(monkeypatch, items, 5.0)
+    img = np.zeros((831, 1378, 3), np.uint8)
+    arrived, stop = xiuluo._arrival_dialog_signal(
+        None, img, ("灵兽村", 60, 60))
+    assert arrived is None and stop is None
+    assert clicks == [xiuluo.SCREEN_CENTER_POS]
+
+
+def test_arrival_dialog_signal_no_click_while_moving(monkeypatch):
+    """人物可能仍在寻路（位置区像素在变）：不点屏。"""
+    items = [("提示文案", [450, 400, 900, 420], 0.9)]
+    clicks = _patch_arrival_dialog_env(monkeypatch, items, 0.5)
+    img = np.zeros((831, 1378, 3), np.uint8)
+    assert xiuluo._arrival_dialog_signal(
+        None, img, ("灵兽村", 60, 60)) == (None, None)
+    assert clicks == []
+
+
+def test_arrival_dialog_signal_unknown_option_dialog_no_click(monkeypatch):
+    """有绿字选项但不认识（如取消确认）：站定也不点屏（防误选）。"""
+    items = [("你真的要取消任务？", [450, 400, 900, 420], 0.9)]
+    clicks = _patch_arrival_dialog_env(monkeypatch, items, 5.0, green_row=True)
+    img = np.zeros((831, 1378, 3), np.uint8)
+    assert xiuluo._arrival_dialog_signal(
+        None, img, ("灵兽村", 60, 60)) == (None, None)
+    assert clicks == []
+
+
+def test_arrival_dialog_signal_ignores_dialog_away_from_spot(monkeypatch):
+    """不在领取点附近（仍在路上）：只识别领取对话框，不点屏。"""
+    items = [("提示文案", [450, 400, 900, 420], 0.9)]
+    clicks = _patch_arrival_dialog_env(monkeypatch, items, 5.0)
+    img = np.zeros((831, 1378, 3), np.uint8)
+    assert xiuluo._arrival_dialog_signal(
+        None, img, ("长安", 1, 2)) == (None, None)
+    assert clicks == []
 
 
 # ---------------- 兼容无快捷寻路（手动寻路，用户 2026-11-20） ----------------

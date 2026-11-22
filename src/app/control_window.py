@@ -43,10 +43,12 @@ from ..core.license_client import LicenseError  # 雪松授权错误（激活/�
 from . import hotkey  # 老板键（启动/停止按钮文案展示热键名）
 from . import updater  # 软件自动更新（清单/下载/覆盖升级）
 from . import update_config  # 更新渠道与节流常量
+from . import window_registry  # 多窗口注册表（选中行/角色短文案）
 from .diagnostics import DiagnosticsMixin, _game_window_clickable  # 诊断页验证工具（P3 拆分）
 from .settings_api import SettingsApiMixin  # 设置保存表驱动方法（P3 拆分）
 from .message_api import MessageApiMixin  # 消息服务面板 API（P3 拆分）
 from .scheme_api import SchemeApiMixin  # 配置方案面板 API（P3 拆分）
+from .fleet_api import FleetApiMixin  # 多窗口舰队看板 API（2026-11-22）
 from .messages.service import MessageService  # 消息服务编排
 from ..core.settings import load_message_config
 from .. import __version__  # 版本号唯一来源（src/__init__.py，面板关于/侧边栏展示）
@@ -103,8 +105,11 @@ class _ControlMessageHost:
     def __init__(self, cw):
         self._cw = cw
 
-    def is_running(self):
-        return self._cw._tm.is_running()
+    def is_running(self, role=None):
+        # 多窗口：消息命令默认作用于选中窗口；/start /stop /status /task
+        # 加 all（或「全部」）时作用于全部窗口。
+        rid = role or window_registry.selected_role() or user_data.current_role_id()
+        return self._cw._tm.is_running(rid)
 
     def runtime_status(self):
         return self._cw.get_runtime_status()
@@ -153,7 +158,46 @@ class _ControlMessageHost:
         return self._cw.start_task()
 
     def stop_task(self):
-        return self._cw.stop_task()
+        """停止选中窗口（/stop 默认；/stop all 走 stop_all）。
+
+        多窗口语义对称：/start、/stop、/status、/task 默认都只作用于
+        选中窗口；arg=all/全部 时作用于全部窗口（2026-11-22）。
+        """
+        rid = window_registry.selected_role()
+        if not rid:
+            return {"status": "error", "msg": "未选择窗口"}
+        return self._cw.stop_window(rid)
+
+    def start_all(self):
+        return self._cw.start_all()
+
+    def stop_all(self):
+        return self._cw.stop_all()
+
+    def select_window(self, role_id, hwnd=None):
+        """切换当前窗口（/window）：选中后推面板全量跟随（Tab/任务/设置等）。"""
+        result = self._cw.select_window(role_id, hwnd)
+        if isinstance(result, dict) and result.get("status") == "success":
+            try:
+                if self._cw.webview_instance:
+                    self._cw.webview_instance.evaluate_js(
+                        "if(window.onRemoteWindowSelected){"
+                        "window.onRemoteWindowSelected();}")
+            except Exception:
+                pass
+        return result
+
+    def is_any_running(self):
+        """是否有任意窗口任务在跑（/stop all 的前置检查）。"""
+        return self._cw._tm.is_running()
+
+    def is_fleet_starting(self):
+        """「全部启动」后台线程是否在途（/stop all 需要一并取消）。"""
+        return self._cw.is_fleet_starting()
+
+    def fleet_state(self):
+        """多窗口行数据（/status all、/task all 用；含逐窗口运行态与进度）。"""
+        return self._cw.get_fleet_state()
 
     def disband_team(self):
         return self._cw._message_disband()
@@ -162,7 +206,7 @@ class _ControlMessageHost:
         return self._cw._message_shout(text)
 
 class ControlWindow(DiagnosticsMixin, SettingsApiMixin, MessageApiMixin,
-                     SchemeApiMixin, WebWindow):
+                     SchemeApiMixin, FleetApiMixin, WebWindow):
     """应用主窗口：任务启动/停止、配置页面；日志展示在面板内日志抽屉。
 
     启停通过桥接调用 TaskManager（任务子进程管理），状态与日志由
@@ -348,6 +392,14 @@ class ControlWindow(DiagnosticsMixin, SettingsApiMixin, MessageApiMixin,
         self.expose(self.scheme_import)
         self.expose(self.scheme_import_confirm)
         self.expose(self.get_runtime_status)
+        # 多窗口舰队看板（2026-11-22）
+        self.expose(self.get_fleet_state)
+        self.expose(self.select_window)
+        self.expose(self.set_window_enabled)
+        self.expose(self.start_window)
+        self.expose(self.start_all)
+        self.expose(self.stop_window)
+        self.expose(self.stop_all)
         # 消息服务（侧边栏「消息」）
         self.expose(self.get_message_config)
         self.expose(self.save_message_config)
@@ -362,7 +414,11 @@ class ControlWindow(DiagnosticsMixin, SettingsApiMixin, MessageApiMixin,
         self.expose(self.set_update_auto_check)
         self.expose(self.open_external)
         # 任务状态/日志回流接线：TaskManager → 主窗口状态 + 日志窗口
-        self._tm.set_callbacks(on_status=self.sync_status, on_log=self.add_logs)
+        # 多窗口（2026-11-22）：行级状态/日志走 on_fleet_*（结构化，UI 可按
+        # 角色过滤）；全局 on_status/on_log 保留给顶栏/消息服务兼容。
+        self._tm.set_callbacks(on_status=self.sync_status, on_log=self.add_logs,
+                               on_role_status=self.on_fleet_status,
+                               on_role_log=self.on_fleet_log)
 
     def _sync_role_binding(self):
         """绑定窗口已关闭、脚本回退操作其他游戏窗口时，把绑定记录对齐到
@@ -404,9 +460,9 @@ class ControlWindow(DiagnosticsMixin, SettingsApiMixin, MessageApiMixin,
         self._sync_role_binding()
         rid = user_data.current_role_id(refresh=True)
         # 未绑定（游戏窗口全部关闭）时给页面一个可读文案，切换日志
-        # 不出现裸 _default（2026-11-19）
-        label = bound_short_label() or (
-            "未绑定" if rid == user_data.DEFAULT_ROLE else "")
+        # 不出现裸 _default（2026-11-19）；多窗口下选中行关闭也保留角色名
+        label = (bound_short_label() or window_registry.selected_label()
+                 or ("未绑定" if rid == user_data.DEFAULT_ROLE else ""))
         return {"id": rid, "label": label}
 
     def get_env_info(self):
@@ -428,6 +484,10 @@ class ControlWindow(DiagnosticsMixin, SettingsApiMixin, MessageApiMixin,
         bound = game.find_bound_window()
         if bound is not None:
             bound_info = bound.title
+        elif win is None and window_registry.selected_role():
+            bound_info = ("选中窗口已关闭（"
+                          + (window_registry.selected_label()
+                             or window_registry.selected_role()) + "）")
         elif win is None:
             bound_info = "未绑定（游戏未启动）"
         else:
@@ -438,9 +498,9 @@ class ControlWindow(DiagnosticsMixin, SettingsApiMixin, MessageApiMixin,
             else:
                 bound_info = win.title  # 无绑定记录：自动选择窗口即操作目标
         self.refresh_window_title()  # 标题角色文案随解析结果刷新
-        # 短文案只在有活窗口时取（游戏已关闭仍展示旧角色名会误导）；
-        # 无窗口/绑定丢失等状态行本身已短，直接用 bound_info
-        short = (bound_short_label() or "") if win is not None else ""
+        # 多窗口：选中窗口关闭后仍展示选中角色（灰行语义，非旧绑定残留）；
+        # 未选择窗口/未绑定才退回状态行文案
+        short = bound_short_label() or window_registry.selected_label() or ""
         return {"theme": ENV_THEME,
                 "adapt_res": f"{ENV_ADAPT_RES[0]} × {ENV_ADAPT_RES[1]}",
                 # 页面「绑定窗口」展示短文案（服务器+角色名）：完整窗口标题
@@ -787,8 +847,9 @@ class ControlWindow(DiagnosticsMixin, SettingsApiMixin, MessageApiMixin,
 
         前置：任务未运行、游戏窗口在前台（面板开合走真实点击）。
         """
-        if self._tm.is_running():
-            return {"status": "error", "msg": "任务运行中，请先停止任务再检查"}
+        role = window_registry.selected_role() or user_data.current_role_id()
+        if self._tm.is_running(role):
+            return {"status": "error", "msg": "该窗口任务运行中，请先停止该窗口任务再检查"}
         if self._group_checking:
             return {"status": "error", "msg": "队伍检查进行中，请稍候"}
         win = game.find_main_window()
@@ -848,9 +909,10 @@ class ControlWindow(DiagnosticsMixin, SettingsApiMixin, MessageApiMixin,
                 pass
 
     def group_save_actions(self, mapping):
-        """组号设置页保存成员战斗动作。任务运行中拒绝修改（同任务选择）。"""
-        if self._tm.is_running():
-            return {"status": "error", "msg": "任务运行中，请先停止任务再修改"}
+        """组号设置页保存成员战斗动作。该窗口任务运行中拒绝修改。"""
+        role = window_registry.selected_role() or user_data.current_role_id()
+        if self._tm.is_running(role):
+            return {"status": "error", "msg": "该窗口任务运行中，请先停止该窗口任务再修改"}
         return save_group_actions(mapping)
 
     def get_task_progress(self):
@@ -860,11 +922,17 @@ class ControlWindow(DiagnosticsMixin, SettingsApiMixin, MessageApiMixin,
         return task_progress_summary()
 
     def get_runtime_status(self):
-        """运行看板状态：直读任务子进程写入的悬浮层状态文件的结构化
-        status 字段（task/progress/battle/bars/team/name）。任务未运行
-        或状态陈旧时返回 None。"""
+        """运行看板状态：直读任务子进程写入的状态文件的结构化 status
+        字段（task/progress/battle/bars/team/name）。任务未运行或状态
+        陈旧时返回 None。
+
+        多窗口：每个 worker 按角色写 data/<角色ID>/debug_overlay_state.json；
+        主进程读当前选中/绑定角色那一份。_default（无角色旧路径）仍读
+        配置目录根文件。"""
         from ..core import debug_overlay  # 延迟导入：与其余验证模块保持一致
-        return debug_overlay.read_runtime_status()
+        role = user_data.current_role_id()
+        return debug_overlay.read_runtime_status(
+            None if role == user_data.DEFAULT_ROLE else role)
 
     def get_task_stats(self):
         """任务成就数据：直读当前角色 data/<ID>/task_stats.json
@@ -878,13 +946,15 @@ class ControlWindow(DiagnosticsMixin, SettingsApiMixin, MessageApiMixin,
         data = debug_overlay.read_task_stats()
         role = user_data.current_role_id()
         label = ("" if role == user_data.DEFAULT_ROLE
-                 else (bound_label_from_binding() or ""))
+                 else (window_registry.selected_label()
+                       or bound_label_from_binding() or ""))
         data["role"] = {"id": role, "label": label}
         return data
 
     def clear_task_stats(self):
-        """清空任务统计：任务运行中拒绝（子进程正在写文件，防竞态）。"""
-        if self._tm.is_running():
+        """清空任务统计：该窗口任务运行中拒绝（子进程正在写文件，防竞态）。"""
+        role = window_registry.selected_role() or user_data.current_role_id()
+        if self._tm.is_running(role):
             return {"status": "error", "msg": "RUNNING"}
         from ..core import debug_overlay
         return debug_overlay.clear_task_stats()
@@ -914,58 +984,18 @@ class ControlWindow(DiagnosticsMixin, SettingsApiMixin, MessageApiMixin,
         return {"show": switch_on and detected and tabs >= 2, "tabs": tabs}
 
     def start_task(self):
-        """启动按钮：启动任务子进程。
+        """兼容入口（Telegram /start / 旧调用）：启动当前选中窗口的任务。
 
-        先刷新标题角色文案（任务目标窗口解析在绑定丢失后可能已自动选择
-        新窗口）；每次启动前在线校验证书到期状态（续期/换卡无需重启软件，
-        下次启动即生效；过期/无效/网络异常拦截启动并提示）。老板键与按钮
-        共用本入口，锁内校验+启动整体串行，防并发双启。
+        多窗口正式入口是 start_all/start_window（FleetApiMixin）；本方法
+        直接走 start_window（授权/勾选/静默/互斥等全套守卫一致）。无选中
+        窗口时明确报错——绝不再走无目标 worker 的旧路径。
         """
         self.refresh_window_title()
-        with self._start_lock:
-            if self._tm.is_running():
-                return {"status": "success", "running": True}
-            # 诊断-地图导航进行中（会持续点击/OCR 游戏窗口，最长数分钟）：
-            # 拒绝启动任务，避免控制进程导航线程与任务子进程互抢操作
-            # （2026-11-20 审查）。用户可先点「中断寻路」再启动。
-            if getattr(self, "_map_nav_running", False):
-                return {"status": "error",
-                        "msg": "地图导航进行中，请先点「中断寻路」或等待完成后再启动任务"}
-            if self._license_gate is not None:
-                try:
-                    result = self._license_gate() or {}
-                except Exception as e:
-                    result = {"ok": False, "msg": f"授权服务异常：{e}"}
-                self._set_license_info(result.get("info") or {})
-                if not result.get("ok"):
-                    msg = result.get("msg") or "授权校验未通过"
-                    if "无法连接授权服务器" in msg:
-                        hint = "请检查网络后重试"
-                    elif "激活数量" in msg or "设备" in msg:
-                        hint = "请联系作者在后台释放旧设备后重新激活"
-                    elif "过期" in msg:
-                        hint = "请续费后重试"
-                    elif "未激活" in msg or "输入卡密" in msg:
-                        hint = "请先在激活页输入卡密激活"
-                    else:
-                        hint = "请联系作者处理"
-                    fail_line = f"[授权] 校验未通过：{msg}"
-                    app_utils.log(fail_line, "WARN")
-                    self.add_logs([fail_line])
-                    return {"status": "error",
-                            "msg": f"授权校验未通过，任务未启动：{msg}（{hint}）"}
-                # 校验通过：授权信息入日志（文件+抽屉，与拦截日志对称）
-                info = self._license_info
-                pass_line = f"[授权] 校验通过：{info.get('status', '未知')}"
-                if info.get("expire"):
-                    pass_line += f"，到期 {info['expire']}"
-                if info.get("offline"):
-                    pass_line += "（网络异常，使用本地许可证）"
-                app_utils.log(pass_line, "SYS")
-                self.add_logs([pass_line])
-            self._sync_start_tab_binding()  # 角色目录跟随「任务启动所在 Tab」
-            self.refresh_window_title()     # 绑定变化后刷新标题角色文案
-            return self._tm.start()
+        rid = window_registry.selected_role()
+        if not rid:
+            return {"status": "error",
+                    "msg": "未选择窗口：请在运行看板选择一个已登录窗口"}
+        return self.start_window(rid, window_registry.selected_hwnd() or None)
 
     def _sync_start_tab_binding(self):
         """任务启动前把窗口绑定对齐到游戏当前所在 Tab。
@@ -983,6 +1013,16 @@ class ControlWindow(DiagnosticsMixin, SettingsApiMixin, MessageApiMixin,
                 getattr(win, "title", "") if win is not None else "")
             if not rid or win is None:
                 return
+            selected = user_data.selected_role_id()
+            if selected:
+                # 多窗口：启动所在 Tab = 选中/队长角色；切换选中行并注入目标
+                if selected == rid:
+                    return
+                self.select_window(rid, int(getattr(win, "hwnd", 0) or 0))
+                app_utils.log(f"[绑定] 任务启动 Tab 角色变化，选中窗口更新: {win.title}",
+                              "SYS")
+                return
+            # 旧单窗口兼容路径（注册表尚未初始化/测试）
             raw = game.bound_window_id()
             bid = raw.get("id") if isinstance(raw, dict) else raw
             if bid == f"（ID：{rid}）":
@@ -1090,6 +1130,17 @@ class ControlWindow(DiagnosticsMixin, SettingsApiMixin, MessageApiMixin,
                     f"if(window.addPanelLogs){{window.addPanelLogs({json.dumps(lines)});}}")
             except Exception:
                 pass
+
+    def show_window(self):
+        """显示控制窗口（第二实例启动唤起；不切换显隐，已显示时无操作）。"""
+        if not self.webview_instance:
+            return
+        try:
+            self.webview_instance.show()
+            self._visible = True
+        except Exception:
+            pass
+        self.refresh_window_title()
 
     def toggle_visible(self):
         """切换控制窗口显示/隐藏（供托盘菜单调用）。"""

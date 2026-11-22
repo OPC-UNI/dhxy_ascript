@@ -833,7 +833,7 @@ def verify_claim_flow(win):
     found = _find_claim_option(items, img_np)
     if found is None:
         return False, "领取对话框已出现，但未识别到绿色领取选项"
-    cx, cy, txt, fallback = found
+    cx, cy, txt, fallback, _cacheable = found
     human_move(win.rect.left + cx, win.rect.top + cy)  # 仅定位，不点击
     suffix = "（兜底匹配）" if fallback else ""
     log(f"{tag} 已定位领取选项「{txt}」@({cx},{cy}){suffix}，仅定位不点击",

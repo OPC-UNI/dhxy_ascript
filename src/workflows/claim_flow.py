@@ -18,7 +18,8 @@ from ..device import task_tracker
 from ..device.battle import is_in_battle, is_in_battle_frame
 from ..device.dialog_common import (DIALOG_FRAME_THRESHOLD,
                                     dialog_frame_score,
-                                    green_option_center)
+                                    green_option_center,
+                                    _option_target_center)
 from .follow import follow_task
 
 _UNSET = object()
@@ -70,10 +71,24 @@ def claim_verify_wait(win, pre_sig, t_opt, polls, *, prefix, interval,
     time.sleep(max(0.0, interval - (time.time() - t0)))
 
 
+# 领取选项单行 OCR 框的最大高度（可缓存性判定）：单行选项框实测
+# 19~23px（2026-11-22 修罗领取对话框真帧：闲来无事，要我帮忙吗 /
+# 我想取消任务 / 我想了解更多细节 / 离开 四行框高 19~21px）；OCR 把
+# 上下两个选项框合并成一行时框高 ≥38px。合并框的选项中心只能按字符
+# 比例估算，可能落到相邻选项行上——不能写进高性能坐标缓存（2026-11-22
+# 实机：缓存被写成「我想取消任务」行上的点 (520,461)，领取点成取消）。
+CLAIM_OPTION_MAX_ROW_H = 30
+
+
 def find_claim_option(items, img_np, needles):
-    """查找领取对话框绿色选项，返回 (cx, cy, txt, 是否兜底) 或 None。
+    """查找领取对话框绿色选项，返回 (cx, cy, txt, 是否兜底, 是否可缓存) 或 None。
 
     needles 已规范化（去标点），按顺序匹配；命中最后一个视为兜底。
+    可缓存（第 5 项）要求匹配框为单行选项行且不是最后一个兜底词：
+    合并框与裸兜底词的选项中心都不可靠，不能写进高性能坐标缓存；
+    调用方按需丢弃该标记（识别补点路径本来就不学习坐标）。
+    点击中心按 needle 在整行文本中的实际位置取（绿字选项行被 OCR
+    与相邻文字/相邻选项合并成一行时，按首段取中心会点偏）。
     """
     for idx, needle in enumerate(needles):
         for txt, rect, score in items:
@@ -82,8 +97,11 @@ def find_claim_option(items, img_np, needles):
                     and rect[0] >= task_tracker.PANEL_MAX_X \
                     and task_tracker.is_green_text(img_np, rect):
                 cx, cy = green_option_center(
-                    img_np, rect, len(needle), len(ntxt))
-                return cx, cy, txt, idx == len(needles) - 1
+                    img_np, rect, len(needle), len(ntxt),
+                    _option_target_center(ntxt, needle))
+                fallback = idx == len(needles) - 1
+                single_row = rect[3] - rect[1] <= CLAIM_OPTION_MAX_ROW_H
+                return cx, cy, txt, fallback, single_row and not fallback
     return None
 
 
@@ -122,14 +140,21 @@ def wait_auto_claim_dialog(win, needles, timeout=AUTO_DIALOG_GRACE,
 
 
 def click_claim_option(win, items, img_np, *, needles, prefix,
-                       cache_key=None):
-    """点击领取选项；成功后刷新高性能模式缓存（cache_key 为 None 不缓存）。"""
+                       cache_key=None, learn=True):
+    """点击领取选项；成功后刷新高性能模式缓存（cache_key 为 None 不缓存）。
+
+    learn=False：调用点所在帧可能处于「选项已点过、对话框过渡渲染」
+    状态（如缓存点击后的识别补点），此时选项的绿字/框位不可靠，只点
+    不学——防止把相邻选项（修罗「我想取消任务」）的坐标写进领取缓存
+    （2026-11-22 实机）。可缓存性另由 find_claim_option 的单行框/非
+    兜底词标记把关。
+    """
     found = find_claim_option(items, img_np, needles)
     if found is None:
         return False
-    cx, cy, txt, fallback = found
+    cx, cy, txt, fallback, cacheable = found
     human_click(win, cx, cy)
-    if cache_key is not None:
+    if cache_key is not None and learn and cacheable:
         app_utils.fixed_pos_set(cache_key, win, cx, cy)
     suffix = "（兜底匹配）" if fallback else ""
     log(f"{prefix} 已点击绿色选项「{txt}」{suffix}", "SYS")

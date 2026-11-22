@@ -21,8 +21,8 @@ def _legacy_progress_char_key():
     except Exception:
         return None
 
-def _fresh_progress_modes():
-    """直读当前角色 state.json 的当天进度（跨进程可见）。
+def _fresh_progress_modes(role=None):
+    """直读角色 state.json 的当天进度（跨进程可见；默认当前角色）。
 
     任务子进程写 data/<角色>/state.json（读-改-写原子替换），主进程
     每次直读文件。旧版未迁移时回退 config.json 的角色键；迁移后不再
@@ -30,10 +30,10 @@ def _fresh_progress_modes():
     返回 {mode: 当天已完成次数}，数据缺失/损坏按空处理。
     """
     try:
-        entry = user_data.get_state(_TASK_PROGRESS_KEY, None, None)
+        entry = user_data.get_state(_TASK_PROGRESS_KEY, role, None)
     except Exception:
         entry = None
-    if entry is None and not user_data.is_migrated():
+    if entry is None and role is None and not user_data.is_migrated():
         try:
             KeyValue._initialize()
             data = KeyValue._load_data().get(_TASK_PROGRESS_KEY, {}) or {}
@@ -45,18 +45,26 @@ def _fresh_progress_modes():
         return {m: int(v) for m, v in modes.items() if isinstance(v, (int, float))}
     return {}
 
-def task_progress_summary():
+def task_progress_summary(role=None):
     """总进度汇总：选中任务当天完成次数合计 / 次数上限合计（次数 0 =
     不限，不计入分母——无法度量；已完成超出上限按上限计，防修改上限
     后百分比破百）。
+    多窗口：传 role 汇总该角色（默认当前角色）。
     返回 {"percent", "done", "total", "per_task": {mode: {"done", "count", "percent"}}}。
     """
-    counts = load_task_counts()
-    done_map = _fresh_progress_modes()
+    if role is None:
+        # 默认路径保持无参调用（测试 monkeypatch / 旧调用点兼容）
+        counts = load_task_counts()
+        done_map = _fresh_progress_modes()
+        modes = load_selected_modes()
+    else:
+        counts = load_task_counts(role)
+        done_map = _fresh_progress_modes(role)
+        modes = load_selected_modes(role)
     total = 0
     done_total = 0
     per_task = {}
-    for mode in load_selected_modes():
+    for mode in modes:
         count = counts.get(mode, 0) or 0
         done = done_map.get(mode, 0) or 0
         if count > 0:

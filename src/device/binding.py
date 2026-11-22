@@ -22,6 +22,11 @@ def _short_label_from_title(title):
     # 标题格式意外时退回完整标题，超长截断（窗口标题栏空间有限）
     return title if len(title) <= 20 else title[:19] + "…"
 
+
+def short_label_from_title(title):
+    """窗口标题 → 「服务器+角色名」短文案（无角色信息返回 None）。"""
+    return _short_label_from_title(title)
+
 def bound_short_label():
     """窗口绑定角色短文案（控制窗口标题/托盘菜单共用）：服务器+角色名，
     如「一生所爱「长相思」」。

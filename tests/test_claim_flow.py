@@ -100,16 +100,55 @@ def test_find_claim_option_full_and_fallback(monkeypatch):
     monkeypatch.setattr(claim_flow.task_tracker, "is_green_text",
                         lambda img, rect: True)
     monkeypatch.setattr(claim_flow, "green_option_center",
-                        lambda img, rect, nlen, ntxt: (520, 300))
+                        lambda img, rect, nlen, ntxt, target=None: (520, 300))
     needles = (claim_flow.norm_text("完整文案"),
                claim_flow.norm_text("尾部"),
                claim_flow.norm_text("兜底"))
     full = [("完整文案", [500, 300, 700, 320], 0.9)]
+    # 单行框 + 非兜底词 → 可缓存
     assert claim_flow.find_claim_option(full, None, needles) == (
-        520, 300, "完整文案", False)
+        520, 300, "完整文案", False, True)
     short = [("兜底", [500, 300, 700, 320], 0.9)]
+    # 命中最后兜底词：坐标不可靠，不可写高性能缓存
     assert claim_flow.find_claim_option(short, None, needles) == (
-        520, 300, "兜底", True)
+        520, 300, "兜底", True, False)
+
+
+def test_find_claim_option_merged_row_not_cacheable(monkeypatch):
+    """OCR 把上下两个选项合并成高框：中心按比例估算，不可写缓存。
+
+    2026-11-22 实机：修罗领取对话框「闲来无事，要我帮忙吗」与
+    「我想取消任务」相邻行被合并后，补点把取消行的点写进领取缓存，
+    此后每轮领取都点成取消。单行框实测 19~23px，合并框 ≥38px。
+    """
+    monkeypatch.setattr(claim_flow.task_tracker, "is_green_text",
+                        lambda img, rect: True)
+    monkeypatch.setattr(claim_flow, "green_option_center",
+                        lambda img, rect, nlen, ntxt, target=None: (520, 461))
+    needles = (claim_flow.norm_text("闲来无事，要我帮忙吗"),
+               claim_flow.norm_text("帮忙"))
+    merged = [("闲来无事，要我帮忙吗", [436, 440, 590, 479], 0.9)]
+    found = claim_flow.find_claim_option(merged, None, needles)
+    assert found[:4] == (520, 461, "闲来无事，要我帮忙吗", False)
+    assert found[4] is False  # 合并高框：只点不学
+
+
+def test_find_claim_option_center_follows_needle_position(monkeypatch):
+    """选项行被 OCR 与相邻文字合并时，点击中心按 needle 实际位置取。"""
+    seen = {}
+
+    def _center(img, rect, nlen, ntxt, target=None):
+        seen["target"] = target
+        return 600, 450
+
+    monkeypatch.setattr(claim_flow.task_tracker, "is_green_text",
+                        lambda img, rect: True)
+    monkeypatch.setattr(claim_flow, "green_option_center", _center)
+    needles = (claim_flow.norm_text("要我帮忙吗"),)
+    items = [("闲来无事，要我帮忙吗", [436, 440, 590, 461], 0.9)]
+    assert claim_flow.find_claim_option(items, None, needles)[:2] == (600, 450)
+    # 「要我帮忙吗」在整行中从第 4 字开始：中心 = 4 + 5/2 = 6.5
+    assert seen["target"] == 6.5
 
 
 def test_find_claim_option_ignores_tracker_and_low_score(monkeypatch):
@@ -122,10 +161,10 @@ def test_find_claim_option_ignores_tracker_and_low_score(monkeypatch):
         [("完整文案", [500, 300, 700, 320], 0.3)], None, needles) is None
 
 
-def test_click_claim_option_caches_position(monkeypatch):
+def _patch_click_env(monkeypatch, found):
     calls = {}
     monkeypatch.setattr(claim_flow, "find_claim_option",
-                        lambda *a: (10, 20, "文案", False))
+                        lambda *a: found)
     monkeypatch.setattr(claim_flow, "human_click",
                         lambda win, x, y: calls.setdefault("click", (x, y)))
     monkeypatch.setattr(claim_flow.app_utils, "fixed_pos_set",
@@ -134,12 +173,37 @@ def test_click_claim_option_caches_position(monkeypatch):
     monkeypatch.setattr(claim_flow, "move_away",
                         lambda win: calls.setdefault("move", True))
     monkeypatch.setattr(claim_flow, "log", lambda *a: None)
+    return calls
+
+
+def test_click_claim_option_caches_position(monkeypatch):
+    calls = _patch_click_env(monkeypatch, (10, 20, "文案", False, True))
     assert claim_flow.click_claim_option(
         object(), [], None, needles=("x",), prefix="[测试]",
         cache_key="option_x") is True
     assert calls["click"] == (10, 20)
     assert calls["cache"] == ("option_x", 10, 20)
     assert calls["move"] is True
+
+
+def test_click_claim_option_learn_false_skips_cache(monkeypatch):
+    """识别补点路径（learn=False）只点不学：过渡帧的中心不可靠。"""
+    calls = _patch_click_env(monkeypatch, (10, 20, "文案", False, True))
+    assert claim_flow.click_claim_option(
+        object(), [], None, needles=("x",), prefix="[测试]",
+        cache_key="option_x", learn=False) is True
+    assert calls["click"] == (10, 20)
+    assert "cache" not in calls
+
+
+def test_click_claim_option_not_cacheable_skips_cache(monkeypatch):
+    """合并框/兜底词命中的坐标不可靠：点击但不写缓存。"""
+    calls = _patch_click_env(monkeypatch, (10, 20, "文案", False, False))
+    assert claim_flow.click_claim_option(
+        object(), [], None, needles=("x",), prefix="[测试]",
+        cache_key="option_x") is True
+    assert calls["click"] == (10, 20)
+    assert "cache" not in calls
 
 
 def test_in_claim_map_and_near_claim_spot():

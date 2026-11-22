@@ -101,7 +101,14 @@ MOWANG_ENTRY_POINTS = ((640, 450), (640, 380), (560, 500), (720, 500),
 MOWANG_WALK_START_TIMEOUT = 6.0  # 点击后等待位移启动的时限（秒）
 MOWANG_WALK_ARRIVE_POLLS = 3     # 位置连续稳定轮询数判定到达（同封印/镐）
 MOWANG_WALK_POS_TOLERANCE = 3    # 坐标稳定容差（像素）
-MOWANG_WALK_MOVE_DELTA = 2       # 判定寻路已启动的位移阈值（像素）
+# 判定寻路已启动的位移阈值（格）。必须为 1（任意坐标变化）：
+# 2026-11-22 狮驼岭实机——详情图缩放随地图变化（大唐边境≈1.0 px/格、
+# 狮驼岭≈5.2 px/格、火云戈壁≈2.9 px/格，实测），adjacent 档 14px
+# 在狮驼岭只有 ≈2.7 格，且点完 0.5s 内即到点；旧阈值「>2 才启动」
+# 把整次位移（2 格）判成未启动 → 关图重试死循环（08:33-08:37 连续
+# 20+ 轮「按提示寻路未启动」，人物实际每轮只挪 2 格）。任意位置
+# 变化即算起步，与 map_nav._wait_movement「pos != before」同源。
+MOWANG_WALK_MOVE_DELTA = 1
 MOWANG_WALK_STALL_TIMEOUT = 12.0 # 位置连续不变多久判寻路停滞（秒）
 MOWANG_WALK_MAX = 150.0          # 单次寻路总时限（秒；跨图长途兜底）
 
@@ -275,6 +282,9 @@ def _walk_click(win, x, y):
 
     任务中不能飞（2026-11-15 用户实机）：点击飞行旗图标会提示
     「不能飞」且人物不动——位移启动检查同时用于识别这种无效点击。
+    位移判定用「任意坐标变化」（≥MOWANG_WALK_MOVE_DELTA=1 格）：
+    详情图缩放随地图变化，adjacent 档在狮驼岭只有 ≈2.7 格且到点极快
+    （2026-11-22 实测），阈值放宽会把整次短位移判成未启动。
     """
     global _walk
     start = game_map.read_map_position(win)
@@ -289,8 +299,8 @@ def _walk_click(win, x, y):
             start = cur  # 起点识别失败：以首个可读位置为基准
             continue
         moved = (cur[0] != start[0]
-                 or abs(cur[1] - start[1]) > MOWANG_WALK_MOVE_DELTA
-                 or abs(cur[2] - start[2]) > MOWANG_WALK_MOVE_DELTA)
+                 or abs(cur[1] - start[1]) >= MOWANG_WALK_MOVE_DELTA
+                 or abs(cur[2] - start[2]) >= MOWANG_WALK_MOVE_DELTA)
         if moved:
             now = time.time()
             _walk = {"at": now, "last_move_at": now,
