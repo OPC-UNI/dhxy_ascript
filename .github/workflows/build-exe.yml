@@ -26,8 +26,66 @@ jobs:
       pull-requests: write
     uses: ./.github/workflows/ci.yml
 
-  build:
+  # 更新日志预览：ci 通过后、构建开始前，用与 build 完全相同的规则
+  # （scripts/make_release_notes.py，changelog/<tag>.md 可覆盖）先生成
+  # 更新说明并写入 Actions 运行页的 Job Summary，方便在耗时的构建/发布
+  # 前核对文案。tag 推送预览本次发版内容；workflow_dispatch 预览
+  # 「上一 tag..HEAD」的下一版草稿（不参与发布）。
+  # build 内仍按原步骤重新生成同一份内容（git log 确定性，无需 artifact）。
+  changelog:
     needs: ci
+    runs-on: windows-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 需要完整 tag 历史：git describe + 上一 tag..HEAD
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: 生成更新日志并写入 Actions 预览
+        shell: pwsh
+        run: |
+          # 规则与 build「生成变更说明」步骤一致：
+          #   tag 推送 → 上一 tag..HEAD；changelog/<tag>.md 存在则人工日志优先
+          #   手动触发 → 上一 tag..HEAD 草稿（无目标 tag，不查人工日志）
+          if ($env:GITHUB_REF -like 'refs/tags/*') {
+            $tag = $env:GITHUB_REF_NAME
+            $prev = git describe --tags --abbrev=0 HEAD~1 2>$null
+            if (-not $prev) {
+              $range = "HEAD"
+              $link = "https://github.com/$env:GITHUB_REPOSITORY/releases/tag/$tag"
+            } else {
+              $range = "$prev..HEAD"
+              $link = "https://github.com/$env:GITHUB_REPOSITORY/compare/$prev...$tag"
+            }
+            $curated = "changelog/$tag.md"
+            if (Test-Path $curated) {
+              python scripts/make_release_notes.py --tag $tag --range $range --compare-url $link --curated $curated
+            } else {
+              python scripts/make_release_notes.py --tag $tag --range $range --compare-url $link
+            }
+            $heading = "## 更新日志预览：$tag"
+          } else {
+            # 手动触发：草稿预览。打 tag 后 build 会按发版规则重新生成；
+            # 用 HEAD（而非 HEAD~1）取上一 tag，避免把刚打的 tag 当成上一版。
+            $prev = git describe --tags --abbrev=0 HEAD 2>$null
+            if (-not $prev) { $range = "HEAD" } else { $range = "$prev..HEAD" }
+            python scripts/make_release_notes.py --tag draft --range $range
+            $heading = "## 更新日志草稿预览（$range）"
+          }
+          $summary = $heading + "`n`n" + (Get-Content release_notes.md -Raw) +
+            "`n> build 会用同一脚本、同一提交范围重新生成这份日志，内容与本次预览一致。`n"
+          $summary | Out-File -Encoding utf8NoBOM -Append -FilePath $env:GITHUB_STEP_SUMMARY
+          Write-Host $summary
+          Write-Host "更新日志已写入 Actions Job Summary"
+
+  build:
+    needs: [ci, changelog]
     runs-on: windows-latest
     timeout-minutes: 120
     # 只有发布相关步骤需要写权限（创建/更新 GitHub Release）
