@@ -675,7 +675,7 @@ flowchart TB
     T1 --> T2{"_task_gone_last_round？"}
     T2 -- 是 --> T3["跳过错检，直接领取"]
     T2 -- 否 --> T4{"需替换？<br/>锁妖网 / 奎木狼开关关 / 显形镜失败"}
-    T4 -- 是 --> T5["距上次替换 < 8s 则等待<br/>重新领取；比对任务签名，连续失败 3 次终止"]
+    T4 -- 是 --> T5["距上次替换 < 8s 则等待<br/>重新领取；比对任务签名，连续失败 3 次终止<br/>（同文案任务经收尾对话框确认已受理，不计失败）"]
     T4 -- 否 --> T6{"任务存在？"}
     T6 -- 是 --> F["直接跟踪<br/>_fight_via_kanda=False"]
     T6 -- 否 --> T3
@@ -684,7 +684,8 @@ flowchart TB
     C --> C1["_walk_to_claim_spot"]
     C1 --> C2["首次：_monitor_team_and_fill<br/>人满才领取；非队长 keep_alive"]
     C2 --> C3["_claim_task(allow_fill)"]
-    C3 --> C4["入口识别（按钮/降魔侍卫）<br/>点「除魔卫国，义不容辞」"]
+    C3 --> C3a["领取前对话框清障<br/>遗留领取对话框直接点选项<br/>滞留收尾/提示对话框点屏关闭并复检"]
+    C3a --> C4["入口识别（按钮/降魔侍卫）<br/>点「除魔卫国，义不容辞」"]
     C4 --> C5{"「前途凶险」队伍不足？"}
     C5 -- 是且开关开 --> C6["关提示 → 监控补人"]
     C5 -- 否 --> C7["校验任务进追踪 + 缓存补点"]
@@ -1301,7 +1302,10 @@ debug_overlay 监督线程 → 每 2s 原子写 debug_overlay_state.json（含 s
 | `TRACK_GATE_MAX_SKIP` | 5.0s | 面板变化兜底强制 OCR |
 | `BATTLE_EXTRAS_INTERVAL` | 2.0s | 战斗中 extras 限频 |
 | `REPLACE_INTERVAL` | 8s | 五倍连续替换领取最小间隔 |
-| `REPLACE_FAIL_LIMIT` | 3 | 五倍替换连续失败上限 |
+| `REPLACE_FAIL_LIMIT` | 3 | 五倍替换连续失败上限（同文案任务已受理不算失败） |
+| `CLAIM_DIALOG_DISMISS_RECHECK` | 0.5s | 五倍收尾对话框点屏取消后的复检间隔 |
+| `CLAIM_DIALOG_DISMISS_CLICKS` | 3 | 五倍收尾对话框点屏取消最多次数 |
+| `HIGH_PERF_DIALOG_ANCHOR_WAIT` | 1.0s | 高性能缓存点选项前的对话框锚点等待上限 |
 | `TEAM_CHECK_RETRY_INTERVAL` | 10s | 队伍缺人无申请人重查 |
 | `TEAM_RECOG_RETRY_INTERVAL` | 3s | 队伍识别失败重查 |
 | `SHOUT_MIN_INTERVAL` | 30s | 缺人喊话最小间隔 |

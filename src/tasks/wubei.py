@@ -87,6 +87,7 @@ from ..core.settings import (load_task_counts,  # 任务次数上限
                              load_wubei_kuimulang_switch,  # 五倍设置：领取奎木狼任务开关
                              load_wubei_tab_group)  # 五倍设置：组号专用开关
 from ..device.dialog_common import (SCREEN_CENTER_POS, green_option_center,
+                            green_option_row_present,
                             _dialog_text_present,
                             _click_green_option_once,
                             dialog_frame_score, DIALOG_FRAME_THRESHOLD,
@@ -1131,6 +1132,37 @@ def _close_dialog_without_claim(win, items, img_np):
 # ≥ DIALOG_FRAME_THRESHOLD 说明收尾对话框已在确认帧内，可直接同帧取消；
 # 每次 _claim_task 入口复位，避免失败轮次沿用上一轮分数。
 _claim_confirm_dlg_score = None
+# 本次替换领取经「收尾对话框」确认已受理、但任务签名未变化（游戏再次
+# 发放同文案任务，如锁妖网）。run_loop 据此跳过「替换未生效」失败计数
+# （2026-11-22 实机：同文案任务连续 3 轮被误判替换失败，终止五倍）。
+_claim_same_task_ack = False
+# 收尾对话框点屏取消的复检参数（2026-11-22）：单次盲点可能落在对话框
+# 过渡帧上被吞掉，对话框滞留后续操作全部错位——每次点击后 0.5s 复检
+# 模板，仍在场再点，至多 3 次（实测正常一次即消失，复检只在异常时
+# 多付 ~0.5s，领取非热路径）。
+CLAIM_DIALOG_DISMISS_RECHECK = 0.5
+CLAIM_DIALOG_DISMISS_CLICKS = 3
+# 高性能缓存点选项前的对话框锚点等待窗口（秒，2026-11-22）：领取入口
+# 点击后对话框正常 0.5s 内渲染，留 1s 上限；窗口内未见对话框即回退
+# 识别路径重新识别（绝不盲点缓存坐标——滞留对话框会吃掉入口点击）。
+HIGH_PERF_DIALOG_ANCHOR_WAIT = 1.0
+
+
+def _dismiss_dialog_click_until_gone(win, max_clicks=CLAIM_DIALOG_DISMISS_CLICKS):
+    """点屏幕中间取消对话框并复检消失，返回 (点击次数, 是否已消失)。
+
+    点击后 CLAIM_DIALOG_DISMISS_RECHECK 秒截帧复检模板：对话框仍在场
+    说明本次点击未生效（过渡渲染吞点击等），继续点；消失即停（不多点，
+    防点击落到世界画面取消寻路）。无帧按未消失处理、继续点到上限。
+    """
+    for i in range(max_clicks):
+        human_click(win, SCREEN_CENTER_POS[0], SCREEN_CENTER_POS[1])
+        move_away(win)
+        time.sleep(CLAIM_DIALOG_DISMISS_RECHECK)
+        img = win.capture(force_activate=False)
+        if img is not None and dialog_frame_score(img) < DIALOG_FRAME_THRESHOLD:
+            return i + 1, True
+    return max_clicks, False
 
 
 def _dismiss_claim_dialog_after_claim(win, score=None, timeout=2.0):
@@ -1140,8 +1172,14 @@ def _dismiss_claim_dialog_after_claim(win, score=None, timeout=2.0):
     0-1s 内对话框模板即命中），期间 follow 轮询每 0.5s 对话区 OCR、
     战斗线程巫医检查（战后 15s 窗口 2s 节奏）再 OCR 一遍、看打兜底
     每 5s 一次 2x 放大 OCR（故事行门控误触发）——与修罗领取后 10s
-    CPU 峰值同款（2026-11-09 py-spy 实测修罗）。点屏幕中间一次即可
-    关闭（2026-11-09 用户确认；旧注释「点中间不关闭」结论有误）。
+    CPU 峰值同款（2026-11-09 py-spy 实测修罗）。点屏幕中间即可关闭
+    （2026-11-09 用户确认；旧注释「点中间不关闭」结论有误）。
+
+    2026-11-22 实机：单次盲点可能落在对话框过渡帧上被吞掉——领取
+    锁妖网任务后收尾对话框滞留，下一轮点领取入口被对话框吃掉、缓存
+    坐标点选项落空，连续 3 轮误判替换失败终止任务（用户实报）。改为
+    每次点击后复检模板，仍在场再点（_dismiss_dialog_click_until_gone），
+    关闭成功即停、不多点。
 
     队伍不足提示（FULL_TEAM_DIALOG_TEXT）的正常处理在 _claim_task
     校验循环内（点中间 + 按开关补人/返回失败）；本函数只在领取成功
@@ -1157,11 +1195,14 @@ def _dismiss_claim_dialog_after_claim(win, score=None, timeout=2.0):
     # 数据收集完成后删除
     t0 = time.time()
     if score is not None and score >= DIALOG_FRAME_THRESHOLD:
-        human_click(win, SCREEN_CENTER_POS[0], SCREEN_CENTER_POS[1])
-        move_away(win)
-        log("[五倍] 已点击屏幕中间取消领取后收尾对话框", "SYS")
+        clicks, gone = _dismiss_dialog_click_until_gone(win)
+        if gone:
+            log("[五倍] 已点击屏幕中间取消领取后收尾对话框", "SYS")
+        else:
+            log(f"[五倍] 收尾对话框点击 {clicks} 次仍未关闭"
+                "（下一轮领取前会先清障）", "WARN")
         log(f"[五倍][领取计时] 收尾对话框取消 @+{time.time() - t0:.2f}s"
-            f"（确认帧复用）", "INFO")
+            f"（确认帧复用，点击 {clicks} 次）", "INFO")
         return True
     polls = 0
     deadline = time.time() + timeout
@@ -1178,15 +1219,17 @@ def _dismiss_claim_dialog_after_claim(win, score=None, timeout=2.0):
             time.sleep(0.5)
             continue
         items, _ = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
-        human_click(win, SCREEN_CENTER_POS[0], SCREEN_CENTER_POS[1])
-        move_away(win)
+        clicks, gone = _dismiss_dialog_click_until_gone(win)
         if _dialog_text_present(items, FULL_TEAM_DIALOG_TEXT):
             log("[五倍] 领取成功后出现队伍人数不足提示（异常时序），"
                 "已点击屏幕中间关闭（任务已领取，不补人）", "WARN")
-        else:
+        elif gone:
             log("[五倍] 已点击屏幕中间取消领取后收尾对话框", "SYS")
+        else:
+            log(f"[五倍] 收尾对话框点击 {clicks} 次仍未关闭"
+                "（下一轮领取前会先清障）", "WARN")
         log(f"[五倍][领取计时] 收尾对话框取消 @+{time.time() - t0:.2f}s"
-            f"（轮询 {polls}）", "INFO")
+            f"（轮询 {polls}，点击 {clicks} 次）", "INFO")
         return True
     log(f"[五倍][领取计时] {timeout:.1f}s 窗口内未见收尾对话框（轮询 {polls}）",
         "INFO")
@@ -1540,14 +1583,25 @@ def _click_entry_ensuring_dialog(win, log_tag="[五倍]", hover_before_click=Fal
         pos_text = f"（位置: {pos2[0]}[{pos2[1]},{pos2[2]}]）" if pos2 is not None \
             else "（位置: 不可读）"
         log(f"{log_tag} 已点击{src2}（领取）{pos_text}", "SYS")
-        # 高性能：领取选项坐标已缓存 → 跳过对话框 OCR 轮询，固定等待
-        # 渲染后由 _claim_task 直接按坐标点选项（点不中由「任务进追踪」
-        # 校验循环识别补点兜底，无 seen 帧返回）
+        # 高性能：领取选项坐标已缓存 → 跳过对话框 OCR 轮询，等对话框
+        # 模板出现后由 _claim_task 直接按坐标点选项（无 seen 帧返回）。
+        # 模板锚点门控（2026-11-22 实机）：留存的收尾对话框会吃掉入口
+        # 点击，盲目按缓存坐标点选项必然落空、空耗 20s 校验——窗口内
+        # 未见对话框则不点，回退下方识别路径（缓存保留，下次正常直点）。
         if app_utils.high_perf_on() \
                 and app_utils.fixed_pos_get(f"option_{CLAIM_DIALOG_OPTION}", win) is not None:
-            time.sleep(app_utils.HIGH_PERF_DIALOG_WAIT)
-            dialog_seen = True
-            break
+            deadline = time.time() + HIGH_PERF_DIALOG_ANCHOR_WAIT
+            while time.time() < deadline:
+                img = win.capture(force_activate=False)
+                if img is not None \
+                        and dialog_frame_score(img) >= DIALOG_FRAME_THRESHOLD:
+                    dialog_seen = True
+                    break
+                time.sleep(0.15)
+            if dialog_seen:
+                break
+            log(f"{log_tag} 高性能缓存点击前未见领取对话框"
+                f"（入口点击可能被滞留对话框吃掉），改识别路径等待", "WARN")
         # 等待对话框出现：轮询选项（正常 ~1.5s 即出）；首次尝试短窗口，
         # 重定位后的第二次尝试用完整窗口
         deadline = time.time() + appear_timeout
@@ -1663,6 +1717,55 @@ def _arrival_claim_dialog_up(win, timeout=CLAIM_ARRIVE_DIALOG_WAIT):
     return True
 
 
+def _claim_start_dialog_guard(win, img):
+    """领取开始前的对话框清障（2026-11-22 五倍实机 18:38 教训）。
+
+    上一轮领取的收尾对话框若滞留（点屏取消点击落在对话过渡帧上被
+    吞掉），本轮点领取入口会被对话框吃掉，随后按缓存坐标点选项落空
+    ——20s 校验超时、误重走领取点、连续 3 次误判「替换未生效」终止
+    任务（用户实报）。领取前用调用方已截帧做模板门控（~9ms，无对话
+    框零 OCR 零点击）：
+      - 含领取绿色选项（上一轮遗留的领取对话框）→ 返回该帧，调用方
+        直接点领取选项（不再点入口）；
+      - 无选项的收尾/提示/剧情对话框 → 点屏幕中间关闭并复检
+        （_dismiss_dialog_click_until_gone，至多 3 次），之后按正常
+        入口流程继续；位置可读且不在领取点附近时不点屏（人物可能
+        仍在寻路，点屏会取消寻路——同点屏站定规则）；
+      - 含未知绿字选项的对话框不点屏（防误选未知选项，同修罗到达
+        等待规则）。
+    返回 (对话框帧 (items, img_np) 或 None, 是否检测到对话框)。
+    """
+    if img is None:
+        return None, False
+    if dialog_frame_score(img) < DIALOG_FRAME_THRESHOLD:
+        return None, False
+    arr = np.asarray(img)
+    dl, dt = task_tracker.DIALOG_REGION[0], task_tracker.DIALOG_REGION[1]
+    if arr.shape[0] <= dt or arr.shape[1] <= dl:
+        return None, False  # 帧尺寸不含对话框区（异常窗口）：跳过清障
+    items, img_np = game_map.ocr_region(img, task_tracker.DIALOG_REGION)
+    if _find_claim_option(items, img_np) is not None:
+        return (items, img_np), True
+    region_items = [it for it in items if it[2] >= 0.55]
+    if region_items and green_option_row_present(img_np, region_items):
+        log("[五倍] 领取前检测到含未知绿字选项的对话框，不点屏"
+            "（交给入口流程自愈）", "WARN")
+        return None, True
+    pos = game_map.read_map_position(win, img=img)
+    if pos is not None and not _near_claim_spot(pos, CLAIM_NEAR_TOLERANCE):
+        # 位置可读且不在领取点：人物可能仍在寻路，点屏会取消寻路
+        log(f"[五倍] 领取前检测到对话框但人物不在领取点"
+            f"（{pos}），不点屏", "WARN")
+        return None, True
+    log("[五倍] 领取前检测到滞留对话框，点击屏幕中间关闭", "WARN")
+    clicks, gone = _dismiss_dialog_click_until_gone(win)
+    if gone:
+        log(f"[五倍] 滞留对话框已关闭（点击 {clicks} 次）", "SYS")
+    else:
+        log(f"[五倍] 滞留对话框点击 {clicks} 次仍未关闭，继续尝试领取", "WARN")
+    return None, True
+
+
 def _claim_task(win, allow_fill=False, allow_existing=False,
                 create_team_if_missing=False):
     """在领取点附近领取五倍任务（前提：已走到领取点附近）。
@@ -1682,6 +1785,12 @@ def _claim_task(win, allow_fill=False, allow_existing=False,
     2. 校验循环内确认新任务渲染即返回（领取前有旧任务遗留面板时须
        签名变化才确认，不再重复一次 has_task 全量检查）
 
+    2026-11-22（用户实报）：领取前先清障——遗留领取对话框直接点选项，
+    滞留收尾/提示对话框点屏关闭并复检（_claim_start_dialog_guard）；
+    替换领取时若游戏再次发放同文案任务（锁妖网等），收尾对话框在场 +
+    领取选项消失即按「已受理」确认（_claim_same_task_ack），不按替换
+    失败累计终止。
+
     allow_existing：允许在追踪面板已有五倍任务时继续领取（替换任务
     场景，need_replace=True——游戏允许重领替换）。默认 False：面板仍
     有五倍任务说明「任务消失」是误判/任务又出现，跳过领取返回让主
@@ -1693,8 +1802,9 @@ def _claim_task(win, allow_fill=False, allow_existing=False,
     18:54：队伍未建时监控开不了组队菜单）。
     """
     global _claim_confirm_dlg_score, _claim_map_kept_open, \
-        _claim_arrive_dialog_frame
+        _claim_arrive_dialog_frame, _claim_same_task_ack
     _claim_confirm_dlg_score = None  # 本轮确认帧模板分复位（run_loop 消费）
+    _claim_same_task_ack = False     # 本轮「同文案任务已受理」标志复位
     # 决策点单帧化：先截一帧，战斗判定与领取前面板签名共用（原
     # is_in_battle 内截一帧 + 面板签名再截一帧）。组号 pass 期间与
     # is_in_battle 同语义按「战斗中等待」处理（屏幕可能是队员 Tab）
@@ -1720,6 +1830,19 @@ def _claim_task(win, allow_fill=False, allow_existing=False,
         # 入口（2026-11-11 修罗同款）；替换任务场景由 allow_existing
         # 放行（游戏允许重领替换）
         return False, "任务追踪中仍有五倍任务，跳过领取（续跑跟踪）", None
+    # 领取前清障（2026-11-22 实机 18:38，用户实报）：上一轮领取的收尾
+    # 对话框滞留时，点领取入口会被对话框吃掉、缓存坐标点选项落空——
+    # 20s 校验超时 + 误重走领取点 + 连续 3 次误判替换失败终止任务。
+    # 用已截帧 img0 门控（~9ms，无对话框零开销）：遗留领取对话框直接
+    # 复用该帧点选项；收尾/提示对话框点屏关闭并复检。
+    seen, guard_dialog = _claim_start_dialog_guard(win, img0)
+    if seen is not None:
+        log("[五倍] 领取前检测到遗留领取对话框，直接点领取选项"
+            "（跳过入口点击）", "WARN")
+    if guard_dialog:
+        # 到达检查暂存帧（若有）早于本次清障：已用本帧或已关闭对话框，
+        # 丢弃防陈旧帧被下方自动对话框路径复用
+        _claim_arrive_dialog_frame = None
     # 到达领取点后任务对话框可能已自动弹出（**仅小地图点击走位到达 +
     # 小地图「任务」勾选时**，用户 2026-11-16）：命中则直接复用该帧点
     # **领取选项**（不走入口点击）；人数不足时领取流程自带的队伍确认/
@@ -1727,8 +1850,7 @@ def _claim_task(win, allow_fill=False, allow_existing=False,
     # 筛选状态在开小地图时读取（_open_claim_map）：False=未勾选跳过检查；
     # 未知（None）仍做门控检查（模板门控 ~10ms，成本极低）。
     auto_dialog_ok = _auto_dialog_claim_mode()
-    seen = None
-    if auto_dialog_ok:
+    if seen is None and auto_dialog_ok:
         # 优先复用到达检查已确认的对话框帧（免重截+重 OCR ~0.3-0.6s，
         # 2026-11-16 19:20 实机：对话框在场到点领取约 3s）：img0 是刚
         # 截的帧，对话框模板门控（~10ms）复核对话框仍在场，帧才够新鲜；
@@ -1823,6 +1945,7 @@ def _claim_task(win, allow_fill=False, allow_existing=False,
     confirm_dlg_score = None    # 观测：确认帧对话框模板分（同帧取消可行性）
     claim_option_still = False  # 观测：确认帧里领取选项是否仍在（模板分来源判别）
     polls = 0
+    img = None  # 末帧（校验失败后的「已在领取点」判定复用，免再截帧）
     track_gate = task_tracker.TrackGate(min_interval=0.0)  # 面板差分门（领取校验短窗口
         # 关键检测，不限频——同修罗 _claim_task，防「未出现」结论被
         # 复用 2s 拖慢领取（2026-10-28）
@@ -1858,18 +1981,46 @@ def _claim_task(win, allow_fill=False, allow_existing=False,
                 return False, "队伍已补齐（监控循环判定），下轮重试领取", None
             log("[五倍] 领取被拒：队伍人数不足（检查队伍开关关闭，不补人）", "WARN")
             return False, "队伍人数不足，领取被拒（未开启检查队伍开关）", None
-        if task_tracker.has_new_task_in(items, img_np, TASK_TITLE,
-                                        TASK_FALLBACK_TEXTS, pre_sig):
+        new_task = task_tracker.has_new_task_in(
+            items, img_np, TASK_TITLE, TASK_FALLBACK_TEXTS, pre_sig)
+        same_task_ack = False
+        if not new_task and allow_existing and pre_sig is not None \
+                and task_tracker.has_task_in(items, img_np, TASK_TITLE,
+                                             TASK_FALLBACK_TEXTS):
+            # 替换/重领场景：领取已受理但游戏再次发放同文案任务（锁妖网/
+            # 奎木狼等任务文案固定，签名不变 → has_new_task_in 永不确认；
+            # 旧逻辑空耗 CLAIM_VERIFY_WAIT_STALE 后误判领取失败——2026-11-22
+            # 实机连续 3 轮误判替换失败、终止五倍，用户实报）。直接信号：
+            # 领取选项已消失（点击被受理，对话框转入收尾页）+ 收尾对话框
+            # 在场（受理后必弹）。缓存点击未点中时选项仍在，不走本分支
+            # （由下方识别补点兜底）。
+            dlg_score_ack = dialog_frame_score(img)
+            if _find_claim_option(items, img_np) is None \
+                    and dlg_score_ack >= DIALOG_FRAME_THRESHOLD:
+                new_task = True
+                same_task_ack = True
+                confirm_dlg_score = dlg_score_ack
+        if new_task:
             found_frame = (items, img_np)
             t_confirm = t_cap
             confirm_polls = polls
-            # 全帧模板分：确认帧里是否已有收尾对话框（同帧取消可行性）。
-            # 领取选项文案仍在说明领取对话框尚未关闭（模板分来自它）——
-            # 不启用同帧取消，交窗口轮询等收尾对话框出现
-            confirm_dlg_score = dialog_frame_score(img)
-            claim_option_still = _dialog_text_present(items, CLAIM_DIALOG_OPTION)
-            _claim_confirm_dlg_score = None if claim_option_still \
-                else confirm_dlg_score  # 供 run_loop 同帧取消
+            if same_task_ack:
+                # 领取已受理、任务文案未变：按成功返回，run_loop 跳过
+                # 「替换未生效」失败计数（_claim_same_task_ack），下轮
+                # 距本次领取满 REPLACE_INTERVAL 秒再替换（2026-10-29 规则）
+                _claim_same_task_ack = True
+                _claim_confirm_dlg_score = confirm_dlg_score  # 同帧取消收尾框
+                log("[五倍] 替换领取已受理（领取选项已消失、收尾对话框在场），"
+                    "任务文案未变化——游戏再次发放同类任务，"
+                    f"下轮按 {REPLACE_INTERVAL}s 间隔继续替换", "WARN")
+            else:
+                # 全帧模板分：确认帧里是否已有收尾对话框（同帧取消可行性）。
+                # 领取选项文案仍在说明领取对话框尚未关闭（模板分来自它）——
+                # 不启用同帧取消，交窗口轮询等收尾对话框出现
+                confirm_dlg_score = dialog_frame_score(img)
+                claim_option_still = _dialog_text_present(items, CLAIM_DIALOG_OPTION)
+                _claim_confirm_dlg_score = None if claim_option_still \
+                    else confirm_dlg_score  # 供 run_loop 同帧取消
             break
         if used_cached and _find_claim_option(items, img_np) is not None:
             # 缓存坐标没点中（选项还在）：清缓存回退识别路径，下一轮
@@ -1901,11 +2052,26 @@ def _claim_task(win, allow_fill=False, allow_existing=False,
             "（下一轮识别重学）", "WARN")
     # 未检索到：小地图重走领取点坐标后再次检索（修罗同款，用户
     # 2026-10-09 确认：重走可能触发任务渲染，不直接判失败）。
-    # 原 Alt+C 飞行重查已移除——多余逻辑
-    ok2, info2 = _relocate_to_claim_spot(win)
-    if not ok2:
-        log(f"[五倍] {info2}", "WARN")
-    elif task_tracker.has_new_task(win, TASK_TITLE, TASK_FALLBACK_TEXTS, pre_sig):
+    # 原 Alt+C 飞行重查已移除——多余逻辑。
+    # 已在领取点坐标（小地图寻路目标 ±WALK_ARRIVE_TOLERANCE）时跳过
+    # 重走：点击同一点不会产生位移，只会白付开图/关图/寻路 ~4s
+    # （2026-11-22 实机 18:39：角色 90,84 就在目标 91,84，仍先开小地图
+    # 移动一轮——用户实报「实际已经在坐标了」）。
+    pos_last = game_map.read_map_position(win, img=img) if img is not None else None
+    moved = False
+    if game_map.is_at_position(pos_last, BAOXIANGGUO,
+                               BAOXIANG_CLAIM_COORD[0],
+                               BAOXIANG_CLAIM_COORD[1],
+                               WALK_ARRIVE_TOLERANCE):
+        log(f"[五倍] 已在领取点坐标（{pos_last}），跳过重走领取点", "INFO")
+    else:
+        ok2, info2 = _relocate_to_claim_spot(win)
+        if not ok2:
+            log(f"[五倍] {info2}", "WARN")
+        else:
+            moved = True
+    if moved and task_tracker.has_new_task(win, TASK_TITLE,
+                                           TASK_FALLBACK_TEXTS, pre_sig):
         log("[五倍] 重走领取点后新任务已出现在追踪面板", "SYS")
         return True, "五倍任务已领取", None
     # 重走后仍无：不再重试，直接失败（下一轮 has_task 检查兜底，
@@ -3459,7 +3625,14 @@ def run_loop(win, cycle_interval=1.0):
                 # 可能给出同地点同文案的新任务，签名相同属正常；若领取
                 # 实际未生效，下一轮继续打原任务即可自然重试，不按替换
                 # 失败累计终止。锁妖网/奎木狼/显形镜替换仍严格校验。
-                if need_replace and prev_sig is not None and not battle_replace:
+                # 例外（2026-11-22 实机）：_claim_task 已用收尾对话框确认
+                # 「领取已受理、游戏再次发放同文案任务」时不按替换失败
+                # 计数——否则同文案任务连续 3 轮即终止整个五倍任务
+                # （用户实报）；下轮按 REPLACE_INTERVAL 间隔继续替换。
+                if _claim_same_task_ack:
+                    log("[五倍] 替换校验：任务文案未变化但领取已受理"
+                        "（同文案任务重新发放），不累计替换失败", "WARN")
+                elif need_replace and prev_sig is not None and not battle_replace:
                     t2 = task_tracker.get_task(win, TASK_TITLE)
                     if t2 is not None and task_tracker.task_signature(t2) == prev_sig:
                         log("[五倍] 替换校验：任务签名未变化，替换未生效", "WARN")

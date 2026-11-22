@@ -1414,3 +1414,176 @@ def test_relocate_arrival_filter_none_still_checks_dialog(monkeypatch):
     img = np.zeros((831, 1378, 3), np.uint8)
     desc = wubei._relocate_arrival(None, img, img, ("宝象国", 60, 60))
     assert desc and "自动弹出" in desc
+
+
+# ---- 领取前后对话框清障与同文案任务受理（2026-11-22 实机 18:38 用户实报）----
+
+def _claim_guard_env(monkeypatch, dialog_scores, claim_option=None,
+                     green_rows=False):
+    """装配 _claim_start_dialog_guard：对话框模板按序列返回、记录点击。"""
+    seq = list(dialog_scores)
+
+    def fake_score(img):
+        return seq.pop(0) if len(seq) > 1 else seq[0]
+
+    monkeypatch.setattr(wubei, "dialog_frame_score", fake_score)
+    region_items = ([("未知选项", (500, 400, 900, 430), 0.9)]
+                    if green_rows else [])
+    monkeypatch.setattr(wubei.game_map, "ocr_region",
+                        lambda img, region: (list(region_items),
+                                             np.zeros((831, 1378, 3), np.uint8)))
+    monkeypatch.setattr(wubei, "_find_claim_option",
+                        lambda items, img_np: claim_option)
+    monkeypatch.setattr(wubei, "green_option_row_present",
+                        lambda img_np, items: green_rows)
+    clicks = []
+    monkeypatch.setattr(wubei, "human_click",
+                        lambda w, x, y, **k: clicks.append((x, y)))
+    monkeypatch.setattr(wubei, "move_away", lambda w: None)
+    monkeypatch.setattr(wubei.game_map, "read_map_position",
+                        lambda w, img=None: ("宝象国", 90, 84))
+    monkeypatch.setattr(wubei.time, "sleep", lambda s: None)
+    monkeypatch.setattr(wubei, "log", lambda *a, **k: None)
+    return clicks
+
+
+def test_claim_start_guard_closes_leftover_closeout_dialog(monkeypatch):
+    """领取前检测到无选项滞留对话框：点屏关闭并复检；关闭后继续入口流程。"""
+    clicks = _claim_guard_env(monkeypatch, [0.99, 0.99, 0.2])
+    img = np.zeros((831, 1378, 3), np.uint8)
+    seen, had = wubei._claim_start_dialog_guard(_FakeWin(), img)
+    assert seen is None and had is True
+    assert len(clicks) == 2  # 首次点击未关（复检仍在场）→ 再点一次关闭
+
+
+def test_claim_start_guard_reuses_leftover_claim_dialog(monkeypatch):
+    """领取前检测到遗留领取对话框（含领取选项）：复用该帧直接点选项，不点屏。"""
+    option = (534, 399, "除魔卫国，义不容辞", False, True)
+    clicks = _claim_guard_env(monkeypatch, [0.99], claim_option=option)
+    img = np.zeros((831, 1378, 3), np.uint8)
+    seen, had = wubei._claim_start_dialog_guard(_FakeWin(), img)
+    assert seen is not None and had is True
+    assert clicks == []  # 不点屏幕中间，交调用方点领取选项
+
+
+def test_claim_start_guard_does_not_click_unknown_green_options(monkeypatch):
+    """无领取选项但含未知绿字选项的对话框：不点屏（防误选未知选项）。"""
+    clicks = _claim_guard_env(monkeypatch, [0.99], green_rows=True)
+    img = np.zeros((831, 1378, 3), np.uint8)
+    seen, had = wubei._claim_start_dialog_guard(_FakeWin(), img)
+    assert seen is None and had is True
+    assert clicks == []
+
+
+def test_dismiss_dialog_click_until_gone_retries_swallowed_click(monkeypatch):
+    """点屏取消点击被过渡帧吞掉：复检仍在场则再点，消失即停。"""
+    scores = [0.99, 0.2]
+    monkeypatch.setattr(wubei, "dialog_frame_score",
+                        lambda img: scores.pop(0))
+    clicks = []
+    monkeypatch.setattr(wubei, "human_click",
+                        lambda w, x, y, **k: clicks.append((x, y)))
+    monkeypatch.setattr(wubei, "move_away", lambda w: None)
+    monkeypatch.setattr(wubei.time, "sleep", lambda s: None)
+    assert wubei._dismiss_dialog_click_until_gone(_FakeWin()) == (2, True)
+    assert len(clicks) == 2
+
+
+def _claim_task_same_task_env(monkeypatch, *, option_still, dialog_score=0.99,
+                              pos=("宝象国", 91, 84)):
+    """装配 _claim_task 替换领取校验循环：入口成功、选项已点、签名不变。"""
+    clock = _FakeClock()
+    monkeypatch.setattr(wubei, "time", clock)
+    monkeypatch.setattr(wubei, "is_in_battle", lambda w: False)
+    monkeypatch.setattr(wubei, "is_in_battle_frame", lambda img: False)
+    monkeypatch.setattr(wubei.task_tracker, "ocr_track", lambda img: ([], None))
+    monkeypatch.setattr(wubei.task_tracker, "task_signature_in",
+                        lambda items, title: "sig")
+    monkeypatch.setattr(wubei, "_claim_start_dialog_guard",
+                        lambda w, img: (None, False))
+    monkeypatch.setattr(wubei, "_arrive_by_walk", False)
+    monkeypatch.setattr(wubei, "CLAIM_VERIFY_WAIT_STALE", 2.0)
+    monkeypatch.setattr(wubei, "CLAIM_DIALOG_TIMEOUT", 0)
+    monkeypatch.setattr(wubei, "log", lambda *a, **k: None)
+    monkeypatch.setattr(wubei, "_click_entry_ensuring_dialog",
+                        lambda w, **k: (True, "x", "src", (1, 1), ([], None)))
+    monkeypatch.setattr(wubei, "_click_claim_option",
+                        lambda w, items, img_np: True)
+    monkeypatch.setattr(wubei, "_claim_verify_wait",
+                        lambda *a, **k: clock.sleep(1.0))
+
+    class _Gate:
+        def __init__(self, min_interval=0.0):
+            pass
+
+        def ocr(self, img):
+            return []
+
+        def paste_track(self, img, img_np):
+            pass
+
+    monkeypatch.setattr(wubei.task_tracker, "TrackGate", _Gate)
+    monkeypatch.setattr(wubei.game_map, "ocr_region",
+                        lambda img, region: ([], np.zeros((831, 1378, 3), np.uint8)))
+    monkeypatch.setattr(wubei.task_tracker, "has_new_task_in",
+                        lambda *a, **k: False)
+    monkeypatch.setattr(wubei.task_tracker, "has_task_in",
+                        lambda *a, **k: True)
+    monkeypatch.setattr(wubei, "_find_claim_option",
+                        lambda items, img_np:
+                        (534, 399, "除魔卫国，义不容辞", False, True)
+                        if option_still else None)
+    monkeypatch.setattr(wubei, "dialog_frame_score", lambda img: dialog_score)
+    monkeypatch.setattr(wubei, "_last_replace_at", 0.0)
+    monkeypatch.setattr(wubei, "_replace_fail_streak", 0)
+    monkeypatch.setattr(wubei.game_map, "read_map_position",
+                        lambda w, img=None: pos)
+    monkeypatch.setattr(wubei.task_tracker, "read_tasks", lambda w: [])
+    relocated = []
+    monkeypatch.setattr(wubei, "_relocate_to_claim_spot",
+                        lambda w: relocated.append(1) or (False, "x"))
+    return relocated
+
+
+def test_claim_task_same_task_confirmed_by_closeout_dialog(monkeypatch):
+    """替换领取：选项已消失 + 收尾对话框在场 → 同文案任务按领取已受理。
+
+    锁妖网等任务文案固定，重领后签名不变——旧校验空耗 20s 后误判失败
+    （2026-11-22 实机连续 3 轮终止五倍）。直接信号为「领取选项消失 +
+    收尾对话框在场」。"""
+    _claim_task_same_task_env(monkeypatch, option_still=False)
+    ok, info, frame = wubei._claim_task(_FakeWin(), allow_existing=True)
+    assert ok is True and info == "五倍任务已领取"
+    assert wubei._claim_same_task_ack is True
+    assert wubei._claim_confirm_dlg_score == 0.99  # 同帧取消收尾对话框
+    assert frame is not None
+
+
+def test_claim_task_same_task_not_confirmed_while_option_still(monkeypatch):
+    """领取选项仍在（点击未生效）：不得用收尾对话框信号误确认。"""
+    relocated = _claim_task_same_task_env(
+        monkeypatch, option_still=True, pos=("宝象国", 60, 60))
+    ok, info, frame = wubei._claim_task(_FakeWin(), allow_existing=True)
+    assert ok is False and frame is None
+    assert wubei._claim_same_task_ack is False
+    assert relocated == [1]  # 真正失败仍走重走兜底
+
+
+def test_claim_task_skips_relocate_when_already_at_claim_coord(monkeypatch):
+    """校验失败但人已在领取点坐标（目标 ±5）：跳过重走领取点（开图/寻路白耗）。"""
+    relocated = _claim_task_same_task_env(
+        monkeypatch, option_still=False, dialog_score=0.3)
+    ok, info, frame = wubei._claim_task(_FakeWin())
+    assert ok is False and frame is None
+    assert relocated == []  # 已在 91,84：不再开小地图重走
+
+
+def test_claim_start_guard_no_click_when_not_at_claim_spot(monkeypatch):
+    """位置可读且不在领取点附近：人物可能仍在寻路，不点屏（防取消寻路）。"""
+    clicks = _claim_guard_env(monkeypatch, [0.99])
+    monkeypatch.setattr(wubei.game_map, "read_map_position",
+                        lambda w, img=None: ("宝象国", 60, 60))
+    img = np.zeros((831, 1378, 3), np.uint8)
+    seen, had = wubei._claim_start_dialog_guard(_FakeWin(), img)
+    assert seen is None and had is True
+    assert clicks == []
