@@ -1577,6 +1577,11 @@
                         <span class="switch-track"></span>
                         <span>领取锁妖网任务（暂不可用）</span>
                     </label>
+                    <label class="switch-row">
+                        <input type="checkbox" id="wubei-manual-nav">
+                        <span class="switch-track"></span>
+                        <span>兼容无快捷寻路（无任务追踪时打开任务栏手动寻路）</span>
+                    </label>
                     <div class="set-sect"><span>队员</span><span class="sect-hint">非队长生效（队长一定自动抢盒子）</span></div>
                     <label class="switch-row">
                         <input type="checkbox" id="wubei-auto-rejoin">
@@ -2175,10 +2180,10 @@
                         <button id="btn-verify-xiuluo-return-silent" class="btn" onclick="verifyXiuluoReturnSilent()">静默修罗回程</button>
                         <span class="verify-result" id="silent-return-verify-result"></span>
                     </div>
-                    <div class="group-hint">与实际流程一致、时序无额外延时，且都不改变任务状态：回程=定位回城符不点击；领取=点击领取按钮开对话框、选项仅定位不点击、点屏幕中间关闭；巫医=走位到 NPC、定位后点击打开对话框（医治选项由战斗线程处理）；组号巫医=巫医完整链路后逐个切换队员 Tab 点击其医治对话框并切回队长（需窗口内 ≥2 个已登录 Tab，开关状态不校验）；修理=走位到洛阳城修理 NPC、点击打开对话框（两套弹窗按文案→选项映射，选项由验证流程自行点击，与战斗线程等效）；组号修理=修理完整链路后逐个切换队员 Tab 点击其修理对话框并切回队长（需 ≥2 个已登录 Tab）。静默修罗领取/静默修罗巫医/静默修罗回程=与领取/巫医/回程验证同流程，但全程静默点击（不移动物理鼠标、不激活游戏窗口，游戏窗口可不前台），用于验证静默通道跑通完整链路。任务运行中不可验证。</div>
+                    <div class="group-hint">与实际流程一致、时序无额外延时，且都不改变任务状态：回程=定位回城符不点击；领取=点击领取按钮开对话框、选项仅定位不点击、点屏幕中间关闭；巫医=走位到 NPC、定位后点击打开对话框（医治选项由战斗线程处理）；组号巫医=巫医完整链路后逐个切换队员 Tab 点击其医治对话框并切回队长（需窗口内 ≥2 个已登录 Tab，开关状态不校验）；修理=走位到洛阳城修理 NPC、点击打开对话框（两套弹窗按文案→选项映射，选项由验证流程自行点击，与战斗线程等效）；组号修理=修理完整链路后逐个切换队员 Tab 点击其修理对话框并切回队长（需 ≥2 个已登录 Tab）。静默修罗领取/静默修罗巫医/静默修罗回程=与领取/巫医/回程验证同流程，但全程静默点击（不移动物理鼠标、不激活游戏窗口，游戏窗口可不前台），用于验证静默通道跑通完整链路。本窗口任务运行中不可验证（多开时其他窗口运行不影响）。</div>
                 </div>
                 <div class="group-box">
-                    <div class="group-title">五倍链路</div>
+                    <div class="group-title">五倍（降魔任务）链路</div>
                     <div class="verify-row">
                         <button id="btn-verify-wubei-claim" class="btn" onclick="verifyWubeiClaim()">验证领取任务</button>
                         <span class="verify-result" id="wubei-claim-verify-result"></span>
@@ -2203,7 +2208,27 @@
                         <button id="btn-verify-wubei-xj" class="btn" onclick="verifyWubeiXj()">测试白龙马模板</button>
                         <span class="verify-result" id="wubei-xj-verify-result"></span>
                     </div>
-                    <div class="group-hint">与实际流程一致、时序无额外延时，且不改变任务状态：领取=走位到宝象国领取点 → 点击领取入口（领取任务按钮/降魔侍卫）打开对话框 → 选项「除魔卫国，义不容辞」仅定位不点击 → 点拒绝选项「事态严重，我等退散」关闭对话框；回程=定位回城符不点击（回城符模板待提供，缺失时报模板未提供）；巫医=走位到巫医 NPC、定位后点击打开对话框（医治选项由验证流程自行点击，与任务进程中战斗线程点击行为等效）；修理=走位到洛阳城修理 NPC、点击打开对话框（两套弹窗按文案→选项映射，选项由验证流程自行点击）；组号修理=修理完整链路后逐个切换队员 Tab 点击其修理对话框并切回队长（需 ≥2 个已登录 Tab）；白龙马模板=按任务流程实际点击候选（找全部候选→逐一真实点击→误点对话框自动关闭→开打对话出现即停止并停留，请手动关闭对话框）。任务运行中不可验证。</div>
+                    <div class="verify-row">
+                        <button id="btn-demon-nav-cancel" class="btn" onclick="demonNavCancel()" disabled>中断寻路</button>
+                        <span class="verify-result" id="demon-nav-common-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="demon-nav-kill-btn" class="btn" onclick="demonNavRun('kill')">五倍识别·三藏逢魔（击杀）→ 寻路</button>
+                        <span class="verify-result" id="demon-nav-kill-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="demon-nav-huangpao-btn" class="btn" onclick="demonNavRun('huangpao')">五倍识别·智斗黄袍（黄袍怪）→ 寻路</button>
+                        <span class="verify-result" id="demon-nav-huangpao-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="demon-nav-xianxing-btn" class="btn" onclick="demonNavRun('xianxing')">五倍识别·宝象迷情（显形镜 A/B）→ 寻路</button>
+                        <span class="verify-result" id="demon-nav-xianxing-result"></span>
+                    </div>
+                    <div class="verify-row">
+                        <button id="demon-nav-reclaim-btn" class="btn" onclick="demonNavRun('reclaim')">五倍识别·殿前献艺（暗雷）→ 提示重领</button>
+                        <span class="verify-result" id="demon-nav-reclaim-result"></span>
+                    </div>
+                    <div class="group-hint">与实际流程一致、时序无额外延时，且不改变任务状态：领取=走位到宝象国领取点 → 点击领取入口（领取任务按钮/降魔侍卫）打开对话框 → 选项「除魔卫国，义不容辞」仅定位不点击 → 点拒绝选项「事态严重，我等退散」关闭对话框；回程=定位回城符不点击（回城符模板待提供，缺失时报模板未提供）；巫医=走位到巫医 NPC、定位后点击打开对话框（医治选项由验证流程自行点击，与任务进程中战斗线程点击行为等效）；修理=走位到洛阳城修理 NPC、点击打开对话框（两套弹窗按文案→选项映射，选项由验证流程自行点击）；组号修理=修理完整链路后逐个切换队员 Tab 点击其修理对话框并切回队长（需 ≥2 个已登录 Tab）；白龙马模板=按任务流程实际点击候选（找全部候选→逐一真实点击→误点对话框自动关闭→开打对话出现即停止并停留，请手动关闭对话框）。**五倍识别·…**四行=五倍任务（降魔任务，同一玩法不同叫法）识别与寻路模拟：打开任务栏→识别当前五倍任务→关闭→按识别出的地图/坐标手动寻路（到达即算完成；显形镜依次 A、B；暗雷只提示需重领；任务类型与按钮不符时只提示、不移动人物），寻路共用「中断寻路」。本窗口任务运行中不可验证；多开时其他窗口运行不影响本窗口诊断。</div>
                 </div>
                 <div class="group-box">
                     <div class="group-title">种族比武链路</div>
@@ -2211,7 +2236,7 @@
                         <button id="btn-verify-zhongzu-claim" class="btn" onclick="verifyZhongzuClaim()">测试领取任务</button>
                         <span class="verify-result" id="zhongzu-claim-verify-result"></span>
                     </div>
-                    <div class="group-hint">与实际流程一致、时序无额外延时，且不改变任务状态：走位到长安领取点（286,159）→ 点击领取 NPC 打开对话框 → 绿色领取选项仅定位不点击（点击即领取）→ 点屏幕中间关闭对话框。不检查队伍、不领取任务（单人也可验证）。成功后对话框停留，请手动关闭。任务运行中不可验证。</div>
+                    <div class="group-hint">与实际流程一致、时序无额外延时，且不改变任务状态：走位到长安领取点（286,159）→ 点击领取 NPC 打开对话框 → 绿色领取选项仅定位不点击（点击即领取）→ 点屏幕中间关闭对话框。不检查队伍、不领取任务（单人也可验证）。成功后对话框停留，请手动关闭。本窗口任务运行中不可验证（多开时其他窗口运行不影响）。</div>
                 </div>
                 <div class="group-box">
                     <div class="group-title">五环链路</div>
@@ -2223,7 +2248,7 @@
                         <button id="btn-verify-wuhuan-claim" class="btn" onclick="verifyWuhuanClaim()">测试领取五环</button>
                         <span class="verify-result" id="wuhuan-claim-verify-result"></span>
                     </div>
-                    <div class="group-hint">与实际流程一致、时序无额外延时，且都不改变任务状态：进入布店=走位到布店门口 → 降落检查 → 点入口 → 点老板 → 点「我想买点东西」打开商店对话框即成功，不购买装备；领取五环=走位到云游大师 → 点领取任务按钮 → 对话面板出现即成功，不点任何选项、不真正领取（领取对话框/活力值不足/今日两次已满任一对话框出现均算面板出现）。成功后对话框停留，请手动关闭。任务运行中不可验证。</div>
+                    <div class="group-hint">与实际流程一致、时序无额外延时，且都不改变任务状态：进入布店=走位到布店门口 → 降落检查 → 点入口 → 点老板 → 点「我想买点东西」打开商店对话框即成功，不购买装备；领取五环=走位到云游大师 → 点领取任务按钮 → 对话面板出现即成功，不点任何选项、不真正领取（领取对话框/活力值不足/今日两次已满任一对话框出现均算面板出现）。成功后对话框停留，请手动关闭。本窗口任务运行中不可验证（多开时其他窗口运行不影响）。</div>
                 </div>
                 <div class="group-box">
                     <div class="group-title">客栈链路</div>
@@ -2231,7 +2256,7 @@
                         <button id="btn-verify-kezhan-awang" class="btn" onclick="verifyKezhanAwang()">找阿旺</button>
                         <span class="verify-result" id="kezhan-awang-verify-result"></span>
                     </div>
-                    <div class="group-hint">与实际流程一致、时序无额外延时：找阿旺=走位到大理寺墙外 → 定位阿旺（模板/OCR 名字兜底，未找到按 Alt+C 降落重试）→ 点击左侧走近 → 等寻路结束重新定位 → 点击交互点；大理寺墙外未找到时兜底走洛阳城阿旺出现点重找一轮。点击阿旺会真实推进任务对话（与任务流程同行为），对话框停留请手动关闭。任务运行中不可验证。</div>
+                    <div class="group-hint">与实际流程一致、时序无额外延时：找阿旺=走位到大理寺墙外 → 定位阿旺（模板/OCR 名字兜底，未找到按 Alt+C 降落重试）→ 点击左侧走近 → 等寻路结束重新定位 → 点击交互点；大理寺墙外未找到时兜底走洛阳城阿旺出现点重找一轮。点击阿旺会真实推进任务对话（与任务流程同行为），对话框停留请手动关闭。本窗口任务运行中不可验证（多开时其他窗口运行不影响）。</div>
                 </div>
                 <div class="group-box">
                     <div class="group-title">名望链路</div>
@@ -2251,7 +2276,7 @@
                         <button id="btn-verify-mingwang-xianzu" class="btn" onclick="verifyMingwangClaimRace('仙族')">仙族领取（小地图快捷）</button>
                         <span class="verify-result" id="mingwang-xianzu-verify-result"></span>
                     </div>
-                    <div class="group-hint">魔族领取（小地图快捷）/仙族领取（小地图快捷）=仅走小地图快捷领取方式（不做种族判定、不走旧坐标寻路 + NPC 模板路线）：打开该种族地图小地图（已在该地图直接开）→ 勾选底部「任务」筛选 → 点击固定位置黄色任务 NPC 名（魔族 逆天魔 / 仙族 武尊神，只点一次）→ 等待游戏自动寻路并在到达后自动打开对话框 → 点绿色选项「开启山河名望志」→ 打开山河名望面板后停止（不领取面板任务）。第一阶段链路（与任务流程一致、时序无额外延时）：点击 (1230,95) 开人物属性面板 → 识别种族（标题牌右侧 120px 条带，日志打印 OCR 文案与条带）→ 关面板 → 魔族前往大唐边境领取点（世界地图/小地图 985,384）→ 点击逆天魔 → 对话框选「开启山河名望志」→ 点击山河名望入口打开任务领取面板后停止（不在面板内领取任务）。测试领取名望任务=面板已打开则直接扫描任务栏（锚点下方 6 卡：3 列×2 行，190×154），按 高级>中级>初级 + 卡片顺序选第一个已实现任务（蛟魔复仇/沙海迷踪/蛟魔探秘/五庄封印/沙都修罗）并点击其接取按钮（真实领取；面板未打开时先走完整第一阶段链路），日志打印 6 卡级别/标题与匹配分数；领取后对话框模板门控命中即点屏幕中间关闭，残留山河名望面板右键标题牌关闭，任务追踪出现「山河名望」→ 复用 follow_task 跟踪至任务完成（任务对话按 DIALOG_OPTION_MAP 处理，如「黑水河深，不如蛟魔之心。」→「逆天魔大将派我前来」；沙海迷踪=「少侠准备好清理地图了吗？」→「我已经准备好了」后识别「开始」按钮 mingwang_chenjiuditu_kaishi 点击进入战斗，战斗结束即完成；净化水晶丛林=「糟糕，水晶丛林竟真被混沌缠上了，得赶快净化这些混沌！」→「马上净化水晶丛林上的混沌。」后识别「开始」按钮 mingwang_qingxishuijing_kaishi 点击进入战斗，战斗结束即完成；蛟魔探秘=「老头子我最喜欢的，就是在这里钓鱼了~」→「请将鱼竿借我一用！」后识别窗口标题 mingwang_diaochushuizhongguaiwu，复用 pochufengyin 点击冲刺连点闭环（mash：连点冲刺+维持泵点击率伺服（位置与持续点击率正相关，停手约 1 秒即回退），不按倒计时停手）；沙都修罗=追踪文案含「根据三张蟠桃园残像所示位置」时进入蟠桃园（世界地图点「蟠桃园」标签 shijie_pantaoyuan），按四个搜索点 (739,588)→(126,32) / (623,476)→(66,87) / (541,428)→(27,112) / (552,310)→(33,171) 依次寻路，先查 NPC 模板 mingwang_shaduxiuluo（阈值 0.79，命中直接点模板中心），未命中再 OCR 找「沙都修罗」（排除任务追踪同名文案），找到点击其上方 40px，四点均未找到限频重试）。任务运行中不可验证。</div>
+                    <div class="group-hint">魔族领取（小地图快捷）/仙族领取（小地图快捷）=仅走小地图快捷领取方式（不做种族判定、不走旧坐标寻路 + NPC 模板路线）：打开该种族地图小地图（已在该地图直接开）→ 勾选底部「任务」筛选 → 点击固定位置黄色任务 NPC 名（魔族 逆天魔 / 仙族 武尊神，只点一次）→ 等待游戏自动寻路并在到达后自动打开对话框 → 点绿色选项「开启山河名望志」→ 打开山河名望面板后停止（不领取面板任务）。第一阶段链路（与任务流程一致、时序无额外延时）：点击 (1230,95) 开人物属性面板 → 识别种族（标题牌右侧 120px 条带，日志打印 OCR 文案与条带）→ 关面板 → 魔族前往大唐边境领取点（世界地图/小地图 985,384）→ 点击逆天魔 → 对话框选「开启山河名望志」→ 点击山河名望入口打开任务领取面板后停止（不在面板内领取任务）。测试领取名望任务=面板已打开则直接扫描任务栏（锚点下方 6 卡：3 列×2 行，190×154），按 高级>中级>初级 + 卡片顺序选第一个已实现任务（蛟魔复仇/沙海迷踪/蛟魔探秘/五庄封印/沙都修罗）并点击其接取按钮（真实领取；面板未打开时先走完整第一阶段链路），日志打印 6 卡级别/标题与匹配分数；领取后对话框模板门控命中即点屏幕中间关闭，残留山河名望面板右键标题牌关闭，任务追踪出现「山河名望」→ 复用 follow_task 跟踪至任务完成（任务对话按 DIALOG_OPTION_MAP 处理，如「黑水河深，不如蛟魔之心。」→「逆天魔大将派我前来」；沙海迷踪=「少侠准备好清理地图了吗？」→「我已经准备好了」后识别「开始」按钮 mingwang_chenjiuditu_kaishi 点击进入战斗，战斗结束即完成；净化水晶丛林=「糟糕，水晶丛林竟真被混沌缠上了，得赶快净化这些混沌！」→「马上净化水晶丛林上的混沌。」后识别「开始」按钮 mingwang_qingxishuijing_kaishi 点击进入战斗，战斗结束即完成；蛟魔探秘=「老头子我最喜欢的，就是在这里钓鱼了~」→「请将鱼竿借我一用！」后识别窗口标题 mingwang_diaochushuizhongguaiwu，复用 pochufengyin 点击冲刺连点闭环（mash：连点冲刺+维持泵点击率伺服（位置与持续点击率正相关，停手约 1 秒即回退），不按倒计时停手）；沙都修罗=追踪文案含「根据三张蟠桃园残像所示位置」时进入蟠桃园（世界地图点「蟠桃园」标签 shijie_pantaoyuan），按四个搜索点 (739,588)→(126,32) / (623,476)→(66,87) / (541,428)→(27,112) / (552,310)→(33,171) 依次寻路，先查 NPC 模板 mingwang_shaduxiuluo（阈值 0.79，命中直接点模板中心），未命中再 OCR 找「沙都修罗」（排除任务追踪同名文案），找到点击其上方 40px，四点均未找到限频重试）。本窗口任务运行中不可验证（多开时其他窗口运行不影响）。</div>
                 </div>
                 <div class="group-box">
                     <div class="group-title">队伍</div>
@@ -2307,7 +2332,7 @@
                         <button id="btn-verify-clear-screen" class="btn" onclick="verifyClearScreen()">验证清屏</button>
                         <span class="verify-result" id="clear-screen-verify-result"></span>
                     </div>
-                    <div class="group-hint">执行真实清屏流程：激活游戏窗口 → 按 Alt+6 屏蔽非队伍玩家 → 按 Alt+5 屏蔽摊位（真实按键，可能短暂取消再开启），结束时两个屏蔽均处于开启态，与任务启动清屏结果一致。游戏窗口未在前台时跳过并提示。任务运行中不可验证。</div>
+                    <div class="group-hint">执行真实清屏流程：激活游戏窗口 → 按 Alt+6 屏蔽非队伍玩家 → 按 Alt+5 屏蔽摊位（真实按键，可能短暂取消再开启），结束时两个屏蔽均处于开启态，与任务启动清屏结果一致。游戏窗口未在前台时跳过并提示。本窗口任务运行中不可验证（多开时其他窗口运行不影响）。</div>
                 </div>
                 <div class="group-box">
                     <div class="group-title">喊话</div>
@@ -2323,7 +2348,7 @@
                         <button id="btn-verify-shout-zz" class="btn" onclick="verifyShout('zhongzu')">测试种族比武喊话</button>
                         <span class="verify-result" id="shout-zz-verify-result"></span>
                     </div>
-                    <div class="group-hint">向游戏聊天发送一次喊话验证 Enter→输入→Enter 链路：分别发送对应任务设置里保存的喊话内容（修罗的「{种族}」按必须种族实时替换）。发送后请查看游戏公屏是否出现消息。任务运行中不可验证。</div>
+                    <div class="group-hint">向游戏聊天发送一次喊话验证 Enter→输入→Enter 链路：分别发送对应任务设置里保存的喊话内容（修罗的「{种族}」按必须种族实时替换）。发送后请查看游戏公屏是否出现消息。本窗口任务运行中不可验证（多开时其他窗口运行不影响）。</div>
                 </div>
                 <div class="group-box">
                     <div class="group-title">模板与坐标</div>
@@ -2359,7 +2384,7 @@
                         <button id="btn-map-nav-cancel" class="btn" onclick="mapNavCancel()" disabled>中断寻路</button>
                         <span class="verify-result" id="map-nav-result"></span>
                     </div>
-                    <div class="group-hint">打开世界地图 → 城市标签（层级图再点层块；大雁塔走「寻路」面板搜索目的地→点黄色链接）→ 在地图上悬停读坐标标定像素换算 → 悬停校验后点击地图点寻路 → 等待 HUD 地名 + 坐标 ±10 到达（2026-11-20 实机验证机制，普通图/龙窟/凤巢/大雁塔均免采样）。会真实移动人物，任务运行中不可用。执行中可点「中断寻路」（1-3 秒内停止自动操作并关闭地图；人物自身的自动寻路不会因此停止）。</div>
+                    <div class="group-hint">打开世界地图 → 城市标签（层级图再点层块；大雁塔走「寻路」面板搜索目的地→点黄色链接）→ 在地图上悬停读坐标标定像素换算 → 悬停校验后点击地图点寻路 → 等待 HUD 地名 + 坐标 ±10 到达（2026-11-20 实机验证机制，普通图/龙窟/凤巢/大雁塔均免采样）。会真实移动人物，本窗口任务运行中不可用（多开时其他窗口运行不影响）。执行中可点「中断寻路」（1-3 秒内停止自动操作并关闭地图；人物自身的自动寻路不会因此停止）。</div>
                 </div>
                 <div class="group-box">
                     <div class="group-title">任务点位导航（坐标化测试）</div>
@@ -2451,7 +2476,7 @@
                         <button id="site-nav-xuanshu_jiantianpan-btn" class="btn" onclick="siteNavRun('xuanshu_jiantianpan')">玄枢监天盘 · 火云戈壁 (180,86)</button>
                         <span class="verify-result" id="site-nav-xuanshu_jiantianpan-result"></span>
                     </div>
-                    <div class="group-hint">逐个验证任务点位改用地图坐标导航（与「地图导航」同一机制，共用中断按钮）：真实点击/移动人物，任务运行中不可用。领取/快送 POI 点位用现固定像素的标定反算坐标（点击像素与现流程一致）；其余为任务常量里的目标坐标。黄字/POI 点位（修罗/五倍领取、客栈入口）请对照：人物是否走到位、是否触发自动任务对话框/快送对话框；纯地形点位（巫医/修理/五环/沙都/玄枢）到达即可。落点或行为不符合请反馈对应点位名。从灵兽村测「修理」会顺带验证预走路坐标化。生产任务点位可经通用设置「任务点位坐标化寻路」开关回滚固定像素寻路（默认开启）。「客栈入口」按钮走真实客栈链路：点击命中玩家路标/飞行旗时自动点「快送我去」，并按客栈内 24,7 附近确认到达。</div>
+                    <div class="group-hint">逐个验证任务点位改用地图坐标导航（与「地图导航」同一机制，共用中断按钮）：真实点击/移动人物，本窗口任务运行中不可用（多开时其他窗口运行不影响）。领取/快送 POI 点位用现固定像素的标定反算坐标（点击像素与现流程一致）；其余为任务常量里的目标坐标。黄字/POI 点位（修罗/五倍领取、客栈入口）请对照：人物是否走到位、是否触发自动任务对话框/快送对话框；纯地形点位（巫医/修理/五环/沙都/玄枢）到达即可。落点或行为不符合请反馈对应点位名。从灵兽村测「修理」会顺带验证预走路坐标化。生产任务点位可经通用设置「任务点位坐标化寻路」开关回滚固定像素寻路（默认开启）。「客栈入口」按钮走真实客栈链路：点击命中玩家路标/飞行旗时自动点「快送我去」，并按客栈内 24,7 附近确认到达。</div>
                 </div>
                 <div class="group-box">
                     <div class="group-title">截屏通道</div>
@@ -2459,7 +2484,7 @@
                         <button id="btn-verify-capture-diag" class="btn" onclick="verifyCaptureDiag()">开始诊断</button>
                         <span class="verify-result" id="capture-diag-verify-result"></span>
                     </div>
-                    <div class="group-hint">对比 PrintWindow(3)/PrintWindow(0)/窗口 BitBlt/全屏 BitBlt 四条截屏通道并记录环境事实（显卡/DWM/进程提权/兼容模式），逐行写入本地日志文件与面板日志抽屉，用于定位黑屏/识别全失效问题。只读不点击（任务未运行时额外尝试置前游戏窗口复测），约 10 秒。任务运行中也可诊断（跳过置前复测）。</div>
+                    <div class="group-hint">对比 PrintWindow(3)/PrintWindow(0)/窗口 BitBlt/全屏 BitBlt 四条截屏通道并记录环境事实（显卡/DWM/进程提权/兼容模式），逐行写入本地日志文件与面板日志抽屉，用于定位黑屏/识别全失效问题。只读不点击（任务未运行时额外尝试置前游戏窗口复测），约 10 秒。本窗口任务运行中也可诊断（跳过置前复测；多开时其他窗口运行不影响）。</div>
                     <div class="verify-row">
                         <button id="btn-verify-child-windows" class="btn" onclick="verifyChildWindows()">子窗口枚举</button>
                         <span class="verify-result" id="child-windows-verify-result"></span>
@@ -2532,7 +2557,7 @@
                         <button id="btn-verify-silent-char" class="btn" onclick="verifySilentChar()">静默字符 WM_CHAR</button>
                         <span class="verify-result" id="silent-char-verify-result"></span>
                     </div>
-                    <div class="group-hint">不移动物理鼠标、不激活游戏窗口，直接向游戏窗口投递一次消息点击（游戏画面中心），用于验证「游戏窗口不在前台」时能否后台点击——左键已实测有效，可行性确认后部分原走鼠标的点击可切换为静默点击。右键投递 WM_RBUTTONDOWN/UP（游戏世界右键会弹操作菜单，可直接观察）。点击后自动对比前后画面差异给出疑似生效/未生效，请同时观察游戏画面（左键看人物是否走向画面中心，右键看是否弹出操作菜单）做最终确认。静默回蓝=右键投递窗口坐标 (1316,105) 一次；静默回血=右键投递窗口坐标 (1316,87) 一次；均只投递不做判定，结果请自行观察血蓝条变化。静默按键=投递组合键消息一次（Alt 组合走 WM_SYSKEYDOWN/UP、Ctrl 组合走 WM_KEYDOWN/UP，实测：Alt+C/Alt+E/Alt+5/Alt+6 有效，Ctrl+Tab 与 Enter 无效），生效信号：Alt+C 人物降落/位置显示刷新、Alt+E 背包打开、Alt+5/Alt+6 屏蔽飘字提示、Alt+U 飞行驭器面板打开（高性能+静默任务的打开路径）、Ctrl+Tab 切换 Tab、Enter 聊天输入框开关。实测结论：Alt 组合/Enter+WM_CHAR/WM_CHAR 中文字符注入有效，Ctrl+Tab 无效（切 Tab 维持键盘门控），WM_PASTE/WM_UNICHAR 无效（子窗口枚举无标准 Edit 控件）。静默字符 WM_CHAR=投递「测」字符消息，请先手动点开游戏聊天输入框再测。请先把控制窗口移到游戏窗口上层遮挡（或切到其他窗口）再点击。任务运行中不可验证。</div>
+                    <div class="group-hint">不移动物理鼠标、不激活游戏窗口，直接向游戏窗口投递一次消息点击（游戏画面中心），用于验证「游戏窗口不在前台」时能否后台点击——左键已实测有效，可行性确认后部分原走鼠标的点击可切换为静默点击。右键投递 WM_RBUTTONDOWN/UP（游戏世界右键会弹操作菜单，可直接观察）。点击后自动对比前后画面差异给出疑似生效/未生效，请同时观察游戏画面（左键看人物是否走向画面中心，右键看是否弹出操作菜单）做最终确认。静默回蓝=右键投递窗口坐标 (1316,105) 一次；静默回血=右键投递窗口坐标 (1316,87) 一次；均只投递不做判定，结果请自行观察血蓝条变化。静默按键=投递组合键消息一次（Alt 组合走 WM_SYSKEYDOWN/UP、Ctrl 组合走 WM_KEYDOWN/UP，实测：Alt+C/Alt+E/Alt+5/Alt+6 有效，Ctrl+Tab 与 Enter 无效），生效信号：Alt+C 人物降落/位置显示刷新、Alt+E 背包打开、Alt+5/Alt+6 屏蔽飘字提示、Alt+U 飞行驭器面板打开（高性能+静默任务的打开路径）、Ctrl+Tab 切换 Tab、Enter 聊天输入框开关。实测结论：Alt 组合/Enter+WM_CHAR/WM_CHAR 中文字符注入有效，Ctrl+Tab 无效（切 Tab 维持键盘门控），WM_PASTE/WM_UNICHAR 无效（子窗口枚举无标准 Edit 控件）。静默字符 WM_CHAR=投递「测」字符消息，请先手动点开游戏聊天输入框再测。请先把控制窗口移到游戏窗口上层遮挡（或切到其他窗口）再点击。本窗口任务运行中不可验证（多开时其他窗口运行不影响）。</div>
                 </div>
             </div>
         </div>
@@ -2656,6 +2681,7 @@
     const zhongzuTabGroup = document.getElementById('zhongzu-tab-group');
     const wubeiRepairIntervalRow = document.getElementById('wubei-repair-interval-row');
     const wubeiKuimulang = document.getElementById('wubei-kuimulang');
+    const wubeiManualNav = document.getElementById('wubei-manual-nav');
     const wubeiTabGroup = document.getElementById('wubei-tab-group');
     const xiuluoShout = document.getElementById('xiuluo-shout');
     const xiuluoShoutText = document.getElementById('xiuluo-shout-text');
@@ -2741,6 +2767,8 @@
     const mapNavResultEl = document.getElementById('map-nav-result');
     const btnSiteNavCancel = document.getElementById('btn-site-nav-cancel');
     const siteNavCommonResultEl = document.getElementById('site-nav-common-result');
+    const btnDemonNavCancel = document.getElementById('btn-demon-nav-cancel');
+    const demonNavCommonResultEl = document.getElementById('demon-nav-common-result');
     const btnVerifyDialogDetect = document.getElementById('btn-verify-dialog-detect');
     const dialogDetectVerifyResultEl = document.getElementById('dialog-detect-verify-result');
     const btnVerifyApplyPanel = document.getElementById('btn-verify-apply-panel');
@@ -5108,6 +5136,9 @@
     wubeiKuimulang.addEventListener('change', () => {
         callPython('save_wubei_kuimulang_switch', wubeiKuimulang.checked);
     });
+    wubeiManualNav.addEventListener('change', () => {
+        callPython('save_wubei_manual_nav', wubeiManualNav.checked);
+    });
     wubeiTabGroup.addEventListener('change', () => {
         callPython('save_wubei_tab_group', wubeiTabGroup.checked);
     });
@@ -5544,6 +5575,7 @@
             wubeiRepairIntervalEl.innerText = info.wubei.repair_interval;
         }
         wubeiKuimulang.checked = !!(info.wubei && info.wubei.kuimulang);
+        wubeiManualNav.checked = !!(info.wubei && info.wubei.manual_nav);
         wubeiTabGroup.checked = !!(info.wubei && info.wubei.tab_group);
         zhongzuCheckTeam.checked = !!(info.zhongzu && info.zhongzu.check_team);
         zhongzuAutoCreateTeam.checked = !!(info.zhongzu && info.zhongzu.auto_create_team);
@@ -7827,6 +7859,89 @@
         const el = document.getElementById('site-nav-' + key + '-result');
         if (btn) btn.disabled = false;
         if (btnSiteNavCancel) btnSiteNavCancel.disabled = true;
+        if (!el) return;
+        el.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
+        el.innerText = (ok ? '✔ ' : '✘ ') + info;
+    };
+
+    // ---- 降魔任务识别与寻路（模拟）：打开任务栏→识别→手动寻路 ----
+    // 与地图/点位导航共用后端线程与中断标志；每类任务一个按钮，识别
+    // 类型必须与按钮对应，否则提示当前识别结果（不移动人物）。
+    let demonNavRunningKind = null;
+    async function demonNavRun(kind) {
+        if (verifying) return;
+        const btn = document.getElementById('demon-nav-' + kind + '-btn');
+        const el = document.getElementById('demon-nav-' + kind + '-result');
+        verifying = true;
+        demonNavRunningKind = kind;
+        if (btn) btn.disabled = true;
+        if (btnDemonNavCancel) btnDemonNavCancel.disabled = true;
+        if (demonNavCommonResultEl) demonNavCommonResultEl.innerText = '';
+        if (el) {
+            el.style.color = 'var(--text)';
+            el.innerText = '模拟中...（过程见日志）';
+        }
+        try {
+            const r = await callPython('verify_demon_navigate', kind);
+            if (!r || r.status !== 'success') {
+                verifying = false;
+                demonNavRunningKind = null;
+                if (btn) btn.disabled = false;
+                if (el) {
+                    el.style.color = 'var(--danger-text)';
+                    el.innerText = (r && r.msg) || '模拟请求失败';
+                }
+                return;
+            }
+            // 线程已启动：等待 Python 侧 onDemonNavResult 回推最终结果
+            if (btnDemonNavCancel) btnDemonNavCancel.disabled = false;
+        } catch (e) {
+            verifying = false;
+            demonNavRunningKind = null;
+            if (btn) btn.disabled = false;
+            if (el) {
+                el.style.color = 'var(--danger-text)';
+                el.innerText = '模拟请求异常';
+            }
+        }
+    }
+    async function demonNavCancel() {
+        if (!verifying) return;
+        if (btnDemonNavCancel) btnDemonNavCancel.disabled = true;
+        try {
+            const r = await callPython('cancel_map_navigate');
+            if (r && r.status === 'success') {
+                const el = demonNavRunningKind
+                    ? document.getElementById('demon-nav-' + demonNavRunningKind + '-result')
+                    : null;
+                if (el) {
+                    el.style.color = 'var(--text)';
+                    el.innerText = r.msg || '已发送中断请求';
+                }
+            } else {
+                if (demonNavCommonResultEl) {
+                    demonNavCommonResultEl.style.color = 'var(--danger-text)';
+                    demonNavCommonResultEl.innerText = (r && r.msg) || '中断请求失败';
+                }
+                if (verifying && btnDemonNavCancel) {
+                    btnDemonNavCancel.disabled = false;
+                }
+            }
+        } catch (e) {
+            if (demonNavCommonResultEl) {
+                demonNavCommonResultEl.style.color = 'var(--danger-text)';
+                demonNavCommonResultEl.innerText = '中断请求异常';
+            }
+            if (btnDemonNavCancel) btnDemonNavCancel.disabled = false;
+        }
+    }
+    window.onDemonNavResult = function (kind, ok, info) {
+        verifying = false;
+        demonNavRunningKind = null;
+        const btn = document.getElementById('demon-nav-' + kind + '-btn');
+        const el = document.getElementById('demon-nav-' + kind + '-result');
+        if (btn) btn.disabled = false;
+        if (btnDemonNavCancel) btnDemonNavCancel.disabled = true;
         if (!el) return;
         el.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         el.innerText = (ok ? '✔ ' : '✘ ') + info;

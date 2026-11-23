@@ -73,6 +73,34 @@ SITE_NAV_POINTS = {
     "xuanshu_jiantianpan": ("玄枢监天盘", "火云戈壁", 180, 86),
 }
 
+# 诊断-五倍（降魔任务）识别与寻路模拟：key → (按钮标签, 期望识别 kind)。
+# 降魔任务即五倍任务（同一玩法的不同叫法，用户 2026-11-23 明确）；按钮
+# 归入「五倍链路」诊断组。流程：打开任务栏 → task_panel 读取当前五倍
+# 任务 → demon_task 识别 → 关闭任务栏 → 按识别出的地图/坐标执行手动
+# 寻路（到达即完成）。任务类型由当前实际任务决定：点与任务不符的按钮
+# 会提示当前识别结果。
+DEMON_NAV_KINDS = {
+    "kill": ("五倍·三藏逢魔（击杀）", "kill"),
+    "huangpao": ("五倍·智斗黄袍（黄袍怪多轮）", "huangpao"),
+    "xianxing": ("五倍·宝象迷情（显形镜 A/B）", "xianxing"),
+    "reclaim": ("五倍·殿前献艺（暗雷，需重领）", "reclaim"),
+}
+
+
+def _task_running_here(tm):
+    """当前选中窗口是否有任务在跑（诊断按窗口放行，用户 2026-11-23）。
+
+    诊断只操作当前选中窗口（game.find_main_window 跟随选中目标），
+    多开时其他窗口的任务运行不应阻塞本窗口诊断——只在「本窗口已启动
+    任务」时拒绝，不再要求全部窗口停止。未选中时回退当前角色 ID
+    （与消息服务/启动按钮的解析顺序一致）；都解析不到时保持旧的全量
+    判定（任一窗口在跑即拒绝，安全兜底）。
+    """
+    from ..core import user_data
+    from . import window_registry
+    rid = window_registry.selected_role() or user_data.current_role_id()
+    return tm.is_running(rid)
+
 
 def _game_window_clickable(win):
     """检查游戏窗口中心点是否被其他窗口遮挡（点击会落到遮挡窗口上）。
@@ -108,10 +136,11 @@ class DiagnosticsMixin(ControlHost):
         确认整条链路（开背包 → 任务储物格 → 回城符识别）是否正确。
 
         验证在主进程后台线程执行（不占用任务子进程通道）；
-        任务运行中拒绝验证，避免与任务子进程互抢游戏操作。
+        本窗口任务运行中拒绝验证，避免与任务子进程互抢游戏操作；
+        多开时其他窗口的任务运行不影响本窗口诊断（用户 2026-11-23）。
         """
-        if self._tm.is_running():
-            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if _task_running_here(self._tm):
+            return {"status": "error", "msg": "本窗口任务运行中，请先停止本窗口任务再验证"}
         if self._verifying:
             return {"status": "error", "msg": "验证进行中，请稍候"}
         win = game.find_main_window()
@@ -132,8 +161,8 @@ class DiagnosticsMixin(ControlHost):
         处仅移动鼠标定位不点击（点击即领取）——验证走位/按钮识别/对话框/选项
         识别整条链路，最后点击屏幕中间关闭对话框，不领取任务。
         """
-        if self._tm.is_running():
-            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if _task_running_here(self._tm):
+            return {"status": "error", "msg": "本窗口任务运行中，请先停止本窗口任务再验证"}
         if self._verifying:
             return {"status": "error", "msg": "验证进行中，请稍候"}
         win = game.find_main_window()
@@ -152,8 +181,8 @@ class DiagnosticsMixin(ControlHost):
         血蓝状态仅报告），NPC 点击前先移动鼠标定位（无延时）；对话框处理复用战斗线程
         逻辑（点击 NPC 后由战斗线程点「全部医治和修复」）。
         """
-        if self._tm.is_running():
-            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if _task_running_here(self._tm):
+            return {"status": "error", "msg": "本窗口任务运行中，请先停止本窗口任务再验证"}
         if self._verifying:
             return {"status": "error", "msg": "验证进行中，请稍候"}
         win = game.find_main_window()
@@ -198,8 +227,8 @@ class DiagnosticsMixin(ControlHost):
         主进程无战斗线程，队长医治选项由验证自行点击（与 verify_wuyi_flow
         一致）；前置：窗口内 ≥2 个已登录 Tab（开关状态不校验）。
         """
-        if self._tm.is_running():
-            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if _task_running_here(self._tm):
+            return {"status": "error", "msg": "本窗口任务运行中，请先停止本窗口任务再验证"}
         if self._verifying:
             return {"status": "error", "msg": "验证进行中，请稍候"}
         win = game.find_main_window()
@@ -258,8 +287,8 @@ class DiagnosticsMixin(ControlHost):
 
     def _start_repair_verify(self, task, group):
         """修理验证公共入口：校验任务/窗口状态后起验证线程。"""
-        if self._tm.is_running():
-            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if _task_running_here(self._tm):
+            return {"status": "error", "msg": "本窗口任务运行中，请先停止本窗口任务再验证"}
         if self._verifying:
             return {"status": "error", "msg": "验证进行中，请稍候"}
         win = game.find_main_window()
@@ -337,8 +366,8 @@ class DiagnosticsMixin(ControlHost):
         通道跑通完整领取链路。不需要 _game_window_clickable 前置
         （消息点击不落屏幕坐标，遮挡无关）。
         """
-        if self._tm.is_running():
-            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if _task_running_here(self._tm):
+            return {"status": "error", "msg": "本窗口任务运行中，请先停止本窗口任务再验证"}
         if self._verifying:
             return {"status": "error", "msg": "验证进行中，请稍候"}
         win = game.find_main_window()
@@ -382,8 +411,8 @@ class DiagnosticsMixin(ControlHost):
         通道跑通完整巫医链路。不需要 _game_window_clickable 前置
         （消息点击不落屏幕坐标，遮挡无关）。
         """
-        if self._tm.is_running():
-            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if _task_running_here(self._tm):
+            return {"status": "error", "msg": "本窗口任务运行中，请先停止本窗口任务再验证"}
         if self._verifying:
             return {"status": "error", "msg": "验证进行中，请稍候"}
         win = game.find_main_window()
@@ -427,8 +456,8 @@ class DiagnosticsMixin(ControlHost):
         通道跑通完整回程链路。不需要 _game_window_clickable 前置
         （消息点击不落屏幕坐标，遮挡无关）。
         """
-        if self._tm.is_running():
-            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if _task_running_here(self._tm):
+            return {"status": "error", "msg": "本窗口任务运行中，请先停止本窗口任务再验证"}
         if self._verifying:
             return {"status": "error", "msg": "验证进行中，请稍候"}
         win = game.find_main_window()
@@ -471,8 +500,8 @@ class DiagnosticsMixin(ControlHost):
         处仅移动鼠标定位不点击（点击即领取）——验证走位/入口识别/对话框/
         选项识别整条链路，最后点击屏幕中间关闭对话框，不领取任务。
         """
-        if self._tm.is_running():
-            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if _task_running_here(self._tm):
+            return {"status": "error", "msg": "本窗口任务运行中，请先停止本窗口任务再验证"}
         if self._verifying:
             return {"status": "error", "msg": "验证进行中，请稍候"}
         win = game.find_main_window()
@@ -516,8 +545,8 @@ class DiagnosticsMixin(ControlHost):
         领取 NPC 打开对话框 → 绿色领取选项仅定位不点击（点击即领取）
         → 点屏幕中间关闭对话框。不领取任务、不检查队伍（单人可验证），
         与修罗/五倍领取验证同模式。"""
-        if self._tm.is_running():
-            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if _task_running_here(self._tm):
+            return {"status": "error", "msg": "本窗口任务运行中，请先停止本窗口任务再验证"}
         if self._verifying:
             return {"status": "error", "msg": "验证进行中，请稍候"}
         win = game.find_main_window()
@@ -563,8 +592,8 @@ class DiagnosticsMixin(ControlHost):
         血蓝状态仅报告），NPC 点击前先移动鼠标定位（无延时）；对话框处理
         由验证流程自行点击医治选项（主进程没有战斗线程，与任务进程中
         战斗线程点击行为等效）。"""
-        if self._tm.is_running():
-            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if _task_running_here(self._tm):
+            return {"status": "error", "msg": "本窗口任务运行中，请先停止本窗口任务再验证"}
         if self._verifying:
             return {"status": "error", "msg": "验证进行中，请稍候"}
         win = game.find_main_window()
@@ -609,8 +638,8 @@ class DiagnosticsMixin(ControlHost):
         关闭后继续 → 开打对话出现即停止）。真实点击会打开/关闭游戏
         对话框；开打对话出现后停留不点开打选项（点击即进入战斗）。
         任务运行中不可验证（点击与任务流程冲突）。"""
-        if self._tm.is_running():
-            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if _task_running_here(self._tm):
+            return {"status": "error", "msg": "本窗口任务运行中，请先停止本窗口任务再验证"}
         if self._verifying:
             return {"status": "error", "msg": "验证进行中，请稍候"}
         win = game.find_main_window()
@@ -654,8 +683,8 @@ class DiagnosticsMixin(ControlHost):
         回城符——仅将鼠标移动到回城符上定位（不点击）后关闭背包，供人工
         确认整条链路（开背包 → 任务储物格 → 回城符识别）是否正确。
         """
-        if self._tm.is_running():
-            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if _task_running_here(self._tm):
+            return {"status": "error", "msg": "本窗口任务运行中，请先停止本窗口任务再验证"}
         if self._verifying:
             return {"status": "error", "msg": "验证进行中，请稍候"}
         win = game.find_main_window()
@@ -698,8 +727,8 @@ class DiagnosticsMixin(ControlHost):
         """诊断页-五环-测试进入布店按钮：与任务购买流程的进店段一致
         （走位到布店 → 降落检查 → 点入口 → 点老板 → 点「我想买点
         东西」），商店对话框打开即成功——不购买任何装备。"""
-        if self._tm.is_running():
-            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if _task_running_here(self._tm):
+            return {"status": "error", "msg": "本窗口任务运行中，请先停止本窗口任务再验证"}
         if self._verifying:
             return {"status": "error", "msg": "验证进行中，请稍候"}
         win = game.find_main_window()
@@ -741,8 +770,8 @@ class DiagnosticsMixin(ControlHost):
     def verify_wuhuan_claim(self):
         """诊断页-五环-测试领取五环按钮：与领取流程一致到点击领取任务
         按钮为止，对话面板出现即成功——不点任何选项、不真正领取。"""
-        if self._tm.is_running():
-            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if _task_running_here(self._tm):
+            return {"status": "error", "msg": "本窗口任务运行中，请先停止本窗口任务再验证"}
         if self._verifying:
             return {"status": "error", "msg": "验证进行中，请稍候"}
         win = game.find_main_window()
@@ -785,8 +814,8 @@ class DiagnosticsMixin(ControlHost):
         """诊断页-客栈-找阿旺按钮：与任务找阿旺流程一致（走位到大理寺
         墙外 → 定位阿旺 → 走近 → 点击交互点；未找到时兜底走洛阳城
         阿旺出现点重找一轮），点击阿旺会真实推进任务对话。"""
-        if self._tm.is_running():
-            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if _task_running_here(self._tm):
+            return {"status": "error", "msg": "本窗口任务运行中，请先停止本窗口任务再验证"}
         if self._verifying:
             return {"status": "error", "msg": "验证进行中，请稍候"}
         win = game.find_main_window()
@@ -831,8 +860,8 @@ class DiagnosticsMixin(ControlHost):
         名望」→ 点击山河名望入口打开任务领取面板），到打开面板为止，
         不在面板内领取任务。仙族/其他种族判定后结束并提示待补充。
         """
-        if self._tm.is_running():
-            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if _task_running_here(self._tm):
+            return {"status": "error", "msg": "本窗口任务运行中，请先停止本窗口任务再验证"}
         if self._verifying:
             return {"status": "error", "msg": "验证进行中，请稍候"}
         win = game.find_main_window()
@@ -877,8 +906,8 @@ class DiagnosticsMixin(ControlHost):
         打开面板）再领取。已实现高级任务「蛟魔复仇」「沙海迷踪」
         「沙都修罗」等，按级别优先级 + 卡片顺序选第一个可用的。
         """
-        if self._tm.is_running():
-            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if _task_running_here(self._tm):
+            return {"status": "error", "msg": "本窗口任务运行中，请先停止本窗口任务再验证"}
         if self._verifying:
             return {"status": "error", "msg": "验证进行中，请稍候"}
         win = game.find_main_window()
@@ -928,8 +957,8 @@ class DiagnosticsMixin(ControlHost):
 
     def _start_mingwang_map_claim_verify(self, race):
         """名望种族领取（小地图快捷）验证公共入口：校验环境并起线程。"""
-        if self._tm.is_running():
-            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if _task_running_here(self._tm):
+            return {"status": "error", "msg": "本窗口任务运行中，请先停止本窗口任务再验证"}
         if self._verifying:
             return {"status": "error", "msg": "验证进行中，请稍候"}
         win = game.find_main_window()
@@ -977,13 +1006,13 @@ class DiagnosticsMixin(ControlHost):
 
     def verify_shout(self, target="wubei"):
         """高级设置-喊话测试：向游戏聊天发送一次喊话内容（验证发送
-        链路；与验证按钮同款约束——任务运行中拒绝、游戏须前台）。
+        链路；与验证按钮同款约束——本窗口任务运行中拒绝、游戏须前台）。
 
         target：wubei/xiuluo/zhongzu 分别发对应任务设置里保存的喊话内容；
         修罗的 {种族} 占位符按必须种族实时替换（_build_shout_text）。
         """
-        if self._tm.is_running():
-            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if _task_running_here(self._tm):
+            return {"status": "error", "msg": "本窗口任务运行中，请先停止本窗口任务再验证"}
         if target == "xiuluo":
             from ..tasks import xiuluo  # 延迟导入：避免启动期加载任务模块
             text = xiuluo._build_shout_text()
@@ -1023,8 +1052,8 @@ class DiagnosticsMixin(ControlHost):
         流程自带游戏窗口激活与前台账校验，故不做遮挡检查（热键经前台
         窗口送达，而非点击屏幕坐标；活动侧栏点击走 human_click）。
         """
-        if self._tm.is_running():
-            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if _task_running_here(self._tm):
+            return {"status": "error", "msg": "本窗口任务运行中，请先停止本窗口任务再验证"}
         if self._verifying:
             return {"status": "error", "msg": "验证进行中，请稍候"}
         win = game.find_main_window()
@@ -1108,8 +1137,8 @@ class DiagnosticsMixin(ControlHost):
         完整链路：面板开合 → 队长判定 → 5 区域成员扫描），检查过程会
         真实点击组队按钮/面板开关/关闭按钮，结果输出到日志抽屉。
         """
-        if self._tm.is_running():
-            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if _task_running_here(self._tm):
+            return {"status": "error", "msg": "本窗口任务运行中，请先停止本窗口任务再验证"}
         if self._verifying:
             return {"status": "error", "msg": "验证进行中，请稍候"}
         win = game.find_main_window()
@@ -1177,8 +1206,8 @@ class DiagnosticsMixin(ControlHost):
         关闭。未组队时会真实创建队伍（点组队按钮/菜单创建队伍项），
         仅手动测试/确认识别用。
         """
-        if self._tm.is_running():
-            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if _task_running_here(self._tm):
+            return {"status": "error", "msg": "本窗口任务运行中，请先停止本窗口任务再验证"}
         if self._verifying:
             return {"status": "error", "msg": "验证进行中，请稍候"}
         win = game.find_main_window()
@@ -1229,8 +1258,8 @@ class DiagnosticsMixin(ControlHost):
         菜单「飞行驭器」→ 面板校验；主进程无高性能开关，恒识别路径，
         战斗中拒绝）。全程真实点击，仅手动测试/确认识别用。
         """
-        if self._tm.is_running():
-            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if _task_running_here(self._tm):
+            return {"status": "error", "msg": "本窗口任务运行中，请先停止本窗口任务再验证"}
         if self._verifying:
             return {"status": "error", "msg": "验证进行中，请稍候"}
         win = game.find_main_window()
@@ -1281,8 +1310,8 @@ class DiagnosticsMixin(ControlHost):
         点关闭按钮 → 校验面板消失）。关闭按钮与队伍面板关闭按钮同款，
         关闭前必须先校验飞行驭器面板打开，防止点到其他面板的同款按钮。
         """
-        if self._tm.is_running():
-            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if _task_running_here(self._tm):
+            return {"status": "error", "msg": "本窗口任务运行中，请先停止本窗口任务再验证"}
         if self._verifying:
             return {"status": "error", "msg": "验证进行中，请稍候"}
         win = game.find_main_window()
@@ -1333,8 +1362,8 @@ class DiagnosticsMixin(ControlHost):
         双模板比分数判飞行状态 → 未飞行点「飞行」按钮 → 校验降落按钮
         出现即起飞）。已在飞行中直接返回成功。全程真实点击。
         """
-        if self._tm.is_running():
-            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if _task_running_here(self._tm):
+            return {"status": "error", "msg": "本窗口任务运行中，请先停止本窗口任务再验证"}
         if self._verifying:
             return {"status": "error", "msg": "验证进行中，请稍候"}
         win = game.find_main_window()
@@ -1385,8 +1414,8 @@ class DiagnosticsMixin(ControlHost):
         双模板比分数判飞行状态 → 飞行中点「降落」按钮 → 校验飞行按钮
         出现即降落）。已降落直接返回成功。全程真实点击。
         """
-        if self._tm.is_running():
-            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if _task_running_here(self._tm):
+            return {"status": "error", "msg": "本窗口任务运行中，请先停止本窗口任务再验证"}
         if self._verifying:
             return {"status": "error", "msg": "验证进行中，请稍候"}
         win = game.find_main_window()
@@ -1439,8 +1468,8 @@ class DiagnosticsMixin(ControlHost):
         按用户约定假设战斗已结束（maybe_rejoin 的战斗判定本就在调用方，
         此处不判战斗）。全程真实点击（组队按钮/队伍面板/归队按钮）。
         """
-        if self._tm.is_running():
-            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if _task_running_here(self._tm):
+            return {"status": "error", "msg": "本窗口任务运行中，请先停止本窗口任务再验证"}
         if self._verifying:
             return {"status": "error", "msg": "验证进行中，请稍候"}
         win = game.find_main_window()
@@ -1508,8 +1537,8 @@ class DiagnosticsMixin(ControlHost):
         """诊断-检查队伍暂离按钮：打开队伍面板逐成员区域扫描「召回」
         标记（出现即该队员暂离），结果输出到日志抽屉。全程真实点击
         （组队按钮/面板开关），不改变队伍状态（不请离）。"""
-        if self._tm.is_running():
-            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if _task_running_here(self._tm):
+            return {"status": "error", "msg": "本窗口任务运行中，请先停止本窗口任务再验证"}
         if self._verifying:
             return {"status": "error", "msg": "验证进行中，请稍候"}
         win = game.find_main_window()
@@ -1559,8 +1588,8 @@ class DiagnosticsMixin(ControlHost):
         """诊断-请离暂离成员按钮：真实执行请离链路——点选暂离成员 →
         「请离队伍」按钮 → 请离。会真实踢出队员，仅手动测试/确认识别
         链路用；一次调用至多请离一名（队首暂离成员）。"""
-        if self._tm.is_running():
-            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if _task_running_here(self._tm):
+            return {"status": "error", "msg": "本窗口任务运行中，请先停止本窗口任务再验证"}
         if self._verifying:
             return {"status": "error", "msg": "验证进行中，请稍候"}
         win = game.find_main_window()
@@ -1612,8 +1641,8 @@ class DiagnosticsMixin(ControlHost):
         队伍」归队。主进程无任务模式，走 init_task 枚举 + ready() 校验
         + member_rejoin_pass(force=True)。全程真实点击与真实切 Tab。
         """
-        if self._tm.is_running():
-            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if _task_running_here(self._tm):
+            return {"status": "error", "msg": "本窗口任务运行中，请先停止本窗口任务再验证"}
         if self._verifying:
             return {"status": "error", "msg": "验证进行中，请稍候"}
         win = game.find_main_window()
@@ -1738,7 +1767,7 @@ class DiagnosticsMixin(ControlHost):
         地名+坐标 ±10 到达。
 
         2026-11-20 实机验证机制（层级图先点层块进层，层内小地图同样
-        支持悬停读坐标）。会真实移动人物，任务运行中拒绝执行，避免与
+        支持悬停读坐标）。会真实移动人物，本窗口任务运行中拒绝执行（其他窗口运行不影响），避免与
         任务子进程互抢游戏操作。
         """
         from ..device import map_nav  # 延迟导入：与其余验证模块一致
@@ -1751,7 +1780,7 @@ class DiagnosticsMixin(ControlHost):
             return {"status": "error", "msg": "坐标必须是整数"}
         if not (0 <= x <= 9999 and 0 <= y <= 9999):
             return {"status": "error", "msg": "坐标超出范围（0-9999）"}
-        if self._tm.is_running():
+        if _task_running_here(self._tm):
             return {"status": "error", "msg": "任务运行中，请先停止任务再导航"}
         if self._verifying:
             return {"status": "error", "msg": "验证进行中，请稍候"}
@@ -1781,7 +1810,7 @@ class DiagnosticsMixin(ControlHost):
         按钮、日志逐行输出）。点位表见模块级 SITE_NAV_POINTS——用于
         逐个验证任务点位坐标化的实际效果：落点是否在任务「附近」判定
         内、点黄字/POI 是否仍触发游戏行为、到达耗时。真实点击并移动
-        人物，任务运行中拒绝执行。
+        人物，本窗口任务运行中拒绝执行（其他窗口运行不影响）。
         """
         from ..device import map_nav  # 延迟导入：与其余验证模块一致
         key = (site or "").strip()
@@ -1792,7 +1821,7 @@ class DiagnosticsMixin(ControlHost):
         if name not in map_nav.all_navigate_maps():
             return {"status": "error",
                     "msg": f"{label}: 地图「{name}」不在导航地图表"}
-        if self._tm.is_running():
+        if _task_running_here(self._tm):
             return {"status": "error", "msg": "任务运行中，请先停止任务再导航"}
         if self._verifying:
             return {"status": "error", "msg": "验证进行中，请稍候"}
@@ -1888,6 +1917,144 @@ class DiagnosticsMixin(ControlHost):
                 ok_js = "true" if ok else "false"
                 self.webview_instance.evaluate_js(
                     f"if(window.onSiteNavResult){{window.onSiteNavResult({json.dumps(site)}, {ok_js}, {json.dumps(info)});}}")
+            except Exception:
+                pass
+
+    def verify_demon_navigate(self, kind=None):
+        """诊断-五倍（降魔任务）识别与寻路模拟：打开任务栏 → 识别当前
+        五倍任务 → 关闭任务栏 → 按识别出的地图/坐标手动寻路（显形镜
+        依次 A、B），寻路完成即算完成；暗雷/锁妖网只识别并提示需重新领取。
+
+        与「地图导航」共用执行/中断机制（_map_nav_running、中断寻路
+        按钮、日志逐行输出）。会真实移动人物，本窗口任务运行中拒绝执行（其他窗口运行不影响）。
+        """
+        key = (kind or "").strip()
+        spec = DEMON_NAV_KINDS.get(key)
+        if spec is None:
+            return {"status": "error", "msg": f"未知任务类型: {key or '(空)'}"}
+        if _task_running_here(self._tm):
+            return {"status": "error", "msg": "任务运行中，请先停止任务再模拟"}
+        if self._verifying:
+            return {"status": "error", "msg": "验证进行中，请稍候"}
+        win = game.find_main_window()
+        if win is None:
+            return {"status": "error",
+                    "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
+        if not _game_window_clickable(win):
+            return {"status": "error",
+                    "msg": "游戏窗口被其他窗口遮挡，请将游戏窗口置于前台后再模拟"}
+        self._verifying = True
+        self._map_nav_running = True
+        try:
+            threading.Thread(target=self._run_demon_navigate,
+                             args=(win, key),
+                             daemon=True, name="demon-navigate").start()
+        except Exception as e:  # noqa: BLE001 —— 线程启动失败须复位标志
+            self._map_nav_running = False
+            self._verifying = False
+            return {"status": "error", "msg": f"启动模拟线程失败：{e}"}
+        return {"status": "success",
+                "msg": f"已开始：{spec[0]}（打开任务栏→识别→寻路），过程见日志"}
+
+    def _run_demon_navigate(self, win, kind):
+        """降魔任务模拟线程体：识别 → 校验类型 → 寻路 → 回推页面。
+
+        kill/huangpao：识别出的地图 + coord_a 寻路一次；
+        xianxing：先 A 再 B（识别出 B 时），两段寻路都到达才算完成；
+        reclaim：只识别并提示需重新领取（不移动人物）。
+        """
+        from ..device import demon_task, map_nav, task_panel
+
+        spec = DEMON_NAV_KINDS.get(kind) or (kind, kind)
+        label, expected = spec
+
+        def emit(msg):
+            app_utils.log(f"[诊断] {msg}")
+            try:
+                self.add_logs([f"[诊断] {msg}"])
+            except Exception:
+                pass
+
+        ok, info = False, "未知错误"
+        try:
+            try:
+                emit(f"五倍（降魔任务）模拟开始：{label}")
+                result, rinfo = task_panel.read_first_group_task(win)
+                if result is None:
+                    ok, info = False, f"任务栏读取失败: {rinfo}"
+                else:
+                    rec = result.get("recognition") or {}
+                    emit(f"识别结果：{demon_task.describe(rec)}")
+                    closed, cinfo = task_panel.close_task_panel(win)
+                    emit(f"关闭任务栏：{'成功' if closed else '失败'}（{cinfo}）")
+                    got = rec.get("kind")
+                    if not closed:
+                        ok, info = False, f"关闭任务栏失败: {cinfo}"
+                    elif got != expected:
+                        ok, info = False, (
+                            f"当前任务「{rec.get('task') or '?'}」识别为 "
+                            f"{demon_task.describe(rec)}，与按钮要求"
+                            f"「{label}」不符；请领取对应任务后重试")
+                    elif expected == "reclaim":
+                        ok, info = True, (
+                            f"识别为需重新领取（{rec.get('task') or '?'}）："
+                            f"{rec.get('reclaim_reason')}（诊断到识别为止）")
+                    else:
+                        map_name = rec.get("map")
+                        coord = rec.get("coord_a")
+                        if not map_name or not coord:
+                            ok, info = False, (
+                                f"识别结果缺少地图/坐标："
+                                f"{demon_task.describe(rec)}")
+                        elif map_name not in map_nav.all_navigate_maps():
+                            ok, info = False, f"地图「{map_name}」不在导航地图表"
+                        else:
+                            legs = [("A", tuple(coord))]
+                            if expected == "xianxing" and rec.get("coord_b"):
+                                legs.append(("B", tuple(rec["coord_b"])))
+                            success = True
+                            done = []
+                            for leg_label, leg_coord in legs:
+                                emit(f"寻路[{leg_label}] → "
+                                     f"{map_name} {leg_coord}")
+                                ok_leg, nav_info = \
+                                    map_nav.navigate_to_map_coordinate(
+                                        win, map_name, leg_coord[0],
+                                        leg_coord[1], log_fn=emit, verbose=True)
+                                emit(f"寻路[{leg_label}]结果：{nav_info}")
+                                done.append(
+                                    f"{leg_label} {leg_coord}"
+                                    f"{'到达' if ok_leg else '失败'}")
+                                if not ok_leg:
+                                    success = False
+                                    info = (f"寻路[{leg_label}]失败：{nav_info}"
+                                            + ("；已完成 " + "、".join(done[:-1])
+                                               if len(done) > 1 else ""))
+                                    break
+                            if success:
+                                ok, info = True, (
+                                    f"寻路完成（{'；'.join(done)}）"
+                                    f"——按寻路完成算完成")
+            except Exception as e:  # noqa: BLE001 —— 线程体兜底
+                ok, info = False, f"模拟异常: {e}"
+            try:
+                app_utils.log(f"[诊断] 五倍（降魔任务）模拟结果: {info}")
+                self.add_logs([f"[诊断] 降魔任务模拟结果: {info}"])
+            except Exception:
+                pass
+            self._notify_demon_nav_result(kind, ok, info)
+        finally:
+            self._map_nav_running = False
+            self._verifying = False
+
+    def _notify_demon_nav_result(self, kind, ok, info):
+        """降魔任务模拟结果回推页面（对应类型按钮的结果文案）。"""
+        if self.webview_instance:
+            try:
+                ok_js = "true" if ok else "false"
+                self.webview_instance.evaluate_js(
+                    f"if(window.onDemonNavResult){{window.onDemonNavResult("
+                    f"{json.dumps(kind)}, {ok_js}, {json.dumps(info)});}}")
             except Exception:
                 pass
 
@@ -1997,7 +2164,7 @@ class DiagnosticsMixin(ControlHost):
         if win is None:
             return {"status": "error", "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
         self._verifying = True
-        allow_activate = not self._tm.is_running()
+        allow_activate = not _task_running_here(self._tm)
         threading.Thread(target=self._run_capture_diag, args=(win, allow_activate),
                          daemon=True, name="capture-diag").start()
         return {"status": "success",
@@ -2059,8 +2226,8 @@ class DiagnosticsMixin(ControlHost):
             y = int(y) if y is not None else None
         except (TypeError, ValueError):
             return {"status": "error", "msg": "坐标必须是整数"}
-        if self._tm.is_running():
-            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if _task_running_here(self._tm):
+            return {"status": "error", "msg": "本窗口任务运行中，请先停止本窗口任务再验证"}
         if self._verifying:
             return {"status": "error", "msg": "验证进行中，请稍候"}
         win = game.find_main_window()
@@ -2112,8 +2279,8 @@ class DiagnosticsMixin(ControlHost):
         entry = _SILENT_KEY_HOTKEYS.get(hotkey)
         if entry is None:
             return {"status": "error", "msg": f"不支持的按键类型: {hotkey}"}
-        if self._tm.is_running():
-            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if _task_running_here(self._tm):
+            return {"status": "error", "msg": "本窗口任务运行中，请先停止本窗口任务再验证"}
         if self._verifying:
             return {"status": "error", "msg": "验证进行中，请稍候"}
         win = game.find_main_window()
@@ -2156,8 +2323,8 @@ class DiagnosticsMixin(ControlHost):
         可行性——游戏聊天输入框出现粘贴文本即生效（前提：先手动
         点开聊天输入框）。结果用户自判。
         """
-        if self._tm.is_running():
-            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if _task_running_here(self._tm):
+            return {"status": "error", "msg": "本窗口任务运行中，请先停止本窗口任务再验证"}
         if self._verifying:
             return {"status": "error", "msg": "验证进行中，请稍候"}
         win = game.find_main_window()
@@ -2198,8 +2365,8 @@ class DiagnosticsMixin(ControlHost):
         可行性——游戏聊天输入框出现「测」即生效（前提：先手动点开
         聊天输入框）。结果用户自判。
         """
-        if self._tm.is_running():
-            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if _task_running_here(self._tm):
+            return {"status": "error", "msg": "本窗口任务运行中，请先停止本窗口任务再验证"}
         if self._verifying:
             return {"status": "error", "msg": "验证进行中，请稍候"}
         win = game.find_main_window()
@@ -2250,8 +2417,8 @@ class DiagnosticsMixin(ControlHost):
         （Enter+WM_CHAR 生效），中文/数字可能同样被其输入系统消费
         ——聊天输入框出现「测」即生效（前提：先手动点开输入框）。
         """
-        if self._tm.is_running():
-            return {"status": "error", "msg": "任务运行中，请先停止任务再验证"}
+        if _task_running_here(self._tm):
+            return {"status": "error", "msg": "本窗口任务运行中，请先停止本窗口任务再验证"}
         if self._verifying:
             return {"status": "error", "msg": "验证进行中，请稍候"}
         win = game.find_main_window()

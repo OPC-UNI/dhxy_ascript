@@ -948,6 +948,24 @@ def save_wubei_kuimulang_switch(on):
     return {"status": "success"}
 
 
+# ---- 五倍兼容无快捷寻路（UI 开关，角色设置持久化，默认开启）：
+#      领取成功后任务追踪面板没有降魔任务时，打开任务栏（Alt+Q）识别
+#      任务目标并手动寻路（2026-11-23 用户需求）。关闭时保持原行为：
+#      只认任务追踪，无追踪按领取失败/重走处理。
+_WUBEI_MANUAL_NAV_KEY = "wubei_manual_nav"
+
+
+def load_wubei_manual_nav():
+    """读取五倍兼容无快捷寻路开关（首次默认开启）。"""
+    return bool(role_settings.get(_WUBEI_MANUAL_NAV_KEY, True))
+
+
+def save_wubei_manual_nav(on):
+    """保存五倍兼容无快捷寻路开关，返回操作结果。"""
+    role_settings.set_value(_WUBEI_MANUAL_NAV_KEY, bool(on))
+    return {"status": "success"}
+
+
 # ---- 组号专用（UI 开关，修罗/五倍/种族比武各一，角色设置持久化，默认开启；
 #      一个窗口内多个登录 Tab 视为一组号：队长带队，队员 Tab 自动挂
 #      战斗/巫医/补血蓝，实现见 src/device/tab_group.py。单号（已登录 Tab<2）

@@ -18,6 +18,11 @@ def _reset_claim_walk_state(monkeypatch):
     monkeypatch.setattr(wubei, "_claim_task_filter_on", None)
     monkeypatch.setattr(wubei, "_claim_map_kept_open", False)
     monkeypatch.setattr(wubei, "_claim_arrive_dialog_frame", None)
+    # 默认追踪面板不在场：_FakeWin 的 60x60 帧小于标题条模板，真实
+    # panel_visible 会触发 cv2 尺寸断言且随 3s 全帧限频在用例间抖动。
+    # 需要面板在场的用例自行 patch 为 True（后者覆盖本夹具）。
+    monkeypatch.setattr(wubei.task_tracker, "panel_visible",
+                        lambda **k: False)
 
 
 def test_click_track_link_clicks_underline_not_rect_center(monkeypatch):
@@ -710,10 +715,35 @@ def test_track_state_panel_visible_no_task(monkeypatch):
     assert wubei._track_state(_FakeWin()) == (False, False, False)
 
 
+def test_claimed_task_replace_kind_suoyaowang(monkeypatch):
+    """新领取任务为锁妖网：修理前先替换（用户 2026-11-23 顺序修正）。"""
+    monkeypatch.setattr(wubei, "_track_state", lambda w: (True, True, False))
+    assert wubei._claimed_task_replace_kind(_FakeWin()) == "锁妖网"
+
+
+def test_claimed_task_replace_kind_kuimulang_switch(monkeypatch):
+    """奎木狼仅在「领取奎木狼任务」开关关闭时需要替换。"""
+    monkeypatch.setattr(wubei, "_track_state", lambda w: (True, False, True))
+    monkeypatch.setattr(wubei, "_kuimulang_on", False)
+    assert wubei._claimed_task_replace_kind(_FakeWin()) == "奎木狼"
+    monkeypatch.setattr(wubei, "_kuimulang_on", True)
+    assert wubei._claimed_task_replace_kind(_FakeWin()) is None
+
+
+def test_claimed_task_replace_kind_normal_and_unknown(monkeypatch):
+    monkeypatch.setattr(wubei, "_track_state", lambda w: (True, False, False))
+    assert wubei._claimed_task_replace_kind(_FakeWin()) is None
+    # 面板过渡/关闭读不到任务：不阻塞修理，跟随期仍会兜底替换
+    monkeypatch.setattr(wubei, "_track_state", lambda w: (False, False, False))
+    assert wubei._claimed_task_replace_kind(_FakeWin()) is None
+
+
 def test_claim_task_skips_when_task_reappeared(monkeypatch):
-    """误判消失走了领取、任务又出现：跳过领取，交主循环续跑跟踪。"""
+    """误判消失走了领取、任务又出现（面板在场）：跳过领取，交主循环续跑跟踪。"""
     monkeypatch.setattr(wubei, "is_in_battle", lambda w: False)
     monkeypatch.setattr(wubei, "is_in_battle_frame", lambda img: False)
+    monkeypatch.setattr(wubei.task_tracker, "panel_visible",
+                        lambda **k: True)
     monkeypatch.setattr(wubei.task_tracker, "ocr_track", lambda img: ([], None))
     monkeypatch.setattr(wubei.task_tracker, "task_signature_in",
                         lambda items, title: "sig")
@@ -724,6 +754,192 @@ def test_claim_task_skips_when_task_reappeared(monkeypatch):
     ok, info, frame = wubei._claim_task(_FakeWin())
     assert ok is False and "续跑跟踪" in info and frame is None
     assert called == []  # 不进入领取入口流程
+
+
+def test_claim_task_claims_when_tracker_panel_absent(monkeypatch):
+    """追踪面板不在场：静态区域 OCR 残留任务文案不得拦截领取。
+
+    2026-11-23 实机：锁妖网任务领取后追踪标题条未匹配，_claim_task
+    用静态区域 OCR 判「任务仍在」→ 连续 18 轮「跳过领取（续跑跟踪）」
+    40s 空转。面板缺席应与 _track_state 同语义走领取/替换。
+    """
+    monkeypatch.setattr(wubei, "is_in_battle", lambda w: False)
+    monkeypatch.setattr(wubei, "is_in_battle_frame", lambda img: False)
+    monkeypatch.setattr(wubei.task_tracker, "panel_visible",
+                        lambda **k: False)
+    monkeypatch.setattr(wubei.task_tracker, "ocr_track",
+                        lambda img: ([("使用任务栏的锁妖网捕捉", [10, 240, 200, 260], 0.99)], None))
+    monkeypatch.setattr(wubei.task_tracker, "task_signature_in",
+                        lambda items, title: "sig")
+    called = []
+    monkeypatch.setattr(
+        wubei, "_click_entry_ensuring_dialog",
+        lambda w, **k: called.append(1) or (False, "入口失败", None, None, None))
+    ok, info, frame = wubei._claim_task(_FakeWin())
+    assert ok is False and info == "入口失败" and frame is None
+    assert called == [1]  # 面板缺席：进入领取入口流程，不再空转跳过
+
+
+def test_claim_task_manual_nav_accepts_without_tracker(monkeypatch):
+    """兼容无快捷寻路：无追踪 + 选项消失 + 收尾对话框在场 → 领取成功。"""
+    _claim_task_same_task_env(monkeypatch, option_still=False)
+    # 无任务追踪场景：面板标题条门控失败（pre_sig=None）、面板内无任务
+    monkeypatch.setattr(wubei.task_tracker, "panel_visible",
+                        lambda **k: False)
+    monkeypatch.setattr(wubei.task_tracker, "has_task_in",
+                        lambda *a, **k: False)
+    ok, info, frame = wubei._claim_task(_FakeWin(), manual_nav=True)
+    assert ok is True and info == "五倍任务已领取" and frame is not None
+
+
+def _manual_rec(kind, map_name="平顶山", a=(187, 27), b=(269, 28),
+                max_rounds=None):
+    if max_rounds is None:
+        max_rounds = 1 if kind == "kill" else (5 if kind == "huangpao"
+                                               else None)
+    return {"task": "测试任务", "kind": kind, "map": map_name,
+            "coords": [c for c in (a, b) if c],
+            "coord_a": a, "coord_b": b,
+            "max_rounds": max_rounds,
+            "reclaim": kind == "reclaim",
+            "reclaim_reason": "测试需重领" if kind == "reclaim" else "",
+            "target": "目标", "item": None, "item_icon": None}
+
+
+def test_manual_nav_round_kill(monkeypatch):
+    """击杀：寻路 → 模板开打 → 战斗后任务消失 → 完成。"""
+    monkeypatch.setattr(wubei, "log", lambda *a, **k: None)
+    monkeypatch.setattr(wubei, "_manual_close_task_panel", lambda w: True)
+    nav, fights = [], []
+    monkeypatch.setattr(wubei, "_manual_navigate",
+                        lambda w, m, c: nav.append((m, c)) or (True, "ok"))
+    monkeypatch.setattr(wubei, "_manual_template_fight",
+                        lambda w, **k: fights.append(1)
+                        or (True, "结束", (100, 200)))
+    monkeypatch.setattr(wubei, "_manual_read_task_after_battle",
+                        lambda w: ("gone", None))
+    ok, info = wubei._manual_nav_round(
+        _FakeWin(), pre_result={"recognition": _manual_rec("kill", "万寿山",
+                                                           (37, 11), None)})
+    assert ok is True and "任务消失" in info
+    # 单杀：寻路一次、战斗一次
+    assert nav == [("万寿山", (37, 11))] and fights == [1]
+
+
+def test_manual_nav_round_huangpao_multi(monkeypatch):
+    """黄袍 5 杀：首杀寻路，之后复用命中模板直接再杀，不重新寻路。"""
+    monkeypatch.setattr(wubei, "log", lambda *a, **k: None)
+    monkeypatch.setattr(wubei, "_manual_close_task_panel", lambda w: True)
+    rec = _manual_rec("huangpao", "平顶山", (302, 22), None,
+                      max_rounds=5)
+    nav, pref = [], []
+    monkeypatch.setattr(wubei, "_manual_navigate",
+                        lambda w, m, c: nav.append((m, c)) or (True, "ok"))
+
+    def fake_fight(w, preferred_pt=None, wait=None):
+        pref.append(preferred_pt)
+        return True, "结束", (321, 222)
+
+    monkeypatch.setattr(wubei, "_manual_template_fight", fake_fight)
+
+    def no_final_read(w):
+        raise AssertionError("黄袍 5 杀打满后不应再读任务栏确认")
+
+    monkeypatch.setattr(wubei, "_manual_read_task_after_battle",
+                        no_final_read)
+    ok, info = wubei._manual_nav_round(
+        _FakeWin(), pre_result={"recognition": rec})
+    assert ok is True and "5 次战斗" in info and "直接返程" in info
+    assert nav == [("平顶山", (302, 22))]  # 只在首杀寻路
+    # 首杀全量搜索；之后复用首杀命中的模板点
+    assert pref == [None, (321, 222), (321, 222), (321, 222), (321, 222)]
+
+
+def test_manual_nav_round_huangpao_early_gone(monkeypatch):
+    """黄袍预计 5 杀但任务提前消失：复用点未触发时先读任务栏，消失即完成。"""
+    monkeypatch.setattr(wubei, "log", lambda *a, **k: None)
+    monkeypatch.setattr(wubei, "_manual_close_task_panel", lambda w: True)
+    rec = _manual_rec("huangpao", "平顶山", (302, 22), None,
+                      max_rounds=5)
+    nav, calls = [], []
+    monkeypatch.setattr(wubei, "_manual_navigate",
+                        lambda w, m, c: nav.append((m, c)) or (True, "ok"))
+
+    def fake_fight(w, preferred_pt=None, wait=None):
+        calls.append(preferred_pt)
+        if len(calls) == 1:
+            return True, "结束", (321, 222)
+        return False, "模板未出现", None
+
+    monkeypatch.setattr(wubei, "_manual_template_fight", fake_fight)
+    monkeypatch.setattr(wubei, "_manual_read_task_after_battle",
+                        lambda w: ("gone", None))
+    ok, info = wubei._manual_nav_round(
+        _FakeWin(), pre_result={"recognition": rec})
+    assert ok is True and "提前完成" in info
+    assert nav == [("平顶山", (302, 22))]  # 只在首杀寻路
+    assert calls == [None, (321, 222)]  # 第 2 杀复用点失败后判定任务已消失
+
+
+def test_manual_task_read_once_statuses(monkeypatch):
+    """任务栏读取三态：present / gone（明确无分组）/ unknown（读取失败）。"""
+    rec = {"recognition": _manual_rec("kill")}
+    seq = iter([(rec, "ok"),
+                (None, "展开分组失败: 任务列表中未找到「降魔」分组"),
+                (None, "未定位到任务栏面板")])
+    monkeypatch.setattr(wubei.task_panel, "read_first_group_task",
+                        lambda w: next(seq))
+    assert wubei._manual_task_read_once(_FakeWin()) == ("present", rec)
+    assert wubei._manual_task_read_once(_FakeWin()) == ("gone", None)
+    assert wubei._manual_task_read_once(_FakeWin()) == ("unknown", None)
+
+
+def test_manual_read_after_battle_unknown_not_completed(monkeypatch):
+    """任务栏读取失败不得按任务消失处理（防误计数）。"""
+    monkeypatch.setattr(wubei, "_manual_close_task_panel", lambda w: True)
+    monkeypatch.setattr(wubei.time, "sleep", lambda s: None)
+    monkeypatch.setattr(wubei.task_panel, "read_first_group_task",
+                        lambda w: (None, "未定位到任务栏面板"))
+    assert wubei._manual_read_task_after_battle(_FakeWin()) == ("unknown", None)
+    monkeypatch.setattr(wubei.task_panel, "read_first_group_task",
+                        lambda w: (None,
+                                   "展开分组失败: 任务列表中未找到「降魔」分组"))
+    assert wubei._manual_read_task_after_battle(_FakeWin()) == ("gone", None)
+
+
+def test_manual_nav_round_xianxing_ab(monkeypatch):
+    """显形镜：A 未完成 → B；B 完成后任务消失 → 完成。"""
+    monkeypatch.setattr(wubei, "log", lambda *a, **k: None)
+    monkeypatch.setattr(wubei, "_manual_close_task_panel", lambda w: True)
+    rec = _manual_rec("xianxing")
+    nav, fights, items = [], [], []
+    monkeypatch.setattr(wubei, "_manual_navigate",
+                        lambda w, m, c: nav.append((m, c)) or (True, "ok"))
+    monkeypatch.setattr(wubei, "_manual_use_xianxingjing",
+                        lambda w: items.append(1) or (True, "已使用"))
+    results = iter([(False, "A 未触发", None),
+                    (True, "B 战斗结束", (200, 300))])
+    monkeypatch.setattr(wubei, "_manual_template_fight",
+                        lambda w, **k: fights.append(1) or next(results))
+    after = iter([("present", {"recognition": rec}), ("gone", None)])
+    monkeypatch.setattr(wubei, "_manual_read_task_after_battle",
+                        lambda w: next(after))
+    ok, info = wubei._manual_nav_round(
+        _FakeWin(), pre_result={"recognition": rec})
+    assert ok is True
+    assert nav == [("平顶山", (187, 27)), ("平顶山", (269, 28))]
+    assert len(items) == 2 and len(fights) == 2
+
+
+def test_manual_nav_round_reclaim_fails_fast(monkeypatch):
+    monkeypatch.setattr(wubei, "log", lambda *a, **k: None)
+    monkeypatch.setattr(wubei, "_manual_close_task_panel", lambda w: True)
+    nav = []
+    monkeypatch.setattr(wubei, "_manual_navigate",
+                        lambda w, m, c: nav.append(1) or (True, "ok"))
+    ok, info = wubei._manual_nav_round(
+        _FakeWin(), pre_result={"recognition": _manual_rec("reclaim")})
+    assert ok is False and "重新领取" in info and nav == []
 
 
 def test_claim_task_replace_allows_existing_task(monkeypatch):
@@ -1496,6 +1712,9 @@ def _claim_task_same_task_env(monkeypatch, *, option_still, dialog_score=0.99,
     monkeypatch.setattr(wubei, "time", clock)
     monkeypatch.setattr(wubei, "is_in_battle", lambda w: False)
     monkeypatch.setattr(wubei, "is_in_battle_frame", lambda img: False)
+    # 同文案替换领取场景：追踪面板在场（pre_sig 非空才走同文案受理分支）
+    monkeypatch.setattr(wubei.task_tracker, "panel_visible",
+                        lambda **k: True)
     monkeypatch.setattr(wubei.task_tracker, "ocr_track", lambda img: ([], None))
     monkeypatch.setattr(wubei.task_tracker, "task_signature_in",
                         lambda items, title: "sig")

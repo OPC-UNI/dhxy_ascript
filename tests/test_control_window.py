@@ -130,6 +130,21 @@ def test_battle_only_hezi_default_off_and_roundtrip():
     assert load_battle_only_hezi() is False
 
 
+def test_wubei_manual_nav_default_and_roundtrip():
+    """五倍兼容无快捷寻路：方案快照注册键、首次默认开启、保存可读回。"""
+    from src.core import schemes
+    from src.core.settings import (
+        _WUBEI_MANUAL_NAV_KEY, load_wubei_manual_nav, save_wubei_manual_nav,
+    )
+    spec = schemes._settings_spec()
+    assert spec[_WUBEI_MANUAL_NAV_KEY] is True
+    assert load_wubei_manual_nav() is True
+    assert save_wubei_manual_nav(False)["status"] == "success"
+    assert load_wubei_manual_nav() is False
+    assert save_wubei_manual_nav(True)["status"] == "success"
+    assert load_wubei_manual_nav() is True
+
+
 def test_settings_spec_kick_away_defaults(monkeypatch):
     """暂离超时自动请离开关/分钟（修罗/五倍各一套）：方案快照默认开启、
     默认 5 分钟；load_* 首次默认与 spec 一致；保存越界拒绝。"""
@@ -984,6 +999,233 @@ def test_verify_site_navigate_starts_thread(monkeypatch):
     assert started["started"] is True
     assert started["args"] == (fake_win, "洛阳城", 321, 110, "repair")
     assert host._map_nav_running is True and host._verifying is True
+
+
+def test_task_running_here_uses_selected_window(monkeypatch):
+    """诊断按窗口放行：只查选中窗口角色，不再要求全部窗口停止。"""
+    from src.app import diagnostics, window_registry
+    from src.core import user_data
+
+    class _TM:
+        def __init__(self, running_role):
+            self.running_role = running_role
+            self.calls = []
+
+        def is_running(self, role=None):
+            self.calls.append(role)
+            return role == self.running_role
+
+    monkeypatch.setattr(window_registry, "selected_role", lambda: "123")
+    tm = _TM("123")
+    assert diagnostics._task_running_here(tm) is True
+    assert tm.calls == ["123"]
+
+    # 另一个窗口在跑、本窗口不在跑：不应阻塞（false 即放行）
+    tm2 = _TM("999")
+    assert diagnostics._task_running_here(tm2) is False
+    assert tm2.calls == ["123"]
+
+    # 未选中走当前角色
+    monkeypatch.setattr(window_registry, "selected_role", lambda: None)
+    monkeypatch.setattr(user_data, "current_role_id", lambda: "456")
+    tm3 = _TM("456")
+    assert diagnostics._task_running_here(tm3) is True
+    assert tm3.calls == ["456"]
+
+    # 都解析不到：回退全量判定（role=None，任一窗口在跑即拒绝）
+    monkeypatch.setattr(user_data, "current_role_id", lambda: None)
+    tm4 = _TM(None)
+    assert diagnostics._task_running_here(tm4) is True
+    assert tm4.calls == [None]
+
+
+def test_demon_nav_kinds_cover_task_types():
+    """四类降魔任务各一个按钮：kind 集合与 demon_task 常量一致。"""
+    from src.app import diagnostics
+    from src.device import demon_task
+
+    expected = {demon_task.KIND_KILL, demon_task.KIND_HUANGPAO,
+                demon_task.KIND_XIANXING, demon_task.KIND_RECLAIM}
+    assert {spec[1] for spec in diagnostics.DEMON_NAV_KINDS.values()} == expected
+
+
+def test_verify_demon_navigate_guards(monkeypatch):
+    """降魔模拟：未知类型/无窗口给出错误，不抛异常。"""
+    import types
+
+    from src.app import diagnostics
+
+    class _Host(diagnostics.DiagnosticsMixin):
+        def __init__(self):
+            self._tm = types.SimpleNamespace(is_running=lambda role=None: False)
+            self._verifying = False
+            self._map_nav_running = False
+
+    host = _Host()
+    r = host.verify_demon_navigate("bogus")
+    assert r["status"] == "error" and "未知任务类型" in r["msg"]
+    monkeypatch.setattr(diagnostics.game, "find_main_window", lambda: None)
+    r = host.verify_demon_navigate("kill")
+    assert r["status"] == "error"
+    assert "未检测到游戏窗口" in r["msg"]
+
+
+def test_verify_demon_navigate_starts_thread(monkeypatch):
+    """降魔模拟线程参数：(win, kind)，启动后置忙标志。"""
+    import types
+
+    from src.app import diagnostics
+
+    class _Host(diagnostics.DiagnosticsMixin):
+        def __init__(self):
+            self._tm = types.SimpleNamespace(is_running=lambda role=None: False)
+            self._verifying = False
+            self._map_nav_running = False
+
+    host = _Host()
+    fake_win = object()
+    monkeypatch.setattr(diagnostics.game, "find_main_window",
+                        lambda: fake_win)
+    monkeypatch.setattr(diagnostics, "_game_window_clickable",
+                        lambda win: True)
+    started = {}
+
+    class _FakeThread:
+        def __init__(self, target=None, args=(), daemon=None, name=None):
+            started["target"] = target
+            started["args"] = args
+            started["name"] = name
+
+        def start(self):
+            started["started"] = True
+
+    monkeypatch.setattr(diagnostics.threading, "Thread", _FakeThread)
+    r = host.verify_demon_navigate("huangpao")
+    assert r["status"] == "success"
+    assert started["started"] is True
+    assert started["args"] == (fake_win, "huangpao")
+    assert host._map_nav_running is True and host._verifying is True
+
+
+def _demon_host(diagnostics):
+    import types
+
+    class _Host(diagnostics.DiagnosticsMixin):
+        def __init__(self):
+            self._tm = types.SimpleNamespace(is_running=lambda role=None: False)
+            self._verifying = True
+            self._map_nav_running = True
+            self.webview_instance = None
+            self.logs = []
+            self.notified = []
+
+        def add_logs(self, lines):
+            self.logs.extend(lines)
+
+        def _notify_demon_nav_result(self, kind, ok, info):
+            self.notified.append((kind, ok, info))
+
+    return _Host()
+
+
+def _mock_demon_thread(monkeypatch, rec, nav_results=None):
+    """打桩：任务栏读取/关闭 + 导航；返回导航调用记录。"""
+    from src.app import diagnostics
+    from src.device import map_nav, task_panel
+
+    monkeypatch.setattr(task_panel, "read_first_group_task",
+                        lambda win: ({"recognition": rec}, "ok"))
+    monkeypatch.setattr(task_panel, "close_task_panel",
+                        lambda win: (True, "已关闭"))
+    monkeypatch.setattr(map_nav, "all_navigate_maps",
+                        lambda: [rec.get("map")] if rec.get("map") else [])
+    calls = []
+    results = list(nav_results or [])
+
+    def fake_nav(win, name, x, y, log_fn=None, verbose=True):
+        calls.append((name, x, y))
+        return results.pop(0) if results else (True, "arrived")
+
+    monkeypatch.setattr(map_nav, "navigate_to_map_coordinate", fake_nav)
+    monkeypatch.setattr(diagnostics.app_utils, "log",
+                        lambda *a, **k: None)
+    host = _demon_host(diagnostics)
+    return host, calls
+
+
+def _kill_rec():
+    return {"kind": "kill", "task": "三藏逢魔", "map": "万寿山",
+            "coords": [(37, 11)], "coord_a": (37, 11), "coord_b": None,
+            "target": "天眼魔尊"}
+
+
+def test_run_demon_navigate_kill(monkeypatch):
+    """击杀：识别 → 关闭任务栏 → 按地图/坐标寻路一次，到达即成功。"""
+    host, calls = _mock_demon_thread(monkeypatch, _kill_rec())
+    host._run_demon_navigate(object(), "kill")
+    assert calls == [("万寿山", 37, 11)]
+    assert host.notified and host.notified[0][0] == "kill"
+    assert host.notified[0][1] is True
+    assert "寻路完成" in host.notified[0][2]
+    assert host._verifying is False and host._map_nav_running is False
+
+
+def test_run_demon_navigate_type_mismatch(monkeypatch):
+    """按钮类型与当前任务不符：不寻路，提示当前识别结果。"""
+    rec = {"kind": "xianxing", "task": "宝象迷情", "map": "平顶山",
+           "coords": [(187, 27), (269, 28)],
+           "coord_a": (187, 27), "coord_b": (269, 28)}
+    host, calls = _mock_demon_thread(monkeypatch, rec)
+    host._run_demon_navigate(object(), "kill")
+    assert calls == []
+    kind, ok, info = host.notified[0]
+    assert kind == "kill" and ok is False and "不符" in info
+
+
+def test_run_demon_navigate_reclaim(monkeypatch):
+    """暗雷：只识别并提示需重新领取，不寻路。"""
+    rec = {"kind": "reclaim", "task": "殿前献艺", "reclaim": True,
+           "reclaim_reason": "任务文案含「暗雷」，需重新领取替换"}
+    host, calls = _mock_demon_thread(monkeypatch, rec)
+    host._run_demon_navigate(object(), "reclaim")
+    assert calls == []
+    assert host.notified[0][1] is True
+    assert "重新领取" in host.notified[0][2]
+
+
+def test_run_demon_navigate_xianxing_ab(monkeypatch):
+    """显形镜：依次寻路 A、B，两段都到达才算完成。"""
+    rec = {"kind": "xianxing", "task": "宝象迷情", "map": "平顶山",
+           "coords": [(187, 27), (269, 28)],
+           "coord_a": (187, 27), "coord_b": (269, 28)}
+    host, calls = _mock_demon_thread(monkeypatch, rec)
+    host._run_demon_navigate(object(), "xianxing")
+    assert calls == [("平顶山", 187, 27), ("平顶山", 269, 28)]
+    assert host.notified[0][1] is True
+    assert "A" in host.notified[0][2] and "B" in host.notified[0][2]
+
+
+def test_run_demon_navigate_xianxing_b_fail(monkeypatch):
+    rec = {"kind": "xianxing", "task": "宝象迷情", "map": "平顶山",
+           "coords": [(187, 27), (269, 28)],
+           "coord_a": (187, 27), "coord_b": (269, 28)}
+    host, calls = _mock_demon_thread(
+        monkeypatch, rec,
+        nav_results=[(True, "到达A"), (False, "超时")])
+    host._run_demon_navigate(object(), "xianxing")
+    assert len(calls) == 2
+    assert host.notified[0][1] is False
+    assert "B" in host.notified[0][2] and "失败" in host.notified[0][2]
+
+
+def test_run_demon_navigate_missing_coord(monkeypatch):
+    rec = {"kind": "kill", "task": "三藏逢魔", "map": "万寿山",
+           "coords": [], "coord_a": None, "coord_b": None}
+    host, calls = _mock_demon_thread(monkeypatch, rec)
+    host._run_demon_navigate(object(), "kill")
+    assert calls == []
+    assert host.notified[0][1] is False
+    assert "缺少地图/坐标" in host.notified[0][2]
 
 
 def test_cancel_map_navigate_only_when_running(monkeypatch):

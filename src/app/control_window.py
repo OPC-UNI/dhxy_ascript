@@ -65,7 +65,8 @@ from ..core.settings import (
     load_update_last_check, load_update_skipped_version, load_use_sheyaoxiang,
     load_wubei_auto_create_team, load_wubei_auto_kick_away, load_wubei_kick_away_minutes,
     load_wubei_auto_rejoin, load_wubei_auto_repair, load_wubei_auto_wuyi, load_wubei_check_team,
-    load_wubei_hezi, load_wubei_kuimulang_switch, load_wubei_repair_interval,
+    load_wubei_hezi, load_wubei_kuimulang_switch, load_wubei_manual_nav,
+    load_wubei_repair_interval,
     load_wubei_shout_switch, load_wubei_shout_text, load_wubei_tab_group, load_wubei_wuyi_interval,
     load_wuhuan_vitality_continue, load_xiuluo_auto_create_team, load_xiuluo_auto_rejoin,
     load_xiuluo_auto_kick_away, load_xiuluo_kick_away_minutes, load_xiuluo_auto_repair,
@@ -309,6 +310,7 @@ class ControlWindow(DiagnosticsMixin, SettingsApiMixin, MessageApiMixin,
         self.expose(self.save_wubei_auto_repair)
         self.expose(self.save_wubei_repair_interval)
         self.expose(self.save_wubei_kuimulang_switch)
+        self.expose(self.save_wubei_manual_nav)
         self.expose(self.save_wubei_tab_group)
         self.expose(self.save_zhongzu_check_team)
         self.expose(self.save_zhongzu_auto_create_team)
@@ -358,6 +360,7 @@ class ControlWindow(DiagnosticsMixin, SettingsApiMixin, MessageApiMixin,
         self.expose(self.get_navigate_maps)
         self.expose(self.verify_map_navigate)
         self.expose(self.verify_site_navigate)
+        self.expose(self.verify_demon_navigate)
         self.expose(self.cancel_map_navigate)
         self.expose(self.verify_dialog_detect)
         self.expose(self.verify_apply_panel)
@@ -812,6 +815,7 @@ class ControlWindow(DiagnosticsMixin, SettingsApiMixin, MessageApiMixin,
                           "auto_repair": load_wubei_auto_repair(),
                           "repair_interval": load_wubei_repair_interval(),
                           "kuimulang": load_wubei_kuimulang_switch(),
+                          "manual_nav": load_wubei_manual_nav(),
                           "tab_group": load_wubei_tab_group()},
                 "zhongzu": {"check_team": load_zhongzu_check_team(),
                             "auto_create_team": load_zhongzu_auto_create_team(),

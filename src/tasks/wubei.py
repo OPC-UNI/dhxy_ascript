@@ -61,6 +61,8 @@ import numpy as np
 from ..core.app_utils import human_click, human_move, log, move_away, norm_text
 from ..core import app_utils  # 高性能模式共享设施（固定位置缓存点击）
 from ..device import task_tracker  # 任务追踪面板操作
+from ..device import task_panel  # 任务栏（Alt+Q）：无追踪时读降魔任务目标
+from ..device import demon_task  # 降魔任务类型/目标识别（击杀/显形镜/暗雷）
 from ..device import map as game_map  # 地图操作（世界地图/小地图/位置识别）
 from ..device import map_nav  # 坐标化寻路（通用设置开关，关闭回滚固定像素）
 from ..device import team  # 组队检查（领取前队伍人数检查，仅队长生效）
@@ -85,6 +87,7 @@ from ..core.settings import (load_task_counts,  # 任务次数上限
                              load_wubei_auto_repair,  # 五倍设置：自动修理装备开关
                              load_wubei_repair_interval,  # 五倍设置：自动修理间隔（场战斗）
                              load_wubei_kuimulang_switch,  # 五倍设置：领取奎木狼任务开关
+                             load_wubei_manual_nav,  # 五倍设置：兼容无快捷寻路
                              load_wubei_tab_group)  # 五倍设置：组号专用开关
 from ..device.dialog_common import (SCREEN_CENTER_POS, green_option_center,
                             green_option_row_present,
@@ -961,6 +964,27 @@ def _track_state(win):
             _track_has_kuimulang(items) if exists else False)
 
 
+def _claimed_task_replace_kind(win):
+    """新领取任务是否为需替换类型（自动修理前的顺序门，用户 2026-11-23）。
+
+    领取成功后、自动巫医之后、自动修理之前调用：新任务为锁妖网捕捉
+    （或领取奎木狼开关关闭时的奎木狼任务）时应先回领取点重新领取替换，
+    再执行修理——否则会先白跑洛阳城修理，跟随期才发现暗雷需要替换，
+    再回宝象国重领，来回浪费一轮跨图行程。
+    返回「锁妖网」/「奎木狼」/None。追踪面板读不到任务（过渡帧/面板
+    关闭）按 None 处理，不阻塞修理；跟随期 pre_click/extras 仍会兜底
+    检测并替换。
+    """
+    exists, suoyaowang, kuimulang = _track_state(win)
+    if not exists:
+        return None
+    if suoyaowang:
+        return "锁妖网"
+    if kuimulang and not _kuimulang_on:
+        return "奎木狼"
+    return None
+
+
 def _near_xiangmoshiwei_spot(pos):
     """降魔侍卫点击门控（规则 3）：宝象国 (86,78) ±容差内可见即可点。
 
@@ -1767,7 +1791,7 @@ def _claim_start_dialog_guard(win, img):
 
 
 def _claim_task(win, allow_fill=False, allow_existing=False,
-                create_team_if_missing=False):
+                create_team_if_missing=False, manual_nav=False):
     """在领取点附近领取五倍任务（前提：已走到领取点附近）。
 
     识图 wubei_lingqu.png / wubei_xiangmoshiwei.png 点击（入口点击按
@@ -1800,6 +1824,10 @@ def _claim_task(win, allow_fill=False, allow_existing=False,
     允许首次检查内自动创建队伍（自动对话框模式跳过首次领取前队伍
     监控的路径专用——run_loop 传 pending_create；2026-11-16 实机
     18:54：队伍未建时监控开不了组队菜单）。
+
+    manual_nav=True（五倍设置「兼容无快捷寻路」）：无任务追踪时，领取
+    选项已消失 + 收尾对话框在场即按领取已受理确认（不等任务进追踪），
+    主循环随后打开任务栏读取降魔任务并手动寻路（用户 2026-11-23）。
     """
     global _claim_confirm_dlg_score, _claim_map_kept_open, \
         _claim_arrive_dialog_frame, _claim_same_task_ack
@@ -1821,7 +1849,12 @@ def _claim_task(win, allow_fill=False, allow_existing=False,
     # 渲染（签名变化）才确认，防首轮点击追踪点到旧任务绿字、组号
     # pass 期间面板刷新被误判为任务进展（2026-11-04 20:32 日志实测）
     pre_sig = None
-    if img0 is not None:
+    # 面板门控与 _track_state 一致（2026-11-23 实机 40s 空转教训）：
+    # 追踪面板不在场（标题条模板未命中）时，静态区域 OCR 会回退读取，
+    # 可能命中任务变化浮字/对话框残留的锁妖网文案，据此判「任务仍在」
+    # 会让主循环反复「跳过领取（续跑跟踪）」——锁妖网任务连续 18 轮
+    # 不领取也不替换。面板缺席按主循环语义走领取/替换，不在这里拦截。
+    if img0 is not None and task_tracker.panel_visible(img=img0):
         items0, _ = task_tracker.ocr_track(img0)
         pre_sig = task_tracker.task_signature_in(items0, TASK_TITLE)
     if pre_sig is not None and not allow_existing:
@@ -2000,6 +2033,18 @@ def _claim_task(win, allow_fill=False, allow_existing=False,
                 new_task = True
                 same_task_ack = True
                 confirm_dlg_score = dlg_score_ack
+        if not new_task and manual_nav and polls >= 2 \
+                and _find_claim_option(items, img_np) is None \
+                and not task_tracker.has_task_in(
+                    items, img_np, TASK_TITLE, TASK_FALLBACK_TEXTS) \
+                and dialog_frame_score(img) >= DIALOG_FRAME_THRESHOLD \
+                and not _dialog_text_present(items, FULL_TEAM_DIALOG_TEXT):
+            # 兼容无快捷寻路（用户 2026-11-23）：无任务追踪 + 领取选项
+            # 已消失 + 收尾对话框在场 = 领取已受理。任务不会进追踪，
+            # 主循环随后打开任务栏读取降魔任务并手动寻路。
+            new_task = True
+            log("[五倍] 无任务追踪：领取选项已消失、收尾对话框在场，"
+                "按领取成功处理（走任务栏手动寻路）", "SYS")
         if new_task:
             found_frame = (items, img_np)
             t_confirm = t_cap
@@ -2083,6 +2128,407 @@ def _claim_task(win, allow_fill=False, allow_existing=False,
     except Exception:
         pass
     return False, "已点击领取选项，但任务追踪中未检测到任务（重走领取点后仍无）", None
+
+
+# ---- 兼容无快捷寻路：无任务追踪时打开任务栏手动寻路（用户 2026-11-23）----
+MANUAL_TASK_MAX_ROUNDS = 10      # 单次领取最多手动战斗轮次（黄袍最多 5 轮）
+MANUAL_TEMPLATE_WAIT = 12.0      # 到达后等白龙马任务模板/对话框出现的窗口（秒）
+MANUAL_TEMPLATE_REUSE_WAIT = 5.0  # 击杀未完成时复用上次命中模板的直接尝试窗口
+MANUAL_TEMPLATE_POLL = 0.5
+MANUAL_BATTLE_START_TIMEOUT = 6.0
+MANUAL_BATTLE_TIMEOUT = 300.0    # 手动回合等战斗结束（战斗线程自动操作）
+MANUAL_XJ_USE_WAIT = 2.0         # 右键显形镜后等对话框/模板的起始等待
+
+
+def _manual_phase(msg):
+    log(f"[五倍][手动] {msg}", "SYS")
+
+
+def _manual_close_task_panel(win):
+    """关闭任务栏（手动寻路读取后收尾；失败仅记日志，不阻断寻路）。"""
+    ok, info = task_panel.close_task_panel(win)
+    if not ok:
+        log(f"[五倍][手动] 关闭任务栏失败: {info}", "WARN")
+    return ok
+
+
+def _manual_navigate(win, map_name, coord):
+    """手动寻路到目标地图坐标；组号队员血蓝 pass 在位移启动后插队。"""
+    _manual_phase(f"寻路 → {map_name} {tuple(coord)}")
+    debug_overlay.set_phase("手动寻路")
+    ok, info = map_nav.navigate_to_map_coordinate(
+        win, map_name, coord[0], coord[1],
+        log_fn=lambda m: log(f"[五倍][手动] {m}", "INFO"),
+        on_walk_start=lambda: _maybe_tab_bars_pass(win))
+    if not ok:
+        return False, f"手动寻路失败: {info}"
+    _manual_phase(f"寻路到达 {map_name} {tuple(coord)}")
+    return True, info
+
+
+def _manual_wait_battle_end(win):
+    """手动回合等战斗结束（战斗线程自动操作）；轮回司判失败。"""
+    ok, info = _wait_battle_end(win, timeout=MANUAL_BATTLE_TIMEOUT)
+    if not ok:
+        return False, info
+    pos = None
+    for _ in range(3):
+        pos = game_map.read_map_position(win)
+        if pos is not None:
+            break
+        time.sleep(0.5)
+    if pos is not None and team.is_in_lunhuisi(pos):
+        return False, f"战斗后落在轮回司（{pos[0]}[{pos[1]},{pos[2]}]），判定失败"
+    return True, "战斗已结束（手动寻路回合）"
+
+
+def _manual_wait_battle_start(win):
+    """点开打选项后等战斗场景出现。"""
+    deadline = time.time() + MANUAL_BATTLE_START_TIMEOUT
+    while time.time() < deadline:
+        img = win.capture(force_activate=False)
+        if img is not None and is_in_battle_frame(img):
+            return True
+        time.sleep(0.5)
+    return False
+
+
+def _manual_close_block_dialog(win, items, img_np):
+    """候选误点阻塞对话框：有选项点选项、无选项点屏关闭；返回是否已处理。"""
+    for text, opt, label in XJ_BLOCK_DIALOGS:
+        if not _dialog_text_present(items, text):
+            continue
+        if opt is None:
+            if time.time() - dc_last_center_click_at() >= XIANXINGJING_XJ_CLICK_GUARD:
+                _click_screen_center(win, times=1, prefix="五倍")
+                _manual_phase(f"候选点中「{label}」对话框（无选项），"
+                              f"已点屏幕中间关闭")
+            return True
+        pt, _ = _find_xj_block_option(items, img_np, opt)
+        if pt is not None:
+            human_click(win, pt[0], pt[1])
+            _manual_phase(f"候选点中「{label}」对话框，"
+                          f"已点击选项「{opt}」关闭")
+            return True
+    return False
+
+
+def _manual_template_fight(win, preferred_pt=None, wait=None):
+    """到达后按白龙马任务模板开打（多候选逐一尝试，同显形镜逻辑）。
+
+    已在战斗 → 等结束；白龙马/普通对话框 → 点屏推进关闭；找白龙马任务
+    模板全部候选 → 逐一点击 → 开打对话（点开打选项）或直接进战斗 →
+    等战斗结束。误点阻塞对话框按 XJ_BLOCK_DIALOGS 关闭后换下一候选。
+    模板窗口内始终未出现模板/战斗 → 失败。
+
+    preferred_pt：上一次命中战斗的模板点（元组坐标）。多候选同屏时
+    只有一个能正确触发战斗；续杀时把离该点最近的候选排到最前，直接
+    复用正确模板，不再先点错误候选（用户 2026-11-23）。仍保留全量
+    兜底：最近候选失败会继续尝试其余候选。
+    返回 (ok, info, 命中点或 None)；命中点供续杀复用。
+    """
+    global _fight_via_kanda
+    deadline = time.time() + (wait or MANUAL_TEMPLATE_WAIT)
+    block_clicked_at = 0.0
+    while time.time() < deadline:
+        img = win.capture(force_activate=False)
+        if img is None:
+            time.sleep(MANUAL_TEMPLATE_POLL)
+            continue
+        if is_in_battle_frame(img):
+            _fight_via_kanda = True
+            _manual_phase("到达后已在战斗中，等待战斗结束")
+            ok, info = _manual_wait_battle_end(win)
+            return ok, info, preferred_pt
+        if block_clicked_at:
+            if time.time() - block_clicked_at < XJ_BLOCK_CLOSE_WAIT:
+                time.sleep(0.5)
+                continue  # 阻塞对话框关闭动画期：等消失再处理
+            block_clicked_at = 0.0
+        if dialog_frame_score(img) >= DIALOG_FRAME_THRESHOLD:
+            items, img_np = game_map.ocr_region(
+                img, task_tracker.DIALOG_REGION)
+            if _handle_xj_wuben(win, items, img_np):
+                time.sleep(MANUAL_TEMPLATE_POLL)
+                continue
+            if _xj_fight_dialog_open(items):
+                if _handle_fight_dialog(win, items, img_np):
+                    _fight_via_kanda = True
+                    if _manual_wait_battle_start(win):
+                        ok, info = _manual_wait_battle_end(win)
+                        return ok, info, preferred_pt
+                    return False, "已点开打选项但未进入战斗", None
+                return False, "开打对话选项点击失败", None
+            if _manual_close_block_dialog(win, items, img_np):
+                block_clicked_at = time.time()
+                time.sleep(MANUAL_TEMPLATE_POLL)
+                continue
+            # 白龙马对话框文字/普通剧情页：点屏推进（3s 冷却防连点）
+            if time.time() - dc_last_center_click_at() >= XIANXINGJING_XJ_CLICK_GUARD:
+                _click_screen_center(win, times=1, prefix="五倍")
+                _manual_phase("白龙马/剧情对话框在场，已点屏幕中间推进")
+            time.sleep(MANUAL_TEMPLATE_POLL)
+            continue
+        bgr = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
+        pts = game_map.match_frame_all(
+            bgr, XIANXINGJING_TASK_ICON,
+            threshold=XIANXINGJING_BTN_THRESHOLD)
+        if not pts:
+            time.sleep(MANUAL_TEMPLATE_POLL)
+            continue
+        if preferred_pt is not None:
+            # 续杀复用：上一杀命中的模板点最近的候选排最前，错误候选
+            # 后置（仍保留兜底尝试）
+            px, py = preferred_pt
+            pts.sort(key=lambda q: (q[1] - px) ** 2 + (q[2] - py) ** 2)
+        _manual_phase(f"识别到任务模板 {len(pts)} 处候选"
+                      + ("（优先复用上次命中点）" if preferred_pt else ""))
+        for i, (_score, cx, cy) in enumerate(pts, 1):
+            human_click(win, cx, cy)
+            move_away(win)
+            _manual_phase(f"已点击任务模板候选 {i}/{len(pts)} @({cx},{cy})")
+            cand_deadline = time.time() + XIANXINGJING_BTN_WAIT
+            block_clicked_at = 0.0
+            while time.time() < cand_deadline:
+                img2 = win.capture(force_activate=False)
+                if img2 is None:
+                    time.sleep(0.5)
+                    continue
+                if is_in_battle_frame(img2):
+                    _fight_via_kanda = True
+                    ok, info = _manual_wait_battle_end(win)
+                    return ok, info, (cx, cy)
+                items2, img_np2 = game_map.ocr_region(
+                    img2, task_tracker.DIALOG_REGION)
+                if _xj_fight_dialog_open(items2):
+                    if _handle_fight_dialog(win, items2, img_np2):
+                        _fight_via_kanda = True
+                        if _manual_wait_battle_start(win):
+                            ok, info = _manual_wait_battle_end(win)
+                            return ok, info, (cx, cy)
+                        return False, "已点开打选项但未进入战斗", None
+                    return False, "开打对话选项点击失败", None
+                if _manual_close_block_dialog(win, items2, img_np2):
+                    block_clicked_at = time.time()
+                    cand_deadline = time.time() + XIANXINGJING_BTN_WAIT
+                    time.sleep(0.5)
+                    continue
+                if block_clicked_at:
+                    if time.time() - block_clicked_at < XJ_BLOCK_CLOSE_WAIT:
+                        time.sleep(0.5)
+                        continue
+                    break  # 阻塞对话框已关闭：换下一候选
+                time.sleep(0.5)
+            _manual_phase(f"候选 {i}/{len(pts)} 未触发战斗，继续下一候选")
+        return False, "任务模板候选全部点击后未触发战斗", None
+    return False, "到达后未出现白龙马任务模板/开打对话", None
+
+
+def _manual_use_xianxingjing(win):
+    """打开背包-任务储物格 → 右键显形镜 → 关闭背包。"""
+    _manual_phase("使用显形镜（背包-任务储物格）")
+    ok, info = _open_task_box(win)
+    if not ok:
+        return False, f"打开任务储物格失败: {info}"
+    pt, finfo = return_flow.find_return_item(
+        win, demon_task.XIANXING_ICON, "显形镜")
+    if pt is None:
+        _close_return_panels(win)
+        return False, finfo
+    human_click(win, pt[0], pt[1], button="secondary")
+    log(f"[五倍][手动] 已右键使用显形镜 ({pt[0]},{pt[1]})", "SYS")
+    time.sleep(1.0)
+    _close_return_panels(win)
+    return True, "已使用显形镜"
+
+
+def _manual_task_read_once(win):
+    """读一次任务栏：返回 (present/gone/unknown, result)。
+
+    区分「任务真的消失」与「任务栏读取失败」：面板在位且明确没有降魔
+    分组/子任务才算 gone；打开面板失败/未定位/详情为空均 unknown，
+    调用方不得按完成处理（防误计数）。
+    """
+    result, info = task_panel.read_first_group_task(win)
+    if result is not None:
+        return "present", result
+    if "未找到「降魔」分组" in info or "分组下未找到子任务" in info:
+        return "gone", None
+    return "unknown", None
+
+
+def _manual_read_task_after_battle(win):
+    """战斗后重读任务栏：返回 (status, result)。
+
+    status=present 任务仍在（黄袍多轮/目标可能换位置）；gone 两次都
+    明确没有降魔分组/子任务；unknown 读取失败（面板不在场/OCR/关闭
+    失败），调用方必须按失败处理，不能当任务完成。
+    """
+    time.sleep(1.5)
+    statuses = []
+    for _ in range(2):
+        status, result = _manual_task_read_once(win)
+        if status == "present":
+            return "present", result
+        statuses.append(status)
+        _manual_close_task_panel(win)
+        time.sleep(1.0)
+    return ("gone", None) if all(s == "gone" for s in statuses) \
+        else ("unknown", None)
+
+
+def _manual_kill_round(win, rec):
+    """击杀/黄袍手动回合：按日志实测次数连续战斗。
+
+    2026-11-23 可乐可口日志：三藏逢魔类每轮 1 场战斗；智斗黄袍一轮
+    连续 5 场战斗（第 13~17 场）后本轮完成。次数取识别结果 max_rounds
+    （黄袍解析「最多N轮」，普通击杀=1）。
+    第一杀寻路到识别坐标并按模板全部候选开打；次数未杀完时不再重新
+    寻路/遍历候选——直接复用上次命中的模板点（preferred_pt），只有
+    复用点未触发战斗（人物/镜头移动）才重新寻路并全量搜索。
+    全部击杀后读任务栏确认任务消失；仍在则按失败返回（下一轮重领）。
+    返回 (ok, info)。
+    """
+    map_name = rec.get("map")
+    coord = tuple(rec.get("coord_a") or ())
+    if not map_name or not coord:
+        return False, f"识别结果缺少地图/坐标: {demon_task.describe(rec)}"
+    default = (demon_task.HUANGPAO_DEFAULT_ROUNDS
+               if rec.get("kind") == demon_task.KIND_HUANGPAO else 1)
+    battles = max(1, int(rec.get("max_rounds") or default))
+    correct_pt = None
+    for i in range(battles):
+        _manual_phase(f"手动战斗 {i + 1}/{battles}")
+        if i == 0 or correct_pt is None:
+            ok, info = _manual_navigate(win, map_name, coord)
+            if not ok:
+                return False, info
+        else:
+            # 同地点续杀：等战斗结算界面恢复后直接复用上次命中模板
+            time.sleep(1.5)
+        ok, info, hit = _manual_template_fight(
+            win, preferred_pt=correct_pt,
+            wait=MANUAL_TEMPLATE_REUSE_WAIT if correct_pt else None)
+        if not ok and correct_pt is not None:
+            # 复用点未触发：任务可能已提前完成（未到预计次数）——先读
+            # 任务栏。gone=提前完成；present=任务仍在，用最新识别坐标
+            # 重新寻路（目标可能换位置）；unknown=读取失败按失败处理
+            status, result = _manual_read_task_after_battle(win)
+            if status == "gone":
+                # 当前第 i+1 次尝试未打成，实际已完成 i 次战斗
+                return True, (f"已完成 {i} 次战斗，任务已消失"
+                              f"（未到预计 {battles} 次），提前完成")
+            if status == "unknown":
+                return False, ("复用模板未触发战斗，且任务栏读取失败，"
+                               "无法确认任务状态")
+            _manual_close_task_panel(win)
+            rec2 = (result or {}).get("recognition") or {}
+            if rec2.get("kind") in (demon_task.KIND_KILL,
+                                    demon_task.KIND_HUANGPAO) \
+                    and rec2.get("map") and rec2.get("coord_a"):
+                map_name = rec2["map"]
+                coord = tuple(rec2["coord_a"])
+                _manual_phase(f"任务仍在，按最新识别坐标重新寻路: "
+                              f"{map_name} {coord}")
+            else:
+                return False, (f"任务仍在但无法继续（识别: "
+                               f"{demon_task.describe(rec2)}）")
+            # 复用点失效（人物/镜头移动/目标换位置）：重新寻路并全量搜索
+            _manual_phase("复用模板未触发战斗，重新寻路并全量搜索")
+            ok_nav, info_nav = _manual_navigate(win, map_name, coord)
+            if not ok_nav:
+                return False, info_nav
+            ok, info, hit = _manual_template_fight(win)
+        if not ok:
+            return False, f"第 {i + 1}/{battles} 次战斗失败: {info}"
+        correct_pt = hit or correct_pt
+        _manual_phase(f"第 {i + 1}/{battles} 次战斗完成")
+    if rec.get("kind") == demon_task.KIND_HUANGPAO:
+        # 黄袍怪最多 N 轮（日志实测 5 轮）：次数打满即完成，直接返程，
+        # 不再读任务栏确认（用户 2026-11-23）
+        return True, f"已完成 {battles} 次战斗（黄袍上限），直接返程"
+    status, result = _manual_read_task_after_battle(win)
+    if status == "gone":
+        return True, f"已完成 {battles} 次战斗，任务消失"
+    if status == "present":
+        _manual_close_task_panel(win)
+        rec2 = (result or {}).get("recognition") or {}
+        return False, (f"已战斗 {battles} 次但任务仍在: "
+                       f"{demon_task.describe(rec2)}")
+    return False, (f"已战斗 {battles} 次，但任务栏读取失败，"
+                   f"无法确认任务状态")
+
+
+def _manual_nav_round(win, pre_result=None):
+    """无任务追踪的五倍手动寻路回合（兼容无快捷寻路）。
+
+    打开任务栏（Alt+Q）读取当前降魔任务并按识别结果手动寻路：
+    - kill/huangpao：交给 _manual_kill_round 按日志实测次数连续战斗
+      （普通击杀 1 次、黄袍最多 N 轮默认 5 次）；首杀寻路并全量搜索
+      模板，续杀直接复用上次命中的模板点，全部杀完后读任务栏确认消失；
+    - xianxing：依次 A、B 两处：寻路 → 背包-任务储物格右键显形镜 →
+      白龙马对话框/模板候选开打；A 处未完成则去 B；
+    - reclaim（暗雷/锁妖网）：不开打，返回失败交主循环重新领取替换。
+    pre_result：run_loop 领取后预读的任务栏结果（避免重复读一次）。
+    返回 (ok, info)；ok=True 表示任务已完成且 _fight_via_kanda 已置位，
+    主循环继续走返程；ok=False 由主循环做失败恢复/重新领取。
+    """
+    global _fight_via_kanda
+    _fight_via_kanda = False
+    xj_leg = 0
+    result = pre_result
+    for round_i in range(MANUAL_TASK_MAX_ROUNDS):
+        if result is None:
+            if round_i == 0:
+                result, rinfo = task_panel.read_first_group_task(win)
+                if result is None:
+                    _manual_close_task_panel(win)
+                    return False, f"打开任务栏识别失败: {rinfo}"
+            else:
+                status, result = _manual_read_task_after_battle(win)
+                if status == "gone":
+                    return True, "任务已消失，手动寻路回合完成"
+                if status == "unknown":
+                    return False, "任务栏读取失败，无法确认任务状态（手动回合）"
+        rec = result.get("recognition") or {}
+        result = None
+        kind = rec.get("kind")
+        _manual_phase(f"任务栏识别: {demon_task.describe(rec)}")
+        if not _manual_close_task_panel(win):
+            return False, "关闭任务栏失败，无法开始手动寻路"
+        if kind == demon_task.KIND_RECLAIM:
+            return False, f"任务需重新领取替换: {rec.get('reclaim_reason')}"
+        map_name = rec.get("map")
+        if not map_name:
+            return False, f"识别结果缺少地图: {demon_task.describe(rec)}"
+        if kind == demon_task.KIND_XIANXING:
+            coords = [tuple(c) for c in (rec.get("coord_a"),
+                                         rec.get("coord_b")) if c]
+            if not coords:
+                return False, f"显形镜任务缺少坐标: {demon_task.describe(rec)}"
+            if xj_leg >= len(coords):
+                return False, "显形镜 A、B 两处均未完成"
+            coord = coords[xj_leg]
+            ok, info = _manual_navigate(win, map_name, coord)
+            if not ok:
+                return False, info
+            ok, info = _manual_use_xianxingjing(win)
+            if not ok:
+                return False, info
+            time.sleep(MANUAL_XJ_USE_WAIT)
+            ok, info, _hit = _manual_template_fight(win)
+            if not ok:
+                xj_leg += 1
+                if xj_leg < len(coords):
+                    _manual_phase(f"本处未完成，前往下一处 {coords[xj_leg]}")
+                    continue
+                return False, f"显形镜 A/B 均失败: {info}"
+            xj_leg += 1
+            continue
+        if kind in (demon_task.KIND_KILL, demon_task.KIND_HUANGPAO):
+            return _manual_kill_round(win, rec)
+        return False, f"未知任务类型: {demon_task.describe(rec)}"
+    return False, f"手动寻路轮次超过上限 {MANUAL_TASK_MAX_ROUNDS}"
 
 
 def _click_xianxingjing_use(win, items, img_np):
@@ -3282,6 +3728,13 @@ def run_loop(win, cycle_interval=1.0):
     repair_interval = max(1, load_wubei_repair_interval())
     log(f"[五倍] 自动修理装备: {'开' if auto_repair else '关'}"
         + (f"（每 {repair_interval} 场战斗）" if auto_repair else ""), "SYS")
+    # 兼容无快捷寻路（五倍设置，默认开启，用户 2026-11-23）：领取成功后
+    # 任务追踪面板没有降魔任务时，打开任务栏（Alt+Q）识别任务目标并
+    # 手动寻路；有追踪时完全走原 follow 流程，不受影响
+    manual_nav = load_wubei_manual_nav()
+    log(f"[五倍] 兼容无快捷寻路: "
+        f"{'开（无任务追踪时打开任务栏手动寻路）' if manual_nav else '关'}",
+        "SYS")
     # 领取奎木狼任务开关（五倍设置，默认开）：关闭时追踪文案含奎木狼
     # 即重新领取替换（逻辑同锁妖网——跟随期检查共用此全局，免每轮询
     # 读 KeyValue）
@@ -3430,6 +3883,8 @@ def run_loop(win, cycle_interval=1.0):
             #    续跑时检查（进程首轮或上轮跟踪失败未确认完成）
             claim_items = None  # 领取校验帧（续跑路径无，跟踪首轮自行截图+OCR）
             repair_round = False  # 本轮是否执行了自动修理（续跑路径不修理）
+            manual_round = False  # 本轮是否走无追踪手动寻路（兼容无快捷寻路）
+            manual_result = None  # 领取后预读的任务栏识别结果
             # 锁妖网捕捉/奎木狼开关关闭/显形镜按钮恢复失败：即使追踪中
             # 已有任务也走领取分支重新领取替换（用户 2026-10-11 确认
             # 游戏允许重领替换）
@@ -3606,7 +4061,8 @@ def run_loop(win, cycle_interval=1.0):
                 debug_overlay.set_phase("领取任务")  # 看板阶段
                 ok, info, claim_items = _claim_task(
                     win, allow_fill=check_team, allow_existing=need_replace,
-                    create_team_if_missing=pending_create)
+                    create_team_if_missing=pending_create,
+                    manual_nav=manual_nav)
                 if not ok:
                     # 战斗失败重领的领取失败不累计替换失败上限（同普通
                     # 领取失败：下轮重试，不因连续失败终止整个任务）
@@ -3654,6 +4110,39 @@ def run_loop(win, cycle_interval=1.0):
                 # 确认帧模板分达标时同帧直接取消（与修罗同款优化）
                 _dismiss_claim_dialog_after_claim(
                     win, score=_claim_confirm_dlg_score)
+                # 兼容无快捷寻路（用户 2026-11-23）：领取成功但任务追踪
+                # 面板没有降魔任务 → 先打开任务栏读取任务目标。暗雷/
+                # 锁妖网任务直接下一轮重领（不做无谓的巫医/修理行程，
+                # 与 2026-11-23 修理顺序修正一致）；有效任务记下识别结果，
+                # 巫医/修理之后走手动寻路。
+                manual_round = False
+                manual_result = None
+                if manual_nav:
+                    tracker_has = task_tracker.has_task(
+                        win, TASK_TITLE, TASK_FALLBACK_TEXTS,
+                        fast_absent=True)
+                    if not tracker_has:
+                        manual_result, minfo = \
+                            task_panel.read_first_group_task(win)
+                        if manual_result is None:
+                            log(f"[五倍][手动] 任务栏读取失败: {minfo}", "WARN")
+                            task_panel.close_task_panel(win)
+                            time.sleep(cycle_interval)
+                            continue
+                        mrec = manual_result.get("recognition") or {}
+                        log(f"[五倍][手动] 任务栏识别: "
+                            f"{demon_task.describe(mrec)}", "SYS")
+                        task_panel.close_task_panel(win)
+                        if mrec.get("kind") == demon_task.KIND_RECLAIM:
+                            log(f"[五倍][手动] 任务需重新领取替换"
+                                f"（{mrec.get('reclaim_reason')}），"
+                                f"本轮不做巫医/修理，直接下一轮重领",
+                                "WARN")
+                            time.sleep(cycle_interval)
+                            continue
+                        manual_round = True
+                        log("[五倍] 领取后任务追踪无降魔任务，"
+                            "改走任务栏手动寻路", "SYS")
                 # 自动巫医：每 N 轮领取后无条件前往宝象国巫医 NPC 医治，
                 # 血蓝正常也照常（失败仅记日志，不阻断后续寻路）
                 if auto_wuyi and round_no % wuyi_interval == 0:
@@ -3663,8 +4152,21 @@ def run_loop(win, cycle_interval=1.0):
                 # 自动修理装备（用户流程，默认开、每 30 场战斗一次）：
                 # 今日累计场次达到间隔 → 前往洛阳城修理（巫医之后：同图
                 # 巫医先做，修理跨图后直接恢复寻路）；失败仅记日志，
-                # 不阻断后续寻路
-                if auto_repair and repair.is_due(win, TASK_MODE, repair_interval):
+                # 不阻断后续寻路。
+                # 顺序修正（用户 2026-11-23）：新领取任务为锁妖网/奎木狼
+                # （需重新领取替换）时不先修理——否则白跑洛阳城后被
+                # 跟随期替换检测打回宝象国。修理顺延到替换成功后的领取轮。
+                # 只在修理到期时做这次追踪检查（每 N 场一次，成本可忽略）
+                repair_due = auto_repair and repair.is_due(
+                    win, TASK_MODE, repair_interval)
+                if repair_due:
+                    replace_kind = _claimed_task_replace_kind(win)
+                    if replace_kind:
+                        log(f"[五倍] 新领取任务为{replace_kind}任务，需先重新"
+                            f"领取替换；自动修理顺延到替换成功后", "WARN")
+                        time.sleep(cycle_interval)
+                        continue
+                if repair_due:
                     repair_round = True
                     debug_overlay.set_phase("自动修理")  # 看板阶段
                     ok3, info3 = repair.auto_repair(win, TASK_MODE, prefix="五倍")
@@ -3674,13 +4176,20 @@ def run_loop(win, cycle_interval=1.0):
             #      战斗由战斗监控线程自动操作、跟踪中自动跳过）；
             #     领取校验帧传入后首轮跳过截图+OCR 立即点击绿字
             #     （修理行程后旧帧已过期——重新截帧识别）
-            try:
-                ok, info = _follow_to_done(
-                    win, first_items=None if repair_round else claim_items)
-            except ReplaceTaskError as e:
-                log(f"[五倍] 检测到「{e}」，中断跟踪，下一轮重新领取替换", "WARN")
-                time.sleep(cycle_interval)
-                continue
+            if manual_round:
+                # 无任务追踪（兼容无快捷寻路）：任务栏识别结果已预读，
+                # 手动寻路 → 白龙马模板候选开打 → 等战斗结束
+                ok, info = _manual_nav_round(
+                    win, pre_result=manual_result)
+            else:
+                try:
+                    ok, info = _follow_to_done(
+                        win, first_items=None if repair_round else claim_items)
+                except ReplaceTaskError as e:
+                    log(f"[五倍] 检测到「{e}」，中断跟踪，下一轮重新领取替换",
+                        "WARN")
+                    time.sleep(cycle_interval)
+                    continue
             if not ok:
                 failed_by_battle = _battle_failed_reason is not None
                 if not failed_by_battle:
