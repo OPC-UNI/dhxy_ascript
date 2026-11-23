@@ -22,12 +22,24 @@
    对话框（按五环设置分流：开关开启点「不差那点小钱，快给我任务吧。」
    花钱领取继续任务；关闭点「那可不行，我一会再来。」结束任务）或跟踪
    期间出现「恭喜你完成了今天五环任务」对话框（今日五环全部完成）即结束任务进程
+4. 五环领取冷却（2026-11-23 用户需求）：昨天与今天领取存在时间间隔，
+   领取链任意环节（点领取按钮后 / 点「我可以帮助这些人」后 / 点活力值
+   继续选项后）都可能出现「你距离下次领取5环任务还差X分钟，等等再来吧！」
+   提示对话框。识别后按提示时长 + 安全余量（60s）持久化冷却截止（按角色
+   存 state.json，跨重启生效）、点屏关闭提示并结束本次领取；任务调度
+   （main._run_selected_tasks）把五环排到队尾先执行其他任务，其他任务
+   完成时若冷却已结束则优先回到五环；其余任务都做完仍未到点则在云游
+   大师处等待到点再领取。剩余时长超过单次等待上限（2 小时）时本轮跳过，
+   冷却记录保留（稍后重跑即可直接跳过）。
 """
 import re
 import time
 
+import numpy as np
+
 from ..core.app_utils import log, human_click, precise_click, move_away, norm_text
 from ..core import app_utils  # 高性能模式共享设施（固定位置缓存点击）
+from ..core import user_data  # 领取冷却截止时间持久化（按角色 state.json）
 from ..device import bag  # 背包操作（储物格切换搜索）
 from ..device import map as game_map  # 地图操作（世界地图/小地图/位置识别）
 from ..device import map_nav  # 坐标化寻路（通用设置开关，关闭回滚固定像素）
@@ -135,6 +147,23 @@ CONGRATS_MARK_TEXT = "还能再完成"                    # 区分特征：出�
 # 完成过此任务两次，请明天再来！」，今日两次五环均已完成的结束信号）
 DAILY_LIMIT_TEXT = "互助友爱，铭记在心即可，今天你已经完成过此任务两次，请明天再来！"
 DAILY_LIMIT_INFO = "今日两次五环均已完成（请明天再来）"   # 结束状态描述
+# ---- 领取冷却（昨天与今天的领取时间间隔，2026-11-23 用户需求） ----
+# 实测提示对话框「你距离下次领取5环任务还差5分钟，等等再来吧！」（截图
+# 2026-11-23）。出现在领取链任意环节：点领取任务按钮后直接替换领取对话
+# 框、点「我可以帮助这些人」后、点活力值「不差那点小钱…」后。识别后把
+# 冷却截止时间持久化（跨重启），任务调度据此先执行其他任务、稍后返回。
+COOLDOWN_DIALOG_TEXT = "下次领取5环任务还差"   # 主判定文案（模糊匹配，抗个别误读）
+COOLDOWN_MARKERS = ("还差", "领取", "再来")     # 兜底组合标记（主判定漏配时）
+COOLDOWN_TIME_RE = re.compile(r"还差(.{0,16})")  # 提示时长片段（还差5分钟…）
+COOLDOWN_SAFETY_MARGIN = 60        # 比提示时间多等 60s（提示按分钟表述，宁晚勿早）
+COOLDOWN_DEFAULT_SECONDS = 600     # 提示时间解析失败兜底（10 分钟后重试）
+# 单次最多在云游大师处等待时长：剩余更久（隔天早跑等场景）时本轮跳过，
+# 冷却记录保留（稍后重跑直接跳过），避免整个任务进程空等数小时
+COOLDOWN_MAX_WAIT = 2 * 3600
+COOLDOWN_CHECK_INTERVAL = 60       # 等待期剩余时长刷新/日志节奏（秒）
+COOLDOWN_INFO = "五环领取冷却中"     # 调度哨兵：main 据此把五环排到队尾
+COOLDOWN_SKIP_INFO = "五环领取冷却剩余时间超过单次等待上限，本次跳过五环"
+_WUHUAN_COOLDOWN_KEY = "wuhuan_cooldown"  # state.json 键：{"until": 时间戳, ...}
 # 跟踪总超时（秒）：一轮五环含 5 个子目标与多场战斗，实测耗时约 9 分半，
 # 默认 300s 会中途超时重启（日志出现「跟踪后任务信息无变化（超时）」）
 WUHUAN_FOLLOW_TIMEOUT = 1800
@@ -460,16 +489,188 @@ def _wait_completion_dialog(win, timeout=8.0):
     return None
 
 
-def _handle_claim_blockers(win, items, img_np):
-    """领取对话链中的结束条件对话框：今日两次已满/活力值不足。
+# ---- 领取冷却（跨重启持久化 + 提示对话框识别/解析/关闭） ----
+
+def _cooldown_role(win):
+    """当前角色的数据目录名（与 task_progress 同一角色维度）。"""
+    return user_data.role_id_from_char_key(app_utils.char_key(win))
+
+
+def _cooldown_until(win):
+    """持久化的冷却截止时间戳（无记录/坏值返回 0）。"""
+    try:
+        entry = user_data.get_state(_WUHUAN_COOLDOWN_KEY,
+                                    _cooldown_role(win), None)
+    except Exception:
+        return 0.0
+    if not isinstance(entry, dict):
+        return 0.0
+    try:
+        return float(entry.get("until") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def cooldown_remaining(win):
+    """距下次可领取五环任务的剩余秒数（0=可领取/无冷却记录）。
+
+    跨重启持久（state.json，按角色）；任务调度（main）与领取流程共用。
+    """
+    return max(0.0, _cooldown_until(win) - time.time())
+
+
+def format_duration(seconds):
+    """时长的可读文案（日志/UI 用）：1小时5分 / 5分30秒 / 30秒。"""
+    total = int(max(0.0, float(seconds)) + 0.5)
+    hours, rem = divmod(total, 3600)
+    minutes, secs = divmod(rem, 60)
+    if hours:
+        return f"{hours}小时{minutes}分"
+    if minutes:
+        return f"{minutes}分{secs}秒"
+    return f"{secs}秒"
+
+
+def _note_cooldown(win, seconds):
+    """记录冷却截止（提示时长 + 安全余量），返回截止时间戳。
+
+    同一段冷却被重复识别（遗留对话框/多次轮询）时取较早的截止时间
+    ——提示文案是对话框渲染时刻的快照，越晚消费只会把截止时间推算
+    得越迟，取较早值避免冷却被无谓拉长。
+    """
+    now = time.time()
+    until = now + max(0, int(seconds)) + COOLDOWN_SAFETY_MARGIN
+    existing = _cooldown_until(win)
+    if existing > now:
+        until = min(until, existing)
+    try:
+        user_data.set_state(_WUHUAN_COOLDOWN_KEY,
+                            {"until": until,
+                             "seconds": int(seconds),
+                             "set_at": now},
+                            _cooldown_role(win))
+    except Exception as e:
+        log(f"[五环] 领取冷却记录持久化失败: {e}", "WARN")
+    return until
+
+
+def _clear_cooldown(win):
+    """领取成功后清除冷却记录（下一段间隔由游戏重新计时）。"""
+    role = _cooldown_role(win)
+    try:
+        if user_data.get_state(_WUHUAN_COOLDOWN_KEY, role, None) is None:
+            return
+
+        def _drop(data):
+            data.pop(_WUHUAN_COOLDOWN_KEY, None)
+            return data
+
+        user_data.update_state(_drop, role)
+    except Exception:
+        pass
+
+
+def _cooldown_dialog_present(items):
+    """冷却提示对话框是否在场（主判定模糊匹配 + 组合标记兜底）。"""
+    if _dialog_text_present(items, COOLDOWN_DIALOG_TEXT):
+        return True
+    joined = norm_text("".join(t[0] for t in items))
+    return all(m in joined for m in COOLDOWN_MARKERS)
+
+
+def _parse_cooldown_seconds(items):
+    """从冷却提示对话框 OCR 行解析剩余时长（秒）；无法解析返回 None。
+
+    兼容「5分钟」「1小时20分钟」「30秒」与数字/单位间空格（norm_text
+    去空格标点）；单位整体丢失时按分钟折算（最常见表述）。只看
+    「还差」之后的片段（前面「领取5环任务」含数字，不能整句扫描）。
+    """
+    joined = norm_text("".join(t[0] for t in items))
+    m = COOLDOWN_TIME_RE.search(joined)
+    if not m:
+        return None
+    total = 0
+    matched = False
+    for num, unit in re.findall(r"(\d+)(小时|时|分钟|分|秒钟|秒)?", m.group(1)):
+        matched = True
+        n = int(num)
+        if unit in ("小时", "时"):
+            total += n * 3600
+        elif unit in ("分钟", "分"):
+            total += n * 60
+        elif unit in ("秒钟", "秒"):
+            total += n
+        else:
+            total += n * 60  # 单位丢失：按分钟
+    return total if matched and total > 0 else None
+
+
+def _consume_cooldown_dialog(win, items, close=True):
+    """识别冷却提示对话框：持久化截止时间并（默认）点屏关闭。
+
+    返回剩余秒数（含安全余量前的提示值）或 None（对话框不在场）。
+    解析失败按 COOLDOWN_DEFAULT_SECONDS 兜底并 WARN——宁可约 10 分钟后
+    重试，也不在提示在场时反复戳领取选项。
+    close=False 供诊断验证链路（不点任何位置，由用户手动关闭）。
+    """
+    if not _cooldown_dialog_present(items):
+        return None
+    seconds = _parse_cooldown_seconds(items)
+    if seconds is None:
+        seconds = COOLDOWN_DEFAULT_SECONDS
+        log(f"[五环] 冷却提示时长解析失败，按 {format_duration(seconds)} 兜底", "WARN")
+    until = _note_cooldown(win, seconds)
+    log(f"[五环] 距下次领取五环任务还差 {format_duration(seconds)}"
+        f"（冷却至 {time.strftime('%H:%M:%S', time.localtime(until))}，"
+        f"含 {COOLDOWN_SAFETY_MARGIN}s 安全余量）", "SYS")
+    if close:
+        # 关闭提示对话框，防遮挡后续队列任务；中心点击对无选项对话框
+        # 即推进/关闭（与完成恭喜对话框同款处理）
+        _click_screen_center(win, times=1, prefix="五环")
+    return seconds
+
+
+def _wait_cooldown(win):
+    """在云游大师处等待领取冷却结束。返回 (是否成功, 描述)。
+
+    只在五环是当前最后一项任务时由 _claim_task(wait_cooldown=True) 调用
+    ——其他任务优先由 main 调度执行，不做无效等待。等待期每
+    COOLDOWN_CHECK_INTERVAL 秒刷新剩余时间并记一条日志（长等待时
+    面板/日志仍能看出进度）。
+    """
+    debug_overlay.set_phase("等待五环冷却")
+    next_log = 0.0
+    try:
+        while True:
+            app_utils.raise_if_aborted()  # 顶号等会话中止：等待期间也及时退出
+            remaining = cooldown_remaining(win)
+            if remaining <= 0:
+                log("[五环] 领取冷却已结束，开始领取", "SYS")
+                return True, "五环领取冷却已结束"
+            if time.time() >= next_log:
+                log(f"[五环] 五环领取冷却中，距可领取还差 "
+                    f"{format_duration(remaining)}，在云游大师处等待", "SYS")
+                next_log = time.time() + COOLDOWN_CHECK_INTERVAL
+            time.sleep(min(remaining, 10.0))
+    finally:
+        debug_overlay.set_phase("")
+
+
+def _handle_claim_blockers(win, items, img_np, cooldown_handled=False):
+    """领取对话链中的结束条件对话框：冷却提示/今日两次已满/活力值不足。
 
     活力值不足按五环设置分流：开关开启点「不差那点小钱，快给我
     任务吧。」花钱领取继续任务（选项点击即领取成功，任务进入追踪
     面板，由调用方轮询检出）；关闭则点「那可不行，我一会再来。」
     后结束任务。所有领取轮询路径（主循环/选项后窗口/兜底/校验）
     每轮询调用，避免高性能缓存直点后选项不可见时漏检。
+    冷却提示：持久化截止时间、关闭提示并返回 COOLDOWN_INFO（调度层
+    据此推迟五环；是否就地等待由 _claim_task 的 wait_cooldown 决定）。
+    cooldown_handled：调用方已在本帧消费过冷却提示（入口防御），跳过。
     返回 (是否结束, 结束描述或 None, 是否已点继续选项)。
     """
+    if not cooldown_handled and _consume_cooldown_dialog(win, items) is not None:
+        return True, COOLDOWN_INFO, False
     if _dialog_text_present(items, DAILY_LIMIT_TEXT):
         log(f"[五环] 检测到「{DAILY_LIMIT_TEXT}」", "SYS")
         return True, DAILY_LIMIT_INFO, False
@@ -486,32 +687,40 @@ def _handle_claim_blockers(win, items, img_np):
 
 
 def _wait_tracked(win, timeout):
-    """轮询等待任务出现在追踪面板（入口防御点继续选项后确认领取成功）。
+    """轮询等待任务出现在追踪面板；同时检测领取冷却提示对话框。
 
-    入口防御仅在遗留对话框场景触发，频率可接受（has_task 面板在场时
-    区域 OCR 约 0.13~0.19s；fast_absent：标题条模板未命中且无遮挡时
-    直接返回 False，面板未出现阶段每次轮询实测 ~0.12s）；战斗中跳过
-    （战斗画面遮挡面板）。
+    入口防御点继续选项后确认领取成功用（遗留对话框场景，频率低）。
+    返回 "tracked"（任务已出现）/ "cooldown"（出现冷却提示，已持久化
+    截止时间并关闭对话框）/ None（超时）。单帧判定：每轮询只截一帧，
+    面板标题条定位 + 内容区 OCR 与对话框区 OCR 复用同一帧。
+    战斗中跳过（战斗画面遮挡面板）。
     """
     deadline = time.time() + timeout
     while time.time() < deadline:
         if is_in_battle(win):
             time.sleep(2.0)
             continue
-        if task_tracker.has_task(win, WUHUAN_TITLE, fast_absent=True):
-            return True
+        img = win.capture(force_activate=False)
+        if img is None:
+            time.sleep(1.0)
+            continue
+        img_np = np.asarray(img)
+        region = task_tracker.track_content_region(img_np)
+        if region is not None:
+            items, _ = game_map.ocr_region(img, region)
+            if task_tracker.has_task_in(items, img_np, WUHUAN_TITLE):
+                return "tracked"
+        dialog_items, _ = game_map.ocr_region(img, task_tracker.DIALOG_REGION)
+        if _consume_cooldown_dialog(win, dialog_items) is not None:
+            return "cooldown"
         time.sleep(1.0)
-    return False
+    return None
 
 
-def _walk_to_yunyou_claim_btn(win, tag="[五环]"):
-    """走到云游大师并点击领取任务按钮（打开领取对话框）。
+def _walk_near_yunyou(win, tag="[五环]"):
+    """走到云游大师附近并清理场景面板（不点领取按钮）。返回 (成功, 描述)。
 
-    与领取流程的走位段一致：小地图点云游大师位置寻路 → 等待到达
-    （长安 95,175 附近）→ 等待领取任务按钮出现并点击（按钮随站位
-    渲染位置变化，必须识图定位，不缓存）。返回 (是否成功, 描述)；
-    成功时对话框由调用方轮询处理。诊断页「测试领取五环」复用本链路
-    （tag 加验证标记）。
+    领取冷却等待前先走位：等待时间覆盖寻路耗时，到点即点领取按钮。
     """
     if map_nav.site_coord_nav_enabled():
         # 已在云游大师附近且站定（±MAP_POS_TOLERANCE，与 _wait_near 同
@@ -558,7 +767,12 @@ def _walk_to_yunyou_claim_btn(win, tag="[五环]"):
         return False, info
     log(f"{tag} 已到达云游大师附近", "SYS")
     close_scene_panels(win, "五环")
-    # 等待领取任务按钮出现并点击
+    return True, "已到达云游大师附近"
+
+
+def _click_yunyou_claim_btn(win, tag="[五环]"):
+    """等待领取任务按钮出现并点击（打开领取对话框）。返回 (成功, 描述)。"""
+    # 按钮随站位渲染位置变化，必须识图定位，不缓存
     if not _wait_template(win, TASK_LINGQU_CHANGAN_ICON, CLAIM_BUTTON_TIMEOUT):
         return False, "到达后未出现领取任务按钮"
     pt = game_map.find_template(win, TASK_LINGQU_CHANGAN_ICON)
@@ -569,36 +783,84 @@ def _walk_to_yunyou_claim_btn(win, tag="[五环]"):
     return True, f"已点击领取任务按钮 ({pt[0]}, {pt[1]})"
 
 
-def _claim_task(win):
-    """到云游大师领取五环任务。返回 (是否成功, 描述)。"""
+def _walk_to_yunyou_claim_btn(win, tag="[五环]"):
+    """走到云游大师并点击领取任务按钮（打开领取对话框）。
+
+    先走位（_walk_near_yunyou）再点领取按钮（_click_yunyou_claim_btn），
+    诊断页「测试领取五环」与正常领取共用。
+    """
+    ok, info = _walk_near_yunyou(win, tag)
+    if not ok:
+        return False, info
+    return _click_yunyou_claim_btn(win, tag)
+
+
+def _claim_task(win, wait_cooldown=False):
+    """到云游大师领取五环任务。返回 (是否成功, 描述)。
+
+    wait_cooldown=True：领取冷却未结束、且调度已确认五环是当前最后
+    一项任务 → 先走到云游大师处等待到点（提示时长 + 安全余量）再点
+    领取按钮。其他场景（还有别的任务）检测到冷却提示即返回
+    COOLDOWN_INFO，由 main 调度推迟五环。
+    """
     if is_in_battle(win):
         return False, "战斗中，跳过本轮领取"
-    # 入口防御：上一轮遗留的限次/活力对话框未关闭时（如高性能直点后
-    # 领取失败），会挡住后续小地图打开——先检测并处理（每轮一次
+    # 入口防御：上一轮遗留的限次/活力/冷却对话框未关闭时（如高性能直点
+    # 后领取失败），会挡住后续小地图打开——先检测并处理（每轮一次
     # 对话框区域 OCR，约 100-170ms）
     img = win.capture(force_activate=False)
     if img is not None:
         items, img_np = game_map.ocr_regions(img, (task_tracker.DIALOG_REGION,))
-        ended, info, continued = _handle_claim_blockers(win, items, img_np)
+        # 冷却提示：持久化截止时间并关闭对话框。非等待场景直接返回
+        # COOLDOWN_INFO（调度先做其他任务）；等待场景继续走下方等待分支
+        cooled = _consume_cooldown_dialog(win, items) is not None
+        if cooled and not wait_cooldown:
+            return False, COOLDOWN_INFO
+        ended, info, continued = _handle_claim_blockers(
+            win, items, img_np, cooldown_handled=cooled)
         if ended:
             return False, info
         if continued:
             # 已点「不差那点小钱…」：选项点击即领取成功，任务进入
             # 追踪面板（渲染较慢，实测 15s 压线）。轮询确认后直接
             # 返回，不再走寻路重领——任务已在追踪时重领会误触
-            # NPC 其它对话
-            if _wait_tracked(win, CLAIM_VERIFY_TIMEOUT):
+            # NPC 其它对话。该选项后也可能弹冷却提示（用户 2026-11-23），
+            # _wait_tracked 同步检测并持久化
+            outcome = _wait_tracked(win, CLAIM_VERIFY_TIMEOUT)
+            if outcome == "tracked":
+                _clear_cooldown(win)
                 return True, "活力值不足已点继续领取，五环任务已领取"
+            if outcome == "cooldown":
+                return False, COOLDOWN_INFO
+    # 领取冷却等待（调度仅在五环为最后一项任务时以 wait_cooldown 调用）：
+    # 先走到云游大师，原地等到点再点领取按钮，不空转重试
+    remaining_before_wait = cooldown_remaining(win)
+    if wait_cooldown and remaining_before_wait > 0:
+        log(f"[五环] 距下次可领取还差 "
+            f"{format_duration(remaining_before_wait)}，前往云游大师处等待", "SYS")
+        ok, info = _walk_near_yunyou(win)
+        if not ok:
+            return False, info
+        ok, info = _wait_cooldown(win)
+        if not ok:
+            return False, info
     # 走位到云游大师并点击领取任务按钮（打开领取对话框）
     ok, info = _walk_to_yunyou_claim_btn(win)
     if not ok:
         return False, info
     # 高性能：领取选项坐标已缓存 → 固定等待渲染后直点（免首轮 OCR）；
-    # 生效与否由下方任务出现轮询判定并兜底
+    # 生效与否由下方任务出现轮询判定并兜底。点前先查冷却提示：提示
+    # 对话框可能直接替代领取对话框（无绿色选项），缓存坐标点下去会把
+    # 提示关掉、丢失剩余时间
     if app_utils.high_perf_on():
         pos = app_utils.fixed_pos_get(f"option_{CLAIM_DIALOG_OPTION}", win)
         if pos is not None:
             time.sleep(app_utils.HIGH_PERF_DIALOG_WAIT)
+            img = win.capture(force_activate=False)
+            if img is not None:
+                items, _ = game_map.ocr_region(img, task_tracker.DIALOG_REGION)
+                if _consume_cooldown_dialog(win, items) is not None:
+                    return False, COOLDOWN_INFO
             human_click(win, pos[0], pos[1])
             log(f"[五环][高性能] 已按缓存坐标点击「{CLAIM_DIALOG_OPTION}」 ({pos[0]}, {pos[1]})", "SYS")
     # 对话框：活力值不足按设置分流（点继续/点结束，见 _handle_claim_blockers）；
@@ -693,6 +955,7 @@ def _claim_task(win):
         time.sleep(1.0)
     if not task_tracker.has_task(win, WUHUAN_TITLE):
         return False, "已点击领取选项，但任务追踪中未检测到任务"
+    _clear_cooldown(win)  # 领取成功：旧冷却记录作废（下一段间隔重新计时）
     return True, "五环任务已领取"
 
 
@@ -701,9 +964,9 @@ def verify_claim_flow(win):
     出现即成功——不点任何选项、不真正领取。
 
     与领取流程一致到点击领取任务按钮为止；领取对话框/活力值不足/
-    今日两次已满任一对话框出现均为面板出现证据。对话框停留不关闭
-    （点屏幕中间是否会关领取对话框未实测，任何关闭尝试都可能误触
-    绿色选项完成领取），由用户手动关闭。返回 (是否成功, 描述)。
+    今日两次已满/领取冷却提示任一对话框出现均为面板出现证据。对话框
+    停留不关闭（点屏幕中间是否会关领取对话框未实测，任何关闭尝试都
+    可能误触绿色选项完成领取），由用户手动关闭。返回 (是否成功, 描述)。
     """
     if is_in_battle(win):
         return False, "战斗中，无法测试领取（请先结束战斗）"
@@ -721,6 +984,14 @@ def verify_claim_flow(win):
             time.sleep(0.5)
             continue
         items, _img_np = game_map.ocr_region(img, task_tracker.DIALOG_REGION)
+        # 冷却提示：命中也记录截止时间（诊断观察到的冷却对后续任务运行
+        # 有效）；不点屏关闭（诊断链路不改动界面状态）
+        cooled = _consume_cooldown_dialog(win, items, close=False)
+        if cooled is not None:
+            log(f"[五环][验证] 出现领取冷却提示（距下次领取约 "
+                f"{format_duration(cooled)}）", "SYS")
+            return True, (f"出现领取冷却提示（距下次领取约 "
+                          f"{format_duration(cooled)}，未领取，请手动关闭对话框）")
         if _dialog_text_present(items, CLAIM_DIALOG_TEXT):
             log("[五环][验证] 领取对话框已出现（未领取）", "SYS")
             return True, "领取对话框已出现（未领取，请手动关闭对话框）"
@@ -1063,6 +1334,9 @@ def run_loop(win, cycle_interval=3.0):
        后结束；开启点「不差那点小钱，快给我任务吧。」花钱领取继续任务）
     3. 领取时出现「互助友爱，铭记在心即可…请明天再来」对话框（今日两次已满）
     4. 跟踪期间出现「恭喜你完成了今天五环任务」对话框（今日五环全部完成）
+    5. 领取冷却未结束：返回 COOLDOWN_INFO 由调度先执行其他任务（本函数
+       被调度再次执行时——五环为最后一项——先在云游大师处等待到点再领）；
+       剩余超过 COOLDOWN_MAX_WAIT 时返回 COOLDOWN_SKIP_INFO 结束本次运行
     返回结束原因描述。
     """
     # _congrats_seen_this_follow 为模块级全局（_handle_submit_dialog 置位、
@@ -1083,8 +1357,24 @@ def run_loop(win, cycle_interval=3.0):
         log(f"[五环] 当天进度已达上限 {done}/{max_rounds}，无需再执行", "SYS")
         return f"已完成 {done} 次五环任务，达到次数上限 {max_rounds}"
 
+    # 领取冷却（跨重启持久）：本函数被调用说明 wuhuan 已排到队首——
+    # 有其他任务时 main 调度先前会跳过五环（见 main._run_selected_tasks），
+    # 走到这里只剩「冷却已结束」或「五环是最后一项任务」两种情况：
+    # 剩余超过单次等待上限则本轮跳过（记录保留，稍后重跑直接跳过），
+    # 否则交给 _claim_task 在云游大师处等待到点再领取
+    tracked = task_tracker.has_task(win, WUHUAN_TITLE)
+    if not tracked:
+        remaining = cooldown_remaining(win)
+        if remaining > COOLDOWN_MAX_WAIT:
+            log(f"[五环] 距下次可领取五环任务还差 {format_duration(remaining)}，"
+                f"超过单次等待上限 {format_duration(COOLDOWN_MAX_WAIT)}，"
+                f"跳过本次五环（冷却记录保留，稍后重跑即可继续）", "WARN")
+            return COOLDOWN_SKIP_INFO
+        if remaining > 0:
+            log(f"[五环] 距下次可领取还差 {format_duration(remaining)}，"
+                f"先准备装备，随后在云游大师处等待到点领取", "SYS")
     # 续跑场景：任务已在追踪中则跳过购买装备（首次领取时再走完整流程）
-    if not task_tracker.has_task(win, WUHUAN_TITLE):
+    if not tracked:
         debug_overlay.set_phase("准备阶段")  # 看板阶段
         ok, info = _prepare(win)
         if not ok:
@@ -1116,7 +1406,7 @@ def run_loop(win, cycle_interval=3.0):
             log("[五环] 任务追踪中已有五环任务，直接跟踪", "SYS")
         else:
             debug_overlay.set_phase("领取任务")  # 看板阶段
-            ok, info = _claim_task(win)
+            ok, info = _claim_task(win, wait_cooldown=cooldown_remaining(win) > 0)
             if not ok:
                 if info == VITALITY_LIMIT_INFO:
                     log(f"[五环] {info}（已完成 {done} 次），结束任务", "SYS")
@@ -1124,6 +1414,15 @@ def run_loop(win, cycle_interval=3.0):
                 if info == DAILY_LIMIT_INFO:
                     log(f"[五环] {info}（已完成 {done} 次），结束任务", "SYS")
                     return f"{DAILY_LIMIT_INFO}，结束五环任务（已完成 {done} 次）"
+                if info == COOLDOWN_INFO:
+                    # 冷却已持久化：交给 main 调度（先做其他任务；五环为
+                    # 唯一剩余任务时再次进入本循环，在云游大师处等待到点）
+                    remaining = cooldown_remaining(win) or (COOLDOWN_DEFAULT_SECONDS
+                                                            + COOLDOWN_SAFETY_MARGIN)
+                    log(f"[五环] 距下次可领取五环任务还差 "
+                        f"{format_duration(remaining)}，先结束本次五环"
+                        f"（有任务未完成则先做其他任务，否则稍后在云游大师处等待领取）", "SYS")
+                    return f"{COOLDOWN_INFO}（距可领取还差 {format_duration(remaining)}）"
                 log(f"[五环] {info}", "WARN")
                 time.sleep(cycle_interval)
                 continue

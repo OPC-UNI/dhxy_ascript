@@ -185,3 +185,96 @@ def test_run_selected_tasks_dispatches_in_order(monkeypatch):
     assert "开始执行" in calls[run_idxs[0] - 1][1]
     assert "循环结束" in calls[run_idxs[0] + 1][1]
     assert calls[run_idxs[0] + 2][0] == "progress"
+
+
+# ---- 五环领取冷却在队列层顺延（2026-11-23 用户需求） ----
+
+def _patch_queue_env(monkeypatch, calls, state):
+    """调度测试公共打桩：run_task_mode 记录调用、冷却剩余由 state 控制。"""
+    import main
+
+    class _Clock:
+        @staticmethod
+        def sleep(seconds):
+            calls.append(("sleep", seconds))
+
+    monkeypatch.setattr(main, "time", _Clock)
+    monkeypatch.setattr(main.app_utils, "raise_if_aborted", lambda: None)
+    monkeypatch.setattr(main.app_utils, "set_current_task_mode",
+                        lambda mode: None)
+    monkeypatch.setattr(main.debug_overlay, "set_task", lambda mode: None)
+    monkeypatch.setattr(main.debug_overlay, "set_progress", lambda text: None)
+    monkeypatch.setattr(main, "_overall_progress_text",
+                        lambda win, modes: "总进度")
+    monkeypatch.setattr(main, "log",
+                        lambda msg, level="INFO": calls.append(("log", msg)))
+    monkeypatch.setattr(main.wuhuan_task, "cooldown_remaining",
+                        lambda win: state["rem"])
+
+
+def _runs(monkeypatch, state, modes, run_impl):
+    import main
+    calls = []
+    _patch_queue_env(monkeypatch, calls, state)
+
+    def _run(win, mode):
+        calls.append(("run", mode))
+        return run_impl(mode, calls)
+
+    monkeypatch.setattr(main, "run_task_mode", _run)
+    main._run_selected_tasks(object(), modes)
+    return [c[1] for c in calls if c[0] == "run"]
+
+
+def test_wuhuan_deferred_to_end_when_cooling(monkeypatch):
+    """冷却未结束且还有其他任务：五环排到队尾先做其他任务。"""
+    state = {"rem": 300.0}
+    runs = _runs(monkeypatch, state, ["五环", "客栈", "修罗"],
+                 lambda mode, calls: f"{mode} 完成")
+    assert runs == ["客栈", "修罗", "五环"]
+
+
+def test_wuhuan_returns_to_front_after_cooldown(monkeypatch):
+    """其他任务完成后冷却已结束：五环插回队首优先执行。"""
+    state = {"rem": 300.0}
+
+    def _impl(mode, calls):
+        if mode == "客栈":
+            state["rem"] = 0.0  # 客栈跑完时冷却恰好结束
+        return f"{mode} 完成"
+
+    runs = _runs(monkeypatch, state, ["五环", "客栈", "修罗"], _impl)
+    assert runs == ["客栈", "五环", "修罗"]
+
+
+def test_wuhuan_cooldown_info_requeued_after_other_tasks(monkeypatch):
+    """五环领取时才发现冷却（返回 COOLDOWN_INFO）：重新排队，先做其他
+    任务，五环最后执行（run_loop 会在云游大师处等待）。"""
+    from src.tasks import wuhuan as wuhuan_task
+    state = {"rem": 0.0}
+
+    def _impl(mode, calls):
+        if mode == "五环" and sum(1 for m, _ in calls if m == "run") == 1:
+            state["rem"] = 300.0
+            return f"{wuhuan_task.COOLDOWN_INFO}（距可领取还差 5分0秒）"
+        return f"{mode} 完成"
+
+    runs = _runs(monkeypatch, state, ["五环", "客栈"], _impl)
+    assert runs == ["五环", "客栈", "五环"]
+
+
+def test_wuhuan_skip_info_not_requeued(monkeypatch):
+    """冷却超过等待上限的跳过哨兵不触发重新排队（本次运行结束五环）。"""
+    from src.tasks import wuhuan as wuhuan_task
+    state = {"rem": wuhuan_task.COOLDOWN_MAX_WAIT + 60}
+    runs = _runs(monkeypatch, state, ["五环"],
+                 lambda mode, calls: wuhuan_task.COOLDOWN_SKIP_INFO)
+    assert runs == ["五环"]
+
+
+def test_wuhuan_alone_runs_directly_with_cooldown(monkeypatch):
+    """五环是唯一任务：直接执行（run_loop 内部等待冷却）。"""
+    state = {"rem": 300.0}
+    runs = _runs(monkeypatch, state, ["五环"],
+                 lambda mode, calls: f"{mode} 完成")
+    assert runs == ["五环"]

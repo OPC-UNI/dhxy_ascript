@@ -530,3 +530,245 @@ def test_enter_cloth_shop_skips_nav_when_already_near(
     ok, info = wuhuan._enter_cloth_shop(object(), tag="[五环]")
     assert ok is False and "自定义到达失败" in info
     assert started == []  # 未走坐标导航
+
+
+# ---- 领取冷却（昨天与今天的领取时间间隔提示，2026-11-23 用户需求） ----
+# 实测提示对话框：「你距离下次领取5环任务还差5分钟，等等再来吧！」
+# （用户截图 2026-11-23，出现在点「我可以帮助这些人」之后；点活力值
+# 「不差那点小钱…」后同样可能弹出）。
+_COOLDOWN_ITEMS = _make([
+    ("你距离下次领取5环任务还差5分钟，等等再来吧！", 435, 390, 930, 430),
+])
+
+
+def test_cooldown_parse_minutes():
+    assert wuhuan._parse_cooldown_seconds(_COOLDOWN_ITEMS) == 300
+
+
+def test_cooldown_parse_hours_and_minutes():
+    items = _make([
+        ("你距离下次领取5环任务还差1小时20分钟，等等再来吧！",
+         435, 390, 930, 430),
+    ])
+    assert wuhuan._parse_cooldown_seconds(items) == 4800
+
+
+def test_cooldown_parse_split_lines():
+    """对话框被 OCR 拆成两行（「…还差」+「30分钟…」）仍能解析。"""
+    items = _make([
+        ("你距离下次领取5环任务还差", 435, 380, 700, 405),
+        ("30分钟，等等再来吧！", 700, 380, 930, 405),
+    ])
+    assert wuhuan._parse_cooldown_seconds(items) == 1800
+
+
+def test_cooldown_parse_seconds_unit():
+    items = _make([
+        ("你距离下次领取5环任务还差30秒，等等再来吧！", 435, 390, 930, 430),
+    ])
+    assert wuhuan._parse_cooldown_seconds(items) == 30
+
+
+def test_cooldown_parse_unparseable_returns_none():
+    items = _make([
+        ("你距离下次领取5环任务还差一会儿，等等再来吧！", 435, 390, 930, 430),
+    ])
+    assert wuhuan._parse_cooldown_seconds(items) is None
+
+
+def test_cooldown_dialog_present_main_needle():
+    assert wuhuan._cooldown_dialog_present(_COOLDOWN_ITEMS) is True
+
+
+def test_cooldown_dialog_present_marker_fallback():
+    """主判定文案被大面积误读时，组合标记（还差/领取/再来）兜底命中。"""
+    from src.device.dialog_common import _dialog_text_present
+    items = _make([
+        ("你和上次领取隔得还差一会儿，等等再来吧", 435, 390, 930, 430),
+    ])
+    assert _dialog_text_present(items, wuhuan.COOLDOWN_DIALOG_TEXT) is False
+    assert wuhuan._cooldown_dialog_present(items) is True
+
+
+def test_cooldown_dialog_absent_on_normal_dialog():
+    items = _make([("我在这里练级，打了好久都打不过夜叉和猪怪。",
+                    435, 395, 878, 433)])
+    assert wuhuan._cooldown_dialog_present(items) is False
+    assert wuhuan._parse_cooldown_seconds(items) is None
+
+
+def test_consume_cooldown_dialog_persists_and_closes(monkeypatch):
+    noted, clicks, logs = [], [], []
+
+    def _note(win, seconds):
+        noted.append(seconds)
+        return wuhuan.time.time() + seconds
+
+    monkeypatch.setattr(wuhuan, "_note_cooldown", _note)
+    monkeypatch.setattr(wuhuan, "_click_screen_center",
+                        lambda win, times=1, prefix="": clicks.append(times))
+    monkeypatch.setattr(wuhuan, "log",
+                        lambda msg, level="INFO": logs.append((msg, level)))
+    assert wuhuan._consume_cooldown_dialog(None, _COOLDOWN_ITEMS) == 300
+    assert noted == [300]
+    assert clicks == [1]  # 关闭提示对话框，防遮挡后续队列任务
+    assert any("还差 5分0秒" in msg for msg, _ in logs)
+
+
+def test_consume_cooldown_dialog_unparseable_uses_default(monkeypatch):
+    noted = []
+    monkeypatch.setattr(wuhuan, "_note_cooldown",
+                        lambda win, seconds: noted.append(seconds) or 0.0)
+    monkeypatch.setattr(wuhuan, "_click_screen_center",
+                        lambda win, times=1, prefix="": None)
+    monkeypatch.setattr(wuhuan, "log", lambda *a, **k: None)
+    items = _make([
+        ("你距离下次领取5环任务还差一会儿，等等再来吧！", 435, 390, 930, 430),
+    ])
+    assert wuhuan._consume_cooldown_dialog(None, items) \
+        == wuhuan.COOLDOWN_DEFAULT_SECONDS
+    assert noted == [wuhuan.COOLDOWN_DEFAULT_SECONDS]
+
+
+def test_consume_cooldown_dialog_absent_no_side_effects(monkeypatch):
+    called = []
+    monkeypatch.setattr(wuhuan, "_note_cooldown",
+                        lambda *a, **k: called.append(1) or 0.0)
+    monkeypatch.setattr(wuhuan, "_click_screen_center",
+                        lambda *a, **k: called.append(2))
+    assert wuhuan._consume_cooldown_dialog(
+        None, _make([("普通的对话", 435, 390, 930, 430)])) is None
+    assert called == []
+
+
+def test_consume_cooldown_dialog_diagnostic_no_close(monkeypatch):
+    """诊断链路 close=False：记录冷却但不点屏（不改动界面状态）。"""
+    noted, clicks = [], []
+    monkeypatch.setattr(wuhuan, "_note_cooldown",
+                        lambda win, seconds: noted.append(seconds) or 0.0)
+    monkeypatch.setattr(wuhuan, "_click_screen_center",
+                        lambda *a, **k: clicks.append(1))
+    monkeypatch.setattr(wuhuan, "log", lambda *a, **k: None)
+    assert wuhuan._consume_cooldown_dialog(None, _COOLDOWN_ITEMS,
+                                           close=False) == 300
+    assert noted == [300] and clicks == []
+
+
+def test_claim_blocker_cooldown_info(monkeypatch):
+    monkeypatch.setattr(wuhuan, "_consume_cooldown_dialog",
+                        lambda win, items, close=True: 300)
+    ended, info, continued = wuhuan._handle_claim_blockers(None, [], None)
+    assert ended is True
+    assert info == wuhuan.COOLDOWN_INFO
+    assert continued is False
+
+
+def test_claim_blocker_cooldown_handled_skips_recheck(monkeypatch):
+    called = []
+    monkeypatch.setattr(wuhuan, "_consume_cooldown_dialog",
+                        lambda win, items, close=True: called.append(1) or 300)
+    ended, info, continued = wuhuan._handle_claim_blockers(
+        None, [], None, cooldown_handled=True)
+    assert (ended, info, continued) == (False, None, False)
+    assert called == []
+
+
+def test_cooldown_persist_roundtrip(monkeypatch):
+    """截止时间持久化（state.json 按角色）：含安全余量、可读取、可清除。"""
+    win = object()
+    wuhuan._clear_cooldown(win)
+    wuhuan._note_cooldown(win, 300)
+    remaining = wuhuan.cooldown_remaining(win)
+    assert 300 < remaining <= 300 + wuhuan.COOLDOWN_SAFETY_MARGIN + 2
+    wuhuan._clear_cooldown(win)
+    assert wuhuan.cooldown_remaining(win) == 0
+
+
+def test_cooldown_renotify_keeps_earlier_deadline(monkeypatch):
+    """同一段冷却被重复识别（遗留对话框）不把截止时间越推越迟。"""
+    win = object()
+    wuhuan._clear_cooldown(win)
+    wuhuan._note_cooldown(win, 300)
+    first = wuhuan._cooldown_until(win)
+    wuhuan._note_cooldown(win, 300)
+    assert wuhuan._cooldown_until(win) == first
+    wuhuan._clear_cooldown(win)
+
+
+def test_wait_cooldown_returns_after_expiry(monkeypatch):
+    seq = iter([5.0, 0.0])
+    monkeypatch.setattr(wuhuan, "cooldown_remaining", lambda win: next(seq))
+    monkeypatch.setattr(wuhuan.time, "sleep", lambda s: None)
+    monkeypatch.setattr(wuhuan.app_utils, "raise_if_aborted", lambda: None)
+    monkeypatch.setattr(wuhuan.debug_overlay, "set_phase", lambda text: None)
+    monkeypatch.setattr(wuhuan, "log", lambda *a, **k: None)
+    ok, info = wuhuan._wait_cooldown(None)
+    assert ok is True and "冷却已结束" in info
+
+
+class _FakeClaimWin:
+    """领取流程最小窗口桩（capture 返回非空帧即可）。"""
+
+    def capture(self, force_activate=False):
+        return object()
+
+
+def test_claim_task_cooldown_returns_without_waiting(monkeypatch):
+    """非最后一项任务时（wait_cooldown=False）检测到冷却提示立即返回
+    COOLDOWN_INFO，不寻路不等待——由 main 调度先执行其他任务。"""
+    walked = []
+    monkeypatch.setattr(wuhuan, "is_in_battle", lambda win: False)
+    monkeypatch.setattr(wuhuan.game_map, "ocr_regions",
+                        lambda img, regions: ([], None))
+    monkeypatch.setattr(wuhuan, "_consume_cooldown_dialog",
+                        lambda win, items, close=True: 300)
+    monkeypatch.setattr(wuhuan, "_walk_near_yunyou",
+                        lambda *a, **k: walked.append(1) or (True, "ok"))
+    monkeypatch.setattr(wuhuan, "_wait_cooldown",
+                        lambda win: walked.append(2) or (True, "ok"))
+    ok, info = wuhuan._claim_task(_FakeClaimWin(), wait_cooldown=False)
+    assert (ok, info) == (False, wuhuan.COOLDOWN_INFO)
+    assert walked == []
+
+
+def test_claim_task_cooldown_waits_when_last_task(monkeypatch):
+    """五环为最后一项任务时（wait_cooldown=True）：先走到云游大师并等待
+    冷却结束，再走常规领取链路。"""
+    walked = []
+    monkeypatch.setattr(wuhuan, "is_in_battle", lambda win: False)
+    monkeypatch.setattr(wuhuan.game_map, "ocr_regions",
+                        lambda img, regions: ([], None))
+    monkeypatch.setattr(wuhuan, "_consume_cooldown_dialog",
+                        lambda win, items, close=True: 300)
+    monkeypatch.setattr(wuhuan, "_handle_claim_blockers",
+                        lambda *a, **k: (False, None, False))
+    monkeypatch.setattr(wuhuan, "cooldown_remaining", lambda win: 10.0)
+    monkeypatch.setattr(wuhuan, "_walk_near_yunyou",
+                        lambda *a, **k: walked.append("near") or (True, "ok"))
+    monkeypatch.setattr(wuhuan, "_wait_cooldown",
+                        lambda win: walked.append("wait") or (True, "ok"))
+    monkeypatch.setattr(wuhuan, "_walk_to_yunyou_claim_btn",
+                        lambda *a, **k: walked.append("claim")
+                        or (False, "到达后未出现领取任务按钮"))
+    monkeypatch.setattr(wuhuan, "log", lambda *a, **k: None)
+    ok, info = wuhuan._claim_task(_FakeClaimWin(), wait_cooldown=True)
+    assert (ok, info) == (False, "到达后未出现领取任务按钮")
+    assert walked == ["near", "wait", "claim"]
+
+
+def test_run_loop_skips_when_cooldown_beyond_wait_cap(monkeypatch):
+    """冷却剩余超过单次等待上限：本轮跳过（不准备不领取），返回哨兵
+    COOLDOWN_SKIP_INFO（main 不会据此重新排队）。"""
+    prepared = []
+    monkeypatch.setattr(wuhuan, "load_task_counts", lambda: {"五环": 2})
+    monkeypatch.setattr(wuhuan.app_utils, "task_progress_done",
+                        lambda win, mode: 0)
+    monkeypatch.setattr(wuhuan.task_tracker, "has_task",
+                        lambda win, title: False)
+    monkeypatch.setattr(wuhuan, "cooldown_remaining",
+                        lambda win: wuhuan.COOLDOWN_MAX_WAIT + 60)
+    monkeypatch.setattr(wuhuan, "_prepare",
+                        lambda win: prepared.append(1) or (True, "ok"))
+    monkeypatch.setattr(wuhuan, "log", lambda *a, **k: None)
+    assert wuhuan.run_loop(object()) == wuhuan.COOLDOWN_SKIP_INFO
+    assert prepared == []

@@ -122,6 +122,7 @@ from src.core import user_data  # 角色数据目录（data/<角色ID>/）
 from src.device import bag  # 背包操作
 from src.device import battle  # 战斗自动化（战斗监控与人物/召唤兽操作）
 from src.app.task_registry import run_task_mode  # 任务模式注册表（前置钩子 + 主循环）
+from src.tasks import wuhuan as wuhuan_task  # 五环领取冷却（跨任务队列推迟/择时）
 from src.device import team  # 组队功能（仅战斗自动归队）
 from src.device import status_bars  # 人物/召唤兽血蓝条检测
 from src.core import debug_overlay  # 调试信息悬浮层（游戏窗口上绘制任务/配置/进度）
@@ -278,16 +279,52 @@ def _overall_progress_text(win, modes):
 def _run_selected_tasks(win, modes):
     """按面板顺序执行选中的任务（注册表分发 + 悬浮层/进度更新）。
 
+    五环领取冷却（2026-11-23 用户需求）在队列层顺延：
+    - 轮到五环但冷却未结束、队列里还有其他任务 → 五环排到队尾先做其他
+    - 每个任务完成后冷却已结束且五环仍在排队 → 五环插回队首优先执行
+    - 其余任务都做完仍未到点 → 五环作为最后一项执行，run_loop 在
+      云游大师处等待到点再领取（剩余超过等待上限时结束本次五环）
+    冷却截止按角色持久化（wuhuan.cooldown_remaining），跨重启生效。
+
     单独成函数便于测试调用点：注册表映射正确但 main 实参颠倒/漏调用
     时，单测可直接捕获 (win, mode)。
     """
-    for mode in modes:
+    pending = list(modes)
+    wuhuan_deferred = False  # 五环是否因领取冷却被推迟过（只对推迟过的做插队）
+    while pending:
         app_utils.raise_if_aborted()  # 顶号等会话中止（战斗线程置位）：不再启动下一任务
+        mode = pending[0]
+        # 冷却未结束且还有其他任务：五环排到队尾，先执行其他任务
+        if mode == wuhuan_task.WUHUAN_TITLE and len(pending) > 1:
+            remaining = wuhuan_task.cooldown_remaining(win)
+            if remaining > 0:
+                wuhuan_deferred = True
+                pending.append(pending.pop(0))
+                log(f"[任务] 五环领取冷却中（距可领取还差 "
+                    f"{wuhuan_task.format_duration(remaining)}），"
+                    f"先执行其他任务，冷却结束或其余任务完成后返回五环", "SYS")
+                time.sleep(1)  # 防日志/状态刷屏，相临跳过不空转
+                continue
         app_utils.set_current_task_mode(mode)
         debug_overlay.set_task(mode)
         log(f"[任务] 开始执行: {mode}", "SYS")
         info = run_task_mode(win, mode)
         log(f"[任务] {mode} 循环结束：{info}", "SYS")
+        pending.pop(0)
+        # 五环因冷却未领取（run_loop 返回冷却哨兵）：重新排队——有其他
+        # 任务时先做其他任务；只剩五环时再次执行，run_loop 会在云游
+        # 大师处等待到点再领取
+        if mode == wuhuan_task.WUHUAN_TITLE \
+                and isinstance(info, str) and info.startswith(wuhuan_task.COOLDOWN_INFO):
+            wuhuan_deferred = True
+            pending.append(mode)
+        # 冷却已结束且五环仍在排队（曾被推迟）：插回队首优先执行
+        if wuhuan_deferred and wuhuan_task.WUHUAN_TITLE in pending \
+                and pending[0] != wuhuan_task.WUHUAN_TITLE \
+                and wuhuan_task.cooldown_remaining(win) <= 0:
+            pending.remove(wuhuan_task.WUHUAN_TITLE)
+            pending.insert(0, wuhuan_task.WUHUAN_TITLE)
+            log("[任务] 五环领取冷却已结束，优先返回执行五环", "SYS")
         # 任务切换间隙：悬浮层改显总进度（任务运行中由各模块
         # 更新自己的进度行），并稍候界面状态稳定
         debug_overlay.set_progress(_overall_progress_text(win, modes))
