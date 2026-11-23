@@ -304,8 +304,12 @@ def test_yunyou_walk_closes_panels_only_after_arrival(monkeypatch):
         events.append("arrived")
         return True, "已到达"
     monkeypatch.setattr(wuhuan, "_wait_near", _wait_near)
-    monkeypatch.setattr(wuhuan, "_wait_template",
-                        lambda win, icon, timeout: True)
+    seen = {}
+
+    def _wait_template(win, icon, timeout, **kw):
+        seen.update(kw)
+        return True
+    monkeypatch.setattr(wuhuan, "_wait_template", _wait_template)
     monkeypatch.setattr(wuhuan.game_map, "find_template",
                         lambda win, icon, threshold=None: (300, 300))
     monkeypatch.setattr(wuhuan, "log", lambda msg, level="INFO": None)
@@ -316,6 +320,86 @@ def test_yunyou_walk_closes_panels_only_after_arrival(monkeypatch):
     assert clicks[0] == wuhuan.YUNYOU_MAP_POS
     assert clicks[1] == (300, 300)  # 到达后点领取按钮
     assert events == ["arrived", "panels"]  # 先到达，再清理面板
+    # 领取按钮等待必须启用对话框遮挡守卫（2026-11-23 实机教训）
+    assert seen == {"dismiss_dialog": "五环"}
+
+
+class _FakeWalk:
+    """WalkGuard 桩：固定站定/寻路中状态。"""
+
+    def __init__(self, walking):
+        self._walking = walking
+        self.calls = 0
+
+    def walking(self, win, img=None):
+        self.calls += 1
+        return self._walking
+
+
+def _wait_template_env(monkeypatch, walking=False, frames=("dialog", "button")):
+    """搭 _wait_template 对话框守卫桩环境，返回 (dismissed, walk, win)。"""
+    clock = {"t": 0.0}
+    monkeypatch.setattr(wuhuan.time, "time", lambda: clock["t"])
+
+    def _sleep(sec):
+        clock["t"] += sec
+    monkeypatch.setattr(wuhuan.time, "sleep", _sleep)
+    seq = iter(frames)
+
+    class _Win:
+        def capture(self, force_activate=False):
+            return next(seq, frames[-1])
+
+    monkeypatch.setattr(
+        wuhuan.game_map, "find_template_in",
+        lambda img, icon, threshold=0.8, region=None:
+        (300, 300) if img == "button" else None)
+    monkeypatch.setattr(wuhuan, "is_in_battle_frame", lambda img: False)
+    monkeypatch.setattr(wuhuan, "dialog_frame_score", lambda img: 0.99)
+    dismissed = []
+
+    def _clear(win, prefix=""):
+        dismissed.append(prefix)
+        return True, True
+    monkeypatch.setattr(wuhuan, "clear_blocking_dialog", _clear)
+    walk = _FakeWalk(walking)
+    monkeypatch.setattr(wuhuan, "WalkGuard", lambda: walk)
+    monkeypatch.setattr(wuhuan, "log", lambda msg, level="INFO": None)
+    return dismissed, walk, _Win()
+
+
+def test_wait_template_dismisses_blocking_dialog(monkeypatch):
+    """2026-11-23 五环实机：云游大师处对话框遮挡领取按钮。
+
+    等待按钮时同帧命中对话框模板且人物站定 → 点屏幕中间关闭后继续等，
+    按钮出现即返回；不得干等 20s 超时。
+    """
+    dismissed, walk, win = _wait_template_env(monkeypatch, walking=False)
+    ok = wuhuan._wait_template(win, wuhuan.TASK_LINGQU_CHANGAN_ICON, 10,
+                               dismiss_dialog="五环")
+    assert ok is True
+    assert dismissed == ["五环"]
+    assert walk.calls >= 1
+
+
+def test_wait_template_does_not_click_while_walking(monkeypatch):
+    """寻路中点屏幕中间会取消自动寻路：未站定不得关闭对话框。"""
+    dismissed, walk, win = _wait_template_env(
+        monkeypatch, walking=True, frames=("dialog",))
+    ok = wuhuan._wait_template(win, wuhuan.TASK_LINGQU_CHANGAN_ICON, 3,
+                               dismiss_dialog="五环")
+    assert ok is False
+    assert dismissed == []
+    assert walk.calls >= 1
+
+
+def test_wait_template_no_dialog_guard_by_default(monkeypatch):
+    """未启用守卫（给与面板等待）时对话框在场也不点屏（防误关提交对话）。"""
+    dismissed, _walk, win = _wait_template_env(
+        monkeypatch, walking=False, frames=("dialog",))
+    ok = wuhuan._wait_template(win, wuhuan.GIVE_ICON, 3)
+    assert ok is False
+    assert dismissed == []
 
 
 def test_buy_equipments_waits_shop_panel_render(monkeypatch):

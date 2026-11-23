@@ -54,9 +54,13 @@ from ..device.dialog_common import click_dialog_green_option as _click_dialog_gr
 from ..device import zuoqi  # 飞行驭器（进服装店前降落检查：飞行中无法点击进店）
 from ..device.dialog_common import (_dialog_text_present,
                             _click_screen_center,
+                            clear_blocking_dialog,  # 对话框遮挡领取按钮守卫
                             close_scene_panels,
+                            dialog_frame_score,  # 对话框模板门（同帧复用）
                             green_option_center,
-                            StoryDialogDismisser)  # 对话框共享组件
+                            DIALOG_FRAME_THRESHOLD,
+                            StoryDialogDismisser,
+                            WalkGuard)  # 点屏前确认人物站定（CLAUDE.md 规则 13）
 
 # 任务追踪面板中的任务标题
 WUHUAN_TITLE = "五环"
@@ -210,12 +214,20 @@ class SingleComplete(Exception):
     """
 
 
-def _wait_template(win, icon, timeout):
+def _wait_template(win, icon, timeout, dismiss_dialog=None):
     """等待模板出现（战斗中跳过等待）；返回是否出现。
 
-    单帧判定：战斗状态与模板匹配共用一帧（原先每轮询截 2 次窗）。
+    单帧判定：战斗状态、模板匹配与对话框门共用一帧（原先每轮询截 2 次窗）。
+    dismiss_dialog：目标模板被对话框遮挡时传入日志前缀启用守卫——同一帧
+    命中标准对话框模板且人物已站定（WalkGuard，CLAUDE.md 规则 13：寻路中
+    点屏幕中间会取消自动寻路）即点屏幕中间关闭并顺延等待窗口。2026-11-23
+    五环实机：云游大师处对话框遮挡领取按钮，连续 3 轮干等 20s 超时（第 4
+    轮弹窗自行消失才领到）。默认 None=旧行为（给与面板等待不能误关正在
+    处理的提交对话框）。
     """
     deadline = time.time() + timeout
+    walk = WalkGuard() if dismiss_dialog else None
+    dismiss_budget = 2  # 关不掉的对话框不无限点屏/无限顺延，到预算后只等超时
     while time.time() < deadline:
         img = win.capture(force_activate=False)
         if img is None:
@@ -226,6 +238,16 @@ def _wait_template(win, icon, timeout):
             continue
         if game_map.find_template_in(img, icon) is not None:
             return True
+        if walk is not None and dismiss_budget > 0 \
+                and dialog_frame_score(img) >= DIALOG_FRAME_THRESHOLD \
+                and walk.walking(win, img) is not True:
+            had, _clicked = clear_blocking_dialog(win, dismiss_dialog)
+            if had:
+                dismiss_budget -= 1
+                log(f"[{dismiss_dialog}] 目标模板被对话框遮挡，"
+                    f"已点屏幕中间关闭并继续等待", "WARN")
+                deadline += 3.0  # 关闭对话/按钮重渲染：等待窗口顺延
+                continue
         time.sleep(1.5)
     return False
 
@@ -771,9 +793,15 @@ def _walk_near_yunyou(win, tag="[五环]"):
 
 
 def _click_yunyou_claim_btn(win, tag="[五环]"):
-    """等待领取任务按钮出现并点击（打开领取对话框）。返回 (成功, 描述)。"""
+    """等待领取任务按钮出现并点击（打开领取对话框）。返回 (成功, 描述)。
+
+    到达时可能有对话框遮挡领取按钮（NPC 欢迎语/残留弹窗）——等待期间
+    由 _wait_template 的对话框守卫点屏关闭后继续等（与玄枢领取按钮的
+    clear_blocking_dialog 守卫同款，2026-11-23 五环实机）。
+    """
     # 按钮随站位渲染位置变化，必须识图定位，不缓存
-    if not _wait_template(win, TASK_LINGQU_CHANGAN_ICON, CLAIM_BUTTON_TIMEOUT):
+    if not _wait_template(win, TASK_LINGQU_CHANGAN_ICON,
+                          CLAIM_BUTTON_TIMEOUT, dismiss_dialog="五环"):
         return False, "到达后未出现领取任务按钮"
     pt = game_map.find_template(win, TASK_LINGQU_CHANGAN_ICON)
     if pt is None:

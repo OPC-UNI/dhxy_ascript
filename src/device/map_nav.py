@@ -11,7 +11,8 @@
   层内小图 4.2 px/格，窗口/地图不同比例不同，必须逐窗口现解）
 - 目标像素 = 变换计算值，**点击前必须悬停校验**（读回坐标与目标差
   ≤2 格才点）：计算点在窗外时悬停无浮层，据此拒绝点击（防点到世界
-  画面让角色乱走）
+  画面让角色乱走）；目标像素被地图图标/NPC 名盖住（浮层不出）时，
+  在容差半径内找可读邻居再校验点击（见 _probe_hover_within_tolerance）
 - 点击地图点 = 开始寻路（同图/跨图均可，跨图由客户端自动过图）；
   点击后 6s 内无位移按点到飞行旗等无效点处理，偏移 14px 重试一次
 - 到达判据：HUD 地名 + 坐标 ±ARRIVE_TOLERANCE；位置 12s 不变提前
@@ -188,11 +189,6 @@ AXIS_RATIO_TOLERANCE = 0.25
 AFFINE_INLIER_PX = 8.0
 # 悬停校验误差（格）：超过则按误差修正点击点重试
 AIM_TOLERANCE = 2
-# 内置标定点的悬停无浮层小偏移恢复（px）：点落到图标/地图边缘/窗口外时
-# 浮层不出——先试 4 个方向的小偏移找回地图内容，避免直接回退完整采样
-# （2026-11-21 实机：大雁塔五层内置标定点 (864,388) 无浮层，偏移 4px
-# 的 (868,388) 正常；完整采样耗时 6.3s）
-AIM_NOHOVER_OFFSETS = ((14, 0), (-14, 0), (0, 14), (0, -14))
 AIM_ATTEMPTS = 3
 
 # ---- 点击与到达 ----
@@ -341,6 +337,59 @@ def _hover_coord(win, px, py):
             got = parse_tooltip_text(text)
             if got is not None:
                 return got
+    return None
+
+
+def _aim_probe_offsets(sx, sy):
+    """瞄准点悬停无浮层时的邻域试探偏移（px，按优先级排序）。
+
+    校验容差是 AIM_TOLERANCE 格，换算成像素半径 = AIM_TOLERANCE·比例；
+    只有这个半径内的邻居读回才可能仍在容差内。地图图标/NPC 名多是横向
+    小块，先沿 x 轴左右各试整半径与半半径（最容易跳出遮挡），再沿 y 轴，
+    最后对角。偏移更大时读回必然超差，偏差修正会把点击点搬回原像素、
+    再次无浮层——这正是旧实现 ±14px 恢复的死循环来源（2026-11-23 蟠桃园
+    (27,112)：目标像素 (543,429) 被地图内容盖住，±14px 读回偏 7 格，
+    修正回原像素，3 次后误回退完整采样 14s）。
+    """
+    rx = max(1, int(round(AIM_TOLERANCE * abs(float(sx)))))
+    ry = max(1, int(round(AIM_TOLERANCE * abs(float(sy)))))
+    offs = [(rx, 0), (rx // 2, 0), (-rx, 0), (-rx // 2, 0),
+            (0, ry), (0, ry // 2), (0, -ry), (0, -ry // 2),
+            (rx, ry), (rx, -ry), (-rx, ry), (-rx, -ry)]
+    seen = set()
+    out = []
+    for dx, dy in offs:
+        if (dx, dy) == (0, 0) or (dx, dy) in seen:
+            continue
+        seen.add((dx, dy))
+        out.append((dx, dy))
+    return out
+
+
+def _probe_hover_within_tolerance(win, affine, px, py, tx, ty, emit):
+    """目标像素悬停无浮层：在容差半径内试探邻居像素，返回
+    (px, py, got) 或 None。
+
+    只接受读回坐标与目标差 ≤AIM_TOLERANCE 格的邻居——它的点击点与
+    目标像素差 ≤2 格，仍在悬停校验口径内；读回超差的邻居不点（标定
+    可能过期，交给调用方修正或回退采样）。偏移恢复不改标定、不写缓存。
+    目标像素落在地图图标/NPC 名上是常见现象（浮层被盖住不出），贴边
+    邻居通常可读：2026-11-21 大雁塔五层内置标定点 (864,388) → +4px
+    的 (868,388) 正常；2026-11-23 蟠桃园 (27,112) 目标像素 (543,429)
+    被盖住，邻近的 (541,430) 实测有浮层（读回 26,112）。
+    """
+    for dx, dy in _aim_probe_offsets(affine["sx"], affine["sy"]):
+        _check_cancel()
+        hx, hy = int(px + dx), int(py + dy)
+        if not (0 <= hx <= 1377 and 0 <= hy <= 830):
+            continue
+        got = _hover_coord(win, hx, hy)
+        if got is None:
+            continue
+        if (abs(got[0] - tx) <= AIM_TOLERANCE
+                and abs(got[1] - ty) <= AIM_TOLERANCE):
+            emit(f"瞄准点悬停无浮层，容差内偏移 ({dx:+d},{dy:+d}) 恢复")
+            return hx, hy, got
     return None
 
 
@@ -603,6 +652,8 @@ def _aim_and_click(win, affine, anchor_pt, tx, ty, emit,
 
     anchor_pt：采样锚点；None=内置标定热启动（无采样点可收缩，浮层不
     出现直接判失败，由调用方回退完整采样）。
+    目标像素悬停无浮层时先在容差半径内试邻居（图标/NPC 名遮挡的常见
+    情况，见 _probe_hover_within_tolerance），每条调用只探一轮。
     校验不到或偏差修正 3 次仍不达标 → 不点击。
     on_affine_corrected：本次发生偏差修正且点击成功时，回传修正后的
     标定 dict。调用方写入会话缓存（remember_affine）后，同图后续导航
@@ -615,6 +666,7 @@ def _aim_and_click(win, affine, anchor_pt, tx, ty, emit,
     px = aff["ax"] + sx * tx
     py = aff["ay"] + sy * ty
     corrected = False
+    probed = False
     t0 = time.time()
     for _attempt in range(1, AIM_ATTEMPTS + 1):
         _check_cancel()
@@ -622,19 +674,19 @@ def _aim_and_click(win, affine, anchor_pt, tx, ty, emit,
             return False, None, "计算出的点击点超出窗口范围"
         got = _hover_coord(win, px, py)
         if got is None:
-            if anchor_pt is None:
-                # 内置标定热启动：标定点悬停无浮层（点落在图标/地图边缘/
-                # 窗口外）——先试小偏移找回地图内容，避免直接回退完整采样
-                for dx, dy in AIM_NOHOVER_OFFSETS:
-                    got = _hover_coord(win, px + dx, py + dy)
-                    if got is not None:
-                        px += dx
-                        py += dy
-                        emit(f"瞄准点悬停无浮层，偏移 ({dx:+d},{dy:+d}) 恢复")
-                        break
-                if got is None:
-                    # 交由调用方回退完整采样
-                    return False, None, "瞄准点悬停无浮层（标定可能过期）"
+            probe = None
+            if not probed:
+                # 图标/NPC 名遮挡目标像素（浮层不出）是常见情况：先在
+                # 容差半径内找可读邻居。每条调用只探一轮——全部失败说明
+                # 标定过期或点在地图窗口外，再探只会白付悬停耗时。
+                probed = True
+                probe = _probe_hover_within_tolerance(
+                    win, aff, px, py, tx, ty, emit)
+            if probe is not None:
+                px, py, got = probe
+            elif anchor_pt is None:
+                # 热启动无采样点可收缩：交由调用方回退完整采样
+                return False, None, "瞄准点悬停无浮层（标定可能过期）"
             else:
                 # 不在图内容上（窗外/被浮层遮挡）：向已知有效采样点收缩
                 emit(f"瞄准点 ({int(px)},{int(py)}) 悬停无浮层，向采样点收缩")

@@ -2557,12 +2557,16 @@
     let fleetState = null;         // get_fleet_state 轮询结果
     let fleetSig = '';             // 行渲染签名（无变化不重建 DOM）
     let fleetLockSig = '';         // 运行/选中锁签名（变化才重渲染任务页/方案锁）
-    let fleetLogs = {};            // key → 行日志（选中行过滤）
+    let fleetLogs = {};            // key → [{seq,text}] 行日志（选中行过滤）
     let fleetLogLabels = {};       // key → 角色短文案
     let fleetErrors = {};          // key → 出现过 ERROR（行内红点）
     let logFilter = 'selected';    // 日志抽屉：selected=选中行 / all=全部
-    let panelLogs = [];            // 全部日志（系统 + 各角色合并）
-    let systemLogs = [];           // 非角色前缀的系统/多开/授权日志（选中视图也显示）
+    let panelLogs = [];            // 全部日志（系统 + 各角色合并，到达顺序）
+    // 选中视图 = 角色日志 + 系统日志按到达序号归并。两类分开缓存，若直接
+    // 拼接（先角色后系统）会把 资源/授权/消息 行永远钉在底部，且 slice 截断
+    // 只吃角色行、旧系统行永久驻留（2026-11-23 用户反馈）
+    let systemLogs = [];           // [{seq,text}] 非角色前缀的系统/多开/授权日志
+    let logSeq = 0;                // 日志到达序号（selected 视图归并排序键）
     let lastSelectedLogKey = null; // 选中行切换时才重建日志 DOM（防滚动重置）
     let lastTabRole = null;        // 已显示的 active Tab（变化时才自动滚入视野）
     const TASK_MODES = ['五环', '客栈', '修罗', '五倍', '种族比武', '玄枢轶闻', '名望', '仅战斗'];
@@ -3595,20 +3599,24 @@
 
     function addPanelLogs(lines) {
         let hasError = false;
+        let addedSystem = false;  // 本批是否进了选中视图（系统行）→ 需重建
         for (const ln of lines) {
             const text = String(ln);
             panelLogs.push(text);
             // 非角色前缀（系统/多开/授权/绑定）单独留存：选中视图也可见，
             // 否则启动失败、授权拦截这些关键行会被默认过滤掉
             if (!isRoleLogLine(text)) {
-                systemLogs.push(text);
+                systemLogs.push({ seq: ++logSeq, text: text });
                 while (systemLogs.length > MAX_PANEL_LOG_LINES) systemLogs.shift();
+                addedSystem = true;
             }
             if (text.includes('[ERROR]')) hasError = true;
         }
         while (panelLogs.length > MAX_PANEL_LOG_LINES) panelLogs.shift();
         if (hasError) expandLogDrawer();  // ERROR 到达自动展开（折叠态看不见）
-        if (logFilter === 'all') renderLogBox();
+        // 系统行属于选中视图：只在有系统行进入时才重建，纯角色前缀批次
+        // 只更新行数（角色原始行由 onFleetLogs 渲染，避免双份重建）
+        if (logFilter === 'all' || addedSystem) renderLogBox();
         else updateLogMeta();
     }
     window.addPanelLogs = addPanelLogs;  // Python 侧 evaluate_js 推送入口
@@ -3616,8 +3624,12 @@
     function currentLogLines() {
         if (logFilter === 'all') return panelLogs;
         const key = fleetSelectedKey();
-        const roleLines = key ? (fleetLogs[key] || []) : [];
-        return roleLines.concat(systemLogs).slice(-MAX_PANEL_LOG_LINES);
+        const roleEntries = key ? (fleetLogs[key] || []) : [];
+        // 按到达序号归并（不改变各自数组的缓存），保证系统行与角色行
+        // 在视图中按真实先后交错，窗口外的旧系统行随新日志自然滚出
+        const merged = roleEntries.concat(systemLogs);
+        merged.sort(function (a, b) { return a.seq - b.seq; });
+        return merged.slice(-MAX_PANEL_LOG_LINES).map(function (e) { return e.text; });
     }
 
     function renderLogBox() {
@@ -3689,7 +3701,7 @@
         if (!fleetLogs[key]) fleetLogs[key] = [];
         for (const ln of (lines || [])) {
             const text = String(ln);
-            fleetLogs[key].push(text);
+            fleetLogs[key].push({ seq: ++logSeq, text: text });
             if (text.includes('[ERROR]')) {
                 fleetErrors[key] = true;
                 expandLogDrawer();
@@ -3715,7 +3727,7 @@
         const line = '[多开] ' + (label || key) + ' 启动失败：' + msg;
         showStartError(line);
         if (!fleetLogs[key]) fleetLogs[key] = [];
-        fleetLogs[key].push(line);
+        fleetLogs[key].push({ seq: ++logSeq, text: line });
         while (fleetLogs[key].length > MAX_PANEL_LOG_LINES) fleetLogs[key].shift();
         fleetErrors[key] = true;
         fleetSig = '';

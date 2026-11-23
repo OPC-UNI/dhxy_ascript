@@ -1145,7 +1145,7 @@ def test_aim_and_click_caches_correction(monkeypatch):
 
 
 def test_aim_and_click_recovers_blocked_point_with_offset(monkeypatch):
-    """内置标定点悬停无浮层：小偏移找回地图内容，不回退完整采样。"""
+    """内置标定点悬停无浮层：容差内小偏移找回地图内容，不回退完整采样。"""
     map_nav._CANCEL.clear()
     aff = {"sx": 2.0, "sy": -2.0, "ax": 100.0, "ay": 500.0}
 
@@ -1163,12 +1163,13 @@ def test_aim_and_click_recovers_blocked_point_with_offset(monkeypatch):
         object(), aff, None, 50, 100, lambda m: None,
         on_affine_corrected=lambda a: got.update(a))
     assert ok, err
-    assert pt == (214, 300) and clicks == [(214, 300)]
+    # 容差半径 = AIM_TOLERANCE×2px = 4px，首个试探点 (+4,0)
+    assert pt == (204, 300) and clicks == [(204, 300)]
     assert got == {}  # 偏移恢复无偏差修正，不写缓存
 
 
 def test_aim_and_click_blocked_point_all_offsets_fail(monkeypatch):
-    """四方向偏移仍无浮层 → 返回失败，交由调用方完整采样。"""
+    """容差内邻居都无浮层 → 返回失败，交由调用方完整采样。"""
     map_nav._CANCEL.clear()
     aff = {"sx": 2.0, "sy": -2.0, "ax": 100.0, "ay": 500.0}
     calls = []
@@ -1180,7 +1181,77 @@ def test_aim_and_click_blocked_point_all_offsets_fail(monkeypatch):
     ok, pt, err = map_nav._aim_and_click(
         object(), aff, None, 50, 100, lambda m: None)
     assert ok is False and "无浮层" in err and clicks == []
-    assert len(calls) == 1 + len(map_nav.AIM_NOHOVER_OFFSETS)
+    assert len(calls) == 1 + len(map_nav._aim_probe_offsets(2.0, -2.0))
+
+
+def test_aim_and_click_probe_rejects_neighbor_out_of_tolerance(monkeypatch):
+    """邻居读回超差（标定可能过期）→ 不点击、不回退错误，交由完整采样。"""
+    map_nav._CANCEL.clear()
+    aff = {"sx": 2.0, "sy": -2.0, "ax": 100.0, "ay": 500.0}
+    monkeypatch.setattr(map_nav, "_hover_coord",
+                        lambda w, px, py: None if (px, py) == (200, 300)
+                        else (60, 100))  # 偏 10 格，远超容差
+    clicks = []
+    monkeypatch.setattr(map_nav, "human_click", lambda *a: clicks.append(1))
+    ok, pt, err = map_nav._aim_and_click(
+        object(), aff, None, 50, 100, lambda m: None)
+    assert ok is False and "无浮层" in err and clicks == []
+
+
+def test_aim_and_click_probe_recovers_real_pantaoyuan_case(monkeypatch):
+    """2026-11-23 蟠桃园 (27,112) 实机：目标像素被地图内容盖住。
+
+    标定 (sx 2.0/-2.0, ax 489.0, ay 653.7) 时目标像素 (543,429)；
+    (542..544,429) 与 (543,430) 悬停无浮层，±14px 的读回偏 7 格——
+    旧实现偏差修正搬回原像素，3 次后回退完整采样。容差内探测应命中
+    邻居（-4,0），且点击点与目标差 ≤2 格。
+    """
+    map_nav._CANCEL.clear()
+    aff = {"sx": 2.0, "sy": -2.0, "ax": 489.0, "ay": 653.7}
+    blocked = {(542, 429), (543, 429), (544, 429), (543, 430)}
+
+    def fake_hover(win, px, py):
+        if (int(px), int(py)) in blocked:
+            return None
+        return (int(round((px - 489.0) / 2.0)),
+                int(round((653.7 - py) / 2.0)))
+
+    monkeypatch.setattr(map_nav, "_hover_coord", fake_hover)
+    clicks = []
+    monkeypatch.setattr(map_nav, "human_click",
+                        lambda w, x, y: clicks.append((x, y)))
+    ok, pt, err = map_nav._aim_and_click(
+        object(), aff, None, 27, 112, lambda m: None)
+    assert ok, err
+    assert clicks == [pt]
+    assert abs(pt[0] - 543) <= 4 and abs(pt[1] - 429) <= 4
+
+
+def test_aim_and_click_probe_after_sampling(monkeypatch):
+    """完整采样后目标像素仍被盖住：邻居探测优先于向锚点收缩。
+
+    2026-11-23 08:40 实机：采样后瞄准 (543,429) 无浮层 → 收缩到
+    (611,378) 读回偏 34/26 格 → 修正搬回 (543,430) 再次无浮层 →
+    3 次用尽判失败（白付 14s 采样）。邻居探测应直接命中。
+    """
+    map_nav._CANCEL.clear()
+    aff = {"sx": 2.0, "sy": -2.0, "ax": 489.0, "ay": 653.7}
+
+    def fake_hover(win, px, py):
+        if (int(px), int(py)) in {(542, 429), (543, 429), (544, 429)}:
+            return None
+        return (int(round((px - 489.0) / 2.0)),
+                int(round((653.7 - py) / 2.0)))
+
+    monkeypatch.setattr(map_nav, "_hover_coord", fake_hover)
+    clicks = []
+    monkeypatch.setattr(map_nav, "human_click",
+                        lambda w, x, y: clicks.append((x, y)))
+    ok, pt, err = map_nav._aim_and_click(
+        object(), aff, (679, 327), 27, 112, lambda m: None)
+    assert ok, err
+    assert clicks == [pt]
+    assert abs(pt[0] - 543) <= 4 and abs(pt[1] - 429) <= 4
 
 
 def test_aim_and_click_no_correction_no_cache(monkeypatch):
