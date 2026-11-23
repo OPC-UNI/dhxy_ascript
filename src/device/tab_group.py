@@ -910,12 +910,20 @@ def _guarded_click(win, x, y, button="primary"):
 
 def _for_each_member(win, handler, label, force=False, total_deadline=None,
                      only_members=False):
-    """遍历队员 Tab：Ctrl+Tab 切一整圈（_tab_count 次），逐个执行 handler。
+    """遍历队员 Tab：逐个覆盖处理，直到目标队员全部访问或兜底跳数用尽。
 
     handler 签名 (win, tab_id)；未登录 Tab（切换成功但无 ID，
-    cur == ""）跳过；绕回队长提前结束；handler 异常内部消化；
-    整体受总时长上限保护（total_deadline 缺省 PASS_TOTAL_DEADLINE；
-    战斗动作 pass 按配置队员数放大）。结束切回队长。
+    cur == ""）跳过；handler 异常内部消化；整体受总时长上限保护
+    （total_deadline 缺省 PASS_TOTAL_DEADLINE；战斗动作 pass 按配置
+    队员数放大）。结束切回队长。
+
+    遍历按「目标集合 + 已访问集合」驱动，不再用「绕回队长即结束」：
+    游戏/用户在 pass 期间可能外部切 Tab（点聊天窗口、客户端切到需要
+    操作的标签），Tab 条当前序号随之跳变，按序号推「下一个」会漏人
+    ——2026-11-23 实机：一名队长+两名队员，处理完第一个队员后游戏已
+    在第二个队员 Tab，下一序号算成队长，遍历提前结束，第二个队员的
+    配置动作从未执行。现在遇到队长只视为「一圈经过」：目标未覆盖就
+    继续切，外部切 Tab 只多花跳数、不会漏队员；跳数上限防异常死循环。
     only_members=True：只处理启动检查确认「在队伍中」的 Tab
     （_team_member_ids）——一个窗口多个 Tab 不全是组号（2026-11-07
     用户基本原则：队伍检查 + Tab 名比对才得出组号结论），不在队伍
@@ -930,19 +938,40 @@ def _for_each_member(win, handler, label, force=False, total_deadline=None,
     if total_deadline is None:
         total_deadline = PASS_TOTAL_DEADLINE
     deadline = time.time() + total_deadline
-    for _ in range(_tab_count):
+    # 目标集合：已登录 Tab（按账号 ID，与 Tab 条选中序号无关）去掉队长，
+    # only_members 时再限定启动检查确认的队员。枚举失败/目标为空时退回
+    # 旧语义（绕回队长即结束）。
+    try:
+        logged = {c["id"] for c in game.list_tab_windows(win) if c["id"]}
+    except Exception:
+        logged = set()
+    targets = logged - {_leader_id}
+    if only_members and not force:
+        targets &= _team_member_ids
+    visited = set()
+    hops = 0
+    max_hops = max(_tab_count, 1) * 2 + TAB_CYCLE_GUARD
+    while hops < max_hops:
         if time.time() > deadline:
             log(f"[组号] {label} 超总时长上限，提前切回队长", "WARN")
             break
+        if targets and not (targets - visited):
+            break  # 目标队员全部处理：不再绕圈，直接切回队长
         cur = _switch_next(win)
         if cur is None:
             log(f"[组号] {label}：切 Tab 失败，中止", _fail_log_level())
             break
+        hops += 1
         if cur == _leader_id:
-            break  # 已绕回队长
+            if not (targets - visited):
+                break  # 已绕回队长且目标队员全部处理
+            continue  # 外部切 Tab 打乱了顺序：还有队员未处理，继续切
         if cur == "":
             log(f"[组号] {label}：当前 Tab 未登录，跳过", "INFO")
             continue
+        if cur in visited:
+            continue  # 外部切 Tab 造成重复经过：同一次 pass 不重复处理
+        visited.add(cur)
         if only_members and not force and cur not in _team_member_ids:
             log(f"[组号] {label}：Tab（ID {cur}）不在队伍/未确认，跳过不操作", "INFO")
             continue
@@ -950,6 +979,10 @@ def _for_each_member(win, handler, label, force=False, total_deadline=None,
             handler(win, cur)
         except Exception as e:
             log(f"[组号] {label}：队员 Tab（ID {cur}）处理异常: {e}", "WARN")
+    missing = targets - visited
+    if missing:
+        log(f"[组号] {label} 结束仍有队员未处理（ID {'、'.join(sorted(missing))}）"
+            f"：达到切换次数上限或超时，下一轮 pass 兜底", "WARN")
     return_to_leader(win)
 
 

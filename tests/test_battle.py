@@ -418,6 +418,74 @@ def test_handle_hezi_reuses_frame(monkeypatch):
     assert battle._handle_hezi(object(), bgr=make_bgr_frame()) is False
 
 
+# ---- 取消自动（自动中判定，2026-11-23 用户实机规则） ----
+
+def _cancel_auto_env(monkeypatch, scores):
+    """_cancel_auto_frame 测试环境：模板分数打桩 + 点击/日志记录。"""
+    clicks, logs = [], []
+    monkeypatch.setattr(battle.game_map, "best_match_np",
+                        lambda img, icon, region=None: scores.get(
+                            icon, (0.0, (0, 0))))
+    monkeypatch.setattr(battle, "human_click",
+                        lambda win, x, y: clicks.append((x, y)))
+    monkeypatch.setattr(battle, "_park_mouse", lambda win: None)
+    monkeypatch.setattr(battle, "_wait_auto_button", lambda win, t: True)
+    monkeypatch.setattr(battle, "log",
+                        lambda msg, level="INFO": logs.append((level, msg)))
+    return clicks, logs
+
+
+def _battle_frame():
+    return np.zeros((831, 1378, 3), dtype=np.uint8)
+
+
+def test_cancel_auto_frame_either_template_reaches_threshold(monkeypatch):
+    """用户实机场景（09:21:23）：取消自动=0.883、自动=1.000——两者任一
+    达到 0.9 即自动中，须点击取消自动。旧「取消分数须高于自动分数」
+    比较恒不成立，自动从未被取消。"""
+    clicks, logs = _cancel_auto_env(monkeypatch, {
+        battle.AUTO_CANCEL_ICON: (0.883, (76, 780)),
+        battle.AUTO_ICON: (1.000, (1341, 678)),
+        battle.AUTO2_ICON: (0.435, (166, 40)),
+    })
+    assert battle._cancel_auto_frame(object(), _battle_frame()) is True
+    assert clicks == [(76, 780)]
+    assert any("检测到自动战斗" in m for _lv, m in logs)
+
+
+def test_cancel_auto_frame_never_clicks_unlocated_cancel(monkeypatch):
+    """自动模板达标但取消模板未达可点击阈值：不盲点弱匹配坐标。"""
+    clicks, _logs = _cancel_auto_env(monkeypatch, {
+        battle.AUTO_CANCEL_ICON: (0.40, (145, 780)),
+        battle.AUTO_ICON: (1.000, (1341, 678)),
+        battle.AUTO2_ICON: (0.435, (166, 40)),
+    })
+    assert battle._cancel_auto_frame(object(), _battle_frame()) is False
+    assert clicks == []
+
+
+def test_cancel_auto_frame_high_cancel_alone_is_auto(monkeypatch):
+    """取消自动模板单独 ≥0.9 同样判定自动中（自动按钮不可见时）。"""
+    clicks, _logs = _cancel_auto_env(monkeypatch, {
+        battle.AUTO_CANCEL_ICON: (0.95, (76, 780)),
+        battle.AUTO_ICON: (0.36, (120, 40)),
+        battle.AUTO2_ICON: (0.43, (166, 40)),
+    })
+    assert battle._cancel_auto_frame(object(), _battle_frame()) is True
+    assert clicks == [(76, 780)]
+
+
+def test_cancel_auto_frame_non_auto_quiet(monkeypatch):
+    """明确非自动（两模板均远低于阈值）：不点击、不输出日志。"""
+    clicks, logs = _cancel_auto_env(monkeypatch, {
+        battle.AUTO_CANCEL_ICON: (0.39, (145, 780)),
+        battle.AUTO_ICON: (0.36, (120, 40)),
+        battle.AUTO2_ICON: (0.43, (166, 40)),
+    })
+    assert battle._cancel_auto_frame(object(), _battle_frame()) is False
+    assert clicks == [] and logs == []
+
+
 def test_handle_hezi_battle_only_switch_gate(monkeypatch):
     """仅战斗模式：身份恒为未知，完全由「自动抢盒子」开关决定——
     关闭（默认）直接返回不匹配，打开才进入盒子识别。"""

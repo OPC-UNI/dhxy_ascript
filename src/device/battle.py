@@ -127,6 +127,12 @@ AUTO_POS_CACHE_KEY = "battle_auto"  # 固定位置缓存键（识别成功后 fi
 AUTO_CACHE_ROI_MARGIN = (80, 50)    # 缓存位置附近小 ROI（按钮 + ≥50px 余量）
 AUTO_CACHE_MISS_CLEAR = 6           # 缓存路径连续未命中 N 次（×0.5s）做一次全带复查
 AUTO_STATE_THRESHOLD = 0.8          # 按钮态判定阈值（与 match_frame_np 默认一致）
+AUTO_ON_THRESHOLD = 0.9             # 自动中判定阈值（2026-11-23 用户实机规则）：
+                                    # 取消自动/自动按钮两个模板任一达到 0.9
+                                    # 即视为自动中——新客户端自动面板与操作条
+                                    # 自动按钮同时在场（取消自动 0.883、自动
+                                    # 1.000），旧「取消分数须高于自动分数」
+                                    # 比较恒不成立，队员配置动作因此从未执行
 
 # ---- 战斗 UI 搜索条带（快速匹配用，窗口相对坐标，实测 1378x831 布局） ----
 BANNER_BAND = (0, 40, 400, 240)  # 回合横幅带（第1/第2回合横幅实测 x34-121 y88-116）
@@ -509,10 +515,12 @@ def _wait_auto_button(win, timeout):
 def _cancel_auto(win):
     """进入第 1 回合时若已处于自动战斗，先点击取消自动恢复手动。
 
-    不取消的话手动操作来不及执行就被自动抢先。原实现要求「取消自动」
-    「恢复自动」同时存在才取消（上局遗留自动），新客户端下两按钮未必
-    同时出现；改为双模板比分数：取消自动分数达标且高于自动按钮分数
-    即处于自动中（两按钮同位置样式相近，单模板阈值会误判）。
+    不取消的话手动操作来不及执行就被自动抢先。自动中判定按用户实机
+    规则（2026-11-23）：取消自动/自动按钮两模板任一达到 0.9 即为自动
+    中，且取消自动模板须达到可点击阈值才实际点击（弱匹配坐标不盲点）。
+    旧「取消分数须高于自动分数」在新客户端恒不成立——自动面板「取消」
+    与操作条「自动」按钮同时在场（0.883/1.000），队员配置动作因此
+    从未执行（09:21:23 实机教训）。
     """
     img = win.capture(force_activate=False, format=WindowCaptureFormat.OPENCV)
     if img is None:
@@ -531,7 +539,12 @@ def _cancel_auto_frame(win, img):
     auto_score, _ = game_map.best_match_np(img, AUTO_ICON, region=band)
     auto2_score, _ = game_map.best_match_np(img, AUTO2_ICON, region=band)
     auto_score = max(auto_score, auto2_score)
-    if cancel_score >= BAR_BUTTON_THRESHOLD and cancel_score > auto_score:
+    # 自动中判定（2026-11-23 用户实机规则）：取消自动/自动按钮两模板
+    # 任一 ≥0.9 即视为自动中；实际取消另需取消模板达到可点击阈值，
+    # 未定位到取消按钮时不盲点弱匹配坐标（手动操作场景操作条「自动」
+    # 按钮同样在场，只凭它的分数无法给出取消按钮位置）。
+    if max(cancel_score, auto_score) >= AUTO_ON_THRESHOLD \
+            and cancel_score >= BAR_BUTTON_THRESHOLD:
         human_click(win, cancel_pt[0], cancel_pt[1])
         _park_mouse(win)  # 鼠标移开，避免遮挡操作条
         log("[战斗] 检测到自动战斗，已点击取消自动恢复手动", "SYS")

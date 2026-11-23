@@ -565,6 +565,7 @@ def test_rejoin_pass_force_bypasses_throttle(monkeypatch):
     monkeypatch.setattr(tab_group.game, "list_tab_windows",
                         lambda win: list(children))
     monkeypatch.setattr(tab_group, "_tab_count", 2)
+    monkeypatch.setattr(tab_group, "_leader_id", "id-leader")
     monkeypatch.setattr(tab_group, "_switch_next",
                         lambda win: "id-m1")
     monkeypatch.setattr(tab_group, "return_to_leader", lambda win: None)
@@ -582,7 +583,7 @@ def test_rejoin_pass_force_bypasses_throttle(monkeypatch):
     done, info, matched = tab_group.member_rejoin_pass(
         _CapWin(), ["碧桃娘子"], force=True)
     assert matched == {"碧桃娘子"}
-    assert done == 2  # _switch_next 恒返回 id-m1，_tab_count=2 两轮都命中
+    assert done == 1  # 已访问去重：同一次 pass 重复经过同一队员不重复处理
 
 
 def test_init_task_logs_member_tab_names(monkeypatch):
@@ -1023,6 +1024,49 @@ def test_for_each_member_force_visits_all(monkeypatch):
                                lambda w, t: calls.append(t),
                                "测试 pass", force=True, only_members=True)
     assert calls == ["idM2", "idM1"]
+
+
+def test_for_each_member_survives_external_switch_back(monkeypatch):
+    """外部切 Tab 打乱顺序不得提前结束遍历（2026-11-23 实机：一名队长+
+    两名队员，处理完第一个队员后游戏已在第二个队员 Tab，Tab 条序号推断
+    回到队长，遍历提前结束，第二个队员配置动作从未执行）。
+
+    场景回放：切换序列 M1 → 队长（外部切 Tab 导致下一序号算成队长）→
+    M2 → 队长；M2 仍必须执行 handler。"""
+    monkeypatch.setattr(tab_group, "_active", True)
+    monkeypatch.setattr(tab_group, "_team_member_ids", {"idM1", "idM2"})
+    monkeypatch.setattr(tab_group, "_leader_id", "idL")
+    monkeypatch.setattr(tab_group, "_tab_count", 3)
+    monkeypatch.setattr(tab_group.game, "list_tab_windows",
+                        lambda win: [
+                            {"id": "idL", "visible": False},
+                            {"id": "idM1", "visible": False},
+                            {"id": "idM2", "visible": False}])
+    seq = iter(["idM1", "idL", "idM2", "idL"])
+    monkeypatch.setattr(tab_group, "_switch_next", lambda win: next(seq))
+    monkeypatch.setattr(tab_group, "return_to_leader", lambda win: None)
+    calls = []
+    tab_group._for_each_member(_FakeWin(), lambda w, t: calls.append(t),
+                               "测试 pass", only_members=True)
+    assert calls == ["idM1", "idM2"]
+
+
+def test_for_each_member_visited_not_repeated(monkeypatch):
+    """外部切 Tab 造成重复经过已处理队员：同一次 pass 不重复执行。"""
+    monkeypatch.setattr(tab_group, "_active", True)
+    monkeypatch.setattr(tab_group, "_team_member_ids", {"idM1"})
+    monkeypatch.setattr(tab_group, "_leader_id", "idL")
+    monkeypatch.setattr(tab_group, "_tab_count", 3)
+    monkeypatch.setattr(tab_group.game, "list_tab_windows",
+                        lambda win: [{"id": "idL", "visible": False},
+                                     {"id": "idM1", "visible": False}])
+    seq = iter(["idM1", "idL", "idM1", "idL"])
+    monkeypatch.setattr(tab_group, "_switch_next", lambda win: next(seq))
+    monkeypatch.setattr(tab_group, "return_to_leader", lambda win: None)
+    calls = []
+    tab_group._for_each_member(_FakeWin(), lambda w, t: calls.append(t),
+                               "测试 pass", only_members=True)
+    assert calls == ["idM1"]
 
 
 def test_member_auto_pass_skips_without_confirmed_members(monkeypatch):
