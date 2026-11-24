@@ -19,7 +19,10 @@
    不移动；普通位置可自动寻路）。
 3. 方向引导：当前地图直接点左上位置文字区打开小地图（open_mini_map，
    2026-11-18 用户规则：不经世界地图），以玩家位置红点为原点，按方向
-   词 + 距离级别点目标点自动寻路；重复「使用 → 按提示走」直到提示
+   词 + 距离级别点目标点自动寻路（步长按本图 px/格 归一，见
+   MOWANG_STEP_PX 注释）；点击后人物不动（目标点落在空洞/不可走区域，
+   地面寻路无法到达）→ 起飞（zuoqi.ensure_flying）后重新移动一次
+   （2026-11-24 用户规则）；重复「使用 → 按提示走」直到提示
    「几乎崩裂/就在附近」——近身继续使用即触发 2 个「魔王护卫」战斗
    （战斗由 follow_task/battle 线程托管，本模块不做战斗操作）。
 4. 战后追踪变为「已经通过了魔王护卫的考验，请将传音石交给魔王三大王」
@@ -42,7 +45,9 @@ import numpy as np
 from ..core.app_utils import human_click, log, norm_text
 from ..device import map as game_map
 from ..device.map import bgr_frame as _bgr_frame
+from ..device import map_nav  # 地图标定表（方向步长按本图 px/格 归一）
 from ..device import task_tracker  # 追踪面板左区边界（签名只取面板列）
+from ..device import zuoqi  # 飞行驭器（空洞目标点起飞兜底，2026-11-24）
 from ..device.battle import is_in_battle_frame  # 用道具后进战斗的判定
 from ..device.dialog_common import (DIALOG_FRAME_THRESHOLD,
                                     dialog_frame_score)  # 对话框在场门
@@ -73,9 +78,16 @@ MOWANG_LEVEL_WORDS = (
     ("几乎崩裂", "adjacent"), ("就在附近", "adjacent"),
     ("不远处", "near"), ("不远了", "mid"), ("很远", "far"),
 )
-# 详情图点击步长（地图像素；大唐边境 2026-11-15 两点标定 ≈0.665 像素/格：
-# (620,430)→(234,150)、(480,340)→(141,210)；两轴 0.664/0.667）
+# 方向步长（地图像素，基准为大唐边境小地图 ≈1.5 像素/格）。像素/格随
+# 地图变化（map_nav 标定表：狮驼岭 ≈4.47、火云戈壁 ≈2.73、长安城 ≈1.67），
+# 固定像素步长在大图上只走几格（2026-11-24 狮驼岭实机：near 26px≈5.8 格，
+# 一轮轮贴脸挪才触发战斗）——运行期按本图比例换算成「格」语义：
+#   像素步长 = MOWANG_STEP_PX × (本图 px/格 / MOWANG_SCALE_BASE)
+# 即各档在任意地图都走相同格数（far≈47 / mid≈31 / near≈17 / adjacent≈9 格）。
 MOWANG_STEP_PX = {"far": 70, "mid": 46, "near": 26, "adjacent": 14}
+MOWANG_SCALE_BASE = 1.5    # 步长基准像素/格（大唐边境小地图，标定表现值）
+MOWANG_SCALE_MIN = 0.8     # 标定比例合理区间（异常值回退基准）
+MOWANG_SCALE_MAX = 9.0
 MOWANG_DIR_VEC = {  # 地图像素方向：东=+x、北=-y（上=北，实测）
     "东": (1, 0), "西": (-1, 0), "北": (0, -1), "南": (0, 1),
     "东北": (1, -1), "东南": (1, 1), "西北": (-1, -1), "西南": (-1, 1),
@@ -355,13 +367,71 @@ def _walk_poll(win, items, frame_fn, prefix):
     return False
 
 
-def _walk_step(win, direction, level, prefix):
+def _px_per_grid(win, map_name):
+    """当前地图小地图的像素/格（map_nav 标定表 affine 两轴均值）。
+
+    只读标定表（会话缓存/角色持久化/内置表），不打开地图、不悬停、不
+    点击。标定缺失（未收录地图/窗口尺寸不符/读取异常）回退
+    MOWANG_SCALE_BASE——行为等价旧版固定像素步长。
+    """
+    if not map_name:
+        return MOWANG_SCALE_BASE
+    try:
+        aff = map_nav.affine_for(win, map_name)
+    except Exception:  # noqa: BLE001 —— 标定读取失败按基准比例
+        return MOWANG_SCALE_BASE
+    if not aff:
+        return MOWANG_SCALE_BASE
+    try:
+        sx = abs(float(aff.get("sx") or 0.0))
+        sy = abs(float(aff.get("sy") or 0.0))
+    except (TypeError, ValueError):
+        return MOWANG_SCALE_BASE
+    vals = [v for v in (sx, sy) if v > 0]
+    if not vals:
+        return MOWANG_SCALE_BASE
+    scale = sum(vals) / len(vals)
+    if not (MOWANG_SCALE_MIN <= scale <= MOWANG_SCALE_MAX):
+        return MOWANG_SCALE_BASE
+    return scale
+
+
+def _takeoff_and_walk(win, direction, level, prefix):
+    """点击目标点未起步（空洞/不可走区域）→ 起飞后重新按提示移动一次。
+
+    用户 2026-11-24 规则：魔王重聚按提示点地图目标点，点到空洞坐标时
+    地面寻路走不过去、人物原地不动——先起飞（zuoqi.ensure_flying），
+    飞行可越过地面障碍直达目标点，再重新点同一目标。飞行驭器面板保持
+    打开会挡住小地图操作，起飞后立即关闭。起飞失败（战斗中/面板瞬态）
+    直接返回 False，由调用方「稍后重试」节奏再试；重试移动只做一次
+    （allow_takeoff=False 防来回起飞死循环，仍不动等下轮重新取提示）。
+    """
+    ok, info = zuoqi.ensure_flying(win)
+    if not ok:
+        log(f"{prefix}传音石：点击地图未起步，起飞失败（{info}），"
+            f"稍后重试", "WARN")
+        return False
+    log(f"{prefix}传音石：点击地图未起步（目标点可能在空洞/不可走区域），"
+        f"已起飞（{info}），重新按提示移动", "SYS")
+    closed, cinfo = zuoqi.close_feixingyuqi_panel(win)
+    if not closed:
+        log(f"{prefix}传音石：飞行驭器面板关闭失败（{cinfo}），"
+            f"仍尝试继续", "WARN")
+    return _walk_step(win, direction, level, prefix, allow_takeoff=False)
+
+
+def _walk_step(win, direction, level, prefix, allow_takeoff=True):
     """当前地图详情图按方向/距离点目标点自动寻路。返回是否启动寻路。
 
     2026-11-18 用户规则：方向提示只在目标地图内出现，直接打开当前地图
     的小地图即可（点左上位置文字区，open_mini_map），不必先开世界地图
     再点标签——旧路径每轮多两次地图操作，世界地图的关闭点击还可能落到
     面板外打断寻路。
+    2026-11-24 用户规则：点目标点后人物不动（空洞/不可走区域，地面
+    寻路无法到达）→ 起飞后重新移动一次（见 _takeoff_and_walk）；
+    allow_takeoff=False 为起飞重试内部的第二次调用，防递归起飞。
+    步长按本图 px/格 归一（同 2026-11-24，见 MOWANG_STEP_PX 注释）：
+    粗比例查询读同一帧位置区，标定缺失回退基准比例（等同旧版固定像素）。
     """
     if game_map.is_world_map_open(win):
         # 使用传音石后世界地图可能自动打开：先关掉，位置区点击才落在 HUD
@@ -377,8 +447,22 @@ def _walk_step(win, direction, level, prefix):
         # 红点未识别：退回图区中心（方向步长小，误差由提示反馈收敛）
         dot = ((MOWANG_MAP_REGION[0] + MOWANG_MAP_REGION[2]) // 2,
                (MOWANG_MAP_REGION[1] + MOWANG_MAP_REGION[3]) // 2)
+    # 步长按本图比例归一（2026-11-24）：读同一帧的位置区取地图名，查
+    # map_nav 标定表的 px/格，把固定像素步长换算成各图一致的「格」步长。
+    map_name = None
+    if img is not None:
+        try:
+            pos = game_map.read_map_position(win, img=img)
+            map_name = pos[0] if pos is not None else None
+        except Exception:  # noqa: BLE001 —— 位置只用于比例查询
+            map_name = None
+    scale_px = _px_per_grid(win, map_name)
     ox, oy = MOWANG_DIR_VEC[direction]
-    step = MOWANG_STEP_PX[level]
+    step = max(6, int(round(MOWANG_STEP_PX[level] * scale_px
+                            / MOWANG_SCALE_BASE)))
+    if abs(scale_px - MOWANG_SCALE_BASE) > 0.05:
+        log(f"{prefix}传音石：{map_name} 地图比例 {scale_px:.2f}px/格，"
+            f"{level} 步长 {step}px（≈{step / scale_px:.0f} 格）", "INFO")
     l, t, r, b = MOWANG_MAP_REGION
     x = max(l + MOWANG_MAP_INSET,
             min(r - MOWANG_MAP_INSET, dot[0] + ox * step))
@@ -393,6 +477,11 @@ def _walk_step(win, direction, level, prefix):
         y2 = max(t + MOWANG_MAP_INSET,
                  min(b - MOWANG_MAP_INSET, dot[1] + oy * half))
         ok = _walk_click(win, x2, y2)
+    if not ok and allow_takeoff:
+        # 地面寻路两次都未起步：目标点在空洞/不可走区域 → 起飞后重走
+        # （2026-11-24 用户规则；先关地图，起飞面板打开后再走会挡操作）
+        _close_map(win)
+        return _takeoff_and_walk(win, direction, level, prefix)
     _close_map(win)
     return ok
 

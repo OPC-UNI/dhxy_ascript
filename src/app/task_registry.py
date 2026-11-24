@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""任务模式注册表：执行侧单点登记（模式 → 前置钩子 → 主循环）。
+"""任务模式注册表：执行侧单点登记（模式 → 次数上限检查 → 前置钩子 → 主循环）。
 
 main.task_start 按面板顺序遍历模式时只调用 `run_task_mode`。新增任务
 需同步以下位置（一致性均由 tests/test_task_registry.py /
@@ -22,7 +22,9 @@ tests/test_import_rules.py 的任务互引检查。
 from dataclasses import dataclass
 from typing import Callable, Optional
 
+from ..core import app_utils
 from ..core.app_utils import log
+from ..core.settings import load_task_counts
 from ..device import task_tracker, team
 from ..tasks import (kezhan, mingwang, wuhuan, wubei, xiuluo, xuanshu,
                      zhongzu)
@@ -73,9 +75,31 @@ TASK_MODES = tuple(spec.mode for spec in TASKS)
 TASKS_BY_MODE = {spec.mode: spec for spec in TASKS}
 
 
-def run_task_mode(win, mode):
-    """执行单个任务模式（前置钩子 + 主循环），返回结束原因描述。
+def _daily_count_reached(win, mode):
+    """当天完成次数已达上限 → 返回跳过说明；否则 None（零游戏操作）。
 
+    次数设置 + 当天进度均为本地持久化读数（与各任务 run_loop 开头同一
+    数据源），在退队等前置动作之前判断：客栈已满 20 次时不必先退队
+    （用户 2026-11-24：前置退队白耗 ~3s）。次数 0 = 不限；读取异常按
+    未达上限处理，不阻断任务执行。
+    """
+    try:
+        max_rounds = load_task_counts().get(mode, 0)
+        if max_rounds <= 0:
+            return None
+        done = app_utils.task_progress_done(win, mode)
+    except Exception:  # noqa: BLE001 —— 仅优化判断，读取失败照常执行
+        return None
+    if done < max_rounds:
+        return None
+    return f"当天已完成 {done}/{max_rounds} 次，无需再执行"
+
+
+def run_task_mode(win, mode):
+    """执行单个任务模式（次数上限检查 → 前置钩子 → 主循环）。
+
+    当天次数已达上限时直接返回跳过说明，不做前置动作（退队等）——
+    与各任务 run_loop 开头的上限检查结论一致，只是提前到前置之前。
     未登记的模式（含「仅战斗」）与旧 main._run_task_mode 行为一致：
     WARN 后跳过并返回说明。
     """
@@ -83,6 +107,10 @@ def run_task_mode(win, mode):
     if spec is None:
         log(f"[任务] {mode} 暂无自动化实现，跳过", "WARN")
         return f"{mode} 暂无自动化实现，跳过"
+    reason = _daily_count_reached(win, mode)
+    if reason is not None:
+        log(f"[任务] {mode} {reason}", "SYS")
+        return f"{mode} {reason}"
     if spec.pre_run is not None:
         spec.pre_run(win)
     return spec.run_loop(win)

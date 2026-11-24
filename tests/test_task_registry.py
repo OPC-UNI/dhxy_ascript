@@ -97,6 +97,70 @@ def test_run_task_mode_unknown_logs_and_skips(monkeypatch):
     assert logs == [("[任务] 仅战斗 暂无自动化实现，跳过", "WARN")]
 
 
+def test_run_task_mode_skips_all_when_daily_limit_reached(monkeypatch):
+    """当天次数已达上限 → 前置退队与主循环都不执行，直接返回跳过说明。
+
+    用户 2026-11-24：客栈已满 20 次时仍先做前置退队（21:47:49→:52 白耗
+    约 3s）；上限判断是本地持久化读数，应放在前置动作之前。
+    """
+    calls = []
+    spec = registry.TaskSpec(
+        "客栈",
+        lambda win: calls.append("loop") or "done",
+        lambda win: calls.append("pre"))
+    monkeypatch.setattr(registry, "TASKS_BY_MODE", {"客栈": spec})
+    monkeypatch.setattr(registry, "load_task_counts", lambda: {"客栈": 20})
+    monkeypatch.setattr(registry.app_utils, "task_progress_done",
+                        lambda win, mode: 20)
+    logs = []
+    monkeypatch.setattr(registry, "log",
+                        lambda msg, level="INFO": logs.append((msg, level)))
+    info = registry.run_task_mode(object(), "客栈")
+    assert calls == []                       # 退队/主循环都不执行
+    assert "20/20" in info and "无需再执行" in info
+    assert logs == [("[任务] 客栈 当天已完成 20/20 次，无需再执行", "SYS")]
+
+
+def test_run_task_mode_runs_below_daily_limit(monkeypatch):
+    """未达上限 → 正常顺序：前置钩子 → 主循环。"""
+    calls = []
+    spec = registry.TaskSpec(
+        "客栈",
+        lambda win: calls.append("loop") or "done",
+        lambda win: calls.append("pre"))
+    monkeypatch.setattr(registry, "TASKS_BY_MODE", {"客栈": spec})
+    monkeypatch.setattr(registry, "load_task_counts", lambda: {"客栈": 20})
+    monkeypatch.setattr(registry.app_utils, "task_progress_done",
+                        lambda win, mode: 19)
+    assert registry.run_task_mode(object(), "客栈") == "done"
+    assert calls == ["pre", "loop"]
+
+
+def test_run_task_mode_unlimited_skips_progress_read(monkeypatch):
+    """次数 0 = 不限：不读进度（零额外依赖），直接执行。"""
+    calls = []
+    spec = registry.TaskSpec("测试", lambda win: calls.append("loop") or "done")
+    monkeypatch.setattr(registry, "TASKS_BY_MODE", {"测试": spec})
+    monkeypatch.setattr(registry, "load_task_counts", lambda: {})
+    monkeypatch.setattr(
+        registry.app_utils, "task_progress_done",
+        lambda win, mode: (_ for _ in ()).throw(
+            AssertionError("不限次数时不应读取进度")))
+    assert registry.run_task_mode(object(), "测试") == "done"
+    assert calls == ["loop"]
+
+
+def test_run_task_mode_progress_read_failure_runs_task(monkeypatch):
+    """进度/设置读取异常 → 按未达上限处理，不阻断任务执行。"""
+    calls = []
+    spec = registry.TaskSpec("测试", lambda win: calls.append("loop") or "done")
+    monkeypatch.setattr(registry, "TASKS_BY_MODE", {"测试": spec})
+    monkeypatch.setattr(registry, "load_task_counts",
+                        lambda: (_ for _ in ()).throw(RuntimeError("坏")))
+    assert registry.run_task_mode(object(), "测试") == "done"
+    assert calls == ["loop"]
+
+
 def test_xuanshu_pre_hook_skips_leave_when_task_tracked(monkeypatch):
     titles = []
 

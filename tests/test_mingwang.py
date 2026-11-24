@@ -2546,14 +2546,29 @@ def test_jiamo_waits_move_before_landing(monkeypatch):
 
 
 def test_jiamo_no_move_timeout_lands(monkeypatch):
-    """始终未见位移（目的地就在脚下）→ JIAMO_MOVE_WAIT 超时放行后到达并降落。"""
+    """始终未见位移（目的地就在脚下）→ 超时放行当轮即降落（12s 静止已是
+    站定直接证据，不再白等 3 轮稳定；2026-11-24 实机 37s→41s 教训）。"""
     state = _patch_jiamo(monkeypatch, JIAMO_SIG, ("女儿村", 7, 7))
     mingwang._reset_jiamo_state()
     assert _jiamo_poll(state) is False
     assert state["land"] == 0
     mingwang._jiamo_walk_at = time.time() - mingwang.JIAMO_MOVE_WAIT - 1
-    assert _jiamo_poll(state) is False          # 放行后开始累计稳定
+    assert _jiamo_poll(state) is True           # 超时放行 + 目标地图匹配：立即降落
     assert mingwang._jiamo_move_seen is True
+    assert state["land"] == 1 and mingwang._jiamo_phase == 1
+
+
+def test_jiamo_no_move_timeout_wrong_map_still_waits(monkeypatch):
+    """超时放行时不在目标地图 → 不降落；换到目标地图后仍须重新累计稳定。"""
+    state = _patch_jiamo(monkeypatch, JIAMO_SIG, ("洛阳城", 5, 5))
+    mingwang._reset_jiamo_state()
+    assert _jiamo_poll(state) is False
+    mingwang._jiamo_walk_at = time.time() - mingwang.JIAMO_MOVE_WAIT - 1
+    assert _jiamo_poll(state) is False          # 放行但在途经地图：不降落
+    assert mingwang._jiamo_move_seen is True
+    assert state["land"] == 0 and mingwang._jiamo_phase == 0
+    # 到达目标地图（换图必然伴随移动）：稳定计数清零，仍须 3 轮确认
+    assert _jiamo_poll(state, ("女儿村", 88, 40)) is False
     assert _jiamo_poll(state) is False
     assert _jiamo_poll(state) is False
     assert _jiamo_poll(state) is True
@@ -2661,19 +2676,20 @@ def test_jiamo_walk_click_after_stable_no_battle(monkeypatch):
 
 
 def test_jiamo_walk_click_human_click_rotates(monkeypatch):
-    """走位点击：human_click 世界点轮换（避开 UI，四点循环）。"""
+    """走位点击：human_click 右键世界点轮换（左键是选择/交互，
+    2026-11-24 用户实机纠正；避开 UI，四点循环）。"""
     clicks = []
     monkeypatch.setattr(mingwang, "human_click",
                         lambda w, x, y, button="primary":
-                        clicks.append((x, y)))
+                        clicks.append((x, y, button)))
     mingwang._jiamo_walk_idx = 0
     for _ in range(len(mingwang.JIAMO_WALK_POINTS) + 1):
         desc = mingwang._jiamo_walk_click(object())
         assert "点击世界地面" in desc and "等待暗雷遇敌" in desc
-    pts = [p for p in clicks]
-    assert pts[0] == mingwang.JIAMO_WALK_POINTS[0]
-    assert pts[:4] == list(mingwang.JIAMO_WALK_POINTS)
-    assert pts[4] == mingwang.JIAMO_WALK_POINTS[0]   # 循环回第一个点
+    assert [p[:2] for p in clicks][0] == mingwang.JIAMO_WALK_POINTS[0]
+    assert [p[:2] for p in clicks][:4] == list(mingwang.JIAMO_WALK_POINTS)
+    assert [p[:2] for p in clicks][4] == mingwang.JIAMO_WALK_POINTS[0]  # 循环回第一个点
+    assert all(btn == "secondary" for _x, _y, btn in clicks)
     # 走位点都在世界区域（避开左上追踪面板/底部战斗面板/技能栏）
     for x, y in mingwang.JIAMO_WALK_POINTS:
         assert 420 <= x <= 950 and 230 <= y <= 680

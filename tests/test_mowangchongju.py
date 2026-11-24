@@ -309,6 +309,8 @@ def test_walk_step_opens_mini_map_directly(monkeypatch):
     calls = {"world": 0, "mini": 0, "close_world": 0,
              "click": [], "closed": 0}
     monkeypatch.setattr(mw.game_map, "is_world_map_open", lambda win: True)
+    monkeypatch.setattr(mw.game_map, "read_map_position",
+                        lambda win, img=None: None)  # 比例查询回退基准
     monkeypatch.setattr(
         mw.game_map, "close_world_map",
         lambda win, quiet=False: calls.__setitem__(
@@ -335,6 +337,126 @@ def test_walk_step_opens_mini_map_directly(monkeypatch):
     assert calls["click"] == [
         (600 + mw.MOWANG_STEP_PX["mid"], 400)]  # 红点为原点按方向步进
     assert calls["closed"] == 1
+
+
+def _patch_scale_step(monkeypatch, map_name, affine):
+    """桩：小地图已开 + 红点固定 + 位置区读地图名 + 标定表比例可控。"""
+    calls = {"click": [], "closed": 0}
+    monkeypatch.setattr(mw.game_map, "is_world_map_open", lambda win: False)
+    monkeypatch.setattr(mw.game_map, "is_mini_map_open", lambda win: True)
+    monkeypatch.setattr(mw, "_find_dot", lambda img: (600, 400))
+    monkeypatch.setattr(mw.game_map, "read_map_position",
+                        lambda win, img=None: (map_name, 50, 20)
+                        if map_name else None)
+    monkeypatch.setattr(mw.map_nav, "affine_for",
+                        lambda win, name: affine)
+    monkeypatch.setattr(
+        mw, "_walk_click",
+        lambda win, x, y: calls["click"].append((x, y)) or True)
+    monkeypatch.setattr(
+        mw, "_close_map",
+        lambda win: calls.__setitem__("closed", calls["closed"] + 1))
+    return calls
+
+
+def test_walk_step_scales_step_by_map_scale(monkeypatch):
+    """大图按 px/格 归一：狮驼岭（≈4.5px/格）near 步长放大 ≈3 倍。
+
+    2026-11-24 实机：固定 26px 在狮驼岭只走 ≈5.8 格，贴脸挪多轮才触发
+    战斗；换算后各图 near 都 ≈17 格（步长 = 26 × 本图比例 / 基准 1.5）。
+    """
+    calls = _patch_scale_step(monkeypatch, "狮驼岭",
+                              {"sx": 4.5, "sy": -4.5})
+    logs = []
+    monkeypatch.setattr(mw, "log",
+                        lambda msg, level="INFO": logs.append(msg))
+    assert mw._walk_step(_FakeWin(), "东", "near", "[测] ") is True
+    expected = 600 + int(round(mw.MOWANG_STEP_PX["near"] * 4.5
+                               / mw.MOWANG_SCALE_BASE))
+    assert calls["click"] == [(expected, 400)]
+    assert calls["closed"] == 1
+    assert any("px/格" in line for line in logs)
+
+
+def test_walk_step_scale_fallback_without_affine(monkeypatch):
+    """标定缺失（未收录地图/窗口尺寸不符）→ 回退基准，步长与旧版一致。"""
+    calls = _patch_scale_step(monkeypatch, "神秘地图", None)
+    assert mw._walk_step(_FakeWin(), "东", "near", "[测] ") is True
+    assert calls["click"] == [
+        (600 + mw.MOWANG_STEP_PX["near"], 400)]
+
+
+def _patch_walk_step(monkeypatch, click_results):
+    """桩：小地图已开 + 红点固定；_walk_click 按序返回结果并记录点击。"""
+    st = {"clicks": [], "fly": 0, "close_fly": 0, "closed": 0,
+          "fly_ok": True, "fly_info": "已起飞（降落按钮出现，降落分 0.95）"}
+    seq = list(click_results)
+
+    def _click(win, x, y):
+        st["clicks"].append((x, y))
+        return seq.pop(0) if seq else False
+
+    monkeypatch.setattr(mw.game_map, "is_world_map_open", lambda win: False)
+    monkeypatch.setattr(mw.game_map, "is_mini_map_open", lambda win: True)
+    monkeypatch.setattr(mw, "_find_dot", lambda img: (600, 400))
+    monkeypatch.setattr(mw.game_map, "read_map_position",
+                        lambda win, img=None: None)  # 比例查询回退基准
+    monkeypatch.setattr(mw, "_walk_click", _click)
+    monkeypatch.setattr(
+        mw, "_close_map",
+        lambda win: st.__setitem__("closed", st["closed"] + 1))
+
+    def _fly(win):
+        st["fly"] += 1
+        return st["fly_ok"], st["fly_info"]
+
+    monkeypatch.setattr(mw.zuoqi, "ensure_flying", _fly)
+    monkeypatch.setattr(
+        mw.zuoqi, "close_feixingyuqi_panel",
+        lambda win: st.__setitem__("close_fly", st["close_fly"] + 1)
+        or (True, "飞行驭器面板已关闭"))
+    return st
+
+
+def test_walk_step_takeoff_retry_when_no_move(monkeypatch):
+    """点击目标点后人物不动（空洞/不可走区域）→ 起飞后重新移动一次。
+
+    2026-11-24 用户规则：地面寻路两次都没起步时先起飞（飞可越过地面
+    障碍直达目标点），关飞行驭器面板后重走同一提示方向。
+    """
+    st = _patch_walk_step(monkeypatch, [False, False, True])
+    assert mw._walk_step(_FakeWin(), "东", "mid", "[测] ") is True
+    assert st["fly"] == 1 and st["close_fly"] == 1
+    assert len(st["clicks"]) == 3          # 原点击 + 半步兜底 + 起飞后重走
+    assert st["closed"] == 2               # 起飞前关地图 + 重走后关地图
+
+
+def test_walk_step_no_takeoff_when_moved(monkeypatch):
+    """首次点击即起步 → 正常路径，不触发起飞。"""
+    st = _patch_walk_step(monkeypatch, [True])
+    assert mw._walk_step(_FakeWin(), "东", "mid", "[测] ") is True
+    assert st["fly"] == 0 and st["closed"] == 1
+
+
+def test_walk_step_takeoff_failure_returns_false(monkeypatch):
+    """起飞失败（战斗中/面板瞬态）→ 返回 False，由「稍后重试」节奏再试。"""
+    st = _patch_walk_step(monkeypatch, [False, False])
+    st["fly_ok"] = False
+    st["fly_info"] = "战斗中不可使用飞行驭器"
+    logs = []
+    monkeypatch.setattr(mw, "log",
+                        lambda msg, level="INFO": logs.append(msg))
+    assert mw._walk_step(_FakeWin(), "东", "mid", "[测] ") is False
+    assert st["fly"] == 1 and st["close_fly"] == 0
+    assert any("起飞失败" in line for line in logs)
+
+
+def test_walk_step_takeoff_retry_only_once(monkeypatch):
+    """起飞后仍不动 → 不再重复起飞（防来回起飞死循环）。"""
+    st = _patch_walk_step(monkeypatch, [False, False, False, False])
+    assert mw._walk_step(_FakeWin(), "东", "mid", "[测] ") is False
+    assert st["fly"] == 1
+    assert len(st["clicks"]) == 4
 
 
 class _FakeTime:

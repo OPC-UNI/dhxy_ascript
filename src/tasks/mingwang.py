@@ -386,6 +386,7 @@ DIALOG_SKIP_TEXTS = {
     # 魔王重聚（2026-11-15 实机）：魔王护卫战后台词 + 魔王三大王收尾台词
     "本事不错，俺家主人愿意见你一面": 1,
     "哼，不知道老牛吸取了之前失败的教训": 1,
+    "来来来，俺有件要紧事托付给你":3,
 }
 FOLLOW_TIMEOUT = 300        # 跟踪任务总超时（秒；战斗等待时间不计入，同 xuanshu）
 
@@ -618,7 +619,9 @@ _tgqy_game_retry_at = 0.0   # 小游戏游玩失败后的下次允许游玩时�
 # 长时间未触发战斗且任务仍在（暗雷战斗文案仍可见）时**点击世界地面模拟
 # 玩家行走**催发暗雷遭遇战（静默模式下 Alt+D 热键实测不会让人物随机
 # 走动——2026-11-17 用户反馈连续多次静默投递零位移零战斗；点击是静默
-# 通道已验证生效的世界交互，且走动本身就触发暗雷）。走位点四点轮换防
+# 通道已验证生效的世界交互，且走动本身就触发暗雷；走位点击一律**右键**
+# ——左键是选择/交互，右键点地面才是走到该点，2026-11-24 用户实机纠正）。
+# 走位点四点轮换防
 # 反复撞同一障碍/NPC；点击前已有位置连续稳定断言（点屏/世界点击须先
 # 确认站定，防打断自动寻路——性能规则 13）；走动使稳定性自然清零，
 # 到达稳定 JIAMO_WALK_WAIT 秒后再点下一个点。战斗开始后由 follow/
@@ -640,8 +643,11 @@ JIAMO_LAND_RETRY_AFTER = 5.0     # 降落失败（战斗中/面板未开）后�
 JIAMO_ABSENT_RESET = 5           # 触发词连续缺失轮询数 → 状态复位（空 OCR 帧不计）
 # 先寻路后降落：位移启动 → 到达稳定 → 降落（2026-11-15 用户规则）
 JIAMO_MOVE_DELTA = 5             # 判定寻路已启动的位移阈值（像素，同封印/镐）
-JIAMO_MOVE_WAIT = 12.0           # 等待寻路启动时限（秒）——超时未见位移视为已在目的地
-JIAMO_ARRIVE_POLLS = 3           # 到达判定：位置连续稳定轮询数（同封印/镐）
+JIAMO_MOVE_WAIT = 12.0           # 等待寻路启动时限（秒）——超时未见位移视为已在
+                                 # 目的地；放行当轮直接视为稳定（12s 静止即证据，
+                                 # 2026-11-24 优化：不再白等 ARRIVE_POLLS 轮）
+JIAMO_ARRIVE_POLLS = 3           # 到达判定：位置连续稳定轮询数（同封印/镐；
+                                 # 仅「见位移」路径需要，超时放行路径已隐含稳定）
 JIAMO_POS_TOLERANCE = 3          # 到达判定：坐标稳定容差（像素）
 # 随机遇敌兜底（点地面模拟行走）：到达稳定后等战斗的时限与走路间隔
 JIAMO_WALK_WAIT = 5.0            # 到达稳定后仍未开战多久点地面走位（秒）
@@ -1070,12 +1076,14 @@ def _jiamo_walk_click(win):
     催战方式——走动本身触发暗雷遭遇。走位点按 JIAMO_WALK_POINTS 轮换；
     调用方已通过位置连续稳定断言人物站定（世界点击须先确认站定，防
     打断自动寻路，性能规则 13），点击走 human_click 全局锁/静默通道。
+    2026-11-24 用户实机纠正：必须**右键**点地面——左键是选择/交互
+    （NPC/地面），右键才是走到该屏幕点（同洞内步行 map_nav 右键小步）。
     返回描述文案。
     """
     global _jiamo_walk_idx
     x, y = JIAMO_WALK_POINTS[_jiamo_walk_idx % len(JIAMO_WALK_POINTS)]
     _jiamo_walk_idx += 1
-    human_click(win, x, y)
+    human_click(win, x, y, button="secondary")
     return f"已点击世界地面 ({x},{y}) 模拟行走，等待暗雷遇敌"
 
 
@@ -3579,8 +3587,13 @@ def _jiamo_step_arrival(win, items, now):
     """phase 0：先等寻路启动，再判到达稳定，到达后降落。
 
     返回是否已处理（执行了降落）。未见位移 JIAMO_MOVE_WAIT 秒放行
-    （目的地就在脚下/链接点击未生效），避免死等；到达判定须在地图 +
-    位置连续稳定 JIAMO_ARRIVE_POLLS 轮（容差 3px）。
+    （目的地就在脚下/链接点击未生效），避免死等——放行时人物已连续
+    12s 站定（每轮位置与起点差 ≤JIAMO_MOVE_DELTA），这份静止证据强于
+    到达判定的 JIAMO_ARRIVE_POLLS 轮稳定确认，故放行当轮直接视为稳定：
+    目标地图匹配即降落（2026-11-24 实机：超时判定 37s 已到达、41s 才
+    降落，白等 3 轮稳定）；地图不匹配时仍清零重新累计（换图必然伴随
+    移动/传送，旧行为保留）。见位移的正常路径仍须地图 + 位置连续稳定
+    JIAMO_ARRIVE_POLLS 轮（容差 3px）。
     """
     global _jiamo_walk_from, _jiamo_move_seen, _jiamo_walk_at, \
         _jiamo_stable, _jiamo_last_pos, _jiamo_land_at, _jiamo_phase, \
@@ -3601,6 +3614,12 @@ def _jiamo_step_arrival(win, items, now):
                 "INFO")
         elif now - _jiamo_walk_at >= JIAMO_MOVE_WAIT:
             _jiamo_move_seen = True
+            # 12s 无位移 = 已连续站定（每轮与起点差 ≤JIAMO_MOVE_DELTA），
+            # 直接视为稳定：目标地图匹配当轮即降落，不再重复 3 轮稳定
+            # 确认（2026-11-24 实机 37s 已到达、41s 才降落）。地图不匹配
+            # 时下方到达分支会清零重计（换图必然伴随移动/传送）。
+            _jiamo_last_pos = pos
+            _jiamo_stable = JIAMO_ARRIVE_POLLS
             log("[名望] 蛟魔复仇：未见位移（可能已在目的地），按到达处理",
                 "INFO")
         else:
