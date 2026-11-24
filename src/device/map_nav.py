@@ -281,16 +281,11 @@ SPECIAL_WALK_VIEW_MARGIN = 20       # 视窗内缩边距（px，避开 UI/边缘
 SPECIAL_WALK_CALIB_STEP = 200
 
 # ---- 父地图场景地图「普通」筛选与入口 NPC 定位（2026-11-23 实测）----
-# 场景地图底部筛选行（全部/传送/普通/任务/商业）相对搜索条基准点固定：
-# 实测基准点 (406,217)，「普通」复选框中心 (438,669) → 偏移 (32,452)；
-# 勾选后复选框内白色对勾像素（min 通道 >170）实测 17 个，未勾选 0 个
-# （20x20 裁剪），阈值 6 留足余量；窗口拖动时随基准点平移。
-MINIMAP_PUTONG_DX = 32
-MINIMAP_PUTONG_DY = 452
-MINIMAP_CHECKBOX_HALF = 9
-MINIMAP_CHECK_HALF = 8
-MINIMAP_CHECK_BRIGHT = 170
-MINIMAP_CHECK_MIN_PIXELS = 6
+# 「普通」勾选框不再按搜索条偏移推算：2026-11-24 实机复盘发现旧偏移
+# (32,452) 实际落在筛选行下方 22px 的地图内容上——该处亮像素被误判为
+# 「已勾选」（客栈跨图导航必现），点击后打开世界地图盖住小地图，后续
+# 悬停标定全部失效。改为复用 game_map.minimap_filter_boxes（小地图
+# 筛选行模板定位，第 3 个框 =「普通」，见 MINI_MAP_FILTER_PUTONG_INDEX）。
 # 地图画布 OCR 区域相对基准点（实测窗口地图区 (266,237)-(1106,647)，
 # 基准点 (406,217) → 左 -140、上 +20、右 +700、下 +430）
 MINIMAP_CANVAS_DX0 = -140
@@ -1795,43 +1790,52 @@ def _wait_special_enter(win, name, timeout, emit):
     return False
 
 
-def _checkbox_checked(img, cx, cy, half=MINIMAP_CHECK_HALF):
-    """复选框是否勾选：中心裁剪内亮白像素（min 通道 >170）计数。
+def _putong_filter_box(img):
+    """定位场景地图筛选行「普通」勾选框，返回 (是否勾选, cx, cy) 或 None。"""
+    boxes = game_map.minimap_filter_boxes(img)
+    if boxes is None or len(boxes) <= game_map.MINI_MAP_FILTER_PUTONG_INDEX:
+        return None
+    return boxes[game_map.MINI_MAP_FILTER_PUTONG_INDEX]
 
-    2026-11-23 实测「普通」筛选：勾选后白色对勾像素 17 个、未勾选 0 个
-    （20x20 裁剪，min>170），阈值 6 留足余量（复选框边框在未勾选时
-    实测最高 min 通道 ~147，不会误判）。
+
+def _set_minimap_putong_filter(win, want_checked, emit):
+    """设置场景地图「普通」筛选勾选状态（模板定位勾选框，按需点击一次）。
+
+    勾选框由 map.minimap_filter_boxes 模板定位（筛选行第 3 个框），
+    不再按搜索条偏移推算——2026-11-24 实机复盘：旧偏移 (32,452) 落在
+    筛选行下方 22px 的地图内容上（不同场景行 y 实测 657/667），亮像素
+    被误判为「已勾选」，点击后打开世界地图盖住小地图，悬停标定全部
+    失效（客栈跨图导航必现）。识别不到筛选行时绝不点击（返回 False），
+    宁可少做一次辅助筛选也不误点地图/其它 UI。
+    入口 NPC 兜底需要勾选（绿字只勾选后显示）；其余坐标导航开图后统一
+    取消勾选——勾选时 NPC 绿字（金角大王等）会吃掉点击（用户 2026-11-24
+    规则：五倍手动寻路也不得残留勾选，其他任务一律取消）。
     """
-    arr = np.asarray(img)[:, :, :3]
-    y0, y1 = max(int(cy) - half, 0), min(int(cy) + half, arr.shape[0])
-    x0, x1 = max(int(cx) - half, 0), min(int(cx) + half, arr.shape[1])
-    if x1 <= x0 or y1 <= y0:
-        return False
-    return int((arr[y0:y1, x0:x1].min(axis=2) > MINIMAP_CHECK_BRIGHT).sum()) \
-        >= MINIMAP_CHECK_MIN_PIXELS
-
-
-def _set_minimap_putong_filter(win, bar, want_checked, emit):
-    """设置场景地图「普通」筛选勾选状态（按需点击一次，复检）。
-
-    复选框位置由搜索条基准点推得（窗口可拖动，不能写死绝对坐标）。
-    入口 NPC 兜底需要勾选（绿字只勾选后显示）；入口坐标寻路前必须
-    取消勾选——否则入口点附近的「金角大王」等 NPC 名字会吃掉点击
-    （用户 2026-11-23 规则）。
-    """
-    cx = bar["x"] + MINIMAP_PUTONG_DX
-    cy = bar["y"] + MINIMAP_PUTONG_DY
     img = win.capture(force_activate=False)
     if img is None:
         return False, "截图失败（窗口可能已最小化）"
-    state = _checkbox_checked(img, cx, cy)
+    box = _putong_filter_box(img)
+    if box is None:
+        # 地图刚打开时筛选行可能尚未渲染：短轮询再试（最多 ~0.9s）
+        for _ in range(3):
+            time.sleep(0.3)
+            img = win.capture(force_activate=False)
+            if img is None:
+                continue
+            box = _putong_filter_box(img)
+            if box is not None:
+                break
+    if box is None:
+        return False, "筛选行未识别（地图可能未打开）"
+    state, cx, cy = box
     if state == want_checked:
         return True, ("「普通」筛选已勾选" if want_checked
                       else "「普通」筛选已取消")
     human_click(win, cx, cy)
     time.sleep(0.4)
     img = win.capture(force_activate=False)
-    if img is not None and _checkbox_checked(img, cx, cy) == want_checked:
+    box = _putong_filter_box(img) if img is not None else None
+    if box is not None and box[0] == want_checked:
         emit(f"{'已勾选' if want_checked else '已取消'}「普通」筛选 @({cx},{cy})")
         return True, ("已勾选「普通」筛选" if want_checked
                       else "已取消「普通」筛选")
@@ -1839,9 +1843,9 @@ def _set_minimap_putong_filter(win, bar, want_checked, emit):
                    else "点击后「普通」筛选仍未取消")
 
 
-def _ensure_minimap_putong_filter(win, bar, emit):
+def _ensure_minimap_putong_filter(win, emit):
     """确保场景地图「普通」筛选已勾选（入口 NPC 绿字只在勾选后显示）。"""
-    return _set_minimap_putong_filter(win, bar, True, emit)
+    return _set_minimap_putong_filter(win, True, emit)
 
 
 def _find_special_entry_npc(win, anchor_name, bar):
@@ -1937,7 +1941,7 @@ def _enter_special_by_npc(win, target, entry, emit):
     if bar is None:
         game_map.close_maps(win, quiet=True)
         return False, "未定位到地图窗口搜索条"
-    ok_f, info_f = _ensure_minimap_putong_filter(win, bar, emit)
+    ok_f, info_f = _ensure_minimap_putong_filter(win, emit)
     if not ok_f:
         game_map.close_maps(win, quiet=True)
         return False, info_f
@@ -3280,7 +3284,7 @@ def _navigate_special_map(win, target, x, y, entry, emit, verbose=False,
     ok, info = _navigate_impl(win, parent, ex, ey, emit, verbose=verbose,
                               allow_restart=True,
                               on_walk_start=on_walk_start,
-                              enter_name=target, uncheck_putong=True)
+                              enter_name=target)
     pos = _read_pos(win)
     entered = pos is not None and str(pos[0]).strip() == target
     if ok and not entered:
@@ -3417,12 +3421,12 @@ def start_navigation(win, target, x, y, log_fn=None, on_map_open=None):
         raise
 
 
-def _start_impl(win, target, x, y, emit, on_map_open=None,
-                uncheck_putong=False):
+def _start_impl(win, target, x, y, emit, on_map_open=None):
     """开图 + 标定 + 点击前半段（start_navigation / _navigate_impl 共用）。
 
-    uncheck_putong：开图后取消场景地图「普通」筛选（特殊地图入口坐标
-    寻路用——勾选时入口点附近的金角大王等 NPC 名会吃掉点击）。
+    世界地图（layer=None）开图后统一取消「普通」筛选（用户 2026-11-24）：
+    勾选时金角大王等 NPC 绿字会吃掉点击/误开对话框；特殊地图 NPC 入口
+    兜底自行勾选（_enter_special_by_npc），残留状态由下次开图时清除。
     成功时地图保持打开（调用方决定关闭时机），返回 (True, "", ctx)；
     失败已清理残留地图（寻路面板不会自动关闭，必须统一收尾）。
     ctx：base/layer/point/t_start/t_map/t_bar/t_click/open_dt/prewalk_dt/
@@ -3498,11 +3502,14 @@ def _start_impl(win, target, x, y, emit, on_map_open=None,
     t_bar = time.time()
     emit(f"搜索条锚点: ({bar['x']},{bar['y']})"
          f"（定位 {t_bar - t_map:.1f}s）")
-    if uncheck_putong:
-        # 特殊地图入口坐标寻路前取消「普通」筛选：勾选时入口点附近会
-        # 显示金角大王等 NPC 绿字，瞄准/点击会误点到 NPC（用户 2026-11-23）
+    if layer is None:
+        # 「普通」筛选统一取消勾选（用户 2026-11-24）：世界地图坐标导航的
+        # 点击点都是地形点，勾选时 NPC 绿字（金角大王等）会吃掉点击/误开
+        # 对话框；特殊地图 NPC 入口兜底（_enter_special_by_npc）自行勾选、
+        # 进入后残留的勾选状态由这里在下次开图时统一取消。层级图
+        # （龙窟/凤巢/大雁塔层）页面无该筛选行，不做处理。
         try:
-            ok_p, info_p = _set_minimap_putong_filter(win, bar, False, emit)
+            ok_p, info_p = _set_minimap_putong_filter(win, False, emit)
         except Exception as e:  # noqa: BLE001 —— 辅助检查不得阻断寻路
             ok_p, info_p = False, f"「普通」筛选检查异常: {e}"
         if not ok_p:
@@ -3563,21 +3570,19 @@ def _start_impl(win, target, x, y, emit, on_map_open=None,
 
 
 def _navigate_impl(win, target, x, y, emit, verbose=False, allow_restart=False,
-                   on_walk_start=None, enter_name=None, uncheck_putong=False):
+                   on_walk_start=None, enter_name=None):
     """导航主流程（navigate_to_map_coordinate 的实现，emit 已就绪）。
 
     enter_name：特殊地图名（莲花洞等）——特殊地图经父地图入口自动进场，
     到达等待以 HUD 地名变为该名为准（见 _wait_arrival）。
-    uncheck_putong：开图后取消场景地图「普通」筛选（特殊地图入口坐标
-    寻路用，防误点入口 NPC 名）。
+    世界地图开图后统一取消「普通」筛选（见 _start_impl；用户 2026-11-24）。
     """
     def _cleanup():
         """统一收尾：先关地图（寻路面板可能被地图窗口遮住），再关面板。"""
         game_map.close_maps(win, quiet=True)
         _close_xunlu_panel_if_open(win)
 
-    ok, info, ctx = _start_impl(win, target, x, y, emit,
-                                uncheck_putong=uncheck_putong)
+    ok, info, ctx = _start_impl(win, target, x, y, emit)
     if not ok:
         return False, info
     base = ctx["base"]

@@ -728,25 +728,25 @@ def handle_battle(win):
 def perform_member_actions(win, actions):
     """组号队员 Tab 执行配置战斗动作（一次，与 handle_battle 对称）。
 
-    流程：帧级确认战斗 → 取消自动（已自动时）→ 等操作条 → 人物动作
-    → 召唤兽动作 → 点自动。阶段间帧级战斗结束检查，战斗结束随时
-    中断；取消自动后当前回合手动条随即出现（回合计时共享）。只执行
-    一次，后续场次自动跨场持续（与队长一致）。
-    返回状态描述字符串（tab_group 记日志）。
+    流程与队长 handle_battle 同序：先等操作条出现 → 操作条在场才取消
+    自动 → 人物动作 → 召唤兽动作 → 点自动。顺序不得颠倒（2026-11-24
+    实机教训）：队员 pass 到达队员 Tab 时当前回合操作条多半已被自动
+    提交关闭，先取消再等只能等下一回合；单回合战斗等不到下一回合，
+    队员整场未执行动作且自动被取消（10:19:04 取消 → 10:19:30 战斗
+    结束，动作从未执行）。操作条未出现（战斗已结束/即将结束）时不点
+    取消、保持自动状态不动，本场动作跳过——与队长一致（队长同样是
+    操作条出现后才取消自动）。
+    阶段间帧级战斗结束检查，战斗结束随时中断；只执行一次，后续场次
+    自动跨场持续（与队长一致）。返回状态描述字符串（tab_group 记日志）。
     """
+    if not _wait_icon(win, FASHU_ICON, MEMBER_BAR_TIMEOUT, want_found=True):
+        # 等不到操作条（战斗结束提前返回/超时）：未点取消，自动状态
+        # 不变、无需点回；本场动作跳过（下场例行 pass 兜底）
+        return "等不到操作条（未改动自动状态）"
     img = win.capture(force_activate=False, format=WindowCaptureFormat.OPENCV)
     if img is None:
         return "截图失败"
-    if not is_in_battle_frame(img):
-        return "战斗已结束"
-    _cancel_auto_frame(win, img)  # 已自动时取消恢复手动；未自动空操作
-    if not _wait_icon(win, FASHU_ICON, MEMBER_BAR_TIMEOUT, want_found=True):
-        # 取消自动后操作条未出现（回合间隙/战斗即将结束）：尝试点回
-        # 自动——取消后队员已脱离自动，不点回会整场停在手动漏操作
-        # （点不到由每 5 场例行 pass 兜底）
-        _click_auto_button(win)
-        _park_mouse(win)
-        return "等不到操作条（已尝试点回自动）"
+    cancelled = _cancel_auto_frame(win, img)  # 操作条在场：已自动则取消恢复手动
     time.sleep(0.5)  # 操作条刚出现，稍作稳定再操作（同 handle_battle）
     # ---- 人物动作阶段 ----
     if actions["char"] == "无":
@@ -756,7 +756,7 @@ def perform_member_actions(win, actions):
     else:
         _wait_icon(win, FASHU_ICON, IDLE_COUNTDOWN_WAIT, want_found=False)
     if not _member_battle_alive(win):
-        return "战斗已结束"
+        return _member_action_end(win, cancelled, "战斗已结束")
     # ---- 召唤兽动作阶段 ----
     _wait_icon(win, FASHU_ICON, BEAST_BAR_TIMEOUT, want_found=True)
     if actions["beast"] == "无":
@@ -770,7 +770,24 @@ def perform_member_actions(win, actions):
         _park_mouse(win)  # 鼠标移开，避免遮挡操作条
         return "已执行配置动作并点自动"
     _park_mouse(win)
+    if cancelled:
+        return "已执行配置动作（已取消自动但未点回，下场例行补点）"
     return "已执行配置动作（自动未点中，下场例行补点）"
+
+
+def _member_action_end(win, cancelled, message):
+    """队员动作中途战斗结束的收尾：已取消自动时尽量点回自动。
+
+    战斗结束帧操作条通常已消失、点不到自动，此时状态串带提示，
+    由下一场每 5 场例行 pass 的 _auto_one 再点一次补回。
+    """
+    if cancelled and _click_auto_button(win):
+        _park_mouse(win)
+        return message + "（已点回自动）"
+    _park_mouse(win)
+    if cancelled:
+        return message + "（已取消自动，未能点回，下场例行补点）"
+    return message
 
 
 def _member_battle_alive(win):

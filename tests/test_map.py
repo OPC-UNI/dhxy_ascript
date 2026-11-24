@@ -501,7 +501,7 @@ def test_open_mini_map_high_perf_off_clicks_position_region(monkeypatch):
 
 # ---- 小地图「任务」筛选勾选状态（模板匹配，跨场景通用；2026-11-16）----
 
-def _minimap_filter_frame(checked):
+def _minimap_filter_frame(checked, putong_checked=False):
     """合成小地图窗口帧：窗口锚点 + 五个勾选框（第 4 个为「任务」）。"""
     frame = make_bgr_frame(seed=20261116)
     anchor = _tpl(game_map.MINI_MAP_OPEN_ICON)
@@ -513,11 +513,24 @@ def _minimap_filter_frame(checked):
     # 大唐边境实测：锚点(1090,219) 下五个勾选框中心
     # x 295/363/431/499/567、y 667 → 相对锚点 -795/-727/-659/-591/-523、+448
     for i, dx in enumerate((-795, -727, -659, -591, -523)):
-        tpl = on if (checked and i == 3) else off
+        on_box = (checked and i == game_map.MINI_MAP_FILTER_TASK_INDEX) or (
+            putong_checked and i == game_map.MINI_MAP_FILTER_PUTONG_INDEX)
+        tpl = on if on_box else off
         th, tw = tpl.shape[:2]
         cx, cy = ax + dx, ay + 448
         frame = paste_template(frame, tpl, cx - tw // 2, cy - th // 2)
     return frame
+
+
+def test_minimap_filter_boxes_index_order():
+    """筛选行模板定位按 x 排序：第 3 个是「普通」、第 4 个是「任务」。"""
+    frame = _minimap_filter_frame(checked=False, putong_checked=True)
+    img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+    boxes = game_map.minimap_filter_boxes(img)
+    assert boxes is not None and len(boxes) == 5
+    assert boxes[game_map.MINI_MAP_FILTER_PUTONG_INDEX][0] is True
+    assert boxes[game_map.MINI_MAP_FILTER_TASK_INDEX][0] is False
+    assert boxes[2][1] < boxes[3][1]  # x 递增
 
 
 def test_minimap_task_filter_state_checked():

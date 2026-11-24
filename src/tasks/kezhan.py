@@ -58,6 +58,7 @@ import time
 
 import cv2
 import numpy as np
+from PIL import Image
 from ascript.windows.hardware.keyboard import Keyboard
 
 from ..core.app_utils import log, human_click, move_away, norm_text
@@ -691,6 +692,29 @@ TRACK_PANEL_REGION = (0, 200, 260, 600)
 # 漏检教训，2026-11-19）。
 AWANG_NAME_BANDS = ((0, 100, 736, 760), (660, 100, 1378, 760))
 AWANG_NAME_SCORE = 0.55              # 名字行置信度下限（同各任务模块 0.55）
+# 金色任务 NPC 名字标签兜底（2026-11-24 比武场实测）：阿旺名字是亮金色
+# 小字，世界区条带快引擎 1x 检测**时好时坏**——同一帧（比武场右侧树下）
+# 条带 OCR 漏检，裁剪后 1.5x/2x 放大交给 ocr_zoom 引擎稳定识别（置信度
+# 1.00，0.03~0.13s/块；同 map_nav 角色名字标签「裁剪 2x + ocr_zoom」做法）。
+# 做法：金色像素掩码 → 9px 横向膨胀合并相邻字 → 文本块候选（块高 10~42px、
+# 宽 ≥14px、膨胀后致密度 ≥0.65——名字标签实测 0.78、杂背景斑块 ≤0.61）
+# → 逐块裁剪 2x 放大 OCR，命中「阿旺」短行即返回。只在条带 OCR 未命中时
+# 执行（失败路径）：实测一帧 14 块候选全 OCR ≈0.3s（引擎预热后）。
+AWANG_GOLD_WORLD = (0, 100, 1378, 790)  # 世界区（排除顶部 HUD/底部快捷栏）
+AWANG_GOLD_MIN_R = 205               # 金色字核心像素下限（阿旺标签实测
+AWANG_GOLD_MIN_G = 195               # (244,243,122)：R、G 高且接近、B 低）
+AWANG_GOLD_MAX_B = 170
+AWANG_GOLD_MIN_RB = 60               # R-B 下限（排灰白墙面：R≈B）
+AWANG_GOLD_MIN_GB = 55               # G-B 下限（同上）
+AWANG_GOLD_MAX_RG = 45               # |R-G| 上限（金色 R≈G）
+AWANG_GOLD_MIN_W, AWANG_GOLD_MAX_W = 14, 180   # 文本块宽（px）
+AWANG_GOLD_MIN_H, AWANG_GOLD_MAX_H = 10, 42    # 文本块高（px）
+AWANG_GOLD_MIN_FILL = 0.65           # 膨胀后致密度下限（区分字迹/杂背景）
+AWANG_GOLD_MARGIN = 8                # 裁剪余量（px）
+AWANG_GOLD_ZOOM = 2                  # 裁剪放大倍数（1x 漏检、2x 稳定）
+AWANG_GOLD_MAX_CANDIDATES = 30       # 单帧最多 OCR 的候选块数（按致密度降序；
+                                     # 实测比武场 14 块、阿旺排第 9，热路径
+                                     # 0.03s/块，30 块封顶 ≈0.9s）
 
 
 def _track_panel_region(img_np):
@@ -1048,7 +1072,9 @@ def _find_awang_by_ocr(win):
     点击目标由 _check_awang 换算：交互点=名字上方约 40px（用户实测：
     点文字本身无效）、走近点=名字左/右侧 90px（按屏幕左右侧选侧，见
     _awang_approach_pos）。未命中时把世界区 OCR 行存入 _awang_ocr_lines，
-    供失败日志诊断（名字漏读/误读的标定数据，同沙都修罗扫描日志）。
+    供失败日志诊断（名字漏读/误读的标定数据，同沙都修罗扫描日志）；
+    条带仍未命中时走金色名字标签兜底（见 _find_awang_by_gold，2026-11-24
+    比武场实测：金色小字 1x 检测时好时坏）。
     """
     global _awang_ocr_lines
     img = win.capture(force_activate=False)
@@ -1068,6 +1094,79 @@ def _find_awang_by_ocr(win):
         cy = (rect[1] + rect[3]) // 2
         log(f"[客栈] OCR 识别到 NPC 名字「{txt}」@({cx},{cy})", "SYS")
         return cx, cy
+    return _find_awang_by_gold(img)
+
+
+def _find_awang_by_gold(img):
+    """金色任务 NPC 名字标签兜底：金色掩码 → 文本块候选 → 2x 裁剪 OCR。
+
+    2026-11-24 比武场实测：阿旺这类任务 NPC 的名字是亮金色小字，世界区
+    条带快引擎 1x 检测**时好时坏**——同一帧条带 OCR 漏检，裁剪 1.5x/2x
+    放大交给 ocr_zoom 引擎稳定识别（置信度 1.00；同 map_nav 角色名字
+    标签「裁剪 2x + ocr_zoom」做法）。金色像素掩码（参数见 AWANG_GOLD_*）
+    → 9px 横向膨胀合并同一名字的相邻字 → 连通块按尺寸/长宽比/致密度
+    过滤（致密度降序，最多 AWANG_GOLD_MAX_CANDIDATES 块）→ 逐块裁剪 2x
+    放大 OCR → 规范化后短行（≤4 字）含「阿旺」即返回名字中心（全帧
+    坐标）。任务追踪面板矩形内的块跳过（面板文案如「阿旺朝……」不可点）。
+    失败返回 None。
+    """
+    if img is None:
+        return None
+    img_np = np.asarray(img)
+    h, w = img_np.shape[:2]
+    l, t, r, b = AWANG_GOLD_WORLD
+    l, t = max(0, l), max(0, t)
+    r, b = min(w, r), min(h, b)
+    if r <= l or b <= t:
+        return None
+    sub = img_np[t:b, l:r, :3].astype(np.int16)
+    red, green, blue = sub[:, :, 0], sub[:, :, 1], sub[:, :, 2]
+    mask = ((red > AWANG_GOLD_MIN_R) & (green > AWANG_GOLD_MIN_G)
+            & (np.abs(red - green) < AWANG_GOLD_MAX_RG)
+            & (blue < AWANG_GOLD_MAX_B)
+            & (red - blue > AWANG_GOLD_MIN_RB)
+            & (green - blue > AWANG_GOLD_MIN_GB))
+    if not mask.any():
+        return None
+    fused = cv2.dilate(mask.astype(np.uint8),
+                       cv2.getStructuringElement(cv2.MORPH_RECT, (9, 2)))
+    count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(
+        fused, 8)
+    panel = _track_panel_region(img_np)
+    cands = []
+    for i in range(1, count):
+        bx, by, bw, bh, area = stats[i]
+        if not (AWANG_GOLD_MIN_W <= bw <= AWANG_GOLD_MAX_W
+                and AWANG_GOLD_MIN_H <= bh <= AWANG_GOLD_MAX_H):
+            continue
+        if bw / bh < 1.3:
+            continue
+        fill = area / (bw * bh)
+        if fill < AWANG_GOLD_MIN_FILL:
+            continue
+        bx, by = bx + l, by + t
+        if _rects_intersect((bx, by, bx + bw, by + bh), panel):
+            continue  # 任务追踪面板内的文案
+        cands.append((fill, bx, by, bw, bh))
+    cands.sort(key=lambda c: -c[0])
+    for _fill, bx, by, bw, bh in cands[:AWANG_GOLD_MAX_CANDIDATES]:
+        cl = max(0, bx - AWANG_GOLD_MARGIN)
+        ct = max(0, by - AWANG_GOLD_MARGIN)
+        cr = min(w, bx + bw + AWANG_GOLD_MARGIN)
+        cb = min(h, by + bh + AWANG_GOLD_MARGIN)
+        crop = img.crop((cl, ct, cr, cb))
+        crop = crop.resize(((cr - cl) * AWANG_GOLD_ZOOM,
+                            (cb - ct) * AWANG_GOLD_ZOOM), Image.LANCZOS)
+        items, _ = game_map.ocr_zoom(crop)
+        for txt, rect, score in items:
+            norm = norm_text(txt)
+            if score < AWANG_NAME_SCORE or len(norm) > 4 \
+                    or "阿旺" not in norm:
+                continue
+            cx = cl + (rect[0] + rect[2]) // (2 * AWANG_GOLD_ZOOM)
+            cy = ct + (rect[1] + rect[3]) // (2 * AWANG_GOLD_ZOOM)
+            log(f"[客栈] 金色名字兜底识别到 NPC「{txt}」@({cx},{cy})", "SYS")
+            return int(cx), int(cy)
     return None
 
 

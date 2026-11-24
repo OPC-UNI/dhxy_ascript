@@ -486,6 +486,76 @@ def test_cancel_auto_frame_non_auto_quiet(monkeypatch):
     assert clicks == [] and logs == []
 
 
+# ---- 队员配置动作：先等操作条再取消自动（2026-11-24 顺序修正） ----
+
+class _FakeMemberWin:
+    """队员动作测试用窗口：截帧返回固定战斗帧。"""
+
+    def capture(self, *a, **k):
+        return _battle_frame()
+
+
+def _member_action_env(monkeypatch, *, bar_found, cancelled=True,
+                       battle_alive=True, auto_clicked=True):
+    """perform_member_actions 测试环境：记录关键调用顺序。"""
+    import time as time_mod
+    monkeypatch.setattr(time_mod, "sleep", lambda s: None)
+    calls = []
+
+    def _wait_icon(win, icon, timeout, want_found=True):
+        calls.append(("wait_bar", want_found))
+        return bar_found
+
+    monkeypatch.setattr(battle, "_wait_icon", _wait_icon)
+    monkeypatch.setattr(
+        battle, "_cancel_auto_frame",
+        lambda w, img: (calls.append(("cancel_auto",)), cancelled)[1])
+    monkeypatch.setattr(
+        battle, "_do_action",
+        lambda w, action, label, frame=None, round_no=None:
+        (calls.append(("action", label, action)), True)[1])
+    monkeypatch.setattr(battle, "_member_battle_alive",
+                        lambda w: battle_alive)
+    monkeypatch.setattr(
+        battle, "_click_auto_button",
+        lambda w: (calls.append(("click_auto",)), auto_clicked)[1])
+    monkeypatch.setattr(battle, "_park_mouse", lambda w: None)
+    return calls
+
+
+def test_perform_member_actions_no_bar_never_cancels(monkeypatch):
+    """操作条未出现（单回合战斗结束）：不得先取消自动——取消后既无
+    操作条可操作、也点不回自动（2026-11-24 10:19 实机教训）。"""
+    calls = _member_action_env(monkeypatch, bar_found=False)
+    status = battle.perform_member_actions(
+        _FakeMemberWin(), {"char": "攻击", "beast": "攻击"})
+    assert status == "等不到操作条（未改动自动状态）"
+    assert calls == [("wait_bar", True)]  # 只等操作条，未取消、未点自动
+
+
+def test_perform_member_actions_bar_then_cancel_then_actions(monkeypatch):
+    """操作条在场才取消自动，随后人物/召唤兽动作、最后点自动（与
+    队长 handle_battle 同序）。"""
+    calls = _member_action_env(monkeypatch, bar_found=True)
+    status = battle.perform_member_actions(
+        _FakeMemberWin(), {"char": "攻击", "beast": "攻击"})
+    assert status == "已执行配置动作并点自动"
+    assert calls[0] == ("wait_bar", True)
+    assert calls[1] == ("cancel_auto",)
+    assert ("action", "人物", "攻击") in calls
+    assert ("action", "召唤兽", "攻击") in calls
+    assert calls[-1] == ("click_auto",)
+
+
+def test_perform_member_actions_battle_end_rearms_after_cancel(monkeypatch):
+    """已取消自动后战斗提前结束：尽量点回自动，状态串说明补点来源。"""
+    calls = _member_action_env(monkeypatch, bar_found=True, battle_alive=False)
+    status = battle.perform_member_actions(
+        _FakeMemberWin(), {"char": "攻击", "beast": "攻击"})
+    assert status == "战斗已结束（已点回自动）"
+    assert ("click_auto",) in calls
+
+
 def test_handle_hezi_battle_only_switch_gate(monkeypatch):
     """仅战斗模式：身份恒为未知，完全由「自动抢盒子」开关决定——
     关闭（默认）直接返回不匹配，打开才进入盒子识别。"""

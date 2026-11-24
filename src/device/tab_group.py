@@ -1062,8 +1062,9 @@ def _member_one(win, tab_id, wait_auto, act_configured):
 def _act_one(win, tab_id, actions, wait_auto):
     """单个队员 Tab 的配置战斗动作（与队长 handle_battle 对称）。
 
-    截一帧确认战斗 → battle.perform_member_actions（取消自动→等操作
-    条→人物动作→召唤兽动作→点自动）。返回是否已尝试（True 记入
+    截一帧确认战斗 → battle.perform_member_actions（等操作条→操作条
+    在场才取消自动→人物动作→召唤兽动作→点自动，与队长同序；等不到
+    操作条时不取消自动，保持自动状态）。返回是否已尝试（True 记入
     _acted_ids，pass 再触发时该队员直接点自动）；不在战斗/截图失败
     返回 False（未消耗动作机会）。执行期受调用方总时长上限保护，
     超时剩余队员由补挂自动场/例行 pass 兜底。

@@ -893,6 +893,80 @@ def test_find_awang_by_ocr_records_lines_for_diagnosis(monkeypatch):
     assert kezhan._awang_ocr_lines == ["生日我最大"]
 
 
+# ---- 金色名字标签兜底（2026-11-24 比武场实测：金色小字 1x 时好时坏） ----
+def _gold_label_frame(x=976, y=621, w=37, h=13, color=(244, 243, 122)):
+    """构造含一个金色名字标签（实测阿旺标签尺寸/颜色）的 1378x831 假帧。"""
+    import numpy as np
+    from PIL import Image
+    img = np.zeros((831, 1378, 3), np.uint8)
+    img[y:y + h, x:x + w] = color
+    return Image.fromarray(img)
+
+
+def test_find_awang_by_gold_zooms_candidate_and_maps_back(monkeypatch):
+    """金色文本块裁剪 2x 走 ocr_zoom，命中「阿旺」返回映射回全帧的中心。"""
+    monkeypatch.setattr(kezhan, "log", lambda *a, **k: None)
+    monkeypatch.setattr(kezhan, "_track_panel_region",
+                        lambda img: (0, 200, 260, 600))
+    seen = []
+
+    def _zoom(crop):
+        w, h = crop.size
+        seen.append((w, h))
+        return [("阿旺", [0, 0, w, h], 1.0)], None
+
+    monkeypatch.setattr(kezhan.game_map, "ocr_zoom", _zoom)
+    pt = kezhan._find_awang_by_gold(_gold_label_frame())
+    assert pt is not None
+    # 标签中心 (994.5, 627.5)；候选块膨胀+余量后中心一致（±8px）
+    assert abs(pt[0] - 994) <= 8 and abs(pt[1] - 627) <= 8
+    # OCR 用的是 2x 放大裁剪
+    assert seen and seen[0][0] >= 2 * kezhan.AWANG_GOLD_MIN_W
+
+
+def test_find_awang_by_gold_skips_tracker_panel(monkeypatch):
+    """任务追踪面板矩形内的金色块跳过（面板文案如「阿旺朝……」不可点）。"""
+    monkeypatch.setattr(kezhan, "log", lambda *a, **k: None)
+    monkeypatch.setattr(kezhan, "_track_panel_region",
+                        lambda img: (0, 200, 260, 600))
+    monkeypatch.setattr(kezhan.game_map, "ocr_zoom",
+                        lambda crop: ([("阿旺", [0, 0, 10, 10], 1.0)], None))
+    assert kezhan._find_awang_by_gold(
+        _gold_label_frame(x=100, y=300)) is None
+
+
+def test_find_awang_by_gold_no_gold_pixels_returns_none(monkeypatch):
+    """无金色像素（黑帧）→ 直接 None，不做任何 OCR。"""
+    calls = []
+    monkeypatch.setattr(kezhan.game_map, "ocr_zoom",
+                        lambda crop: (calls.append(1), ([], None))[1])
+    assert kezhan._find_awang_by_gold(
+        _AwangFrameWin().capture()) is None
+    assert calls == []
+
+
+def test_find_awang_by_ocr_band_hit_skips_gold_fallback(monkeypatch):
+    """条带 OCR 命中即返回，不再走金色兜底。"""
+    _patch_awang_ocr(monkeypatch, [
+        ("阿旺。", [600, 300, 660, 326], 0.97)])
+    calls = []
+    monkeypatch.setattr(kezhan, "_find_awang_by_gold",
+                        lambda img: calls.append(1))
+    assert kezhan._find_awang_by_ocr(_AwangFrameWin()) == (630, 313)
+    assert calls == []
+
+
+def test_find_awang_by_ocr_falls_back_to_gold_label(monkeypatch):
+    """条带 OCR 未命中时走金色名字标签兜底（2026-11-24 比武场漏检教训）。"""
+    _patch_awang_ocr(monkeypatch, [
+        ("任务追踪", [20, 210, 100, 230], 1.0)])
+    seen = []
+    monkeypatch.setattr(kezhan, "_find_awang_by_gold",
+                        lambda img: seen.append(img) or (993, 626))
+    assert kezhan._find_awang_by_ocr(_AwangFrameWin()) == (993, 626)
+    assert len(seen) == 1  # 复用同一帧，不再二次截图
+
+
 # ---- 阿旺兜底到达目标：185/176 两个落点任一到达即可（2026-11-11 用户） ----
 def test_near_luoyang_accepts_either_fallback_landing():
     """兜底目标为多落点：落在 (185,207)/(176,207) 任一点 ±5 内即算到达。"""

@@ -1748,14 +1748,30 @@ def _fake_img(color, size=(40, 40)):
     return Image.fromarray(arr, "RGB")
 
 
-def test_checkbox_checked_pixel_detection():
-    """「普通」复选框勾选判定：白色对勾像素计数（实测勾选 17 / 未勾 0）。"""
-    from PIL import Image
-    img = _fake_img((40, 70, 65))
-    assert not map_nav._checkbox_checked(img, 20, 20)
-    arr = np.asarray(img).copy()
-    arr[16:24, 16:24] = (230, 230, 220)
-    assert map_nav._checkbox_checked(Image.fromarray(arr, "RGB"), 20, 20)
+def _fake_filter_boxes(states):
+    """按调用序返回筛选行五框（第 3 个 =「普通」状态由 states 给出）。"""
+    calls = {"n": 0}
+
+    def fake(_img):
+        i = min(calls["n"], len(states) - 1)
+        calls["n"] += 1
+        checked = states[i]
+        return [(False, 275, 657), (False, 343, 657),
+                (checked, 411, 657), (False, 479, 657), (False, 547, 657)]
+
+    return fake
+
+
+def test_putong_filter_box_selects_third_box(monkeypatch):
+    """「普通」= 筛选行第 3 个框（全部/传送/普通/任务/商业）。"""
+    monkeypatch.setattr(
+        map_nav.game_map, "minimap_filter_boxes",
+        lambda img: [(False, 275, 657), (False, 343, 657), (True, 411, 657),
+                     (False, 479, 657), (False, 547, 657)])
+    assert map_nav._putong_filter_box(object()) == (True, 411, 657)
+    monkeypatch.setattr(map_nav.game_map, "minimap_filter_boxes",
+                        lambda img: None)
+    assert map_nav._putong_filter_box(object()) is None
 
 
 def _npc_test_image(anchor=(100, 100, 150, 120)):
@@ -1798,13 +1814,12 @@ def test_find_special_entry_npc_missing_anchor(monkeypatch):
 
 
 def test_ensure_minimap_putong_filter_clicks_unchecked(monkeypatch):
-    """「普通」未勾选时点复选框一次；已勾选不点（偏移随搜索条基准点）。"""
+    """「普通」未勾选时点筛选行模板定位的第 3 个框一次；已勾选不点。"""
     clicks = []
     monkeypatch.setattr(map_nav, "human_click",
                         lambda win, x, y: clicks.append((x, y)))
-    states = iter([False, True])
-    monkeypatch.setattr(map_nav, "_checkbox_checked",
-                        lambda img, cx, cy: next(states))
+    monkeypatch.setattr(map_nav.game_map, "minimap_filter_boxes",
+                        _fake_filter_boxes([False, True]))
     monkeypatch.setattr(map_nav.time, "sleep", lambda s: None)
 
     class _W:
@@ -1812,15 +1827,15 @@ def test_ensure_minimap_putong_filter_clicks_unchecked(monkeypatch):
             return object()
 
     ok, info = map_nav._ensure_minimap_putong_filter(
-        _W(), {"x": 406, "y": 217}, lambda m: None)
+        _W(), lambda m: None)
     assert ok and info == "已勾选「普通」筛选"
-    assert clicks == [(438, 669)]   # (406+32, 217+452)
+    assert clicks == [(411, 657)]   # 模板定位的第 3 个框中心
 
     clicks.clear()
-    monkeypatch.setattr(map_nav, "_checkbox_checked",
-                        lambda img, cx, cy: True)
+    monkeypatch.setattr(map_nav.game_map, "minimap_filter_boxes",
+                        _fake_filter_boxes([True]))
     ok2, _info2 = map_nav._ensure_minimap_putong_filter(
-        _W(), {"x": 406, "y": 217}, lambda m: None)
+        _W(), lambda m: None)
     assert ok2 and clicks == []
 
 
@@ -1853,9 +1868,8 @@ def test_navigate_special_enters_via_parent_entry(monkeypatch):
     calls = []
 
     def fake_impl(win, target, x, y, emit, verbose=False,
-                  allow_restart=False, on_walk_start=None, enter_name=None,
-                  uncheck_putong=False):
-        calls.append((target, x, y, enter_name, uncheck_putong))
+                  allow_restart=False, on_walk_start=None, enter_name=None):
+        calls.append((target, x, y, enter_name))
         return True, "已进入莲花洞 (83,10)"
 
     monkeypatch.setattr(map_nav, "_navigate_impl", fake_impl)
@@ -1868,7 +1882,7 @@ def test_navigate_special_enters_via_parent_entry(monkeypatch):
     ok, info = map_nav.navigate_to_map_coordinate(
         object(), "莲花洞", 75, 21, log_fn=emits.append)
     assert ok and "已到达莲花洞" in info
-    assert calls == [("平顶山", 102, 42, "莲花洞", True)]
+    assert calls == [("平顶山", 102, 42, "莲花洞")]
     assert any("经平顶山入口" in m for m in emits)
 
 
@@ -2262,9 +2276,8 @@ def test_set_minimap_putong_filter_unchecks_when_checked(monkeypatch):
     clicks = []
     monkeypatch.setattr(map_nav, "human_click",
                         lambda win, x, y: clicks.append((x, y)))
-    states = iter([True, False])
-    monkeypatch.setattr(map_nav, "_checkbox_checked",
-                        lambda img, cx, cy: next(states))
+    monkeypatch.setattr(map_nav.game_map, "minimap_filter_boxes",
+                        _fake_filter_boxes([True, False]))
     monkeypatch.setattr(map_nav.time, "sleep", lambda s: None)
 
     class _W:
@@ -2272,26 +2285,49 @@ def test_set_minimap_putong_filter_unchecks_when_checked(monkeypatch):
             return object()
 
     ok, info = map_nav._set_minimap_putong_filter(
-        _W(), {"x": 406, "y": 217}, False, lambda m: None)
+        _W(), False, lambda m: None)
     assert ok and "已取消" in info
-    assert clicks == [(438, 669)]   # (406+32, 217+452)
+    assert clicks == [(411, 657)]   # 模板定位的第 3 个框中心
 
 
-def test_start_impl_unchecks_putong_only_when_requested(monkeypatch):
-    """uncheck_putong=True 才取消「普通」；普通导航不碰筛选状态。"""
+def test_set_minimap_putong_filter_no_row_no_click(monkeypatch):
+    """筛选行未识别时绝不点击：旧偏移 (32,452) 落在筛选行下方的地图内容
+    上，点击会打开世界地图盖住小地图，后续悬停标定全部失效（2026-11-24
+    客栈跨图导航必现）。"""
+    clicks = []
+    monkeypatch.setattr(map_nav, "human_click",
+                        lambda win, x, y: clicks.append((x, y)))
+    monkeypatch.setattr(map_nav.game_map, "minimap_filter_boxes",
+                        lambda img: None)
+    monkeypatch.setattr(map_nav.time, "sleep", lambda s: None)
+
+    class _W:
+        def capture(self, force_activate=False):
+            return object()
+
+    ok, info = map_nav._set_minimap_putong_filter(
+        _W(), False, lambda m: None)
+    assert not ok and "未识别" in info and clicks == []
+
+
+def test_start_impl_unchecks_putong_for_world_maps(monkeypatch):
+    """世界地图导航开图统一取消「普通」（用户 2026-11-24）：特殊地图 NPC
+    入口兜底勾选后残留的状态，由任何普通导航开图时统一清除；层级图
+    （龙窟/凤巢/大雁塔层）页面无该筛选行，不处理。"""
     _patch_start_env(monkeypatch)
     calls = []
     monkeypatch.setattr(
         map_nav, "_set_minimap_putong_filter",
-        lambda win, bar, want, emit:
-        calls.append((bar["x"], bar["y"], want)) or (True, "已取消"))
-    ok, _info, _ctx = map_nav._start_impl(
-        object(), "平顶山", 102, 42, lambda m: None, uncheck_putong=True)
-    assert ok and calls == [(100, 200, False)]
-
-    calls.clear()
+        lambda win, want, emit: calls.append(want) or (True, "已取消"))
     ok, _info, _ctx = map_nav._start_impl(
         object(), "平顶山", 102, 42, lambda m: None)
+    assert ok and calls == [False]
+
+    calls.clear()
+    monkeypatch.setattr(map_nav, "_read_pos",
+                        lambda win: ("大雁塔四层", 1, 2))
+    ok, _info, _ctx = map_nav._start_impl(
+        object(), "大雁塔四层", 105, 36, lambda m: None)
     assert ok and calls == []
 
 

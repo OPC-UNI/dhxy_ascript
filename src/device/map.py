@@ -1113,13 +1113,21 @@ def minimap_task_filter_checked(img, cx, cy):
     return int(white.sum()) >= MINI_MAP_TASK_CHECKED_MIN_WHITE
 
 
-def _minimap_task_filter_box(img):
-    """定位小地图底部「任务」勾选框，返回 (是否勾选, cx, cy) 或 None。
+# 筛选行五个勾选框按 x 排序的固定顺序：全部/传送/普通/任务/商业
+MINI_MAP_FILTER_PUTONG_INDEX = 2
+MINI_MAP_FILTER_TASK_INDEX = 3
+
+
+def minimap_filter_boxes(img):
+    """定位小地图底部筛选行五个勾选框，返回 [(是否勾选, cx, cy), ...]。
 
     底部五个勾选框（全部/传送/普通/任务/商业）是同一控件：勾选模板只
-    命中「任务」框，未勾选模板命中其余四个；合并两类命中按 x 排序取
-    第 4 个即「任务」框。2026-11-16 实机标定：大唐边境 勾选 1.000 /
-    未勾选 0.889~0.924，天宫 勾选 0.947；两类模板互不命中。
+    命中勾选中的框，未勾选模板命中其余四个；合并两类命中按 x 排序即
+    固定顺序（见 MINI_MAP_FILTER_*_INDEX）。2026-11-16 实机标定：
+    大唐边境 勾选 1.000 / 未勾选 0.889~0.924，天宫 勾选 0.947；两类
+    模板互不命中。2026-11-24 傲来国/洛阳城实机：勾选「普通」框时勾选
+    模板 0.934 命中第 3 个框，点击框中心可正常勾选/取消（不再按搜索条
+    偏移推算——窗口位置/场景不同，行 y 在 657~667 间变化，绝对带覆盖）。
     返回模板中心（点击点）；地图未打开或筛选行未识别返回 None。
     """
     bgr = bgr_frame(img)
@@ -1145,8 +1153,15 @@ def _minimap_task_filter_box(img):
             merged.append(h)
     if len(merged) < 5:
         return None
-    state, _score, x, y = merged[3]
-    return state, x, y
+    return [(state, int(x), int(y)) for state, _score, x, y in merged]
+
+
+def _minimap_task_filter_box(img):
+    """定位小地图底部「任务」勾选框，返回 (是否勾选, cx, cy) 或 None。"""
+    boxes = minimap_filter_boxes(img)
+    if boxes is None or len(boxes) <= MINI_MAP_FILTER_TASK_INDEX:
+        return None
+    return boxes[MINI_MAP_FILTER_TASK_INDEX]
 
 
 def minimap_task_filter_state(win, img=None):
