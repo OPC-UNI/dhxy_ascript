@@ -82,21 +82,29 @@ def test_kezhan_yinlv_arm_only_for_entry_option(monkeypatch):
 # ---- 玄枢：钓鱼优先于机关；机关只在提示对话出现时触发 ----
 def test_xuanshu_wait_handler_diaoyu_before_jiguan(monkeypatch):
     calls = []
+    seen = {}
     monkeypatch.setattr(xuanshu, "_diaoyu_window_check",
                         lambda win, img, prefix="": calls.append("diaoyu")
                         or True)
-    monkeypatch.setattr(xuanshu, "_play_jiguan_puzzle",
-                        lambda win, title: calls.append("jiguan")
-                        or (True, "ok"))
+
+    def fake_play(win, title, hint_text=""):
+        calls.append("jiguan")
+        seen["hint_text"] = hint_text
+        return True, "ok"
+
+    monkeypatch.setattr(xuanshu, "_play_jiguan_puzzle", fake_play)
     monkeypatch.setattr(xuanshu, "log", lambda *a, **k: None)
 
-    items = [(xuanshu.JIGUAN_DIALOG_TEXT, [500, 300, 700, 330], 0.99)]
+    items = [(xuanshu.JIGUAN_DIALOG_TEXT, [500, 300, 700, 330], 0.99),
+             ("赤锋凝华，封禁皆破。依据神", [20, 240, 380, 262], 0.99)]
     assert xuanshu._follow_wait_handler(object(), items, None, None) is True
     assert calls == ["diaoyu"]
 
     monkeypatch.setattr(xuanshu, "_diaoyu_window_check", lambda *a, **k: False)
     assert xuanshu._follow_wait_handler(object(), items, None, None) is True
     assert calls == ["diaoyu", "jiguan"]
+    # 任务面板文本原样传给机关破解（描述首句颜色提示的来源）
+    assert "赤锋凝华" in seen["hint_text"]
 
 
 def test_xuanshu_jiguan_requires_dialog_text(monkeypatch):

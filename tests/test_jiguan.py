@@ -122,8 +122,11 @@ def test_result_dialog_trigger_text_is_not_result(monkeypatch):
 
 # ---- play 主流程 ----
 
+_IMG = object()  # 场景帧替身（颜色校验已打桩）
+
+
 def _install(monkeypatch, labels, results):
-    """安装替身：labels 供 _wait_labels，results 按点击次数消费。"""
+    """安装替身：labels 供 _wait_scene，results 按点击次数消费。"""
     clicks = []
     dismissed = []
     landed = []
@@ -134,12 +137,17 @@ def _install(monkeypatch, labels, results):
     monkeypatch.setattr(jiguan.time, "sleep", lambda s: None)
     monkeypatch.setattr(jiguan, "human_click",
                         lambda win, x, y: clicks.append((x, y)))
-    monkeypatch.setattr(jiguan, "_wait_labels", lambda win: labels)
+    monkeypatch.setattr(jiguan, "_wait_scene",
+                        lambda win: (labels, {}, _IMG))
+    monkeypatch.setattr(jiguan, "_point_has_color",
+                        lambda img, pos, color: True)
     monkeypatch.setattr(jiguan, "_jiguan_result_dialog",
                         lambda win, timeout=None: next(outcomes))
     monkeypatch.setattr(jiguan, "clear_blocking_dialog",
                         lambda win, prefix="", max_clicks=3:
                         dismissed.append(prefix) or (True, True))
+    monkeypatch.setattr(jiguan, "_leave_seal_area",
+                        lambda win, prefix="": False)
     monkeypatch.setattr(jiguan.zuoqi, "ensure_landed",
                         lambda win: landed.append("land") or (True, "已降落"))
     monkeypatch.setattr(jiguan.zuoqi, "close_feixingyuqi_panel",
@@ -220,11 +228,16 @@ def _play_with_scans(monkeypatch, scans, results, step_ok=True):
     monkeypatch.setattr(jiguan.time, "sleep", lambda s: None)
     monkeypatch.setattr(jiguan, "human_click",
                         lambda win, x, y: clicks.append((x, y)))
-    monkeypatch.setattr(jiguan, "_wait_labels", lambda win: next(scans, []))
+    monkeypatch.setattr(jiguan, "_wait_scene",
+                        lambda win: (next(scans, []), {}, _IMG))
+    monkeypatch.setattr(jiguan, "_point_has_color",
+                        lambda img, pos, color: True)
     monkeypatch.setattr(jiguan, "_jiguan_result_dialog",
                         lambda win, timeout=None: next(outcomes))
     monkeypatch.setattr(jiguan, "clear_blocking_dialog",
                         lambda win, prefix="", max_clicks=3: (True, True))
+    monkeypatch.setattr(jiguan, "_leave_seal_area",
+                        lambda win, prefix="": False)
     monkeypatch.setattr(jiguan.zuoqi, "ensure_landed",
                         lambda win: (True, "已降落"))
     monkeypatch.setattr(jiguan.zuoqi, "close_feixingyuqi_panel",
@@ -272,3 +285,160 @@ def test_play_reveal_bounded_twice(monkeypatch):
     assert not ok
     assert len(steps) == jiguan.JIGUAN_REVEAL_MAX
     assert clicks[1:] == [(760, 400), (620, 470)]
+
+
+# ---- 任务文案颜色提示 + 剑身色块定位（2026-11-24 实机标定）----
+
+def test_hint_color_from_task_description():
+    """描述首句颜色提示：玄黄→黄、赤锋→红；无提示返回 None。"""
+    assert jiguan._hint_color(
+        "玄闻辨真玄枢轶闻玄黄贯气破封断障依据神秘人所言") == "黄"
+    assert jiguan._hint_color(
+        "玄闻辨真玄枢轶闻赤锋凝华封禁皆破依据神秘人所言") == "红"
+    assert jiguan._hint_color("依据神秘人所言，前往封印所在地破解玄石封印") is None
+    assert jiguan._hint_color("") is None
+
+
+def test_scan_labels_color_char_anchor(monkeypatch):
+    """标签被遮挡只剩「红」：用同帧完整标签字宽反推标签中心 → 剑身点。
+
+    2026-11-24 流洲帧：红标签 OCR 拆成「射印机」+「红」，无「机关」关键字，
+    旧代码读不到红机关，把蓝剑当未知色重点一次、红剑从未点中。
+    """
+    items = [("封印机关·蓝", [579, 486, 679, 510], 0.99),
+             ("红", [701, 391, 716, 406], 1.00)]
+    monkeypatch.setattr(jiguan.game_map, "ocr_region",
+                        lambda img, region: (items, None))
+    labels = jiguan.scan_labels(
+        _Win(), img=np.zeros((831, 1378, 3), dtype=np.uint8))
+    assert ("蓝", (629, 433)) in labels
+    red = [pos for color, pos in labels if color == "红"]
+    assert len(red) == 1
+    assert abs(red[0][0] - 666) <= 2 and abs(red[0][1] - 333) <= 2
+
+
+def test_find_sword_blobs_colors_and_filters():
+    """按颜色定位三把剑：竖向大色块命中，名字文字（15px 高）与青色长枪
+    （6px 宽）被过滤。"""
+    img = np.zeros((831, 1378, 3), dtype=np.uint8)
+    img[280:380, 660:680] = (150, 30, 20)     # 红剑
+    img[340:440, 760:780] = (120, 70, 15)     # 金剑
+    img[380:460, 620:640] = (60, 120, 200)    # 蓝剑
+    img[490:505, 580:640] = (200, 180, 40)    # 金色名字文字
+    img[270:360, 715:721] = (60, 120, 200)    # 玩家青色长枪
+    blobs = jiguan.find_sword_blobs(img)
+    assert set(blobs) == {"红", "黄", "蓝"}
+    assert abs(blobs["红"][0] - 670) <= 2 and abs(blobs["红"][1] - 330) <= 2
+    assert abs(blobs["黄"][0] - 770) <= 2 and abs(blobs["黄"][1] - 390) <= 2
+    assert abs(blobs["蓝"][0] - 630) <= 2 and abs(blobs["蓝"][1] - 420) <= 2
+
+
+BLOB_LABELS = [("黄", (760, 400)), ("蓝", (620, 470)), ("红", (800, 560))]
+BLOB_POS = {"黄": (760, 390), "蓝": (620, 450), "红": (800, 540)}
+
+
+def test_play_hint_color_clicked_first(monkeypatch):
+    """「赤锋凝华」→ 首击红机关（剑身色块），不再黄→蓝→红盲试。"""
+    clicks, _d, _l, _t = _install(monkeypatch, BLOB_LABELS, [])
+    monkeypatch.setattr(jiguan, "_wait_scene",
+                        lambda win: (BLOB_LABELS, dict(BLOB_POS), _IMG))
+    monkeypatch.setattr(jiguan, "_jiguan_result_dialog",
+                        lambda win, timeout=None: "success")
+    ok, _info = jiguan.play(
+        _Win(), hint_text="玄闻辨真玄枢轶闻赤锋凝华封禁皆破依据神")
+    assert ok
+    assert clicks[1] == (800, 540)  # 红剑身色块，不是黄
+
+
+def test_play_hint_wrong_falls_back(monkeypatch):
+    """提示颜色被「换一处」后按 黄→蓝→红 兜底其余颜色。"""
+    clicks, _d, _l, _t = _install(monkeypatch, BLOB_LABELS, ["fail", "success"])
+    monkeypatch.setattr(jiguan, "_wait_scene",
+                        lambda win: (BLOB_LABELS, dict(BLOB_POS), _IMG))
+    ok, _info = jiguan.play(_Win(), hint_text="赤锋凝华，封禁皆破")
+    assert ok
+    assert clicks[1:] == [(800, 540), (760, 390)]
+
+
+def test_play_hint_blob_missing_walks_before_wrong_colors(monkeypatch):
+    """提示颜色剑身不可见 → 先走位拉开遮挡，不先点其它颜色。"""
+    scans = iter([
+        ([("黄", (760, 400)), ("蓝", (620, 470))],
+         {"黄": (760, 390), "蓝": (620, 450)}),
+        ([("红", (800, 560))], {"红": (800, 540)}),
+    ])
+    clicks, _d, _l, _t = _install(monkeypatch, [], [])
+    monkeypatch.setattr(jiguan, "_wait_scene",
+                        lambda win: (*next(scans, ([], {})), _IMG))
+    steps = []
+    monkeypatch.setattr(jiguan, "_step_aside",
+                        lambda win, labels, prefix="": steps.append(1) or True)
+    monkeypatch.setattr(jiguan, "_jiguan_result_dialog",
+                        lambda win, timeout=None: "success")
+    ok, _info = jiguan.play(_Win(), hint_text="赤锋凝华，封禁皆破")
+    assert ok and len(steps) == 1
+    assert clicks[1] == (800, 540)
+
+
+def test_play_unknown_label_never_reclicks_failed_color(monkeypatch):
+    """残缺标签（颜色未知）落在已「换一处」颜色的剑身旁 → 不得重复点击。
+
+    2026-11-24 实机：走位后视角上移，蓝标签残行反推点在蓝剑上方，旧代码
+    把蓝剑当未知色又点一次；未知标签现在用最近剑身色块反推颜色并按颜色
+    去重。
+    """
+    labels = [("黄", (760, 400)), ("蓝", (620, 470))]
+    scans = iter([
+        (labels, {"黄": (760, 390), "蓝": (620, 450)}),
+        (labels + [(None, (700, 500))], {"黄": (760, 390), "蓝": (620, 450)}),
+        (labels + [(None, (700, 500)), ("红", (800, 560))],
+         {"黄": (760, 390), "蓝": (620, 450), "红": (800, 540)}),
+    ])
+    clicks, _d, _l, _t = _install(monkeypatch, [], ["fail", "fail", "success"])
+    monkeypatch.setattr(jiguan, "_wait_scene",
+                        lambda win: (*next(scans, ([], {})), _IMG))
+    ok, _info = jiguan.play(_Win())
+    assert ok
+    assert clicks[1:] == [(760, 390), (620, 450), (800, 540)]
+
+
+def test_play_never_clicks_ground_point(monkeypatch):
+    """残缺标签反推点无剑身颜色（旧代码会点空、人物走开）→ 不点击。"""
+    clicks, _d, _l, _t = _install(monkeypatch, [(None, (627, 311))], [])
+    monkeypatch.setattr(jiguan, "_point_has_color",
+                        lambda img, pos, color: False)
+    monkeypatch.setattr(jiguan, "_step_aside",
+                        lambda win, labels, prefix="": False)
+    ok, info = jiguan.play(_Win())
+    assert not ok and "尝试 0 个机关位置" in info
+    assert clicks == [jiguan.SCREEN_CENTER_POS]
+
+
+def test_play_failure_walks_away_from_seal(monkeypatch):
+    """三个颜色都「换一处」→ 失败后走开封印范围（否则任务原地空转卡死）。"""
+    _clicks, _d, _l, _t = _install(monkeypatch, LABELS,
+                                   ["fail", "fail", "fail"])
+    monkeypatch.setattr(jiguan, "_point_has_color",
+                        lambda img, pos, color: True)
+    left = []
+    monkeypatch.setattr(jiguan, "_leave_seal_area",
+                        lambda win, prefix="": left.append(1) or True)
+    ok, _info = jiguan.play(_Win())
+    assert not ok
+    assert left == [1]
+
+
+def test_leave_seal_area_tries_next_direction(monkeypatch):
+    """失败走开：首个方向走不动 → 换方向；成功即停。"""
+    monkeypatch.setattr(jiguan, "log", lambda *a, **k: None)
+    clicks = []
+    monkeypatch.setattr(jiguan, "human_click",
+                        lambda win, x, y: clicks.append((x, y)))
+    results = iter([False, True])
+    monkeypatch.setattr(jiguan, "_wait_settle",
+                        lambda win, start: next(results))
+    monkeypatch.setattr(jiguan.game_map, "read_map_position",
+                        lambda win: ("流洲", 73, 55))
+    assert jiguan._leave_seal_area(_Win(), "玄枢轶闻")
+    cx, cy = jiguan.SCREEN_CENTER_POS
+    assert clicks == [(cx, cy - 200), (cx + 220, cy)]

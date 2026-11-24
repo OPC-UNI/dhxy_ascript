@@ -66,6 +66,7 @@ from ..core.settings import (
     load_wubei_auto_create_team, load_wubei_auto_kick_away, load_wubei_kick_away_minutes,
     load_wubei_auto_rejoin, load_wubei_auto_repair, load_wubei_auto_wuyi, load_wubei_check_team,
     load_wubei_hezi, load_wubei_kuimulang_switch, load_wubei_manual_nav,
+    load_wubei_force_manual,
     load_wubei_repair_interval,
     load_wubei_shout_switch, load_wubei_shout_text, load_wubei_tab_group, load_wubei_wuyi_interval,
     load_wuhuan_vitality_continue, load_xiuluo_auto_create_team, load_xiuluo_auto_rejoin,
@@ -311,6 +312,7 @@ class ControlWindow(DiagnosticsMixin, SettingsApiMixin, MessageApiMixin,
         self.expose(self.save_wubei_repair_interval)
         self.expose(self.save_wubei_kuimulang_switch)
         self.expose(self.save_wubei_manual_nav)
+        self.expose(self.save_wubei_force_manual)
         self.expose(self.save_wubei_tab_group)
         self.expose(self.save_zhongzu_check_team)
         self.expose(self.save_zhongzu_auto_create_team)
@@ -816,6 +818,7 @@ class ControlWindow(DiagnosticsMixin, SettingsApiMixin, MessageApiMixin,
                           "repair_interval": load_wubei_repair_interval(),
                           "kuimulang": load_wubei_kuimulang_switch(),
                           "manual_nav": load_wubei_manual_nav(),
+                          "force_manual": load_wubei_force_manual(),
                           "tab_group": load_wubei_tab_group()},
                 "zhongzu": {"check_team": load_zhongzu_check_team(),
                             "auto_create_team": load_zhongzu_auto_create_team(),

@@ -16,8 +16,22 @@ play：提示对话框关闭 → 座骑降落（飞行驭器面板「降落」�
 破解，人物不必先走到剑前。点对机关的结局除「已被破解」外还有剧情式
 结局（玩家「怎么没有反应？」→ 神秘人「玄宝已被人抢先一步取走了」，
 任务随即结束），结果为非「换一处」的对话框即按成功处理。
+
+颜色提示与剑身定位（2026-11-24 实机重标定）：任务描述首句就是机关
+颜色提示——「玄黄贯气破封断障」→ 黄机关（3 次首击成功）、「赤锋凝华
+封禁皆破」→ 红机关（2 次黄/蓝均「换一处」后红成功）。解析提示后直接
+点对应颜色，不再盲试。同时按颜色在场景内定位剑身色块（红/金/蓝三把
+剑颜色鲜明，31x31 窗口命中像素 400~550，空地 0）：标签被人物挡住时
+OCR 只剩「红」这类单字颜色行，残缺标签反推的坐标可偏差 30~40px——
+2026-11-24 实机三次点击两个颜色后把蓝剑当未知色重踢一次、红剑从未
+踢中，任务卡死。现在色块优先、残缺标签需通过点击点颜色校验，且失败
+后走开封印范围让下一轮跟踪重走能重新触发提示对话（否则人物停在原地，
+任务每 300s 空转一轮永不恢复）。
 """
 import time
+
+import cv2
+import numpy as np
 
 from ..core.app_utils import human_click, log
 from ..device import map as game_map
@@ -86,6 +100,35 @@ JIGUAN_REVEAL_CLEAR = 130     # 步点与已知机关剑身的最小曼哈顿距
 JIGUAN_REVEAL_MAX = 2         # 每次 play 最多走开次数（防来回走动）
 JIGUAN_REVEAL_SETTLE = 4.0    # 等人物走完的上限（秒）
 JIGUAN_REVEAL_POLL = 0.3      # 走位轮询间隔（秒，位置 OCR ≈0.1-0.2s/次）
+# ---- 任务文案颜色提示（2026-11-23/24 实机标定）----
+# 「玄黄贯气破封断障」→ 黄机关（两个角色合计 3 次首击成功）；
+# 「赤锋凝华封禁皆破」→ 红机关（两个角色均是黄/蓝「换一处」后红成功）。
+# 描述首句（「依据」之前）即颜色提示：玄黄=黄、赤锋=红；蓝/青/碧按蓝处理
+# （青色提示未经实机验证，映射错只多花一次点击，随后按黄→蓝→红兜底）。
+JIGUAN_HINT_SPLIT = "依据"       # 描述首句与后续指引的分隔词
+JIGUAN_HINT_CLAUSE_LEN = 24      # 只解析首句范围（防后续指引里的撞色字）
+JIGUAN_HINT_CHARS = {"黄": "黄", "黃": "黄", "赤": "红", "红": "红",
+                     "紅": "红", "蓝": "蓝", "藍": "蓝",
+                     "青": "蓝", "碧": "蓝"}
+# ---- 剑身颜色定位（2026-11-24 流洲实机标定）----
+# 标签可能被人物身体挡住（OCR 只剩「红」），但剑身颜色鲜明、是场景中的
+# 大块竖向色块，可直接按颜色定位：红剑 RGB 中位 (113,29,13)、金剑
+# (87,59,10)、蓝剑 (111,125,199)，背景岩石灰 (63,63,63)。
+# 31x31 窗口命中像素：红 400~550 / 金 319~389 / 蓝 478~508，空地 0。
+# 竖向长条 + 宽度过滤排除玩家青色长枪（9px 宽）与名字文字（15px 高）。
+JIGUAN_SWORD_REGION = (450, 120, 980, 700)  # 机关场景（含走位后上移的剑）
+JIGUAN_SWORD_MIN_AREA = 500     # 剑身色块最小面积（像素）
+JIGUAN_SWORD_MIN_W = 16         # 剑身最小宽度（排除武器细杆）
+JIGUAN_SWORD_MAX_W = 70         # 剑身最大宽度
+JIGUAN_SWORD_MIN_H = 50         # 剑身最小高度（排除名字/标签文字行）
+JIGUAN_SWORD_COLOR_MIN = 220    # 点击点颜色校验下限（31x31 窗口命中像素）
+JIGUAN_SWORD_COLOR_RADIUS = 15  # 颜色校验窗口半径
+JIGUAN_BLOB_PAIR_MAX = 150      # 标签点击点与剑身色块最大配对距离
+# ---- 破解失败后走开封印范围（2026-11-24 实机教训）----
+# 三点都「换一处」后人物停在封印中心，follow 超时重点任务链接时人已在
+# 目的地，封印提示对话不再弹出，任务每 300s 空转一轮永远卡住。
+# 失败后走开一段距离，下一轮跟踪重走才能重新触发提示对话。
+JIGUAN_LEAVE_STEPS = ((0, -200), (220, 0), (-220, 0), (0, 200))
 
 
 def _jiguan_result_dialog(win, timeout=JIGUAN_RESULT_WAIT):
@@ -151,30 +194,186 @@ def _label_color(text):
     return next((c for c in JIGUAN_CLICK_ORDER if c in tail), None)
 
 
-def scan_labels(win):
-    """扫描机关标签，返回 [(颜色或 None, (x, y))]，颜色未知的排后使用。"""
-    img = win.capture(force_activate=False)
-    if img is None:
-        return []
-    items, _ = game_map.ocr_region(img, JIGUAN_LABEL_REGION)
-    out = []
+def _label_char_width(items):
+    """完整标签行的字宽中位数（残缺标签反推标签中心用）。
+
+    取同帧含「机关」且有颜色的行：整行宽 / 字数。合并玩家名的行
+    （「直荣印兽封印机关·黄」）字宽与纯标签行一致，实测 16.4 vs 16.7。
+    """
+    widths = []
     for text, box, score in items:
         if score < JIGUAN_LABEL_MIN_SCORE or JIGUAN_LABEL_KEY not in text:
             continue
-        pos = _label_click_pos(box, text)
-        if pos is not None:
-            out.append((_label_color(text), pos))
+        if _label_color(text) is None:
+            continue
+        widths.append((box[2] - box[0]) / max(1, len(text)))
+    if not widths:
+        return None
+    widths.sort()
+    return widths[len(widths) // 2]
+
+
+def _color_char_row(text):
+    """单字颜色行（标签被遮挡后只剩「红」「藍」）→ 归一颜色；否则 None。"""
+    t = (text or "").strip().translate(JIGUAN_COLOR_ALIASES)
+    if len(t) == 1:
+        return t if t in JIGUAN_CLICK_ORDER else None
+    if len(t) <= 2:  # OCR 偶带标点
+        chars = [ch for ch in t if ch in JIGUAN_CLICK_ORDER]
+        if len(chars) == 1:
+            return chars[0]
+    return None
+
+
+def scan_labels(win, img=None):
+    """扫描机关标签，返回 [(颜色或 None, (x, y))]，颜色未知的排后使用。
+
+    标签被人物身体遮挡时 OCR 可能只剩「红」这类单字颜色行（没有「机关」
+    关键字，2026-11-24 流洲实机）：用同帧完整标签的字宽反推标签中心，
+    再上移到剑身。残缺「机关」行仍按原公式（字位反推）处理。
+    """
+    if img is None:
+        img = win.capture(force_activate=False)
+    if img is None:
+        return []
+    items, _ = game_map.ocr_region(img, JIGUAN_LABEL_REGION)
+    char_w = _label_char_width(items)
+    out = []
+    for text, box, score in items:
+        if score < JIGUAN_LABEL_MIN_SCORE:
+            continue
+        if JIGUAN_LABEL_KEY in text:
+            pos = _label_click_pos(box, text)
+            if pos is not None:
+                out.append((_label_color(text), pos))
+            continue
+        color = _color_char_row(text)
+        if color is not None and char_w is not None:
+            # 颜色字是标签第 6 字：颜色字中心 - 2.5 字宽 = 标签中心
+            cx = int((box[0] + box[2]) / 2
+                     - (JIGUAN_LABEL_CHARS / 2 - 0.5) * char_w)
+            cy = int((box[1] + box[3]) / 2)
+            out.append((color, (cx, cy - JIGUAN_SWORD_DY)))
     return out
 
 
-def _wait_labels(win):
-    """等机关标签出现（降落/关闭面板后视角就位需要时间），出现即返回。"""
+def _color_mask(arr, color):
+    """机关剑颜色掩码（RGB 数组，2026-11-24 实机标定）。"""
+    r = arr[..., 0].astype(np.int16)
+    g = arr[..., 1].astype(np.int16)
+    b = arr[..., 2].astype(np.int16)
+    if color == "红":
+        return (r >= 80) & ((r - np.maximum(g, b)) >= 45)
+    if color == "黄":
+        return ((r >= 70) & (g >= 40) & ((r - b) >= 45)
+                & ((g - b) >= 20) & ((r - g) <= 80))
+    if color == "蓝":
+        return (b >= 90) & ((b - np.maximum(r, g)) >= 40)
+    return np.zeros(r.shape, dtype=bool)
+
+
+def _color_count(arr, x, y, color, radius=JIGUAN_SWORD_COLOR_RADIUS):
+    """(x,y) 周围窗口内该颜色的命中像素数（越界裁剪）。"""
+    x0, x1 = max(0, x - radius), min(arr.shape[1], x + radius + 1)
+    y0, y1 = max(0, y - radius), min(arr.shape[0], y + radius + 1)
+    if x1 <= x0 or y1 <= y0:
+        return 0
+    return int(_color_mask(arr[y0:y1, x0:x1], color).sum())
+
+
+def _point_has_color(img, pos, color):
+    """点击点附近是否有该颜色剑身（防标签残缺反推坐标偏差点空）。"""
+    arr = np.asarray(img)[:, :, :3]
+    x, y = pos
+    if not (0 <= x < arr.shape[1] and 0 <= y < arr.shape[0]):
+        return False
+    return _color_count(arr, x, y, color) >= JIGUAN_SWORD_COLOR_MIN
+
+
+def find_sword_blobs(img):
+    """在机关场景内按颜色定位三把机关剑，返回 {颜色: (剑身中心x, y)}。
+
+    2026-11-24 流洲实机标定（见 JIGUAN_SWORD_* 注释）：色块面积/长宽
+    过滤后，红/金/蓝各只剩剑身本身（金剑场景里玩家金色披风 541、
+    红剑金色纹饰 836，均小于金剑 1079）。找不到的颜色不出现在结果里。
+    """
+    arr = np.asarray(img)[:, :, :3]
+    left, top, right, bottom = JIGUAN_SWORD_REGION
+    roi = arr[top:bottom, left:right]
+    out = {}
+    kernel = np.ones((5, 5), np.uint8)
+    for color in JIGUAN_CLICK_ORDER:
+        mask = _color_mask(roi, color)
+        if not mask.any():
+            continue
+        m8 = cv2.morphologyEx(mask.astype(np.uint8) * 255,
+                              cv2.MORPH_CLOSE, kernel)
+        n, _lab, stats, centroids = cv2.connectedComponentsWithStats(m8, 8)
+        best = None
+        for i in range(1, n):
+            area = int(stats[i, cv2.CC_STAT_AREA])
+            w = int(stats[i, cv2.CC_STAT_WIDTH])
+            h = int(stats[i, cv2.CC_STAT_HEIGHT])
+            if (area < JIGUAN_SWORD_MIN_AREA or w < JIGUAN_SWORD_MIN_W
+                    or w > JIGUAN_SWORD_MAX_W or h < JIGUAN_SWORD_MIN_H):
+                continue
+            if best is None or area > best[0]:
+                best = (area, int(centroids[i][0]) + left,
+                        int(centroids[i][1]) + top)
+        if best is not None:
+            out[color] = (best[1], best[2])
+    return out
+
+
+def _nearest_blob(blobs, color, pos):
+    """离标签点击点最近的剑身色块 → (颜色, 点)；超配对距离返回 None。"""
+    best = None
+    for c, bpos in blobs.items():
+        if color is not None and c != color:
+            continue
+        d = abs(bpos[0] - pos[0]) + abs(bpos[1] - pos[1])
+        if best is None or d < best[0]:
+            best = (d, c, bpos)
+    if best is None or best[0] > JIGUAN_BLOB_PAIR_MAX:
+        return None
+    return best[1], best[2]
+
+
+def _scan_scene(win):
+    """一次截帧 → 标签 + 剑身色块（共用一帧，性能规则）。"""
+    img = win.capture(force_activate=False)
+    if img is None:
+        return [], {}, None
+    return scan_labels(win, img=img), find_sword_blobs(img), img
+
+
+def _wait_scene(win):
+    """等机关场景就位（降落/视角切换/关对话框后），任一信号出现即返回。
+
+    返回 (labels, blobs, img)；img 为最近一帧（颜色校验同源）。
+    """
     deadline = time.time() + JIGUAN_LABEL_WAIT
     while True:
-        labels = scan_labels(win)
-        if labels or time.time() >= deadline:
-            return labels
+        labels, blobs, img = _scan_scene(win)
+        if labels or blobs or time.time() >= deadline:
+            return labels, blobs, img
         time.sleep(JIGUAN_LABEL_POLL)
+
+
+def _hint_color(text):
+    """从任务描述首句解析机关颜色提示（玄黄→黄 / 赤锋→红）。
+
+    2026-11-23/24 实机标定（见 JIGUAN_HINT_* 注释）。解析不到返回 None，
+    调用方按 黄→蓝→红 兜底，行为与旧版一致。
+    """
+    if not text:
+        return None
+    clause = text.split(JIGUAN_HINT_SPLIT, 1)[0][:JIGUAN_HINT_CLAUSE_LEN]
+    for ch in clause:
+        color = JIGUAN_HINT_CHARS.get(ch)
+        if color is not None:
+            return color
+    return None
 
 
 def _ordered_labels(labels):
@@ -264,60 +463,164 @@ def _land(win, prefix):
     return ok
 
 
-def play(win, prefix="玄枢轶闻"):
-    """封印机关破解（用户 2026-10-15 流程，2026-11-18/11-20 实机重标定）：
+def _build_candidates(labels, blobs, order, failed_colors, tried, img):
+    """候选点击点：剑身颜色色块优先，同色标签次之，颜色未知标签兜底。
 
-    提示对话框点击一次关闭 → 座骑降落 → OCR 机关标签定位三个机关 →
-    按 黄→蓝→红 点标签上方的剑身 → 轮询解除结果：
+    - 同色剑身色块可见 → 点色块中心（剑身中部，不依赖标签 OCR）；
+    - 色块缺失但同色标签可见 → 标签上方点击点须通过颜色校验，否则不点
+      （2026-11-24 教训：残缺标签反推坐标可偏差 30~40px，点空会让人物
+      走开、视角偏离，还可能把已试过的颜色当未知色重踢）；
+    - 颜色未知的标签 → 用最近的剑身色块反推颜色，跨视角仍按颜色去重。
+    返回 [(颜色或 None, (x, y), 来源说明)]，按 order 排序、同色去重。
+    """
+    def fresh(pos):
+        return all(abs(pos[0] - t[0]) + abs(pos[1] - t[1]) > JIGUAN_SAME_SPOT
+                   for t in tried)
+
+    label_pos = {}
+    for color, pos in labels:
+        if color is not None and color not in label_pos:
+            label_pos[color] = pos
+
+    out = []
+    seen = set()
+    for color in order:
+        if color in failed_colors or color in seen:
+            continue
+        pos = None
+        source = ""
+        lpos = label_pos.get(color)
+        bpos = blobs.get(color)
+        if bpos is not None and (lpos is None
+                                 or (abs(bpos[0] - lpos[0])
+                                     + abs(bpos[1] - lpos[1]))
+                                 <= JIGUAN_BLOB_PAIR_MAX):
+            pos, source = bpos, "剑身色块"
+        elif lpos is not None and img is not None \
+                and _point_has_color(img, lpos, color):
+            # 色块离标签过远（可能是别人的武器/特效）或缺失：标签点+
+            # 颜色校验通过才点
+            pos, source = lpos, "标签+颜色校验"
+        elif bpos is not None:
+            pos, source = bpos, "剑身色块"
+        if pos is not None and fresh(pos):
+            out.append((color, pos, source))
+            seen.add(color)
+    for _color, lpos in labels:
+        if _color is not None:
+            continue
+        near = _nearest_blob(blobs, None, lpos)
+        if near is None:
+            continue
+        ncolor, npos = near
+        if ncolor in failed_colors or ncolor in seen or not fresh(npos):
+            continue
+        out.append((ncolor, npos, "标签邻色"))
+        seen.add(ncolor)
+    return out
+
+
+def _leave_seal_area(win, prefix):
+    """破解失败后走开封印范围（2026-11-24 实机教训）。
+
+    人物停在封印中心时，follow 超时重点任务追踪链接不会产生寻路，封印
+    提示对话也不再弹出——任务每 300s 空转一轮永远卡住。走开一段距离后
+    下一轮重走才能重新触发提示对话、重启破解。
+    """
+    start = game_map.read_map_position(win)
+    left, top, right, bottom = JIGUAN_REVEAL_BOUNDS
+    cx, cy = SCREEN_CENTER_POS
+    for dx, dy in JIGUAN_LEAVE_STEPS:
+        x, y = cx + dx, cy + dy
+        if not (left <= x <= right and top <= y <= bottom):
+            continue
+        human_click(win, x, y)
+        if _wait_settle(win, start):
+            log(f"[{prefix}] 破解失败，已走开封印位置 @({x},{y})，"
+                f"等待任务追踪重走重新触发封印对话", "WARN")
+            return True
+        start = game_map.read_map_position(win)
+    return False
+
+
+def play(win, prefix="玄枢轶闻", hint_text=""):
+    """封印机关破解（用户 2026-10-15 流程；2026-11-18/20/24 实机重标定）：
+
+    提示对话框点击一次关闭 → 座骑降落 → 定位三个机关（任务描述首句
+    的颜色提示优先，其次剑身颜色色块 / 标签 OCR）→ 按 黄→蓝→红（提示
+    颜色最先）点击剑身 → 轮询解除结果：
     - 「换一处再试试」：本机关不对，关闭对话框后换下一个；
     - 「已被破解」/「解除封印」/「已完成玄枢轶闻任务」/剧情式结局
       （非「换一处」的结果对话框）：结束；
     - 超时无结果：点击落空，换下一个机关（不按成功处理）。
-    每次点击前重新扫描标签（点击落空可能让角色走动、视角变化），同一
-    机关（按颜色/位置）不重复点；已有标签全部点过而仍缺机关（标签被
-    人物身体挡住，OCR 读不出）时走开一小步再重扫（2026-11-20 用户
-    规则，JIGUAN_REVEAL_*）；轮次上限 JIGUAN_LABEL_ROUNDS。
-    返回 (是否成功, 描述)。
+    hint_text 为任务追踪面板（含描述）的 OCR 文本，用于解析颜色提示。
+    每次点击后重新扫描场景（点击落空可能让角色走动、视角变化），同一
+    颜色/位置不重复点；目标剑身不可见时走开一小步再重扫
+    （2026-11-20/24，JIGUAN_REVEAL_*）；失败后走开封印范围
+    （JIGUAN_LEAVE_STEPS）让下一轮重走能重新触发。轮次上限
+    JIGUAN_LABEL_ROUNDS。返回 (是否成功, 描述)。
     """
+    hint = _hint_color(hint_text)
     # 1. 点击一次关闭提示对话框（屏幕中间；该对话框无选项）
     human_click(win, SCREEN_CENTER_POS[0], SCREEN_CENTER_POS[1])
     log(f"[{prefix}] 已点击关闭封印提示对话框", "SYS")
     time.sleep(0.5)
     # 2. 座骑降落（飞行状态下机关不可见不可点）
     _land(win, prefix)
-    # 3. 标签定位 → 逐个尝试（每轮点击前重扫，位置随视角更新）
+    # 3. 点击顺序：任务文案提示的颜色优先，其余按 黄→蓝→红
+    if hint:
+        order = [hint] + [c for c in JIGUAN_CLICK_ORDER if c != hint]
+        log(f"[{prefix}] 任务描述颜色提示：{hint}机关"
+            f"（点击顺序 {'→'.join(order)}）", "SYS")
+    else:
+        order = list(JIGUAN_CLICK_ORDER)
     clicked = 0
     tried = []
-    failed_colors = set()   # 明确提示「换一处」的机关颜色（落空的不记，防误杀）
+    tried_colors = set()    # 已点过的颜色（含落空，防同一颜色无限重试）
+    failed_colors = set()   # 明确提示「换一处」的颜色（之后不再点）
     reveals = 0
     max_attempts = JIGUAN_LABEL_ROUNDS * len(JIGUAN_CLICK_ORDER)
     while clicked < max_attempts:
-        labels = _wait_labels(win)
-        if not labels:
-            log(f"[{prefix}] 未找到封印机关标签（区域 {JIGUAN_LABEL_REGION}），"
-                f"放弃本轮破解", "WARN")
+        # 每次点击前重扫场景（标签 + 剑身色块同帧；视角/人物位置可能变化）
+        labels, blobs, img = _wait_scene(win)
+        if not labels and not blobs:
+            if clicked == 0:
+                log(f"[{prefix}] 未找到封印机关（区域 {JIGUAN_LABEL_REGION}），"
+                    f"放弃本轮破解", "WARN")
             break
-        cands = [(color, pos) for color, pos in _ordered_labels(labels)
-                 if color not in failed_colors
-                 and all(abs(pos[0] - t[0]) + abs(pos[1] - t[1])
-                         > JIGUAN_SAME_SPOT for t in tried)]
+        # 提示颜色未尝试且完全不可见（无剑身色块、标签点颜色校验也不过）：
+        # 先走位拉开遮挡，避免跳过提示颜色直接盲试其它颜色
+        # （2026-11-24 实机：红剑被人物挡住）
+        hint_label = next((pos for color, pos in labels if color == hint), None)
+        hint_ready = hint in blobs or (
+            hint_label is not None and img is not None
+            and _point_has_color(img, hint_label, hint))
+        if hint and hint not in tried_colors and hint not in failed_colors \
+                and not hint_ready and reveals < JIGUAN_REVEAL_MAX \
+                and _step_aside(win, labels, prefix):
+            reveals += 1
+            continue
+        cands = _build_candidates(labels, blobs, order, failed_colors,
+                                  tried, img)
         if not cands:
-            # 已知标签都点过了但机关没凑齐：某个标签被人物身体挡住，
-            # 区域 OCR 读不出（2026-11-20 流洲实测，2x 放大也读不出）。
-            # 走开一小步拉开遮挡后重扫（用户规则）。
-            if len(tried) < len(JIGUAN_CLICK_ORDER) \
-                    and reveals < JIGUAN_REVEAL_MAX \
+            # 已有标签/剑身都点过仍缺机关：某个机关被人物身体挡住。
+            # 走开一小步拉开遮挡后重扫（2026-11-20 用户规则）。
+            untried = [c for c in JIGUAN_CLICK_ORDER
+                       if c not in tried_colors and c not in failed_colors]
+            if untried and reveals < JIGUAN_REVEAL_MAX \
                     and _step_aside(win, labels, prefix):
                 reveals += 1
                 continue
             break
-        color, (x, y) = cands[0]
+        color, (x, y), source = cands[0]
         tried.append((x, y))
+        if color is not None:
+            tried_colors.add(color)
         clicked += 1
         human_click(win, x, y)
         color_tag = f"·{color}" if color else ""
-        log(f"[{prefix}] 已点击封印机关{color_tag} @({x},{y})，等待解除结果",
-            "SYS")
+        log(f"[{prefix}] 已点击封印机关{color_tag} @({x},{y})（{source}），"
+            f"等待解除结果", "SYS")
         result = _jiguan_result_dialog(win)
         if result == "fail":
             log(f"[{prefix}] 机关 @({x},{y}) 提示「换一处再试试」，改点下一个",
@@ -331,4 +634,6 @@ def play(win, prefix="玄枢轶闻"):
             return True, f"封印破解完成（点击 {clicked} 个机关）"
         log(f"[{prefix}] 点击机关 @({x},{y}) 后 {JIGUAN_RESULT_WAIT}s 内无解除"
             f"结果，按点击落空处理，换下一个", "WARN")
+    if clicked > 0:
+        _leave_seal_area(win, prefix)
     return False, f"封印破解未成功（尝试 {clicked} 个机关位置）"

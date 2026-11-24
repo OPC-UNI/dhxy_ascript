@@ -72,7 +72,10 @@ def test_all_navigate_maps_excludes_unsupported_includes_layers():
     for name in ("龙窟", "凤巢", "大雁塔"):
         assert name not in maps
     assert len(maps) == len(set(maps))   # 无重复
-    assert len(maps) == 70               # 与内置标定表条目数一致
+    # 70 项常规/层名内置标定 + 特殊地图（世界地图无标签，2026-11-23）
+    assert len(maps) == 70 + len(map_nav.SPECIAL_MAP_ENTRIES)
+    for name in map_nav.SPECIAL_MAP_ENTRIES:
+        assert name in maps
 
 
 # ---------------- HUD 地名匹配与到达 ----------------
@@ -675,7 +678,7 @@ def test_prewalk_skips_same_map(monkeypatch):
 
 
 def test_prewalk_skips_non_xiuluo_task(monkeypatch):
-    """预走路仅修罗任务启用：五环等其他任务从灵兽村出发不预走。"""
+    """预走路只认修罗/五倍任务：五环等其他任务从灵兽村出发不预走。"""
     opened = []
     monkeypatch.setattr(map_nav.app_utils, "current_task_mode",
                         lambda: "五环")
@@ -707,6 +710,61 @@ def test_prewalk_clicks_configured_point(monkeypatch):
     assert ("click", 316, 616) in calls
     assert any(c[0] == "close" for c in calls)
     assert any("预走路" in m for m in emits)
+
+
+def test_prewalk_wubei_baoxiangguo_clicks_point(monkeypatch):
+    """五倍任务（用户 2026-11-24）：宝象国 (75,135) 按标定换算成小地图点。
+
+    预走路按任务模式识别（PREWALK_TASK_MODES 含五倍），导航内自动触发。
+    """
+    calls = []
+    monkeypatch.setattr(map_nav.app_utils, "current_task_mode",
+                        lambda: "五倍")
+    monkeypatch.setattr(map_nav, "affine_for",
+                        lambda win, target: {"sx": 1.9459, "sy": -1.954,
+                                             "ax": 329.5, "ay": 655.3})
+    monkeypatch.setattr(map_nav, "_open_mini_map_quick", lambda win: True)
+    monkeypatch.setattr(map_nav, "human_click",
+                        lambda win, x, y: calls.append(("click", x, y)))
+    monkeypatch.setattr(map_nav.game_map, "close_map_if_open",
+                        lambda *a, **k: calls.append(("close", k)))
+    emits = []
+    dt = map_nav._prewalk_if_configured(
+        object(), ("宝象国", 86, 86), "平顶山", None, emits.append)
+    assert dt >= 0.0
+    px = int(329.5 + 1.9459 * 75)   # 宝象国 (75,135) → 小地图点
+    py = int(655.3 - 1.954 * 135)
+    assert ("click", px, py) in calls
+    assert any(c[0] == "close" for c in calls)
+    assert any("预走路" in m for m in emits)
+
+
+def test_prewalk_suppressed_skips(monkeypatch):
+    """巫医轮次整轮抑制（用户 2026-11-24）：置位后不预走，复位恢复。"""
+    opened = []
+    monkeypatch.setattr(map_nav.app_utils, "current_task_mode",
+                        lambda: "五倍")
+    monkeypatch.setattr(map_nav, "affine_for",
+                        lambda win, target: {"sx": 1.9459, "sy": -1.954,
+                                             "ax": 329.5, "ay": 655.3})
+    monkeypatch.setattr(map_nav, "_open_mini_map_quick",
+                        lambda win: opened.append(1) or True)
+    monkeypatch.setattr(map_nav, "human_click", lambda *a, **k: None)
+    monkeypatch.setattr(map_nav.game_map, "close_map_if_open",
+                        lambda *a, **k: None)
+    map_nav.set_prewalk_suppressed(True)
+    try:
+        assert map_nav._prewalk_if_configured(
+            object(), ("宝象国", 86, 86), "平顶山", None,
+            lambda m: None) == 0.0
+    finally:
+        map_nav.set_prewalk_suppressed(False)
+    assert opened == []
+    # 复位后同场景照常预走（会尝试打开小地图并点击）
+    assert map_nav._prewalk_if_configured(
+        object(), ("宝象国", 86, 86), "平顶山", None,
+        lambda m: None) >= 0.0
+    assert opened == [1]
 
 
 def test_prewalk_skips_when_minimap_unavailable(monkeypatch):
@@ -1650,3 +1708,869 @@ def test_start_navigation_unchecks_task_filter(monkeypatch):
     ok, _info, _pt = map_nav.start_navigation(
         object(), "洛阳城", 321, 110, log_fn=lambda m: None)
     assert ok and calls == [1]
+
+
+# ---------------- 特殊地图（莲花洞等，世界地图无标签） ----------------
+
+def test_special_map_entry_table():
+    """莲花洞入口定义：父地图平顶山 (102,42)，场景地图黄字锚点同名。"""
+    entry = map_nav.special_map_entry("莲花洞")
+    assert entry == {"parent": "平顶山", "entry": (102, 42),
+                     "npc_anchor": "莲花洞", "portal": (84, 9)}
+    assert map_nav.special_map_entry(" 莲花洞 ") is entry
+    assert map_nav.special_map_entry("洛阳城") is None
+    assert map_nav.special_map_entry("") is None
+
+
+def test_wait_arrival_accepts_special_enter_name(monkeypatch):
+    """特殊地图经父地图入口自动进场：HUD 地名变为特殊地图名即到达。"""
+    map_nav._CANCEL.clear()
+    monkeypatch.setattr(map_nav, "is_in_battle_frame", lambda img: False)
+    monkeypatch.setattr(map_nav.game_map, "read_map_position",
+                        lambda win, img=None: ("莲花洞", 83, 10))
+    emits = []
+    ok, info = map_nav._wait_arrival(
+        _arrival_win(), "平顶山", None, 102, 42, emits.append,
+        enter_name="莲花洞")
+    assert ok and "莲花洞" in info
+    # 未传 enter_name 时同帧不按特殊地图到达（普通导航行为不变）
+    map_nav._CANCEL.clear()
+    monkeypatch.setattr(map_nav, "ARRIVE_STALL_TIMEOUT", 0.0)
+    ok2, info2 = map_nav._wait_arrival(
+        _arrival_win(), "平顶山", None, 102, 42, lambda m: None)
+    assert not ok2 and "未变化" in info2
+
+
+def _fake_img(color, size=(40, 40)):
+    from PIL import Image
+    arr = np.zeros((size[1], size[0], 3), dtype=np.uint8)
+    arr[:, :, :] = color
+    return Image.fromarray(arr, "RGB")
+
+
+def test_checkbox_checked_pixel_detection():
+    """「普通」复选框勾选判定：白色对勾像素计数（实测勾选 17 / 未勾 0）。"""
+    from PIL import Image
+    img = _fake_img((40, 70, 65))
+    assert not map_nav._checkbox_checked(img, 20, 20)
+    arr = np.asarray(img).copy()
+    arr[16:24, 16:24] = (230, 230, 220)
+    assert map_nav._checkbox_checked(Image.fromarray(arr, "RGB"), 20, 20)
+
+
+def _npc_test_image(anchor=(100, 100, 150, 120)):
+    """构造带绿字 NPC 行的帧（锚点下方绿色像素行）。"""
+    from PIL import Image
+    arr = np.zeros((300, 500, 3), dtype=np.uint8)
+    arr[:, :, :] = (60, 60, 60)
+    arr[124:134, 110:150] = (0, 255, 0)   # 金角大王绿字行（合成）
+    return Image.fromarray(arr, "RGB")
+
+
+def test_find_special_entry_npc_uses_anchor_and_green_row(monkeypatch):
+    """锚点黄字正下方顶行绿字中点 = 入口 NPC 点击点（金角/银角均可）。"""
+    img = _npc_test_image()
+    monkeypatch.setattr(
+        map_nav.game_map, "ocr_regions",
+        lambda im, regions: ([("莲花洞", (100, 100, 150, 120), 0.99)], None))
+
+    class _W:
+        def capture(self, force_activate=False):
+            return img
+
+    pt = map_nav._find_special_entry_npc(
+        _W(), "莲花洞", {"x": 230, "y": 60})
+    # band: l=75, top=117；绿行 x=110..149、y=124..133 → (129, 130)
+    assert pt == (129, 130)
+
+
+def test_find_special_entry_npc_missing_anchor(monkeypatch):
+    monkeypatch.setattr(
+        map_nav.game_map, "ocr_regions",
+        lambda im, regions: ([("平顶山", (100, 100, 150, 120), 0.99)], None))
+
+    class _W:
+        def capture(self, force_activate=False):
+            return _npc_test_image()
+
+    assert map_nav._find_special_entry_npc(
+        _W(), "莲花洞", {"x": 230, "y": 60}) is None
+
+
+def test_ensure_minimap_putong_filter_clicks_unchecked(monkeypatch):
+    """「普通」未勾选时点复选框一次；已勾选不点（偏移随搜索条基准点）。"""
+    clicks = []
+    monkeypatch.setattr(map_nav, "human_click",
+                        lambda win, x, y: clicks.append((x, y)))
+    states = iter([False, True])
+    monkeypatch.setattr(map_nav, "_checkbox_checked",
+                        lambda img, cx, cy: next(states))
+    monkeypatch.setattr(map_nav.time, "sleep", lambda s: None)
+
+    class _W:
+        def capture(self, force_activate=False):
+            return object()
+
+    ok, info = map_nav._ensure_minimap_putong_filter(
+        _W(), {"x": 406, "y": 217}, lambda m: None)
+    assert ok and info == "已勾选「普通」筛选"
+    assert clicks == [(438, 669)]   # (406+32, 217+452)
+
+    clicks.clear()
+    monkeypatch.setattr(map_nav, "_checkbox_checked",
+                        lambda img, cx, cy: True)
+    ok2, _info2 = map_nav._ensure_minimap_putong_filter(
+        _W(), {"x": 406, "y": 217}, lambda m: None)
+    assert ok2 and clicks == []
+
+
+def test_navigate_special_already_inside(monkeypatch):
+    """已在特殊地图：直接洞内步行，不再开图/寻路。"""
+    monkeypatch.setattr(map_nav, "_read_pos",
+                        lambda win: ("莲花洞", 20, 21))
+    calls = []
+    monkeypatch.setattr(map_nav, "_navigate_impl",
+                        lambda *a, **k: calls.append(1) or (True, ""))
+    walked = []
+    monkeypatch.setattr(
+        map_nav, "_walk_special_coordinate",
+        lambda win, target, x, y, emit:
+        walked.append((target, x, y)) or (True, "已到达莲花洞 (75,21)"))
+    emits = []
+    ok, info = map_nav.navigate_to_map_coordinate(
+        object(), "莲花洞", 75, 21, log_fn=emits.append)
+    assert ok and "已到达莲花洞" in info and calls == []
+    assert walked == [("莲花洞", 75, 21)]
+    assert any("直接步行到坐标" in m for m in emits)
+
+
+def test_navigate_special_enters_via_parent_entry(monkeypatch):
+    """未进入时经父地图入口坐标导航；进场（HUD 改名）即成功。"""
+    pos_seq = [("宝象国", 110, 102), ("莲花洞", 83, 10)]
+    monkeypatch.setattr(map_nav, "_read_pos",
+                        lambda win: pos_seq.pop(0) if pos_seq else
+                        ("莲花洞", 83, 10))
+    calls = []
+
+    def fake_impl(win, target, x, y, emit, verbose=False,
+                  allow_restart=False, on_walk_start=None, enter_name=None,
+                  uncheck_putong=False):
+        calls.append((target, x, y, enter_name, uncheck_putong))
+        return True, "已进入莲花洞 (83,10)"
+
+    monkeypatch.setattr(map_nav, "_navigate_impl", fake_impl)
+    monkeypatch.setattr(map_nav, "_enter_special_by_npc",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("不应走 NPC 兜底")))
+    monkeypatch.setattr(map_nav, "_walk_special_coordinate",
+                        lambda *a, **k: (True, "已到达莲花洞 (74,20)"))
+    emits = []
+    ok, info = map_nav.navigate_to_map_coordinate(
+        object(), "莲花洞", 75, 21, log_fn=emits.append)
+    assert ok and "已到达莲花洞" in info
+    assert calls == [("平顶山", 102, 42, "莲花洞", True)]
+    assert any("经平顶山入口" in m for m in emits)
+
+
+def test_navigate_special_falls_back_to_npc_entry(monkeypatch):
+    """入口坐标到达但未自动进门 → 场景地图 NPC 入口兜底。"""
+    pos_seq = [("宝象国", 110, 102), ("平顶山", 102, 42)]
+    monkeypatch.setattr(map_nav, "_read_pos",
+                        lambda win: pos_seq.pop(0) if pos_seq else
+                        ("平顶山", 102, 42))
+    monkeypatch.setattr(map_nav, "_navigate_impl",
+                        lambda *a, **k: (True, "到达 平顶山 (102,42)"))
+    monkeypatch.setattr(map_nav, "_wait_special_enter",
+                        lambda *a, **k: False)
+    monkeypatch.setattr(map_nav, "_enter_special_by_npc",
+                        lambda win, target, entry, emit:
+                        (True, f"已通过 NPC 入口进入{target}"))
+    monkeypatch.setattr(map_nav, "_walk_special_coordinate",
+                        lambda *a, **k: (True, "已到达莲花洞 (75,21)"))
+    emits = []
+    ok, info = map_nav.navigate_to_map_coordinate(
+        object(), "莲花洞", 75, 21, log_fn=emits.append)
+    assert ok and "已到达莲花洞" in info
+    assert any("改走 NPC 入口" in m for m in emits)
+
+
+def test_navigate_special_both_entries_fail(monkeypatch):
+    pos_seq = [("宝象国", 110, 102), ("平顶山", 102, 42)]
+    monkeypatch.setattr(map_nav, "_read_pos",
+                        lambda win: pos_seq.pop(0) if pos_seq else
+                        ("平顶山", 102, 42))
+    monkeypatch.setattr(map_nav, "_navigate_impl",
+                        lambda *a, **k: (False, "开图失败"))
+    monkeypatch.setattr(map_nav, "_enter_special_by_npc",
+                        lambda *a, **k: (False, "未找到入口 NPC"))
+    ok, info = map_nav.navigate_to_map_coordinate(
+        object(), "莲花洞", 75, 21, log_fn=lambda m: None)
+    assert not ok and "莲花洞 进入失败" in info and "未找到入口 NPC" in info
+
+
+def _patch_npc_entry_env(monkeypatch, clicks, emits, start_results):
+    """打桩 NPC 入口兜底的各环节（开图/筛选/定位/点击/起步判定）。"""
+    monkeypatch.setattr(map_nav, "_read_pos",
+                        lambda win: ("平顶山", 94, 35))
+    monkeypatch.setattr(map_nav, "_open_target_map",
+                        lambda *a, **k: (True, "地图已打开"))
+    monkeypatch.setattr(map_nav, "locate_search_bar",
+                        lambda win: {"x": 406, "y": 217})
+    monkeypatch.setattr(map_nav, "_ensure_minimap_putong_filter",
+                        lambda *a, **k: (True, "已勾选"))
+    monkeypatch.setattr(map_nav, "_find_special_entry_npc",
+                        lambda *a, **k: (514, 547))
+    monkeypatch.setattr(map_nav, "human_click",
+                        lambda win, x, y: clicks.append((x, y)))
+    it = iter(start_results)
+    monkeypatch.setattr(map_nav, "_wait_special_start",
+                        lambda *a, **k: next(it, start_results[-1]))
+    monkeypatch.setattr(map_nav, "_wait_special_enter",
+                        lambda *a, **k: True)
+    monkeypatch.setattr(map_nav.game_map, "close_maps",
+                        lambda *a, **k: None)
+
+
+def test_enter_special_by_npc_retries_click_when_not_started(monkeypatch):
+    """首次点击只选中 NPC 未起步（地图仍开）→ 补点一次后起步。"""
+    clicks, emits = [], []
+    _patch_npc_entry_env(monkeypatch, clicks, emits, [False, True])
+    monkeypatch.setattr(map_nav.game_map, "is_mini_map_open",
+                        lambda win: True)
+    monkeypatch.setattr(map_nav.game_map, "is_world_map_open",
+                        lambda win: False)
+    ok, info = map_nav._enter_special_by_npc(
+        object(), "莲花洞", map_nav.special_map_entry("莲花洞"),
+        emits.append)
+    assert ok and "NPC 入口" in info
+    assert clicks == [(514, 547), (514, 547)]
+    assert any("补点一次" in m for m in emits)
+
+
+def test_enter_special_by_npc_no_retry_when_map_closed(monkeypatch):
+    """点击后地图已关闭（过图中）→ 不补点（补点会点到世界画面）。"""
+    clicks, emits = [], []
+    _patch_npc_entry_env(monkeypatch, clicks, emits, [False])
+    monkeypatch.setattr(map_nav.game_map, "is_mini_map_open",
+                        lambda win: False)
+    monkeypatch.setattr(map_nav.game_map, "is_world_map_open",
+                        lambda win: False)
+    ok, info = map_nav._enter_special_by_npc(
+        object(), "莲花洞", map_nav.special_map_entry("莲花洞"),
+        emits.append)
+    assert ok and clicks == [(514, 547)]
+
+
+def test_enter_special_by_npc_fails_when_never_starts(monkeypatch):
+    """地图始终开着且人物不动 → 补点到上限后失败（不无限连点）。"""
+    clicks, emits = [], []
+    _patch_npc_entry_env(monkeypatch, clicks, emits, [False])
+    monkeypatch.setattr(map_nav.game_map, "is_mini_map_open",
+                        lambda win: True)
+    monkeypatch.setattr(map_nav.game_map, "is_world_map_open",
+                        lambda win: False)
+    ok, info = map_nav._enter_special_by_npc(
+        object(), "莲花洞", map_nav.special_map_entry("莲花洞"),
+        emits.append)
+    assert not ok and "未起步" in info
+    assert len(clicks) == map_nav.SPECIAL_CLICK_ATTEMPTS
+
+
+# ---------------- 洞内按坐标步行（无小地图/不用角色名） ----------------
+
+def test_special_settle_pos_returns_final_position(monkeypatch):
+    """到达后等停稳：返回最终 HUD 位置（半路位置会被后续站位替代）。"""
+    monkeypatch.setattr(map_nav.time, "sleep", lambda s: None)
+    monkeypatch.setattr(map_nav, "_special_read_pos",
+                        lambda win: ("火云洞", 74, 22))
+    assert map_nav._special_settle_pos(
+        None, ("火云洞", 74, 22)) == ("火云洞", 74, 22)
+    monkeypatch.setattr(map_nav, "_special_read_pos",
+                        lambda win: ("火云洞", 72, 20))
+    assert map_nav._special_settle_pos(
+        None, ("火云洞", 74, 22)) == ("火云洞", 72, 20)
+
+
+def test_walk_special_coordinate_endpoint_bias_correction(monkeypatch):
+    """无首步校准：终点停稳误差超容差 → 按最终误差修正偏置补一步到位。"""
+    map_nav._CANCEL.clear()
+    B_true = (0.0, 24.7)
+    delta = (4.0, 2.0)          # 模型映射与真实映射的偏差（不靠首步校准）
+    B_model = (B_true[0] + delta[0], B_true[1] + delta[1])
+    state = {"pos": ("莲花洞", 0, 10)}
+    clicks = []
+
+    def fake_click(win, px, py, button="primary"):
+        assert button == "secondary"
+        clicks.append((px, py))
+        state["pos"] = (
+            "莲花洞",
+            int(round(map_nav.SPECIAL_WALK_SX * px + B_true[0])),
+            int(round(map_nav.SPECIAL_WALK_SY * py + B_true[1])))
+
+    class _W:
+        def capture(self, force_activate=False):
+            return object()
+
+    monkeypatch.setattr(map_nav, "human_click", fake_click)
+    monkeypatch.setattr(map_nav.game_map, "read_map_position",
+                        lambda win, img=None: None)
+    monkeypatch.setattr(map_nav, "_special_read_pos",
+                        lambda win: state["pos"])
+    monkeypatch.setattr(map_nav, "_special_model_anchor",
+                        lambda win, target, pos: (
+                            (pos[1] - B_model[0]) / map_nav.SPECIAL_WALK_SX,
+                            (pos[2] - B_model[1]) / map_nav.SPECIAL_WALK_SY))
+    monkeypatch.setattr(map_nav, "_special_self_anchor",
+                        lambda win, emit: None)
+    monkeypatch.setattr(map_nav, "_special_probe",
+                        lambda win, target, emit, deadline: B_model)
+    monkeypatch.setattr(map_nav, "_special_frame_shift",
+                        lambda img0, img1: None)
+    monkeypatch.setattr(map_nav, "_special_wait_step",
+                        lambda win, before, emit:
+                        (state["pos"], state["pos"] != before))
+    monkeypatch.setattr(map_nav, "special_map_route", lambda name: None)
+    monkeypatch.setattr(map_nav, "is_in_battle_frame", lambda img: False)
+    monkeypatch.setattr(map_nav.time, "sleep", lambda s: None)
+    emits = []
+    ok, info = map_nav._walk_special_coordinate(
+        _W(), "莲花洞", 20, 20, emits.append, use_route=False)
+    assert ok and "误差" in info
+    assert abs(state["pos"][1] - 20) <= map_nav.SPECIAL_WALK_TOLERANCE
+    assert abs(state["pos"][2] - 20) <= map_nav.SPECIAL_WALK_TOLERANCE
+    assert any("修正偏置" in m for m in emits)
+
+
+def test_walk_special_coordinate_converges_with_right_click(monkeypatch):
+    """右键小步 + 每步用到达坐标重解 B：无角色名锚点也能收敛到 ±3 格。"""
+    map_nav._CANCEL.clear()
+    true_b = (12.0, 40.0)   # world = M * screen + B
+    state = {"pos": ("莲花洞", 30, 30), "clicks": []}
+
+    def fake_click(win, px, py, button="primary"):
+        assert button == "secondary"       # 用户 2026-11-23：洞内小步用右键
+        state["clicks"].append((px, py))
+        wx = map_nav.SPECIAL_WALK_SX * px + true_b[0]
+        wy = map_nav.SPECIAL_WALK_SY * py + true_b[1]
+        state["pos"] = ("莲花洞", int(round(wx)), int(round(wy)))
+
+    class _W:
+        def capture(self, force_activate=False):
+            return object()
+
+    monkeypatch.setattr(map_nav, "human_click", fake_click)
+    # 主循环先尝试用同一帧读位置（桩帧不是图像 → 返回 None 走重试函数）
+    monkeypatch.setattr(map_nav.game_map, "read_map_position",
+                        lambda win, img=None: None)
+    monkeypatch.setattr(map_nav, "_special_read_pos",
+                        lambda win: state["pos"])
+    monkeypatch.setattr(map_nav, "_special_wait_step",
+                        lambda win, before, emit:
+                        (state["pos"], state["pos"] != before))
+    # 相机位移跟踪：假世界固定 B（无相机滚动）
+    monkeypatch.setattr(map_nav, "_special_probe",
+                        lambda win, target, emit, deadline: true_b)
+    monkeypatch.setattr(map_nav, "_special_self_anchor",
+                        lambda win, emit: None)
+    monkeypatch.setattr(map_nav, "_special_frame_shift",
+                        lambda img0, img1: None)
+    monkeypatch.setattr(map_nav, "is_in_battle_frame", lambda img: False)
+    monkeypatch.setattr(map_nav.time, "sleep", lambda s: None)
+    emits = []
+    ok, info = map_nav._walk_special_coordinate(
+        _W(), "莲花洞", 75, 21, emits.append, use_route=False)
+    assert ok and "误差" in info
+    assert abs(state["pos"][1] - 75) <= map_nav.SPECIAL_WALK_TOLERANCE
+    assert abs(state["pos"][2] - 21) <= map_nav.SPECIAL_WALK_TOLERANCE
+    assert state["clicks"]
+    assert any("洞内步行到达" in m for m in emits)
+
+
+def test_walk_special_coordinate_probe_all_blocked(monkeypatch):
+    """探针无位移 → 明确失败（不空转/不无限连点）。"""
+    map_nav._CANCEL.clear()
+
+    class _W:
+        def capture(self, force_activate=False):
+            return object()
+
+    monkeypatch.setattr(map_nav, "_special_read_pos",
+                        lambda win: ("莲花洞", 30, 30))
+    monkeypatch.setattr(map_nav, "_special_probe",
+                        lambda win, target, emit, deadline: None)
+    monkeypatch.setattr(map_nav, "_special_self_anchor",
+                        lambda win, emit: None)
+    monkeypatch.setattr(map_nav, "is_in_battle_frame", lambda img: False)
+    monkeypatch.setattr(map_nav.time, "sleep", lambda s: None)
+    ok, info = map_nav._walk_special_coordinate(
+        _W(), "莲花洞", 75, 21, lambda m: None, use_route=False)
+    assert not ok and "探针" in info
+
+
+def test_name_hit_fuzzy():
+    """名字标签 OCR 容忍 1 字误识别；短名字只认全等。"""
+    assert map_nav._name_hit("20「可乐可口」", "可乐可口")
+    assert map_nav._name_hit("20「同乐可口」", "可乐可口")   # 实测误识别
+    assert not map_nav._name_hit("独孤剑客", "可乐可口")
+    assert map_nav._name_hit("可乐可口", "可乐可口")
+    assert not map_nav._name_hit("口乐", "可乐")            # 2 字名字不模糊
+    assert map_nav._name_hit("「可乐」", "可乐")
+    assert not map_nav._name_hit("", "可乐可口")
+
+
+def test_name_label_anchor_zoom_crop_mapping(monkeypatch):
+    """2x 裁剪 OCR 命中名字标签：rect 映射回窗口坐标（中心/上沿-3）。"""
+    from PIL import Image
+    img = Image.new("RGB", (1378, 831), (0, 0, 0))
+    calls = {}
+
+    def fake_zoom(crop):
+        calls["size"] = crop.size
+        # crop 是 2x 放大图：rect 坐标是放大图坐标
+        return [("20「同乐可口」", [80, 40, 280, 70], 0.9)], None
+
+    monkeypatch.setattr(map_nav.game_map, "ocr_zoom", fake_zoom)
+    best = map_nav._name_label_anchor(img, "可乐可口",
+                                      box=(100, 200, 500, 400))
+    assert best == (0.9, 190, 217)
+    assert calls["size"] == ((500 - 100) * 2, (400 - 200) * 2)
+
+    # 置信度不足 → None
+    monkeypatch.setattr(
+        map_nav.game_map, "ocr_zoom",
+        lambda crop: ([("20「可乐可口」", [0, 0, 40, 20], 0.3)], None))
+    assert map_nav._name_label_anchor(img, "可乐可口",
+                                      box=(100, 200, 500, 400)) is None
+
+
+def test_special_model_anchor_knn_and_window_guard(monkeypatch):
+    """描边锚点模型：K 近邻加权；窗口尺寸不符/覆盖太远返回 None。"""
+    route = {
+        "trace": [[10, 10], [20, 20]],
+        "self_anchor": {
+            "window": [1378, 831],
+            "samples": [[10, 10, 700, 400], [12, 10, 704, 402],
+                        [30, 30, 800, 500]],
+        },
+    }
+    monkeypatch.setattr(map_nav, "special_map_route",
+                        lambda name: route if name == "莲花洞" else None)
+
+    class _Rect:
+        width, height = 1378, 831
+
+    class _W:
+        rect = _Rect()
+
+    ax, ay = map_nav._special_model_anchor(_W(), "莲花洞",
+                                          ("莲花洞", 11, 10))
+    assert abs(ax - 702) <= 3 and abs(ay - 401) <= 3
+    # 附近没有样品（>12 格）→ None，退回名字锚点/探针
+    assert map_nav._special_model_anchor(
+        _W(), "莲花洞", ("莲花洞", 90, 50)) is None
+
+    class _Rect2:
+        width, height = 1280, 720
+
+    class _W2:
+        rect = _Rect2()
+
+    # 窗口尺寸与采集不一致 → None（锚点是绝对屏幕像素）
+    assert map_nav._special_model_anchor(
+        _W2(), "莲花洞", ("莲花洞", 11, 10)) is None
+    # 无该图/无锚点模型 → None
+    assert map_nav._special_model_anchor(
+        _W(), "平顶山", ("平顶山", 11, 10)) is None
+
+
+def test_walk_special_coordinate_uses_anchor_model_first(monkeypatch):
+    """有描边锚点模型时直接标定 B，不调用名字 OCR / 探针。"""
+    map_nav._CANCEL.clear()
+    true_b = (12.0, 40.0)
+    state = {"pos": ("莲花洞", 30, 30), "clicks": []}
+    calls = {"ocr": 0, "probe": 0}
+
+    def fake_click(win, px, py, button="primary"):
+        assert button == "secondary"
+        state["clicks"].append((px, py))
+        wx = map_nav.SPECIAL_WALK_SX * px + true_b[0]
+        wy = map_nav.SPECIAL_WALK_SY * py + true_b[1]
+        state["pos"] = ("莲花洞", int(round(wx)), int(round(wy)))
+
+    class _W:
+        def capture(self, force_activate=False):
+            return object()
+
+    monkeypatch.setattr(map_nav, "human_click", fake_click)
+    monkeypatch.setattr(map_nav.game_map, "read_map_position",
+                        lambda win, img=None: None)
+    monkeypatch.setattr(map_nav, "_special_read_pos",
+                        lambda win: state["pos"])
+    monkeypatch.setattr(map_nav, "_special_wait_step",
+                        lambda win, before, emit:
+                        (state["pos"], state["pos"] != before))
+    monkeypatch.setattr(map_nav, "_special_model_anchor",
+                        lambda win, target, pos: (
+                            (pos[1] - true_b[0]) / map_nav.SPECIAL_WALK_SX,
+                            (pos[2] - true_b[1]) / map_nav.SPECIAL_WALK_SY))
+    monkeypatch.setattr(map_nav, "_special_self_anchor",
+                        lambda win, emit: calls.__setitem__(
+                            "ocr", calls["ocr"] + 1) or (700.0, 400.0))
+    monkeypatch.setattr(map_nav, "_special_probe",
+                        lambda win, target, emit, deadline:
+                        calls.__setitem__(
+                            "probe", calls["probe"] + 1) or true_b)
+    monkeypatch.setattr(map_nav, "_special_frame_shift",
+                        lambda img0, img1: None)
+    monkeypatch.setattr(map_nav, "is_in_battle_frame", lambda img: False)
+    monkeypatch.setattr(map_nav.time, "sleep", lambda s: None)
+    emits = []
+    ok, info = map_nav._walk_special_coordinate(
+        _W(), "莲花洞", 75, 21, emits.append, use_route=False)
+    assert ok and "误差" in info
+    assert abs(state["pos"][1] - 75) <= map_nav.SPECIAL_WALK_TOLERANCE
+    assert abs(state["pos"][2] - 21) <= map_nav.SPECIAL_WALK_TOLERANCE
+    assert calls == {"ocr": 0, "probe": 0}
+    assert any("描边锚点模型" in m for m in emits)
+
+
+def test_walk_special_coordinate_stops_within_tolerance(monkeypatch):
+    """已在 ±3 格内：不点击，直接成功（用户 2026-11-23 确认容差）。"""
+    map_nav._CANCEL.clear()
+    clicks = []
+    monkeypatch.setattr(map_nav, "human_click",
+                        lambda *a, **k: clicks.append(1))
+    monkeypatch.setattr(map_nav, "_special_read_pos",
+                        lambda win: ("莲花洞", 74, 22))
+    monkeypatch.setattr(map_nav, "_special_wait_step",
+                        lambda *a, **k: (("莲花洞", 74, 22), False))
+    monkeypatch.setattr(map_nav, "is_in_battle_frame", lambda img: False)
+    monkeypatch.setattr(map_nav.time, "sleep", lambda s: None)
+
+    class _W:
+        def capture(self, force_activate=False):
+            return object()
+
+    ok, info = map_nav._walk_special_coordinate(
+        _W(), "莲花洞", 75, 21, lambda m: None, use_route=False)
+    assert ok and "已到达莲花洞" in info and clicks == []
+
+
+def test_set_minimap_putong_filter_unchecks_when_checked(monkeypatch):
+    """入口坐标寻路前取消「普通」（防止入口点附近 NPC 名吃掉点击）。"""
+    clicks = []
+    monkeypatch.setattr(map_nav, "human_click",
+                        lambda win, x, y: clicks.append((x, y)))
+    states = iter([True, False])
+    monkeypatch.setattr(map_nav, "_checkbox_checked",
+                        lambda img, cx, cy: next(states))
+    monkeypatch.setattr(map_nav.time, "sleep", lambda s: None)
+
+    class _W:
+        def capture(self, force_activate=False):
+            return object()
+
+    ok, info = map_nav._set_minimap_putong_filter(
+        _W(), {"x": 406, "y": 217}, False, lambda m: None)
+    assert ok and "已取消" in info
+    assert clicks == [(438, 669)]   # (406+32, 217+452)
+
+
+def test_start_impl_unchecks_putong_only_when_requested(monkeypatch):
+    """uncheck_putong=True 才取消「普通」；普通导航不碰筛选状态。"""
+    _patch_start_env(monkeypatch)
+    calls = []
+    monkeypatch.setattr(
+        map_nav, "_set_minimap_putong_filter",
+        lambda win, bar, want, emit:
+        calls.append((bar["x"], bar["y"], want)) or (True, "已取消"))
+    ok, _info, _ctx = map_nav._start_impl(
+        object(), "平顶山", 102, 42, lambda m: None, uncheck_putong=True)
+    assert ok and calls == [(100, 200, False)]
+
+    calls.clear()
+    ok, _info, _ctx = map_nav._start_impl(
+        object(), "平顶山", 102, 42, lambda m: None)
+    assert ok and calls == []
+
+
+def test_special_frame_shift_measures_camera_scroll():
+    """相位相关测相机位移：合成随机纹理平移 (20,15) 应读回同值。"""
+    from PIL import Image
+    rng = np.random.default_rng(20261123)
+    arr = (rng.random((831, 1378)) * 255).astype(np.uint8)
+    arr = np.stack([arr, arr, arr], axis=2)
+    moved = np.roll(arr, shift=(15, 20), axis=(0, 1))
+    s = map_nav._special_frame_shift(Image.fromarray(arr, "RGB"),
+                                     Image.fromarray(moved, "RGB"))
+    assert s is not None
+    dx, dy, resp = s
+    assert abs(dx - 20) < 1.5 and abs(dy - 15) < 1.5
+    assert resp >= map_nav.SPECIAL_WALK_SHIFT_MIN_RESP
+
+
+def test_special_apply_shift_updates_b():
+    """B_new = B - M*shift（屏幕向上 = 世界 y 增大，符号不得写反）。"""
+    B = (10.0, 20.0)
+    B2 = map_nav._special_apply_shift(B, (100.0, -50.0))
+    assert B2 == (10.0 - map_nav.SPECIAL_WALK_SX * 100.0,
+                  20.0 - map_nav.SPECIAL_WALK_SY * -50.0)
+    assert map_nav._special_apply_shift(B, None) == B
+    assert map_nav._special_apply_shift(None, (1, 2)) is None
+
+
+# ---------------- 特殊地图探图路网 ----------------
+
+_ROUTE = {
+    "center": [57, 26],
+    "arms": {
+        "1,-1": [[57, 26], [65, 18], [74, 9]],
+        "-1,1": [[57, 26], [50, 33], [41, 41], [32, 49], [23, 57]],
+        "-1,-1": [[57, 26], [49, 18], [40, 9]],
+        "1,1": [[57, 26], [63, 31], [72, 39], [81, 47], [85, 55]],
+    },
+}
+
+
+def test_special_route_waypoints_same_arm():
+    """同臂：沿臂节点走到目标最近节点，最后追加目标坐标。"""
+    wps = map_nav._special_route_waypoints(
+        _ROUTE, ("莲花洞", 60, 24), 30, 56)
+    assert wps[0] == (57, 26)
+    assert wps[-1] == (30, 56)
+    assert (50, 33) in wps and (41, 41) in wps and (23, 57) in wps
+
+
+def test_special_route_waypoints_cross_arm_via_center():
+    """跨臂：当前臂回中心，再沿目标臂走（不穿越空洞）。"""
+    wps = map_nav._special_route_waypoints(
+        _ROUTE, ("莲花洞", 70, 10), 30, 56)
+    assert (74, 9) in wps and (65, 18) in wps
+    assert (57, 26) in wps
+    assert (23, 57) in wps
+    assert wps[-1] == (30, 56)
+
+
+def test_special_route_waypoints_off_route_returns_none():
+    """目标离最近臂节点太远（不在十字臂上）→ 不按路网走。"""
+    assert map_nav._special_route_waypoints(
+        _ROUTE, ("莲花洞", 57, 26), 0, 0) is None
+
+
+def test_special_map_route_role_data_priority(monkeypatch):
+    """角色数据路网优先于内置表；中心/臂缺失视为无效。"""
+    monkeypatch.setattr(
+        map_nav, "_load_builtin_routes",
+        lambda: {"maps": {"莲花洞": {"center": [1, 2],
+                                     "arms": {"1,1": [[1, 2]]}}}})
+    monkeypatch.setattr(
+        map_nav, "_ROUTE_TABLE", None)
+    from src.core import user_data
+    monkeypatch.setattr(
+        user_data, "read_special_map_routes",
+        lambda role=None, path=None: {"maps": {"莲花洞": {
+            "center": [57, 26], "arms": {"-1,1": [[57, 26]]}}}})
+    route = map_nav.special_map_route("莲花洞")
+    assert route["center"] == [57, 26]
+    monkeypatch.setattr(user_data, "read_special_map_routes",
+                        lambda role=None, path=None: {})
+    route2 = map_nav.special_map_route("莲花洞")
+    assert route2["center"] == [1, 2]
+    assert map_nav.special_map_route("不存在") is None
+
+
+def test_special_trace_boundary_inside_direct():
+    """描边边界内：直接到目标（不再沿描边绕一圈）。"""
+    route = {"boundary": [[0, 0], [10, 0], [10, 10], [0, 10]]}
+    wps = map_nav._special_route_waypoints(
+        route, ("莲花洞", 2, 2), 5, 5)
+    assert wps == [(5, 5)]
+    # 边界上（容差内）也算可走
+    assert map_nav._special_route_waypoints(
+        route, ("莲花洞", 2, 2), 10, 5) == [(10, 5)]
+
+
+def test_special_trace_boundary_outside_clamped():
+    """描边外：落到边界最近可走点（避免点进空洞）。"""
+    route = {"boundary": [[0, 0], [10, 0], [10, 10], [0, 10]]}
+    assert map_nav._special_route_waypoints(
+        route, ("莲花洞", 2, 2), 15, 5) == [(10, 5)]
+    wps = map_nav._special_route_waypoints(
+        route, ("莲花洞", 2, 2), 15, 15)
+    assert wps == [(10, 10)]
+
+
+def test_special_trace_boundary_nonconvex_void():
+    """非凸十字边界：臂内可走、两臂之间的空洞判为外部。"""
+    plus = [[10, 0], [20, 0], [20, 10], [30, 10], [30, 20], [20, 20],
+            [20, 30], [10, 30], [10, 20], [0, 20], [0, 10], [10, 10]]
+    route = {"boundary": plus}
+    # 上方臂内
+    assert map_nav._special_route_waypoints(
+        route, ("莲花洞", 15, 25), 15, 25) == [(15, 25)]
+    # 右上空洞角（两臂之间）
+    wps = map_nav._special_route_waypoints(
+        route, ("莲花洞", 15, 25), 25, 25)
+    assert wps != [(25, 25)]
+    x, y = wps[0]
+    assert x <= 20 or y <= 20
+
+
+def test_special_trace_segment_crosses_void_uses_boundary_grid_route():
+    """两端都在描边内、直线穿两臂间空洞 → 边界内栅格 A* 绕行。"""
+    boundary = [[0, 0], [15, 0], [15, 10], [12, 10], [12, 3],
+                [3, 3], [3, 10], [0, 10]]
+    route = {"boundary": boundary,
+             "trace": [[1, 8], [1, 1], [13, 1], [13, 8]]}
+    assert map_nav._special_boundary_contains(boundary, 1, 8)
+    assert map_nav._special_boundary_contains(boundary, 13, 8)
+    # U 形两臂之间是空洞：直线 (1,8)→(13,8) 不全程在边界内
+    assert not map_nav._special_segment_inside(boundary, (1, 8), (13, 8))
+    wps = map_nav._special_route_waypoints(
+        route, ("莲花洞", 1, 8), 13, 8)
+    assert len(wps) > 1                      # 不再直线穿空洞
+    for wx, wy in wps:                       # 途经点全部在描边内
+        assert map_nav._special_boundary_contains(boundary, wx, wy)
+    assert min(wy for _wx, wy in wps) <= 3   # 下到 U 形底部绕上去
+    assert wps[-1] == (13, 8)
+    # 同侧短线仍然直接走
+    assert map_nav._special_route_waypoints(
+        route, ("莲花洞", 1, 8), 1, 6) == [(1, 6)]
+
+
+def test_special_segment_portal_avoidance():
+    """传送光圈：两端在外时线段不得穿过；端点落在光圈内放行。"""
+    boundary = [[0, 0], [20, 0], [20, 20], [0, 20]]
+    portal = (10, 10)
+    assert not map_nav._special_segment_inside(
+        boundary, (1, 1), (19, 19), portal=portal)
+    assert map_nav._special_segment_inside(
+        boundary, (1, 1), (19, 1), portal=portal)      # 不经过光圈
+    assert map_nav._special_segment_inside(
+        boundary, (10, 10), (19, 19), portal=portal)   # 从光圈里走出
+    assert map_nav._special_segment_inside(
+        boundary, (1, 1), (10, 10), portal=portal)     # 目标就是光圈
+
+
+def test_special_route_avoids_portal():
+    """直线穿光圈 → 改走绕开光圈的边界栅格 A* 路线。"""
+    boundary = [[0, 0], [20, 0], [20, 20], [0, 20]]
+    route = {"boundary": boundary,
+             "trace": [[1, 1], [19, 1], [19, 19], [1, 19]]}
+    portal = (10, 10)
+    wps = map_nav._special_route_waypoints(
+        route, ("莲花洞", 1, 1), 19, 19, portal=portal)
+    assert len(wps) > 1
+    r = map_nav.SPECIAL_PORTAL_AVOID_R
+    prev = (1, 1)
+    for wp in wps:
+        assert (wp[0] - 10) ** 2 + (wp[1] - 10) ** 2 > r * r
+        assert map_nav._special_segment_inside(
+            boundary, prev, wp, portal=portal)
+        prev = wp
+
+
+def test_walk_special_coordinate_direct_stuck_rescues_to_trace(monkeypatch):
+    """直线导航长时间无进展（原地小幅抖动）→ 自动改走描边路网绕行。"""
+    map_nav._CANCEL.clear()
+    monkeypatch.setattr(map_nav, "SPECIAL_WALK_DIRECT_STUCK_TIME", -1.0)
+    B_true = (0.0, 24.7)
+    state = {"pos": ("莲花洞", 1, 1)}
+    route = {"boundary": [[0, 0], [20, 0], [20, 20], [0, 20]],
+             "trace": [[1, 1], [19, 1], [19, 19], [1, 19]]}
+
+    def fake_click(win, px, py, button="primary"):
+        wx = map_nav.SPECIAL_WALK_SX * px + B_true[0]
+        wy = map_nav.SPECIAL_WALK_SY * py + B_true[1]
+        # 只有沿描边路网（下边 y≈1 / 右边 x≈19）的点击才移动；
+        # 沿直线对角的点击不动（模拟被局部障碍卡住、原地抖动）
+        if abs(wy - 1) <= 2 or abs(wx - 19) <= 2:
+            state["pos"] = ("莲花洞", int(round(wx)), int(round(wy)))
+
+    class _W:
+        def capture(self, force_activate=False):
+            return object()
+
+    monkeypatch.setattr(map_nav, "human_click", fake_click)
+    monkeypatch.setattr(map_nav.game_map, "read_map_position",
+                        lambda win, img=None: None)
+    monkeypatch.setattr(map_nav, "_special_read_pos",
+                        lambda win: state["pos"])
+    monkeypatch.setattr(map_nav, "_special_probe",
+                        lambda win, target, emit, deadline: B_true)
+    monkeypatch.setattr(map_nav, "_special_self_anchor",
+                        lambda win, emit: None)
+    monkeypatch.setattr(map_nav, "_special_model_anchor",
+                        lambda win, target, pos: None)
+    monkeypatch.setattr(map_nav, "_special_frame_shift",
+                        lambda img0, img1: None)
+    monkeypatch.setattr(map_nav, "_special_wait_step",
+                        lambda win, before, emit: (state["pos"], False))
+    monkeypatch.setattr(map_nav, "special_map_route", lambda name: route)
+    monkeypatch.setattr(map_nav, "is_in_battle_frame", lambda img: False)
+    monkeypatch.setattr(map_nav.time, "sleep", lambda s: None)
+    emits = []
+    ok, info = map_nav._walk_special_coordinate(
+        _W(), "莲花洞", 19, 19, emits.append)
+    assert ok and "误差" in info
+    assert any("改走描边路网绕行" in m for m in emits)
+    assert abs(state["pos"][1] - 19) <= map_nav.SPECIAL_WALK_TOLERANCE
+    assert abs(state["pos"][2] - 19) <= map_nav.SPECIAL_WALK_TOLERANCE
+
+
+def test_special_route_validation_accepts_trace_only():
+    """只有人工描边轨迹（无中心/臂）也是有效路网。"""
+    assert map_nav._valid_special_route(
+        {"trace": [[0, 0], [1, 1]]}) is not None
+    assert map_nav._valid_special_route({"trace": [[0, 0]]}) is None
+
+
+def test_walk_special_coordinate_visible_nav_skips_unreachable_waypoint(monkeypatch):
+    """可见性导航：更远的途经点在屏幕内就直接点它，跳过中间不可达的点。"""
+    map_nav._CANCEL.clear()
+    B_true = (0.0, 24.7)
+    state = {"pos": ("莲花洞", 0, 10)}
+    clicks = []
+
+    def fake_click(win, px, py, button="primary"):
+        clicks.append((px, py))
+        wx = map_nav.SPECIAL_WALK_SX * px + B_true[0]
+        wy = map_nav.SPECIAL_WALK_SY * py + B_true[1]
+        # 只有点到终目标 (10,10) 附近才移动；中间点 (5,10) 不可直达
+        if abs(wx - 10) <= 0.8 and abs(wy - 10) <= 0.8:
+            state["pos"] = ("莲花洞", int(round(wx)), int(round(wy)))
+
+    class _W:
+        def capture(self, force_activate=False):
+            return object()
+
+    monkeypatch.setattr(map_nav, "human_click", fake_click)
+    monkeypatch.setattr(map_nav.game_map, "read_map_position",
+                        lambda win, img=None: None)
+    monkeypatch.setattr(map_nav, "_special_read_pos",
+                        lambda win: state["pos"])
+    monkeypatch.setattr(map_nav, "_special_probe",
+                        lambda win, target, emit, deadline: B_true)
+    monkeypatch.setattr(map_nav, "_special_self_anchor",
+                        lambda win, emit: None)
+    monkeypatch.setattr(map_nav, "_special_frame_shift",
+                        lambda img0, img1: None)
+    monkeypatch.setattr(map_nav, "_special_wait_step",
+                        lambda win, before, emit:
+                        (state["pos"], state["pos"] != before))
+    monkeypatch.setattr(map_nav, "special_map_route",
+                        lambda name: {"center": [0, 10],
+                                      "arms": {"1,0": [[0, 10], [5, 10],
+                                                       [10, 10]]}})
+    monkeypatch.setattr(map_nav, "is_in_battle_frame", lambda img: False)
+    monkeypatch.setattr(map_nav.time, "sleep", lambda s: None)
+    emits = []
+    ok, info = map_nav._walk_special_coordinate(
+        _W(), "莲花洞", 10, 10, emits.append)
+    assert ok and "误差" in info
+    assert abs(state["pos"][1] - 10) <= map_nav.SPECIAL_WALK_TOLERANCE
+    assert abs(state["pos"][2] - 10) <= map_nav.SPECIAL_WALK_TOLERANCE
+    # 首点直接选最远可见的 (10,10)（无首步校准，屏幕 ≈208,300），跳过 (5,10)
+    assert clicks and abs(clicks[0][0] - 208) <= 6 and abs(clicks[0][1] - 300) <= 6
+    assert any("途经点 (10,10)" in m for m in emits)

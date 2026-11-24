@@ -145,6 +145,23 @@ def test_wubei_manual_nav_default_and_roundtrip():
     assert load_wubei_manual_nav() is True
 
 
+def test_wubei_force_manual_default_off_and_roundtrip():
+    """五倍强制手动寻路（测试用，与修罗同款）：方案快照注册键、
+    首次默认关闭、保存可读回。"""
+    from src.core import schemes
+    from src.core.settings import (
+        _WUBEI_FORCE_MANUAL_KEY, load_wubei_force_manual,
+        save_wubei_force_manual,
+    )
+    spec = schemes._settings_spec()
+    assert spec[_WUBEI_FORCE_MANUAL_KEY] is False
+    assert load_wubei_force_manual() is False
+    assert save_wubei_force_manual(True)["status"] == "success"
+    assert load_wubei_force_manual() is True
+    assert save_wubei_force_manual(False)["status"] == "success"
+    assert load_wubei_force_manual() is False
+
+
 def test_settings_spec_kick_away_defaults(monkeypatch):
     """暂离超时自动请离开关/分钟（修罗/五倍各一套）：方案快照默认开启、
     默认 5 分钟；load_* 首次默认与 spec 一致；保存越界拒绝。"""

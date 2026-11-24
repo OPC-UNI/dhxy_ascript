@@ -966,6 +966,24 @@ def save_wubei_manual_nav(on):
     return {"status": "success"}
 
 
+# ---- 五倍强制手动寻路（UI 开关，角色设置持久化，默认关闭。
+#      即使有任务追踪（快捷寻路可用）也强制走手动寻路——打开任务栏
+#      识别降魔任务并手动寻路；开启时视同打开兼容无快捷寻路。实现见
+#      wubei.run_loop 的 manual_enabled / force_manual 分支） ----
+_WUBEI_FORCE_MANUAL_KEY = "wubei_force_manual"
+
+
+def load_wubei_force_manual():
+    """读取五倍强制手动寻路开关（首次默认关闭）。"""
+    return bool(role_settings.get(_WUBEI_FORCE_MANUAL_KEY, False))
+
+
+def save_wubei_force_manual(on):
+    """保存五倍强制手动寻路开关，返回操作结果。"""
+    role_settings.set_value(_WUBEI_FORCE_MANUAL_KEY, bool(on))
+    return {"status": "success"}
+
+
 # ---- 组号专用（UI 开关，修罗/五倍/种族比武各一，角色设置持久化，默认开启；
 #      一个窗口内多个登录 Tab 视为一组号：队长带队，队员 Tab 自动挂
 #      战斗/巫医/补血蓝，实现见 src/device/tab_group.py。单号（已登录 Tab<2）

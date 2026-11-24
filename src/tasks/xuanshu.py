@@ -539,9 +539,13 @@ def navigate_to_task(win):
 
 
 
-def _play_jiguan_puzzle(win, title):
-    """封印机关破解：阻塞循环在 minigames/jiguan.py，任务侧保留薄包装。"""
-    return _jiguan_minigame.play(win, prefix=title)
+def _play_jiguan_puzzle(win, title, hint_text=""):
+    """封印机关破解：阻塞循环在 minigames/jiguan.py，任务侧保留薄包装。
+
+    hint_text 为任务追踪面板 OCR 文本：描述首句是机关颜色提示
+    （玄黄→黄 / 赤锋→红，2026-11-23/24 实机标定），供破解时优先点。
+    """
+    return _jiguan_minigame.play(win, prefix=title, hint_text=hint_text)
 
 
 
@@ -790,7 +794,8 @@ def _follow_wait_handler(win, items, img_np, img):
     if _diaoyu_window_check(win, img, TASK_TITLE):
         return True
     if _dialog_text_present(items, JIGUAN_DIALOG_TEXT):
-        ok2, info2 = _play_jiguan_puzzle(win, TASK_TITLE)
+        hint_text = "".join(t for t, _box, _score in items)
+        ok2, info2 = _play_jiguan_puzzle(win, TASK_TITLE, hint_text=hint_text)
         log(f"[{TASK_TITLE}] {info2}", "SYS" if ok2 else "WARN")
         return True
     # 锄遗聚宝面板标题：条带匹配（2026-11-16 实测 0.9ms vs 全帧 46ms；

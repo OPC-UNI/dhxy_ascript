@@ -4,7 +4,7 @@
 1. 映射目标真实存在于 core.settings；
 2. 所有方法在 mixin/ControlWindow 上可解析且归属正确（callPython 名不变，
    且不得在 ControlWindow 类体重复定义形成两份实现）；
-3. 纯转发：函数体是单条 `return settings_module.<同名>(...)`，57 个转发
+3. 纯转发：函数体是单条 `return settings_module.<同名>(...)`，58 个转发
    逐一验证参数原样到达 core.settings、返回值原样透传；
 4. 「运行中拒绝修改」守卫经 ControlWindow 的解析路径生效。
 """
@@ -34,7 +34,7 @@ def test_site_coord_nav_default_on_and_toggle():
 
 
 def test_delegates_target_real_settings_functions():
-    assert len(DELEGATE_NAMES) == 57
+    assert len(DELEGATE_NAMES) == 58
     for name in DELEGATE_NAMES:
         assert callable(getattr(settings, name)), name
 

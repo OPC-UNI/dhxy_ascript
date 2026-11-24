@@ -124,6 +124,10 @@ class SettingsApiMixin(ControlHost):
         """五倍设置变更：保存兼容无快捷寻路开关状态。"""
         return settings_module.save_wubei_manual_nav(on)
 
+    def save_wubei_force_manual(self, on):
+        """五倍设置变更：保存强制手动寻路（忽略快捷寻路）开关状态。"""
+        return settings_module.save_wubei_force_manual(on)
+
     def save_wubei_repair_interval(self, value):
         """五倍设置变更：保存自动修理间隔（场战斗）。"""
         return settings_module.save_wubei_repair_interval(value)

@@ -937,9 +937,14 @@ def test_manual_nav_round_reclaim_fails_fast(monkeypatch):
     nav = []
     monkeypatch.setattr(wubei, "_manual_navigate",
                         lambda w, m, c: nav.append(1) or (True, "ok"))
+    wubei._manual_reclaim_pending = False
     ok, info = wubei._manual_nav_round(
         _FakeWin(), pre_result={"recognition": _manual_rec("reclaim")})
     assert ok is False and "重新领取" in info and nav == []
+    # 强制手动寻路时任务一直在追踪：置重领标志，下一轮走领取/替换分支，
+    # 防每轮手动回合空转（暗雷/锁妖网无法手动推进）
+    assert wubei._manual_reclaim_pending is True
+    wubei._manual_reclaim_pending = False  # 复位，防跨测试污染
 
 
 def test_claim_task_replace_allows_existing_task(monkeypatch):

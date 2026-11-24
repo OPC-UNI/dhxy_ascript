@@ -88,6 +88,7 @@ from ..core.settings import (load_task_counts,  # 任务次数上限
                              load_wubei_repair_interval,  # 五倍设置：自动修理间隔（场战斗）
                              load_wubei_kuimulang_switch,  # 五倍设置：领取奎木狼任务开关
                              load_wubei_manual_nav,  # 五倍设置：兼容无快捷寻路
+                             load_wubei_force_manual,  # 五倍设置：强制手动寻路
                              load_wubei_tab_group)  # 五倍设置：组号专用开关
 from ..device.dialog_common import (SCREEN_CENTER_POS, green_option_center,
                             green_option_row_present,
@@ -357,6 +358,7 @@ XJ_BLOCK_DIALOGS = (
     ("这是喜还是忧，我也说不准了", None, "喜忧"),
     ("我是红孩儿，不是哪吒", None, "红孩儿"),
     ("我爹是平天大圣牛魔王，我不坑爹", None, "红孩儿"),
+    ("唐僧肉唐僧肉", None, "金角大王"),
     (XJ_WUBEN_DIALOG_TEXT, XJ_WUBEN_OPTION, "无本买卖"),
 )
 XJ_BLOCK_CLOSE_WAIT = 1.5   # 误点对话框选项点击后的关闭等待（秒）：关闭动画期
@@ -538,6 +540,8 @@ _battle_failed_reason = None    # 战斗失败原因（None=未失败；"task"=�
                                 # 2026-11-14：五倍不取消任务，直接重新领取替换）
 _battle_failed_reclaim = False  # 战斗失败恢复完成：下一轮强制走领取/替换分支
                                 # （旧任务仍在追踪，不能按续跑继续跟踪）
+_manual_reclaim_pending = False  # 手动寻路无法推进（暗雷/锁妖网或回合失败）：
+                                # 下一轮强制走领取/替换分支，防每轮手动回合空转
 _battle_recovery_pending = False  # 战斗失败恢复未完成（回宝象国失败）：下一轮
                                 # 先重试恢复，不得回到任务跟踪（旧任务仍在
                                 # 追踪，继续跟踪会反复打同一任务）
@@ -2460,7 +2464,7 @@ def _manual_kill_round(win, rec):
 
 
 def _manual_nav_round(win, pre_result=None):
-    """无任务追踪的五倍手动寻路回合（兼容无快捷寻路）。
+    """五倍手动寻路回合（兼容无快捷寻路；强制手动寻路时同样走本链路）。
 
     打开任务栏（Alt+Q）读取当前降魔任务并按识别结果手动寻路：
     - kill/huangpao：交给 _manual_kill_round 按日志实测次数连续战斗
@@ -2470,10 +2474,13 @@ def _manual_nav_round(win, pre_result=None):
       白龙马对话框/模板候选开打；A 处未完成则去 B；
     - reclaim（暗雷/锁妖网）：不开打，返回失败交主循环重新领取替换。
     pre_result：run_loop 领取后预读的任务栏结果（避免重复读一次）。
+    预走路（用户 2026-11-24）：任务栏确认任务需执行后首次 `_manual_navigate`
+    进入 map_nav 导航时自动预走（宝象国 75,135，PREWALK_POINTS/模式识别
+    在 map_nav 内；本轮自动巫医时由 run_loop 整轮抑制，巫医后再出发不预走）。
     返回 (ok, info)；ok=True 表示任务已完成且 _fight_via_kanda 已置位，
     主循环继续走返程；ok=False 由主循环做失败恢复/重新领取。
     """
-    global _fight_via_kanda
+    global _fight_via_kanda, _manual_reclaim_pending
     _fight_via_kanda = False
     xj_leg = 0
     result = pre_result
@@ -2497,6 +2504,9 @@ def _manual_nav_round(win, pre_result=None):
         if not _manual_close_task_panel(win):
             return False, "关闭任务栏失败，无法开始手动寻路"
         if kind == demon_task.KIND_RECLAIM:
+            # 暗雷/锁妖网无法手动推进：置位下一轮强制重新领取替换，
+            # 防强制手动寻路时任务一直在追踪、每轮手动回合空转
+            _manual_reclaim_pending = True
             return False, f"任务需重新领取替换: {rec.get('reclaim_reason')}"
         map_name = rec.get("map")
         if not map_name:
@@ -3700,7 +3710,7 @@ def run_loop(win, cycle_interval=1.0):
     """
     global _fight_via_kanda, _battle_failed_reason, _battle_failed_reclaim, \
         _battle_recovery_pending, _team_checked, _task_gone_last_round, \
-        _xj_need_replace, \
+        _xj_need_replace, _manual_reclaim_pending, \
         _replace_fail_streak, _hpg_task_seen, _shout_text, _returned_last_round, \
         _kuimulang_on, _last_replace_at
     max_rounds = load_task_counts().get(TASK_MODE, 0)
@@ -3732,9 +3742,16 @@ def run_loop(win, cycle_interval=1.0):
     # 任务追踪面板没有降魔任务时，打开任务栏（Alt+Q）识别任务目标并
     # 手动寻路；有追踪时完全走原 follow 流程，不受影响
     manual_nav = load_wubei_manual_nav()
+    # 强制手动寻路（五倍设置，默认关闭，测试用；与修罗同款）：即使有
+    # 任务追踪（快捷寻路可用）也走手动寻路；开启时视同打开兼容无快捷寻路
+    force_manual = load_wubei_force_manual()
+    manual_enabled = manual_nav or force_manual
+    if force_manual and not manual_nav:
+        log("[五倍] 强制手动寻路已开启（兼容无快捷寻路开关关闭，"
+            "按开启处理）", "SYS")
     log(f"[五倍] 兼容无快捷寻路: "
-        f"{'开（无任务追踪时打开任务栏手动寻路）' if manual_nav else '关'}",
-        "SYS")
+        f"{'开（无任务追踪时打开任务栏手动寻路）' if manual_enabled else '关'}"
+        + ("；强制手动寻路: 开（忽略任务追踪）" if force_manual else ""), "SYS")
     # 领取奎木狼任务开关（五倍设置，默认开）：关闭时追踪文案含奎木狼
     # 即重新领取替换（逻辑同锁妖网——跟随期检查共用此全局，免每轮询
     # 读 KeyValue）
@@ -3883,7 +3900,7 @@ def run_loop(win, cycle_interval=1.0):
             #    续跑时检查（进程首轮或上轮跟踪失败未确认完成）
             claim_items = None  # 领取校验帧（续跑路径无，跟踪首轮自行截图+OCR）
             repair_round = False  # 本轮是否执行了自动修理（续跑路径不修理）
-            manual_round = False  # 本轮是否走无追踪手动寻路（兼容无快捷寻路）
+            manual_round = False  # 本轮是否走手动寻路（兼容无快捷寻路/强制手动寻路）
             manual_result = None  # 领取后预读的任务栏识别结果
             # 锁妖网捕捉/奎木狼开关关闭/显形镜按钮恢复失败：即使追踪中
             # 已有任务也走领取分支重新领取替换（用户 2026-10-11 确认
@@ -3901,14 +3918,25 @@ def run_loop(win, cycle_interval=1.0):
             _xj_need_replace = False  # 消费替换请求（本轮走领取分支）
             battle_replace = _battle_failed_reclaim
             _battle_failed_reclaim = False  # 消费战斗失败请求（本轮重新领取）
+            manual_reclaim = _manual_reclaim_pending
+            _manual_reclaim_pending = False  # 消费手动寻路重领请求
             kuimulang_replace = kuimulang and not _kuimulang_on
-            need_replace = task_exists and (suoyaowang or kuimulang_replace
-                                            or xj_replace or battle_replace)
+            need_replace = (task_exists and (suoyaowang or kuimulang_replace
+                                             or xj_replace or battle_replace)) \
+                or manual_reclaim
             if task_exists and not need_replace:
                 # 续跑：非对话开打进入（契约：仅对话开打战斗结束才返程，
                 # 否则黄袍怪多杀第 2/3 杀遭遇战后会误返程——审计问题 4）
                 _fight_via_kanda = False
-                log("[五倍] 任务追踪中已有五倍任务，直接跟踪", "SYS")
+                if force_manual:
+                    # 强制手动寻路：有追踪也忽略快捷寻路，手动回合开头
+                    # 自行读任务栏（pre_result=None）；手动链路无法推进
+                    # 的暗雷/锁妖网由 _manual_nav_round 置重领标志
+                    manual_round = True
+                    log("[五倍][手动] 强制手动寻路：忽略任务追踪，"
+                        "直接走任务栏手动寻路", "SYS")
+                else:
+                    log("[五倍] 任务追踪中已有五倍任务，直接跟踪", "SYS")
             else:
                 if need_replace:
                     # 连续重领间隔（用户 2026-10-29）：距上次替换领取不足
@@ -3928,6 +3956,9 @@ def run_loop(win, cycle_interval=1.0):
                             f"领取奎木狼开关关闭），重新领取替换任务", "WARN")
                     elif battle_replace:
                         log("[五倍] 战斗失败，重新领取替换任务", "WARN")
+                    elif manual_reclaim:
+                        log("[五倍][手动] 手动寻路无法推进（暗雷/锁妖网"
+                            "或回合失败），重新领取替换任务", "WARN")
                     else:
                         log("[五倍] 显形镜任务按钮点击失败，重新领取替换任务", "WARN")
                 if _task_gone_last_round:
@@ -4062,7 +4093,7 @@ def run_loop(win, cycle_interval=1.0):
                 ok, info, claim_items = _claim_task(
                     win, allow_fill=check_team, allow_existing=need_replace,
                     create_team_if_missing=pending_create,
-                    manual_nav=manual_nav)
+                    manual_nav=manual_enabled)
                 if not ok:
                     # 战斗失败重领的领取失败不累计替换失败上限（同普通
                     # 领取失败：下轮重试，不因连续失败终止整个任务）
@@ -4110,18 +4141,28 @@ def run_loop(win, cycle_interval=1.0):
                 # 确认帧模板分达标时同帧直接取消（与修罗同款优化）
                 _dismiss_claim_dialog_after_claim(
                     win, score=_claim_confirm_dlg_score)
-                # 兼容无快捷寻路（用户 2026-11-23）：领取成功但任务追踪
-                # 面板没有降魔任务 → 先打开任务栏读取任务目标。暗雷/
-                # 锁妖网任务直接下一轮重领（不做无谓的巫医/修理行程，
-                # 与 2026-11-23 修理顺序修正一致）；有效任务记下识别结果，
-                # 巫医/修理之后走手动寻路。
+                # 兼容无快捷寻路（用户 2026-11-23）/强制手动寻路：领取
+                # 成功但（无追踪或强制开启）→ 先打开任务栏读取任务目标。
+                # 暗雷/锁妖网任务直接下一轮重领（不做无谓的巫医/修理
+                # 行程，与 2026-11-23 修理顺序修正一致）；有效任务记下
+                # 识别结果，巫医/修理之后走手动寻路。
                 manual_round = False
                 manual_result = None
-                if manual_nav:
-                    tracker_has = task_tracker.has_task(
-                        win, TASK_TITLE, TASK_FALLBACK_TEXTS,
-                        fast_absent=True)
-                    if not tracker_has:
+                wuyi_round = auto_wuyi and round_no % wuyi_interval == 0
+                # 预走路整轮抑制（用户 2026-11-24）：本轮有自动巫医时，
+                # 巫医、修理行程与随后手动寻路都不预走（巫医后再出发）；
+                # 每轮结束的 finally 统一复位，这里只在本轮为巫医轮次时置位
+                map_nav.set_prewalk_suppressed(wuyi_round)
+                if wuyi_round and manual_enabled:
+                    log("[五倍][手动] 本轮有自动巫医，整轮不预走路"
+                        "（巫医后再出发）", "SYS")
+                if manual_enabled:
+                    # 强制模式忽略追踪面板（免一次追踪 OCR，直接读任务栏）
+                    tracker_has = (not force_manual
+                                   and task_tracker.has_task(
+                                       win, TASK_TITLE, TASK_FALLBACK_TEXTS,
+                                       fast_absent=True))
+                    if force_manual or not tracker_has:
                         manual_result, minfo = \
                             task_panel.read_first_group_task(win)
                         if manual_result is None:
@@ -4134,18 +4175,23 @@ def run_loop(win, cycle_interval=1.0):
                             f"{demon_task.describe(mrec)}", "SYS")
                         task_panel.close_task_panel(win)
                         if mrec.get("kind") == demon_task.KIND_RECLAIM:
+                            _manual_reclaim_pending = True
                             log(f"[五倍][手动] 任务需重新领取替换"
                                 f"（{mrec.get('reclaim_reason')}），"
-                                f"本轮不做巫医/修理，直接下一轮重领",
+                                f"本轮不做巫医/修理，下一轮重领",
                                 "WARN")
                             time.sleep(cycle_interval)
                             continue
                         manual_round = True
-                        log("[五倍] 领取后任务追踪无降魔任务，"
-                            "改走任务栏手动寻路", "SYS")
+                        if force_manual:
+                            log("[五倍][手动] 领取后强制手动寻路"
+                                "（忽略任务追踪），改走任务栏手动寻路", "SYS")
+                        else:
+                            log("[五倍] 领取后任务追踪无降魔任务，"
+                                "改走任务栏手动寻路", "SYS")
                 # 自动巫医：每 N 轮领取后无条件前往宝象国巫医 NPC 医治，
                 # 血蓝正常也照常（失败仅记日志，不阻断后续寻路）
-                if auto_wuyi and round_no % wuyi_interval == 0:
+                if wuyi_round:
                     debug_overlay.set_phase("自动巫医")  # 看板阶段
                     ok2, info2 = _auto_wuyi(win)
                     log(f"[五倍][巫医] {info2}", "SYS" if ok2 else "WARN")
@@ -4215,6 +4261,12 @@ def run_loop(win, cycle_interval=1.0):
                         "SYS" if status == "reclaim" else "WARN")
                     time.sleep(cycle_interval)
                     continue
+                if manual_round:
+                    # 手动回合失败（寻路/模板未出现等）：下一轮强制走
+                    # 领取/替换分支重新领取，防对着同一任务无限重试手动
+                    # 链路（五倍不取消任务，重领即替换；与无追踪模式
+                    # 「失败下一轮重新领取」同语义）
+                    _manual_reclaim_pending = True
                 log(f"[五倍] {info}", "WARN")
                 time.sleep(cycle_interval)
                 continue
@@ -4227,7 +4279,12 @@ def run_loop(win, cycle_interval=1.0):
             #    标题条模板未命中且无遮挡面板时跳过区域 OCR（面板缺席
             #    场景实测 ~0.22s → ~0.12s；命中照常 OCR）——仅确认消失
             #    方向可用，领取校验类 has_task 不得开启
-            if _hpg_task_seen:
+            if manual_round:
+                # 手动寻路回合的任务状态已由任务栏读取确认（多杀在回合
+                # 内自行复核）——任务追踪可能是残留渲染（强制手动寻路
+                # 时任务一直在追踪），不再复查，直接进入返程判断
+                still_tracked = False
+            elif _hpg_task_seen:
                 recheck_deadline = time.time() + 4.0
                 still_tracked = False
                 while time.time() < recheck_deadline:
@@ -4272,3 +4329,7 @@ def run_loop(win, cycle_interval=1.0):
             log(f"[五倍] 主循环异常: {e}", "WARN")
             log(traceback.format_exc(), "WARN")  # 完整堆栈定位异常行
             time.sleep(cycle_interval)
+        finally:
+            # 每轮结束复位预走路抑制（巫医轮次整轮抑制）：continue/异常/
+            # 任务返回都先走本行，防置位状态遗留到下一轮或其他任务
+            map_nav.set_prewalk_suppressed(False)

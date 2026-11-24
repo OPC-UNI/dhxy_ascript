@@ -1577,11 +1577,6 @@
                         <span class="switch-track"></span>
                         <span>领取锁妖网任务（暂不可用）</span>
                     </label>
-                    <label class="switch-row">
-                        <input type="checkbox" id="wubei-manual-nav">
-                        <span class="switch-track"></span>
-                        <span>兼容无快捷寻路（无任务追踪时打开任务栏手动寻路）</span>
-                    </label>
                     <div class="set-sect"><span>队员</span><span class="sect-hint">非队长生效（队长一定自动抢盒子）</span></div>
                     <label class="switch-row">
                         <input type="checkbox" id="wubei-auto-rejoin">
@@ -1594,6 +1589,16 @@
                         <span>自动抢盒子</span>
                     </label>
                     <div class="set-sect"><span>队长执行</span><span class="sect-hint">仅队长走 NPC，组号队员自动跟随；非队长开关无效</span></div>
+                    <label class="switch-row">
+                        <input type="checkbox" id="wubei-manual-nav">
+                        <span class="switch-track"></span>
+                        <span>兼容无快捷寻路（无任务追踪时打开任务栏手动寻路）</span>
+                    </label>
+                    <label class="switch-row">
+                        <input type="checkbox" id="wubei-force-manual">
+                        <span class="switch-track"></span>
+                        <span>强制手动寻路（忽略快捷寻路，测试用）</span>
+                    </label>
                     <label class="switch-row">
                         <input type="checkbox" id="wubei-auto-wuyi">
                         <span class="switch-track"></span>
@@ -2682,6 +2687,7 @@
     const wubeiRepairIntervalRow = document.getElementById('wubei-repair-interval-row');
     const wubeiKuimulang = document.getElementById('wubei-kuimulang');
     const wubeiManualNav = document.getElementById('wubei-manual-nav');
+    const wubeiForceManual = document.getElementById('wubei-force-manual');
     const wubeiTabGroup = document.getElementById('wubei-tab-group');
     const xiuluoShout = document.getElementById('xiuluo-shout');
     const xiuluoShoutText = document.getElementById('xiuluo-shout-text');
@@ -5139,6 +5145,9 @@
     wubeiManualNav.addEventListener('change', () => {
         callPython('save_wubei_manual_nav', wubeiManualNav.checked);
     });
+    wubeiForceManual.addEventListener('change', () => {
+        callPython('save_wubei_force_manual', wubeiForceManual.checked);
+    });
     wubeiTabGroup.addEventListener('change', () => {
         callPython('save_wubei_tab_group', wubeiTabGroup.checked);
     });
@@ -5576,6 +5585,7 @@
         }
         wubeiKuimulang.checked = !!(info.wubei && info.wubei.kuimulang);
         wubeiManualNav.checked = !!(info.wubei && info.wubei.manual_nav);
+        wubeiForceManual.checked = !!(info.wubei && info.wubei.force_manual);
         wubeiTabGroup.checked = !!(info.wubei && info.wubei.tab_group);
         zhongzuCheckTeam.checked = !!(info.zhongzu && info.zhongzu.check_team);
         zhongzuAutoCreateTeam.checked = !!(info.zhongzu && info.zhongzu.auto_create_team);

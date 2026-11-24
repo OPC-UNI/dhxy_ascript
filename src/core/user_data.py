@@ -9,6 +9,7 @@
     data/<角色ID>/task_stats.json       # 该角色的成就统计
     data/<角色ID>/high_perf_cache.json  # 该角色的高性能坐标缓存
     data/<角色ID>/map_nav_affines.json  # 该角色的地图悬停标定修正缓存
+    data/<角色ID>/special_map_routes.json  # 特殊地图自动探图路网（十字臂等）
 
 角色 ID 取窗口绑定记录的账号 ID（「这个窗口的这个角色」语义）；未绑定时
 退实时窗口标题「（ID：数字）」；再退 _default。绑定优先而非标题优先：
@@ -47,6 +48,7 @@ SCHEMES_NAME = "schemes.json"
 STATS_NAME = "task_stats.json"
 HIGH_PERF_NAME = "high_perf_cache.json"
 MAP_AFFINE_NAME = "map_nav_affines.json"
+SPECIAL_MAP_ROUTES_NAME = "special_map_routes.json"
 
 # 旧版 config.json 里按角色键控的运行时状态（键 = 「（ID：xxx）」）
 ROLE_STATE_KEYS = ("task_progress", "sheyaoxiang_last_use",
@@ -229,6 +231,10 @@ def map_nav_affines_path(role=None):
     return role_dir(role) / MAP_AFFINE_NAME
 
 
+def special_map_routes_path(role=None):
+    return role_dir(role) / SPECIAL_MAP_ROUTES_NAME
+
+
 # ==================== JSON 读写 ====================
 
 def _read_json(path, default=None):
@@ -318,6 +324,22 @@ def read_map_nav_affines(role=None, path=None):
 def write_map_nav_affines(data, role=None, path=None):
     with _LOCK:
         _atomic_write(path or map_nav_affines_path(role),
+                      data if isinstance(data, dict) else {})
+
+
+# ==================== 特殊地图自动探图路网 ====================
+# 世界地图无标签、洞内无小地图的特殊地图（莲花洞等）由 _walk_special_
+# coordinate 的自动探图得到「十字中心 + 各臂节点」；导航时按臂节点走，
+# 避免直线穿越不可走的空洞（2026-11-23 用户需求）。path 供单测注入。
+
+def read_special_map_routes(role=None, path=None):
+    data = _read_json(path or special_map_routes_path(role), {})
+    return data if isinstance(data, dict) else {}
+
+
+def write_special_map_routes(data, role=None, path=None):
+    with _LOCK:
+        _atomic_write(path or special_map_routes_path(role),
                       data if isinstance(data, dict) else {})
 
 
