@@ -141,20 +141,21 @@ EXPANDED_ITEMS = _items(
     ("田常规玩法[3]", (437, 355, 541, 377)),
     ("日降魔任务[1]", (437, 374, 541, 396)),
     ("三藏逢魔", (451, 394, 520, 417)),
-    ("[√]", (601, 396, 630, 415)),
+    # 实机只读探针 2026-11-24：选中行右缘标记 OCR 读作「[~]」
+    ("[~]", (601, 396, 630, 415)),
     ("田门派试炼[1]", (437, 414, 541, 436)),
     ("田长安之围[2]", (437, 432, 541, 455)),
 )
 COLLAPSED_ITEMS = [it for it in EXPANDED_ITEMS if it[0] != "三藏逢魔"
-                   and it[0] != "[√]"]
+                   and it[0] != "[~]"]
 
 
 def test_visual_rows_merge_right_marker():
     rows = tp._visual_rows(EXPANDED_ITEMS)
     child = [r for r in rows if "三藏逢魔" in r["text"]]
     assert len(child) == 1
-    # 同一行右侧 [√] 合并且不抢主文本框
-    assert "[√]" in child[0]["text"]
+    # 同一行右侧 [~] 合并且不抢主文本框
+    assert "[~]" in child[0]["text"]
     assert child[0]["rect"][0] == 451
 
 
@@ -385,12 +386,13 @@ def test_close_task_panel_hotkey_fallback(monkeypatch):
     assert ok and keys == [1] and "Alt+Q" in info
 
 
-def test_read_first_group_task_expands_selects_and_reads(monkeypatch):
+def test_read_first_group_task_expands_and_skips_selected_child(monkeypatch):
+    """已展开且第一个子任务已选中（右侧 [√]）→ 只点展开图标，不重复点子任务。"""
     monkeypatch.setattr(tp, "time", _FakeClock())
     panel = _fake_panel()
     monkeypatch.setattr(tp, "_capture_bgr", lambda _w: (object(), object()))
     monkeypatch.setattr(tp, "locate_panel", lambda _b: panel)
-    # 首次读列表为折叠态，点击图标后变为展开态
+    # 首次读列表为折叠态，点击图标后变为展开态（实机样例带 [√] 选中标记）
     state = {"list_calls": 0, "collapsed_until": 1}
     from src.device import map as game_map
     monkeypatch.setattr(game_map, "ocr_region",
@@ -402,9 +404,8 @@ def test_read_first_group_task_expands_selects_and_reads(monkeypatch):
                         lambda _w, x, y: clicks.append((x, y)))
     result, info = tp.read_first_group_task(object())
     assert result is not None, info
-    # 先点折叠图标，再点第一个子任务（三藏逢魔行中心）
-    assert clicks[0] == (446, 386)
-    assert clicks[1] == ((451 + 520) // 2, (394 + 417) // 2)
+    # 只点折叠图标；子任务行已选中（[√]）→ 跳过点击（用户 2026-11-24）
+    assert clicks == [(446, 386)]
     assert result["task"] == "三藏逢魔"
     assert result["objective_text"].startswith("三藏黑松林迷路")
     assert "任务轮次" not in result["objective_text"]
@@ -413,6 +414,52 @@ def test_read_first_group_task_expands_selects_and_reads(monkeypatch):
     assert rec["map"] == "万寿山"
     assert rec["coords"] == [(37, 11)]
     assert rec["target"] == "天眼魔尊"
+
+
+NO_MARKER_ITEMS = [it for it in EXPANDED_ITEMS if it[0] != "[~]"]
+
+
+def test_read_first_group_task_clicks_unselected_child(monkeypatch):
+    """子任务行无选中标记（[~] 缺失）→ 照常点击选中（旧行为兜底）。"""
+    monkeypatch.setattr(tp, "time", _FakeClock())
+    panel = _fake_panel()
+    monkeypatch.setattr(tp, "_capture_bgr", lambda _w: (object(), object()))
+    monkeypatch.setattr(tp, "locate_panel", lambda _b: panel)
+    from src.device import map as game_map
+
+    def fake_ocr(_img, region):
+        if tuple(region) == tuple(panel["list_region"]):
+            return list(NO_MARKER_ITEMS), None
+        return list(DETAIL_ITEMS), None
+
+    monkeypatch.setattr(game_map, "ocr_region", fake_ocr)
+    clicks = []
+    monkeypatch.setattr(tp, "human_click",
+                        lambda _w, x, y: clicks.append((x, y)))
+    result, info = tp.read_first_group_task(object())
+    assert result is not None, info
+    # 无标记：点击第一个子任务（三藏逢魔行中心）
+    assert clicks == [((451 + 520) // 2, (394 + 417) // 2)]
+    assert result["task"] == "三藏逢魔"
+
+
+def test_row_selected_marker_detection():
+    """右侧选中标记判定：标记块须在任务名右侧；名称块本身不参与。"""
+    rows = tp._visual_rows(EXPANDED_ITEMS)
+    child = [r for r in rows if "三藏逢魔" in r["text"]][0]
+    assert tp.row_selected(child) is True
+    rows = tp._visual_rows(NO_MARKER_ITEMS)
+    child = [r for r in rows if "三藏逢魔" in r["text"]][0]
+    assert tp.row_selected(child) is False
+    # 同一标记的另一种 OCR 形态「[√]」同样识别（兼容旧样例）
+    alt = [it for it in EXPANDED_ITEMS
+           if it[0] != "[~]"] + [("[√]", (601, 396, 630, 415), 0.99)]
+    rows = tp._visual_rows(alt)
+    child = [r for r in rows if "三藏逢魔" in r["text"]][0]
+    assert tp.row_selected(child) is True
+    # 任务名本身含标记字符不算（只看名称块右侧的 OCR 块）
+    rows = tp._visual_rows(_items(("三藏逢魔~", (451, 394, 520, 417))))
+    assert tp.row_selected(rows[0]) is False
 
 
 def test_read_first_group_task_fails_without_group(monkeypatch):

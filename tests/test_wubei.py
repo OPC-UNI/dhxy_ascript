@@ -807,7 +807,11 @@ def _manual_rec(kind, map_name="平顶山", a=(187, 27), b=(269, 28),
 
 
 def test_manual_nav_round_kill(monkeypatch):
-    """击杀：寻路 → 模板开打 → 战斗后任务消失 → 完成。"""
+    """击杀：寻路 → 模板开打 → 1 场战斗结束直接返程，不再读任务栏。
+
+    用户 2026-11-24：单次战斗结束后任务即完成，读两轮任务栏确认白白
+    多耗 ~8s（日志 13:33:07 战斗完成 → 13:33:16 才返程）。
+    """
     monkeypatch.setattr(wubei, "log", lambda *a, **k: None)
     monkeypatch.setattr(wubei, "_manual_close_task_panel", lambda w: True)
     nav, fights = [], []
@@ -816,27 +820,38 @@ def test_manual_nav_round_kill(monkeypatch):
     monkeypatch.setattr(wubei, "_manual_template_fight",
                         lambda w, **k: fights.append(1)
                         or (True, "结束", (100, 200)))
+
+    def no_final_read(w):
+        raise AssertionError("单场击杀完成后不应再读任务栏确认")
+
     monkeypatch.setattr(wubei, "_manual_read_task_after_battle",
-                        lambda w: ("gone", None))
+                        no_final_read)
     ok, info = wubei._manual_nav_round(
         _FakeWin(), pre_result={"recognition": _manual_rec("kill", "万寿山",
                                                            (37, 11), None)})
-    assert ok is True and "任务消失" in info
+    assert ok is True and "直接返程" in info
     # 单杀：寻路一次、战斗一次
     assert nav == [("万寿山", (37, 11))] and fights == [1]
 
 
 def test_manual_nav_round_huangpao_multi(monkeypatch):
-    """黄袍 5 杀：首杀寻路，之后复用命中模板直接再杀，不重新寻路。"""
+    """黄袍 5 杀：首杀寻路，之后复用命中模板直接再杀，不重新寻路。
+
+    两场战斗之间（结算界面恢复后的间隙）须补调组号队员血蓝 pass
+    （用户 2026-11-24：多杀期间队员得不到回血回蓝检查）。
+    """
     monkeypatch.setattr(wubei, "log", lambda *a, **k: None)
     monkeypatch.setattr(wubei, "_manual_close_task_panel", lambda w: True)
+    monkeypatch.setattr(wubei, "time", _FakeClock())
     rec = _manual_rec("huangpao", "平顶山", (302, 22), None,
                       max_rounds=5)
-    nav, pref = [], []
+    nav, pref, bars = [], [], []
     monkeypatch.setattr(wubei, "_manual_navigate",
                         lambda w, m, c: nav.append((m, c)) or (True, "ok"))
+    monkeypatch.setattr(wubei, "_maybe_tab_bars_pass",
+                        lambda w: bars.append(1))
 
-    def fake_fight(w, preferred_pt=None, wait=None):
+    def fake_fight(w, preferred_pt=None, wait=None, **k):
         pref.append(preferred_pt)
         return True, "结束", (321, 222)
 
@@ -853,6 +868,8 @@ def test_manual_nav_round_huangpao_multi(monkeypatch):
     assert nav == [("平顶山", (302, 22))]  # 只在首杀寻路
     # 首杀全量搜索；之后复用首杀命中的模板点
     assert pref == [None, (321, 222), (321, 222), (321, 222), (321, 222)]
+    # 第 2~5 场开打前各补调一次（共 4 次）；首杀由寻路 on_walk_start 触发
+    assert bars == [1, 1, 1, 1]
 
 
 def test_manual_nav_round_huangpao_early_gone(monkeypatch):
@@ -865,7 +882,7 @@ def test_manual_nav_round_huangpao_early_gone(monkeypatch):
     monkeypatch.setattr(wubei, "_manual_navigate",
                         lambda w, m, c: nav.append((m, c)) or (True, "ok"))
 
-    def fake_fight(w, preferred_pt=None, wait=None):
+    def fake_fight(w, preferred_pt=None, wait=None, **k):
         calls.append(preferred_pt)
         if len(calls) == 1:
             return True, "结束", (321, 222)
@@ -907,28 +924,228 @@ def test_manual_read_after_battle_unknown_not_completed(monkeypatch):
     assert wubei._manual_read_task_after_battle(_FakeWin()) == ("gone", None)
 
 
+def _xj_manual_dialog_env(monkeypatch, items):
+    """装配 _manual_template_fight 显形镜腿的对话框场景（虚拟时钟）。"""
+    clock = _FakeClock()
+    monkeypatch.setattr(wubei, "time", clock)
+    monkeypatch.setattr(wubei, "log", lambda *a, **k: None)
+    monkeypatch.setattr(wubei, "is_in_battle_frame", lambda img: False)
+    monkeypatch.setattr(wubei, "dialog_frame_score", lambda img: 0.99)
+    monkeypatch.setattr(wubei.game_map, "ocr_region",
+                        lambda img, region: (list(items), None))
+    clicks = []
+    monkeypatch.setattr(wubei, "_click_screen_center",
+                        lambda win, times=1, prefix="": clicks.append(times))
+    monkeypatch.setattr(wubei, "dc_last_center_click_at", lambda: 0.0)
+    return clock, clicks
+
+
+def test_manual_template_fight_story_dialog_skips_immediately(monkeypatch):
+    """用镜后剧情对话框（非白龙马）两帧确认即判本处无怪。
+
+    用户 2026-11-24 13:39 金兜洞 A 处：用镜后出现「有高僧自东土大唐
+    而来…」剧情对话框，旧逻辑点屏推进后空等模板窗才换 B 处；
+    现改为点屏关闭后立即返回失败，由调用方换下一处。
+    """
+    items = [("有高僧自东土大唐而来，礼乐雍容", [430, 520, 900, 560], 0.95)]
+    clock, clicks = _xj_manual_dialog_env(monkeypatch, items)
+    t0 = clock.t
+    ok, info, hit = wubei._manual_template_fight(
+        _FakeWin(), expect_bailongma=True)
+    assert ok is False and "未命中白龙马" in info and hit is None
+    assert clicks == [1]          # 关闭剧情对话框一次（防吞寻路点击）
+    assert clock.t - t0 < 3.0     # 两帧即判，不空等模板窗
+
+
+def test_manual_template_fight_bailongma_dialog_not_misjudged(monkeypatch):
+    """白龙马对话框命中文案：不按剧情页判失败，照常点屏找模板。"""
+    items = [("一阵光芒闪过，白龙马出现在眼前，竟开口说起话来。",
+              [430, 520, 950, 560], 0.95)]
+    clock, clicks = _xj_manual_dialog_env(monkeypatch, items)
+    ok, info, hit = wubei._manual_template_fight(
+        _FakeWin(), expect_bailongma=True, wait=1.0)
+    assert ok is False and "未命中白龙马" not in info
+    assert clicks                     # 白龙马对话框照常点屏关闭遮挡
+    assert "未出现白龙马任务模板" in info
+
+
+def _manual_alt_ocr_env(monkeypatch, points):
+    """装配 _manual_template_fight 的「模板→Alt+A→名字 OCR」兜底场景。"""
+    clock = _FakeClock()
+    monkeypatch.setattr(wubei, "time", clock)
+    monkeypatch.setattr(wubei, "log", lambda *a, **k: None)
+    state = {"battle": False}
+
+    def _is_battle(img):
+        return state["battle"]
+
+    monkeypatch.setattr(wubei, "is_in_battle_frame", _is_battle)
+    monkeypatch.setattr(wubei, "dialog_frame_score", lambda img: 0.0)
+    monkeypatch.setattr(wubei.game_map, "match_frame_all",
+                        lambda *a, **k: [])
+    monkeypatch.setattr(wubei.game_map, "ocr_region",
+                        lambda img, region: ([], None))
+    monkeypatch.setattr(wubei, "_manual_close_block_dialog",
+                        lambda *a, **k: False)
+    monkeypatch.setattr(wubei, "_xj_fight_dialog_open", lambda items: False)
+    hotkeys = []
+    monkeypatch.setattr(wubei.app_utils, "press_alt_hotkey",
+                        lambda win, key, label, prefix="": (
+                            hotkeys.append(key) or (True, "alt")))
+    clicked = []
+    point_values = set(points.values())
+
+    def _click(win, x, y, **k):
+        clicked.append((x, y))
+        if (x, y) in point_values:
+            state["battle"] = True  # 点中名字后进入战斗
+
+    monkeypatch.setattr(wubei, "human_click", _click)
+    monkeypatch.setattr(wubei, "move_away", lambda win: None)
+    monkeypatch.setattr(wubei, "_manual_wait_battle_end",
+                        lambda win: (True, "战斗已结束（手动寻路回合）"))
+    named = []
+
+    def _named(img, names):
+        named.append(list(names))
+        return [(t, pt) for t, pt in points.items()]
+
+    monkeypatch.setattr(wubei.world_target, "find_named_points", _named)
+    return state, hotkeys, clicked, named
+
+
+def test_manual_template_fight_alt_ocr_name_fallback(monkeypatch):
+    """模板短窗未现 → Alt+A 复查仍无 → OCR 世界区目标名 → 点名字上方开打。
+
+    用户 2026-11-24：目标点在地图边缘时游戏不渲染任务小牌；五倍任务栏
+    已知完整目标名，按名字找 NPC（点击名字上方 40px）兜底。
+    """
+    points = {"智慧魔尊": (544, 401)}
+    state, hotkeys, clicked, named = _manual_alt_ocr_env(monkeypatch, points)
+    ok, info, hit = wubei._manual_template_fight(
+        _FakeWin(), target_names=("智慧魔尊",))
+    assert ok is True and info.startswith("战斗已结束")
+    assert hit == (544, 401)
+    assert hotkeys == ["a"]                 # 模板窗口后才按 Alt+A
+    assert clicked == [(544, 401)]          # 点击 OCR 名字上方点击点
+    assert named == [["智慧魔尊"]]
+
+
+def test_manual_template_fight_alt_restored_on_failure(monkeypatch):
+    """Alt+A + 名字 OCR 均未命中：点屏幕中间释放 Alt+A 后判失败。"""
+    state, hotkeys, clicked, named = _manual_alt_ocr_env(monkeypatch, points={})
+    centers = []
+    monkeypatch.setattr(wubei, "_click_screen_center",
+                        lambda win, times=1, prefix="": centers.append(times))
+    monkeypatch.setattr(wubei, "dc_last_center_click_at", lambda: 0.0)
+    ok, info, hit = wubei._manual_template_fight(
+        _FakeWin(), target_names=("智慧魔尊",))
+    assert ok is False and hit is None
+    assert "未出现白龙马任务模板" in info and "名字 OCR" in info
+    assert hotkeys == ["a"]
+    assert centers == [1]                   # 释放 Alt+A
+    assert clicked == []
+
+
+def test_manual_template_fight_coord_screen_fallback(monkeypatch):
+    """模板未现 → 特殊地图先按任务坐标反查屏幕点，命中不按 Alt+A。
+
+    用户 2026-11-24：目标名字被其他名字叠绘挡住、OCR 读不出时，按任务栏
+    坐标反查屏幕点直接点（必须读 HUD 坐标，放在 Alt+A 之前）。
+    """
+    state, hotkeys, clicked, named = _manual_alt_ocr_env(monkeypatch, points={})
+    seen = {}
+
+    def _coord(win, name, x, y, emit=None):
+        seen["args"] = (name, x, y)
+        return (754, 427)
+
+    monkeypatch.setattr(wubei.map_nav, "special_coord_screen_point", _coord)
+
+    def _click(win, x, y, **k):
+        clicked.append((x, y))
+        state["battle"] = True  # 点中坐标反查点后进入战斗
+
+    monkeypatch.setattr(wubei, "human_click", _click)
+    ok, info, hit = wubei._manual_template_fight(
+        _FakeWin(), target_names=("智慧魔尊",),
+        target_map="莲花洞", target_coord=(40, 48))
+    assert ok is True and hit == (754, 427)
+    assert seen["args"] == ("莲花洞", 40, 48)
+    assert hotkeys == []      # 反查命中，不按 Alt+A
+    assert named == []        # 未走到名字 OCR
+
+
+def test_manual_template_fight_coord_unavailable_continues_alt(monkeypatch):
+    """坐标反查不可用（普通地图/无锚点模型）→ 继续 Alt+A + 名字兜底。"""
+    state, hotkeys, clicked, named = _manual_alt_ocr_env(monkeypatch, points={})
+    monkeypatch.setattr(wubei.map_nav, "special_coord_screen_point",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(wubei, "_click_screen_center",
+                        lambda win, times=1, prefix="": None)
+    monkeypatch.setattr(wubei, "dc_last_center_click_at", lambda: 0.0)
+    ok, info, hit = wubei._manual_template_fight(
+        _FakeWin(), target_names=("智慧魔尊",),
+        target_map="平顶山", target_coord=(163, 105))
+    assert ok is False and hit is None
+    assert hotkeys == ["a"]   # 反查不可用仍走 Alt+A
+    assert named == [["智慧魔尊"]]  # 名字 OCR 兜底执行
+
+
+def test_manual_target_names_huangpao_variants():
+    """黄袍怪三种写法共用短名兜底；普通击杀用完整目标名。"""
+    assert wubei._manual_target_names(
+        {"kind": "huangpao", "target": "愤怒的黄袍怪"}) == \
+        ["愤怒的黄袍怪", "黄袍怪"]
+    assert wubei._manual_target_names(
+        {"kind": "huangpao", "target": "黄袍怪"}) == ["黄袍怪"]
+    assert wubei._manual_target_names(
+        {"kind": "huangpao", "target": None}) == ["黄袍怪"]
+    assert wubei._manual_target_names(
+        {"kind": "kill", "target": "智慧魔尊"}) == ["智慧魔尊"]
+    assert wubei._manual_target_names(
+        {"kind": "kill", "target": None}) == []
+    assert wubei._manual_target_names(None) == []
+
+
 def test_manual_nav_round_xianxing_ab(monkeypatch):
-    """显形镜：A 未完成 → B；B 完成后任务消失 → 完成。"""
+    """显形镜：A 未完成 → B；B 战斗结束直接返程（不再读任务栏确认）。
+
+    用户 2026-11-24：显形镜任一处战斗结束即任务完成，与单场击杀同规。
+    """
     monkeypatch.setattr(wubei, "log", lambda *a, **k: None)
     monkeypatch.setattr(wubei, "_manual_close_task_panel", lambda w: True)
     rec = _manual_rec("xianxing")
     nav, fights, items = [], [], []
+    bm_flags = []  # 用镜腿必须要求白龙马文案判定
     monkeypatch.setattr(wubei, "_manual_navigate",
                         lambda w, m, c: nav.append((m, c)) or (True, "ok"))
     monkeypatch.setattr(wubei, "_manual_use_xianxingjing",
                         lambda w: items.append(1) or (True, "已使用"))
     results = iter([(False, "A 未触发", None),
                     (True, "B 战斗结束", (200, 300))])
-    monkeypatch.setattr(wubei, "_manual_template_fight",
-                        lambda w, **k: fights.append(1) or next(results))
-    after = iter([("present", {"recognition": rec}), ("gone", None)])
-    monkeypatch.setattr(wubei, "_manual_read_task_after_battle",
-                        lambda w: next(after))
+
+    def fake_fight(w, **k):
+        bm_flags.append(k.get("expect_bailongma"))
+        fights.append(1)
+        return next(results)
+
+    monkeypatch.setattr(wubei, "_manual_template_fight", fake_fight)
+    after = iter([("present", {"recognition": rec})])
+
+    def read_after(w):
+        try:
+            return next(after)
+        except StopIteration:
+            raise AssertionError("显形镜战斗完成后不应再读任务栏确认")
+
+    monkeypatch.setattr(wubei, "_manual_read_task_after_battle", read_after)
     ok, info = wubei._manual_nav_round(
         _FakeWin(), pre_result={"recognition": rec})
-    assert ok is True
+    assert ok is True and "直接返程" in info
     assert nav == [("平顶山", (187, 27)), ("平顶山", (269, 28))]
     assert len(items) == 2 and len(fights) == 2
+    assert bm_flags == [True, True]  # 两条腿都走白龙马文案判定
 
 
 def test_manual_nav_round_reclaim_fails_fast(monkeypatch):

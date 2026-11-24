@@ -279,6 +279,22 @@ SPECIAL_WALK_VIEW_MARGIN = 20       # 视窗内缩边距（px，避开 UI/边缘
 # 且相位相关在单次位移接近半幅（区域 1100x530）时会混叠，限制在
 # 240px 内保证相机位移可测。
 SPECIAL_WALK_CALIB_STEP = 200
+# ---- 多分区特殊地图（波月洞等：同一坐标平面分 A/B 两区，洞口传送连接）----
+# 用户 2026-11-24 规则：波月洞进入先到 A 区，A 区走到一个坐标附近自动
+# 传送到 B 区；A/B 的坐标都画在同一平面上，但两区之间是空洞/墙壁。
+# 旧的单一描边边界会把两区当成一块连通区域（A* 在空洞里绕），按坐标
+# 可见性永远走不进 B 区。路网改为 zones（每区独立边界）+ links（传送
+# 触发点/落点），导航时先走到当前区的触发点，等传送进目标区再继续。
+SPECIAL_TRIGGER_TOLERANCE = 2        # 走到传送触发点的到达容差（格）
+SPECIAL_TRIGGER_WALK_TIMEOUT = 90.0  # 单次走到触发点的超时（s）
+SPECIAL_TELEPORT_WAIT = 8.0          # 到达触发点后等待场景切换（s）
+SPECIAL_TELEPORT_STABLE_POLLS = 2    # 传送后位置连续 N 次一致才继续
+SPECIAL_TELEPORT_JUMP_MIN = 10.0     # 落点不在任何分区时按跳变判传送（格）
+SPECIAL_TELEPORT_NUDGES = 3          # 未触发传送时朝洞口方向补点次数
+SPECIAL_TELEPORT_NUDGE_TIMEOUT = 20.0
+# 区内其他传送触发点与进出光圈共用 SPECIAL_PORTAL_AVOID_R=3 格避让：
+# 太小会误踩回另一区，太大会把触发点附近的合法目标挤出可走区（波月洞
+# 落点距回程触发点仅约 4.5 格，避让半径必须小于该距离）。
 
 # ---- 父地图场景地图「普通」筛选与入口 NPC 定位（2026-11-23 实测）----
 # 「普通」勾选框不再按搜索条偏移推算：2026-11-24 实机复盘发现旧偏移
@@ -1768,6 +1784,31 @@ def _open_target_map(win, base, layer, pos, emit, timing=None):
 
 # ---- 特殊地图进入（世界地图无标签、洞内无小地图，见 SPECIAL_MAP_ENTRIES）----
 
+def _special_map_name_match(hud, target):
+    """HUD 地名与目标特殊地图名是否一致（容忍 1 个 OCR 错字/漏字）。
+
+    特殊地图步行只在同一张图内进行，位置区域 OCR 偶发错字：2026-11-24
+    波月洞 B→A 实机把「波月洞」读成「波月同 (10,69)」，被当成场景变化
+    直接判失败（其实已传送到 A 区）。编辑距离 ≤1（替换/插/删）按同图。
+    """
+    hud = str(hud or "").strip()
+    target = str(target or "").strip()
+    if not hud or not target:
+        return False
+    if hud == target:
+        return True
+    if len(target) < 2 or abs(len(hud) - len(target)) > 1:
+        return False
+    shorter, longer = ((hud, target) if len(hud) <= len(target)
+                       else (target, hud))
+    i = 0
+    while i < len(shorter) and shorter[i] == longer[i]:
+        i += 1
+    if len(shorter) == len(longer):
+        return shorter[i + 1:] == longer[i + 1:]
+    return shorter[i:] == longer[i + 1:]
+
+
 def _wait_special_enter(win, name, timeout, emit):
     """等待 HUD 地名变为特殊地图名（进场判据；战斗期不计入超时）。
 
@@ -1783,7 +1824,7 @@ def _wait_special_enter(win, name, timeout, emit):
             time.sleep(1.0)
             continue
         pos = game_map.read_map_position(None, img=img) if img is not None else None
-        if pos is not None and str(pos[0]).strip() == name:
+        if pos is not None and _special_map_name_match(pos[0], name):
             emit(f"已进入{name}（{pos[1]},{pos[2]}）")
             return True
         time.sleep(0.8)
@@ -1911,7 +1952,7 @@ def _wait_special_start(win, name, before, timeout):
             return True  # 过图动画/位置暂不可读 → 视为已起步
         if before is None or pos != before:
             return True
-        if str(pos[0]).strip() == name:
+        if _special_map_name_match(pos[0], name):
             return True
         if not (game_map.is_mini_map_open(win)
                 or game_map.is_world_map_open(win)):
@@ -1992,6 +2033,7 @@ def _special_model_anchor(win, target, pos):
     if not isinstance(samples, list) or not samples:
         return None
     size = model.get("window")
+    win_w = win_h = None
     if isinstance(size, (list, tuple)) and len(size) == 2:
         rect = getattr(win, "rect", None)
         if rect is None:
@@ -2002,6 +2044,7 @@ def _special_model_anchor(win, target, pos):
                     or abs(int(rect.height) - int(size[1]))
                     > SPECIAL_ANCHOR_MODEL_WIN_TOL):
                 return None
+            win_w, win_h = int(size[0]), int(size[1])
         except Exception:  # noqa: BLE001 —— 窗口尺寸不可读按不匹配处理
             return None
     wx, wy = pos[1], pos[2]
@@ -2011,10 +2054,16 @@ def _special_model_anchor(win, target, pos):
             continue
         try:
             d = math.hypot(float(s[0]) - wx, float(s[1]) - wy)
+            sx, sy = float(s[2]), float(s[3])
         except (TypeError, ValueError):
             continue
+        # 采集时相机跟踪跑飞（如传送黑屏期间）会记下窗口外的锚点：
+        # 波月洞 B 区实测有 ay>1000 的样品，运行期命中会把点击点换算到
+        # 屏幕外，必须丢弃（建图脚本同样过滤，这里兜底旧数据）。
+        if win_w is not None and not (0 <= sx <= win_w and 0 <= sy <= win_h):
+            continue
         if d <= SPECIAL_ANCHOR_MODEL_MAX_DIST:
-            cand.append((d, float(s[2]), float(s[3])))
+            cand.append((d, sx, sy))
     if not cand:
         return None
     cand.sort(key=lambda t: t[0])
@@ -2025,6 +2074,68 @@ def _special_model_anchor(win, target, pos):
         ax += sx * wgt
         ay += sy * wgt
     return ax / wsum, ay / wsum
+
+
+# ---- 任务坐标反查屏幕点（2026-11-24 用户规则）----
+# 手动寻路到达后，目标名字可能被其他名字叠绘挡住（OCR 读不出来）、任务
+# 小牌在地图边缘也不渲染时，按任务栏给的目标坐标反查当前画面屏幕点直接
+# 点击。模型沿用洞内导航：world = diag(SX, SY) * screen + B，锚点模型给出
+# 「当前世界坐标 → 角色屏幕位置」A → B = W - M*A，于是
+#   screen(目标) = A + (目标坐标 - 当前坐标) / (SX, SY)
+# 已有 self_anchor 数据的特殊地图（莲花洞/波月洞/火云洞/金兜洞）直接可用。
+# 精度：停稳状态实测约 20px（2026-11-24 莲花洞 [38,50] 截图：模型锚点
+# (712,411)，名字标签实测 (692,416)）；采集样品按 1s 间隔且含行走中相机
+# 跟随滞后，行走状态误差可到 50px+——调用方必须在人物停稳后反查。
+# 点击点再上移 SPECIAL_COORD_CLICK_UP 像素落到角色本体：坐标点对应 NPC
+# 脚下（名字渲染在角色下方，与名字兜底同标定），名字文字本身点不中。
+SPECIAL_COORD_CLICK_UP = 25
+
+
+def special_coord_screen_point(win, map_name, x, y, emit=None):
+    """特殊地图：目标世界坐标 → 当前画面屏幕点；不可用返回 None。
+
+    map_name 传 None 时按当前 HUD 地名自动匹配特殊地图（诊断用；HUD 名
+    可能 OCR 错字，按 _special_map_name_match 容错匹配）。
+    仅当目标图是特殊地图（有描边 self_anchor 锚点模型）、当前 HUD 就在
+    该图、模型覆盖当前坐标时返回 (sx, sy)。窗口尺寸不符/锚点缺失/位置
+    读不到一律 None（调用方回退 Alt+A/名字 OCR 等其余兜底）。
+    emit 可选，打印反查明细（角色坐标、锚点、屏幕点）。
+    """
+    if map_name and special_map_entry(map_name) is None:
+        return None  # 普通地图没有锚点模型：先判掉，免得白读一次 HUD 坐标
+    pos = _special_read_pos(win)
+    if pos is None:
+        return None
+    if map_name:
+        if not _special_map_name_match(pos[0], map_name):
+            return None
+    else:
+        for key in SPECIAL_MAP_ENTRIES:
+            if _special_map_name_match(pos[0], key):
+                map_name = key
+                break
+        else:
+            return None
+    anchor = _special_model_anchor(win, map_name, pos)
+    if anchor is None:
+        return None
+    sx = anchor[0] + (x - pos[1]) / SPECIAL_WALK_SX
+    sy = (anchor[1] + (y - pos[2]) / SPECIAL_WALK_SY
+          - SPECIAL_COORD_CLICK_UP)
+    rect = getattr(win, "rect", None)
+    if rect is not None:
+        try:
+            if not (0 <= sx <= int(rect.width)
+                    and 0 <= sy <= int(rect.height)):
+                return None
+        except Exception:  # noqa: BLE001 —— 窗口尺寸不可读按不可用处理
+            return None
+    if emit:
+        emit(f"坐标反查：角色 ({pos[1]},{pos[2]}) 屏幕锚点 "
+             f"≈({anchor[0]:.0f},{anchor[1]:.0f}) → 目标 ({x},{y}) "
+             f"屏幕点 ≈({sx:.0f},{sy:.0f})（已上移 "
+             f"{SPECIAL_COORD_CLICK_UP}px 到角色本体）")
+    return int(round(sx)), int(round(sy))
 
 
 def _name_hit(text, name):
@@ -2252,7 +2363,7 @@ def _special_probe(win, target, emit, deadline):
         if time.time() > deadline:
             break
         before = _special_read_pos(win)
-        if before is None or str(before[0]).strip() != target:
+        if before is None or not _special_map_name_match(before[0], target):
             continue
         img0 = win.capture(force_activate=False)
         human_click(win, px, py, button="secondary")
@@ -2276,9 +2387,11 @@ def _special_probe(win, target, emit, deadline):
 
 
 def _valid_special_route(route):
-    """校验路网条目：人工描边轨迹或「中心 + 非空臂」二者其一。"""
+    """校验路网条目：分区路网、人工描边轨迹或「中心 + 非空臂」三者其一。"""
     if not isinstance(route, dict):
         return None
+    if len(_special_zones(route)) >= 2:
+        return route
     trace = route.get("trace")
     if isinstance(trace, list) and len(trace) >= 2:
         return route
@@ -2477,20 +2590,49 @@ def _special_boundary_nearest(boundary, px, py):
     return best[1] if best else None
 
 
+def _special_point(p):
+    """把 (x, y) / [x, y] 归一化成浮点坐标；非法值返回 None。"""
+    try:
+        return float(p[0]), float(p[1])
+    except (TypeError, ValueError, IndexError):
+        return None
+
+
+def _special_portal_points(points):
+    """归一化传送/避让点参数：单点 (x,y) 或点列表 → [(x,y), ...]。
+
+    旧调用方传单个光圈点 (x,y)；多分区路网需要同时避让区内多个传送
+    触发点，传 [[x,y], [x,y]]（或元组列表）。两种格式都接受。
+    """
+    if points is None:
+        return []
+    if isinstance(points, (list, tuple)):
+        one = _special_point(points)
+        if one is not None:
+            return [one]
+        out = []
+        for p in points:
+            q = _special_point(p)
+            if q is not None:
+                out.append(q)
+        return out
+    return []
+
+
 def _special_segment_inside(boundary, p0, p1, step=1.5, portal=None):
-    """线段是否全程在描边内（含边界容差；portal 光圈不可被穿过）。
+    """线段是否全程在描边内（含边界容差；portal 传送点不可被穿过）。
 
     端点都在描边内 ≠ 直线可走：十字形地图两臂之间是空洞（边界外），
     直线穿空洞时客户端会走到走廊尽头来回振荡（2026-11-23 实机：
     莲花洞 (34,20)→(30,56) 直线穿过两臂间空洞，连续 30+ 次点击原地
     打转）。此时改走人工描边路网绕行。
-    portal：洞内传送光圈（走进会退出山洞）；端点落在光圈内的路段放行
-    （进洞落点就在光圈上），两端都在光圈外时路段不得进入避让半径。
+    portal：洞内传送光圈/洞口触发点（走进会退出山洞或切到另一分区），
+    支持单点或点列表；端点落在传送点避让半径内的路段放行（进洞落点
+    就在光圈上），两端都在半径外时路段不得进入避让半径。
     """
     x0, y0 = p0
     x1, y1 = p1
-    if portal is not None:
-        pxp, pyp = portal
+    for pxp, pyp in _special_portal_points(portal):
         rr = SPECIAL_PORTAL_AVOID_R ** 2
         start_in = (x0 - pxp) ** 2 + (y0 - pyp) ** 2 <= rr
         end_in = (x1 - pxp) ** 2 + (y1 - pyp) ** 2 <= rr
@@ -2539,12 +2681,13 @@ def _special_boundary_waypoints(boundary, cur, dst, portal=None):
             for gx in range(int(math.ceil(xs[j])),
                             int(math.floor(xs[j + 1])) + 1):
                 walkable.add((gx, gy))
-    if portal is not None:
-        # 光圈格子不可走：路线绕开传送点（走进会退出山洞）
-        pxp, pyp = portal
+    portals = _special_portal_points(portal)
+    if portals:
+        # 光圈/洞口格子不可走：路线绕开传送点（走进会退出山洞/切区）
         rr = SPECIAL_PORTAL_AVOID_R ** 2
         walkable = {c for c in walkable
-                    if (c[0] - pxp) ** 2 + (c[1] - pyp) ** 2 > rr}
+                    if all((c[0] - pxp) ** 2 + (c[1] - pyp) ** 2 > rr
+                           for pxp, pyp in portals)}
     if not walkable:
         return None
 
@@ -2732,19 +2875,139 @@ def _special_route_waypoints(route, cur, x, y, portal=None):
     return wps or [(x, y)]
 
 
-def _remember_special_view(win, target, B, pos):
-    """记住本次导航结束视图（帧+B）：下次同图导航热启动，免探针绕路。"""
+def _special_boundary_distance(boundary, px, py):
+    """点到描边边界（闭合多边形各边）的最近距离；无边界返回 inf。"""
+    poly = [(float(p[0]), float(p[1])) for p in boundary
+            if isinstance(p, (list, tuple)) and len(p) == 2]
+    n = len(poly)
+    if n < 2:
+        return float("inf")
+    best = float("inf")
+    for i in range(n):
+        ax, ay = poly[i]
+        bx, by = poly[(i + 1) % n]
+        d, _pt = _special_segment_distance(px, py, ax, ay, bx, by)
+        if d < best:
+            best = d
+    return best
+
+
+def _special_zones(route):
+    """路网分区列表（zones: 每区独立 boundary/trace）；无有效分区返回 []。"""
+    out = []
+    zones = (route or {}).get("zones") if isinstance(route, dict) else None
+    if not isinstance(zones, list):
+        return out
+    for z in zones:
+        if not isinstance(z, dict):
+            continue
+        b = z.get("boundary")
+        if isinstance(b, list) and len(b) >= 3:
+            out.append(z)
+    return out
+
+
+def _special_zone_name(zone):
+    """分区名（路网 links 用它引用分区）；缺失返回空串。"""
+    if not isinstance(zone, dict):
+        return ""
+    return str(zone.get("name") or "").strip()
+
+
+def _special_zone_at(zones, px, py, allow_nearest=False):
+    """坐标所在分区：严格包含优先；allow_nearest=True 时退到最近边界分区。
+
+    波月洞 A/B 两区在同一坐标平面上但互不相邻（中间是空洞），用边界
+    包含判定当前区/目标区即可；目标/落点略在描边外时取最近边界所在区。
+    """
+    if not zones:
+        return None
+    hits = [z for z in zones
+            if _special_boundary_contains(z["boundary"], px, py)]
+    if hits:
+        if len(hits) == 1:
+            return hits[0]
+        return min(hits, key=lambda z: _special_boundary_distance(
+            z["boundary"], px, py))
+    if allow_nearest:
+        return min(zones, key=lambda z: _special_boundary_distance(
+            z["boundary"], px, py))
+    return None
+
+
+def _special_zone_links(route):
+    """路网传送链接（from_zone → to_zone，from 为触发点/land 为落点）。"""
+    names = {_special_zone_name(z) for z in _special_zones(route)}
+    out = []
+    links = (route or {}).get("links") if isinstance(route, dict) else None
+    if not isinstance(links, list):
+        return out
+    for link in links:
+        if not isinstance(link, dict):
+            continue
+        a = str(link.get("from_zone") or "").strip()
+        b = str(link.get("to_zone") or "").strip()
+        p = _special_point(link.get("from"))
+        if a not in names or b not in names or p is None:
+            continue
+        land = _special_point(link.get("land") or link.get("to")) or p
+        out.append({"from_zone": a, "to_zone": b, "from": p, "land": land,
+                    "land_recalibrate": bool(
+                        link.get("land_recalibrate"))})
+    return out
+
+
+def _special_zone_path(links, src, dst):
+    """分区传送图 BFS：返回从 src 到 dst 的链接列表；不可达返回 None。"""
+    if src == dst:
+        return []
+    adj = {}
+    for link in links:
+        adj.setdefault(link["from_zone"], []).append(link)
+    prev = {src: None}
+    queue = [src]
+    while queue:
+        zone = queue.pop(0)
+        for link in adj.get(zone, []):
+            nxt = link["to_zone"]
+            if nxt in prev:
+                continue
+            prev[nxt] = (zone, link)
+            queue.append(nxt)
+    if dst not in prev:
+        return None
+    hops = []
+    cur = dst
+    while prev.get(cur) is not None:
+        pz, link = prev[cur]
+        hops.append(link)
+        cur = pz
+    hops.reverse()
+    return hops
+
+
+def _remember_special_view(win, target, B, pos, zone_name=None):
+    """记住本次导航结束视图（帧+B+分区）：下次同区导航热启动，免探针绕路。
+
+    分区名必须一并记录：传送切区后场景/相机全变，跨区的旧帧+B 不能
+    复用于相位相关（会得到错误位移），见 _walk_special_coordinate 的
+    热启动条件。
+    """
     global _LAST_SPECIAL_VIEW
     try:
         img = win.capture(force_activate=False)
     except Exception:  # noqa: BLE001 —— 记忆失败只影响下次热启动
         img = None
     if img is not None and B is not None:
-        _LAST_SPECIAL_VIEW = {"map": target, "B": B, "frame": img,
-                              "pos": pos}
+        _LAST_SPECIAL_VIEW = {"map": target, "zone": zone_name, "B": B,
+                              "frame": img, "pos": pos}
 
 
-def _walk_special_coordinate(win, target, x, y, emit, use_route=True):
+def _walk_special_coordinate(win, target, x, y, emit, use_route=True,
+                             verbose=False, zone=None, avoid=None,
+                             tolerance=None, timeout=None,
+                             zones=None, zone_state=None,
+                             recalibrate=False):
     """特殊地图洞内按坐标步行：逐帧相机跟踪 + 连续右键步行。
 
     异形洞穴（莲花洞为斜十字）相机随人物滚动，单次标定的屏幕↔世界
@@ -2755,21 +3018,57 @@ def _walk_special_coordinate(win, target, x, y, emit, use_route=True):
     2026-11-23）。**连续步行**（用户 2026-11-23）：首步停稳测一次映射
     偏差，之后每 `SPECIAL_WALK_CLICK_INTERVAL` 秒沿目标方向重新右击，
     人物不必走到点击点停稳；到达 ±3 格即成功。返回 (ok, info)。
+    verbose=True（诊断卡片/探图）：逐步输出「洞内步行 N」点击明细；
+    生产默认不输出（用户 2026-11-24：正式环境每步一条刷屏），只保留
+    到达/修正/无位移等关键节点。
+
+    分区路网参数（波月洞 A/B 等，见 _walk_special_zones）：
+    zone：限定本次步行只用该分区的 boundary/trace（缺省用整图路网）；
+    avoid：区内其它传送触发点，路线不得穿过（与进出光圈同样避让）；
+    tolerance/timeout：本次到达容差/超时（走到传送触发点要更近更快）；
+    zones/zone_state：传入时监视「位置进入其它分区」，命中即记录到
+    zone_state 并提前返回（传送可能发生在走到触发点途中）；
+    recalibrate：传送落点/贴地图边缘起步时不信任描边锚点模型（转场期
+    采集的样品与稳态相机不一致），先用名字标签 OCR，失败再强制探针。
     """
+    tol = SPECIAL_WALK_TOLERANCE if tolerance is None else int(tolerance)
+    walk_timeout = SPECIAL_WALK_TIMEOUT if timeout is None else float(timeout)
     t0 = time.time()
-    deadline = t0 + SPECIAL_WALK_TIMEOUT
+    deadline = t0 + walk_timeout
     pos0 = _special_read_pos(win)
-    if (pos0 is not None and str(pos0[0]).strip() == target
-            and abs(pos0[1] - x) <= SPECIAL_WALK_TOLERANCE
-            and abs(pos0[2] - y) <= SPECIAL_WALK_TOLERANCE):
+    if (pos0 is not None and _special_map_name_match(pos0[0], target)
+            and abs(pos0[1] - x) <= tol
+            and abs(pos0[2] - y) <= tol):
         emit(f"已在{target} ({pos0[1]},{pos0[2]})，误差 "
              f"({pos0[1] - x:+d},{pos0[2] - y:+d})，无需步行")
         return True, (f"已到达{target} ({pos0[1]},{pos0[2]})，"
                       f"误差 ({pos0[1] - x:+d},{pos0[2] - y:+d})")
-    emit(f"{target} 洞内按坐标步行 → ({x},{y})（相机位移跟踪，容差 "
-         f"±{SPECIAL_WALK_TOLERANCE} 格）")
+    zone_name = _special_zone_name(zone) if isinstance(zone, dict) else ""
+    zone_label = f" {zone_name} 区" if zone_name else ""
+
+    def _zone_teleported(p):
+        """位置已进入其它分区 → 记录传送并返回 True（仅触发点步行启用）。"""
+        if zones is None or zone_state is None or not zone_name or p is None:
+            return False
+        z_now = _special_zone_at(zones, p[1], p[2])
+        if z_now is None:
+            return False
+        name_now = _special_zone_name(z_now)
+        if not name_now or name_now == zone_name:
+            return False
+        zone_state["teleported"] = True
+        zone_state["pos"] = p
+        zone_state["zone"] = z_now
+        emit(f"已传送到 {name_now} 区 ({p[1]},{p[2]})")
+        return True
+    emit(f"{target}{zone_label} 洞内按坐标步行 → ({x},{y})（相机位移跟踪，"
+         f"容差 ±{tol} 格）")
     _entry = special_map_entry(target)
     portal = _entry.get("portal") if _entry else None
+    # 传送光圈 + 区内其它洞口触发点统一为避让点列表（单点写法兼容）
+    portal = _special_portal_points(portal) + _special_portal_points(avoid)
+    route = special_map_route(target) if use_route else None
+    active_route = zone if isinstance(zone, dict) else route
     waypoints = [(x, y)]
     final_target = (x, y)
 
@@ -2785,32 +3084,50 @@ def _walk_special_coordinate(win, target, x, y, emit, use_route=True):
         else:
             emit(f"{prefix}使用{target}探图路网：{len(wps)} 个途经点")
 
-    if use_route and pos0 is not None:
-        route = special_map_route(target)
-        if route is not None:
-            wps = _special_route_waypoints(route, pos0, x, y, portal=portal)
-            if wps:
-                waypoints = wps
-                _describe_waypoints(wps)
+    if use_route and pos0 is not None and active_route is not None:
+        wps = _special_route_waypoints(active_route, pos0, x, y, portal=portal)
+        if wps:
+            waypoints = wps
+            _describe_waypoints(wps)
 
     def _refresh_waypoints(tag):
         """探针/重探针会移动人物：按探针后的实际位置重算途经点。"""
         nonlocal waypoints
-        if not use_route:
-            return
-        route = special_map_route(target)
-        if route is None:
+        if not use_route or active_route is None:
             return
         pos_now = _special_read_pos(win)
         if pos_now is None:
             return
-        wps = _special_route_waypoints(route, pos_now, x, y, portal=portal)
+        wps = _special_route_waypoints(active_route, pos_now, x, y,
+                                       portal=portal)
         if wps:
             waypoints = wps
             _describe_waypoints(wps, prefix=f"{tag}：")
 
     B = None
-    if pos0 is not None:
+    name_tried = False
+    probe_tried = False
+    if recalibrate:
+        # 传送落点/贴地图边缘起步：描边锚点样品多在场景切换瞬间采集
+        # （相机还在转场或贴地图边缘），与稳态位置不一致——波月洞 B→A
+        # 实机模型偏差约 (150,155)px，按模型点击会点到墙/屏幕边缘，连点
+        # 无位移。名字标签 OCR 便宜且反映当前真实位置；失败再强制探针，
+        # 两者都不行才退回锚点模型。
+        if pos0 is not None:
+            name_tried = True
+            anchor = _special_self_anchor(win, emit)
+            if anchor is not None:
+                B = (pos0[1] - SPECIAL_WALK_SX * anchor[0],
+                     pos0[2] - SPECIAL_WALK_SY * anchor[1])
+                emit(f"传送后名字锚点重标定 → B=({B[0]:.2f},{B[1]:.2f})")
+        if B is None:
+            probe_tried = True
+            B = _special_probe(win, target, emit, deadline)
+            if B is not None:
+                emit("传送后探针重标定完成")
+            else:
+                emit("传送后名字/探针标定失败，退回描边锚点模型")
+    if B is None and pos0 is not None:
         # 描边采集的锚点模型优先（免 OCR/探针，人多也不受影响）
         anchor = _special_model_anchor(win, target, pos0)
         if anchor is not None:
@@ -2818,7 +3135,7 @@ def _walk_special_coordinate(win, target, x, y, emit, use_route=True):
                  pos0[2] - SPECIAL_WALK_SY * anchor[1])
             emit(f"描边锚点模型：角色屏幕 ≈({anchor[0]:.0f},{anchor[1]:.0f})"
                  f" → B=({B[0]:.2f},{B[1]:.2f})")
-        if B is None:
+        if B is None and not name_tried:
             anchor = _special_self_anchor(win, emit)
             if anchor is not None:
                 B = (pos0[1] - SPECIAL_WALK_SX * anchor[0],
@@ -2826,7 +3143,8 @@ def _walk_special_coordinate(win, target, x, y, emit, use_route=True):
                 emit(f"名字锚点标定 → B=({B[0]:.2f},{B[1]:.2f})")
     lv = _LAST_SPECIAL_VIEW
     if (B is None and lv.get("map") == target and lv.get("frame") is not None
-            and lv.get("B") is not None):
+            and lv.get("B") is not None
+            and (not zone_name or lv.get("zone") == zone_name)):
         img_now = win.capture(force_activate=False)
         shift = _special_frame_shift(lv["frame"], img_now)
         if shift is not None and shift[2] >= 0.20:
@@ -2834,6 +3152,8 @@ def _walk_special_coordinate(win, target, x, y, emit, use_route=True):
             emit(f"沿用上次相机标定（位移 ({shift[0]:.1f},{shift[1]:.1f}) "
                  f"resp={shift[2]:.2f}）→ B=({B[0]:.2f},{B[1]:.2f})")
     if B is None:
+        if probe_tried:
+            return False, "洞内无法定位（探针点击均无位移）"
         B = _special_probe(win, target, emit, deadline)
         if B is None:
             return False, "洞内无法定位（探针点击均无位移）"
@@ -2841,12 +3161,10 @@ def _walk_special_coordinate(win, target, x, y, emit, use_route=True):
 
     # 可见性检查用边界（只点视窗内且直线不穿空洞的路线点）
     route_boundary = None
-    if use_route:
-        _route = special_map_route(target)
-        if _route is not None:
-            _b = _route.get("boundary")
-            if isinstance(_b, list) and len(_b) >= 3:
-                route_boundary = _b
+    if use_route and isinstance(active_route, dict):
+        _b = active_route.get("boundary")
+        if isinstance(_b, list) and len(_b) >= 3:
+            route_boundary = _b
 
     misses = 0
     read_misses = 0
@@ -2899,9 +3217,13 @@ def _walk_special_coordinate(win, target, x, y, emit, use_route=True):
                 return False, f"洞内位置读取失败（最后位置 {last}）"
             continue
         read_misses = 0
-        if str(pos[0]).strip() != target:
+        if not _special_map_name_match(pos[0], target):
             return False, (f"洞内步行时场景变化：{pos[0]} "
                            f"({pos[1]},{pos[2]})")
+        if _zone_teleported(pos):
+            # 触发点途中/到达瞬间就完成传送：本次步行目标已不存在，
+            # 交回 _walk_special_zones 从落点继续下一段
+            return True, f"已传送到{_special_zone_name(zone_state['zone'])}区"
         if not shift_ok:
             # 相位相关不可用（画面变化大/遮挡）：用当前站位查锚点模型
             # 重标定 B，避免点击点按旧视图换算。
@@ -2946,20 +3268,23 @@ def _walk_special_coordinate(win, target, x, y, emit, use_route=True):
             direct_stuck_t = time.time()
         fdx = final_target[0] - pos[1]
         fdy = final_target[1] - pos[2]
-        arrive_gate = max(SPECIAL_WALK_TOLERANCE, SPECIAL_WALK_ARRIVE_CHECK)
+        arrive_gate = max(tol, SPECIAL_WALK_ARRIVE_CHECK)
         if (abs(fdx) <= arrive_gate and abs(fdy) <= arrive_gate
                 and endpoint_last != (pos[1], pos[2])):
             # 接近目标：等停稳用最终落点复核（连续走时半路位置可能还在走，
             # 日志/成功判定都必须用停稳后的真实站位）
             final_pos = _special_settle_pos(win, pos)
             if final_pos is not None:
-                if str(final_pos[0]).strip() != target:
+                if not _special_map_name_match(final_pos[0], target):
                     return False, (f"洞内步行时场景变化：{final_pos[0]} "
                                    f"({final_pos[1]},{final_pos[2]})")
                 pos = final_pos
                 last = pos
                 prev_pos = (pos[1], pos[2])
                 prev_img = None
+                if _zone_teleported(pos):
+                    return True, (f"已传送到"
+                                  f"{_special_zone_name(zone_state['zone'])}区")
                 fdx = final_target[0] - pos[1]
                 fdy = final_target[1] - pos[2]
                 # 停稳后的真实进展才重置「直线无进展」计时（避免终点原地
@@ -2970,14 +3295,14 @@ def _walk_special_coordinate(win, target, x, y, emit, use_route=True):
                         or goal_dist <= direct_best - SPECIAL_WALK_PROGRESS_MIN):
                     direct_best = goal_dist
                     direct_stuck_t = time.time()
-            if (abs(fdx) <= SPECIAL_WALK_TOLERANCE
-                    and abs(fdy) <= SPECIAL_WALK_TOLERANCE):
+            if (abs(fdx) <= tol and abs(fdy) <= tol):
                 extra = ("" if final_target == (x, y)
                          else f"（目标在描边外，最近可走点 {final_target}）")
                 emit(f"洞内步行到达 {target} ({pos[1]},{pos[2]})，"
                      f"误差 ({fdx:+d},{fdy:+d}){extra}，共 {clicks} 次点击 "
                      f"{time.time() - t0:.1f}s")
-                _remember_special_view(win, target, B, pos)
+                _remember_special_view(win, target, B, pos,
+                                       zone_name=zone_name or None)
                 return True, (f"已到达{target} ({pos[1]},{pos[2]}){extra}，"
                               f"误差 ({fdx:+d},{fdy:+d})")
             # 同一站位不再重复停稳复核（否则反复「修正→原地→再修正」）：
@@ -2986,8 +3311,7 @@ def _walk_special_coordinate(win, target, x, y, emit, use_route=True):
             # 停稳复核超容差：按最终误差修正点击偏置（无首步校准的终点闭环）
             aim_bias = (max(-6.0, min(6.0, aim_bias[0] + fdx)),
                         max(-6.0, min(6.0, aim_bias[1] + fdy)))
-            emit(f"停稳后 ({pos[1]},{pos[2]}) 超出容差 ±"
-                 f"{SPECIAL_WALK_TOLERANCE}，修正偏置"
+            emit(f"停稳后 ({pos[1]},{pos[2]}) 超出容差 ±{tol}，修正偏置"
                  f"({aim_bias[0]:+.1f},{aim_bias[1]:+.1f})，继续走")
         while (len(waypoints) > 1
                and abs(pos[1] - waypoints[0][0])
@@ -2998,13 +3322,16 @@ def _walk_special_coordinate(win, target, x, y, emit, use_route=True):
         tx_wp, ty_wp = waypoints[0]
         # 直线导航（单途经点）长时间没有实质进展 → 改走描边路网绕行（一次）
         if (use_route and not direct_rescued and len(waypoints) == 1
+                and active_route is not None
                 and time.time() - direct_stuck_t
                 >= SPECIAL_WALK_DIRECT_STUCK_TIME):
-            route = special_map_route(target)
-            wps = None
-            if route is not None:
-                wps = _special_trace_waypoints(
-                    route, pos, final_target[0], final_target[1])
+            wps = _special_trace_waypoints(
+                active_route, pos, final_target[0], final_target[1])
+            if not wps and route_boundary is not None:
+                # 分区只有边界没有描边折线时，用边界栅格 A* 绕行
+                wps = _special_boundary_waypoints(
+                    route_boundary, (pos[1], pos[2]), final_target,
+                    portal=portal)
             if wps and len(wps) > 1:
                 waypoints = wps
                 direct_rescued = True
@@ -3142,13 +3469,16 @@ def _walk_special_coordinate(win, target, x, y, emit, use_route=True):
         seg_target = ((SPECIAL_WALK_SX * px + B[0],
                        SPECIAL_WALK_SY * py + B[1])
                       if screen_clamped else step_world)
-        bias_txt = ("" if aim_bias == (0.0, 0.0)
-                    else f" 修正({aim_bias[0]:+.1f},{aim_bias[1]:+.1f})")
-        clamp_txt = " 屏幕边缘" if screen_clamped else ""
-        emit(f"洞内步行 {clicks + 1}: {pos[1:]} 差 ({dx:+d},{dy:+d}) "
-             f"角色屏幕≈({A_x:.0f},{A_y:.0f}) 步长 {slen:.0f}px "
-             f"→ 右键 ({px},{py}) 途经点 ({tx_wp},{ty_wp})"
-             f"{bias_txt}{clamp_txt}")
+        if verbose:
+            # 逐步点击明细只在诊断/探图输出（用户 2026-11-24：正式环境
+            # 每步一条刷屏不需要）
+            bias_txt = ("" if aim_bias == (0.0, 0.0)
+                        else f" 修正({aim_bias[0]:+.1f},{aim_bias[1]:+.1f})")
+            clamp_txt = " 屏幕边缘" if screen_clamped else ""
+            emit(f"洞内步行 {clicks + 1}: {pos[1:]} 差 ({dx:+d},{dy:+d}) "
+                 f"角色屏幕≈({A_x:.0f},{A_y:.0f}) 步长 {slen:.0f}px "
+                 f"→ 右键 ({px},{py}) 途经点 ({tx_wp},{ty_wp})"
+                 f"{bias_txt}{clamp_txt}")
         human_click(win, px, py, button="secondary")
         last_click_t = time.time()
         clicks += 1
@@ -3211,6 +3541,240 @@ def _walk_special_coordinate(win, target, x, y, emit, use_route=True):
     return False, f"洞内步行步数超过上限（最后位置 {last}）"
 
 
+def _special_wait_teleport(win, target, from_zone_name, trigger, zones, emit,
+                           timeout=SPECIAL_TELEPORT_WAIT):
+    """等待洞口传送完成：位置进入其他分区（或大幅跳变）且连续稳定。
+
+    传送有加载黑屏/位置 OCR 短暂失败——读不到继续等；战斗期间冻结。
+    位置跳变但落在所有描边外（落点略偏出描边）时，离触发点超过
+    SPECIAL_TELEPORT_JUMP_MIN 也按传送处理（取最近边界所在区）。
+    返回 (pos, zone)；超时返回 (None, None)。
+    """
+    deadline = time.time() + timeout
+    stable_pos = None
+    stable_zone = None
+    stable_n = 0
+    while time.time() < deadline:
+        _check_cancel()
+        img = win.capture(force_activate=False)
+        if img is not None and is_in_battle_frame(img):
+            deadline += 1.0
+            time.sleep(1.0)
+            continue
+        pos = (game_map.read_map_position(None, img=img)
+               if img is not None else None)
+        if pos is None:
+            pos = _special_read_pos(win)
+        cand = None
+        if pos is not None and _special_map_name_match(pos[0], target):
+            zone = _special_zone_at(zones, pos[1], pos[2])
+            if zone is not None and _special_zone_name(zone) != from_zone_name:
+                cand = zone
+            elif zone is None:
+                moved = math.hypot(pos[1] - trigger[0],
+                                   pos[2] - trigger[1])
+                if moved >= SPECIAL_TELEPORT_JUMP_MIN:
+                    near = _special_zone_at(zones, pos[1], pos[2],
+                                            allow_nearest=True)
+                    if (near is not None
+                            and _special_zone_name(near) != from_zone_name):
+                        cand = near
+        if cand is not None:
+            if (stable_pos == (pos[1], pos[2])
+                    and _special_zone_name(stable_zone)
+                    == _special_zone_name(cand)):
+                stable_n += 1
+            else:
+                stable_pos = (pos[1], pos[2])
+                stable_zone = cand
+                stable_n = 1
+            if stable_n >= SPECIAL_TELEPORT_STABLE_POLLS:
+                emit(f"传送完成：{from_zone_name} 区 → "
+                     f"{_special_zone_name(cand)} 区 ({pos[1]},{pos[2]})")
+                return pos, cand
+        else:
+            stable_pos = None
+            stable_zone = None
+            stable_n = 0
+        time.sleep(0.4)
+    return None, None
+
+
+def _special_trigger_nudge(win, target, trigger, zone, avoid, emit,
+                           verbose=False):
+    """未触发传送：朝洞口方向越过触发点补点一次。
+
+    补点可能落在描边外，由 _special_route_waypoints 自动钳到最近可走
+    边界点（通常就是触发点附近），人物再走一次即可踩进触发区。
+    """
+    pos = _special_read_pos(win)
+    if pos is None:
+        return False
+    dx = trigger[0] - pos[1]
+    dy = trigger[1] - pos[2]
+    dist = math.hypot(dx, dy)
+    if dist > 1e-6:
+        bx = int(round(trigger[0] + dx / dist * 3.0))
+        by = int(round(trigger[1] + dy / dist * 3.0))
+    else:
+        bx, by = int(round(trigger[0])), int(round(trigger[1]))
+    emit(f"传送未触发：朝洞口方向补点 ({bx},{by})")
+    ok, _info = _walk_special_coordinate(
+        win, target, bx, by, emit, verbose=verbose, zone=zone, avoid=avoid,
+        tolerance=1, timeout=SPECIAL_TELEPORT_NUDGE_TIMEOUT)
+    return ok
+
+
+def _walk_special_zones(win, target, x, y, emit, verbose=False, _retries=2,
+                        _force_probe_first=False):
+    """特殊地图分区导航（波月洞 A/B）：跨区先走洞口传送，再在目标区步行。
+
+    分区路网（route["zones"]/["links"]）描述同一坐标平面上的多块互不
+    相连区域：先用位置判定当前区/目标区，BFS 求传送链，逐段走到本区
+    触发点并等待场景切换（传送也可能发生在步行途中，由 zone_state
+    捕获），最后在目标区按该区边界步行到目标。目标区步行期间若被
+    洞口传送到别的区（目标靠近回程触发点），按新位置重新规划，最多
+    _retries 次。无分区路网时等价于 _walk_special_coordinate。
+    从传送落点附近起步的每一段都用名字/探针重标定相机（recalibrate），
+    不信任转场期采集的描边锚点样品。返回 (ok, info)。
+    """
+    route = special_map_route(target)
+    zones = _special_zones(route)
+    if len(zones) < 2:
+        return _walk_special_coordinate(win, target, x, y, emit,
+                                        verbose=verbose)
+    names = [_special_zone_name(z) for z in zones]
+    if "" in names or len(set(names)) != len(names):
+        emit(f"{target} 分区路网缺少唯一区名，按整图路网步行")
+        return _walk_special_coordinate(win, target, x, y, emit,
+                                        verbose=verbose)
+    by_name = {_special_zone_name(z): z for z in zones}
+    links = _special_zone_links(route)
+    pos = _special_read_pos(win)
+    if pos is None or not _special_map_name_match(pos[0], target):
+        return _walk_special_coordinate(win, target, x, y, emit,
+                                        verbose=verbose)
+    cur = _special_zone_at(zones, pos[1], pos[2], allow_nearest=True)
+    dst = _special_zone_at(zones, x, y, allow_nearest=True)
+    if cur is None or dst is None:
+        return _walk_special_coordinate(win, target, x, y, emit,
+                                        verbose=verbose)
+    cur_name = _special_zone_name(cur)
+    dst_name = _special_zone_name(dst)
+    triggers = {}
+    for link in links:
+        triggers.setdefault(link["from_zone"], []).append(link["from"])
+    need_recal = bool(_force_probe_first)
+
+    def _landing_recal(px, py, r=6.0):
+        """起点在传送落点附近时，该落点是否被标记为需重标定相机。
+
+        波月洞 A 落点（B→A）附近没有稳态锚点样品，必须名字/探针重标定；
+        B 落点（A→B）样品正常，继续用锚点模型，避免探针把人物带偏绕路。
+        """
+        best = None
+        for link in links:
+            d = math.hypot(px - link["land"][0], py - link["land"][1])
+            if d <= r and (best is None or d < best[0]):
+                best = (d, link)
+        return bool(best and best[1].get("land_recalibrate"))
+
+    if _landing_recal(pos[1], pos[2]):
+        need_recal = True
+
+    def _walk_destination(zone_obj, recalibrate=False):
+        """目标区步行：区内其他触发点避让（目标本身在触发点附近时除外）。"""
+        zn = _special_zone_name(zone_obj)
+        zavoid = [p for p in triggers.get(zn, [])
+                  if math.hypot(p[0] - x, p[1] - y)
+                  > SPECIAL_PORTAL_AVOID_R]
+        state = {}
+        ok2, info2 = _walk_special_coordinate(
+            win, target, x, y, emit, verbose=verbose, zone=zone_obj,
+            avoid=zavoid, zones=zones, zone_state=state,
+            recalibrate=recalibrate)
+        return ok2, info2, state
+
+    def _replan(zone_now):
+        """目标区步行期间被传送走：清旧视图并按当前区重新规划。"""
+        emit(f"{target} 目标区步行期间被传送到 {zone_now} 区，重新规划")
+        _LAST_SPECIAL_VIEW.clear()
+        if _retries > 0:
+            return _walk_special_zones(win, target, x, y, emit,
+                                       verbose=verbose,
+                                       _retries=_retries - 1,
+                                       _force_probe_first=True)
+        return False, f"{target} 分区导航反复传送，未能到达目标"
+
+    if cur_name == dst_name:
+        ok, info, state = _walk_destination(cur, recalibrate=need_recal)
+        if state.get("teleported"):
+            return _replan(_special_zone_name(state.get("zone")))
+        return ok, info
+    path = _special_zone_path(links, cur_name, dst_name)
+    if path is None:
+        emit(f"{target} 当前 {cur_name} 区，目标在 {dst_name} 区，"
+             f"但路网没有可用传送路线")
+        return False, (f"{target} 分区之间无传送路线"
+                       f"（{cur_name}→{dst_name}）")
+    emit(f"{target} 分区路网：当前 {cur_name} 区 ({pos[1]},{pos[2]})，"
+         f"目标 {dst_name} 区 ({x},{y})，需传送 {len(path)} 次")
+    for hop in path:
+        fname = hop["from_zone"]
+        tname = hop["to_zone"]
+        from_zone = by_name[fname]
+        trig = hop["from"]
+        # 本区其它传送触发点一律避让；当前要走的触发点是目标，不避让
+        avoid = [p for p in triggers.get(fname, []) if p != trig]
+        emit(f"前往 {fname} 区传送点 ({trig[0]:.0f},{trig[1]:.0f})"
+             f" → {tname} 区")
+        state = {}
+        ok, info = _walk_special_coordinate(
+            win, target, int(round(trig[0])), int(round(trig[1])), emit,
+            verbose=verbose, zone=from_zone, avoid=avoid,
+            tolerance=SPECIAL_TRIGGER_TOLERANCE,
+            timeout=SPECIAL_TRIGGER_WALK_TIMEOUT,
+            zones=zones, zone_state=state, recalibrate=need_recal)
+        if not state.get("teleported") and not ok:
+            return False, f"{target} 前往传送点失败：{info}"
+        if state.get("teleported"):
+            tp = state.get("pos")
+            emit(f"已传送进入 {tname} 区"
+                 + (f" ({tp[1]},{tp[2]})" if tp is not None else ""))
+        else:
+            # 已走到触发点但还未切场景：等自动传送，未触发则补点重试
+            tp, tzone = _special_wait_teleport(win, target, fname, trig,
+                                               zones, emit)
+            for _ in range(SPECIAL_TELEPORT_NUDGES):
+                if tp is not None:
+                    break
+                _special_trigger_nudge(win, target, trig, from_zone, avoid,
+                                       emit, verbose=verbose)
+                tp, tzone = _special_wait_teleport(win, target, fname, trig,
+                                                   zones, emit)
+            if tp is None:
+                return False, (f"{target} 传送未触发"
+                               f"（{fname} 区 {trig} → {tname} 区）")
+            emit(f"已传送进入 {_special_zone_name(tzone)} 区 "
+                 f"({tp[1]},{tp[2]})")
+        # 落点与路网预期不符（踩到别的洞口等）：按实际分区重新规划
+        landed = (_special_zone_at(zones, tp[1], tp[2], allow_nearest=True)
+                  if tp is not None else None)
+        landed_name = _special_zone_name(landed)
+        if landed_name and landed_name != tname:
+            return _replan(landed_name)
+        # 刚从该链接的落点起步：只有落点被标记（附近无稳态锚点样品）
+        # 才重标定；A→B 的 B 落点锚点正常，不触发探针绕路。
+        need_recal = bool(hop.get("land_recalibrate"))
+        # 相机/场景已切换：旧视图热启动不可复用
+        _LAST_SPECIAL_VIEW.clear()
+    ok, info, state = _walk_destination(by_name[dst_name],
+                                        recalibrate=need_recal)
+    if state.get("teleported"):
+        return _replan(_special_zone_name(state.get("zone")))
+    return ok, info
+
+
 def explore_special_map(win, target, center=None, arm_step=8,
                         max_arm_steps=8, log_fn=None):
     """特殊地图自动探图：从十字中心向四个斜向臂探测并保存路网。
@@ -3226,13 +3790,14 @@ def explore_special_map(win, target, center=None, arm_step=8,
         center = tuple(route["center"]) if route else (57, 26)
     emit(f"{target} 自动探图：中心 {center}，四臂探测中（可中断）")
     ok, info = _walk_special_coordinate(win, target, center[0], center[1],
-                                        emit, use_route=False)
+                                        emit, use_route=False, verbose=True)
     if not ok:
         return False, f"探图前到达中心失败：{info}"
     arms = {}
     for d in ((1, -1), (-1, 1), (-1, -1), (1, 1)):
         ok_c, info_c = _walk_special_coordinate(
-            win, target, center[0], center[1], emit, use_route=False)
+            win, target, center[0], center[1], emit, use_route=False,
+            verbose=True)
         if not ok_c:
             emit(f"返回中心失败：{info_c}")
             break
@@ -3241,7 +3806,7 @@ def explore_special_map(win, target, center=None, arm_step=8,
             tx = center[0] + d[0] * arm_step * k
             ty = center[1] + d[1] * arm_step * k
             ok_a, info_a = _walk_special_coordinate(
-                win, target, tx, ty, emit, use_route=False)
+                win, target, tx, ty, emit, use_route=False, verbose=True)
             if not ok_a:
                 emit(f"臂 {d} 第 {k} 节点 ({tx},{ty}) 不可达：{info_a}")
                 break
@@ -3269,15 +3834,16 @@ def _navigate_special_map(win, target, x, y, entry, emit, verbose=False,
     入口两条路（用户 2026-11-23 明确为两种进入方式）：① 父地图入口
     坐标（平顶山 102,42）走近光圈自动进场；② 未自动进门时打开父地图
     场景地图、勾选「普通」、点入口 NPC（金角大王/银角大王）自动寻路
-    进入。进入后洞内无小地图，用 _walk_special_coordinate 右键小步
-    按 HUD 坐标走到目标（±3 格即可）。
+    进入。进入后洞内无小地图，用 _walk_special_zones 右键小步按 HUD
+    坐标走到目标（分区图先经洞口传送，±3 格即可）。
     """
     t_start = time.time()
 
     pos = _read_pos(win)
-    if pos is not None and str(pos[0]).strip() == target:
+    if pos is not None and _special_map_name_match(pos[0], target):
         emit(f"已在{target}（{pos[1]},{pos[2]}），直接步行到坐标")
-        return _walk_special_coordinate(win, target, x, y, emit)
+        return _walk_special_zones(win, target, x, y, emit,
+                                   verbose=verbose)
     parent = entry["parent"]
     ex, ey = entry["entry"]
     emit(f"{target} 世界地图无标签：经{parent}入口 ({ex},{ey}) 进入")
@@ -3286,7 +3852,7 @@ def _navigate_special_map(win, target, x, y, entry, emit, verbose=False,
                               on_walk_start=on_walk_start,
                               enter_name=target)
     pos = _read_pos(win)
-    entered = pos is not None and str(pos[0]).strip() == target
+    entered = pos is not None and _special_map_name_match(pos[0], target)
     if ok and not entered:
         # 到达入口坐标但还没自动进门：给光圈一个短窗口（走近即触发），
         # 仍不进再走场景地图 NPC 入口（用户 2026-11-23 兜底）
@@ -3300,7 +3866,8 @@ def _navigate_special_map(win, target, x, y, entry, emit, verbose=False,
             return False, (f"{target} 进入失败（入口：{info}；"
                            f"NPC 入口：{info2}）")
         emit(f"{info2}（总耗时 {time.time() - t_start:.1f}s）")
-    ok_w, info_w = _walk_special_coordinate(win, target, x, y, emit)
+    ok_w, info_w = _walk_special_zones(win, target, x, y, emit,
+                                       verbose=verbose)
     if not ok_w:
         return False, f"已进入{target}，但未能走到坐标：{info_w}"
     emit(f"{target} 导航完成（总耗时 {time.time() - t_start:.1f}s）")
@@ -3317,8 +3884,9 @@ def navigate_to_map_coordinate(win, target, x, y, log_fn=None, verbose=False,
     按 HUD 坐标右键小步走到 (x,y)（±3 格，见 _navigate_special_map）。
     返回 (ok, info)，过程经 log_fn 输出。
     每个关键阶段 emit 一行累计/分段耗时，最终 info 附完整耗时汇总。
-    verbose=True（诊断卡片）逐次输出行走位置；生产默认只在地名变化
-    （过场景）时输出，避免每 1s 一条刷屏。
+    verbose=True（诊断卡片/探图）逐次输出行走位置与洞内步行逐步点击
+    明细；生产默认只在地名变化（过场景）、到达/修正/无位移等关键节点
+    输出，避免每 1s 一条刷屏。
     on_walk_start：可选无参回调，位移启动确认后、到达等待前调用一次
     （行走期插队任务，如修罗手动寻路的组号队员血蓝 pass——与 follow
     点任务绿字后的寻路期 pass 对齐）。回调异常只记日志、不影响导航；

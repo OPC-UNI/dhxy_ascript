@@ -2362,6 +2362,12 @@
                         <span class="verify-result" id="jiguan-verify-result"></span>
                     </div>
                     <div class="verify-row">
+                        <button id="btn-verify-edge-target" class="btn" onclick="verifyEdgeTarget()">边缘目标查找</button>
+                        <input id="edge-target-x" class="shout-input" type="number" min="0" max="9999" placeholder="目标X（可选）" style="width:104px;flex:none;">
+                        <input id="edge-target-y" class="shout-input" type="number" min="0" max="9999" placeholder="目标Y（可选）" style="width:104px;flex:none;">
+                        <span class="verify-result" id="edge-target-verify-result"></span>
+                    </div>
+                    <div class="verify-row">
                         <button id="btn-verify-position" class="btn" onclick="verifyPosition()">获取当前坐标</button>
                         <span class="verify-result" id="position-verify-result"></span>
                     </div>
@@ -2373,7 +2379,7 @@
                         <button id="btn-verify-apply-panel" class="btn" onclick="verifyApplyPanel()">测试申请加入</button>
                         <span class="verify-result" id="apply-panel-verify-result"></span>
                     </div>
-                    <div class="group-hint">机关模板：对当前游戏画面逐一测试黄/蓝/红三个机关模板，打印全帧最佳匹配度与位置日志（只读不点击），请将游戏画面停在封印机关场景再测试。坐标：读取游戏左上角当前地图名与坐标并打印日志（只读）。对话框识别：单帧模板匹配判定对话框是否在场并计时、同时计时对话区 OCR——请分别在有对话框（如巫医/任务对话）和无对话框场景各点一次，对照日志中模板分数与两段耗时（方案验证：模板未命中即跳过对话 OCR）。申请加入：单帧匹配申请加入面板并识别申请人行（名字+等级+点击点坐标，只读）——请打开申请加入面板（有人申请时点组队按钮出现）再点，对照日志中识别出的申请人是否与面板一致。四项任务运行中也可使用。</div>
+                    <div class="group-hint">机关模板：对当前游戏画面逐一测试黄/蓝/红三个机关模板，打印全帧最佳匹配度与位置日志（只读不点击），请将游戏画面停在封印机关场景再测试。边缘目标查找：单帧先查任务小牌模板（五倍白龙马任务按钮/修罗任务标记），都没有再 OCR 世界区名字并**汇总一行**打印识别到的名字（不逐行刷屏；另有修罗「xx修罗」后缀候选）；填了目标 X/Y（任务栏/领取对话框的坐标）时还会打印特殊地图坐标反查屏幕点（与任务兜底同一模型，名字被叠绘挡住时的落点，只打印不点击）——站在手动寻路到达的边缘目标旁点一次即可对照（只读不点击）。坐标：读取游戏左上角当前地图名与坐标并打印日志（只读）。对话框识别：单帧模板匹配判定对话框是否在场并计时、同时计时对话区 OCR——请分别在有对话框（如巫医/任务对话）和无对话框场景各点一次，对照日志中模板分数与两段耗时（方案验证：模板未命中即跳过对话 OCR）。申请加入：单帧匹配申请加入面板并识别申请人行（名字+等级+点击点坐标，只读）——请打开申请加入面板（有人申请时点组队按钮出现）再点，对照日志中识别出的申请人是否与面板一致。五项任务运行中也可使用。</div>
                 </div>
                 <div class="group-box">
                     <div class="group-title">地图导航</div>
@@ -2763,6 +2769,10 @@
     const shoutZzVerifyResultEl = document.getElementById('shout-zz-verify-result');
     const btnVerifyJiguan = document.getElementById('btn-verify-jiguan');
     const jiguanVerifyResultEl = document.getElementById('jiguan-verify-result');
+    const btnVerifyEdgeTarget = document.getElementById('btn-verify-edge-target');
+    const edgeTargetXEl = document.getElementById('edge-target-x');
+    const edgeTargetYEl = document.getElementById('edge-target-y');
+    const edgeTargetVerifyResultEl = document.getElementById('edge-target-verify-result');
     const btnVerifyPosition = document.getElementById('btn-verify-position');
     const positionVerifyResultEl = document.getElementById('position-verify-result');
     const mapNavMapEl = document.getElementById('map-nav-map');
@@ -7670,6 +7680,43 @@
         btnVerifyJiguan.disabled = false;
         jiguanVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         jiguanVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+    };
+
+    // 边缘目标查找：模板 → 名字 OCR →（可选坐标）坐标反查屏幕点，只读
+    async function verifyEdgeTarget() {
+        if (verifying) return;
+        const tx = edgeTargetXEl.value.trim();
+        const ty = edgeTargetYEl.value.trim();
+        if ((tx === '') !== (ty === '')) {
+            edgeTargetVerifyResultEl.style.color = 'var(--danger-text)';
+            edgeTargetVerifyResultEl.innerText = '目标坐标 X/Y 需同时填写';
+            return;
+        }
+        verifying = true;
+        btnVerifyEdgeTarget.disabled = true;
+        edgeTargetVerifyResultEl.style.color = 'var(--text)';
+        edgeTargetVerifyResultEl.innerText = '查找中...';
+        try {
+            const r = await callPython('verify_edge_target', tx, ty);
+            if (!r || r.status !== 'success') {
+                edgeTargetVerifyResultEl.style.color = 'var(--danger-text)';
+                edgeTargetVerifyResultEl.innerText = (r && r.msg) || '查找请求失败';
+                verifying = false;
+                btnVerifyEdgeTarget.disabled = false;
+            }
+            // 成功：等待 Python 侧 onEdgeTargetVerifyResult 回推最终结果
+        } catch (e) {
+            edgeTargetVerifyResultEl.style.color = 'var(--danger-text)';
+            edgeTargetVerifyResultEl.innerText = '查找请求异常';
+            verifying = false;
+            btnVerifyEdgeTarget.disabled = false;
+        }
+    }
+    window.onEdgeTargetVerifyResult = function (ok, info) {
+        verifying = false;
+        btnVerifyEdgeTarget.disabled = false;
+        edgeTargetVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
+        edgeTargetVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
     async function verifyPosition() {

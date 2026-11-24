@@ -3,7 +3,8 @@
 锁住（2026-11-17 用户实机全流程）：
 - 触发条件：任务名 + 「星宿石」同时在场（NPC 入口阶段零操作）
 - green_picker：场景阶段只点「四象禁地」（不点星宿石链接）
-- 场景标签识别：只认四字整行「X之星魂」，对话「此乃X之星魂」不算
+- 场景标签识别：只认「X之星魂」标签，对话「此乃X之星魂」不算；
+  玩家名/叠绘残片同排的合并行由行内子串定位（2026-11-24 实机）
 - 找星魂：点标签 → 走位结束 → 点石柱（标签上方 68px / 遮挡回退）
 - 石柱重试上限与跳过、无星魂可见时回中心/游走搜索
 - 星宿石链接点击 → 「星魂归位！」→ 回中心 → 下一轮
@@ -184,6 +185,36 @@ def test_soul_labels_merged_stacked_labels(monkeypatch):
     assert xh._pillar_point(cands, "房") == (493, 443)
 
 
+def test_soul_labels_name_merged_row(monkeypatch):
+    """队友名与星魂标签同排 → 行内定位「角之星魂」子矩形（2026-11-24 实机）。
+
+    实拍帧主条带 OCR：队友名「孤独つ魅」+ 两个星魂标签（「角之星魂」和
+    另一个只剩「星魂」残片）被合成一行「孤独つ魅 角之星魂星魂」(0.945)，
+    整行精确匹配失败 → 模块误判「视野内无星魂」反复游走，而人物正站在
+    石柱前。行内子串换算：x 494~677、11 字符、子串始末 5~9 →
+    [577, 505, 644, 531]（实测「角之星魂」黄色色块 577~637）。
+    """
+    monkeypatch.setattr(xh.game_map, "ocr_region", lambda img, region: (
+        [("角之星宿石", [1028, 328, 1112, 354], 0.994),
+         ("「长相思」", [657, 446, 728, 469], 0.997),
+         ("大唐盛景", [495, 488, 564, 511], 0.999),
+         ("箕之星宿石", [724, 488, 811, 515], 1.0),
+         ("孤独つ魅 角之星魂星魂", [494, 505, 677, 531], 0.945)], None))
+    cands = xh._soul_labels(object(), [], _frame_fn, time.time(), force=True)
+    assert cands == [("角", [577, 505, 644, 531])]
+
+
+def test_embedded_soul_rejects_dialog_and_float():
+    """行内含「X之星魂」但带此乃/归位标记：对话正文与归位浮字不算场景标签。"""
+    assert xh._embedded_soul_labels("此乃角之星魂。", [0, 0, 100, 20]) == []
+    assert xh._embedded_soul_labels("已成功让角之星魂归位了！",
+                                    [0, 0, 160, 20]) == []
+    # 行内正常子串：按位置收窄（前后都是残片）
+    assert xh._embedded_soul_labels("孤独つ魅 角之星魂星魂",
+                                    [494, 505, 677, 531]) == [
+        ("角", [577, 505, 644, 531])]
+
+
 def test_merged_soul_elements_accepts_and_rejects():
     """合并标签解析：只认「别名 + 之星魂、无残余字符」的多元素行。"""
     assert xh._merged_soul_elements("箕房星魂魂") == ["箕", "房"]
@@ -209,6 +240,20 @@ def test_search_clicks_merged_label_once(monkeypatch):
     assert xh.handle(_win(), TRACKER_ITEMS, _FRAME, frame_fn=_frame_fn) is True
     assert clicks == [(493, 522)]
     assert xh._target == "箕" and xh._walk_at > 0
+
+
+def test_search_clicks_embedded_label_not_row_center(monkeypatch):
+    """合并行（队友名+标签）：点标签子矩形中心，不是整行中心（队友名字）。"""
+    clicks = []
+    monkeypatch.setattr(xh, "human_click", lambda w, x, y: clicks.append((x, y)))
+    monkeypatch.setattr(xh.game_map, "ocr_region", lambda img, region: (
+        [("箕之星宿石", [724, 488, 811, 515], 1.0),
+         ("孤独つ魅 角之星魂星魂", [494, 505, 677, 531], 0.945)], None))
+    assert xh.handle(_win(), TRACKER_ITEMS, _FRAME, frame_fn=_frame_fn) is True
+    assert clicks == [(610, 518)]      # 子矩形 577~644 中心（整行中心 585 会点到名字）
+    assert xh._target == "角" and xh._walk_at > 0
+    # 走位结束后石柱点 = 子矩形中心 x、标签框顶上方 68px
+    assert xh._pillar_point([("角", [577, 505, 644, 531])], "角") == (610, 437)
 
 
 def test_pillar_point_offset_and_fallback():

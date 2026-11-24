@@ -65,6 +65,7 @@ from ..device import task_panel  # 任务栏（Alt+Q）：无追踪时读降魔�
 from ..device import demon_task  # 降魔任务类型/目标识别（击杀/显形镜/暗雷）
 from ..device import map as game_map  # 地图操作（世界地图/小地图/位置识别）
 from ..device import map_nav  # 坐标化寻路（通用设置开关，关闭回滚固定像素）
+from ..device import world_target  # 世界区名字 OCR（手动寻路到达后的目标兜底）
 from ..device import team  # 组队检查（领取前队伍人数检查，仅队长生效）
 from ..device import status_bars  # 血蓝检测（巫医验证模式血蓝报告）
 from ..core import debug_overlay  # 调试信息悬浮层（任务进度更新）
@@ -96,6 +97,7 @@ from ..device.dialog_common import (SCREEN_CENTER_POS, green_option_center,
                             _click_green_option_once,
                             dialog_frame_score, DIALOG_FRAME_THRESHOLD,
                             _click_screen_center,
+                            WalkGuard,
                             last_center_click_at as dc_last_center_click_at,
                             )  # 对话框共享组件（屏幕中间点击/选项中心/文案检测）
 from ..workflows.team_flow import TeamFlow  # 组队流程编排（检查/建队/补人/喊话/归队）
@@ -2136,12 +2138,19 @@ def _claim_task(win, allow_fill=False, allow_existing=False,
 
 # ---- 兼容无快捷寻路：无任务追踪时打开任务栏手动寻路（用户 2026-11-23）----
 MANUAL_TASK_MAX_ROUNDS = 10      # 单次领取最多手动战斗轮次（黄袍最多 5 轮）
-MANUAL_TEMPLATE_WAIT = 12.0      # 到达后等白龙马任务模板/对话框出现的窗口（秒）
+MANUAL_TEMPLATE_WAIT = 3.0       # 到达后找任务模板的首个窗口（秒）。用户
+                                 # 2026-11-24 规则：导航返回时人物已停稳，
+                                 # 模板要么已在场要么永不出现（目标点在地图
+                                 # 边缘时游戏不渲染），长窗（原 12s）只是
+                                 # 白等；窗口内没有即转 Alt+A 复查 + 名字
+                                 # OCR 兜底（对话框在场时主循环会延长处理）
 MANUAL_TEMPLATE_REUSE_WAIT = 5.0  # 击杀未完成时复用上次命中模板的直接尝试窗口
 MANUAL_TEMPLATE_POLL = 0.5
 MANUAL_BATTLE_START_TIMEOUT = 6.0
 MANUAL_BATTLE_TIMEOUT = 300.0    # 手动回合等战斗结束（战斗线程自动操作）
 MANUAL_XJ_USE_WAIT = 2.0         # 右键显形镜后等对话框/模板的起始等待
+MANUAL_ALT_KEY = "a"             # Alt+A 隐藏界面（同修罗手动寻路兜底）
+MANUAL_ALT_RECHECK_WAIT = 2.0    # Alt+A 后复查任务模板的短窗（秒）
 
 
 def _manual_phase(msg):
@@ -2217,115 +2226,295 @@ def _manual_close_block_dialog(win, items, img_np):
     return False
 
 
-def _manual_template_fight(win, preferred_pt=None, wait=None):
+def _manual_target_names(rec):
+    """手动回合的目标名列表（OCR 名字兜底用；五倍任务栏已知完整目标）。
+
+    用户 2026-11-24：五倍任务面板知道目标完整名字（智慧魔尊 / 白龙马 /
+    黄袍怪三种写法 / 奎星）。黄袍怪三种写法（黄袍怪/变态的黄袍怪/
+    愤怒的黄袍怪）是同一只怪：黄袍多轮任务一律额外接受短名「黄袍怪」
+    （目标解析缺失时也保留该兜底），防任务文案与世界名字前缀不一致。
+    """
+    rec = rec or {}
+    target = (rec.get("target") or "").strip()
+    names = [target] if target else []
+    if rec.get("kind") == demon_task.KIND_HUANGPAO and "黄袍怪" not in names:
+        names.append("黄袍怪")
+    return names
+
+
+def _manual_try_task_points(win, pts, preferred_pt=None, source="任务模板"):
+    """逐个点击任务点候选，直到触发战斗/开打对话。返回 (ok, info, 命中点)。
+
+    pts: [(score, cx, cy)]；source 仅用于日志文案（任务模板 / 名字）。
+    行为与原 _manual_template_fight 内联候选循环一致（2026-11-23）：
+    续杀时上一杀命中的点最近的候选排最前；误点阻塞对话框按
+    XJ_BLOCK_DIALOGS 关闭后换下一候选；每候选窗口
+    XIANXINGJING_BTN_WAIT 秒。命中点供续杀复用。
+    """
+    global _fight_via_kanda
+    if not pts:
+        return False, f"{source}候选为空", None
+    if preferred_pt is not None:
+        # 续杀复用：上一杀命中的点最近的候选排最前，错误候选后置
+        # （仍保留兜底尝试）
+        px, py = preferred_pt
+        pts = sorted(pts, key=lambda q: (q[1] - px) ** 2 + (q[2] - py) ** 2)
+    _manual_phase(f"识别到{source} {len(pts)} 处候选"
+                  + ("（优先复用上次命中点）" if preferred_pt else ""))
+    for i, (_score, cx, cy) in enumerate(pts, 1):
+        human_click(win, cx, cy)
+        move_away(win)
+        _manual_phase(f"已点击{source}候选 {i}/{len(pts)} @({cx},{cy})")
+        cand_deadline = time.time() + XIANXINGJING_BTN_WAIT
+        block_clicked_at = 0.0
+        while time.time() < cand_deadline:
+            img2 = win.capture(force_activate=False)
+            if img2 is None:
+                time.sleep(0.5)
+                continue
+            if is_in_battle_frame(img2):
+                _fight_via_kanda = True
+                ok, info = _manual_wait_battle_end(win)
+                return ok, info, (cx, cy)
+            items2, img_np2 = game_map.ocr_region(
+                img2, task_tracker.DIALOG_REGION)
+            if _xj_fight_dialog_open(items2):
+                if _handle_fight_dialog(win, items2, img_np2):
+                    _fight_via_kanda = True
+                    if _manual_wait_battle_start(win):
+                        ok, info = _manual_wait_battle_end(win)
+                        return ok, info, (cx, cy)
+                    return False, "已点开打选项但未进入战斗", None
+                return False, "开打对话选项点击失败", None
+            if _manual_close_block_dialog(win, items2, img_np2):
+                block_clicked_at = time.time()
+                cand_deadline = time.time() + XIANXINGJING_BTN_WAIT
+                time.sleep(0.5)
+                continue
+            if block_clicked_at:
+                if time.time() - block_clicked_at < XJ_BLOCK_CLOSE_WAIT:
+                    time.sleep(0.5)
+                    continue
+                break  # 阻塞对话框已关闭：换下一候选
+            time.sleep(0.5)
+        _manual_phase(f"候选 {i}/{len(pts)} 未触发战斗，继续下一候选")
+    return False, f"{source}候选全部点击后未触发战斗", None
+
+
+def _manual_coord_screen_fight(win, map_name, coord, preferred_pt=None):
+    """特殊地图按任务坐标反查屏幕点点击开打（模板/名字都被遮挡时兜底）。
+
+    用户 2026-11-24：目标名字可能被其他名字叠绘挡住（OCR 读不出）、任务
+    小牌在地图边缘也不渲染，按任务栏给的目标坐标反查当前画面屏幕点直接
+    点击。仅有描边锚点模型的特殊地图（莲花洞/波月洞/火云洞/金兜洞）可用；
+    点击点在坐标点基础上已上移 25px 落到角色本体。必须在 Alt+A 之前调用
+    （隐藏界面后 HUD 坐标读不到）。
+    返回 (ok, info, 命中点或 None)。
+    """
+    if not map_name or not coord:
+        return False, "无任务坐标", None
+    if map_nav.special_map_entry(map_name) is None:
+        # 普通地图没有描边锚点模型：属预期（走 Alt+A/名字兜底），不刷日志
+        return False, "非特殊地图", None
+    pt = map_nav.special_coord_screen_point(
+        win, map_name, coord[0], coord[1],
+        emit=lambda m: _manual_phase(m))
+    if pt is None:
+        return False, "坐标反查不可用（非特殊地图/无锚点模型/位置不可读）", None
+    _manual_phase(f"按任务坐标 {tuple(coord)} 反查屏幕点 {pt} 点击")
+    return _manual_try_task_points(
+        win, [(0.0, pt[0], pt[1])], preferred_pt, source="坐标点")
+
+
+_MANUAL_WALK_GUARD = WalkGuard()  # 手动寻路收尾点屏的站定判定（CLAUDE.md 规则 13）
+
+
+def _manual_release_alt(win):
+    """点屏幕中间释放 Alt+A（先确认人物站定，同修罗 _click_screen_center_safe）。
+
+    隐藏界面状态下位置文字区可能不可读：WalkGuard 返回 None（无法判断）
+    按未寻路放行；超时同样放行——失败收尾的点击即便打断寻路也不影响
+    后续重新寻路，但不主动在行走中取消寻路（规则 13）。
+    """
+    deadline = time.time() + 4.0
+    frame = win.capture(force_activate=False)
+    while True:
+        state = _MANUAL_WALK_GUARD.walking(win, frame) \
+            if frame is not None else None
+        frame = None
+        if state is not True or time.time() >= deadline:
+            break
+        time.sleep(0.3)
+        frame = win.capture(force_activate=False)
+    _click_screen_center(win, times=1, prefix="五倍")
+
+
+def _manual_template_fight(win, preferred_pt=None, wait=None,
+                           expect_bailongma=False, target_names=None,
+                           target_map=None, target_coord=None):
     """到达后按白龙马任务模板开打（多候选逐一尝试，同显形镜逻辑）。
 
     已在战斗 → 等结束；白龙马/普通对话框 → 点屏推进关闭；找白龙马任务
     模板全部候选 → 逐一点击 → 开打对话（点开打选项）或直接进战斗 →
     等战斗结束。误点阻塞对话框按 XJ_BLOCK_DIALOGS 关闭后换下一候选。
-    模板窗口内始终未出现模板/战斗 → 失败。
+
+    模板窗口内始终未出现模板/战斗 → 特殊地图按任务坐标反查屏幕点点击
+    （target_map/target_coord，用户 2026-11-24：名字被其他名字叠绘挡住
+    时 OCR 读不出、任务小牌在地图边缘也不渲染；反查要读 HUD 坐标，必须
+    在 Alt+A 之前做）→ 没中再 Alt+A 隐藏界面后短窗复查模板 → 仍无 →
+    OCR 世界区目标名兜底（target_names，点击名字上方 40px——名字渲染
+    在角色下方），逐候选点击。全部失败才判失败，且已按过 Alt+A 时点
+    屏幕中间释放（同修罗手动寻路失败路径）。
+
+    expect_bailongma：显形镜用镜后的腿。标准对话框在场但未命中白龙马
+    文案 = 本处是剧情幌子点（无怪，用户 2026-11-24 13:39 金兜洞实机
+    「有高僧自东土大唐而来…」）——不再点屏推进、不空等模板窗，连续
+    2 帧确认（防单帧 OCR 截断把真白龙马误判成剧情页）后点屏关闭对话框
+    （保证后续寻路点击不被吞）并判本处失败，调用方立即换下一处。
 
     preferred_pt：上一次命中战斗的模板点（元组坐标）。多候选同屏时
     只有一个能正确触发战斗；续杀时把离该点最近的候选排到最前，直接
     复用正确模板，不再先点错误候选（用户 2026-11-23）。仍保留全量
     兜底：最近候选失败会继续尝试其余候选。
+
+    target_names：任务栏已知的完整目标名（OCR 名字兜底用）；显形镜腿
+    传「白龙马」。缺省不做名字兜底（保持旧行为）。
     返回 (ok, info, 命中点或 None)；命中点供续杀复用。
     """
     global _fight_via_kanda
     deadline = time.time() + (wait or MANUAL_TEMPLATE_WAIT)
     block_clicked_at = 0.0
-    while time.time() < deadline:
+    xj_dialog_miss = 0  # 用镜后非白龙马对话框帧数（expect_bailongma 腿）
+    alt_pressed = False
+    alt_phase_done = False
+    while True:
+        while time.time() < deadline:
+            img = win.capture(force_activate=False)
+            if img is None:
+                time.sleep(MANUAL_TEMPLATE_POLL)
+                continue
+            if is_in_battle_frame(img):
+                _fight_via_kanda = True
+                _manual_phase("到达后已在战斗中，等待战斗结束")
+                ok, info = _manual_wait_battle_end(win)
+                return ok, info, preferred_pt
+            if block_clicked_at:
+                if time.time() - block_clicked_at < XJ_BLOCK_CLOSE_WAIT:
+                    time.sleep(0.5)
+                    continue  # 阻塞对话框关闭动画期：等消失再处理
+                block_clicked_at = 0.0
+            if dialog_frame_score(img) >= DIALOG_FRAME_THRESHOLD:
+                items, img_np = game_map.ocr_region(
+                    img, task_tracker.DIALOG_REGION)
+                if _handle_xj_wuben(win, items, img_np):
+                    time.sleep(MANUAL_TEMPLATE_POLL)
+                    continue
+                if _xj_fight_dialog_open(items):
+                    if _handle_fight_dialog(win, items, img_np):
+                        _fight_via_kanda = True
+                        if _manual_wait_battle_start(win):
+                            ok, info = _manual_wait_battle_end(win)
+                            return ok, info, preferred_pt
+                        return False, "已点开打选项但未进入战斗", None
+                    return False, "开打对话选项点击失败", None
+                if _manual_close_block_dialog(win, items, img_np):
+                    block_clicked_at = time.time()
+                    time.sleep(MANUAL_TEMPLATE_POLL)
+                    continue
+                if expect_bailongma and not _xj_dialog_present(items):
+                    # 用镜后出现标准对话框但不是白龙马台词：本处是剧情
+                    # 幌子点（无怪）。连续 2 帧确认后点屏关闭对话框（防
+                    # 后续寻路点击被吞），立即判本处失败换下一处——不
+                    # 空等模板窗（用户 2026-11-24：明显没命中白龙马
+                    # 文案，直接换下一处即可）
+                    xj_dialog_miss += 1
+                    if xj_dialog_miss < 2:
+                        time.sleep(MANUAL_TEMPLATE_POLL)
+                        continue
+                    if time.time() - dc_last_center_click_at() \
+                            >= XIANXINGJING_XJ_CLICK_GUARD:
+                        _click_screen_center(win, times=1, prefix="五倍")
+                        _manual_phase("用镜后为剧情对话框（非白龙马），"
+                                      "已点屏关闭，换下一处")
+                    return False, "用镜后对话框未命中白龙马文案（本处无怪）", None
+                xj_dialog_miss = 0
+                # 白龙马对话框文字/普通剧情页：点屏推进（3s 冷却防连点）
+                if time.time() - dc_last_center_click_at() >= XIANXINGJING_XJ_CLICK_GUARD:
+                    _click_screen_center(win, times=1, prefix="五倍")
+                    _manual_phase("白龙马/剧情对话框在场，已点屏幕中间推进")
+                time.sleep(MANUAL_TEMPLATE_POLL)
+                continue
+            bgr = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
+            pts = game_map.match_frame_all(
+                bgr, XIANXINGJING_TASK_ICON,
+                threshold=XIANXINGJING_BTN_THRESHOLD)
+            if not pts:
+                time.sleep(MANUAL_TEMPLATE_POLL)
+                continue
+            return _manual_try_task_points(win, pts, preferred_pt)
+        if alt_phase_done:
+            break
+        alt_phase_done = True
         img = win.capture(force_activate=False)
-        if img is None:
-            time.sleep(MANUAL_TEMPLATE_POLL)
-            continue
-        if is_in_battle_frame(img):
+        if img is not None and is_in_battle_frame(img):
             _fight_via_kanda = True
             _manual_phase("到达后已在战斗中，等待战斗结束")
             ok, info = _manual_wait_battle_end(win)
             return ok, info, preferred_pt
-        if block_clicked_at:
-            if time.time() - block_clicked_at < XJ_BLOCK_CLOSE_WAIT:
-                time.sleep(0.5)
-                continue  # 阻塞对话框关闭动画期：等消失再处理
-            block_clicked_at = 0.0
+        if img is None:
+            break  # 无帧：不动画面，也跳过名字兜底
         if dialog_frame_score(img) >= DIALOG_FRAME_THRESHOLD:
-            items, img_np = game_map.ocr_region(
-                img, task_tracker.DIALOG_REGION)
-            if _handle_xj_wuben(win, items, img_np):
-                time.sleep(MANUAL_TEMPLATE_POLL)
-                continue
-            if _xj_fight_dialog_open(items):
-                if _handle_fight_dialog(win, items, img_np):
-                    _fight_via_kanda = True
-                    if _manual_wait_battle_start(win):
-                        ok, info = _manual_wait_battle_end(win)
-                        return ok, info, preferred_pt
-                    return False, "已点开打选项但未进入战斗", None
-                return False, "开打对话选项点击失败", None
-            if _manual_close_block_dialog(win, items, img_np):
-                block_clicked_at = time.time()
-                time.sleep(MANUAL_TEMPLATE_POLL)
-                continue
-            # 白龙马对话框文字/普通剧情页：点屏推进（3s 冷却防连点）
-            if time.time() - dc_last_center_click_at() >= XIANXINGJING_XJ_CLICK_GUARD:
-                _click_screen_center(win, times=1, prefix="五倍")
-                _manual_phase("白龙马/剧情对话框在场，已点屏幕中间推进")
-            time.sleep(MANUAL_TEMPLATE_POLL)
+            # 对话框仍在处理：不按 Alt+A、不做名字 OCR（会点到对话文字），
+            # 顺延一个窗口让主循环把对话点完（多页对话/点屏冷却可能越过
+            # 首个窗口；只顺延一次，之后按失败转名字兜底）
+            deadline = time.time() + (wait or MANUAL_TEMPLATE_WAIT)
             continue
-        bgr = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
-        pts = game_map.match_frame_all(
-            bgr, XIANXINGJING_TASK_ICON,
-            threshold=XIANXINGJING_BTN_THRESHOLD)
-        if not pts:
-            time.sleep(MANUAL_TEMPLATE_POLL)
-            continue
-        if preferred_pt is not None:
-            # 续杀复用：上一杀命中的模板点最近的候选排最前，错误候选
-            # 后置（仍保留兜底尝试）
-            px, py = preferred_pt
-            pts.sort(key=lambda q: (q[1] - px) ** 2 + (q[2] - py) ** 2)
-        _manual_phase(f"识别到任务模板 {len(pts)} 处候选"
-                      + ("（优先复用上次命中点）" if preferred_pt else ""))
-        for i, (_score, cx, cy) in enumerate(pts, 1):
-            human_click(win, cx, cy)
-            move_away(win)
-            _manual_phase(f"已点击任务模板候选 {i}/{len(pts)} @({cx},{cy})")
-            cand_deadline = time.time() + XIANXINGJING_BTN_WAIT
-            block_clicked_at = 0.0
-            while time.time() < cand_deadline:
-                img2 = win.capture(force_activate=False)
-                if img2 is None:
-                    time.sleep(0.5)
-                    continue
-                if is_in_battle_frame(img2):
-                    _fight_via_kanda = True
-                    ok, info = _manual_wait_battle_end(win)
-                    return ok, info, (cx, cy)
-                items2, img_np2 = game_map.ocr_region(
-                    img2, task_tracker.DIALOG_REGION)
-                if _xj_fight_dialog_open(items2):
-                    if _handle_fight_dialog(win, items2, img_np2):
-                        _fight_via_kanda = True
-                        if _manual_wait_battle_start(win):
-                            ok, info = _manual_wait_battle_end(win)
-                            return ok, info, (cx, cy)
-                        return False, "已点开打选项但未进入战斗", None
-                    return False, "开打对话选项点击失败", None
-                if _manual_close_block_dialog(win, items2, img_np2):
-                    block_clicked_at = time.time()
-                    cand_deadline = time.time() + XIANXINGJING_BTN_WAIT
-                    time.sleep(0.5)
-                    continue
-                if block_clicked_at:
-                    if time.time() - block_clicked_at < XJ_BLOCK_CLOSE_WAIT:
-                        time.sleep(0.5)
-                        continue
-                    break  # 阻塞对话框已关闭：换下一候选
-                time.sleep(0.5)
-            _manual_phase(f"候选 {i}/{len(pts)} 未触发战斗，继续下一候选")
-        return False, "任务模板候选全部点击后未触发战斗", None
-    return False, "到达后未出现白龙马任务模板/开打对话", None
+        # 特殊地图：模板找不到时先按任务坐标反查屏幕点（用户 2026-11-24）。
+        # 必须在 Alt+A 之前做——隐藏界面后 HUD 坐标读不到，反查需要它。
+        if target_map and target_coord:
+            ok, info, hit = _manual_coord_screen_fight(
+                win, target_map, target_coord, preferred_pt)
+            if ok:
+                return ok, info, hit
+            if info != "非特殊地图":
+                _manual_phase(f"坐标反查未命中（{info}），"
+                              f"继续 Alt+A/名字兜底")
+        sent, sinfo = app_utils.press_alt_hotkey(
+            win, MANUAL_ALT_KEY, "隐藏界面看任务模板", prefix="[五倍][手动]")
+        alt_pressed = bool(sent)
+        _manual_phase(f"未出现任务模板，Alt+A 隐藏界面复查（{sinfo}）")
+        time.sleep(0.6)
+        deadline = time.time() + MANUAL_ALT_RECHECK_WAIT
+    # 模板两阶段均未命中：OCR 世界区名字兜底（用户 2026-11-24：
+    # 目标点在地图边缘时游戏不渲染任务小牌）
+    names = [n for n in (target_names or ()) if n]
+    fail_info = "到达后未出现白龙马任务模板/开打对话"
+    if names:
+        img = win.capture(force_activate=False)
+        pts = []
+        if img is not None and not is_in_battle_frame(img) \
+                and dialog_frame_score(img) < DIALOG_FRAME_THRESHOLD:
+            pts = world_target.find_named_points(img, names)
+        _manual_phase(f"任务模板未命中，OCR 名字兜底 {names} → "
+                      f"{len(pts)} 处候选"
+                      f"{'：' + '、'.join(t for t, _ in pts) if pts else ''}")
+        if pts:
+            ok, info, hit = _manual_try_task_points(
+                win, [(0.0, pt[0], pt[1]) for _txt, pt in pts],
+                preferred_pt, source="名字")
+            if ok:
+                return ok, info, hit
+            fail_info = ("到达后未出现白龙马任务模板/开打对话"
+                         f"（名字 OCR 未触发战斗：{info}）")
+        else:
+            fail_info = ("到达后未出现白龙马任务模板/开打对话"
+                         "（名字 OCR 兜底亦未找到目标）")
+    if alt_pressed and time.time() - dc_last_center_click_at() \
+            >= XIANXINGJING_XJ_CLICK_GUARD:
+        # 点屏幕中间释放 Alt+A（同修罗手动寻路失败路径；刚点过屏则
+        # 那次点击已释放，不重复点）；点前用 WalkGuard 确认站定
+        _manual_release_alt(win)
+    return False, fail_info, None
 
 
 def _manual_use_xianxingjing(win):
@@ -2390,7 +2579,12 @@ def _manual_kill_round(win, rec):
     第一杀寻路到识别坐标并按模板全部候选开打；次数未杀完时不再重新
     寻路/遍历候选——直接复用上次命中的模板点（preferred_pt），只有
     复用点未触发战斗（人物/镜头移动）才重新寻路并全量搜索。
-    全部击杀后读任务栏确认任务消失；仍在则按失败返回（下一轮重领）。
+    两场战斗之间（结算界面恢复后）补调一次组号队员血蓝 pass——多杀
+    任务间隙没有领取/跟踪环节，否则队员整轮得不到回血回蓝检查
+    （用户 2026-11-24）。
+    打满次数即直接返程，不再读任务栏确认：黄袍打满 N 轮（用户
+    2026-11-23）、普通击杀固定 1 场（用户 2026-11-24）；多场战斗的
+    其他类型（目前无）打完仍读任务栏确认任务消失。
     返回 (ok, info)。
     """
     map_name = rec.get("map")
@@ -2410,9 +2604,17 @@ def _manual_kill_round(win, rec):
         else:
             # 同地点续杀：等战斗结算界面恢复后直接复用上次命中模板
             time.sleep(1.5)
+            # 组号队员回血回蓝（用户 2026-11-24）：多杀任务两场战斗之间
+            # 没有领取/跟踪环节，唯一间隙就在这里——复用 follow 模式重点
+            # 追踪链接后的 pass（同一条 tab_group.member_bars_pass：60s
+            # 节流 + pass 互斥，pass 期间战斗线程跳过处理、屏幕不会停在
+            # 队员 Tab；队员在战斗中/结算画面自动跳过血蓝检查）。
+            _maybe_tab_bars_pass(win)
         ok, info, hit = _manual_template_fight(
             win, preferred_pt=correct_pt,
-            wait=MANUAL_TEMPLATE_REUSE_WAIT if correct_pt else None)
+            wait=MANUAL_TEMPLATE_REUSE_WAIT if correct_pt else None,
+            target_names=_manual_target_names(rec),
+            target_map=map_name, target_coord=coord)
         if not ok and correct_pt is not None:
             # 复用点未触发：任务可能已提前完成（未到预计次数）——先读
             # 任务栏。gone=提前完成；present=任务仍在，用最新识别坐标
@@ -2442,15 +2644,20 @@ def _manual_kill_round(win, rec):
             ok_nav, info_nav = _manual_navigate(win, map_name, coord)
             if not ok_nav:
                 return False, info_nav
-            ok, info, hit = _manual_template_fight(win)
+            ok, info, hit = _manual_template_fight(
+                win, target_names=_manual_target_names(rec2),
+                target_map=map_name, target_coord=coord)
         if not ok:
             return False, f"第 {i + 1}/{battles} 次战斗失败: {info}"
         correct_pt = hit or correct_pt
         _manual_phase(f"第 {i + 1}/{battles} 次战斗完成")
-    if rec.get("kind") == demon_task.KIND_HUANGPAO:
+    if rec.get("kind") == demon_task.KIND_HUANGPAO or battles == 1:
         # 黄袍怪最多 N 轮（日志实测 5 轮）：次数打满即完成，直接返程，
-        # 不再读任务栏确认（用户 2026-11-23）
-        return True, f"已完成 {battles} 次战斗（黄袍上限），直接返程"
+        # 不再读任务栏确认（用户 2026-11-23）。
+        # 普通击杀固定 1 场战斗：战斗结束即完成，同样直接返程——打完
+        # 再读两轮任务栏白白多耗 ~8s（用户 2026-11-24，实测日志
+        # 2026-11-24 13:33:07 战斗完成 → 13:33:16 才返程）
+        return True, f"已完成 {battles} 次战斗，直接返程"
     status, result = _manual_read_task_after_battle(win)
     if status == "gone":
         return True, f"已完成 {battles} 次战斗，任务消失"
@@ -2469,9 +2676,12 @@ def _manual_nav_round(win, pre_result=None):
     打开任务栏（Alt+Q）读取当前降魔任务并按识别结果手动寻路：
     - kill/huangpao：交给 _manual_kill_round 按日志实测次数连续战斗
       （普通击杀 1 次、黄袍最多 N 轮默认 5 次）；首杀寻路并全量搜索
-      模板，续杀直接复用上次命中的模板点，全部杀完后读任务栏确认消失；
+      模板，续杀直接复用上次命中的模板点，打满次数直接返程（不再读
+      任务栏确认，见 _manual_kill_round）；
     - xianxing：依次 A、B 两处：寻路 → 背包-任务储物格右键显形镜 →
-      白龙马对话框/模板候选开打；A 处未完成则去 B；
+      白龙马对话框/模板候选开打；用镜后对话框未命中白龙马文案即本处
+      无怪，立即换下一处（用户 2026-11-24）；任一处战斗结束即任务
+      完成，直接返程（不再读任务栏确认，同单场击杀）；
     - reclaim（暗雷/锁妖网）：不开打，返回失败交主循环重新领取替换。
     pre_result：run_loop 领取后预读的任务栏结果（避免重复读一次）。
     预走路（用户 2026-11-24）：任务栏确认任务需执行后首次 `_manual_navigate`
@@ -2500,7 +2710,8 @@ def _manual_nav_round(win, pre_result=None):
         rec = result.get("recognition") or {}
         result = None
         kind = rec.get("kind")
-        _manual_phase(f"任务栏识别: {demon_task.describe(rec)}")
+        # 识别摘要已由 task_panel.read_first_group_task 打「任务识别」行
+        # （用户 2026-11-24：日志只保留一行识别结果，不重复刷屏）
         if not _manual_close_task_panel(win):
             return False, "关闭任务栏失败，无法开始手动寻路"
         if kind == demon_task.KIND_RECLAIM:
@@ -2526,15 +2737,19 @@ def _manual_nav_round(win, pre_result=None):
             if not ok:
                 return False, info
             time.sleep(MANUAL_XJ_USE_WAIT)
-            ok, info, _hit = _manual_template_fight(win)
+            ok, info, _hit = _manual_template_fight(
+                win, expect_bailongma=True, target_names=("白龙马",))
             if not ok:
                 xj_leg += 1
                 if xj_leg < len(coords):
-                    _manual_phase(f"本处未完成，前往下一处 {coords[xj_leg]}")
+                    _manual_phase(f"本处未完成（{info}），"
+                                  f"前往下一处 {coords[xj_leg]}")
                     continue
                 return False, f"显形镜 A/B 均失败: {info}"
-            xj_leg += 1
-            continue
+            # 显形镜战斗结束即任务完成，直接返程（用户 2026-11-24 规则
+            # 同单场击杀）：实测 follow 13:20/13:24 与手动 13:29/13:39
+            # 战斗后任务即消失——不再读任务栏双轮确认（省 ~8s）
+            return True, f"显形镜 {coord} 战斗完成，直接返程"
         if kind in (demon_task.KIND_KILL, demon_task.KIND_HUANGPAO):
             return _manual_kill_round(win, rec)
         return False, f"未知任务类型: {demon_task.describe(rec)}"
@@ -4171,8 +4386,8 @@ def run_loop(win, cycle_interval=1.0):
                             time.sleep(cycle_interval)
                             continue
                         mrec = manual_result.get("recognition") or {}
-                        log(f"[五倍][手动] 任务栏识别: "
-                            f"{demon_task.describe(mrec)}", "SYS")
+                        # 识别摘要已由 read_first_group_task 打「任务识别」
+                        # 行（用户 2026-11-24：日志只保留一行，不重复）
                         task_panel.close_task_panel(win)
                         if mrec.get("kind") == demon_task.KIND_RECLAIM:
                             _manual_reclaim_pending = True

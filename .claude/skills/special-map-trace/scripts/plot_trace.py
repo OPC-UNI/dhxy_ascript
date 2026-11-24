@@ -2,10 +2,10 @@
 """把人工描边轨迹画成地图 PNG（坐标网格 + 轨迹折线 + 起终点标记）。
 
 输入二选一：
-- --trace  logs/xxx.jsonl   （scripts/trace_special_map.py 的输出）
+- --trace  map_trace/xxx.jsonl   （scripts/trace_special_map.py 的输出）
 - --route-json             （special_map_routes.json，取 maps[--map].trace）
 
-输出默认 logs/special_map_<map>.png。只读取，不操作游戏窗口。
+输出默认 map_trace/special_map_<map>.png。只读取，不操作游戏窗口。
 """
 import argparse
 import json
@@ -81,7 +81,7 @@ def _nice_step(span):
 def main(argv=None):
     ap = argparse.ArgumentParser(description="描边轨迹 → 地图 PNG")
     ap.add_argument("--map", required=True)
-    ap.add_argument("--trace", default="logs/special_map_trace.jsonl")
+    ap.add_argument("--trace", default="map_trace/special_map_trace.jsonl")
     ap.add_argument("--route-json", default=None,
                     help="从 special_map_routes.json 取 trace（优先于 --trace）")
     ap.add_argument("--out", default=None)
@@ -151,7 +151,7 @@ def main(argv=None):
            f"包围盒 [{minx},{miny}]-[{maxx},{maxy}]",
            fill=(30, 30, 30), font=title_font)
 
-    out = Path(args.out) if args.out else REPO / "logs" / f"special_map_{args.map}.png"
+    out = Path(args.out) if args.out else REPO / "map_trace" / f"special_map_{args.map}.png"
     out.parent.mkdir(parents=True, exist_ok=True)
     img.save(out)
     print(f"地图已生成: {out}  size={img.size}  点={len(pts)}  "

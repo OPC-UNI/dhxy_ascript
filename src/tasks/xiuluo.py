@@ -56,6 +56,7 @@ from ..core import app_utils  # 高性能模式共享设施（固定位置缓存
 from ..device import task_tracker  # 任务追踪面板操作
 from ..device import map as game_map  # 地图操作（世界地图/小地图/位置识别）
 from ..device import map_nav  # 手动寻路引擎（兼容无快捷寻路，用户 2026-11-20）
+from ..device import world_target  # 世界区名字 OCR（手动寻路到达后的目标兜底）
 from ..device import team  # 组队检查（领取前队伍人数检查，仅队长生效）
 from ..core import debug_overlay  # 调试信息悬浮层（任务进度更新）
 from ..device import status_bars  # 血蓝检测（自动巫医前置条件）
@@ -340,7 +341,10 @@ _fight_cached_used = False       # 当前这次看打对话框出现已试过缓
 # 模板，用户 2026-11-21 提供的「任务」小牌）→ 看打；被面板挡住时
 # Alt+A 隐藏界面再找标记，
 # 点击直接进战斗同样算「看打进入」；战后回城符返程；失败回灵兽村
-# 取消任务重新领取。
+# 取消任务重新领取。目标点在地图边缘时游戏不渲染任务小牌（用户
+# 2026-11-24 确认是任务设计），Alt+A 后仍无标记 → OCR 世界区名字
+# 「xx修罗」兜底（领取对话框只给坐标没有完整名字，但目标名必为
+# 「xx修罗」），点击名字上方 40px（名字渲染在角色下方）开打。
 _claim_manual_dialog = False     # 本次领取是否以「对话框证据」确认（无任务
                                  # 追踪）：True → 主循环改走手动寻路分支
 MANUAL_DEST_COORD_RE = re.compile(
@@ -354,6 +358,10 @@ MARKER_DIALOG_WAIT = 1.5          # 点标记后等对话框/战斗的窗口（�
 MARKER_BATTLE_START_TIMEOUT = 10.0  # 点「看打！」后等战斗场景出现超时
 MANUAL_BATTLE_TIMEOUT = 300.0     # 手动寻路回合等战斗结束超时（战斗线程自动操作）
 MANUAL_ALT_KEY = "a"              # Alt+A 隐藏界面（用户指定：释放面板遮挡看标记）
+# 名字 OCR 兜底（用户 2026-11-24）：目标点在地图边缘时游戏不渲染任务
+# 小牌；Alt+A 后仍无标记 → 世界区 OCR 名字。领取对话框只有坐标没有
+# 完整名字，但目标名必为「xx修罗」（如 狂风修罗），按后缀匹配。
+MANUAL_NAME_SUFFIXES = ("修罗", "修羅")  # 名字后缀别名（游戏字体偶发繁体输出）
 
 # ---- 返程（任务储物格 → 修罗回城符右键 → 回灵兽村；共享实现在
 #      workflows/return_flow.py） ----
@@ -2435,14 +2443,87 @@ def _wait_manual_battle_end(win):
     return True, "战斗已结束（手动寻路回合）"
 
 
-def _click_markers_and_fight(win):
+def _ocr_name_candidates_and_fight(win):
+    """OCR 世界区「xx修罗」名字兜底：逐个候选点击开打并等战斗结束。
+
+    用户 2026-11-24：目标点在地图边缘时游戏不渲染「任务」小牌（任务
+    设计），模板与 Alt+A 兜底都找不到标记时，按名字找目标——领取
+    对话框只给坐标没有完整名字，但目标名必为「xx修罗」（如 狂风修罗），
+    世界区 OCR 按后缀匹配，点击名字框中心正上方 40px（游戏 NPC 名字
+    渲染在角色下方，名望/客栈同款标定）。
+    单个候选的处理对齐 Alt+A 标记路径：看打对话或直接进战斗都算命中，
+    无反应/其他对话框则关闭换下一个。本兜底在 Alt+A 隐藏界面状态下
+    执行（世界区更干净），调用方负责失败后点屏幕中间释放 Alt+A。
+    返回 (ok, info)。
+    """
+    global _fight_via_kanda
+    img = win.capture(force_activate=False)
+    if img is None:
+        return False, "截图失败，无法 OCR 名字兜底"
+    if is_in_battle_frame(img):
+        _fight_via_kanda = True
+        return _wait_manual_battle_end(win)
+    if dialog_frame_score(img) >= DIALOG_FRAME_THRESHOLD:
+        return False, "对话框在场，跳过名字 OCR 兜底"
+    pts = world_target.find_suffix_points(img, MANUAL_NAME_SUFFIXES)
+    log(f"[修罗][手动] OCR 名字兜底识别到名字候选 {len(pts)} 个"
+        f"{[t for t, _ in pts]}", "SYS")
+    for i, (txt, pt) in enumerate(pts, 1):
+        human_click(win, pt[0], pt[1])
+        move_away(win)
+        res = _wait_fight_dialog(win, MARKER_DIALOG_WAIT + 2.0)
+        if res == "fight" or (res == "dialog" and _wait_battle_start(
+                win, MARKER_BATTLE_START_TIMEOUT)):
+            log(f"[修罗][手动] 名字候选 {i}/{len(pts)}「{txt}」已进战斗", "SYS")
+            return _wait_manual_battle_end(win)
+        if res == "other":
+            _dismiss_current_dialog(win)
+        else:
+            log(f"[修罗][手动] 名字候选 {i}/{len(pts)}「{txt}」无反应", "INFO")
+    return False, ("OCR 名字兜底未找到可点击的「xx修罗」"
+                   if not pts else
+                   f"OCR 名字候选 {len(pts)} 个均未触发战斗")
+
+
+def _coord_screen_fight(win, dest):
+    """特殊地图按任务坐标反查屏幕点点击开打（模板/名字都被遮挡时兜底）。
+
+    用户 2026-11-24：目标名字可能被其他名字叠绘挡住（OCR 读不出）、任务
+    小牌在地图边缘也不渲染，按领取对话框给的目标坐标反查当前画面屏幕点
+    直接点击。仅有描边锚点模型的特殊地图（莲花洞/波月洞/火云洞/金兜洞）
+    可用；点击点在坐标点基础上已上移 25px 落到角色本体。
+    返回 (ok, info)。
+    """
+    map_name, gx, gy = dest
+    pt = map_nav.special_coord_screen_point(
+        win, map_name, gx, gy,
+        emit=lambda m: log(f"[修罗][手动] {m}", "INFO"))
+    if pt is None:
+        return False, "坐标反查不可用（非特殊地图/无锚点模型/位置不可读）"
+    log(f"[修罗][手动] 按任务坐标 ({gx},{gy}) 反查屏幕点 {pt} 点击", "SYS")
+    human_click(win, pt[0], pt[1])
+    move_away(win)
+    res = _wait_fight_dialog(win, MARKER_DIALOG_WAIT + 2.0)
+    if res == "fight" or (res == "dialog" and _wait_battle_start(
+            win, MARKER_BATTLE_START_TIMEOUT)):
+        return _wait_manual_battle_end(win)
+    if res == "other":
+        _dismiss_current_dialog(win)
+    return False, "坐标反查点击后未触发战斗"
+
+
+def _click_markers_and_fight(win, dest=None):
     """到达目的地后：点任务标记 → 看打 → 等战斗结束。
 
     用户 2026-11-20 规则：可能有多个标记，逐个点；点了要看到对话框且
-    含「看打！」才有效，没有就换下一个。全部没中（标记可能被任务追踪/
-    其他面板挡住）→ Alt+A 隐藏界面再识别；还有标记就直接点（直接进入
-    战斗，同样算看打进入）。Alt+A 后也没有 → 点屏幕中间释放 Alt+A，
-    判失败（主循环回灵兽村取消重领）。
+    含「看打！」才有效，没有就换下一个。标记找不到（可能被任务追踪/
+    其他面板挡住）时：特殊地图先按任务坐标反查屏幕点点击（用户
+    2026-11-24，反查需要 HUD 坐标，必须在 Alt+A 之前做）→ 仍没中则
+    Alt+A 隐藏界面再识别；还有标记就直接点（直接进入战斗，同样算看打
+    进入）。Alt+A 后也没有 → OCR 世界区名字「xx修罗」兜底（用户
+    2026-11-24：地图边缘目标不渲染任务小牌），仍未命中则点屏幕中间
+    释放 Alt+A，判失败（主循环回灵兽村取消重领）。
+    dest：_parse_claim_destination 的 (地图名, x, y)，None 跳过坐标反查。
     返回 (ok, info)。
     """
     global _fight_via_kanda
@@ -2479,6 +2560,12 @@ def _click_markers_and_fight(win):
         log("[修罗][手动] 标记扫描期间进入战斗，等战斗结束后按原流程收尾",
             "WARN")
         return _wait_manual_battle_end(win)
+    # 特殊地图：标记找不到时先按任务坐标反查屏幕点（用户 2026-11-24）。
+    # 必须在 Alt+A 之前做——隐藏界面后 HUD 坐标读不到，反查需要它。
+    if dest is not None:
+        ok, info = _coord_screen_fight(win, dest)
+        if ok:
+            return ok, info
     # 标记可能被任务追踪等面板挡住：Alt+A 隐藏界面后再识别（用户第 6 条）
     sent, sinfo = app_utils.press_alt_hotkey(
         win, MANUAL_ALT_KEY, "隐藏界面看任务标记", prefix="[修罗][手动]")
@@ -2496,10 +2583,15 @@ def _click_markers_and_fight(win):
             return _wait_manual_battle_end(win)
         if res == "other":
             _dismiss_current_dialog(win)
+    # 地图边缘目标不渲染任务小牌：OCR 世界区名字「xx修罗」兜底
+    # （用户 2026-11-24；Alt+A 已隐藏界面，世界区更干净）
+    ok, info = _ocr_name_candidates_and_fight(win)
+    if ok:
+        return ok, info
     # Alt+A 后也没有更多标记：点屏幕中间释放 Alt+A，判失败（用户第 7 条）
     _click_screen_center_safe(win)
-    return False, ("Alt+A 兜底后仍未找到可点击的任务标记"
-                   "（已点屏幕中间释放），按失败处理")
+    return False, (f"Alt+A 与 OCR 名字兜底后仍未找到可点击的任务目标"
+                   f"（{info}；已点屏幕中间释放），按失败处理")
 
 
 def _manual_nav_round(win, dest):
@@ -2525,7 +2617,7 @@ def _manual_nav_round(win, dest):
         on_walk_start=lambda: _maybe_tab_bars_pass(win))
     if not ok:
         return False, f"手动寻路失败: {info}"
-    return _click_markers_and_fight(win)
+    return _click_markers_and_fight(win, dest)
 
 
 def _manual_recover(win, check_team):

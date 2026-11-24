@@ -1132,6 +1132,139 @@ class DiagnosticsMixin(ControlHost):
             except Exception:
                 pass
 
+    def verify_edge_target(self, x=None, y=None):
+        """诊断-模板与坐标-边缘目标查找按钮：单帧查找手动寻路到达后的目标。
+
+        只读不点击（任务运行中也可用），对应任务侧「边缘目标」兜底链：
+        1. 搜索两个任务小牌模板（五倍白龙马任务按钮 / 修罗任务标记），
+           打印最高分、阈值与全部候选点；命中即结束（任务流程会直接
+           点模板，不再 OCR 名字）；
+        2. 都未命中（目标点在地图边缘时游戏不渲染该小牌，用户
+           2026-11-24 确认）→ OCR 世界区两段条带，**只汇总一行**打印
+           识别到的名字（不逐行打印矩形/点击点，防正式日志刷屏），
+           并给出修罗「xx修罗」后缀候选（五倍按任务栏目标名对照）；
+        3. 可选 x/y（任务栏/领取对话框给的目标坐标）：同时打印特殊地图
+           坐标反查屏幕点（与任务兜底同一模型，只打印不点击），用于核对
+           名字被叠绘挡住时的落点。X/Y 须同时填写。
+        """
+        if self._verifying:
+            return {"status": "error", "msg": "验证进行中，请稍候"}
+        try:
+            tx = int(x) if x not in (None, "") else None
+            ty = int(y) if y not in (None, "") else None
+        except (TypeError, ValueError):
+            return {"status": "error", "msg": "目标坐标必须是数字（X/Y）"}
+        if (tx is None) != (ty is None):
+            return {"status": "error", "msg": "目标坐标 X/Y 需同时填写"}
+        win = game.find_main_window()
+        if win is None:
+            return {"status": "error",
+                    "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
+        self._verifying = True
+        threading.Thread(target=self._run_edge_target_verify,
+                         args=(win, tx, ty),
+                         daemon=True, name="edge-target-verify").start()
+        return {"status": "success",
+                "msg": "边缘目标查找已开始：先查任务模板，未命中则 OCR "
+                       "世界区名字，结果见日志"}
+
+    def _run_edge_target_verify(self, win, target_x=None, target_y=None):
+        """边缘目标查找线程体：模板 → 名字 OCR，只读打印日志。"""
+        from ..device import map as game_map
+        from ..device import world_target
+        from ..device.battle import is_in_battle_frame
+        from ..tasks import wubei, xiuluo  # 延迟导入：与其余验证模块保持一致
+
+        def emit(msg):
+            app_utils.log(f"[诊断] {msg}")
+            try:
+                self.add_logs([f"[诊断] {msg}"])
+            except Exception:
+                pass
+
+        ok, info = True, ""
+        try:
+            emit("边缘目标查找开始（只读不点击，对应手动寻路到达后的"
+                 "模板→名字兜底）")
+            img = win.capture(force_activate=False)
+            bgr = game_map.bgr_frame(img) if img is not None else None
+            if img is None:
+                ok, info = False, "截图失败"
+            elif is_in_battle_frame(bgr):
+                ok, info = False, "战斗中，退出战斗后再测试"
+            else:
+                found = []
+                for label, icon, threshold in (
+                        ("五倍任务小牌", wubei.XIANXINGJING_TASK_ICON,
+                         wubei.XIANXINGJING_BTN_THRESHOLD),
+                        ("修罗任务小牌", xiuluo.XIULUO_MARKER_ICON,
+                         xiuluo.MARKER_THRESHOLD)):
+                    pts = game_map.match_frame_all(
+                        bgr, icon, threshold=threshold)
+                    score, (bx, by) = game_map.best_match_np(bgr, icon)
+                    if pts:
+                        found.append(label)
+                        detail = "、".join(
+                            f"({x},{y}) 分数 {s:.3f}"
+                            for s, x, y in pts[:8])
+                        emit(f"{label}[{icon}]: {len(pts)} 处候选：{detail}")
+                    else:
+                        emit(f"{label}[{icon}]: 0 处（最高 {score:.3f} "
+                             f"@({bx},{by})，阈值 {threshold:.2f}）")
+                if found:
+                    info = (f"模板命中（{'、'.join(found)}），任务流程会"
+                            f"直接点模板，不再 OCR 名字")
+                    emit(info)
+                else:
+                    lines = world_target.scan_name_lines(img)
+                    # 正式环境日志从简（用户 2026-11-24：诊断明细会刷屏
+                    # 正式日志）：不逐行打印矩形/点击点，只汇总一行名字
+                    # 候选；聊天/摊位等含数字的长行不进汇总
+                    shown = [txt.strip() for txt, _rect, _score in lines
+                             if len(txt.strip()) <= 12
+                             and not any(ch.isdigit() for ch in txt)][:10]
+                    emit(f"模板均未命中 → OCR 世界区名字 {len(lines)} 行"
+                         f"（已排除追踪面板/低分）；名字候选："
+                         f"{'、'.join(shown) if shown else '(无)'}")
+                    suf = world_target.find_suffix_points(
+                        img, xiuluo.MANUAL_NAME_SUFFIXES, lines=lines)
+                    emit(f"修罗「xx修罗」后缀候选 {len(suf)} 个"
+                         + (f"：{[(t, pt) for t, pt in suf]}" if suf else ""))
+                    info = (f"模板 0 处；OCR 名字行 {len(lines)} 条；"
+                            f"修罗候选 {len(suf)} 个（五倍目标名见日志对照）")
+                if target_x is not None and target_y is not None:
+                    # 特殊地图坐标反查屏幕点（与任务兜底同一模型；只打印）
+                    from ..device import map_nav
+                    pt = map_nav.special_coord_screen_point(
+                        win, None, int(target_x), int(target_y),
+                        emit=lambda m: emit(m))
+                    if pt is not None:
+                        emit(f"坐标反查屏幕点：{pt}"
+                             f"（任务流程点击这里开打）")
+                        info = f"{info}；坐标反查点 {pt}"
+                    else:
+                        emit("坐标反查不可用（非特殊地图/无锚点模型/"
+                             "位置不可读/反查点出窗）")
+                        info = f"{info}；坐标反查不可用"
+        except Exception as e:  # noqa: BLE001 —— 诊断线程不得抛
+            ok, info = False, f"查找异常: {e}"
+        try:
+            self.add_logs([f"[验证] 结果: {info}"])
+        except Exception:
+            pass
+        self._notify_edge_target_verify_result(ok, info)
+        self._verifying = False
+
+    def _notify_edge_target_verify_result(self, ok, info):
+        """边缘目标查找结果回推页面（模板与坐标-边缘目标查找行的结果文案）。"""
+        if self.webview_instance:
+            try:
+                ok_js = "true" if ok else "false"
+                self.webview_instance.evaluate_js(
+                    f"if(window.onEdgeTargetVerifyResult){{window.onEdgeTargetVerifyResult({ok_js}, {json.dumps(info)});}}")
+            except Exception:
+                pass
+
     def verify_team_check(self):
         """诊断-检查队伍信息按钮：走真实队伍检查逻辑（team.check_team_min
         完整链路：面板开合 → 队长判定 → 5 区域成员扫描），检查过程会

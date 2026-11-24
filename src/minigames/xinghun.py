@@ -43,6 +43,13 @@
   前缀，不得误认成场景标签）。两个星魂几乎重叠时标签叠绘成一行
   （2026-11-22 实机「箕房星魂魂」0.63），由 _merged_soul_elements
   拆分，点哪个石柱以对话文案为准。
+- 人物/队友名字与星魂标签同排时也会被 OCR 合并成一行（2026-11-24
+  实机「孤独つ魅 角之星魂星魂」0.945：人物正站在石柱前，队友名与
+  两个星魂标签叠在同一文本行）——整行匹配失败，模块误判「视野内
+  无星魂」反复回中心/游走约 60s。由 _embedded_soul_labels 在行内
+  定位完整「X之星魂」子串，并按字符位置比例换算子矩形（实测子矩形
+  577~644，点到的就是标签本体与石柱；「角之星魂」黄色色块 577~637，
+  右缘含相邻残片数 px）。
 - 追踪文案在四象禁地阶段是**静态**的（归位不改变文字/颜色），follow
   引擎签名不变化、不会自行点链接；所有导航动作由本模块驱动。
   green_picker 在场景阶段返回「四象禁地」链接点（引擎万一要补点
@@ -258,9 +265,11 @@ def _in_scene_pos(pos):
 def _soul_labels(win, items, frame_fn, now, force=False):
     """场景 OCR 找视野内「X之星魂」标签，返回 [(元素, rect), ...]。
 
-    只认四字整行（norm 后恰为「X之星魂」）：对话正文「此乃X之星魂。」
-    含前缀，不得误认成场景标签。按 XH_SCAN_INTERVAL 限频（全区域 OCR
-    ~0.4s）；force=True 时强制重新识别（走位结束后的石柱定位）。
+    标签可独占一行（norm 后恰为「X之星魂」），也可与玩家名/叠绘残片
+    同排（2026-11-24 实机，见 _embedded_soul_labels）；对话正文
+    「此乃X之星魂。」与归位浮字「已成功让X之星魂归位了！」不得误认
+    成场景标签。按 XH_SCAN_INTERVAL 限频（全区域 OCR ~0.4s）；
+    force=True 时强制重新识别（走位结束后的石柱定位）。
     """
     global _scan_at, _scan_result
     if not force and now - _scan_at < XH_SCAN_INTERVAL:
@@ -288,6 +297,11 @@ def _soul_labels(win, items, frame_fn, now, force=False):
             el = exact.get(n)
             if el is not None:
                 cands.append((el, rect))
+                continue
+            # 玩家名/叠绘残片与标签同排的合并行（见 _embedded_soul_labels）
+            emb = _embedded_soul_labels(txt, rect)
+            if emb:
+                cands.extend(emb)
                 continue
             # 叠绘合并行（两个星魂几乎重叠，见 _merged_soul_elements）
             for mel in _merged_soul_elements(n):
@@ -325,6 +339,56 @@ def _merged_soul_elements(text):
     if "魂" not in rest or set(rest) - set("星魂"):
         return []
     return els
+
+
+def _sub_rect(rect, text, idx, length):
+    """OCR 行矩形内按字符位置换算子串矩形（近似：按字符宽度比例分配）。
+
+    OCR 只给整行并集框。玩家名与星魂标签同排时整行中心会落到队友名字
+    上（点名字只会选中队友/空走），必须按子串在行内的字符位置收窄。
+    2026-11-24 实拍行「孤独つ魅 角之星魂星魂」框 x 494~677：换算
+    「角之星魂」x≈577~644，与实际黄色标签色块 577~637 吻合。
+    中日韩字符与玩家名用字宽度接近，字符比例换算是够用的近似。
+    """
+    if not text or length <= 0 or len(text) <= length:
+        return rect
+    l, t, r, b = rect
+    w = r - l
+    x0 = l + int(round(w * idx / float(len(text))))
+    x1 = l + int(round(w * (idx + length) / float(len(text))))
+    return [x0, t, x1, b]
+
+
+def _embedded_soul_labels(txt, rect):
+    """一行文本内嵌的「X之星魂」标签 → [(元素, 子矩形), ...]。
+
+    2026-11-24 实机：人物/队友站在星魂石柱前时，队友名字与星魂标签被
+    OCR 合成一行「孤独つ魅 角之星魂星魂」（0.945）——其中「角之星魂」
+    是完整标签，尾部「星魂」是另一个被遮挡标签的残片。整行精确匹配
+    失败 → 模块误判「视野内无星魂」反复游走，而星魂就在人物脚下。
+    在原始行文本里找完整「X之星魂」子串（含形近字别名），按字符位置
+    收窄矩形；同一元素只取首个。
+
+    排除两类别含子串的非场景文案：星魂对话「此乃X之星魂。」与归位
+    浮字「已成功让X之星魂归位了！」——按行为标记词（此乃/归位）拒绝。
+    """
+    n = norm_text(txt)
+    if not txt or "此乃" in n or "归位" in n:
+        return []
+    out = []
+    seen = set()
+    for el, aliases in XH_ELEMENTS:
+        if el in seen:
+            continue
+        for a in aliases:
+            tok = f"{a}之星魂"
+            idx = txt.find(tok)
+            if idx < 0:
+                continue
+            seen.add(el)
+            out.append((el, _sub_rect(rect, txt, idx, len(tok))))
+            break
+    return out
 
 
 def _pillar_point(cands, el):

@@ -64,6 +64,12 @@ TASK_PANEL_DETAIL_TIMEOUT = 2.0
 TASK_PANEL_ROW_MERGE_DY = 8
 # 子任务行与分组行的最大中心距（行距约 19px，留一组噪声余量）
 TASK_PANEL_CHILD_MAX_GAP = 40
+# 子任务行右侧选中标记：详情栏正在显示的任务行右缘有勾选/追踪标记。
+# 实机只读探针 2026-11-24 抓到 OCR 读作「[~]」（三藏逢魔行，面板打开
+# 即已选中、详情栏已有内容）；「[√]」为既有测试样例的同类形态，一并
+# 兼容。已选中时跳过点击直接读详情（用户 2026-11-24）；OCR 漏读按
+# 未选中处理（照常点击，只少一次优化、不会读错任务）。
+TASK_PANEL_SELECTED_MARKERS = ("~", "√", "✓", "☑")
 # 目标分组关键词（「降魔任务」分组；标题栏任务名还会显示为
 # 「三藏逢魔[降魔任务]」，此处只匹配任务列表里的分组行）
 TASK_PANEL_DEMON_KEYWORD = "降魔"
@@ -322,6 +328,26 @@ def first_child_row(rows, group_row):
     return {"text": txt, "rect": rect, "row": nxt, "score": score}
 
 
+def row_selected(row):
+    """视觉行是否带右侧选中标记（详情栏正在显示该任务）。
+
+    只看任务名块右侧的 OCR 块（同一视觉行内 x 在任务名右缘之后）：
+    游戏在已选中任务的行右缘显示勾选/追踪标记，OCR 实测读作「[~]」
+    （2026-11-24 只读探针）。标记 OCR 漏读返回 False → 调用方照常
+    点击选中（与旧行为一致，只会少一次优化、不会读错任务）。
+    """
+    items = row.get("items") or []
+    if len(items) < 2:
+        return False  # 只有任务名块：无右侧标记
+    name_rect = items[0][1]
+    for txt, rect, _score in items[1:]:
+        if rect[0] < name_rect[2]:
+            continue  # 不在任务名右侧（行内其它碎片）
+        if any(m in (txt or "") for m in TASK_PANEL_SELECTED_MARKERS):
+            return True
+    return False
+
+
 def group_expanded_state(img_bgr, group_rect):
     """分组展开状态：返回 (state, 图标中心, (展开分, 折叠分))。
 
@@ -466,10 +492,12 @@ def ensure_group_expanded(win, keyword=TASK_PANEL_DEMON_KEYWORD, prefix=TAG):
 
 
 def select_first_child(win, keyword=TASK_PANEL_DEMON_KEYWORD, prefix=TAG):
-    """在已展开的分组下点击第一个子任务，返回 (子任务信息, 描述)。
+    """在已展开的分组下选中第一个子任务，返回 (子任务信息, 描述)。
 
     子任务信息：{'text': 任务名, 'rect': OCR 框, 'row': 视觉行}；失败返回
-    (None, 描述)。点击任务名字框中心（行内选择，不会点到右侧 [√] 标记）。
+    (None, 描述)。点击任务名字框中心（行内选择，不会点到右侧 [√] 标记）；
+    子任务行右侧已有选中标记（详情栏正在显示它）时跳过点击直接返回
+    （用户 2026-11-24：已展开且已选中的情况不再重复点击）。
     """
     rows, bgr, _img, panel = _read_list(win)
     if rows is None or bgr is None or panel is None:
@@ -480,6 +508,9 @@ def select_first_child(win, keyword=TASK_PANEL_DEMON_KEYWORD, prefix=TAG):
     child = first_child_row(rows, group)
     if child is None:
         return None, f"「{group['text']}」分组下未找到子任务"
+    if row_selected(child["row"]):
+        log(f"{prefix}子任务「{child['text']}」已选中，跳过点击", "SYS")
+        return child, f"「{child['text']}」已选中"
     l, t, r, b = child["rect"]
     cx, cy = (l + r) // 2, (t + b) // 2
     human_click(win, cx, cy)
@@ -552,10 +583,11 @@ def read_first_group_task(win, keyword=TASK_PANEL_DEMON_KEYWORD, prefix=TAG):
     步骤：
     1. Alt+Q 确保任务栏打开（已打开不重复按，避免开关误关）；
     2. 在任务列表定位「降魔任务」分组（可折叠），必要时点击行首图标展开；
-    3. 点击该分组下的第一个子任务；
-    4. OCR 任务详情栏，识别「任务目的」段落并逐行打印（同时写日志）；
+    3. 选中该分组下的第一个子任务（行右缘已有 √ 选中标记则跳过点击）；
+    4. OCR 任务详情栏，识别「任务目的」段落；
     5. demon_task.recognize 解析任务类型与目标（击杀/显形镜/需重领），
-       识别摘要同步写日志。
+       日志只打识别摘要一行（用户 2026-11-24：任务详情逐行/任务目的
+       原文不再刷屏，识别结果已含地图/坐标/目标/轮次）。
 
     返回 dict：{'group', 'task', 'detail', 'objective', 'objective_text',
     'recognition'}；任一步失败返回 (None, 原因)。成功返回 (dict, 描述)。
@@ -575,11 +607,8 @@ def read_first_group_task(win, keyword=TASK_PANEL_DEMON_KEYWORD, prefix=TAG):
     objective = objective_lines(detail)
     obj_text = "".join(objective)
     recognition = demon_task.recognize(child["text"], obj_text)
-    log(f"{prefix}任务详情（{len(detail)} 行）：", "SYS")
-    for txt, _rect, score in detail:
-        if score >= TASK_PANEL_MIN_OCR_SCORE:
-            log(f"{prefix}  {txt}", "SYS")
-    log(f"{prefix}任务目的：{obj_text}", "SYS")
+    # 日志只保留识别摘要（用户 2026-11-24）：任务详情逐行与任务目的原文
+    # 不刷屏，识别结果已含地图/坐标/目标/轮次
     log(f"{prefix}任务识别：{demon_task.describe(recognition)}", "SYS")
     return {
         "group": _group["text"] if _group else "",

@@ -1849,7 +1849,7 @@ def test_navigate_special_already_inside(monkeypatch):
     walked = []
     monkeypatch.setattr(
         map_nav, "_walk_special_coordinate",
-        lambda win, target, x, y, emit:
+        lambda win, target, x, y, emit, **k:
         walked.append((target, x, y)) or (True, "已到达莲花洞 (75,21)"))
     emits = []
     ok, info = map_nav.navigate_to_map_coordinate(
@@ -2196,6 +2196,43 @@ def test_special_model_anchor_knn_and_window_guard(monkeypatch):
     # 无该图/无锚点模型 → None
     assert map_nav._special_model_anchor(
         _W(), "平顶山", ("平顶山", 11, 10)) is None
+
+
+def test_special_coord_screen_point(monkeypatch):
+    """特殊地图坐标反查：锚点 + (目标-当前)/(SX,SY)，点击点上移 25px。"""
+    monkeypatch.setattr(map_nav, "special_map_entry",
+                        lambda name: {"name": name}
+                        if name == "莲花洞" else None)
+    monkeypatch.setattr(map_nav, "_special_read_pos",
+                        lambda win: ("莲花洞", 38, 50))
+    monkeypatch.setattr(map_nav, "_special_map_name_match",
+                        lambda hud, target: hud == target)
+    monkeypatch.setattr(map_nav, "_special_model_anchor",
+                        lambda win, name, pos: (712.0, 411.0))
+    emit = []
+    pt = map_nav.special_coord_screen_point(
+        _Win(1378, 831), "莲花洞", 40, 48, emit=emit.append)
+    # x: 712 + 2/0.048 = 753.7 → 754；y: 411 - 2/0.049 - 25 = 426.8 → 427
+    assert pt == (754, 427)
+    assert emit and "坐标反查" in emit[0]
+    # map_name=None：按当前 HUD 地名自动匹配特殊地图（诊断路径）
+    assert map_nav.special_coord_screen_point(
+        _Win(1378, 831), None, 40, 48) == (754, 427)
+    # 非特殊地图 / 锚点缺失 / 位置不在该图 / 目标反查点出窗 → None
+    assert map_nav.special_coord_screen_point(
+        _Win(1378, 831), "平顶山", 40, 48) is None
+    assert map_nav.special_coord_screen_point(
+        _Win(1378, 831), "莲花洞", 120, 48) is None  # x 超窗
+    monkeypatch.setattr(map_nav, "_special_read_pos",
+                        lambda win: ("波月洞", 38, 50))
+    assert map_nav.special_coord_screen_point(
+        _Win(1378, 831), "莲花洞", 40, 48) is None
+    monkeypatch.setattr(map_nav, "_special_read_pos",
+                        lambda win: ("莲花洞", 38, 50))
+    monkeypatch.setattr(map_nav, "_special_model_anchor",
+                        lambda win, name, pos: None)
+    assert map_nav.special_coord_screen_point(
+        _Win(1378, 831), "莲花洞", 40, 48) is None
 
 
 def test_walk_special_coordinate_uses_anchor_model_first(monkeypatch):
@@ -2602,8 +2639,9 @@ def test_walk_special_coordinate_visible_nav_skips_unreachable_waypoint(monkeypa
     monkeypatch.setattr(map_nav, "is_in_battle_frame", lambda img: False)
     monkeypatch.setattr(map_nav.time, "sleep", lambda s: None)
     emits = []
+    # verbose=True：本例断言逐步点击明细（「途经点 (10,10)」），生产默认不输出
     ok, info = map_nav._walk_special_coordinate(
-        _W(), "莲花洞", 10, 10, emits.append)
+        _W(), "莲花洞", 10, 10, emits.append, verbose=True)
     assert ok and "误差" in info
     assert abs(state["pos"][1] - 10) <= map_nav.SPECIAL_WALK_TOLERANCE
     assert abs(state["pos"][2] - 10) <= map_nav.SPECIAL_WALK_TOLERANCE

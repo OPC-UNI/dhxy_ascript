@@ -951,6 +951,188 @@ def test_moved_verify_methods_no_window_paths(monkeypatch):
     assert host.verify_silent_click("bogus")["status"] == "error"
 
 
+def test_verify_edge_target_guards(monkeypatch):
+    """边缘目标查找：无窗口/验证中给出错误，不抛异常。"""
+    import types
+
+    from src.app import diagnostics
+
+    class _Host(diagnostics.DiagnosticsMixin):
+        def __init__(self):
+            self._verifying = False
+
+    host = _Host()
+    monkeypatch.setattr(diagnostics.game, "find_main_window", lambda: None)
+    r = host.verify_edge_target()
+    assert r["status"] == "error" and "未检测到游戏窗口" in r["msg"]
+    host._verifying = True
+    r = host.verify_edge_target()
+    assert r["status"] == "error" and "验证进行中" in r["msg"]
+
+
+def test_run_edge_target_verify_logs_ocr_when_template_missing(monkeypatch):
+    """边缘目标查找：模板未命中 → 打印 OCR 名字行/点击点与修罗候选（只读）。"""
+    import types
+
+    from src.app import diagnostics
+    from src.device import battle
+    from src.device import map as game_map
+    from src.device import world_target
+
+    class _Host(diagnostics.DiagnosticsMixin):
+        def __init__(self):
+            self._verifying = True
+            self.webview_instance = None
+            self.logs = []
+
+        def add_logs(self, lines):
+            self.logs.extend(lines)
+
+    host = _Host()
+    monkeypatch.setattr(diagnostics.app_utils, "log", lambda *a, **k: None)
+    monkeypatch.setattr(game_map, "bgr_frame", lambda img: img)
+    monkeypatch.setattr(battle, "is_in_battle_frame", lambda img: False)
+    monkeypatch.setattr(game_map, "match_frame_all", lambda *a, **k: [])
+    monkeypatch.setattr(game_map, "best_match_np",
+                        lambda *a, **k: (0.5, (10, 20)))
+    lines = [("智慧魔尊", (510, 441, 578, 464), 0.995)]
+    monkeypatch.setattr(world_target, "scan_name_lines", lambda img: lines)
+    seen = {}
+
+    def _suffix(img, suffixes, lines=None):
+        seen["suffixes"] = suffixes
+        seen["lines"] = lines
+        return [("狂风修罗", (300, 260))]
+
+    monkeypatch.setattr(world_target, "find_suffix_points", _suffix)
+    win = types.SimpleNamespace(
+        capture=lambda force_activate=False: "frame")
+    host._run_edge_target_verify(win)
+    text = "\n".join(host.logs)
+    assert "五倍任务小牌" in text and "修罗任务小牌" in text
+    assert "0 处" in text                     # 模板未命中
+    assert "智慧魔尊" in text                 # 名字汇总行
+    assert "点击点 (544,401)" not in text      # 不逐行打印明细（正式日志从简）
+    assert "修罗「xx修罗」后缀候选 1 个" in text
+    assert seen["lines"] is lines             # 同一次扫描复用，不重复 OCR
+    assert seen["suffixes"] == ("修罗", "修羅")
+    assert host._verifying is False
+
+
+def test_run_edge_target_verify_template_hit_skips_ocr(monkeypatch):
+    """边缘目标查找：任一任务小牌模板命中即结束，不再 OCR 名字。"""
+    import types
+
+    from src.app import diagnostics
+    from src.device import battle
+    from src.device import map as game_map
+    from src.device import world_target
+
+    class _Host(diagnostics.DiagnosticsMixin):
+        def __init__(self):
+            self._verifying = True
+            self.webview_instance = None
+            self.logs = []
+
+        def add_logs(self, lines):
+            self.logs.extend(lines)
+
+    host = _Host()
+    monkeypatch.setattr(diagnostics.app_utils, "log", lambda *a, **k: None)
+    monkeypatch.setattr(game_map, "bgr_frame", lambda img: img)
+    monkeypatch.setattr(battle, "is_in_battle_frame", lambda img: False)
+    monkeypatch.setattr(game_map, "match_frame_all",
+                        lambda *a, **k: [(0.95, 300, 260)])
+    monkeypatch.setattr(game_map, "best_match_np",
+                        lambda *a, **k: (0.95, (300, 260)))
+    called = []
+    monkeypatch.setattr(world_target, "scan_name_lines",
+                        lambda img: called.append(1) or [])
+    win = types.SimpleNamespace(
+        capture=lambda force_activate=False: "frame")
+    host._run_edge_target_verify(win)
+    assert called == []
+    assert "模板命中" in "\n".join(host.logs)
+    assert host._verifying is False
+
+
+def test_verify_edge_target_coord_inputs(monkeypatch):
+    """边缘目标查找坐标输入校验：非数字/只填一边直接报错。"""
+    import types
+
+    from src.app import diagnostics
+
+    class _Host(diagnostics.DiagnosticsMixin):
+        def __init__(self):
+            self._verifying = False
+
+    host = _Host()
+    r = host.verify_edge_target("abc", "def")
+    assert r["status"] == "error" and "数字" in r["msg"]
+    r = host.verify_edge_target(40, "")
+    assert r["status"] == "error" and "同时填写" in r["msg"]
+
+
+def _edge_coord_env(monkeypatch, point):
+    """装配边缘目标查找的坐标反查场景（模板命中，跳过 OCR）。"""
+    import types
+
+    from src.app import diagnostics
+    from src.device import battle
+    from src.device import map as game_map
+    from src.device import map_nav
+
+    class _Host(diagnostics.DiagnosticsMixin):
+        def __init__(self):
+            self._verifying = True
+            self.webview_instance = None
+            self.logs = []
+
+        def add_logs(self, lines):
+            self.logs.extend(lines)
+
+    host = _Host()
+    monkeypatch.setattr(diagnostics.app_utils, "log", lambda *a, **k: None)
+    monkeypatch.setattr(game_map, "bgr_frame", lambda img: img)
+    monkeypatch.setattr(battle, "is_in_battle_frame", lambda img: False)
+    monkeypatch.setattr(game_map, "match_frame_all",
+                        lambda *a, **k: [(0.95, 300, 260)])
+    monkeypatch.setattr(game_map, "best_match_np",
+                        lambda *a, **k: (0.95, (300, 260)))
+    seen = {}
+
+    def _coord(win, name, x, y, emit=None):
+        seen["args"] = (name, x, y)
+        if point is not None and emit:
+            emit("坐标反查：角色 (38,50) 屏幕锚点 ≈(712,411) → "
+                 "目标 (40,48) 屏幕点 ≈(754,427)")
+        return point
+
+    monkeypatch.setattr(map_nav, "special_coord_screen_point", _coord)
+    win = types.SimpleNamespace(
+        capture=lambda force_activate=False: "frame")
+    return host, win, seen
+
+
+def test_run_edge_target_verify_logs_coord_reverse(monkeypatch):
+    """填目标坐标：额外打印特殊地图坐标反查屏幕点（只打印不点击）。"""
+    host, win, seen = _edge_coord_env(monkeypatch, (754, 427))
+    host._run_edge_target_verify(win, 40, 48)
+    text = "\n".join(host.logs)
+    assert "坐标反查屏幕点：(754, 427)" in text
+    assert seen["args"] == (None, 40, 48)  # map_name=None → 按 HUD 地名匹配
+    assert host._verifying is False
+
+
+def test_run_edge_target_verify_coord_unavailable(monkeypatch):
+    """坐标反查不可用：打印原因，模板结论照常输出。"""
+    host, win, seen = _edge_coord_env(monkeypatch, None)
+    host._run_edge_target_verify(win, 40, 48)
+    text = "\n".join(host.logs)
+    assert "坐标反查不可用" in text
+    assert "模板命中" in text  # 模板结论不受影响
+
+
 def test_site_nav_points_maps_known():
     """坐标化测试点位的地图必须都在导航地图表里（按钮点了不能报错）。"""
     from src.app import diagnostics

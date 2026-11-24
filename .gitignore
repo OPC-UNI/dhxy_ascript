@@ -21,6 +21,8 @@ data/
 team_race_glyphs*.npz
 # 本地日志文件（开发调试用，log 同时落盘到 logs/）
 logs/
+# 特殊地图人工描边产物（轨迹 JSONL / 汇总 / 边界核对图等，本地工作数据）
+map_trace/
 dist_exe/
 # 外挂重型依赖（CI 构建生成：numpy/onnxruntime 不编译进 exe，随包分发）
 pylibs/

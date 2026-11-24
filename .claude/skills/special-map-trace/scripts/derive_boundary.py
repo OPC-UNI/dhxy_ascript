@@ -10,7 +10,7 @@ build_special_map_route.py --boundary-trace），并可选画核对图。
 用法::
 
     python .claude/skills/special-map-trace/scripts/derive_boundary.py \\
-        --map 波月洞 --trace logs/波月洞.jsonl --out logs/波月洞_boundary.jsonl
+        --map 波月洞 --trace map_trace/波月洞.jsonl --out map_trace/波月洞_boundary.jsonl
 """
 import argparse
 import json
@@ -67,7 +67,7 @@ def _simplify(poly, min_dist=2.0):
 def main(argv=None):
     ap = argparse.ArgumentParser(description="全图轨迹 → 描边边界多边形")
     ap.add_argument("--map", required=True)
-    ap.add_argument("--trace", default="logs/special_map_trace.jsonl")
+    ap.add_argument("--trace", default="map_trace/special_map_trace.jsonl")
     ap.add_argument("--out", default=None)
     ap.add_argument("--thickness", type=int, default=3,
                     help="轨迹线宽（格，默认 3；越大边界越外扩）")
@@ -114,7 +114,7 @@ def main(argv=None):
         return 2
 
     out = (Path(args.out) if args.out
-           else REPO / "logs" / f"{args.map}_boundary.jsonl")
+           else REPO / "map_trace" / f"{args.map}_boundary.jsonl")
     out.parent.mkdir(parents=True, exist_ok=True)
     with out.open("w", encoding="utf-8") as f:
         for x, y in poly:

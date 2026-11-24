@@ -358,6 +358,7 @@ class ControlWindow(DiagnosticsMixin, SettingsApiMixin, MessageApiMixin,
         self.expose(self.verify_clear_screen)
         self.expose(self.verify_shout)
         self.expose(self.verify_jiguan)
+        self.expose(self.verify_edge_target)
         self.expose(self.verify_position)
         self.expose(self.get_navigate_maps)
         self.expose(self.verify_map_navigate)

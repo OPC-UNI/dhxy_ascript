@@ -41,7 +41,7 @@ HUD 坐标**。语义：**描边以内都可走、以外不可走**。导航时�
 ```bash
 cd <仓库根>
 python scripts/trace_special_map.py --map <地图名> \
-    --out logs/<地图名>.jsonl --interval 0.4 --duration 1800 \
+    --out map_trace/<地图名>.jsonl --interval 0.4 --duration 1800 \
     --anchor-interval 1.0
 ```
 
@@ -59,8 +59,8 @@ python scripts/trace_special_map.py --map <地图名> \
   小框重标定一次，限制相位相关 +0.5px/次 的系统漂移（小框连续 3 次失败
   则整片重扫，防止初始锚点认到别人头上）。`--anchor-interval 0` 关闭。
 - 停止：Ctrl+C、到时（默认 900s）、或创建停止文件
-  `logs/special_map_trace.stop`。
-- 启动后先看 `logs/special_map_trace.jsonl` 是否有第一行，确认记录生效；
+  `map_trace/special_map_trace.stop`。
+- 启动后先看 `map_trace/special_map_trace.jsonl` 是否有第一行，确认记录生效；
   日志会显示「角色屏幕锚点：每 1.0s 记录，每 8s 名字标签重标定」和
   首次「锚点标定 (x,y) conf=…」。
 
@@ -73,10 +73,10 @@ python scripts/trace_special_map.py --map <地图名> \
 用户说「好了」时：
 
 ```bash
-touch logs/special_map_trace.stop
+touch map_trace/special_map_trace.stop
 ```
 
-等 1~2s，确认脚本退出；检查 `logs/special_map_trace.summary.json`
+等 1~2s，确认脚本退出；检查 `map_trace/special_map_trace.summary.json`
 （点数 / 包围盒 / 里程，`--out` 对应 `<name>.summary.json`）。
 
 ### 3. 生成路网
@@ -84,24 +84,39 @@ touch logs/special_map_trace.stop
 ```bash
 # 只录了外轮廓（描边同时就是边界）
 python scripts/build_special_map_route.py --map <地图名> \
-    --trace logs/<地图名>.jsonl --role <角色ID> --res
+    --trace map_trace/<地图名>.jsonl --role <角色ID> --res
 
 # 全图轨迹（外轮廓 + 内部路线）：边界必须另给外轮廓描边文件，
 # 不能拿全图轨迹当边界（内部路线会被当成多边形边）
 python scripts/build_special_map_route.py --map <地图名> \
-    --trace logs/<地图名>_full.jsonl \
-    --boundary-trace logs/<边界描边>.jsonl \
+    --trace map_trace/<地图名>_full.jsonl \
+    --boundary-trace map_trace/<边界描边>.jsonl \
     --role <角色ID> --res
 
 # 只跑了一遍全图（没单独走外轮廓）：从轨迹外轮廓提取边界（省一次录制；
 # 单独走外轮廓仍更准）。会同时输出核对图 <out>_check.png
 python .claude/skills/special-map-trace/scripts/derive_boundary.py \
-    --map <地图名> --trace logs/<地图名>.jsonl \
-    --out logs/<地图名>_boundary.jsonl
+    --map <地图名> --trace map_trace/<地图名>.jsonl \
+    --out map_trace/<地图名>_boundary.jsonl
+
+# 多分区地图（波月洞：同一坐标平面分 A/B 两区、区之间是洞口传送）：
+# 加 --zones 自动按传送跳变拆分每区边界与传送链接
+python scripts/build_special_map_route.py --map 波月洞 \
+    --trace map_trace/波月洞.jsonl --boundary-trace map_trace/波月洞_boundary.jsonl \
+    --role <角色ID> --res --zones
 ```
 
 - 默认写角色数据 `data/<角色>/special_map_routes.json`；`--res` 同时更新
   内置表 `res/special_map_routes.json`（所有角色可用；新异形图建议加）。
+- `--zones`（多分区地图，2026-11-24 波月洞）：相邻轨迹点跳变 ≥
+  `--zone-jump`（默认 10 格）切段（传送瞬间 HUD 坐标大幅跳变，步行采样
+  不会）；段间最小距离 < `--zone-join`（默认 5 格）聚为同一分区；每区
+  独立生成 `boundary`+`trace`，相邻且跨区的两段记为传送链接
+  （触发点=离开段末点、落点=进入段首点，多次观测取中位数），写
+  `zones`/`links`。运行期 `_walk_special_zones`：按位置判定当前区/目标区
+  → BFS 传送链 → 先走到本区触发点（±2 格）→ 等位置进入目标区且连续
+  2 次稳定 → 在目标区按该区边界步行到目标；区内其他触发点按 3 格半径
+  避让。若录制时某区坐标没走全，先补录该区再 `--zones` 重建。
 - 路网格式：`{"trace": [[x,y], ...], "trace_source": "manual ..."}`。
   **不需要中心/臂节点**；`--keep-old` 才保留旧 center/arms 兜底字段。
 - 锚点样品清洗（同坐标中位数 + 近邻离群剔除，防名字 OCR 命中别人）后
@@ -113,12 +128,12 @@ python .claude/skills/special-map-trace/scripts/derive_boundary.py \
 
 ```bash
 python .claude/skills/special-map-trace/scripts/plot_trace.py \
-    --map <地图名> --trace logs/<地图名>.jsonl
+    --map <地图名> --trace map_trace/<地图名>.jsonl
 # 或直接用路网数据：
 #   --route-json res/special_map_routes.json
 ```
 
-默认输出 `logs/special_map_<地图名>.png`（网格 + 轨迹折线 + 起终点标记）。
+默认输出 `map_trace/special_map_<地图名>.png`（网格 + 轨迹折线 + 起终点标记）。
 用 Read 工具打开 PNG 给用户看，并说明轮廓/包围盒/点数。
 
 ### 5. 验证导航（可选但推荐）
@@ -153,7 +168,7 @@ EOF
 | 描边画图 | `.claude/skills/special-map-trace/scripts/plot_trace.py` |
 | 路网数据（角色） | `data/<角色ID>/special_map_routes.json` |
 | 路网数据（内置） | `res/special_map_routes.json` |
-| 原始轨迹 | `logs/<地图名>.jsonl`（默认 `logs/special_map_trace.jsonl`） |
+| 原始轨迹 | `map_trace/<地图名>.jsonl`（默认 `map_trace/special_map_trace.jsonl`） |
 
 导航侧：`src/device/map_nav.py`
 
@@ -171,7 +186,21 @@ EOF
   端点在内放行）；**无首步停顿**：连续右击（0.5s，行走可打断）；接近目标时停稳复核，
   误差超 ±3 按最终误差修正点击偏置补一步（终点闭环）；相机位移逐帧相位相关更新屏幕↔世界映射
   （单次超区域半幅限幅；不可测时用锚点模型重标定）；上次成功导航的帧+B
-  做下次热启动免探针；±3 格到达。
+  做下次热启动免探针；±3 格到达。`zone=` 限定用该分区边界/描边，
+  `avoid=` 避让区内其他洞口触发点，`zones=/zone_state=` 监视步行途中
+  是否已传送到别的分区。
+- `_walk_special_zones`：**分区导航**（波月洞 A/B）——位置判定当前区/
+  目标区，BFS 传送链，逐段走到本区触发点并等场景切换（±2 格、90s；
+  未触发朝洞口方向补点最多 3 次），传送后在目标区按该区边界步行。
+  **落点锚点可信度按建图标记**：`--zones` 用轨迹跳变时间窗（落点后 4s）
+  过滤转场期锚点样品，落点 8 格内不足 3 个稳态样品 → 链接标
+  `land_recalibrate`（波月洞只有 B→A 的 A 落点 (11,69)）；运行期只在
+  被标记的落点起步时先用名字标签 OCR、失败再强制探针重标定，未标记的
+  B 落点仍用锚点模型（避免探针绕路）。洞内 HUD 地名比较容忍 1 个 OCR
+  错字（「波月同」=「波月洞」，否则传送瞬间误判场景变化直接失败）。
+  `_walk_special_zones` 无分区数据时等价于 `_walk_special_coordinate`。
+- `_special_model_anchor`：运行期丢弃窗口外的锚点样品（采集期相机跟踪
+  跑飞的黑屏样品，如 `ay>窗口高`），避免点击点被换算到屏幕外。
 - 无描边数据时才退回自动探图（`explore_special_map` 中心/四臂兜底）。
 
 ## 注意
@@ -186,6 +215,10 @@ EOF
 - **新洞府要在 `map_nav.SPECIAL_MAP_ENTRIES` 补 `portal`**（进出地图的
   传送光圈坐标；莲花洞实测 (84,9)、避让半径 `SPECIAL_PORTAL_AVOID_R`
   =3 格）：路线穿过光圈会被传送出图（2026-11-24 实机教训）。
+- **同一坐标平面分多块区域、靠洞口传送连接的地图**（波月洞 A/B）必须
+  用 `--zones` 建分区路网：单一边界会让 A* 在区域间空洞里绕、永远进不了
+  另一区。传送触发点/落点从描边轨迹的坐标跳变自动识别，不要手工编；
+  录制时每个区都要走到（每区至少一段轨迹），否则该区边界/传送链接缺失。
 - 轨迹点很多时不用手动简化：导航时 `SPECIAL_ROUTE_WP_TOLERANCE` 会
   跳过近距离途经点；描边点越密越安全。
 - 目标离描边太远时（>25 格，自动探图路网才有的限制），描边路网仍然

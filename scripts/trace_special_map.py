@@ -19,10 +19,10 @@
 
 - 不抢前台、不移动鼠标/键盘（截图 force_activate=False，仅 OCR HUD/名字）。
 - 每记录到一个新坐标追加一行 JSON 到 --out（默认
-  logs/special_map_trace.jsonl），中途停止也不丢数据。
+  map_trace/special_map_trace.jsonl），中途停止也不丢数据。
 - 锚点样品行带 ``"kind": "anchor"`` 与 ``ax/ay/src/w/h``，位置行无 kind。
 - 停止：Ctrl+C、达到 --duration 秒，或创建停止文件
-  logs/special_map_trace.stop。
+  map_trace/special_map_trace.stop。
 - 结束后同目录输出 summary（start/end/点数/包围盒/总里程/锚点样品数）。
 
 注意：本脚本只读取，操作人物完全由用户完成。
@@ -105,17 +105,17 @@ def parse_args(argv=None):
     ap.add_argument("--duration", type=float, default=900.0,
                     help="最长记录秒数（默认 900，10 分钟）")
     ap.add_argument("--out", default=None,
-                    help="输出 JSONL（默认 logs/special_map_trace.jsonl）")
+                    help="输出 JSONL（默认 map_trace/special_map_trace.jsonl）")
     ap.add_argument("--stop-file", default=None,
-                    help="停止标记文件（默认 logs/special_map_trace.stop）")
+                    help="停止标记文件（默认 map_trace/special_map_trace.stop）")
     return ap.parse_args(argv)
 
 
 def main(argv=None):
     args = parse_args(argv)
-    out = Path(args.out) if args.out else REPO / "logs" / "special_map_trace.jsonl"
+    out = Path(args.out) if args.out else REPO / "map_trace" / "special_map_trace.jsonl"
     stop_file = (Path(args.stop_file) if args.stop_file
-                 else REPO / "logs" / "special_map_trace.stop")
+                 else REPO / "map_trace" / "special_map_trace.stop")
     out.parent.mkdir(parents=True, exist_ok=True)
     try:
         if stop_file.exists():

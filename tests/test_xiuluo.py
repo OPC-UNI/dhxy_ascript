@@ -1665,7 +1665,7 @@ def test_manual_nav_round_navigates_and_fights(monkeypatch):
         lambda win, name, x, y, log_fn=None, on_walk_start=None: (
             calls.append((name, x, y)) or (True, "到达")))
     monkeypatch.setattr(xiuluo, "_click_markers_and_fight",
-                        lambda win: (True, "战斗已结束"))
+                        lambda win, dest=None: (True, "战斗已结束"))
     ok, _info = xiuluo._manual_nav_round(_FakeWin(), ("洛阳城", 191, 110))
     assert ok and calls == [("洛阳城", 191, 110)]
 
@@ -1681,7 +1681,7 @@ def test_manual_nav_round_wires_bars_pass_to_walk_start(monkeypatch):
     monkeypatch.setattr(
         xiuluo.map_nav, "navigate_to_map_coordinate", _fake_nav)
     monkeypatch.setattr(xiuluo, "_click_markers_and_fight",
-                        lambda win: (True, "战斗已结束"))
+                        lambda win, dest=None: (True, "战斗已结束"))
     bars = []
     monkeypatch.setattr(xiuluo, "_maybe_tab_bars_pass",
                         lambda win: bars.append(win))
@@ -1715,22 +1715,116 @@ def test_click_markers_fight_flow(monkeypatch):
 
 
 def test_click_markers_alt_fallback_fails(monkeypatch):
-    """无标记 → Alt+A → 仍无 → 点屏幕中间释放，判失败（用户第 7 条）。"""
+    """无标记 → Alt+A → 仍无 → 名字 OCR 也无 → 点屏幕中间释放，判失败。"""
     monkeypatch.setattr(xiuluo, "is_in_battle", lambda win: False)
+    monkeypatch.setattr(xiuluo, "is_in_battle_frame", lambda img: False)
+    monkeypatch.setattr(xiuluo, "dialog_frame_score", lambda img: 0.0)
     monkeypatch.setattr(xiuluo, "_task_markers", lambda win, img=None: [])
     monkeypatch.setattr(xiuluo.time, "sleep", lambda s: None)
     hotkeys = []
     monkeypatch.setattr(xiuluo.app_utils, "press_alt_hotkey",
                         lambda win, key, label, prefix="": (
                             hotkeys.append(key) or (True, "alt")))
+    monkeypatch.setattr(xiuluo.world_target, "find_suffix_points",
+                        lambda img, suffixes: [])
     clicks = []
     monkeypatch.setattr(xiuluo, "human_click",
                         lambda win, x, y, **k: clicks.append((x, y)))
     monkeypatch.setattr(xiuluo, "move_away", lambda win: None)
     ok, info = xiuluo._click_markers_and_fight(_FakeWin())
-    assert not ok and "Alt+A" in info
+    assert not ok and "Alt+A" in info and "OCR 名字兜底" in info
     assert hotkeys == ["a"]
     assert CENTER in clicks
+
+
+def test_click_markers_ocr_name_fallback_fights(monkeypatch):
+    """模板/Alt+A 都无标记 → OCR 世界区「xx修罗」名字 → 点击上方开打。"""
+    monkeypatch.setattr(xiuluo, "is_in_battle", lambda win: False)
+    monkeypatch.setattr(xiuluo, "is_in_battle_frame", lambda img: False)
+    monkeypatch.setattr(xiuluo, "dialog_frame_score", lambda img: 0.0)
+    monkeypatch.setattr(xiuluo, "_task_markers", lambda win, img=None: [])
+    monkeypatch.setattr(xiuluo.time, "sleep", lambda s: None)
+    monkeypatch.setattr(xiuluo.app_utils, "press_alt_hotkey",
+                        lambda *a, **k: (True, "alt"))
+    seen = {}
+
+    def _suffix(img, suffixes):
+        seen["suffixes"] = suffixes
+        return [("狂风修罗", (300, 260))]
+
+    monkeypatch.setattr(xiuluo.world_target, "find_suffix_points", _suffix)
+    clicks = []
+    monkeypatch.setattr(xiuluo, "human_click",
+                        lambda win, x, y, **k: clicks.append((x, y)))
+    monkeypatch.setattr(xiuluo, "move_away", lambda win: None)
+    monkeypatch.setattr(xiuluo, "_wait_fight_dialog",
+                        lambda win, timeout: "dialog")
+    monkeypatch.setattr(xiuluo, "_wait_battle_start",
+                        lambda win, timeout: True)
+    monkeypatch.setattr(xiuluo, "_wait_manual_battle_end",
+                        lambda win: (True, "战斗已结束（手动寻路回合）"))
+    ok, info = xiuluo._click_markers_and_fight(_FakeWin())
+    assert ok and info.startswith("战斗已结束")
+    assert seen["suffixes"] == ("修罗", "修羅")  # 目标名必为 xx修罗
+    assert (300, 260) in clicks                   # 名字上方 40px 点击点
+    assert CENTER not in clicks                   # 命中后不释放 Alt+A 点击
+
+
+def test_click_markers_coord_screen_fallback(monkeypatch):
+    """标记找不到 → 特殊地图先按任务坐标反查屏幕点（Alt+A 之前）。"""
+    monkeypatch.setattr(xiuluo, "is_in_battle", lambda win: False)
+    monkeypatch.setattr(xiuluo, "is_in_battle_frame", lambda img: False)
+    monkeypatch.setattr(xiuluo, "dialog_frame_score", lambda img: 0.0)
+    monkeypatch.setattr(xiuluo, "_task_markers", lambda win, img=None: [])
+    monkeypatch.setattr(xiuluo.time, "sleep", lambda s: None)
+    hotkeys = []
+    monkeypatch.setattr(xiuluo.app_utils, "press_alt_hotkey",
+                        lambda *a, **k: hotkeys.append(1) or (True, "alt"))
+    seen = {}
+
+    def _coord(win, name, x, y, emit=None):
+        seen["args"] = (name, x, y)
+        return (700, 400)
+
+    monkeypatch.setattr(xiuluo.map_nav, "special_coord_screen_point", _coord)
+    clicks = []
+    monkeypatch.setattr(xiuluo, "human_click",
+                        lambda win, x, y, **k: clicks.append((x, y)))
+    monkeypatch.setattr(xiuluo, "move_away", lambda win: None)
+    monkeypatch.setattr(xiuluo, "_wait_fight_dialog",
+                        lambda win, timeout: "dialog")
+    monkeypatch.setattr(xiuluo, "_wait_battle_start",
+                        lambda win, timeout: True)
+    monkeypatch.setattr(xiuluo, "_wait_manual_battle_end",
+                        lambda win: (True, "战斗已结束（手动寻路回合）"))
+    ok, info = xiuluo._click_markers_and_fight(
+        _FakeWin(), ("莲花洞", 40, 48))
+    assert ok and info.startswith("战斗已结束")
+    assert seen["args"] == ("莲花洞", 40, 48)
+    assert clicks == [(700, 400)]  # 反查点点击
+    assert hotkeys == []           # 反查命中，不按 Alt+A
+
+
+def test_click_markers_ocr_skipped_when_dialog_present(monkeypatch):
+    """名字 OCR 兜底前有对话框：不 OCR 世界区、不点名字（防点中对话文字）。"""
+    monkeypatch.setattr(xiuluo, "is_in_battle", lambda win: False)
+    monkeypatch.setattr(xiuluo, "is_in_battle_frame", lambda img: False)
+    monkeypatch.setattr(xiuluo, "dialog_frame_score", lambda img: 0.99)
+    monkeypatch.setattr(xiuluo, "_task_markers", lambda win, img=None: [])
+    monkeypatch.setattr(xiuluo.time, "sleep", lambda s: None)
+    monkeypatch.setattr(xiuluo.app_utils, "press_alt_hotkey",
+                        lambda *a, **k: (True, "alt"))
+    ocr_calls = []
+    monkeypatch.setattr(xiuluo.world_target, "find_suffix_points",
+                        lambda img, suffixes: ocr_calls.append(1) or [])
+    clicks = []
+    monkeypatch.setattr(xiuluo, "human_click",
+                        lambda win, x, y, **k: clicks.append((x, y)))
+    monkeypatch.setattr(xiuluo, "move_away", lambda win: None)
+    ok, info = xiuluo._click_markers_and_fight(_FakeWin())
+    assert not ok and "对话框在场" in info
+    assert ocr_calls == []
+    assert CENTER in clicks  # 释放 Alt+A
 
 
 def test_cancel_task_assume_task_skips_tracker(monkeypatch):
