@@ -45,6 +45,8 @@ def test_task_state_panel_visible_uses_task_in(monkeypatch):
 
 
 def test_probe_task_block_uses_region_fn(monkeypatch):
+    monkeypatch.setattr(claim_flow.task_tracker, "track_content_region",
+                        lambda img_np: (0, 0, 10, 10))
     monkeypatch.setattr(claim_flow.game_map, "ocr_region",
                         lambda img, region: ([], None))
     monkeypatch.setattr(claim_flow.task_tracker, "has_task_in",
@@ -58,6 +60,20 @@ def test_probe_task_block_uses_region_fn(monkeypatch):
     hit, _dt = claim_flow.probe_task_block(
         _Win(), "任务", (), _region)
     assert hit is True and called["region"] is True
+
+
+def test_probe_task_block_skips_ocr_when_panel_absent(monkeypatch):
+    """追踪面板标题条模板缺席：任务不可能渲染，免任务块 OCR（~0.24s）。"""
+    monkeypatch.setattr(claim_flow.task_tracker, "track_content_region",
+                        lambda img_np: None)
+    called = []
+    monkeypatch.setattr(claim_flow.game_map, "ocr_region",
+                        lambda img, region: called.append(1) or ([], None))
+    monkeypatch.setattr(claim_flow.task_tracker, "has_task_in",
+                        lambda *a: called.append("has_task_in") or True)
+    hit, _dt = claim_flow.probe_task_block(
+        _Win(), "任务", (), lambda img_np: (0, 0, 10, 10))
+    assert hit is False and called == []
 
 
 def test_claim_verify_wait_probe_hit_skips_sleep(monkeypatch):
@@ -485,13 +501,18 @@ def test_open_claim_map_custom_click_fn_and_no_filter_read(monkeypatch):
 
 def test_open_claim_map_coord_nav_uses_start_navigation(
         monkeypatch, coord_nav_enabled):
-    """坐标化开关开启且给出 map_coord：走 map_nav 坐标点击（不开旧地图）。"""
+    """坐标化开关开启且给出 map_coord：走 map_nav 坐标点击（不开旧地图）。
+
+    trusted（2026-11-25）：固定领取点有标定直点，免悬停校验。
+    """
     calls = _patch_open_env(monkeypatch)
     from src.device import map_nav
     started = {}
 
-    def _start(win, map_name, x, y, log_fn=None, on_map_open=None):
+    def _start(win, map_name, x, y, log_fn=None, on_map_open=None,
+               trusted=False):
         started["args"] = (map_name, x, y)
+        started["trusted"] = trusted
         if on_map_open is not None:
             on_map_open()  # 模拟「地图已打开、点击前」的筛选读取时机
         return True, "已点击目标点 (627,396)，开始寻路", (627, 396)
@@ -505,23 +526,33 @@ def test_open_claim_map_coord_nav_uses_start_navigation(
         map_coord=(120, 88))
     assert ok is True and "坐标" in info
     assert started["args"] == ("灵兽村", 120, 88)
+    assert started["trusted"] is True
     assert states == [True] and calls["filter"] == [1]
     assert calls["mini"] == [] and calls["city"] == []  # 不走旧开图
     assert calls["click"] == []  # 不走固定像素点击
 
 
-def test_open_claim_map_coord_nav_failure(monkeypatch, coord_nav_enabled):
-    """坐标化寻路失败原样返回，不回落固定像素路径。"""
+def test_open_claim_map_coord_nav_failure_falls_back_to_fixed_pixel(
+        monkeypatch, coord_nav_enabled):
+    """坐标直点失败（无标定/越界）→ 回退固定像素点击，不再整轮卡死。
+
+    2026-11-25 手动寻路实机：悬停不可用时坐标寻路 32 次×36s 空转；
+    固定像素是该地图窗口的生产标定值，差一点不影响领取点到达判据。
+    """
     calls = _patch_open_env(monkeypatch)
     from src.device import map_nav
     monkeypatch.setattr(
         map_nav, "start_navigation",
-        lambda *a, **k: (False, "地图窗口未出现搜索条", None))
+        lambda *a, **k: (False, "灵兽村 无地图标定（trusted 直点不可用）", None))
+    win = _FrameWin()
     ok, info = claim_flow.open_claim_map(
-        _FrameWin(), None, map_name="灵兽村", map_pos=(1, 2),
+        win, None, map_name="宝象国", map_pos=(517, 488),
         prefix="[测试]", map_coord=(120, 88))
-    assert ok is False and "搜索条" in info
-    assert calls["click"] == [] and calls["mini"] == []
+    assert ok is True and "宝象国" in info
+    # 回退路径重新截帧 + 重读位置（旧帧/旧位置已在开合图后过期）
+    assert win.captures == 2
+    assert len(calls["read_pos"]) == 1
+    assert calls["mini"] == [1] and calls["click"] == [(517, 488)]
 
 
 def test_open_claim_map_pos_reused_skips_position_read(monkeypatch):

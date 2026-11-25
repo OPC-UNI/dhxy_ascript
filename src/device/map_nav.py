@@ -1121,14 +1121,94 @@ def locate_layer_tile(img, base, layer_name):
     return int(px), int(py)
 
 
+# ---- 层块页坐标缓存（2026-11-25 用户确认：层块页布局固定）----
+# 首次 OCR 定位成功后缓存该层标题小块模板；后续导航用模板匹配
+# （~10ms）当「层块页已渲染」信号并给出点击点，再用小区域 OCR
+# （~30-100ms，_rect_text 2x）读回层名做文本确认，总开销 ~0.1s
+# vs 整页 OCR ~0.5-0.9s。确认失败/模板未命中（动画、布局变化）回退
+# 整页 OCR 并重新学习。键含窗口尺寸（窗口布局变化时重新学习）。
+_LAYER_TILE_CACHE = {}
+LAYER_TILE_TPL_HALF_W = 46       # 标题小块半宽（层名 4-6 字，实测 ~60-100px）
+LAYER_TILE_TPL_HALF_H = 14       # 半高（单行文字 ~24px）
+LAYER_TILE_TPL_THRESHOLD = 0.90  # TM_CCOEFF_NORMED 灰度（静态标题，取严）
+
+
+def reset_layer_tile_cache():
+    """清空层块页坐标缓存（测试/布局变化用）。"""
+    _LAYER_TILE_CACHE.clear()
+
+
+def _layer_tile_cache_key(win, base, layer):
+    try:
+        return (base, layer, int(win.rect.width), int(win.rect.height))
+    except Exception:  # noqa: BLE001 —— 无窗口几何时不缓存（测试桩）
+        return None
+
+
+def _layer_tile_title_rect(pt):
+    """标题中心 → 标题小块矩形（模板裁剪与文本确认共用）。"""
+    cx, cy = int(pt[0]), int(pt[1])
+    return (cx - LAYER_TILE_TPL_HALF_W, cy - LAYER_TILE_TPL_HALF_H,
+            cx + LAYER_TILE_TPL_HALF_W, cy + LAYER_TILE_TPL_HALF_H)
+
+
+def _remember_layer_tile(win, img, base, layer, pt):
+    """缓存层块标题中心 + 标题小块灰度模板（首次 OCR 定位成功后调用）。"""
+    key = _layer_tile_cache_key(win, base, layer)
+    if key is None:
+        return
+    gray = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2GRAY)
+    x0, y0, x1, y1 = _layer_tile_title_rect(pt)
+    x0, y0 = max(0, x0), max(0, y0)
+    x1 = min(gray.shape[1], x1)
+    y1 = min(gray.shape[0], y1)
+    if x1 - x0 < 20 or y1 - y0 < 10:
+        return
+    _LAYER_TILE_CACHE[key] = {"pt": (int(pt[0]), int(pt[1])),
+                              "tpl": gray[y0:y1, x0:x1].copy()}
+
+
+def _match_layer_tile(win, img, base, layer):
+    """缓存命中：在全帧模板匹配标题小块（布局固定、全帧 ~10ms），
+    再用小区域 OCR 读回层名确认。返回确认后的标题中心或 None。"""
+    key = _layer_tile_cache_key(win, base, layer)
+    ent = _LAYER_TILE_CACHE.get(key) if key else None
+    if ent is None:
+        return None
+    gray = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2GRAY)
+    tpl = ent["tpl"]
+    th, tw = tpl.shape[:2]
+    if gray.shape[0] < th or gray.shape[1] < tw:
+        return None
+    res = cv2.matchTemplate(gray, tpl, cv2.TM_CCOEFF_NORMED)
+    _, max_val, _, max_loc = cv2.minMaxLoc(res)
+    if max_val < LAYER_TILE_TPL_THRESHOLD:
+        return None
+    cx = int(max_loc[0] + tw // 2)
+    cy = int(max_loc[1] + th // 2)
+    # 文本确认：小区域 2x OCR 读回层名（防模板误配点错层块）
+    text = _rect_text(img, _layer_tile_title_rect((cx, cy)))
+    if layer not in text:
+        return None
+    return (cx, cy)
+
+
 def _wait_layer_tile(win, base, layer_name, timeout):
-    """在层块页定位目标层标题，返回标题中心；找不到返回 None。"""
+    """在层块页定位目标层标题，返回标题中心；找不到返回 None。
+
+    优先缓存（模板匹配 + 文本确认，~0.1s）；未命中/确认失败回退整页
+    OCR（~0.5-0.9s），成功后更新缓存。
+    """
     deadline = time.time() + timeout
     while time.time() < deadline:
         img = win.capture(force_activate=False)
         if img is not None:
+            pt = _match_layer_tile(win, img, base, layer_name)
+            if pt is not None:
+                return pt
             pt = locate_layer_tile(img, base, layer_name)
             if pt is not None:
+                _remember_layer_tile(win, img, base, layer_name, pt)
                 return pt
         time.sleep(0.4)
     return None
@@ -1646,12 +1726,15 @@ def _prewalk_if_configured(win, pos, base, layer, emit):
         emit("预走路跳过：小地图未打开（不影响导航）")
         return 0.0
     human_click(win, int(px), int(py))
-    # 快速关小地图：刚由本流程打开、无自动关闭动画风险，不等 1s 确认；
-    # 世界地图流程需要它先关（窗口重叠）
+    # 快速关小地图：刚由本流程打开（known_open 免双帧复核）、无自动
+    # 关闭动画风险，不等 1s 确认，0.15s 步长尽早返回；世界地图流程
+    # 需要它先关（窗口重叠）。仍确认关闭——若不确认，后续 close_maps
+    # 会把关闭动画中的面板当打开，白等 1s 确认窗口。
     game_map.close_map_if_open(win, game_map.MINI_MAP_OPEN_ICON, "小地图",
                                primary_button="primary",
                                match_region=game_map.MINI_MAP_REGION,
-                               confirm_wait=0.0, quiet=True)
+                               confirm_wait=0.0, quiet=True,
+                               known_open=True, poll_step=0.15)
     dt = time.time() - t0
     emit(f"预走路：{cur}坐标 {pt} → 小地图点 ({int(px)},{int(py)})"
          f" → 角色先走起来（{dt:.1f}s）")
@@ -3899,7 +3982,7 @@ def _navigate_special_map(win, target, x, y, entry, emit, verbose=False,
 
 
 def navigate_to_map_coordinate(win, target, x, y, log_fn=None, verbose=False,
-                               on_walk_start=None):
+                               on_walk_start=None, pos_hint=None):
     """导航到 target 地图 (x, y)：打开地图 → 悬停标定 → 校验点击 → 到达。
 
     target：WORLD_MAP_LABELS 地图名（经 resolve 归一）、层级图全名
@@ -3915,6 +3998,10 @@ def navigate_to_map_coordinate(win, target, x, y, log_fn=None, verbose=False,
     （行走期插队任务，如修罗手动寻路的组号队员血蓝 pass——与 follow
     点任务绿字后的寻路期 pass 对齐）。回调异常只记日志、不影响导航；
     停滞重启会再走一遍流程，回调可能被调用第二次（调用方自行节流）。
+    pos_hint：调用方已知的当前位置（与 read_map_position 同形元组），
+    仅用于开图路线的地图名判断（预走路/同图/层内）；传入后免一次
+    截帧+位置 OCR（~0.4s）。只认 pos[0]，坐标不参与路线决策；位移
+    基线仍在点击后另读。仅首趟生效（停滞重启时人物已移动，hint 过期）。
     行走中位置停滞 5s（寻路被点世界/其它操作打断）会自动重新开图补点
     一次；主动 request_cancel() 中断（诊断「中断寻路」）不补——那是用户
     要停：各轮询循环每轮检查（1-3s 生效），中断时关地图/寻路面板并返回
@@ -3934,11 +4021,13 @@ def navigate_to_map_coordinate(win, target, x, y, log_fn=None, verbose=False,
             return ok, info
         ok, info = _navigate_impl(win, target, x, y, emit, verbose=verbose,
                                   allow_restart=True,
-                                  on_walk_start=on_walk_start)
+                                  on_walk_start=on_walk_start,
+                                  pos_hint=pos_hint)
         if not ok and info == ARRIVE_RESTART_TEXT:
             # 人物原地站了 5s：多半是客户端寻路被打断（点世界/其它操作），
             # 重新走一遍开图 + 点目标点补一次；补过仍不行按失败返回
             emit("位置 5s 未变化（寻路可能被打断）——重新开图补一次")
+            # 重启时人物已移动，pos_hint 不再可信：重新读位置
             ok, info = _navigate_impl(win, target, x, y, emit,
                                       verbose=verbose, allow_restart=False,
                                       on_walk_start=on_walk_start)
@@ -3974,7 +4063,8 @@ def site_coord_nav_enabled():
     return load_site_coord_nav()
 
 
-def start_navigation(win, target, x, y, log_fn=None, on_map_open=None):
+def start_navigation(win, target, x, y, log_fn=None, on_map_open=None,
+                     trusted=False):
     """坐标化寻路（只开图/标定/点击，不等到达）：任务点位迁移用。
 
     与 navigate_to_map_coordinate 前半段一致：同图直开小地图/跨图经
@@ -3984,13 +4074,15 @@ def start_navigation(win, target, x, y, log_fn=None, on_map_open=None):
     失败/中断路径清理残留地图与寻路面板。
     on_map_open：目标地图打开后、点击前回调（领取流程读小地图「任务」
     筛选状态等）。回调异常只记日志、不影响寻路。
+    trusted：有标定直接点（免悬停校验/采样），固定领取点专用；无标定
+    立即失败由调用方回退固定像素点（见 _start_impl）。
     返回 (ok, info, point)。
     """
     emit = log_fn or (lambda m: log(f"[地图导航] {m}", "INFO"))
     _CANCEL.clear()
     try:
         ok, info, ctx = _start_impl(win, target, x, y, emit,
-                                    on_map_open=on_map_open)
+                                    on_map_open=on_map_open, trusted=trusted)
         if not ok:
             return False, info, None
         return True, f"已点击目标点 {ctx['point']}，开始寻路", ctx["point"]
@@ -4013,7 +4105,8 @@ def start_navigation(win, target, x, y, log_fn=None, on_map_open=None):
         raise
 
 
-def _start_impl(win, target, x, y, emit, on_map_open=None):
+def _start_impl(win, target, x, y, emit, on_map_open=None, pos_hint=None,
+                trusted=False):
     """开图 + 标定 + 点击前半段（start_navigation / _navigate_impl 共用）。
 
     世界地图（layer=None）开图后统一取消「普通」筛选（用户 2026-11-24）：
@@ -4021,6 +4114,12 @@ def _start_impl(win, target, x, y, emit, on_map_open=None):
     兜底自行勾选（_enter_special_by_npc），残留状态由下次开图时清除。
     成功时地图保持打开（调用方决定关闭时机），返回 (True, "", ctx)；
     失败已清理残留地图（寻路面板不会自动关闭，必须统一收尾）。
+    pos_hint：调用方已知的当前位置（read_map_position 同形元组）——只
+    用于路线判断（预走路/同图/层内），传入后免一次截帧+位置 OCR；
+    坐标不参与决策（位移基线在点击后另读）。
+    trusted：有会话/内置标定就直接点（免悬停校验/采样），固定领取点等
+    坐标容差大的目标专用；无标定/越界立即失败，由调用方回退固定像素点
+    （见 claim_flow.open_claim_map）。
     ctx：base/layer/point/t_start/t_map/t_bar/t_click/open_dt/prewalk_dt/
     layer_entry/xunlu_entry（大雁塔跨层走寻路面板：面板被目的地地图窗口
     遮住，需等点击起点、位移启动后先关地图再补关面板）。
@@ -4037,8 +4136,12 @@ def _start_impl(win, target, x, y, emit, on_map_open=None):
         if resolved is None:
             return False, f"地图「{target}」未收录世界地图标签", None
         base = resolved
-    pos = _read_pos(win)
-    emit(f"目标 {layer or base} ({x},{y})；起点位置 {pos}")
+    if pos_hint is not None:
+        pos = tuple(pos_hint)
+        emit(f"目标 {layer or base} ({x},{y})；起点位置 {pos}（hint）")
+    else:
+        pos = _read_pos(win)
+        emit(f"目标 {layer or base} ({x},{y})；起点位置 {pos}")
     # 大雁塔跨层走「世界地图→寻路」面板（与 _open_target_map 同一判据）：
     # 面板在目的地地图窗口打开时被遮住、点不到 X，需等地图窗口收起后补关
     # （2026-11-21 实机：面板一直留到行走/战斗中，见 _navigate_impl）。
@@ -4111,20 +4214,43 @@ def _start_impl(win, target, x, y, emit, on_map_open=None):
     affine = affine_for(win, key)
     point = None
     err = ""
+    ok = False
 
     def _cache_corrected(aff):
         """偏差修正后的标定写入会话缓存：同图下次导航一次命中。"""
         remember_affine(win, key, aff)
         emit("标定已按悬停校验修正并缓存（同图后续导航直接命中）")
 
-    if affine is not None:
+    if trusted:
+        # trusted 直点（2026-11-25 用户确认）：固定领取点这类坐标容差大
+        # （差 1-2 格不影响到达判据），跳过悬停标定/校验——悬停浮层在
+        # 窗口非前台时可能整体不渲染（2026-11-25 实机 32 次×36s 空转），
+        # 直点让重走领取点不再被标定链拖死。无标定/换算越界立即失败，
+        # 由调用方回退固定像素点（claim_flow 的旧生产路径），不跑采样。
+        if affine is None:
+            _cleanup()
+            emit(f"耗时: trusted 直点无标定（总计 {time.time() - t_start:.1f}s）")
+            return False, f"{key} 无地图标定（trusted 直点不可用）", None
+        px = int(round(affine["ax"] + affine["sx"] * x))
+        py = int(round(affine["ay"] + affine["sy"] * y))
+        if not (0 <= px <= 1377 and 0 <= py <= 830):
+            _cleanup()
+            emit(f"耗时: trusted 直点换算越界 ({px},{py})"
+                 f"（总计 {time.time() - t_start:.1f}s）")
+            return False, f"trusted 直点 ({px},{py}) 超出窗口", None
+        _check_cancel()
+        emit(f"使用内置/会话标定（trusted 直点，免悬停校验）→ ({px},{py})")
+        human_click(win, px, py)
+        point = (px, py)
+        ok = True
+    elif affine is not None:
         emit("使用内置/会话标定（悬停校验）")
         ok, point, err = _aim_and_click(win, affine, None, x, y, emit,
                                         on_affine_corrected=_cache_corrected)
         if not ok:
             emit(f"标定未通过校验（{err}），回退完整采样")
             affine = None
-    if affine is None:
+    if not trusted and affine is None:
         t_sample = time.time()
         samples = _collect_hover_samples(win, bar, emit)
         if len(samples) < 2:
@@ -4162,11 +4288,12 @@ def _start_impl(win, target, x, y, emit, on_map_open=None):
 
 
 def _navigate_impl(win, target, x, y, emit, verbose=False, allow_restart=False,
-                   on_walk_start=None, enter_name=None):
+                   on_walk_start=None, enter_name=None, pos_hint=None):
     """导航主流程（navigate_to_map_coordinate 的实现，emit 已就绪）。
 
     enter_name：特殊地图名（莲花洞等）——特殊地图经父地图入口自动进场，
     到达等待以 HUD 地名变为该名为准（见 _wait_arrival）。
+    pos_hint：调用方已知的当前位置（只认地名，见 _start_impl）。
     世界地图开图后统一取消「普通」筛选（见 _start_impl；用户 2026-11-24）。
     """
     def _cleanup():
@@ -4174,7 +4301,7 @@ def _navigate_impl(win, target, x, y, emit, verbose=False, allow_restart=False,
         game_map.close_maps(win, quiet=True)
         _close_xunlu_panel_if_open(win)
 
-    ok, info, ctx = _start_impl(win, target, x, y, emit)
+    ok, info, ctx = _start_impl(win, target, x, y, emit, pos_hint=pos_hint)
     if not ok:
         return False, info
     base = ctx["base"]
@@ -4202,15 +4329,15 @@ def _navigate_impl(win, target, x, y, emit, verbose=False, allow_restart=False,
         human_click(win, min(point[0] + CLICK_OFFSET_RETRY, 1377), point[1])
         _wait_movement(win, before)
     emit(f"位移启动（点击后 {time.time() - t_click:.1f}s）")
-    if xunlu_entry:
-        # 大雁塔特殊入口：开图阶段目的地地图窗口压在「寻路」面板上，面板
-        # 在场判定看不到内容、X 点不到（2026-11-21 实机：面板一直留到
-        # 行走/战斗中才被看见）。起点点击已完成、人物已起步，此时地图
-        # 窗口不再需要（客户端可能已自动收起）——先关地图让面板露出，
-        # 再补关面板，避免行走与战斗期间一直挡屏。
-        game_map.close_maps(win, quiet=True)
-        if _close_xunlu_panel_if_open(win):
-            emit("已关闭残留「寻路」面板")
+    # 位移已启动即关地图（2026-11-25 性能）：到达等待只读 HUD 位置
+    # （MAP_POS_REGION，不在地图窗口内），不依赖地图窗口；关图/面板
+    # 收尾与行走并行，到达后不再占一段收尾时间（原实现到达后才
+    # close_maps，含 1s 关闭确认实测 ~1.5s，每轮白等）。大雁塔入口的
+    # 「寻路」面板被目的地地图窗口遮住，须先关地图让面板露出再补关
+    # （2026-11-21 实机：面板一直留到行走/战斗中）。
+    game_map.close_maps(win, quiet=True)
+    if xunlu_entry and _close_xunlu_panel_if_open(win):
+        emit("已关闭残留「寻路」面板")
     if on_walk_start is not None:
         # 行走期插队回调（修罗手动寻路 → 组号队员血蓝 pass）：人物已在走，
         # 回调期间客户端寻路继续；异常只记日志，不拖垮导航

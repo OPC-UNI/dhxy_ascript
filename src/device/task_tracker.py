@@ -359,7 +359,7 @@ class TrackGate:
         self.min_interval = min_interval
         self.region = None      # 上轮内容区（paste_track 贴同一区域）
 
-    def ocr(self, img):
+    def ocr(self, img, skip_when_absent=False):
         """面板 OCR 三态门：节奏上限 → 像素相等 → 全量 OCR。
 
         1. 距上次 OCR 不足 min_interval：一律复用（世界像素变化/面板
@@ -370,10 +370,23 @@ class TrackGate:
         3. 其余：全量面板 OCR（含 MAX_SKIP 兜底强制刷新）
         面板内容区每帧由标题条模板动态定位（面板漂移时区域与门跟随）；
         模板未命中回退静态 TRACK_REGION（原行为）。
+
+        skip_when_absent：标题条模板未命中时直接返回空列表，跳过区域
+        OCR。只给「空结论不触发重试/重领」的调用用（领取校验：无追踪
+        面板的账号/快捷寻路次数用尽后面板缺席，逐轮白付 ~0.9s；
+        面板恢复的下一帧模板命中即恢复正常 OCR）。默认 False 保持
+        原语义（面板被遮挡/瞬态漏检时仍回退静态区域 OCR）。
         """
         img_np = np.asarray(img)
         region = track_content_region(img_np)
         self.region = region  # 与本次 OCR 同区域（未命中为 None → paste 回退静态）
+        if region is None and skip_when_absent:
+            # 面板缺席：没有任何任务行可读。清门缓存——面板恢复后
+            # 必须按新帧重新 OCR，不能复用空结论
+            self.crop = None
+            self.items = []
+            self.ocr_at = 0.0
+            return self.items
         l, t, r, b = region or TRACK_REGION
         gl, gt = l, t
         gr = min(img_np.shape[1], gl + TRACK_GATE_W)

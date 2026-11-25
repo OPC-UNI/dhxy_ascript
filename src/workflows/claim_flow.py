@@ -44,12 +44,19 @@ def task_state(win, title, fallbacks):
 
 
 def probe_task_block(win, title, fallbacks, region_fn):
-    """小区域探针：新截帧 + 任务块 OCR，返回 (是否渲染, 探针耗时)。"""
+    """小区域探针：新截帧 + 任务块 OCR，返回 (是否渲染, 探针耗时)。
+
+    追踪面板标题条模板缺席（无快捷寻路次数的账号/面板被关）时直接
+    返回未命中：面板不存在，任务不可能渲染，免任务块 OCR（实测
+    ~0.24s + 截帧，领取校验每轮白付；2026-11-25 手动寻路日志）。
+    """
     t0 = time.time()
     img = win.capture(force_activate=False)
     if img is None:
         return False, time.time() - t0
     img_np = np.asarray(img)
+    if task_tracker.track_content_region(img_np) is None:
+        return False, time.time() - t0
     items, _ = game_map.ocr_region(img, region_fn(img_np))
     hit = task_tracker.has_task_in(items, img_np, title, fallbacks)
     return hit, time.time() - t0
@@ -222,6 +229,9 @@ def open_claim_map(win, pos=None, *, map_name, map_pos, prefix,
     map_coord：领取点地图坐标 (x, y)——坐标化寻路开关（通用设置，默认
     开）开启且给出时改走 map_nav 坐标点击（开图标定后按坐标换算像素，
     与固定像素同点位）；关闭/未给定时走原固定像素逻辑（回滚路径）。
+    坐标点击走 trusted 直点（2026-11-25）：有标定直接点、免悬停校验，
+    无标定/越界时回退固定像素点击（map_pos/click_fn），悬停不可用
+    （窗口非前台）也不再卡住重走领取点。
     """
     img = win.capture(force_activate=False)
     if img is None:
@@ -232,16 +242,31 @@ def open_claim_map(win, pos=None, *, map_name, map_pos, prefix,
         # 坐标化寻路（2026-11-21 默认开）：同点位坐标换算点击像素，点击
         # 行为与固定像素一致；「任务」筛选状态在地图打开后、点击前读取
         # （与原流程时机一致，供到达时判断是否检查自动对话框）。
+        # trusted（2026-11-25）：领取点是固定坐标、到达判据容差大（±5/±15
+        # 与领取按钮模板），有标定直接点、免悬停校验——悬停浮层在窗口非
+        # 前台可能整体不渲染，旧路径每次白耗 36s 且整轮卡死（2026-11-25
+        # 实机 32 次空转 20 分钟）。
         ok, info, _pt = map_nav.start_navigation(
             win, map_name, map_coord[0], map_coord[1],
             log_fn=lambda m: log(f"{prefix}{m}", "INFO"),
             on_map_open=lambda: _read_minimap_task_filter(
-                win, prefix, on_filter_state))
-        if not ok:
-            return False, info
-        log(f"{prefix} 已按坐标 {map_coord} 点击{map_name}地图点，"
-            f"自动寻路中", "SYS")
-        return True, f"已点击{map_name}地图点坐标 {map_coord}"
+                win, prefix, on_filter_state),
+            trusted=True)
+        if ok:
+            log(f"{prefix} 已按坐标 {map_coord} 点击{map_name}地图点，"
+                f"自动寻路中", "SYS")
+            return True, f"已点击{map_name}地图点坐标 {map_coord}"
+        # 直点失败（无标定/换算越界）：回退固定像素点击——固定像素是
+        # 该地图窗口的生产标定值，差一点不影响领取点到达判据；也保证
+        # 悬停不可用时仍能重走领取点（不跑悬停采样、不空转）
+        log(f"{prefix} 坐标直点失败（{info}），回退固定像素点击领取点",
+            "WARN")
+        img = win.capture(force_activate=False)
+        if img is None:
+            return False, "截图失败"
+        if is_in_battle_frame(img):
+            return False, "战斗中，跳过地图导航"
+        pos = None  # 失败路径期间地图开合过：位置重新读，不信旧帧
     if pos is None:
         pos = game_map.read_map_position(win, img=img)
     if pos is not None and pos[0].strip() == map_name:

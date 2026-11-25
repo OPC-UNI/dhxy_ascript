@@ -576,19 +576,27 @@ def _run_wuyi_chain(win, hover_before_click=False, report_condition=False,
     #    （位置 ±5 或 NPC 模板可见均算到达——坐标 OCR 不可靠时
     #    模板兜底，原实现教训）
     if need_walk:
+        walked = False
         if map_nav.site_coord_nav_enabled():
             # 坐标化寻路（2026-11-21 默认开）：按巫医坐标开图标定点击，
             # 等同原固定像素点位；关闭开关回滚下方固定像素逻辑。
+            # trusted（2026-11-25 用户指定）：巫医是固定 NPC 坐标、到达
+            # 判据宽松（坐标 ±5 或 NPC 模板可见），有标定直点免悬停校验；
+            # 无标定/越界立即回退下方固定像素点击（悬停不可用时不跳过巫医）
             ok, info, _pt = map_nav.start_navigation(
                 win, LINGSHOUCUN, WUYI_SPOT[0], WUYI_SPOT[1],
-                log_fn=lambda m: log(f"[修罗][巫医][坐标] {m}", "INFO"))
-            if not ok:
-                return False, info
-            log(f"[修罗][巫医] 已按坐标 {WUYI_SPOT} 点击灵兽村地图点，"
-                f"自动寻路中", "SYS")
-            time.sleep(1.0)
-            game_map.close_maps(win)
-        else:
+                log_fn=lambda m: log(f"[修罗][巫医][坐标] {m}", "INFO"),
+                trusted=True)
+            if ok:
+                log(f"[修罗][巫医] 已按坐标 {WUYI_SPOT} 点击灵兽村地图点，"
+                    f"自动寻路中", "SYS")
+                time.sleep(1.0)
+                game_map.close_maps(win)
+                walked = True
+            else:
+                log(f"[修罗][巫医] 坐标直点失败（{info}），回退固定像素点击",
+                    "WARN")
+        if not walked:
             ok, info = game_map.open_mini_map(win)
             if not ok:
                 return False, info
@@ -1741,8 +1749,13 @@ def _claim_task(win, allow_fill=False, create_team_if_missing=False,
             # （正常成功轮次任务在第 1~2 轮已确认，不进这里）。
             need_dialog = True
         # 面板差分门：任务进追踪必然改变面板核心像素（门必开）；
-        # 对话框区域（队伍确认/警告、完成次数、缓存补点）逐轮新鲜 OCR
-        track_items = track_gate.ocr(img)
+        # 对话框区域（队伍确认/警告、完成次数、缓存补点）逐轮新鲜 OCR。
+        # skip_when_absent（2026-11-25）：无追踪面板（快捷寻路次数用尽/
+        # 兼容无快捷寻路账号）时标题条模板必然缺席——直接跳过面板区域
+        # OCR（实测每轮 ~0.9s、两轮校验白付 ~1.8s）；面板若随后出现，
+        # 下一帧模板命中即恢复正常 OCR，且 try 后的 has_task 复查兜底
+        # 走 follow 分支。
+        track_items = track_gate.ocr(img, skip_when_absent=True)
         if need_dialog:
             dialog_items, img_np = game_map.ocr_region(
                 img, task_tracker.DIALOG_REGION)
@@ -1853,7 +1866,11 @@ def _claim_task(win, allow_fill=False, create_team_if_missing=False,
         if polls >= 2 \
                 and not task_tracker.has_task_in(
                     items, img_np, TASK_TITLE, TASK_FALLBACK_TEXTS) \
+                and task_tracker.panel_visible(img=img) \
                 and _task_in_tracker_zoom(img):
+            # 面板标题条模板缺席时任务不可能渲染（无快捷寻路次数的账号），
+            # 2x 全帧引擎放大（单次成本高）纯白付——模板命中（面板在场）
+            # 才做漏检补读，与 has_task(fast_absent) 同一面板在场判据
             log("[修罗] 任务块 2x 重识别检出任务", "SYS")
             # 重截一帧补全双区域 OCR：found_frame 需完整帧供 follow
             # 首轮复用（面板绿字点击与对话框处理依赖）
@@ -2594,10 +2611,12 @@ def _click_markers_and_fight(win, dest=None):
                    f"（{info}；已点屏幕中间释放），按失败处理")
 
 
-def _manual_nav_round(win, dest):
+def _manual_nav_round(win, dest, pos_hint=None):
     """无任务追踪的手动寻路回合：寻路 → 点标记开打 → 等战斗结束。
 
     dest：_parse_claim_destination 的 (地图名, x, y)；None 表示解析失败。
+    pos_hint：已知当前位置（领取点附近/巫医后仍在灵兽村时传入），
+    免导航开头一次截帧+位置 OCR（只认地名，见 map_nav.pos_hint）。
     组号队员血蓝 pass 走 map_nav 的 on_walk_start 回调：位移启动后、
     到达等待前插入（与 follow 点任务绿字后的寻路期 pass 同语义——
     行走期不占主流程时间；60s 节流与 pass 互斥在 tab_group 内部）。
@@ -2614,6 +2633,7 @@ def _manual_nav_round(win, dest):
     ok, info = map_nav.navigate_to_map_coordinate(
         win, map_name, gx, gy,
         log_fn=lambda m: log(f"[修罗][手动] {m}", "INFO"),
+        pos_hint=pos_hint,
         on_walk_start=lambda: _maybe_tab_bars_pass(win))
     if not ok:
         return False, f"手动寻路失败: {info}"
@@ -3437,8 +3457,13 @@ def run_loop(win, cycle_interval=1.0):
             # 时再看追踪面板——有任务走原 follow，没有则本轮回合改走
             # 手动寻路（目的地先于对话框关闭解析，动作在下方 follow 处分叉）
             if manual_enabled and (force_manual or _claim_manual_dialog):
+                # fast_absent（2026-11-25）：面板标题条模板缺席且无遮挡
+                # 面板时直接判无任务（~0.12s vs 区域 OCR ~0.5s）。本调用
+                # False 只走手动寻路、不触发重试/重领（校验循环已按
+                # 对话框证据确认领取成功），符合 fast_absent 的使用边界；
+                # 面板在场时照常 OCR，不影响有追踪账号走 follow。
                 tracker_has = task_tracker.has_task(
-                    win, TASK_TITLE, TASK_FALLBACK_TEXTS)
+                    win, TASK_TITLE, TASK_FALLBACK_TEXTS, fast_absent=True)
                 if tracker_has and not force_manual:
                     log("[修罗] 兼容无快捷寻路：追踪面板已有任务，"
                         "走原跟踪流程", "SYS")
@@ -3484,8 +3509,13 @@ def run_loop(win, cycle_interval=1.0):
         #     领取校验帧传入后首轮跳过截图+OCR 立即点击绿字
         #     （修理行程后旧帧已过期——重新截帧识别）
         if manual_round:
-            # 无任务追踪：手动寻路 → 点任务标记 → 看打/直接进战斗 → 等战斗结束
-            ok, info = _manual_nav_round(win, manual_dest)
+            # 无任务追踪：手动寻路 → 点任务标记 → 看打/直接进战斗 → 等战斗结束。
+            # 位置 hint：领取后人物必在灵兽村领取点（巫医也在灵兽村）；自动修理
+            # 轮次可能把人物带到洛阳城，不给 hint（导航自行读位置，路线才正确）
+            ok, info = _manual_nav_round(
+                win, manual_dest,
+                pos_hint=(LINGSHOUCUN, CLAIM_COORD[0], CLAIM_COORD[1])
+                if not repair_round else None)
         else:
             ok, info = _follow_to_done(
                 win, first_items=None if repair_round else claim_items)

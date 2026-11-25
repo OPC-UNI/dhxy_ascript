@@ -952,7 +952,7 @@ def open_mini_map_by_name(win, map_name, prefix="[地图] "):
 
 def close_map_if_open(win, icon, label, fallbacks=(), primary_button="secondary",
                       close_retries=3, confirm_wait=0.0, match_region=None,
-                      quiet=False):
+                      quiet=False, known_open=False, poll_step=0.3):
     """检测地图（模板）是否打开，打开则点击模板位置关闭。
 
     双帧确认后才点击（防瞬时误检）；confirm_wait > 0 时再等复检一次
@@ -970,6 +970,11 @@ def close_map_if_open(win, icon, label, fallbacks=(), primary_button="secondary"
     quiet：周期性兜底检查用——「未打开不点击」这类无操作路径不再
     打日志（锄遗聚宝 5s 兜底检查实测每轮刷 2 条 INFO），实际执行
     关闭动作的日志保留。
+    known_open：调用方刚确认地图打开（如预走路刚开小地图点过走路点），
+    跳过双帧确认的首帧复核（省一次截帧+匹配；面板瞬时误检已由调用方
+    的开图确认排除）。
+    poll_step：关闭后复检轮询间隔（默认 0.3s；已知打开的快速关闭可
+    用 0.15s 更早返回）。
     返回 (是否成功, 描述)。全部点击与复检结果打日志（排查多点一次）。
     """
     def _find():
@@ -982,7 +987,7 @@ def close_map_if_open(win, icon, label, fallbacks=(), primary_button="secondary"
         return match_frame_np(frame, icon, region=match_region, fallback=False)
 
     pt = _find()
-    if pt is None or _find() is None:
+    if pt is None or (not known_open and _find() is None):
         if not quiet:
             log(f"[地图] 关闭{label}: 双帧确认未打开，不点击", "INFO")
         return False, f"{label}未打开，无需关闭"
@@ -1001,7 +1006,7 @@ def close_map_if_open(win, icon, label, fallbacks=(), primary_button="secondary"
         human_click(win, pt[0], pt[1], button=primary_button)
         deadline = time.time() + 1.0  # 轮询复检替代固定等待（关闭动画约 1s）
         while time.time() < deadline:
-            time.sleep(0.3)
+            time.sleep(poll_step)
             if _find() is None:
                 log(f"[地图] 关闭{label}: 复检已关闭（第 {attempt + 1} 次点击生效）", "INFO")
                 return True, f"{label}已在模板位置{btn}键关闭"

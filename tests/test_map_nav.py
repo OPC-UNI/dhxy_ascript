@@ -14,6 +14,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from PIL import Image
 
 from src.device import map_nav
 
@@ -32,8 +33,10 @@ def _isolate_affine_caches(monkeypatch, tmp_path):
         map_nav, "_persisted_affines_path",
         lambda: tmp_path / "map_nav_affines.json")
     map_nav.reset_affine_cache()
+    map_nav.reset_layer_tile_cache()
     yield
     map_nav.reset_affine_cache()
+    map_nav.reset_layer_tile_cache()
 
 
 # ---------------- 层级图与下拉 ----------------
@@ -359,6 +362,73 @@ def test_locate_layer_tile_longku_columns(monkeypatch):
         pt = map_nav.locate_layer_tile(object(), "龙窟", layer)
         assert pt is not None, layer
         assert abs(pt[0] - cx) <= 2 and abs(pt[1] - cy) <= 3, (layer, pt)
+
+
+# ---------------- 层块页坐标缓存（2026-11-25） ----------------
+
+def _layer_page_win(frame):
+    class _W:
+        rect = types.SimpleNamespace(width=1378, height=831)
+
+        def capture(self, force_activate=False):
+            return frame
+
+    return _W()
+
+
+def _layer_page_frame(seed):
+    rng = np.random.default_rng(seed)
+    return Image.fromarray(rng.integers(0, 255, (831, 1378, 3), dtype=np.uint8))
+
+
+def test_layer_tile_cache_learns_then_matches_without_ocr(monkeypatch):
+    """首次 OCR 定位后缓存标题小块；下次模板匹配 + 小区域文本确认，
+    不再整页 OCR（省 ~0.5-0.9s/次）。"""
+    frame = _layer_page_frame(7)
+    win = _layer_page_win(frame)
+    ocr = []
+    monkeypatch.setattr(map_nav, "locate_layer_tile",
+                        lambda img, base, layer: ocr.append(1) or (200, 150))
+    monkeypatch.setattr(map_nav, "_rect_text",
+                        lambda *a, **k: "凤巢七层")
+    assert map_nav._wait_layer_tile(
+        win, "凤巢", "凤巢七层", 1.0) == (200, 150)
+    assert len(ocr) == 1  # 首趟走整页 OCR 并学习
+    monkeypatch.setattr(map_nav, "locate_layer_tile",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("缓存命中不应整页 OCR")))
+    assert map_nav._wait_layer_tile(
+        win, "凤巢", "凤巢七层", 1.0) == (200, 150)
+
+
+def test_layer_tile_cache_text_mismatch_falls_back_to_ocr(monkeypatch):
+    """模板命中但小区域读回别的层名（防误配点错层块）→ 回退整页 OCR。"""
+    frame = _layer_page_frame(7)
+    win = _layer_page_win(frame)
+    ocr = []
+    texts = iter(["别的层名", "凤巢七层"])
+    monkeypatch.setattr(map_nav, "_rect_text", lambda *a, **k: next(texts, ""))
+    monkeypatch.setattr(map_nav, "locate_layer_tile",
+                        lambda img, base, layer: ocr.append(1) or (200, 150))
+    assert map_nav._wait_layer_tile(win, "凤巢", "凤巢七层", 1.0) == (200, 150)
+    assert map_nav._wait_layer_tile(win, "凤巢", "凤巢七层", 1.0) == (200, 150)
+    assert len(ocr) == 2  # 第二次文本确认失败 → OCR 兜底
+
+
+def test_layer_tile_cache_miss_on_changed_page(monkeypatch):
+    """层块页内容变化（动画/布局漂移）模板不命中 → 回退整页 OCR。"""
+    win = _layer_page_win(_layer_page_frame(7))
+    ocr = []
+    monkeypatch.setattr(map_nav, "_rect_text", lambda *a, **k: "凤巢七层")
+    monkeypatch.setattr(map_nav, "locate_layer_tile",
+                        lambda img, base, layer: ocr.append(1) or (200, 150))
+    assert map_nav._wait_layer_tile(win, "凤巢", "凤巢七层", 1.0) == (200, 150)
+    other = _layer_page_win(_layer_page_frame(11))
+    monkeypatch.setattr(map_nav, "locate_layer_tile",
+                        lambda img, base, layer: ocr.append(1) or (300, 200))
+    assert map_nav._wait_layer_tile(
+        other, "凤巢", "凤巢七层", 1.0) == (300, 200)
+    assert len(ocr) == 2
 
 
 # ---------------- 内置标定表与会话缓存 ----------------
@@ -709,6 +779,10 @@ def test_prewalk_clicks_configured_point(monkeypatch):
     # 原固定像素 (317,616) 的坐标反算值 → 换算回来同一像素（±1px）
     assert ("click", 316, 616) in calls
     assert any(c[0] == "close" for c in calls)
+    close_kw = [c[1] for c in calls if c[0] == "close"][0]
+    # 已知打开：免双帧复核 + 0.15s 快速复检（2026-11-25）
+    assert close_kw.get("known_open") is True
+    assert close_kw.get("poll_step") == 0.15
     assert any("预走路" in m for m in emits)
 
 
@@ -1347,6 +1421,85 @@ def test_start_impl_flags_dayan_pagoda_xunlu_entry(monkeypatch):
     assert ok and ctx["xunlu_entry"] is False
 
 
+def test_start_impl_pos_hint_skips_position_read(monkeypatch):
+    """pos_hint：开图前免截帧+位置 OCR（只认地名参与路线判断）。"""
+    _patch_start_env(monkeypatch)
+    monkeypatch.setattr(map_nav, "_read_pos",
+                        lambda win: (_ for _ in ()).throw(
+                            AssertionError("传入 hint 不应再读位置")))
+    seen = {}
+
+    def _prewalk(win, pos, base, layer, emit):
+        seen["pos"] = pos
+        return 0.0
+
+    monkeypatch.setattr(map_nav, "_prewalk_if_configured", _prewalk)
+    emits = []
+    ok, _info, _ctx = map_nav._start_impl(
+        object(), "凤巢七层", 10, 20, emits.append,
+        pos_hint=("灵兽村", 120, 88))
+    assert ok and seen["pos"] == ("灵兽村", 120, 88)
+    assert any("hint" in m for m in emits)
+
+
+def test_start_impl_without_hint_reads_position(monkeypatch):
+    """未传 hint：照常读位置（hint 只是可选优化）。"""
+    _patch_start_env(monkeypatch)
+    read = []
+    monkeypatch.setattr(map_nav, "_read_pos",
+                        lambda win: read.append(1) or ("长安", 1, 2))
+    ok, _info, _ctx = map_nav._start_impl(
+        object(), "凤巢七层", 10, 20, lambda m: None)
+    assert ok and read == [1]
+
+
+def test_start_impl_trusted_clicks_computed_point_without_hover(monkeypatch):
+    """trusted：有标定直接点（免悬停校验/采样）——固定领取点专用。"""
+    _patch_start_env(monkeypatch)
+    monkeypatch.setattr(map_nav, "_aim_and_click",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("trusted 不应悬停校验")))
+    monkeypatch.setattr(map_nav, "_collect_hover_samples",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("trusted 不应完整采样")))
+    clicks = []
+    monkeypatch.setattr(map_nav, "human_click",
+                        lambda win, x, y, **k: clicks.append((x, y)))
+    ok, _info, ctx = map_nav._start_impl(
+        object(), "洛阳城", 10, 20, lambda m: None, trusted=True)
+    assert ok and ctx["point"] == (40, 540)
+    assert clicks == [(40, 540)]
+
+
+def test_start_impl_trusted_without_affine_fails_fast(monkeypatch):
+    """trusted 无标定：立即失败（调用方回退固定像素），不跑悬停采样。"""
+    _patch_start_env(monkeypatch)
+    monkeypatch.setattr(map_nav, "affine_for", lambda win, key: None)
+    monkeypatch.setattr(map_nav, "_collect_hover_samples",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("trusted 不应完整采样")))
+    emits = []
+    ok, info, ctx = map_nav._start_impl(
+        object(), "洛阳城", 10, 20, emits.append, trusted=True)
+    assert not ok and ctx is None and "无地图标定" in info
+    assert any("trusted 直点无标定" in m for m in emits)
+
+
+def test_start_impl_trusted_rejects_out_of_window(monkeypatch):
+    """trusted 换算点越界（标定异常）：不点，返回失败由调用方回退。"""
+    _patch_start_env(monkeypatch)
+    monkeypatch.setattr(map_nav, "affine_for",
+                        lambda win, key: {"sx": 1.0, "sy": -1.0,
+                                          "ax": 2000.0, "ay": 2000.0})
+    clicks = []
+    monkeypatch.setattr(map_nav, "human_click",
+                        lambda win, x, y, **k: clicks.append((x, y)))
+    ok, info, ctx = map_nav._start_impl(
+        object(), "洛阳城", 10, 20, lambda m: None, trusted=True)
+    assert not ok and ctx is None and "超出窗口" in info
+    assert clicks == []
+
+
 def test_navigate_closes_xunlu_panel_after_walk_start(monkeypatch):
     """大雁塔：位移启动后先关地图再补关寻路面板，然后才等到达。
 
@@ -1374,8 +1527,13 @@ def test_navigate_closes_xunlu_panel_after_walk_start(monkeypatch):
     assert any("已关闭残留「寻路」面板" in m for m in emits)
 
 
-def test_navigate_normal_map_no_early_panel_close(monkeypatch):
-    """普通地图不触发提前关面板（只在收尾统一清理一次）。"""
+def test_navigate_normal_map_closes_early(monkeypatch):
+    """普通地图也在位移启动后立即关图（与行走并行，不占到达后收尾）。
+
+    2026-11-25 性能：到达等待只读 HUD 位置、不依赖地图窗口；原实现
+    到达后才 close_maps（含 1s 关闭确认），每轮白等 ~1.5s。收尾的
+    _cleanup 仍幂等调用一次（地图已关时双帧检查快速返回）。
+    """
     _patch_nav_happy(monkeypatch)
     order = []
     monkeypatch.setattr(map_nav, "_open_target_map",
@@ -1391,7 +1549,8 @@ def test_navigate_normal_map_no_early_panel_close(monkeypatch):
     ok, _info = map_nav.navigate_to_map_coordinate(
         object(), "洛阳城", 10, 20, log_fn=lambda m: None)
     assert ok
-    assert order == ["move", "arrive", "maps", "panel"]
+    assert order.index("move") < order.index("maps") < order.index("arrive")
+    assert order[-2:] == ["maps", "panel"]  # 收尾幂等再清理一次
 
 
 def test_start_impl_caches_corrected_affine(monkeypatch):
@@ -1486,10 +1645,12 @@ def test_wait_arrival_skips_frame_check_when_watch_confirms_battle(monkeypatch):
 def test_navigate_retries_once_after_stall(monkeypatch):
     """停滞提示 → 自动重新导航一次；补过仍失败不无限重试。"""
     calls = []
+    hints = []
 
     def fake_impl(win, target, x, y, emit, verbose=False, allow_restart=False,
-                  on_walk_start=None):
+                  on_walk_start=None, pos_hint=None):
         calls.append(allow_restart)
+        hints.append(pos_hint)
         if len(calls) == 1:
             return False, map_nav.ARRIVE_RESTART_TEXT
         return True, "到达 大雁塔四层 (105,36)"
@@ -1497,9 +1658,12 @@ def test_navigate_retries_once_after_stall(monkeypatch):
     monkeypatch.setattr(map_nav, "_navigate_impl", fake_impl)
     emits = []
     ok, info = map_nav.navigate_to_map_coordinate(
-        object(), "大雁塔四层", 108, 37, log_fn=emits.append)
+        object(), "大雁塔四层", 108, 37, log_fn=emits.append,
+        pos_hint=("灵兽村", 120, 88))
     assert ok and "到达" in info
     assert calls == [True, False]
+    # 停滞重启时人物已移动：hint 过期，第二趟必须重新读位置
+    assert hints == [("灵兽村", 120, 88), None]
     assert any("重新开图补一次" in m for m in emits)
 
 
@@ -1507,7 +1671,7 @@ def test_navigate_no_retry_when_second_stall(monkeypatch):
     calls = []
 
     def fake_impl(win, target, x, y, emit, verbose=False, allow_restart=False,
-                  on_walk_start=None):
+                  on_walk_start=None, pos_hint=None):
         calls.append(allow_restart)
         return False, map_nav.ARRIVE_RESTART_TEXT
 

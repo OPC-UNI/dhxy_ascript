@@ -434,6 +434,48 @@ def test_gate_5s_fallback(monkeypatch):
         monkeypatch.setattr(time, "time", time.time)
 
 
+def test_gate_skip_when_absent_saves_ocr(monkeypatch):
+    """skip_when_absent：标题条模板缺席直接返回空，不 OCR（省 ~0.9s）。
+
+    2026-11-25 修罗手动寻路：快捷寻路次数用尽后追踪面板缺席，领取
+    校验每轮两次面板 OCR 白付。面板恢复（模板下一帧命中）必须恢复
+    正常 OCR——空结论不得被门缓存复用。
+    """
+    calls = {"n": 0}
+
+    def fake(img, region=None):
+        calls["n"] += 1
+        return list(FAKE), np.zeros_like(np.asarray(img))
+
+    monkeypatch.setattr(game_map, "ocr_region", fake)
+    monkeypatch.setattr(task_tracker, "track_content_region",
+                        lambda img_np: None)
+    gate = task_tracker.TrackGate(min_interval=0.0)
+    assert gate.ocr(_make_frame(10), skip_when_absent=True) == []
+    assert calls["n"] == 0
+    # 面板恢复：下一帧模板命中 → 正常 OCR（空结论不被复用）
+    monkeypatch.setattr(task_tracker, "track_content_region",
+                        lambda img_np: (0, 200, 400, 300))
+    assert gate.ocr(_make_frame(10), skip_when_absent=True) == FAKE
+    assert calls["n"] == 1
+
+
+def test_gate_default_absent_still_ocrs(monkeypatch):
+    """默认语义不变：模板缺席回退静态区域 OCR（follow 等调用方依赖）。"""
+    calls = {"n": 0}
+
+    def fake(img, region=None):
+        calls["n"] += 1
+        return list(FAKE), np.zeros_like(np.asarray(img))
+
+    monkeypatch.setattr(game_map, "ocr_region", fake)
+    monkeypatch.setattr(task_tracker, "track_content_region",
+                        lambda img_np: None)
+    gate = task_tracker.TrackGate(min_interval=0.0)
+    assert gate.ocr(_make_frame(10)) == FAKE
+    assert calls["n"] == 1
+
+
 def test_gate_region_shape_change_no_crash(monkeypatch):
     """门区域随面板拖动变化（贴屏幕底部裁剪变矮）时不得崩溃。
 

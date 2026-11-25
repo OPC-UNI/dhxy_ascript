@@ -1425,17 +1425,23 @@ def test_wait_claim_entry_relaxes_walk_gate_after_stop_on_task_click(monkeypatch
     assert pos == (wubei.BAOXIANGGUO, 86, 86)
 
 
-def test_wait_claim_entry_keeps_strict_gate_when_filter_off(monkeypatch):
-    """任务筛选未勾选：走位终点固定为落点，86,86 驻足也不放行
-    （原流程不变——无黄字可点，落点不会是 NPC）。"""
+def test_wait_claim_entry_relaxes_walk_gate_when_filter_off(monkeypatch):
+    """任务筛选未勾选：驻足后同样放行（2026-11-25 修正）。
+
+    2026-11-21 起领取点统一取消勾选筛选，旧条件（勾选/未知才放行）会
+    永久禁用驻足规则；寻路终点不一定是落点盒 (94,84)±5（点击点压 NPC
+    名会走到侍卫旁，市场人流挡路会中途停在 86,82）——2026-11-25 20:40
+    验证领取卡在 (86,82)：入口模板命中但规则 1 永不命中。
+    """
     monkeypatch.setattr(wubei, "_claim_task_filter_on", False)
     _entry_wait_env(monkeypatch, [
-        (wubei.BAOXIANGGUO, 86, 86),
-        (wubei.BAOXIANGGUO, 86, 86),
-        (wubei.BAOXIANGGUO, 86, 86),
+        (wubei.BAOXIANGGUO, 86, 82),   # 落脚：环比一次不算驻足
+        (wubei.BAOXIANGGUO, 86, 82),   # 驻足：按站着规则放行
     ])
-    assert wubei._wait_claim_entry(_FakeWin(), 5, arrive_by_walk=True) \
-        == (None, None, None)
+    pt, src, pos = wubei._wait_claim_entry(
+        _FakeWin(), 10, arrive_by_walk=True)
+    assert pt == (818, 358) and src == "领取任务按钮"
+    assert pos == (wubei.BAOXIANGGUO, 86, 82)
 
 
 def test_wait_claim_entry_no_early_click_while_walking(monkeypatch):
@@ -1978,7 +1984,7 @@ def test_dismiss_dialog_click_until_gone_retries_swallowed_click(monkeypatch):
 
 
 def _claim_task_same_task_env(monkeypatch, *, option_still, dialog_score=0.99,
-                              pos=("宝象国", 91, 84)):
+                              pos=("宝象国", 94, 84)):
     """装配 _claim_task 替换领取校验循环：入口成功、选项已点、签名不变。"""
     clock = _FakeClock()
     monkeypatch.setattr(wubei, "time", clock)
@@ -2007,7 +2013,7 @@ def _claim_task_same_task_env(monkeypatch, *, option_still, dialog_score=0.99,
         def __init__(self, min_interval=0.0):
             pass
 
-        def ocr(self, img):
+        def ocr(self, img, skip_when_absent=False):
             return []
 
         def paste_track(self, img, img_np):
@@ -2066,7 +2072,7 @@ def test_claim_task_skips_relocate_when_already_at_claim_coord(monkeypatch):
         monkeypatch, option_still=False, dialog_score=0.3)
     ok, info, frame = wubei._claim_task(_FakeWin())
     assert ok is False and frame is None
-    assert relocated == []  # 已在 91,84：不再开小地图重走
+    assert relocated == []  # 已在 94,84（领取点坐标）：不再开小地图重走
 
 
 def test_claim_start_guard_no_click_when_not_at_claim_spot(monkeypatch):

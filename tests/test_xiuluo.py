@@ -238,12 +238,17 @@ def test_wuyi_chain_timeout_no_click_self_clicks(wuyi_chain):
 
 def test_wuyi_chain_coord_nav_uses_map_coord(
         wuyi_chain, monkeypatch, coord_nav_enabled):
-    """坐标化开关开启：巫医走位改走 map_nav 坐标点击，到达判据不变。"""
+    """坐标化开关开启：巫医走位改走 map_nav 坐标点击，到达判据不变。
+
+    trusted（2026-11-25 用户指定）：固定巫医坐标有标定直点，免悬停校验。
+    """
     from src.device import map_nav
     started = {}
 
-    def _start(win, map_name, x, y, log_fn=None, on_map_open=None):
+    def _start(win, map_name, x, y, log_fn=None, on_map_open=None,
+               trusted=False):
         started["args"] = (map_name, x, y)
+        started["trusted"] = trusted
         return True, "已点击", (610, 442)
 
     monkeypatch.setattr(map_nav, "start_navigation", _start)
@@ -258,6 +263,32 @@ def test_wuyi_chain_coord_nav_uses_map_coord(
     ok, info = xiuluo._run_wuyi_chain(_FakeWin())
     assert ok is True
     assert started["args"] == (xiuluo.LINGSHOUCUN, *xiuluo.WUYI_SPOT)
+    assert started["trusted"] is True
+
+
+def test_wuyi_chain_coord_nav_failure_falls_back_to_fixed_pixel(
+        wuyi_chain, monkeypatch, coord_nav_enabled):
+    """trusted 直点失败（无标定）→ 回退固定像素点击巫医位置，不跳过巫医。"""
+    from src.device import map_nav
+    monkeypatch.setattr(map_nav, "start_navigation",
+                        lambda *a, **k: (False, "灵兽村 无地图标定", None))
+    monkeypatch.setattr(xiuluo.game_map, "close_maps", lambda *a, **k: None)
+    monkeypatch.setattr(xiuluo.game_map, "uncheck_minimap_task_filter",
+                        lambda win: (True, "未勾选"))
+    opened = []
+    monkeypatch.setattr(xiuluo.game_map, "open_mini_map",
+                        lambda win: opened.append(1) or (True, "ok"))
+    seq = [("灵兽村", 1, 2)]  # 首次判定不在巫医旁 → 走位
+
+    def _pos(win):
+        return seq.pop(0) if seq else ("灵兽村", *xiuluo.WUYI_SPOT)
+
+    monkeypatch.setattr(xiuluo.game_map, "read_map_position", _pos)
+    xiuluo.battle.last_wuyi_option_at = 1000.5
+    ok, info = xiuluo._run_wuyi_chain(_FakeWin())
+    assert ok is True
+    assert opened == [1]
+    assert xiuluo.WUYI_MAP_POS in wuyi_chain["clicks"]
 
 
 def test_claim_map_wrapper_passes_coord(monkeypatch):
@@ -1662,7 +1693,8 @@ def test_manual_nav_round_navigates_and_fights(monkeypatch):
     calls = []
     monkeypatch.setattr(
         xiuluo.map_nav, "navigate_to_map_coordinate",
-        lambda win, name, x, y, log_fn=None, on_walk_start=None: (
+        lambda win, name, x, y, log_fn=None, on_walk_start=None,
+               pos_hint=None: (
             calls.append((name, x, y)) or (True, "到达")))
     monkeypatch.setattr(xiuluo, "_click_markers_and_fight",
                         lambda win, dest=None: (True, "战斗已结束"))
@@ -1670,11 +1702,30 @@ def test_manual_nav_round_navigates_and_fights(monkeypatch):
     assert ok and calls == [("洛阳城", 191, 110)]
 
 
+def test_manual_nav_round_passes_pos_hint(monkeypatch):
+    """领取后人物必在灵兽村领取点：传 pos_hint 免导航开头一次位置 OCR。"""
+    captured = {}
+
+    def _fake_nav(win, name, x, y, log_fn=None, on_walk_start=None,
+                  pos_hint=None):
+        captured["pos_hint"] = pos_hint
+        return True, "到达"
+
+    monkeypatch.setattr(
+        xiuluo.map_nav, "navigate_to_map_coordinate", _fake_nav)
+    monkeypatch.setattr(xiuluo, "_click_markers_and_fight",
+                        lambda win, dest=None: (True, "战斗已结束"))
+    ok, _info = xiuluo._manual_nav_round(
+        _FakeWin(), ("洛阳城", 191, 110), pos_hint=("灵兽村", 120, 88))
+    assert ok and captured["pos_hint"] == ("灵兽村", 120, 88)
+
+
 def test_manual_nav_round_wires_bars_pass_to_walk_start(monkeypatch):
     """手动寻路回合：组号队员血蓝 pass 挂在 on_walk_start（行走期触发）。"""
     captured = {}
 
-    def _fake_nav(win, name, x, y, log_fn=None, on_walk_start=None):
+    def _fake_nav(win, name, x, y, log_fn=None, on_walk_start=None,
+                  pos_hint=None):
         captured["cb"] = on_walk_start
         return True, "到达"
 
