@@ -22,6 +22,7 @@
 Ctrl+A / 拖选均无法清空输入框，输入会追加成错误坐标——不作为生产
 路径（机制见记忆 map-coord-search-red-ring）。
 """
+import base64
 import heapq
 import json
 import math
@@ -1127,15 +1128,45 @@ def locate_layer_tile(img, base, layer_name):
 # （~30-100ms，_rect_text 2x）读回层名做文本确认，总开销 ~0.1s
 # vs 整页 OCR ~0.5-0.9s。确认失败/模板未命中（动画、布局变化）回退
 # 整页 OCR 并重新学习。键含窗口尺寸（窗口布局变化时重新学习）。
+# 2026-11-25 用户需求：模板持久化到 data/map_nav_layer_tiles.json
+# （PNG base64，按窗口尺寸分层）——层块页是游戏 UI、与角色无关，
+# 全局共享，所有账号重启后首次导航即命中，不必每层再付一次整页 OCR。
+# 另支持随版本发布的内置表 res/map_nav_layer_tiles.json（2026-11-25
+# 实机抓取龙窟/凤巢 14 层，格式与持久化文件一致）；查找顺序
+# 会话缓存 → 运行时持久化（学习/修正优先）→ 内置表 → 整页 OCR。
 _LAYER_TILE_CACHE = {}
 LAYER_TILE_TPL_HALF_W = 46       # 标题小块半宽（层名 4-6 字，实测 ~60-100px）
 LAYER_TILE_TPL_HALF_H = 14       # 半高（单行文字 ~24px）
 LAYER_TILE_TPL_THRESHOLD = 0.90  # TM_CCOEFF_NORMED 灰度（静态标题，取严）
+# OCR 吞字容错门槛（2026-11-25 实机：凤巢一/二层标题小区域 OCR 稳定
+# 读成「凤巢层」，整页 OCR 同样吞「一」）。模板分数接近全等（跨层
+# 模板交叉实测最高 0.759，0.90 门限已能拒绝错层）+ 文本含基础名与
+# 「层」且不含其它层序号，才允许绕过完整层名确认；分数不够仍回退
+# 整页 OCR（吞字时整页 OCR 的网格拟合仍能定位）。
+LAYER_TILE_TPL_STRICT_THRESHOLD = 0.97
+LAYER_TILE_CACHE_VERSION = 1     # 持久化/内置表文件格式版本
+LAYER_TILE_TABLE_FILE = "map_nav_layer_tiles.json"  # 内置表（res/）
+# 持久化模板尺寸合法性（坏文件/跨版本残留不得撑爆匹配）
+LAYER_TILE_TPL_MIN_W, LAYER_TILE_TPL_MIN_H = 20, 10
+LAYER_TILE_TPL_MAX_W, LAYER_TILE_TPL_MAX_H = 200, 60
+_PERSISTED_LAYER_TILES = None
+_PERSISTED_LAYER_TILES_MTIME = None
+_LAYER_TILE_TABLE = None
+_LAYER_TILE_TABLE_MTIME = None
 
 
 def reset_layer_tile_cache():
-    """清空层块页坐标缓存（测试/布局变化用）。"""
+    """清空层块页坐标缓存（内存 + 持久化/内置表镜像；测试/布局变化用）。
+
+    不删除角色持久化文件与内置表（生产重启动时要继续用）。
+    """
+    global _PERSISTED_LAYER_TILES, _PERSISTED_LAYER_TILES_MTIME
+    global _LAYER_TILE_TABLE, _LAYER_TILE_TABLE_MTIME
     _LAYER_TILE_CACHE.clear()
+    _PERSISTED_LAYER_TILES = None
+    _PERSISTED_LAYER_TILES_MTIME = None
+    _LAYER_TILE_TABLE = None
+    _LAYER_TILE_TABLE_MTIME = None
 
 
 def _layer_tile_cache_key(win, base, layer):
@@ -1152,8 +1183,174 @@ def _layer_tile_title_rect(pt):
             cx + LAYER_TILE_TPL_HALF_W, cy + LAYER_TILE_TPL_HALF_H)
 
 
+def _layer_tile_table_path():
+    """内置层块模板表路径（res/map_nav_layer_tiles.json；测试可注入）。"""
+    from ascript.windows.system import R
+    return Path(R.res(LAYER_TILE_TABLE_FILE))
+
+
+def _load_layer_tile_table():
+    """加载内置层块模板表（按 mtime 热更新）；缺失/损坏返回 {}。"""
+    global _LAYER_TILE_TABLE, _LAYER_TILE_TABLE_MTIME
+    path = None
+    mtime = None
+    try:
+        path = _layer_tile_table_path()
+        mtime = path.stat().st_mtime
+    except Exception:
+        mtime = None
+    if _LAYER_TILE_TABLE is not None and mtime == _LAYER_TILE_TABLE_MTIME:
+        return _LAYER_TILE_TABLE
+    table = {}
+    if path is not None and mtime is not None:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                table = data
+        except Exception:
+            table = {}
+    _LAYER_TILE_TABLE = table
+    _LAYER_TILE_TABLE_MTIME = mtime
+    return table
+
+
+def _persisted_layer_tiles_path():
+    """持久化层块模板文件路径（data/ 根目录，全角色共享；测试可注入）。"""
+    from ..core import user_data
+    return user_data.map_nav_layer_tiles_path()
+
+
+def _load_persisted_layer_tiles():
+    """加载持久化层块模板（按 mtime 热更新）；缺失/损坏返回 {}。"""
+    global _PERSISTED_LAYER_TILES, _PERSISTED_LAYER_TILES_MTIME
+    from ..core import user_data
+    path = None
+    mtime = None
+    try:
+        path = _persisted_layer_tiles_path()
+        mtime = path.stat().st_mtime
+    except Exception:
+        mtime = None
+    if (_PERSISTED_LAYER_TILES is not None
+            and mtime == _PERSISTED_LAYER_TILES_MTIME):
+        return _PERSISTED_LAYER_TILES
+    data = {}
+    if path is not None and mtime is not None:
+        try:
+            data = user_data.read_map_nav_layer_tiles(path=path)
+        except Exception:
+            data = {}
+    _PERSISTED_LAYER_TILES = data
+    _PERSISTED_LAYER_TILES_MTIME = mtime
+    return data
+
+
+def _decode_layer_tile(entry):
+    """持久化条目 → 灰度模板；字段缺失/损坏/尺寸异常返回 None。"""
+    if not isinstance(entry, dict):
+        return None
+    try:
+        tw, th = int(entry["w"]), int(entry["h"])
+        if not (LAYER_TILE_TPL_MIN_W <= tw <= LAYER_TILE_TPL_MAX_W
+                and LAYER_TILE_TPL_MIN_H <= th <= LAYER_TILE_TPL_MAX_H):
+            return None
+        raw = base64.b64decode(str(entry.get("png_b64") or ""))
+        if not raw:
+            return None
+        tpl = cv2.imdecode(np.frombuffer(raw, np.uint8),
+                           cv2.IMREAD_GRAYSCALE)
+        if tpl is None or tpl.shape[0] != th or tpl.shape[1] != tw:
+            return None
+        return tpl
+    except Exception:
+        return None
+
+
+def _layer_tile_entry(table, layout_key, base, layer):
+    """从表（{layouts:{布局:{层名:条目}}}）取层模板条目；无则 None。"""
+    layouts = table.get("layouts") if isinstance(table, dict) else None
+    if not isinstance(layouts, dict):
+        return None
+    per = layouts.get(layout_key)
+    if not isinstance(per, dict):
+        return None
+    entry = per.get(layer)
+    if not isinstance(entry, dict):
+        return None
+    if entry.get("base") and entry.get("base") != base:
+        return None
+    return entry
+
+
+def _promote_layer_tile(win, base, layer):
+    """会话缓存未命中：运行时持久化 → 内置表，取该层模板提升进内存缓存。
+
+    持久化（运行期学习/刷新）优先于内置表（随版本发布的热启动资产），
+    两处都未命中才回退整页 OCR。
+    """
+    key = _layer_tile_cache_key(win, base, layer)
+    if key is None:
+        return None
+    layout = f"{key[2]}x{key[3]}"
+    for table in (_load_persisted_layer_tiles(), _load_layer_tile_table()):
+        entry = _layer_tile_entry(table, layout, base, layer)
+        tpl = _decode_layer_tile(entry)
+        if tpl is None:
+            continue
+        pt = entry.get("pt")
+        try:
+            pt = (int(pt[0]), int(pt[1]))
+        except (TypeError, IndexError, ValueError):
+            pt = None
+        ent = {"pt": pt, "tpl": tpl}
+        _LAYER_TILE_CACHE[key] = ent
+        return ent
+    return None
+
+
+def _persist_layer_tile(win, base, layer, pt, tpl):
+    """把学到的层块标题模板写共享数据（读-改-写；失败不影响本次导航）。
+
+    模板未变化（同层重复学习）不写盘；多进程各自持 mtime 镜像，
+    并发写以最后一次为准——丢失的层下次导航重新学习即可。
+    """
+    global _PERSISTED_LAYER_TILES, _PERSISTED_LAYER_TILES_MTIME
+    from ..core import user_data
+    try:
+        ok, buf = cv2.imencode(".png", tpl)
+        if not ok:
+            return
+        b64 = base64.b64encode(buf.tobytes()).decode("ascii")
+        w, h = int(win.rect.width), int(win.rect.height)
+        data = dict(_load_persisted_layer_tiles())
+        layouts = data.get("layouts")
+        layouts = dict(layouts) if isinstance(layouts, dict) else {}
+        key = f"{w}x{h}"
+        per = layouts.get(key)
+        per = dict(per) if isinstance(per, dict) else {}
+        prev = per.get(layer)
+        if isinstance(prev, dict) and prev.get("png_b64") == b64:
+            return  # 模板未变化不写盘
+        per[layer] = {"base": base, "pt": [int(pt[0]), int(pt[1])],
+                      "w": int(tpl.shape[1]), "h": int(tpl.shape[0]),
+                      "png_b64": b64, "at": round(time.time(), 1)}
+        layouts[key] = per
+        data["version"] = LAYER_TILE_CACHE_VERSION
+        data["layouts"] = layouts
+        path = _persisted_layer_tiles_path()
+        user_data.write_map_nav_layer_tiles(data, path=path)
+        _PERSISTED_LAYER_TILES = data
+        try:
+            _PERSISTED_LAYER_TILES_MTIME = path.stat().st_mtime
+        except Exception:
+            _PERSISTED_LAYER_TILES_MTIME = None
+    except Exception:
+        pass  # 持久化失败不影响本次导航（下次学习再尝试写）
+
+
 def _remember_layer_tile(win, img, base, layer, pt):
-    """缓存层块标题中心 + 标题小块灰度模板（首次 OCR 定位成功后调用）。"""
+    """缓存层块标题中心 + 标题小块灰度模板（首次 OCR 定位成功后调用），
+    并写入共享持久化（进程重启后直接命中）。"""
     key = _layer_tile_cache_key(win, base, layer)
     if key is None:
         return
@@ -1164,15 +1361,40 @@ def _remember_layer_tile(win, img, base, layer, pt):
     y1 = min(gray.shape[0], y1)
     if x1 - x0 < 20 or y1 - y0 < 10:
         return
-    _LAYER_TILE_CACHE[key] = {"pt": (int(pt[0]), int(pt[1])),
-                              "tpl": gray[y0:y1, x0:x1].copy()}
+    tpl = gray[y0:y1, x0:x1].copy()
+    _LAYER_TILE_CACHE[key] = {"pt": (int(pt[0]), int(pt[1])), "tpl": tpl}
+    _persist_layer_tile(win, base, layer, pt, tpl)
+
+
+def _layer_text_confirms(text, base, layer, score):
+    """层块标题文本确认（防模板误配点错层块）。
+
+    正常：小区域 OCR 读回完整层名（子串匹配）。OCR 吞字（实测「凤巢
+    一层」读成「凤巢层」）：文本含基础名与「层」、不含其它层序号，
+    且模板分数 ≥0.97 时放行；否则交回整页 OCR（网格拟合兜底）。
+    """
+    if layer in text:
+        return True
+    if score < LAYER_TILE_TPL_STRICT_THRESHOLD:
+        return False
+    if base not in text or "层" not in text:
+        return False
+    for cn in _CN_NUM[:LAYER_MAP_FLOORS.get(base, 0)]:
+        if cn in text and f"{base}{cn}层" != layer:
+            return False
+    return True
 
 
 def _match_layer_tile(win, img, base, layer):
     """缓存命中：在全帧模板匹配标题小块（布局固定、全帧 ~10ms），
-    再用小区域 OCR 读回层名确认。返回确认后的标题中心或 None。"""
+    再用小区域 OCR 读回层名确认。返回确认后的标题中心或 None。
+
+    会话缓存未命中时先查持久化/内置表（重启后免整页 OCR）。
+    """
     key = _layer_tile_cache_key(win, base, layer)
     ent = _LAYER_TILE_CACHE.get(key) if key else None
+    if ent is None:
+        ent = _promote_layer_tile(win, base, layer)
     if ent is None:
         return None
     gray = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2GRAY)
@@ -1188,7 +1410,7 @@ def _match_layer_tile(win, img, base, layer):
     cy = int(max_loc[1] + th // 2)
     # 文本确认：小区域 2x OCR 读回层名（防模板误配点错层块）
     text = _rect_text(img, _layer_tile_title_rect((cx, cy)))
-    if layer not in text:
+    if not _layer_text_confirms(text, base, layer, max_val):
         return None
     return (cx, cy)
 

@@ -8,10 +8,12 @@
 实机机制（2026-11-20）：地图窗口悬停读坐标 → 线性标定 → 悬停校验
 后点击地图点寻路；比例/方向/残差门槛见 map_nav 模块常量注释。
 """
+import base64
 import json
 import types
 from pathlib import Path
 
+import cv2
 import numpy as np
 import pytest
 from PIL import Image
@@ -28,10 +30,16 @@ class _Win:
 
 @pytest.fixture(autouse=True)
 def _isolate_affine_caches(monkeypatch, tmp_path):
-    """标定缓存隔离：持久化文件指向 tmp 目录，不读写真实角色数据。"""
+    """标定/层块模板缓存隔离：持久化文件指向 tmp 目录，不读写真实角色数据。"""
     monkeypatch.setattr(
         map_nav, "_persisted_affines_path",
         lambda: tmp_path / "map_nav_affines.json")
+    monkeypatch.setattr(
+        map_nav, "_persisted_layer_tiles_path",
+        lambda: tmp_path / "map_nav_layer_tiles.json")
+    monkeypatch.setattr(
+        map_nav, "_layer_tile_table_path",
+        lambda: tmp_path / "builtin_layer_tiles.json")
     map_nav.reset_affine_cache()
     map_nav.reset_layer_tile_cache()
     yield
@@ -429,6 +437,156 @@ def test_layer_tile_cache_miss_on_changed_page(monkeypatch):
     assert map_nav._wait_layer_tile(
         other, "凤巢", "凤巢七层", 1.0) == (300, 200)
     assert len(ocr) == 2
+
+
+def test_layer_tile_persists_across_restart(monkeypatch):
+    """学习后写角色持久化；重启（内存清空）后模板直接命中，免整页 OCR。"""
+    frame = _layer_page_frame(7)
+    win = _layer_page_win(frame)
+    ocr = []
+    monkeypatch.setattr(map_nav, "_rect_text", lambda *a, **k: "凤巢七层")
+    monkeypatch.setattr(map_nav, "locate_layer_tile",
+                        lambda img, base, layer: ocr.append(1) or (200, 150))
+    assert map_nav._wait_layer_tile(win, "凤巢", "凤巢七层", 1.0) == (200, 150)
+    assert len(ocr) == 1
+    # 「重启」：内存缓存与持久化镜像清空（文件保留）
+    map_nav.reset_layer_tile_cache()
+    monkeypatch.setattr(map_nav, "locate_layer_tile",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("持久化命中不应整页 OCR")))
+    assert map_nav._wait_layer_tile(win, "凤巢", "凤巢七层", 1.0) == (200, 150)
+
+
+def test_layer_tile_persist_merges_layers(monkeypatch, tmp_path):
+    """多层学习按层名合并写盘（读-改-写），互不覆盖。"""
+    frame = _layer_page_frame(7)
+    win = _layer_page_win(frame)
+    monkeypatch.setattr(map_nav, "_rect_text", lambda *a, **k: "凤巢七层")
+    monkeypatch.setattr(map_nav, "locate_layer_tile",
+                        lambda img, base, layer: (200, 150))
+    assert map_nav._wait_layer_tile(win, "凤巢", "凤巢七层", 1.0) == (200, 150)
+    assert map_nav._wait_layer_tile(win, "凤巢", "凤巢六层", 1.0) == (200, 150)
+    data = json.loads((tmp_path / "map_nav_layer_tiles.json")
+                      .read_text(encoding="utf-8"))
+    per = data["layouts"]["1378x831"]
+    assert set(per) == {"凤巢七层", "凤巢六层"}
+    assert per["凤巢七层"]["base"] == "凤巢"
+    assert per["凤巢七层"]["pt"] == [200, 150]
+    assert per["凤巢七层"]["w"] > 0 and per["凤巢七层"]["h"] > 0
+
+
+def test_layer_tile_persist_window_size_mismatch_falls_back(monkeypatch):
+    """持久化按窗口尺寸分层：换了窗口尺寸不走旧模板，回退整页 OCR。"""
+    frame = _layer_page_frame(7)
+    win = _layer_page_win(frame)
+    ocr = []
+    monkeypatch.setattr(map_nav, "_rect_text", lambda *a, **k: "凤巢七层")
+    monkeypatch.setattr(map_nav, "locate_layer_tile",
+                        lambda img, base, layer: ocr.append(1) or (200, 150))
+    assert map_nav._wait_layer_tile(win, "凤巢", "凤巢七层", 1.0) == (200, 150)
+    map_nav.reset_layer_tile_cache()
+    small = _layer_page_win(frame)
+    small.rect = types.SimpleNamespace(width=1280, height=720)
+    assert map_nav._wait_layer_tile(
+        small, "凤巢", "凤巢七层", 1.0) == (200, 150)
+    assert len(ocr) == 2  # 尺寸不匹配 → 整页 OCR 兜底
+
+
+def test_layer_tile_persist_corrupt_file_falls_back(monkeypatch, tmp_path):
+    """持久化文件损坏/条目坏图：回退整页 OCR 并重写有效文件。"""
+    path = tmp_path / "map_nav_layer_tiles.json"
+    path.write_text("{broken", encoding="utf-8")
+    frame = _layer_page_frame(7)
+    win = _layer_page_win(frame)
+    monkeypatch.setattr(map_nav, "_rect_text", lambda *a, **k: "凤巢七层")
+    monkeypatch.setattr(map_nav, "locate_layer_tile",
+                        lambda img, base, layer: (200, 150))
+    assert map_nav._wait_layer_tile(win, "凤巢", "凤巢七层", 1.0) == (200, 150)
+    # 坏图条目同样回退（解码失败 → OCR 学习覆盖）
+    map_nav.reset_layer_tile_cache()
+    path.write_text(json.dumps({"version": 1, "layouts": {"1378x831": {
+        "凤巢六层": {"w": 92, "h": 28, "png_b64": "not-a-png"}}}},
+        ensure_ascii=False), encoding="utf-8")
+    ocr = []
+    monkeypatch.setattr(map_nav, "locate_layer_tile",
+                        lambda img, base, layer: ocr.append(1) or (300, 200))
+    assert map_nav._wait_layer_tile(
+        win, "凤巢", "凤巢六层", 1.0) == (300, 200)
+    assert len(ocr) == 1
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert "凤巢六层" in data["layouts"]["1378x831"]
+
+
+def _tile_entry(frame, base, layer, center):
+    """按生产同款裁剪/编码构造层块模板条目（灰度 PNG base64）。"""
+    gray = cv2.cvtColor(np.asarray(frame), cv2.COLOR_RGB2GRAY)
+    x0, y0, x1, y1 = map_nav._layer_tile_title_rect(center)
+    tpl = gray[y0:y1, x0:x1]
+    ok, buf = cv2.imencode(".png", tpl)
+    assert ok
+    return {"base": base, "pt": [center[0], center[1]],
+            "w": int(tpl.shape[1]), "h": int(tpl.shape[0]),
+            "png_b64": base64.b64encode(buf.tobytes()).decode("ascii")}
+
+
+def _write_tile_file(path, layer, entry):
+    path.write_text(json.dumps(
+        {"version": 1, "layouts": {"1378x831": {layer: entry}}},
+        ensure_ascii=False), encoding="utf-8")
+
+
+def test_layer_tile_builtin_table_hits_without_ocr(monkeypatch, tmp_path):
+    """内置表（res/map_nav_layer_tiles.json）直接命中，不整页 OCR。"""
+    frame = _layer_page_frame(7)
+    win = _layer_page_win(frame)
+    _write_tile_file(tmp_path / "builtin_layer_tiles.json", "凤巢七层",
+                     _tile_entry(frame, "凤巢", "凤巢七层", (300, 200)))
+    monkeypatch.setattr(map_nav, "_rect_text", lambda *a, **k: "凤巢七层")
+    monkeypatch.setattr(map_nav, "locate_layer_tile",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("内置表命中不应整页 OCR")))
+    assert map_nav._wait_layer_tile(
+        win, "凤巢", "凤巢七层", 1.0) == (300, 200)
+
+
+def test_layer_text_confirm_swallowed_numeral(monkeypatch, tmp_path):
+    """OCR 吞字（凤巢一层→凤巢层）：模板近全等才放行，读到其它层序号拒绝。"""
+    frame = _layer_page_frame(7)
+    win = _layer_page_win(frame)
+    _write_tile_file(tmp_path / "builtin_layer_tiles.json", "凤巢一层",
+                     _tile_entry(frame, "凤巢", "凤巢一层", (200, 150)))
+    monkeypatch.setattr(map_nav, "_rect_text", lambda *a, **k: "凤巢层")
+    assert map_nav._match_layer_tile(win, frame, "凤巢", "凤巢一层") == (200, 150)
+    monkeypatch.setattr(map_nav, "_rect_text", lambda *a, **k: "凤巢二层")
+    assert map_nav._match_layer_tile(win, frame, "凤巢", "凤巢一层") is None
+
+
+def test_layer_text_confirm_swallowed_numeral_needs_strict_score(
+        monkeypatch, tmp_path):
+    """吞字容错要求模板分数 ≥0.97：画面不同分数不够仍回退整页 OCR。"""
+    frame = _layer_page_frame(7)
+    other = _layer_page_frame(11)
+    win = _layer_page_win(other)
+    _write_tile_file(tmp_path / "builtin_layer_tiles.json", "凤巢一层",
+                     _tile_entry(frame, "凤巢", "凤巢一层", (200, 150)))
+    monkeypatch.setattr(map_nav, "_rect_text", lambda *a, **k: "凤巢层")
+    assert map_nav._match_layer_tile(win, other, "凤巢", "凤巢一层") is None
+
+
+def test_layer_tile_data_preferred_over_builtin(monkeypatch, tmp_path):
+    """运行时持久化优先于内置表（学习结果可覆盖旧内置模板）。"""
+    frame = _layer_page_frame(7)
+    win = _layer_page_win(frame)
+    _write_tile_file(tmp_path / "builtin_layer_tiles.json", "凤巢七层",
+                     _tile_entry(frame, "凤巢", "凤巢七层", (300, 200)))
+    _write_tile_file(tmp_path / "map_nav_layer_tiles.json", "凤巢七层",
+                     _tile_entry(frame, "凤巢", "凤巢七层", (200, 150)))
+    monkeypatch.setattr(map_nav, "_rect_text", lambda *a, **k: "凤巢七层")
+    monkeypatch.setattr(map_nav, "locate_layer_tile",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("持久化命中不应整页 OCR")))
+    assert map_nav._wait_layer_tile(
+        win, "凤巢", "凤巢七层", 1.0) == (200, 150)
 
 
 # ---------------- 内置标定表与会话缓存 ----------------

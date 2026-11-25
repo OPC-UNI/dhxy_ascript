@@ -10,6 +10,7 @@
     data/<角色ID>/high_perf_cache.json  # 该角色的高性能坐标缓存
     data/<角色ID>/map_nav_affines.json  # 该角色的地图悬停标定修正缓存
     data/<角色ID>/special_map_routes.json  # 特殊地图自动探图路网（十字臂等）
+    data/map_nav_layer_tiles.json       # 层块页标题模板缓存（全角色共享，按窗口尺寸分层）
 
 角色 ID 取窗口绑定记录的账号 ID（「这个窗口的这个角色」语义）；未绑定时
 退实时窗口标题「（ID：数字）」；再退 _default。绑定优先而非标题优先：
@@ -48,6 +49,7 @@ SCHEMES_NAME = "schemes.json"
 STATS_NAME = "task_stats.json"
 HIGH_PERF_NAME = "high_perf_cache.json"
 MAP_AFFINE_NAME = "map_nav_affines.json"
+MAP_LAYER_TILES_NAME = "map_nav_layer_tiles.json"
 SPECIAL_MAP_ROUTES_NAME = "special_map_routes.json"
 
 # 旧版 config.json 里按角色键控的运行时状态（键 = 「（ID：xxx）」）
@@ -231,6 +233,14 @@ def map_nav_affines_path(role=None):
     return role_dir(role) / MAP_AFFINE_NAME
 
 
+def map_nav_layer_tiles_path():
+    """层块页标题模板缓存（全局，所有角色共享；层块页是游戏 UI，与
+    角色无关，每个号各学一遍没有意义）。"""
+    root = data_root()
+    root.mkdir(parents=True, exist_ok=True)
+    return root / MAP_LAYER_TILES_NAME
+
+
 def special_map_routes_path(role=None):
     return role_dir(role) / SPECIAL_MAP_ROUTES_NAME
 
@@ -324,6 +334,24 @@ def read_map_nav_affines(role=None, path=None):
 def write_map_nav_affines(data, role=None, path=None):
     with _LOCK:
         _atomic_write(path or map_nav_affines_path(role),
+                      data if isinstance(data, dict) else {})
+
+
+# ==================== 层块页标题模板缓存 ====================
+# 龙窟/凤巢层块页布局固定（2026-11-25 用户确认）：首次 OCR 定位后缓存
+# 每层标题小块灰度模板（PNG base64）与中心，按窗口尺寸分层；进程重启后
+# 模板匹配（~10ms）+ 小区域 OCR 读回层名确认直接命中，免整页 OCR
+# （~0.5-0.9s）。层块页是游戏 UI、与角色无关，存 data/ 根目录全角色共享。
+# path 参数供单测注入临时文件，生产不传。
+
+def read_map_nav_layer_tiles(path=None):
+    data = _read_json(path or map_nav_layer_tiles_path(), {})
+    return data if isinstance(data, dict) else {}
+
+
+def write_map_nav_layer_tiles(data, path=None):
+    with _LOCK:
+        _atomic_write(path or map_nav_layer_tiles_path(),
                       data if isinstance(data, dict) else {})
 
 
