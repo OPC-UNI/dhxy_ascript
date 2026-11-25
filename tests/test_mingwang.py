@@ -2475,9 +2475,11 @@ def test_jiamo_map_match():
 
 
 def _patch_jiamo(monkeypatch, sig, pos, land_ok=True):
-    """蛟魔复仇状态机替换：追踪文案、位置读取、降落/关面板/走位记录。"""
+    """蛟魔复仇状态机替换：追踪文案、位置读取、共享帧/站定守卫、
+    降落/关面板/走位记录。"""
     state = {"land": 0, "close": 0, "sig": sig, "pos": pos, "ok": land_ok,
-             "pos_reads": 0, "walk": 0}
+             "pos_reads": 0, "walk": 0, "walking": False, "frame_reads": 0,
+             "dialog_score": 0.0, "guard_resets": 0}
     monkeypatch.setattr(mingwang, "_seal_sig", lambda items: state["sig"])
 
     def _pos(win, items):
@@ -2485,6 +2487,24 @@ def _patch_jiamo(monkeypatch, sig, pos, land_ok=True):
         return state["pos"]
 
     monkeypatch.setattr(mingwang, "_seal_pos", _pos)
+
+    def _frame(win, items):
+        state["frame_reads"] += 1
+        blank = np.zeros((800, 1400, 3), np.uint8)
+        return blank, blank
+
+    monkeypatch.setattr(mingwang, "_seal_frame", _frame)
+    monkeypatch.setattr(mingwang, "dialog_frame_score",
+                        lambda frame: state["dialog_score"])
+
+    class _Guard:
+        def reset(self):
+            state["guard_resets"] += 1
+
+        def walking(self, win=None, img=None):
+            return state["walking"]
+
+    monkeypatch.setattr(mingwang, "_jiamo_walk_guard", _Guard())
 
     def _land(win):
         state["land"] += 1
@@ -2589,10 +2609,11 @@ def test_jiamo_waits_until_target_map(monkeypatch):
     assert _jiamo_poll(state) is True
     assert state["land"] == 1 and state["close"] == 1
     assert mingwang._jiamo_phase == 1
-    # 已降落：后续轮询零动作（位置不可读/战斗心跳也不重复降落）
+    # 已降落：不会重复降落；后续轮询走位催战（暗雷战斗文案仍在，
+    # 位置不可读也不影响 phase 1——站定判定走位置区像素/守卫）
     state["pos"] = None
-    assert _jiamo_poll(state) is False
-    assert state["land"] == 1
+    assert _jiamo_poll(state) is True
+    assert state["land"] == 1 and state["walk"] == 1
 
 
 def test_jiamo_pos_check_throttled(monkeypatch):
@@ -2644,35 +2665,41 @@ def test_jiamo_new_target_map_relands(monkeypatch):
     assert state["land"] == 2 and mingwang._jiamo_phase == 1
 
 
-def test_jiamo_walk_click_after_stable_no_battle(monkeypatch):
-    """到达稳定后仍不开战（任务文案仍在）→ 点击世界地面模拟行走催战
-    （静默 Alt+D 不会让人物走动，2026-11-17 用户实测修正；限频重按）。"""
+def test_jiamo_walk_click_when_standing_no_battle(monkeypatch):
+    """降落站定后未开战（任务文案仍在）→ 立即点世界地面模拟行走催战
+    （静默 Alt+D 不会让人物走动；2026-11-25 效率重做：不再等 5s/10s
+    固定时限——暗雷按走动步数触发，站定即续走；走动中不点）。"""
     state = _patch_jiamo(monkeypatch, JIAMO_SIG, ("女儿村", 1, 1))
     mingwang._reset_jiamo_state()
     _jiamo_seed_stable(("女儿村", 1, 1))
     assert _jiamo_poll(state) is True              # 降落 → phase 1
-    assert state["walk"] == 0
-    # 稳定但未到走位等待时限：不点
+    assert state["walk"] == 0 and mingwang._jiamo_walk_click_at == 0.0
+    # 人物走动中（自动寻路/自家走位未停）：不点世界
+    state["walking"] = True
     assert _jiamo_poll(state) is False
-    assert state["walk"] == 0 and mingwang._jiamo_stable_at > 0
-    # 等待时限到：点地面走位
-    mingwang._jiamo_stable_at = time.time() - mingwang.JIAMO_WALK_WAIT - 1
+    assert state["walk"] == 0
+    # 站定确认：立即点，无额外等待时限
+    state["walking"] = False
     assert _jiamo_poll(state) is True
     assert state["walk"] == 1
-    # 重按间隔内不重复
+    # 连点保护间隔内不重复
     assert _jiamo_poll(state) is False
     assert state["walk"] == 1
     # 间隔到：再次点
     mingwang._jiamo_walk_click_at = (time.time()
-                                     - mingwang.JIAMO_WALK_INTERVAL - 1)
+                                     - mingwang.JIAMO_WALK_MIN_INTERVAL - 1)
     assert _jiamo_poll(state) is True
     assert state["walk"] == 2
-    # 位置变化（走动中）→ 稳定清零、不点
-    assert _jiamo_poll(state, ("女儿村", 40, 40)) is False
-    assert mingwang._jiamo_stable_at == 0.0
-    mingwang._jiamo_walk_click_at = 0.0
+    # 站定但标准对话框在场（暗雷遭遇开场白）：不抢点，交给对话处理链
+    state["dialog_score"] = mingwang.DIALOG_FRAME_THRESHOLD
     assert _jiamo_poll(state) is False
     assert state["walk"] == 2
+    # 对话框消失后恢复走位
+    state["dialog_score"] = 0.0
+    mingwang._jiamo_walk_click_at = (time.time()
+                                     - mingwang.JIAMO_WALK_MIN_INTERVAL - 1)
+    assert _jiamo_poll(state) is True
+    assert state["walk"] == 3
 
 
 def test_jiamo_walk_click_human_click_rotates(monkeypatch):

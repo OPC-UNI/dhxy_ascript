@@ -621,10 +621,14 @@ _tgqy_game_retry_at = 0.0   # 小游戏游玩失败后的下次允许游玩时�
 # 走动——2026-11-17 用户反馈连续多次静默投递零位移零战斗；点击是静默
 # 通道已验证生效的世界交互，且走动本身就触发暗雷；走位点击一律**右键**
 # ——左键是选择/交互，右键点地面才是走到该点，2026-11-24 用户实机纠正）。
-# 走位点四点轮换防
-# 反复撞同一障碍/NPC；点击前已有位置连续稳定断言（点屏/世界点击须先
-# 确认站定，防打断自动寻路——性能规则 13）；走动使稳定性自然清零，
-# 到达稳定 JIAMO_WALK_WAIT 秒后再点下一个点。战斗开始后由 follow/
+# 走位点四点轮换防反复撞同一障碍/NPC；点击前须先确认站定（点屏/世界
+# 点击规则，性能规则 13，防打断任务链路自动寻路）。
+# 2026-11-25 用户实机效率反馈重做节奏：暗雷按走动步数触发、站定不遇敌，
+# 旧参数「走位间隔 10s + 站定后再等 5s」使人物每次只走 ~2s、原地站
+# ~9s（09:23:54 降落 → 09:24:38 才开战，44s / 4 次走位）。改为站定
+# 直接信号（WalkGuard：位置文字区像素比对 + 长时「移动」坐标 OCR 复核）
+# 确认站定即点下一个走位点，人物几乎持续走动；对话框在场不点（暗雷
+# 遭遇开场白交给对话处理链）；走动中一律不点。战斗开始后由 follow/
 # battle 线程接管。
 JIAMO_ANLEI_KEYWORD = "暗雷战斗"     # 追踪触发词（任务描述括号内）
 # 目标地图解析：「请在<地图>仔细搜查」——地图名 2~8 字非贪婪，锚定在
@@ -649,15 +653,17 @@ JIAMO_MOVE_WAIT = 12.0           # 等待寻路启动时限（秒）——超时
 JIAMO_ARRIVE_POLLS = 3           # 到达判定：位置连续稳定轮询数（同封印/镐；
                                  # 仅「见位移」路径需要，超时放行路径已隐含稳定）
 JIAMO_POS_TOLERANCE = 3          # 到达判定：坐标稳定容差（像素）
-# 随机遇敌兜底（点地面模拟行走）：到达稳定后等战斗的时限与走路间隔
-JIAMO_WALK_WAIT = 5.0            # 到达稳定后仍未开战多久点地面走位（秒）
-JIAMO_WALK_INTERVAL = 10.0       # 两次走位点击的最小间隔（秒）
-# 走位点（窗口坐标，四点轮换）：世界区域中心附近、避开所有 UI 面板
-# （左上任务追踪 x<400/y200-355、左下自动战斗 y≥690/x<330、右侧血蓝
-# 与技能栏 x>1020、顶部状态栏 y<200、底部技能栏 y>735）——角色在屏幕
-# 中心附近，任意一个点都会走出可观位移；轮换防止连续撞同一障碍物或
-# 误点到同一 NPC。
-JIAMO_WALK_POINTS = ((900, 430), (480, 430), (690, 650), (690, 250))
+# 随机遇敌兜底（点地面模拟行走）：站定即续走（2026-11-25 效率重做）
+JIAMO_WALK_CHECK_INTERVAL = 0.5  # 站定判定/走位检查最小间隔（秒；像素比对
+                                 # ~0.1ms，成本仅一次截窗；跟轮询 0.5s 同步）
+JIAMO_WALK_MIN_INTERVAL = 2.0    # 两次走位点击最小间隔（秒）——点击后人物
+                                 # 起步有延迟，防起步前连点同一轮走位
+# 走位点（窗口坐标，四点轮换）：取安全世界区四角、相邻两点对角穿越屏幕
+# ——单次走位距离最大（~340px，旧中心四点仅 ~210-260px，走动占比更高）。
+# 避开所有 UI 面板（左上任务追踪 x<400/y200-355、左下自动战斗
+# y≥690/x<330、右侧血蓝与技能栏 x>1020、顶部状态栏 y<200、底部技能栏
+# y>735）；对角轮换防止连续撞同一障碍物或误点到同一 NPC。
+JIAMO_WALK_POINTS = ((430, 660), (950, 230), (950, 660), (430, 230))
 # 状态机：0=等寻路启动/到达/降落；1=已到达并降落，等战斗（点地面走位
 # 兜底；保持到目标地图变化/复位）。
 _jiamo_phase = 0
@@ -669,11 +675,13 @@ _jiamo_warned = False         # 目标地图解析失败已告警（每状态实
 _jiamo_walk_from = None       # 等待寻路启动的起点位置
 _jiamo_move_seen = False      # 已见位移（寻路已启动）或超时放行
 _jiamo_walk_at = 0.0          # 首见文案时间（未见位移超时起点）
-_jiamo_stable = 0             # 位置连续稳定轮询数（到达/走位共用）
+_jiamo_stable = 0             # 位置连续稳定轮询数（到达判定）
 _jiamo_last_pos = None        # 上次位置
-_jiamo_stable_at = 0.0        # 稳定起点（走位等待起点；不稳清零）
-_jiamo_walk_click_at = 0.0    # 上次走位点击时间（重按间隔）
+_jiamo_walk_click_at = 0.0    # 上次走位点击时间（连点保护间隔）
 _jiamo_walk_idx = 0           # 走位点轮换下标
+# 等战斗阶段的站定判定（WalkGuard：位置文字区像素直接信号 + 长时「移动」
+# 坐标 OCR 复核，零 OCR 常规路径）：走动中不点世界（规则 13），站定即续走
+_jiamo_walk_guard = WalkGuard()
 
 # ---- 沙海迷踪（高级任务）执行入口 ----
 # 入口对话选项「少侠准备好清理地图了吗？」→「我已经准备好了」（在
@@ -1074,7 +1082,8 @@ def _jiamo_walk_click(win):
     2026-11-17 用户修正：静默模式下 Alt+D 热键不会让人物随机走动
     （连续多次投递零位移零战斗），点击世界地面模拟玩家行走才是有效
     催战方式——走动本身触发暗雷遭遇。走位点按 JIAMO_WALK_POINTS 轮换；
-    调用方已通过位置连续稳定断言人物站定（世界点击须先确认站定，防
+    2026-11-25 起调用方在每个走位点点击前用 _jiamo_walk_guard
+    （WalkGuard）确认人物站定 + 无对话框（世界点击须先确认站定，防
     打断自动寻路，性能规则 13），点击走 human_click 全局锁/静默通道。
     2026-11-24 用户实机纠正：必须**右键**点地面——左键是选择/交互
     （NPC/地面），右键才是走到该屏幕点（同洞内步行 map_nav 右键小步）。
@@ -3504,7 +3513,7 @@ def _reset_jiamo_state():
     """蛟魔复仇暗雷战斗状态机复位（新任务领取/触发词连续缺失）。"""
     global _jiamo_phase, _jiamo_target, _jiamo_missing, _jiamo_pos_at, \
         _jiamo_land_at, _jiamo_warned, _jiamo_walk_from, _jiamo_move_seen, \
-        _jiamo_walk_at, _jiamo_stable, _jiamo_last_pos, _jiamo_stable_at, \
+        _jiamo_walk_at, _jiamo_stable, _jiamo_last_pos, \
         _jiamo_walk_click_at, _jiamo_walk_idx
     _jiamo_phase = 0
     _jiamo_target = None
@@ -3517,9 +3526,9 @@ def _reset_jiamo_state():
     _jiamo_walk_at = 0.0
     _jiamo_stable = 0
     _jiamo_last_pos = None
-    _jiamo_stable_at = 0.0
     _jiamo_walk_click_at = 0.0
     _jiamo_walk_idx = 0
+    _jiamo_walk_guard.reset()
 
 
 def _reset_jiamo_arrival():
@@ -3529,7 +3538,7 @@ def _reset_jiamo_arrival():
     地图时不会把重试间隔打穿、每轮询都开面板。
     """
     global _jiamo_phase, _jiamo_walk_from, _jiamo_move_seen, \
-        _jiamo_walk_at, _jiamo_stable, _jiamo_last_pos, _jiamo_stable_at, \
+        _jiamo_walk_at, _jiamo_stable, _jiamo_last_pos, \
         _jiamo_walk_click_at
     _jiamo_phase = 0
     _jiamo_walk_from = None
@@ -3537,8 +3546,8 @@ def _reset_jiamo_arrival():
     _jiamo_walk_at = 0.0
     _jiamo_stable = 0
     _jiamo_last_pos = None
-    _jiamo_stable_at = 0.0
     _jiamo_walk_click_at = 0.0
+    _jiamo_walk_guard.reset()
 
 
 def _jiamo_target_map(sig):
@@ -3597,7 +3606,7 @@ def _jiamo_step_arrival(win, items, now):
     """
     global _jiamo_walk_from, _jiamo_move_seen, _jiamo_walk_at, \
         _jiamo_stable, _jiamo_last_pos, _jiamo_land_at, _jiamo_phase, \
-        _jiamo_target, _jiamo_stable_at
+        _jiamo_target
     if not _jiamo_move_seen:
         pos = _seal_pos(win, items)
         if pos is None:
@@ -3656,45 +3665,39 @@ def _jiamo_step_arrival(win, items, now):
     if not ok:
         return False  # 战斗中/面板瞬态失败：按间隔重试
     _jiamo_phase = 1
-    _jiamo_stable_at = 0.0  # 进入等战斗阶段：稳定计时从零开始
+    _jiamo_walk_guard.reset()  # 进入等战斗阶段：站定判定从零建基线
     return True
 
 
 def _jiamo_step_wait_battle(win, items, now):
-    """phase 1：已到达并降落，等暗雷遭遇战斗；稳定久未开战 → 点击地面走位。
+    """phase 1：已到达并降落，等暗雷遭遇战斗；站定即续走（催发暗雷）。
 
-    战斗由 follow_task/battle 线程托管，本步骤不做战斗操作；仅当任务
-    文案仍在（暗雷战斗）、位置稳定且超过 JIAMO_WALK_WAIT 未开战时点
-    世界地面模拟玩家行走催战（静默 Alt+D 无效，2026-11-17 用户实测），
-    之后每 JIAMO_WALK_INTERVAL 重按。走动的位移会自然清零稳定计数，
-    人物停下稳定 JIAMO_WALK_WAIT 秒后再点下一个走位点。
+    战斗由 follow_task/battle 线程托管，本步骤不做战斗操作。暗雷按走动
+    步数触发、站定不遇敌（2026-11-25 用户实机：旧节奏走 2s 站 9s，降落
+    → 开战 44s），故确认人物站定后**立即**点下一个走位点，人物几乎
+    持续走动：
+    - 站定用 WalkGuard 直接信号（位置文字区像素比对 + 长时「移动」
+      坐标 OCR 复核，常规路径零 OCR，~0.1ms/次）；
+    - 走动中一律不点世界（规则 13：世界点击会打断任务链路自动寻路
+      ——阶段推进后 follow 点链接发起的寻路）；
+    - 标准对话框在场不点（暗雷遭遇开场白交给对话处理链，防抢点）；
+    - 两次点击间隔 JIAMO_WALK_MIN_INTERVAL 防起步前连点。
     返回是否已处理（点了世界地面）。
     """
-    global _jiamo_stable, _jiamo_last_pos, _jiamo_stable_at, \
-        _jiamo_walk_click_at
-    pos = _seal_pos(win, items)
-    if pos is None:
-        return False
-    last = _jiamo_last_pos
-    if (last is not None and pos[0] == last[0]
-            and abs(pos[1] - last[1]) <= JIAMO_POS_TOLERANCE
-            and abs(pos[2] - last[2]) <= JIAMO_POS_TOLERANCE):
-        _jiamo_stable += 1
-    else:
-        _jiamo_stable = 0
-        _jiamo_stable_at = 0.0   # 位置变化：稳定/走位等待重新计时
-    _jiamo_last_pos = pos
-    if _jiamo_stable < JIAMO_ARRIVE_POLLS:
-        return False  # 仍在移动（自由寻路/被推挤）：不催遇敌
-    if _jiamo_stable_at == 0.0:
-        _jiamo_stable_at = now
-    if now - _jiamo_stable_at < JIAMO_WALK_WAIT:
-        return False
-    if now - _jiamo_walk_click_at < JIAMO_WALK_INTERVAL:
-        return False
+    global _jiamo_walk_click_at
+    rgb, bgr = _seal_frame(win, items)
+    if rgb is None:
+        return False  # 无帧（加载/截窗失败）：下轮再查
+    if _jiamo_walk_guard.walking(win, img=rgb) is not False:
+        return False  # 走动中/无法判断：不点世界（防打断自动寻路）
+    if bgr is not None and dialog_frame_score(bgr) >= DIALOG_FRAME_THRESHOLD:
+        return False  # 标准对话框在场：交给对话处理链，不抢点世界
+    if now - _jiamo_walk_click_at < JIAMO_WALK_MIN_INTERVAL:
+        return False  # 连点保护（点击生效起步有延迟）
     _jiamo_walk_click_at = now
+    _jiamo_walk_guard.reset()  # 点击后按新基线重新判定走动/站定
     desc = _jiamo_walk_click(win)
-    log(f"[名望] 蛟魔复仇：到达稳定后仍未触发战斗，{desc}", "SYS")
+    log(f"[名望] 蛟魔复仇：站定仍未触发战斗，{desc}", "SYS")
     return True
 
 
@@ -3702,17 +3705,18 @@ def _handle_jiamo_anlei(win, items, img_np):
     """蛟魔复仇暗雷战斗状态机（follow extras 通道，每轮询一次）。
 
     触发：追踪面板文案含「暗雷战斗」——点击追踪绿字由 follow 引擎完成
-    （本处理器不点链接，不干涉寻路）。触发后按 JIAMO_POS_CHECK_INTERVAL
-    限频识别当前位置：
+    （本处理器不点链接，不干涉寻路）。phase 0 按 JIAMO_POS_CHECK_INTERVAL
+    限频识别当前位置、phase 1 按 JIAMO_WALK_CHECK_INTERVAL 限频做站定
+    判定与走位：
     1. **先寻路后降落**（2026-11-15 用户规则）：追踪文案出现时人物可能
        已站在目标地图（旧逻辑立即降落），但引擎点链接开始寻路可能再次
        起飞——先等位移启动（未见位移 JIAMO_MOVE_WAIT 超时放行），再在
        目标地图内位置连续稳定（JIAMO_ARRIVE_POLLS）判到达，到达后才
        调用飞行驭器降落（zuoqi.ensure_landed，降落后关面板防遮挡）。
-    2. 到达稳定后等暗雷遭遇战斗（battle 线程托管）；**任务仍在但长时间
-       未开战时点击世界地面模拟玩家行走**催发（JIAMO_WALK_WAIT 后首次、
-       之后每 JIAMO_WALK_INTERVAL 一次——静默 Alt+D 不会让人物走动，
-       2026-11-17 用户实测修正）。
+    2. 到达降落、等暗雷遭遇战斗（battle 线程托管）；**任务仍在但未开战、
+       确认站定后立即点击世界地面模拟玩家行走**催发（静默 Alt+D 不会让
+       人物走动，2026-11-17 用户实测修正；2026-11-25 效率重做：站定即
+       续走、不再等 5s/10s 固定时限——暗雷按走动步数触发）。
     目标地图变化（多段搜查换图）时重新执行寻路/到达/降落判定；
     触发词连续 JIAMO_ABSENT_RESET 轮缺失即复位（空 OCR 帧为战斗心跳/
     加载过渡，不计缺失，防战斗中清掉已降落状态导致战后重复降落）。
@@ -3746,8 +3750,8 @@ def _handle_jiamo_anlei(win, items, img_np):
             "按「请在」后地名出现判定到达", "WARN")
     now = time.time()
     if _jiamo_phase == 1:
-        if now - _jiamo_pos_at < JIAMO_POS_CHECK_INTERVAL:
-            return False  # 位置 OCR 限频（轮询热路径，规则同 OCR 三原则）
+        if now - _jiamo_pos_at < JIAMO_WALK_CHECK_INTERVAL:
+            return False  # 站定判定限频（像素比对 ~0.1ms，成本仅截窗）
         _jiamo_pos_at = now
         return _jiamo_step_wait_battle(win, items, now)
     if now - _jiamo_pos_at < JIAMO_POS_CHECK_INTERVAL:
