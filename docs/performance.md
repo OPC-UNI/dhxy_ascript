@@ -262,6 +262,21 @@ OCR 1.4-2.2 CPU 秒。整改后结构（内层循环每轮顺序固定为）：
   点击与非标准对话框保持原行为，零额外开销）。接入方：xuanshu
   follow_task 传本轮已截帧 `img=img`（复用 OCR 结果时为 None，实例内
   部补截，force_activate=False）。
+- **任务侧战斗等待复用战斗线程状态**（2026-11-25 py-spy 实测）：修罗
+  手动寻路回合等战斗结束由 `_wait_manual_battle_end →
+  return_flow.wait_battle_end` 自建 0.5s 轮询（截图 + 3 模板条带匹配 +
+  坐标 OCR），与 `battle.watch_loop` 完全并发重复——60s 采样中
+  `wait_battle_end` 占进程坐标 OCR 17.6% + 战斗判定 10.2%，watch_loop
+  另占 17.3% + 9.3%。改造：`wait_battle_end` 每轮先读
+  `battle.watch_in_battle()`（内存读，零截图零 OCR），线程已确认战斗时
+  只等待；线程确认结束后仍走本函数自己的 4 轮询 2s 模板窗口复核——
+  结束时序与原先一致，也给战斗线程留出战后补血蓝/巫医点击的收尾时间。
+  `map_nav._wait_arrival` 与进层等待 `_wait_map_name`（龙窟/凤巢层块
+  点击后等 HUD 层名）同样先查共享状态，确认战斗中跳过帧级
+  `is_in_battle_frame`（行走期该判定占任务进程 ~9% 采样）。三处均带
+  会话中止回退（战斗线程退出后共享标志会残留，此时回退帧级判定，
+  防死等）。坐标 OCR 与退出确认等校准资产的频率不变——只是不再由
+  第二个循环重复计算同一信号。
 - **后续优化候选（未实施）**：巫医差分双阈值（行走范围 diff 2~25 跳过
   OCR，需弹窗样本标定）；wuhuan `_handle_submit_dialog` 每轮询一次
   GIVE_ICON 全帧模板匹配（~27ms+capture，给与面板仅在提交对话后出现，

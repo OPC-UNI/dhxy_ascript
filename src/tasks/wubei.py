@@ -2230,7 +2230,7 @@ def _manual_target_names(rec):
     """手动回合的目标名列表（OCR 名字兜底用；五倍任务栏已知完整目标）。
 
     用户 2026-11-24：五倍任务面板知道目标完整名字（智慧魔尊 / 白龙马 /
-    黄袍怪三种写法 / 奎星）。黄袍怪三种写法（黄袍怪/变态的黄袍怪/
+    黄袍怪三种写法 / 奎木狼（奎星归位））。黄袍怪三种写法（黄袍怪/变态的黄袍怪/
     愤怒的黄袍怪）是同一只怪：黄袍多轮任务一律额外接受短名「黄袍怪」
     （目标解析缺失时也保留该兜底），防任务文案与世界名字前缀不一致。
     """
@@ -2670,6 +2670,21 @@ def _manual_kill_round(win, rec):
                    f"无法确认任务状态")
 
 
+def _manual_is_kuimulang(rec):
+    """手动回合识别结果是否为奎木狼任务（领取奎木狼开关门控）。
+
+    任务栏子任务名可能为「奎星归位」，任务目的/目标含「奎木狼」（与
+    跟随期追踪文案判定 KUIMULANG_TRACK_TEXT 同语义）；任务名按「奎星」
+    子串判断，容忍尾部 OCR 误读。
+    """
+    rec = rec or {}
+    if KUIMULANG_TRACK_TEXT in (rec.get("target") or ""):
+        return True
+    if KUIMULANG_TRACK_TEXT in (rec.get("objective_text") or ""):
+        return True
+    return "奎星" in (rec.get("task") or "")
+
+
 def _manual_nav_round(win, pre_result=None):
     """五倍手动寻路回合（兼容无快捷寻路；强制手动寻路时同样走本链路）。
 
@@ -2677,12 +2692,15 @@ def _manual_nav_round(win, pre_result=None):
     - kill/huangpao：交给 _manual_kill_round 按日志实测次数连续战斗
       （普通击杀 1 次、黄袍最多 N 轮默认 5 次）；首杀寻路并全量搜索
       模板，续杀直接复用上次命中的模板点，打满次数直接返程（不再读
-      任务栏确认，见 _manual_kill_round）；
+      任务栏确认，见 _manual_kill_round）；奎星归位（奎木狼）按任务名
+      识别为单场击杀（任务目的无击杀动词，用户 2026-11-25）；
     - xianxing：依次 A、B 两处：寻路 → 背包-任务储物格右键显形镜 →
       白龙马对话框/模板候选开打；用镜后对话框未命中白龙马文案即本处
       无怪，立即换下一处（用户 2026-11-24）；任一处战斗结束即任务
       完成，直接返程（不再读任务栏确认，同单场击杀）；
     - reclaim（暗雷/锁妖网）：不开打，返回失败交主循环重新领取替换。
+    - 「领取奎木狼任务」开关关闭时的奎木狼任务（含奎星归位）：不开打，
+      与跟随期替换同语义，置重领标志返回失败。
     pre_result：run_loop 领取后预读的任务栏结果（避免重复读一次）。
     预走路（用户 2026-11-24）：任务栏确认任务需执行后首次 `_manual_navigate`
     进入 map_nav 导航时自动预走（宝象国 75,135，PREWALK_POINTS/模式识别
@@ -2719,6 +2737,12 @@ def _manual_nav_round(win, pre_result=None):
             # 防强制手动寻路时任务一直在追踪、每轮手动回合空转
             _manual_reclaim_pending = True
             return False, f"任务需重新领取替换: {rec.get('reclaim_reason')}"
+        if not _kuimulang_on and _manual_is_kuimulang(rec):
+            # 领取奎木狼开关关闭（用户设置）：与跟随期 ReplaceTaskError
+            # 同语义，不寻路、置重领标志交主循环重新领取替换
+            _manual_reclaim_pending = True
+            return False, ("任务为奎木狼任务（领取奎木狼开关关闭），"
+                           "重新领取替换")
         map_name = rec.get("map")
         if not map_name:
             return False, f"识别结果缺少地图: {demon_task.describe(rec)}"
@@ -4395,6 +4419,16 @@ def run_loop(win, cycle_interval=1.0):
                                 f"（{mrec.get('reclaim_reason')}），"
                                 f"本轮不做巫医/修理，下一轮重领",
                                 "WARN")
+                            time.sleep(cycle_interval)
+                            continue
+                        if not _kuimulang_on and _manual_is_kuimulang(mrec):
+                            # 领取奎木狼开关关闭（手动无追踪路径）：与跟随期
+                            # 替换同语义，本轮不做巫医/修理，下一轮重领替换
+                            # （同暗雷/锁妖网的顺序修正）
+                            _manual_reclaim_pending = True
+                            log("[五倍][手动] 新领取任务为奎木狼任务"
+                                "（领取奎木狼开关关闭），本轮不做巫医/修理，"
+                                "下一轮重领替换", "WARN")
                             time.sleep(cycle_interval)
                             continue
                         manual_round = True

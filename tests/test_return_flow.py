@@ -30,6 +30,8 @@ def _patch_wait_env(monkeypatch, battle_frames=None, pos=None):
         value = bool(battle_frames)
         monkeypatch.setattr(return_flow, "is_in_battle_frame",
                             lambda bgr: value)
+    # 战斗线程共享状态默认未确认战斗中（各用例可覆盖）
+    monkeypatch.setattr(return_flow, "watch_in_battle", lambda: False)
     reads = []
     monkeypatch.setattr(
         return_flow.game_map, "read_map_position",
@@ -115,6 +117,69 @@ def test_wait_battle_end_coordinate_gated_before_10s(monkeypatch):
     assert ok is True
     assert reads  # 门开后读了坐标
     assert clock.t >= 10.0  # 10s 门之后才结束
+
+
+def test_wait_battle_end_reuses_watch_state(monkeypatch):
+    """战斗线程已确认战斗中：不重复截图/模板判定/坐标 OCR（2026-11-25）。
+
+    线程确认期只等待；线程确认结束后仍走本函数自己的 4 轮询 2s 模板
+    窗口复核（结束时序与原先一致）。
+    """
+    clock, reads = _patch_wait_env(monkeypatch, battle_frames=False)
+    polls = {"n": 0}
+    captured = {"n": 0}
+    checked = {"n": 0}
+
+    def _watch():
+        polls["n"] += 1
+        return polls["n"] <= 5      # 前 5 轮询（2.5s）确认战斗中
+
+    def _frame(bgr):
+        checked["n"] += 1
+        return False
+
+    monkeypatch.setattr(return_flow, "watch_in_battle", _watch)
+    monkeypatch.setattr(return_flow, "is_in_battle_frame", _frame)
+    win = _Win()
+
+    def _capture(force_activate=False):
+        captured["n"] += 1
+        return np.zeros((10, 10, 3), np.uint8)
+
+    win.capture = _capture
+    ok, info = return_flow.wait_battle_end(win, timeout=60)
+    assert ok is True and info == "战斗已结束"
+    # 线程确认期零截图/零判定；确认结束后才走本函数的 4 轮询复核
+    assert captured["n"] == 4
+    assert checked["n"] == 4
+    assert reads == []          # 全程零坐标 OCR（2.5s < 10s 坐标门）
+    assert clock.t >= 5 * return_flow.BATTLE_END_POLL
+
+
+def test_wait_battle_end_watch_confirmed_timeout(monkeypatch):
+    """战斗线程一直确认战斗中：保持原超时语义，且不做帧级空转。"""
+    _patch_wait_env(monkeypatch, battle_frames=True)
+    checked = {"n": 0}
+
+    def _frame(bgr):
+        checked["n"] += 1
+        return True
+
+    monkeypatch.setattr(return_flow, "watch_in_battle", lambda: True)
+    monkeypatch.setattr(return_flow, "is_in_battle_frame", _frame)
+    ok, info = return_flow.wait_battle_end(_Win(), timeout=3)
+    assert ok is False and info == "等待战斗结束超时（3s）"
+    assert checked["n"] == 0
+
+
+def test_wait_battle_end_ignores_stale_watch_after_session_abort(monkeypatch):
+    """会话中止后战斗线程已退出、共享状态残留：回退帧级判定防死等。"""
+    _patch_wait_env(monkeypatch, battle_frames=False)
+    monkeypatch.setattr(return_flow, "watch_in_battle", lambda: True)
+    monkeypatch.setattr(return_flow.app_utils, "session_abort_reason",
+                        lambda: "顶号")
+    assert return_flow.wait_battle_end(_Win(), timeout=60) == \
+        (True, "战斗已结束")
 
 
 def test_find_return_item_template_missing(monkeypatch):

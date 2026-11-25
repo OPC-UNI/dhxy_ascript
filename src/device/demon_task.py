@@ -6,7 +6,7 @@
 输入为任务栏「任务详情」的 OCR 文本（objective_text，段落已由
 task_panel.objective_lines 截取），识别只做文本解析，不截图、不点击。
 
-支持的三类实机文案（用户 2026-11-23 截图，任务栏 OCR 实测）：
+支持的实机文案（用户实机截图，任务栏 OCR 实测）：
 
 1. 击杀类（三藏逢魔 等，地图/目标/坐标随轮次变化）：
    「三藏黑松林迷路……义士速赶至四圣庄，消灭神通魔尊(四圣庄，163，105)，
@@ -35,6 +35,12 @@ task_panel.objective_lines 截取），识别只做文本解析，不截图、�
    （多场战斗共用同一目标；注意三藏逢魔文案里的「黄袍怪老巢」是叙述，
      不能误判，仅按击杀目标/任务名判定）。
 
+5. 奎星归位（奎木狼，2026-11-25 用户实机截图）：
+   「奎木狼(火云戈壁，134，12)终于要出动了，与他一决雌雄吧！」
+   → kind=kill，target=奎木狼，map=火云戈壁，coords=[(134,12)]。
+   目标名紧邻括号地图坐标、没有「消灭/击败」等击杀动词，按已知任务名
+   「奎星归位」判定（用户确认该任务同样是杀一次）。
+
 未匹配已知文案时 kind=unknown，仍尽量返回地图/坐标，供调用方决策。
 OCR 容错：全/半角括号与逗号、缺右括号、显形镜被读成「豆形镜」等（取
 「形镜」子串）；地图名经 map.resolve_world_map_name 繁体/形近归一。
@@ -59,6 +65,11 @@ XIANXING_TASK_NAMES = ("宝象迷情",)
 # 叙述而非击杀目标。
 HUANGPAO_KEYWORD = "黄袍"
 HUANGPAO_TASK_NAMES = ("智斗黄袍",)
+# 已知击杀任务名兜底（目标文案无「消灭/击败」动词时仍按击杀处理；
+# 新增变体在此追加）。奎星归位（奎木狼，2026-11-25 用户实机截图）：
+# 任务目的为「奎木狼(火云戈壁，134，12)终于要出动了，与他一决雌雄吧！」
+# ——目标名紧邻括号地图坐标，没有击杀动词；「奎星」子串容忍尾部 OCR 误读。
+KILL_TASK_NAMES = ("奎星归位", "奎星")
 _HUANGPAO_KILL_RE = re.compile(
     r"(?:消灭|击败|击杀)[^。！；，]{0,8}黄袍怪")
 # 黄袍怪轮次数：任务文案写明「（最多5轮）」，2026-11-23 可乐可口日志
@@ -78,8 +89,10 @@ XIANXING_KEYWORDS = ("形镜",)
 _TARGET_VERBS = ("消灭", "击败", "击杀", "降服", "除掉", "擒获", "捉拿")
 
 # 地图 + 坐标三元组：如「(四圣庄，163，105)」「（万寿山，37，11）」
+# 地图与 x 之间的逗号允许缺失：OCR 有时把间隔读成空格，_clean 去空格后
+# 地图与坐标直连（2026-11-25 奎星归位实测「火云戈壁，134，12」）。
 _MAP_COORD_RE = re.compile(
-    r"[（(]\s*(?P<map>[一-龥]{2,8})\s*[，,、]\s*"
+    r"[（(]\s*(?P<map>[一-龥]{2,8})\s*[，,、]?\s*"
     r"(?P<x>\d{1,3})\s*[，,、.．]\s*(?P<y>\d{1,3})\s*[)）]?")
 # 纯坐标对：如「(187,27)」（显形镜 A/B）；括号可缺右半边
 _COORD_PAIR_RE = re.compile(
@@ -93,6 +106,12 @@ _PLACE_BEFORE_COORD_RE = re.compile(
 _TARGET_RE = re.compile(
     r"(?:" + "|".join(_TARGET_VERBS) + r")(?:\d+只)?"
     r"(?P<target>[一-龥]{2,8})")
+# 目标名紧邻括号地图坐标（无击杀动词的击杀文案，奎星归位）：
+# 「奎木狼(火云戈壁，134，12)…」。名称取括号前整段中文串再剥离前置
+# 动词——固定长度字符集会在长叙述里从串中间截出半截名字。
+_NAME_BEFORE_MAP_COORD_RE = re.compile(
+    r"(?P<name>[一-龥]+)[（(]\s*(?P<map>[一-龥]{2,8})\s*[，,、]?\s*"
+    r"(?P<x>\d{1,3})\s*[，,、.．]\s*(?P<y>\d{1,3})\s*[)）]?")
 
 # 地名前的动词（「义士速赶至四圣庄」取地名时剥离）
 _PLACE_VERBS = ("速赶至", "前往", "赶到", "去往", "去到", "去", "到", "至")
@@ -163,6 +182,28 @@ def _is_huangpao(text, task_name, target):
     return bool(_HUANGPAO_KILL_RE.search(text))
 
 
+def _is_known_kill_task(task_name):
+    """任务名是否已知击杀类（目标文案无击杀动词时按任务名兜底判类型）。"""
+    return any(name in (task_name or "") for name in KILL_TASK_NAMES)
+
+
+def _parse_name_before_coord(text):
+    """「奎木狼(火云戈壁，134，12)…」式目标名（无击杀动词的击杀文案）。
+
+    名称取括号前的中文串（可能混入叙述），按最后一个击杀动词截断
+    （「速去消灭奎木狼」→「奎木狼」）；2~8 字才认定为名字。
+    """
+    for m in _NAME_BEFORE_MAP_COORD_RE.finditer(text):
+        name = m.group("name")
+        for verb in _TARGET_VERBS:
+            idx = name.rfind(verb)
+            if idx >= 0:
+                name = name[idx + len(verb):]
+        if 2 <= len(name) <= 8:
+            return name
+    return None
+
+
 def recognize(task_name, objective_text):
     """识别降魔任务类型与目标，返回结构化 dict（字段见模块 docstring）。
 
@@ -221,7 +262,11 @@ def recognize(task_name, objective_text):
         )
         return rec
 
+    kill_task = _is_known_kill_task(task_name)
     target = _parse_target(text)
+    if not target and kill_task:
+        # 奎星归位等无击杀动词的击杀文案：「目标名(地图，x，y)…」
+        target = _parse_name_before_coord(text)
     coords = _dedupe_coords(
         [(x, y) for _mp, x, y in map_tuples] + plain_coords)
     place = map_tuples[0][0] if map_tuples else _map_before_coord(text)
@@ -234,6 +279,9 @@ def recognize(task_name, objective_text):
         rec["target"] = target
         rec["kind"] = KIND_HUANGPAO if _is_huangpao(
             text, task_name, target) else KIND_KILL
+    elif kill_task:
+        # 任务名已知为击杀类（奎星归位）：目标 OCR 缺失也按击杀处理
+        rec["kind"] = KIND_KILL
     elif _is_huangpao(text, task_name, None):
         rec["kind"] = KIND_HUANGPAO
     if rec["kind"] == KIND_HUANGPAO:

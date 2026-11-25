@@ -40,9 +40,11 @@ HUD 坐标**。语义：**描边以内都可走、以外不可走**。导航时�
 
 ```bash
 cd <仓库根>
+# 多开时加 --role <角色ID>（按窗口标题「（ID：xxx）」精确选窗口，
+# 避免 find_main_window 绑定缺失时读到别的号）
 python scripts/trace_special_map.py --map <地图名> \
     --out map_trace/<地图名>.jsonl --interval 0.4 --duration 1800 \
-    --anchor-interval 1.0
+    --anchor-interval 1.0 --role <角色ID>
 ```
 
 用 `run_in_background` 启动。脚本行为：
@@ -106,8 +108,12 @@ python scripts/build_special_map_route.py --map 波月洞 \
     --role <角色ID> --res --zones
 ```
 
-- 默认写角色数据 `data/<角色>/special_map_routes.json`；`--res` 同时更新
-  内置表 `res/special_map_routes.json`（所有角色可用；新异形图建议加）。
+- **路网数据属于所有角色（用户 2026-11-25 规则）**：正式数据一律写内置表
+  `res/special_map_routes.json`（命令带 `--res`，所有角色共用同一份）。角色
+  目录的 `data/<角色>/special_map_routes.json` 只作**特殊覆盖**（如窗口尺寸
+  不同需另行采集），常规不保留：加载顺序是角色文件优先、内置表兜底，留一份
+  旧的角色副本会让该角色读不到后续 res 更新（2026-11-25 波月洞 B 区补描后
+  已删除 36096466 的冗余副本，备份在 map_trace/）。
 - `--zones`（多分区地图，2026-11-24 波月洞）：相邻轨迹点跳变 ≥
   `--zone-jump`（默认 10 格）切段（传送瞬间 HUD 坐标大幅跳变，步行采样
   不会）；段间最小距离 < `--zone-join`（默认 5 格）聚为同一分区；每区

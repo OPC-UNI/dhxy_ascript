@@ -17,7 +17,7 @@ from ..device import bag
 from ..device import map as game_map
 from ..device import tab_group
 from ..device.battle import (BATTLE_END_POS_AFTER, _end_poll_advance,
-                             is_in_battle, is_in_battle_frame)
+                             is_in_battle, is_in_battle_frame, watch_in_battle)
 
 # 任务储物格按钮双模板（选中/未选中态）与搜索参数
 BOX_TASK_ICON = "box_task.png"
@@ -53,6 +53,15 @@ def wait_battle_end(win, timeout=60):
     战斗中段才被调用（观测不到进场时刻），以本次等待中首次观测到
     战斗帧作为 BATTLE_END_POS_AFTER 坐标启用门起点——门未开只走
     模板路径（保守，不影响正确性）。
+
+    战斗线程已确认战斗中（battle.watch_in_battle）时不再重复截图/
+    模板判定/坐标 OCR，只等线程确认结束（2026-11-25 py-spy 实测：
+    原实现与 watch_loop 完全并发重复，修罗手动寻路回合双路坐标 OCR
+    各占任务进程 ~17% 采样）。线程确认结束后仍走本函数自己的 2s
+    模板窗口复核（结束时序与原先一致，也给战斗线程留出战后补血蓝/
+    巫医点击的收尾时间）。线程未确认战斗（等待前已结束/尚未确认
+    进场）时保持原逻辑不变；会话中止时线程可能已退出、状态会残留，
+    此时不采信共享状态、回退帧级判定（防死等）。
     """
     deadline = time.time() + timeout
     out_polls = 0
@@ -60,6 +69,16 @@ def wait_battle_end(win, timeout=60):
     while True:
         if tab_group.pass_active:
             time.sleep(0.3)
+            continue
+        now = time.time()
+        if watch_in_battle() and not app_utils.session_abort_reason():
+            # 战斗线程已确认战斗中：本函数不再重复截图/判定/OCR，只保留
+            # 超时计时（战斗时间仍计入本函数超时，与原语义一致）
+            if first_battle_at is None:
+                first_battle_at = now
+            if now > deadline:
+                return False, f"等待战斗结束超时（{timeout}s）"
+            time.sleep(BATTLE_END_POLL)
             continue
         img = win.capture(force_activate=False)
         if img is None:

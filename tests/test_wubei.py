@@ -8,6 +8,7 @@
 import numpy as np
 import pytest
 
+from src.device import demon_task
 from src.tasks import wubei
 
 
@@ -832,6 +833,55 @@ def test_manual_nav_round_kill(monkeypatch):
     assert ok is True and "直接返程" in info
     # 单杀：寻路一次、战斗一次
     assert nav == [("万寿山", (37, 11))] and fights == [1]
+
+
+def test_manual_nav_round_kuixing_guiwei_single_kill(monkeypatch):
+    """奎星归位（奎木狼）：任务目的无击杀动词，按任务名识别为单场击杀。
+
+    用户 2026-11-25 实机截图/确认：任务目的「奎木狼(火云戈壁，134，12)
+    终于要出动了，与他一决雌雄吧！」；同样是杀一次。
+    """
+    monkeypatch.setattr(wubei, "log", lambda *a, **k: None)
+    monkeypatch.setattr(wubei, "_manual_close_task_panel", lambda w: True)
+    monkeypatch.setattr(wubei, "_kuimulang_on", True)
+    rec = demon_task.recognize(
+        "奎星归位",
+        "奎木狼(火云戈壁，134，12)终于要出动了，与他一决雌雄吧！")
+    nav, fights, names = [], [], []
+    monkeypatch.setattr(wubei, "_manual_navigate",
+                        lambda w, m, c: nav.append((m, c)) or (True, "ok"))
+
+    def fake_fight(w, **k):
+        fights.append(1)
+        names.append(k.get("target_names"))
+        return True, "结束", (100, 200)
+
+    monkeypatch.setattr(wubei, "_manual_template_fight", fake_fight)
+    ok, info = wubei._manual_nav_round(
+        _FakeWin(), pre_result={"recognition": rec})
+    assert ok is True and "直接返程" in info
+    assert nav == [("火云戈壁", (134, 12))]
+    assert fights == [1]  # 杀一次
+    assert names == [["奎木狼"]]  # 世界区名字兜底使用任务栏已知目标名
+
+
+def test_manual_nav_round_kuimulang_switch_off_reclaims(monkeypatch):
+    """领取奎木狼开关关闭：手动链路同样不寻路，置重领标志下一轮替换。"""
+    monkeypatch.setattr(wubei, "log", lambda *a, **k: None)
+    monkeypatch.setattr(wubei, "_manual_close_task_panel", lambda w: True)
+    monkeypatch.setattr(wubei, "_kuimulang_on", False)
+    rec = demon_task.recognize(
+        "奎星归位",
+        "奎木狼(火云戈壁，134，12)终于要出动了，与他一决雌雄吧！")
+    wubei._manual_reclaim_pending = False
+    nav = []
+    monkeypatch.setattr(wubei, "_manual_navigate",
+                        lambda w, m, c: nav.append((m, c)) or (True, "ok"))
+    ok, info = wubei._manual_nav_round(
+        _FakeWin(), pre_result={"recognition": rec})
+    assert ok is False and "奎木狼" in info and nav == []
+    assert wubei._manual_reclaim_pending is True
+    wubei._manual_reclaim_pending = False  # 复位，防跨测试污染
 
 
 def test_manual_nav_round_huangpao_multi(monkeypatch):

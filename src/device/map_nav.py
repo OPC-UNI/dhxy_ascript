@@ -38,7 +38,7 @@ from ascript.windows.hardware.keyboard import Keyboard
 from ..core import app_utils
 from ..core.app_utils import human_click, log
 from . import map as game_map
-from .battle import is_in_battle_frame  # 途中遇战斗冻结到达/进层计时
+from .battle import is_in_battle_frame, watch_in_battle  # 途中遇战斗冻结到达/进层计时
 
 
 # ---- 中断（诊断面板「中断寻路」）----
@@ -951,11 +951,22 @@ def _wait_map_name(win, name, timeout, emit):
     位置日志降噪（2026-11-21）：只在地名变化（逐层过场景）时输出「位置」
     行——进层是逐层步行，原实现每个位置变化都输出（凤巢四层走两步就
     两行「凤巢四层」），生产日志刷屏。
+
+    战斗判定先查战斗线程确认状态（battle.watch_in_battle，内存读零
+    成本）：已确认战斗中直接冻结超时计时，跳过本帧截图 + 条带模板
+    匹配 + 每 3s 全帧兜底（2026-11-25，与 _wait_arrival 同款）；线程
+    未确认/会话中止（线程可能已退出、状态残留）时保持原帧级判定，
+    防死等。
     """
     deadline = time.time() + timeout
     last_name = None
     while time.time() < deadline:
         _check_cancel()
+        if watch_in_battle() and not app_utils.session_abort_reason():
+            # 途中遇战斗：坐标不可读、人物不动——战斗期不计入超时
+            deadline += 0.8
+            time.sleep(0.8)
+            continue
         img = win.capture(force_activate=False)
         if img is not None and is_in_battle_frame(img):
             deadline += 0.8  # 战斗期不计入超时
@@ -1669,6 +1680,12 @@ def _wait_arrival(win, target, layer, x, y, emit, verbose=False,
 
     verbose=False（生产）：位置日志只在地名变化（过场景）时输出，
     避免行走期每 1s 一条刷屏；诊断卡片传 verbose=True 保留逐次位置。
+
+    战斗判定先查战斗线程确认状态（battle.watch_in_battle，内存读零
+    成本）：已确认战斗中直接冻结停滞计时，跳过本帧截图 + 条带模板
+    匹配 + 每 3s 全帧兜底（2026-11-25 py-spy 实测行走期该帧判定占
+    任务进程 ~9% 采样）；线程未确认/会话中止（线程可能已退出、状态
+    残留）时保持原帧级判定，防死等。
     """
     deadline = time.time() + ARRIVE_TIMEOUT
     last = None
@@ -1676,6 +1693,13 @@ def _wait_arrival(win, target, layer, x, y, emit, verbose=False,
     last_change = time.time()
     while time.time() < deadline:
         _check_cancel()
+        if watch_in_battle() and not app_utils.session_abort_reason():
+            # 途中遇战斗：坐标不可读、人物不动——冻结停滞计时并把战斗
+            # 时间从总超时里扣掉（战斗线程自动打完，之后继续等寻路）
+            last_change = time.time()
+            deadline += ARRIVE_POLL_INTERVAL
+            time.sleep(ARRIVE_POLL_INTERVAL)
+            continue
         img = win.capture(force_activate=False)
         if img is not None and is_in_battle_frame(img):
             # 途中遇战斗：坐标不可读、人物不动——冻结停滞计时并把战斗

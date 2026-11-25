@@ -108,6 +108,11 @@ def parse_args(argv=None):
                     help="输出 JSONL（默认 map_trace/special_map_trace.jsonl）")
     ap.add_argument("--stop-file", default=None,
                     help="停止标记文件（默认 map_trace/special_map_trace.stop）")
+    ap.add_argument("--role", default=None,
+                    help="目标角色 ID（多开时必填：按窗口标题「（ID：xxx）」"
+                         "精确选择窗口，避免读到别的号）")
+    ap.add_argument("--hwnd", type=int, default=None,
+                    help="目标窗口句柄（优先于 --role）")
     return ap.parse_args(argv)
 
 
@@ -122,6 +127,10 @@ def main(argv=None):
             stop_file.unlink()
     except Exception:
         pass
+    if args.role or args.hwnd:
+        # 多开：固化本进程目标窗口，find_main_window 只返回该窗口
+        # （未指定时保持旧的绑定/首个已登录窗口语义）
+        game.set_process_target(role_id=args.role, hwnd=args.hwnd or 0)
     win = game.find_main_window()
     if win is None:
         print("NO_WINDOW：找不到游戏主窗口（未启动/未登录？）")

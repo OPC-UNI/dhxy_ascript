@@ -1451,6 +1451,38 @@ def test_wait_arrival_stall_failure_without_restart(monkeypatch):
     assert not ok and "未变化" in info and "最后位置" in info
 
 
+def test_wait_arrival_skips_frame_check_when_watch_confirms_battle(monkeypatch):
+    """战斗线程已确认战斗中：跳过截图 + 条带模板判定（2026-11-25）。
+
+    只冻结停滞计时并顺延超时；线程未确认（本次等待首次轮询）后才做
+    帧级战斗判定。
+    """
+    map_nav._CANCEL.clear()
+    polls = {"watch": 0, "cap": 0, "frame": 0}
+
+    def _watch():
+        polls["watch"] += 1
+        return polls["watch"] <= 3
+
+    class _W:
+        def capture(self, force_activate=False):
+            polls["cap"] += 1
+            return object()
+
+    monkeypatch.setattr(map_nav, "watch_in_battle", _watch)
+    monkeypatch.setattr(
+        map_nav, "is_in_battle_frame",
+        lambda img: polls.__setitem__("frame", polls["frame"] + 1) or False)
+    monkeypatch.setattr(map_nav.game_map, "read_map_position",
+                        lambda win, img=None: ("大雁塔四层", 108, 37))
+    monkeypatch.setattr(map_nav, "ARRIVE_POLL_INTERVAL", 0.0)
+    ok, _info = map_nav._wait_arrival(
+        _W(), "大雁塔四层", "大雁塔四层", 108, 37, lambda m: None)
+    assert ok
+    assert polls["cap"] == 1    # 线程确认期零截图，随后一帧即到达
+    assert polls["frame"] == 1  # 线程确认期零帧级战斗判定
+
+
 def test_navigate_retries_once_after_stall(monkeypatch):
     """停滞提示 → 自动重新导航一次；补过仍失败不无限重试。"""
     calls = []
@@ -1665,6 +1697,34 @@ def test_wait_map_name_logs_only_name_changes(monkeypatch):
                          "位置: ('凤巢三层', 26, 22)",
                          "位置: ('凤巢四层', 106, 49)",
                          "位置: ('凤巢五层', 30, 24)"]
+
+
+def test_wait_map_name_skips_frame_check_when_watch_confirms_battle(
+        monkeypatch):
+    """战斗线程已确认战斗中：跳过截图 + 战斗模板判定（2026-11-25）。"""
+    map_nav._CANCEL.clear()
+    polls = {"watch": 0, "cap": 0, "frame": 0}
+
+    def _watch():
+        polls["watch"] += 1
+        return polls["watch"] <= 3
+
+    class _W:
+        def capture(self, force_activate=False):
+            polls["cap"] += 1
+            return object()
+
+    monkeypatch.setattr(map_nav, "watch_in_battle", _watch)
+    monkeypatch.setattr(
+        map_nav, "is_in_battle_frame",
+        lambda img: polls.__setitem__("frame", polls["frame"] + 1) or False)
+    monkeypatch.setattr(map_nav.game_map, "read_map_position",
+                        lambda win, img=None: ("凤巢五层", 30, 24))
+    monkeypatch.setattr(map_nav.time, "sleep", lambda s: None)
+    emits = []
+    assert map_nav._wait_map_name(_W(), "凤巢五层", 10, emits.append) is True
+    assert polls["cap"] == 1    # 线程确认期零截图，随后一帧即命中
+    assert polls["frame"] == 1  # 线程确认期零帧级战斗判定
 
 
 def test_wait_arrival_position_log_quiet_without_verbose(monkeypatch):

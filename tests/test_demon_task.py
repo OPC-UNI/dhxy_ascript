@@ -40,6 +40,12 @@ HUANGPAO = (
     "斗，请在7分钟内完成尽可能多轮次的挑"
     "战（最多5轮）。"
 )
+# 奎星归位（奎木狼）：目标名紧邻括号地图坐标、无击杀动词（用户
+# 2026-11-25 实机截图，任务栏 OCR 原文）
+KUIXING_GUIWEI = (
+    "奎木狼(火云戈壁，134，12)终于要出动了，"
+    "与他一决雌雄吧！"
+)
 
 
 def test_kill_task_sishengzhuang():
@@ -110,6 +116,41 @@ def test_huangpao_rounds_parsed_from_text():
     assert rec["max_rounds"] == 3
     rec2 = dt.recognize("智斗黄袍", "前往平顶山(1,2)消灭黄袍怪。")
     assert rec2["max_rounds"] == dt.HUANGPAO_DEFAULT_ROUNDS == 5
+
+
+def test_kill_task_kuixing_guiwei_kuimulang():
+    """奎星归位：目标名紧邻括号地图坐标、无击杀动词，杀一次（2026-11-25）。"""
+    rec = dt.recognize("奎星归位", KUIXING_GUIWEI)
+    assert rec["kind"] == dt.KIND_KILL
+    assert rec["reclaim"] is False
+    assert rec["map"] == "火云戈壁"
+    assert rec["coords"] == [(134, 12)]
+    assert rec["coord_a"] == (134, 12) and rec["coord_b"] is None
+    assert rec["target"] == "奎木狼"
+    assert rec["max_rounds"] == 1  # 用户确认：同样是杀一次
+    assert "击杀任务" in dt.describe(rec)
+
+
+def test_kill_kuimulang_ocr_variants():
+    """OCR 变体：地图/坐标间无逗号、缺右括号、名字前带叙述与动词。"""
+    for text in (
+        "奎木狼(火云戈壁134,12)终于要出动了，与他一决雌雄吧！",
+        "奎木狼(火云戈壁，134，12终于要出动了，与他一决雌雄吧",
+        "义士速赶至火云戈壁消灭奎木狼(火云戈壁，134，12)！",
+    ):
+        rec = dt.recognize("奎星归位", text)
+        assert rec["kind"] == dt.KIND_KILL
+        assert rec["map"] == "火云戈壁"
+        assert rec["coords"] == [(134, 12)]
+        assert rec["target"] == "奎木狼"
+
+
+def test_name_before_coord_needs_known_kill_task():
+    """未知任务名：同样句式不误判击杀，地图/坐标仍照常返回给调用方。"""
+    rec = dt.recognize("未知任务", KUIXING_GUIWEI)
+    assert rec["kind"] == dt.KIND_UNKNOWN
+    assert rec["map"] == "火云戈壁" and rec["coords"] == [(134, 12)]
+    assert rec["target"] is None
 
 
 def test_sancang_not_misjudged_as_huangpao():
