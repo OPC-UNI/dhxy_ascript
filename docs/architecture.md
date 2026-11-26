@@ -224,6 +224,7 @@ sequenceDiagram
     M->>T: TaskManager(task_start, task_stop)
     M->>C: ControlWindow(tm, license_info, license_gate, license_client)
     M->>M: webview.windows.clear()<br/>prepare 唯一窗口 → webview.start()
+    M->>Q: 后台周期心跳（heartbeat_interval，默认 300s；网络失败静默重试）
     M->>M: 托盘 / 老板键 / Runtime.wait / OCR 预热（后台线程）
 
     U->>C: 点击「启动」或按 F11

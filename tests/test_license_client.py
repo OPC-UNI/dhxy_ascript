@@ -1,10 +1,12 @@
-"""雪松授权客户端单测：验签、过期/撤销/指纹、激活、心跳降级。"""
+"""雪松授权客户端单测：验签、过期/撤销/指纹、激活、心跳降级、后台心跳。"""
 import base64
 import json
+import os
 import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
+import requests
 from Crypto.Hash import SHA256
 from Crypto.PublicKey import RSA
 from Crypto.Signature import pss
@@ -316,3 +318,186 @@ def test_unbind_local(client, rsa_key):
     client._save_record({"license_key": "k", "license_file": lic})
     client.unbind_local()
     assert client.info()["status"] == lc.STATUS_INACTIVE
+
+
+# ---------- 后台周期心跳（start_heartbeat_loop） ----------
+
+def _seed_record(client, rsa_key, **extra):
+    """写入一条本地许可证记录（服务端可下发的字段按需覆盖）。"""
+    lic = make_license(rsa_key, "fp-test")
+    rec = {
+        "license_key": "LIC-DEVICE-TEST", "license_file": lic,
+        "public_key": client.public_key_pem, "last_heartbeat": 0,
+        "heartbeat_interval": 0.05,  # 配合 MIN_HEARTBEAT_LOOP_INTERVAL 的测试值
+    }
+    rec.update(extra)
+    client._save_record(rec)
+    return rec
+
+
+def _start_heartbeat(client, session, monkeypatch):
+    """测试用启动：把间隔下限压到 0.05s，返回收集到的日志 (level, msg)。"""
+    monkeypatch.setattr(lc, "MIN_HEARTBEAT_LOOP_INTERVAL", 0.05)
+    client._session = session
+    logs = []
+    client.start_heartbeat_loop(
+        log=lambda msg, level="SYS": logs.append((level, msg)))
+    return logs
+
+
+def _wait_until(predicate, timeout=3.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return False
+
+
+class RepeatingSession:
+    """每次心跳都返回同一成功响应（周期上报测试）。"""
+
+    def __init__(self, payload):
+        self.payload = payload
+        self.calls = []
+
+    def post(self, url, json=None, timeout=None, headers=None):
+        self.calls.append((url, json))
+        return FakeResponse(200, self.payload)
+
+
+class FailingSession:
+    """心跳始终网络失败（连续失败告警测试）。"""
+
+    def __init__(self, exc=None):
+        self.exc = exc or requests.ConnectionError("down")
+        self.calls = []
+
+    def post(self, url, json=None, timeout=None, headers=None):
+        self.calls.append((url, json))
+        raise self.exc
+
+
+class SequenceSession:
+    """按顺序返回响应，最后一个响应重复使用（撤销→恢复测试）。"""
+
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = []
+
+    def post(self, url, json=None, timeout=None, headers=None):
+        self.calls.append((url, json))
+        item = self.responses.pop(0) if len(self.responses) > 1 \
+            else self.responses[0]
+        if isinstance(item, Exception):
+            raise item
+        return FakeResponse(*item)
+
+
+def test_heartbeat_wait_seconds_clamped_and_default(client, rsa_key,
+                                                    monkeypatch):
+    assert client.heartbeat_wait_seconds() == lc.DEFAULT_HEARTBEAT_INTERVAL
+    _seed_record(client, rsa_key, heartbeat_interval=1)
+    # 服务端下发异常小值时按模块下限跑，防止高频请求
+    assert client.heartbeat_wait_seconds() == lc.MIN_HEARTBEAT_LOOP_INTERVAL
+    _seed_record(client, rsa_key, heartbeat_interval=600)
+    assert client.heartbeat_wait_seconds() == 600
+
+
+def test_heartbeat_loop_reports_periodically(client, rsa_key, monkeypatch):
+    """运行期按 heartbeat_interval 周期上报，并刷新 last_heartbeat。"""
+    _seed_record(client, rsa_key)
+    session = RepeatingSession(
+        {"code": lc.CODE_OK, "data": {"status": "active"}})
+    logs = _start_heartbeat(client, session, monkeypatch)
+    try:
+        assert _wait_until(lambda: len(session.calls) >= 2)
+    finally:
+        client.stop_heartbeat_loop()
+    assert all(url.endswith("/api/v1/heartbeat")
+               for url, _payload in session.calls)
+    assert client._read_record()["last_heartbeat"] > 0
+
+
+def test_heartbeat_loop_skips_without_license(client, monkeypatch):
+    """未激活/已解绑：心跳待命，不访问授权服务器。"""
+    session = RepeatingSession(
+        {"code": lc.CODE_OK, "data": {"status": "active"}})
+    _start_heartbeat(client, session, monkeypatch)
+    try:
+        time.sleep(0.2)
+    finally:
+        client.stop_heartbeat_loop()
+    assert session.calls == []
+    assert client.info()["status"] == lc.STATUS_INACTIVE
+
+
+def test_heartbeat_loop_escalates_once(client, rsa_key, monkeypatch):
+    """网络失败静默重试，连续 3 次才升级一条 ERROR，且不重复刷屏。"""
+    _seed_record(client, rsa_key)
+    session = FailingSession()
+    logs = _start_heartbeat(client, session, monkeypatch)
+    try:
+        assert _wait_until(
+            lambda: any(level == "ERROR" for level, _msg in logs))
+        time.sleep(0.3)  # 再多跑几轮：升级后不再重复告警
+    finally:
+        client.stop_heartbeat_loop()
+    errors = [msg for level, msg in logs if level == "ERROR"]
+    assert len(errors) == 1
+    assert "连续 3 次失败" in errors[0]
+
+
+def test_heartbeat_loop_revoke_alert_once_then_recover(client, rsa_key,
+                                                       monkeypatch):
+    """服务端撤销：立即 ERROR（同码只报一次），恢复后提示重新武装。"""
+    _seed_record(client, rsa_key)
+    revoked = (200, {"code": lc.CODE_OK, "data": {"status": "revoked"}})
+    active = (200, {"code": lc.CODE_OK, "data": {"status": "active"}})
+    session = SequenceSession([revoked, revoked, active])
+    logs = _start_heartbeat(client, session, monkeypatch)
+    try:
+        assert _wait_until(
+            lambda: any("恢复" in msg for _level, msg in logs))
+    finally:
+        client.stop_heartbeat_loop()
+    errors = [msg for level, msg in logs if level == "ERROR"]
+    assert len(errors) == 1
+    assert "被拒绝" in errors[0] and "撤销" in errors[0]
+    # 恢复后重新武装：下一次撤销仍会再次告警
+    assert client._hb_reject_code == ""
+
+
+def test_heartbeat_loop_server_revoke_code_alerts(client, rsa_key,
+                                                  monkeypatch):
+    """心跳接口直接返回业务错误码（300007）也按明确拒绝立即告警。"""
+    _seed_record(client, rsa_key)
+    revoked = (403, {"code": "300007", "message": "许可证已被撤销"})
+    active = (200, {"code": lc.CODE_OK, "data": {"status": "active"}})
+    session = SequenceSession([revoked, active])
+    logs = _start_heartbeat(client, session, monkeypatch)
+    try:
+        assert _wait_until(
+            lambda: any("恢复" in msg for _level, msg in logs))
+    finally:
+        client.stop_heartbeat_loop()
+    errors = [msg for level, msg in logs if level == "ERROR"]
+    assert len(errors) == 1
+    assert "被拒绝" in errors[0] and "撤销" in errors[0]
+
+
+def test_heartbeat_does_not_resurrect_unbound_license(client, rsa_key):
+    """心跳在途时解绑：结果丢弃，不能把旧许可证写回磁盘。"""
+    _seed_record(client, rsa_key)
+
+    class UnbindDuringPost:
+        def post(self, url, json=None, timeout=None, headers=None):
+            client.unbind_local()  # 模拟网络请求期间用户在面板点「解绑」
+            return FakeResponse(200, {"code": lc.CODE_OK,
+                                      "data": {"status": "active"}})
+
+    client._session = UnbindDuringPost()
+    info = client.heartbeat()
+    assert info["status"] == lc.STATUS_INACTIVE
+    assert client._read_record() is None
+    assert not os.path.exists(client.record_path)

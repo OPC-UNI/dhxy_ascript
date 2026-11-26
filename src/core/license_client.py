@@ -51,6 +51,24 @@ MAX_OFFLINE_SECONDS = 7 * 86400
 # last_heartbeat 允许的未来偏差；超出视为记录被改/系统时钟回拨，不信任该值。
 HEARTBEAT_CLOCK_SKEW = 60.0
 
+# 后台周期心跳（start_heartbeat_loop）：程序运行期间持续上报在线状态，
+# 服务端才能看到「在线」并下发撤销/续期。间隔取激活/心跳响应里的
+# heartbeat_interval，缺省 300s；下限 30s 防止异常值打成高频请求。
+DEFAULT_HEARTBEAT_INTERVAL = 300.0
+MIN_HEARTBEAT_LOOP_INTERVAL = 30.0
+# 连续失败达到该次数只升级一条 ERROR 告警（恢复后重新武装），
+# 避免每轮失败都刷日志/面板——与项目周期失败告警约定一致。
+HEARTBEAT_FAIL_ESCALATE = 3
+# 服务端明确拒绝的状态（撤销/过期/设备不匹配等）：立即告警，同一错误码
+# 只报一次；其余错误（网络/服务端临时异常）按可恢复失败静默重试。
+# 前半为客户端归类码（心跳 status 字段 / 许可证验签），后半为服务端
+# 直接在心跳接口返回的业务错误码（如 300007 撤销、300008 设备不匹配）。
+HEARTBEAT_REJECT_CODES = frozenset({
+    "revoked", "status", "expired", "not_started", "fingerprint",
+    "bad_license", "crypto",
+    "300001", "300003", "300004", "300005", "300006", "300007", "300008",
+})
+
 # 服务端错误码 → 用户可读文案（zh-CN 语言包）
 ERROR_MESSAGES = {
     "300001": "授权码不存在或已过期",
@@ -228,6 +246,17 @@ class LicenseClient:
         self.data_dir = str(data_dir)
         self.record_path = os.path.join(self.data_dir, "license.json")
         self._record = None
+        # 记录版本号：心跳在途期间解绑/换卡（_save_record / unbind 都 +1）
+        # 时丢弃本次心跳结果，避免把旧许可证写回来（解绑后被心跳复活）。
+        self._record_gen = 0
+        # 后台周期心跳：每轮独立停止事件（重启循环时旧线程仍持旧事件，
+        # 不会因新事件被清除而复活）+ 告警状态
+        self._hb_stop = threading.Event()
+        self._hb_thread = None
+        self._hb_log_fn = None
+        self._hb_fail_streak = 0
+        self._hb_reject_code = ""
+        self._hb_first_ok = False
 
     # ---------- 基础 ----------
 
@@ -270,8 +299,26 @@ class LicenseClient:
         os.makedirs(self.data_dir, exist_ok=True)
         with self._lock:
             self._record = dict(record)
+            self._record_gen += 1
             _atomic_write(self.record_path, json.dumps(
                 record, ensure_ascii=False, indent=1))
+
+    def _save_record_if_current(self, record, gen):
+        """仅当记录版本未变时回写（心跳在途时解绑/换卡则丢弃结果）。
+
+        后台周期心跳让「读记录 → 网络请求 → 写记录」之间的窗口常态存在；
+        期间面板解绑（_record=None）或换卡会推进 ``_record_gen``，旧心跳
+        不能再把过期记录写回磁盘。
+        """
+        with self._lock:
+            if gen != self._record_gen:
+                return False
+            if not self._record:
+                return False
+            if self._record.get("license_key") != record.get("license_key"):
+                return False
+            self._save_record(record)
+            return True
 
     def _license_pem(self):
         """验签公钥：固定用随包分发的产品公钥，不信任本地记录里的字段。
@@ -291,6 +338,7 @@ class LicenseClient:
         """清除本地许可证（不改变服务端绑定；换机需后台释放设备）。"""
         with self._lock:
             self._record = None
+            self._record_gen += 1
             try:
                 os.remove(self.record_path)
             except FileNotFoundError:
@@ -348,10 +396,16 @@ class LicenseClient:
         return info
 
     def heartbeat(self, record=None):
-        """在线同步状态；撤销/过期/设备不匹配时抛错。返回最新 info。"""
+        """在线同步状态；撤销/过期/设备不匹配时抛错。返回最新 info。
+
+        启动校验与后台周期心跳可能并发调用：落盘前用
+        ``_save_record_if_current`` 校验记录版本未变——后到的请求不会
+        覆盖先到的结果；心跳在途期间面板解绑/换卡也不会把旧许可证写回。
+        """
         record = record or self._read_record()
         if not record:
             raise LicenseError("本地暂无许可证，请先激活", code="not_activated")
+        gen = self._record_gen
         fingerprint = machine_fingerprint()
         payload = {
             "license_key": record.get("license_key"),
@@ -387,10 +441,125 @@ class LicenseClient:
         record["last_heartbeat"] = time.time()
         if body.get("heartbeat_interval"):
             record["heartbeat_interval"] = int(body["heartbeat_interval"])
-        self._save_record(record)
+        self._save_record_if_current(record, gen)
         info = self.info()
         info["offline"] = False
         return info
+
+    # ---------- 后台周期心跳 ----------
+
+    def heartbeat_wait_seconds(self):
+        """后台心跳等待间隔：服务端下发的 heartbeat_interval，钳制下限。"""
+        record = self._read_record() or {}
+        try:
+            interval = float(record.get("heartbeat_interval") or 0)
+        except (TypeError, ValueError):
+            interval = 0.0
+        if interval <= 0:
+            interval = DEFAULT_HEARTBEAT_INTERVAL
+        return max(MIN_HEARTBEAT_LOOP_INTERVAL, interval)
+
+    def start_heartbeat_loop(self, log=None):
+        """启动后台周期心跳线程（程序运行期间持续上报在线状态）。
+
+        - 每轮读记录里的 ``heartbeat_interval``（服务端可下发新值），
+          未激活/已解绑时静默待命，激活后自动开始上报；
+        - ``log(msg, level)`` 可选回调（主进程写文件/面板），不传则静默；
+        - 只上报不改门禁：服务端撤销/过期记 ERROR 告警，但不中止已运行
+          任务，下次点「启动」仍由 ``check()`` 拦截；
+        - daemon 线程随主进程退出；重复调用无副作用。
+        """
+        if self._hb_thread is not None and self._hb_thread.is_alive():
+            return
+        self._hb_log_fn = log
+        self._hb_fail_streak = 0
+        self._hb_reject_code = ""
+        self._hb_first_ok = False
+        stop = threading.Event()
+        self._hb_stop = stop
+        self._hb_thread = threading.Thread(
+            target=self._heartbeat_loop, args=(stop,),
+            name="license-heartbeat", daemon=True)
+        self._hb_thread.start()
+        if self._read_record():
+            self._log_line(
+                "[授权] 在线心跳已开启：每 %d 秒上报一次（运行期间持续校验）"
+                % int(self.heartbeat_wait_seconds()), "SYS")
+            self._hb_first_ok = True
+
+    def stop_heartbeat_loop(self, timeout=2.0):
+        """停止后台心跳线程（退出/测试用；daemon 线程不调用也随进程退出）。"""
+        self._hb_stop.set()
+        thread = self._hb_thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout)
+
+    def _heartbeat_loop(self, stop):
+        """心跳线程主体：等间隔上报；线程内异常一律吞掉，不允许退出。"""
+        while True:
+            if stop.wait(self.heartbeat_wait_seconds()):
+                return
+            if not self._read_record():
+                # 未激活/面板解绑：待命，激活后下一轮自动开始
+                self._hb_fail_streak = 0
+                self._hb_reject_code = ""
+                continue
+            try:
+                self.heartbeat()
+            except LicenseError as e:
+                self._on_heartbeat_error(e)
+            except Exception as e:  # noqa: BLE001 - 心跳线程不允许死
+                self._on_heartbeat_error(
+                    LicenseError("心跳线程异常：%s" % e, code="unexpected"))
+            else:
+                self._on_heartbeat_ok()
+
+    def _on_heartbeat_ok(self):
+        if not self._hb_first_ok:
+            self._hb_first_ok = True
+            self._log_line(
+                "[授权] 在线心跳正常：每 %d 秒上报一次"
+                % int(self.heartbeat_wait_seconds()), "SYS")
+        if self._hb_reject_code:
+            self._hb_reject_code = ""
+            self._log_line("[授权] 在线心跳恢复：服务端已重新接受授权", "SYS")
+        if self._hb_fail_streak:
+            streak = self._hb_fail_streak
+            self._hb_fail_streak = 0
+            self._log_line(
+                "[授权] 在线心跳已恢复（此前连续失败 %d 次）" % streak, "SYS")
+
+    def _on_heartbeat_error(self, err):
+        """心跳失败分级：网络类静默重试（连续 3 次升级一条 ERROR），
+        撤销/过期等明确拒绝立即告警（同码只报一次），恢复后重新武装。"""
+        code = str(getattr(err, "code", "") or "")
+        if code == "not_activated":
+            # 解绑/清除本地授权：转为待命（不告警）
+            self._hb_fail_streak = 0
+            self._hb_reject_code = ""
+            return
+        if code in HEARTBEAT_REJECT_CODES:
+            if code != self._hb_reject_code:
+                self._hb_reject_code = code
+                self._hb_fail_streak = 0
+                self._log_line(
+                    "[授权] 在线心跳被拒绝：%s（已运行任务不中止，"
+                    "下次启动任务将被拦截）" % err.message, "ERROR")
+            return
+        self._hb_fail_streak += 1
+        if self._hb_fail_streak == HEARTBEAT_FAIL_ESCALATE:
+            self._log_line(
+                "[授权] 在线心跳连续 %d 次失败：%s（网络恢复后自动继续）"
+                % (self._hb_fail_streak, err.message), "ERROR")
+
+    def _log_line(self, msg, level="SYS"):
+        fn = self._hb_log_fn
+        if fn is None:
+            return
+        try:
+            fn(msg, level)
+        except Exception:  # noqa: BLE001 - 日志失败不影响心跳
+            pass
 
     # ---------- 本地校验 / 对外信息 ----------
 

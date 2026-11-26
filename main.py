@@ -738,6 +738,22 @@ if __name__ == '__main__':
     # 不阻塞启动，也不抢占 OCR 预热。手动检查在系统页「关于」。
     control_win.schedule_update_check()
 
+    # ---- 运行期在线心跳（2026-11-26 用户确认）----
+    # 启动校验与点「启动」前校验之外，运行期间按服务端 heartbeat_interval
+    # （默认 300s）持续上报在线状态：网络失败静默重试（连续 3 次才升级
+    # 一条 ERROR），撤销/过期记 ERROR 但不中止已运行任务（启动门禁仍拦截）。
+    # 调试授权模式跳过（该模式语义 = 不访问授权服务器）。
+    if not debug_auth:
+        def _license_heartbeat_log(msg, level="SYS"):
+            log(msg, level)  # 文件/控制台（含时间戳与级别）
+            try:
+                control_win.add_logs(
+                    [f"{time.strftime('%H:%M:%S')} [{level}] {msg}"])
+            except Exception:
+                pass
+
+        license_client.start_heartbeat_loop(log=_license_heartbeat_log)
+
     # OCR 引擎预热（主进程，后台线程）：高级设置的验证/测试按钮在主进程
     # 跑 OCR，首次调用冷启动加载 det/rec 模型（本地模型实测约 1s；
     # 2026-10-30 曾因联网下载模型卡 30s）。预热范围 = 区域 + 2x 快引擎；
