@@ -232,7 +232,7 @@ def test_close_bag_closed_does_not_press_hotkey(monkeypatch):
     assert ok and info == "背包未打开"
 
 
-# ---- 切储物格前复检背包在前台（2026-11-26 实机误点地图教训）----
+# ---- 切储物格前复检面板在前台（2026-11-26 实机误点地图教训）----
 
 def test_find_item_with_slots_aborts_when_bag_covered(monkeypatch):
     """背包被地图/面板盖住：切格前复检中止，绝不向未知窗口盲点。
@@ -244,7 +244,7 @@ def test_find_item_with_slots_aborts_when_bag_covered(monkeypatch):
     monkeypatch.setattr(bag, "_match_all_template", lambda *a, **k: [])
     base = type("R", (), {"x": 446, "y": 579})()
     monkeypatch.setattr(bag, "find_box_one_close", lambda w: base)
-    monkeypatch.setattr(bag, "is_bag_open", lambda w: False)
+    monkeypatch.setattr(bag, "is_slot_panel_open", lambda w: False)
     monkeypatch.setattr(bag.time, "sleep", lambda s: None)
     clicks = []
     monkeypatch.setattr(bag, "human_click", lambda *a, **k: clicks.append(a))
@@ -253,4 +253,56 @@ def test_find_item_with_slots_aborts_when_bag_covered(monkeypatch):
     assert item is None
     assert "不在前台" in desc
     assert clicks == []  # 面板已不在前台，一次储物格点击都不能发
+
+
+def test_slot_panel_on_frame_give_panel(monkeypatch):
+    """给与面板在场（给与横幅命中、背包锚点全低分）也判「带储物格列面板在场」。
+
+    2026-11-26 用户截图实测：give_title 1.000、bag_box 0.382、
+    box_task 0.705/0.707——给与面板不是背包，旧复检按背包判会误中止切格。
+    """
+    def fake_match(frame, icon, **k):
+        return (860, 350) if icon == bag.GIVE_TITLE_ICON else None
+
+    monkeypatch.setattr(bag.game_map, "match_frame_np", fake_match)
+    monkeypatch.setattr(bag.game_map, "best_match_multi_np",
+                        lambda frame, icons, region=None: {
+                            bag.BOX_TASK_SELECTED_ICON: (0.707, (0, 0)),
+                            bag.BOX_TASK_ICON: (0.705, (0, 0))})
+    assert bag.slot_panel_on_frame(object()) is True
+
+
+def test_slot_panel_on_frame_world(monkeypatch):
+    """世界帧（背包/给与都关闭）→ 不在场，切格必须中止。"""
+    monkeypatch.setattr(bag.game_map, "match_frame_np",
+                        lambda frame, icon, **k: None)
+    monkeypatch.setattr(bag.game_map, "best_match_multi_np",
+                        lambda frame, icons, region=None: {
+                            bag.BOX_TASK_SELECTED_ICON: (0.542, (0, 0)),
+                            bag.BOX_TASK_ICON: (0.651, (0, 0))})
+    assert bag.slot_panel_on_frame(object()) is False
+
+
+def test_find_item_with_slots_switches_in_give_panel(monkeypatch):
+    """给与面板在场时正常切格：复检放行，4 个储物格逐个点击。"""
+    monkeypatch.setattr(bag, "find_item_in_bag", lambda *a, **k: [])
+    monkeypatch.setattr(bag, "_match_all_template", lambda *a, **k: [])
+    base = type("R", (), {"x": 446, "y": 579})()
+    monkeypatch.setattr(bag, "find_box_one_close", lambda w: base)
+    monkeypatch.setattr(bag, "slot_panel_on_frame", lambda frame: True)
+    monkeypatch.setattr(bag.time, "sleep", lambda s: None)
+    clicks = []
+    monkeypatch.setattr(bag, "human_click",
+                        lambda w, x, y, **k: clicks.append((x, y)))
+
+    class _W:
+        def capture(self, force_activate=False):
+            import numpy as np
+            from PIL import Image
+            return Image.fromarray(np.zeros((831, 1378, 3), dtype=np.uint8))
+
+    item, desc = bag.find_item_with_slots(_W(), "jiuzhuan.png", "九转还魂汤")
+    assert item is None
+    assert "切换 4 个储物格" in desc
+    assert clicks == [(446, 579), (446, 614), (446, 649), (446, 684)]
 

@@ -24,7 +24,9 @@
    （点击成功标记本轮战斗由「看打！」进入）
 4. 战斗：战斗由 battle.watch_loop 线程自动操作；follow_task 战斗中自动跳过识别
    战斗失败（用户 2026-11-14）：战斗结束任务仍在追踪、或战死落轮回司
-   → 队长回灵兽村（轮回司世界地图不可用，走修罗回城符）→ 点「我想
+   → 队长走世界地图/小地图寻路回灵兽村（**修罗回城符只有任务完成才能
+   使用**，战斗失败/死亡时不可用——用户 2026-11-26 确认，恢复链路不得
+   再尝试回城符）→ 点「我想
    取消任务」→ 二次确认弹窗「你真的要取消任务？」点「是」（用户
    2026-11-15）→ 从「是」点击起 6s 后重新领取（重新领取前强制队伍检查：
    暂离/组号队员归队/超时请离/补人）；身上已无任务时游戏提示「你身上
@@ -221,8 +223,8 @@ CANCEL_NO_TASK_TEXT = "你身上都没有任务"      # 游戏原文「你身上
 CANCEL_RE_CLAIM_DELAY = 6                     # 取消任务后重新领取的等待（秒，用户指定；
                                               # 从确认弹窗点「是」开始计——取消校验
                                               # 轮询消耗的时间计入该间隔）
-_lunhuisi_retry_count = 3                     # 战斗失败后回灵兽村的重试次数（回城符
-                                              # 打开任务储物格偶发失败，2026-11-11 日志
+_lunhuisi_retry_count = 3                     # 战斗失败后回灵兽村的重试次数（世界地图/
+                                              # 小地图寻路偶发失败，2026-11-11 日志
                                               # 死亡后首次打开失败、稍后成功）
 
 # ---- 自动巫医（用户流程：领取后每 N 轮一次，无条件医治——血蓝正常
@@ -294,6 +296,11 @@ _battle_recovery_pending = False  # 战斗失败恢复未完成（回灵兽村/�
                                 # 下一轮开始先重试恢复，不得回到任务跟踪——
                                 # 旧任务仍在追踪，直接继续跟踪会反复打同一
                                 # 任务（用户 2026-11-14 疑问的缺口）
+_rejoin_deferred = False        # 队员归队推迟：战斗失败恢复后队长尚未到灵兽村
+                                # 前，队伍检查不替暂离队员归队（2026-11-26
+                                # 用户实机：轮回司归队会把队员传到轮回司，
+                                # 队长再回城，队员还得二次归队）。走位到
+                                # 领取点（已在灵兽村）后清除
 _cancel_confirmed_at = None     # 最近一次点击取消确认弹窗「是」的时间戳：6s 重领
                                 # 间隔的计时起点（用户 2026-11-15 指定从「是」
                                 # 点击完成开始算；None=本次流程尚未点过确认）
@@ -2094,9 +2101,11 @@ def _check_team_ready(win, create_if_missing=False):
     return _team_flow.check_team_ready(win, create_if_missing)
 
 
-def _check_team_with_retry(win, tries=3, create_if_missing=False):
+def _check_team_with_retry(win, tries=3, create_if_missing=False,
+                           away_handling=True):
     """队伍检查带瞬态失败重试（共享实现在 workflows/team_flow.py）。"""
-    return _team_flow.check_team_with_retry(win, tries, create_if_missing)
+    return _team_flow.check_team_with_retry(
+        win, tries, create_if_missing, away_handling=away_handling)
 
 
 _fight_fb_last_at = 0.0  # 兜底 2x OCR 冷却（防无选项对话框每轮询白耗）
@@ -2651,11 +2660,12 @@ def _manual_recover(win, check_team):
     返回 (是否已取消并进入重领等待, 描述)。
     """
     global _team_checked, _task_gone_last_round, _returned_last_round, \
-        _cancel_confirmed_at
+        _cancel_confirmed_at, _rejoin_deferred
     if is_in_battle(win):
         return False, "战斗中，手动寻路失败恢复顺延到战斗结束后重试"
     if check_team:
-        status, info = _check_team_with_retry(win)
+        # 只读身份/人数：队长回灵兽村前不替暂离队员归队（同战斗失败恢复）
+        status, info = _check_team_with_retry(win, away_handling=False)
         if status == "not_leader":
             if team.is_definitive_not_leader(info):
                 log(f"[修罗][手动] 非队长：转保持模式并自动归队（{info}）",
@@ -2666,13 +2676,13 @@ def _manual_recover(win, check_team):
     img = win.capture(force_activate=False)
     pos = game_map.read_map_position(win, img=img) if img is not None else None
     if not (pos is not None and pos[0].strip() == LINGSHOUCUN):
-        ok, info = (_return_to_npc(win) if team.is_in_lunhuisi(pos)
-                    else _walk_to_claim_spot(win, just_returned=False))
-        if not ok:
-            ok, info = _return_to_npc(win)
+        # 回城符只有任务完成才能用（战斗失败/死亡不可用），走地图寻路
+        ok, info = _walk_to_claim_spot(win, just_returned=False)
         if not ok:
             return False, f"回灵兽村失败: {info}"
         _returned_last_round = True
+    # 队员归队推迟到队长走位到灵兽村领取点后（同战斗失败恢复）
+    _rejoin_deferred = True
     ok, info = _cancel_task(win, assume_task=True)
     if not ok:
         return False, f"取消任务失败: {info}"
@@ -2741,9 +2751,14 @@ def _recover_battle_failure(win, check_team):
     """任务战斗失败恢复（用户 2026-11-14 指定流程）。
 
     1. 身份检查（检查队伍开启时）：非队长不取消/重领——转保持模式 +
-       自动归队（死亡落轮回司点「归队」回队长身边）。
-    2. 回灵兽村：落轮回司时世界地图不可用（2026-11-11 日志实测），
-       走修罗回城符返程；其他地图走地图寻路，寻路失败再用回城符。
+       自动归队（死亡落轮回司点「归队」回队长身边）。**只读身份/人数，
+       不做暂离处理**（away_handling=False，2026-11-26 用户实机）：
+       在轮回司替组号队员归队会把队员传送到轮回司，队长随后回灵兽村，
+       队员还得切 Tab 二次归队——归队推迟到队长到达灵兽村后（见
+       _rejoin_deferred）。
+    2. 回灵兽村：**修罗回城符只有任务完成才能使用**（战斗失败/死亡时
+       不可用——用户 2026-11-26 确认；旧逻辑落轮回司走回城符会「使用
+       成功」但并未传送），不论人在哪一律走世界地图/小地图寻路。
     3. 取消任务：追踪中仍有任务则点「我想取消任务」→ 确认弹窗点「是」；
        任务已消失（战斗胜利后死亡等）按本轮完成处理。
     4. 取消成功 → 从确认弹窗点「是」起等满 CANCEL_RE_CLAIM_DELAY(6s)
@@ -2752,10 +2767,11 @@ def _recover_battle_failure(win, check_team):
     返回 ("canceled"|"completed"|"failed", 描述)。
     """
     global _team_checked, _task_gone_last_round, _returned_last_round, \
-        _battle_recovery_pending, _cancel_confirmed_at
-    # 1. 身份：非队长走归队保持模式（队员不能取消/领取队伍任务）
+        _battle_recovery_pending, _cancel_confirmed_at, _rejoin_deferred
+    # 1. 身份：非队长走归队保持模式（队员不能取消/领取队伍任务）。
+    #    只读身份/人数，不为暂离队员归队（队长尚未回灵兽村，见文档）
     if check_team:
-        status, info = _check_team_with_retry(win)
+        status, info = _check_team_with_retry(win, away_handling=False)
         if status == "not_leader":
             if team.is_definitive_not_leader(info):
                 log(f"[修罗] 战斗失败，非队长：转保持模式并自动归队（{info}）",
@@ -2764,34 +2780,27 @@ def _recover_battle_failure(win, check_team):
                 return "failed", f"保持模式异常退出（{info}）"
             _battle_recovery_pending = True
             return "failed", f"战斗失败后队伍身份无法判定（{info}）"
-    # 2. 回灵兽村
+    # 2. 回灵兽村（回城符只有任务完成才能用——战斗失败/死亡时不可用，
+    #    用户 2026-11-26 确认；一律走世界地图/小地图寻路）
     img = win.capture(force_activate=False)
     pos = game_map.read_map_position(win, img=img) if img is not None else None
     at_lingshou = pos is not None and pos[0].strip() == LINGSHOUCUN
     last_info = ""
     if not at_lingshou:
         for attempt in range(_lunhuisi_retry_count):
-            if team.is_in_lunhuisi(pos):
-                # 轮回司世界地图不可用：修罗回城符是自动返程通道
-                ok, last_info = _return_to_npc(win)
-            else:
-                ok, last_info = _walk_to_claim_spot(win, just_returned=False)
-                if not ok:
-                    log(f"[修罗] 战斗失败后寻路未成功（{last_info}），"
-                        f"改用修罗回城符返程", "WARN")
-                    ok, last_info = _return_to_npc(win)
+            ok, last_info = _walk_to_claim_spot(win, just_returned=False)
             if ok:
                 break
             log(f"[修罗] 战斗失败后回灵兽村失败（第 {attempt + 1}/"
                 f"{_lunhuisi_retry_count} 次）：{last_info}", "WARN")
             time.sleep(3.0)
-            img = win.capture(force_activate=False)
-            pos = game_map.read_map_position(win, img=img) \
-                if img is not None else None
         else:
             _battle_recovery_pending = True
             return "failed", f"战斗失败后回灵兽村失败: {last_info}"
         _returned_last_round = True
+    # 队员归队推迟到队长回到灵兽村领取点之后（见 _rejoin_deferred）：
+    # 轮回司归队会把队员传送到轮回司，白跑一趟还要二次归队
+    _rejoin_deferred = True
     # 3. 取消任务（任务已消失 = 本轮其实已完成）
     ok, info = _cancel_task(win)
     if "无需取消" in info:
@@ -3101,7 +3110,7 @@ def run_loop(win, cycle_interval=1.0):
     """
     global _fight_via_kanda, _battle_failed_reason, _battle_recovery_pending, \
         _manual_recovery_pending, _team_checked, _task_gone_last_round, \
-        _returned_last_round, _shout_text
+        _returned_last_round, _shout_text, _rejoin_deferred
     max_rounds = load_task_counts().get(TASK_MODE, 0)
     log(f"[修罗] 任务次数上限: {max_rounds if max_rounds > 0 else '不限'}", "SYS")
     # 高性能模式开关由 main.task_start 按通用设置置位（共享设施）
@@ -3371,9 +3380,12 @@ def run_loop(win, cycle_interval=1.0):
                         # （用户 2026-10-27）；真实队长瞬态恢复后原地通过检查
                         # 再走位，无进度损失。确定性非队长由 _keep_alive 处理。
                         # 自动创建队伍并入本次检查（同一次菜单打开）
+                        # 战斗失败恢复后队长尚未回到灵兽村：本次只读
+                        # 身份/人数，不为暂离队员归队（见 _rejoin_deferred）
                         while True:
                             status, info = _check_team_with_retry(
-                                win, create_if_missing=pending_create)
+                                win, create_if_missing=pending_create,
+                                away_handling=not _rejoin_deferred)
                             pending_create = False  # 自动创建一次即消费
                             if status == "not_leader" \
                                     and team.is_definitive_not_leader(info):
@@ -3399,6 +3411,9 @@ def run_loop(win, cycle_interval=1.0):
                 log(f"[修罗] {info}", "WARN")
                 time.sleep(cycle_interval)
                 continue
+            # 走位成功 = 队长已到灵兽村领取点：解除队员归队推迟，
+            # 后续监控/领取被拒补人链路可放心替暂离队员归队
+            _rejoin_deferred = False
             if not check_team:
                 # 关闭队伍检查：不开面板判定身份，任务自行寻路即视为
                 # 队长（抢盒子的队长规则依赖此记录，见 battle._handle_hezi）

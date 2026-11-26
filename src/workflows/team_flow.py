@@ -78,11 +78,14 @@ class TeamFlow:
         value = self._kick_timeout
         return value() if callable(value) else value
 
-    def check_team_ready(self, win, create_if_missing=False):
+    def check_team_ready(self, win, create_if_missing=False,
+                         away_handling=True):
         """领取前队伍检查：一次面板开关，结果顺带更新悬浮层队伍行。
 
         战斗期间不检查；检查期间开打的结果一并作废（见 BATTLE_DEFER_INFO）
         ——战斗中组队菜单/面板读数不可信，交调用方战后重查。
+        away_handling=False：只读身份/人数，不替暂离队员归队、不请离
+        （战斗失败恢复的轮回司身份检查用，见 team.check_team_min）。
         """
         if _in_battle(win):
             return "not_leader", BATTLE_DEFER_INFO
@@ -90,7 +93,8 @@ class TeamFlow:
             win, min_members=self._team_min(), allow_kick=True,
             create_if_missing=create_if_missing, prefix=self.create_prefix,
             kick_timeout=self._kick_timeout_now(),
-            kick_overdue=self._kick_overdue_now())
+            kick_overdue=self._kick_overdue_now(),
+            away_handling=away_handling)
         if _in_battle(win):
             # 检查期间进入战斗：本次读到的身份/人数可能来自战斗界面或
             # 被战斗打断的菜单，不能作为任何确定性结论；不写悬浮层
@@ -98,7 +102,8 @@ class TeamFlow:
         team.update_overlay_team(status, info, members)
         return status, info
 
-    def check_team_with_retry(self, win, tries=3, create_if_missing=False):
+    def check_team_with_retry(self, win, tries=3, create_if_missing=False,
+                              away_handling=True):
         """队伍检查带瞬态失败重试：截窗失败/面板打不开可能是瞬时问题，
         一次失败即转非队长保持模式会把队长永久挂起。未组队与明确非队长
         是确定性状态，不重试。
@@ -115,7 +120,8 @@ class TeamFlow:
                 # 调用方按瞬态处理（战后再重查）
                 return "not_leader", BATTLE_DEFER_INFO
             status, info = self.check_team_ready(
-                win, create_if_missing=create_if_missing)
+                win, create_if_missing=create_if_missing,
+                away_handling=away_handling)
             last = (status, info)
             if info == BATTLE_DEFER_INFO:
                 # 检查期间开打：结果已作废，战斗中菜单不可读，不再重试

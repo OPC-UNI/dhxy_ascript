@@ -951,6 +951,12 @@ def test_check_team_min_allow_kick_flag(monkeypatch):
     status, _info, _members = team.check_team_min(
         win, min_members=None, allow_kick=True, kick_overdue=False)
     assert status == "ready" and called[-1] == (team.KICK_AWAY_TIMEOUT, False)
+    # away_handling=False：只读身份/人数，不做归队/请离（战斗失败恢复
+    # 在轮回司内的身份检查用，2026-11-26 用户实机顺序修复）
+    before = len(called)
+    status, _info, _members = team.check_team_min(
+        win, min_members=None, allow_kick=True, away_handling=False)
+    assert status == "ready" and len(called) == before
 
 
 def test_auto_kick_overdue_disabled_keeps_tab_rejoin(monkeypatch):

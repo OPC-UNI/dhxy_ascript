@@ -46,7 +46,7 @@ def test_check_team_with_retry_known_leader_unclear_keeps_leader(monkeypatch):
     calls = []
     monkeypatch.setattr(
         team_flow.TeamFlow, "check_team_ready",
-        lambda self, win, create_if_missing=False:
+        lambda self, win, create_if_missing=False, **kw:
         calls.append(1) or ("not_leader", "队长无法判定（组队菜单未打开）"))
     monkeypatch.setattr(team_flow.team, "known_leader", lambda: True)
     monkeypatch.setattr(team_flow, "log", lambda *a, **k: None)
@@ -63,7 +63,7 @@ def test_check_team_with_retry_unknown_identity_keeps_transient(monkeypatch):
     """未确认过队长：身份未决保持瞬态 not_leader（调用方继续重试）。"""
     monkeypatch.setattr(
         team_flow.TeamFlow, "check_team_ready",
-        lambda self, win, create_if_missing=False:
+        lambda self, win, create_if_missing=False, **kw:
         ("not_leader", "队长无法判定（组队菜单未打开）"))
     monkeypatch.setattr(team_flow.team, "known_leader", lambda: None)
     monkeypatch.setattr(team_flow, "log", lambda *a, **k: None)
@@ -80,7 +80,7 @@ def test_check_team_with_retry_definitive_member_immediate(monkeypatch):
     calls = []
     monkeypatch.setattr(
         team_flow.TeamFlow, "check_team_ready",
-        lambda self, win, create_if_missing=False:
+        lambda self, win, create_if_missing=False, **kw:
         calls.append(1) or ("not_leader", "非队长（面板无「解散队伍」）"))
     monkeypatch.setattr(team_flow.team, "known_leader", lambda: True)
     monkeypatch.setattr(team_flow, "log", lambda *a, **k: None)
@@ -126,7 +126,7 @@ def test_check_team_with_retry_returns_immediately_in_battle(monkeypatch):
     monkeypatch.setattr(team_flow, "_in_battle", lambda win: True)
     monkeypatch.setattr(
         team_flow.TeamFlow, "check_team_ready",
-        lambda self, win, create_if_missing=False: checks.append(1))
+        lambda self, win, create_if_missing=False, **kw: checks.append(1))
     status, info = _flow().check_team_with_retry(object())
     assert status == "not_leader"
     assert info == team_flow.BATTLE_DEFER_INFO
@@ -178,6 +178,20 @@ def test_check_team_ready_kick_switch_and_timeout(monkeypatch):
     assert calls["allow_kick"] is True
     assert calls["kick_overdue"] is False
     assert calls["kick_timeout"] == 120
+
+
+def test_check_team_ready_away_handling_passthrough(monkeypatch):
+    """away_handling=False 透传 check_team_min（战斗失败恢复轮回司身份
+    检查只读身份/人数，不替暂离队员归队——2026-11-26 用户实机）。"""
+    calls = {}
+    monkeypatch.setattr(team_flow.team, "check_team_min",
+                        lambda win, **kw: calls.update(kw) or ("wait", "", []))
+    monkeypatch.setattr(team_flow.team, "update_overlay_team", lambda *a: None)
+    _flow().check_team_ready(object(), away_handling=False)
+    assert calls["away_handling"] is False
+    calls.clear()
+    _flow().check_team_ready(object())
+    assert calls["away_handling"] is True  # 默认行为不变
 
 
 def test_check_team_ready_callable_min_members(monkeypatch):

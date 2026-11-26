@@ -1681,11 +1681,18 @@ def test_on_battle_end_random_battle_not_failure(monkeypatch):
 
 
 def test_recover_battle_failure_reclaim_directly(monkeypatch):
-    """队长已在宝象国：置位重领标记并强制队伍检查；不调用取消任务。"""
+    """队长已在宝象国：置位重领标记并强制队伍检查；不调用取消任务。
+
+    身份检查只读身份/人数（away_handling=False，2026-11-26 用户实机：
+    轮回司归队会把队员传到轮回司），队员归队推迟到队长到宝象国后
+    （_rejoin_deferred）。
+    """
     monkeypatch.setattr(wubei, "log", lambda *a, **k: None)
     monkeypatch.setattr(wubei, "time", _FakeClock())
+    check_kwargs = {}
     monkeypatch.setattr(wubei, "_check_team_with_retry",
-                        lambda w, **k: ("ready", "队伍满足"))
+                        lambda w, **k: check_kwargs.update(k)
+                        or ("ready", "队伍满足"))
     monkeypatch.setattr(wubei.game_map, "read_map_position",
                         lambda w, img=None: (wubei.BAOXIANGGUO, 94, 84))
     cancelled = []
@@ -1694,9 +1701,12 @@ def test_recover_battle_failure_reclaim_directly(monkeypatch):
     monkeypatch.setattr(wubei, "_battle_failed_reclaim", False)
     monkeypatch.setattr(wubei, "_battle_recovery_pending", True)
     monkeypatch.setattr(wubei, "_team_checked", True)
+    monkeypatch.setattr(wubei, "_rejoin_deferred", False)
     status, info = wubei._recover_battle_failure(_FakeWin(), True)
     assert status == "reclaim" and "重新领取" in info
+    assert check_kwargs.get("away_handling") is False  # 轮回司内不归队
     assert wubei._battle_failed_reclaim is True
+    assert wubei._rejoin_deferred is True
     assert wubei._team_checked is False
     assert wubei._battle_recovery_pending is False  # 恢复完成：清除重试标记
     assert cancelled == []  # 五倍不取消任务
@@ -1716,8 +1726,9 @@ def test_recover_battle_failure_non_leader_keep_alive(monkeypatch):
     assert kept and "非队长" in kept[0]
 
 
-def test_recover_battle_failure_lunhuisi_uses_talisman(monkeypatch):
-    """落轮回司：世界地图不可用，走五倍回城符返程。"""
+def test_recover_battle_failure_lunhuisi_walks_not_talisman(monkeypatch):
+    """落轮回司：回城符只有任务完成才能用（战斗失败/死亡不可用，用户
+    2026-11-26 确认），一律走世界地图/小地图寻路回宝象国。"""
     monkeypatch.setattr(wubei, "log", lambda *a, **k: None)
     monkeypatch.setattr(wubei, "time", _FakeClock())
     monkeypatch.setattr(wubei.game_map, "read_map_position",
@@ -1725,32 +1736,38 @@ def test_recover_battle_failure_lunhuisi_uses_talisman(monkeypatch):
     calls = []
     monkeypatch.setattr(
         wubei, "_return_to_npc",
-        lambda w: calls.append("talisman") or (True, "已返回宝象国"))
+        lambda w: (_ for _ in ()).throw(
+            AssertionError("战斗失败不得使用回城符")))
     monkeypatch.setattr(
         wubei, "_walk_to_claim_spot",
-        lambda w, **k: (_ for _ in ()).throw(
-            AssertionError("轮回司不应走世界地图")))
+        lambda w, **k: calls.append("walk") or (True, "已到达领取点"))
     monkeypatch.setattr(wubei, "_team_checked", True)
     monkeypatch.setattr(wubei, "_battle_recovery_pending", True)
+    monkeypatch.setattr(wubei, "_rejoin_deferred", False)
     status, _info = wubei._recover_battle_failure(_FakeWin(), False)
-    assert status == "reclaim" and calls == ["talisman"]
+    assert status == "reclaim" and calls == ["walk"]
     assert wubei._battle_recovery_pending is False
+    assert wubei._rejoin_deferred is True
 
 
 def test_recover_battle_failure_return_failed(monkeypatch):
-    """回宝象国多次失败：报告失败（主循环下轮重试）。"""
+    """回宝象国多次失败：报告失败（主循环下轮重试）；不再尝试回城符。"""
     clock = _FakeClock()
     monkeypatch.setattr(wubei, "time", clock)
     monkeypatch.setattr(wubei, "log", lambda *a, **k: None)
     monkeypatch.setattr(wubei.game_map, "read_map_position",
                         lambda w, img=None: ("长安", 100, 100))
+    walks = []
     monkeypatch.setattr(wubei, "_walk_to_claim_spot",
-                        lambda w, **k: (False, "寻路超时"))
-    monkeypatch.setattr(wubei, "_return_to_npc",
-                        lambda w: (False, "背包打开失败"))
+                        lambda w, **k: walks.append(1) or (False, "寻路超时"))
+    monkeypatch.setattr(
+        wubei, "_return_to_npc",
+        lambda w: (_ for _ in ()).throw(
+            AssertionError("战斗失败不得使用回城符")))
     monkeypatch.setattr(wubei, "_battle_recovery_pending", False)
     status, info = wubei._recover_battle_failure(_FakeWin(), False)
     assert status == "failed" and "回宝象国失败" in info
+    assert len(walks) == wubei._BAOXIANG_RETRY_COUNT
     assert clock.t >= 3 * 3.0
     # 恢复未完成：下一轮先重试恢复，不得回走任务跟踪
     assert wubei._battle_recovery_pending is True

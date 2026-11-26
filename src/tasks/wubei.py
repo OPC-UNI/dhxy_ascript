@@ -28,10 +28,18 @@
    标记本轮战斗由对话开打进入）
 4. 战斗：战斗由 battle.watch_loop 线程自动操作；follow_task 战斗中自动跳过识别
    战斗失败（用户 2026-11-14）：战斗结束任务仍在追踪、或战死落轮回司
-   → 队长回宝象国领取点（轮回司世界地图不可用，走五倍回城符）后
-   **直接重新领取替换**（五倍无需取消任务，游戏允许重领替换；黄袍怪
-   多杀两场之间任务仍在属正常，只按落轮回司判定）；非队长不重领，
-   转保持模式并自动归队；重新领取前强制队伍检查（暂离/组号归队/补人）
+   → 队长走世界地图/小地图寻路回宝象国领取点（**五倍回城符只有任务
+   完成才能使用**，战斗失败/死亡时不可用——用户 2026-11-26 确认，
+   恢复链路不得再尝试回城符）后**直接重新领取替换**（五倍无需取消
+   任务，游戏允许重领替换；黄袍怪多杀两场之间任务仍在属正常，只按
+   落轮回司判定）；非队长不重领，
+   转保持模式并自动归队；重新领取前强制队伍检查（暂离/组号归队/补人）。
+   顺序（用户 2026-11-26）：**队长先回宝象国、再替组号队员归队**——
+   轮回司归队会把队员传送到轮回司，队长随后回城，队员白跑还要二次
+   归队；恢复期队伍检查只读身份/人数（away_handling=False），归队
+   推迟到走位到领取点后（_rejoin_deferred）。换领意图保持到领取成功：
+   领取被队伍不足打断时下一轮仍走替换分支，不得按「已有任务」续跑
+   打过期的失败任务（2026-11-26 实机：人补齐后没重领、到场无法开打）
 5. 返程（已实现，逻辑与修罗一致）：战斗结束后用五倍回城符回宝象国
    （仅对话开打进入的战斗才返程，其他方式进入的战斗不自动返程）：
    打开背包 → 打开任务储物格（box_task/box_task_selected 双模板比分数
@@ -136,8 +144,8 @@ REPLACE_INTERVAL = 8
 
 # ---- 战斗失败重新领取（用户 2026-11-14）：与修罗不同，五倍无需取消
 #      任务（游戏允许重领替换）——回宝象国后直接走领取/替换分支 ----
-_BAOXIANG_RETRY_COUNT = 3       # 战斗失败后回宝象国的重试次数（回城符打开
-                                # 任务储物格偶发失败，与修罗同款）
+_BAOXIANG_RETRY_COUNT = 3       # 战斗失败后回宝象国的重试次数（世界地图/
+                                # 小地图寻路偶发失败，与修罗同款）
 
 
 class ReplaceTaskError(Exception):
@@ -549,8 +557,17 @@ _battle_failed_reason = None    # 战斗失败原因（None=未失败；"task"=�
                                 # 追踪；"dead"=战后落轮回司）：follow 的
                                 # battle_end_handler 置位、主循环消费（用户
                                 # 2026-11-14：五倍不取消任务，直接重新领取替换）
-_battle_failed_reclaim = False  # 战斗失败恢复完成：下一轮强制走领取/替换分支
-                                # （旧任务仍在追踪，不能按续跑继续跟踪）
+_battle_failed_reclaim = False  # 战斗失败待重领：强制走领取/替换分支（旧任务
+                                # 仍在追踪，不能按续跑继续跟踪）。**保持到
+                                # 真正领取成功**才清除（2026-11-26 实机：
+                                # 回城后首次领取被「队伍人数不足」打断，标记
+                                # 被消费 → 下一轮按「已有任务」续跑把过期失败
+                                # 任务又打了一轮，人补齐后也不重领）
+_rejoin_deferred = False        # 队员归队推迟：战斗失败恢复后队长尚未到宝象国
+                                # 前，队伍检查不替暂离队员归队（2026-11-26
+                                # 用户实机：在轮回司归队会把队员传到轮回司，
+                                # 队长再回宝象国，队员还得二次归队）。走位到
+                                # 领取点（已在宝象国）后清除
 _manual_reclaim_pending = False  # 手动寻路无法推进（暗雷/锁妖网或回合失败）：
                                 # 下一轮强制走领取/替换分支，防每轮手动回合空转
 _battle_recovery_pending = False  # 战斗失败恢复未完成（回宝象国失败）：下一轮
@@ -3723,17 +3740,26 @@ def _recover_battle_failure(win, check_team):
     领取点后直接重新领取即可（旧任务仍在追踪，下一轮走替换领取分支）。
 
     1. 身份检查（检查队伍开启时）：非队长转保持模式并自动归队。
-    2. 回宝象国：落轮回司时世界地图不可用（2026-11-11 修罗日志实测，
-       同机制），走五倍回城符；其他地图走地图寻路，失败再用回城符。
-    3. 置位 _battle_failed_reclaim 强制下一轮走领取/替换分支，并复位
-       队伍检查标记（重新领取前走检查暂离/组号队员归队/补人流程）。
+       **只读身份/人数，不做暂离处理**（away_handling=False，2026-11-26
+       用户实机）：在轮回司替组号队员归队会把队员传送到轮回司，队长
+       随后回宝象国，队员还得切 Tab 二次归队——归队一律推迟到队长
+       到达宝象国后（见 _rejoin_deferred）。
+    2. 回宝象国：**五倍回城符只有任务完成才能使用**（战斗失败/死亡时
+       不可用——用户 2026-11-26 确认；旧逻辑落轮回司走回城符会「使用
+       成功」但并未传送，白等一轮），不论人在哪一律走世界地图/小地图
+       寻路（2026-11-26 日志：轮回司内世界地图可用，成功经宝象国地图
+       点寻路回城）。
+    3. 置位 _battle_failed_reclaim 强制下一轮走领取/替换分支（保持到
+       领取成功），并复位队伍检查标记（重新领取前走检查暂离/组号队员
+       归队/补人流程）；置位 _rejoin_deferred 把队员归队推迟到队长
+       走位到宝象国领取点之后。
     返回 ("reclaim"|"failed", 描述)。
     """
     global _battle_failed_reclaim, _battle_recovery_pending, \
-        _team_checked, _returned_last_round
+        _team_checked, _returned_last_round, _rejoin_deferred
     # 1. 身份：非队长走归队保持模式（队员不能领取/替换队伍任务）
     if check_team:
-        status, info = _check_team_with_retry(win)
+        status, info = _check_team_with_retry(win, away_handling=False)
         if status == "not_leader":
             if team.is_definitive_not_leader(info):
                 log(f"[五倍] 战斗失败，非队长：转保持模式并自动归队（{info}）",
@@ -3742,38 +3768,39 @@ def _recover_battle_failure(win, check_team):
                 return "failed", f"保持模式异常退出（{info}）"
             _battle_recovery_pending = True
             return "failed", f"战斗失败后队伍身份无法判定（{info}）"
-    # 2. 回宝象国
+    # 2. 回宝象国（回城符不可用，一律走地图寻路）
     img = win.capture(force_activate=False)
     pos = game_map.read_map_position(win, img=img) if img is not None else None
     at_baoxiang = pos is not None and pos[0].strip() == BAOXIANGGUO
     last_info = ""
     if not at_baoxiang:
         for attempt in range(_BAOXIANG_RETRY_COUNT):
-            if team.is_in_lunhuisi(pos):
-                # 轮回司世界地图不可用：五倍回城符是自动返程通道
-                ok, last_info = _return_to_npc(win)
-            else:
-                ok, last_info = _walk_to_claim_spot(win, just_returned=False)
-                if not ok:
-                    log(f"[五倍] 战斗失败后寻路未成功（{last_info}），"
-                        f"改用五倍回城符返程", "WARN")
-                    ok, last_info = _return_to_npc(win)
+            ok, last_info = _walk_to_claim_spot(win, just_returned=False)
             if ok:
                 break
             log(f"[五倍] 战斗失败后回宝象国失败（第 {attempt + 1}/"
                 f"{_BAOXIANG_RETRY_COUNT} 次）：{last_info}", "WARN")
             time.sleep(3.0)
-            img = win.capture(force_activate=False)
-            pos = game_map.read_map_position(win, img=img) \
-                if img is not None else None
         else:
             _battle_recovery_pending = True
             return "failed", f"战斗失败后回宝象国失败: {last_info}"
-        _returned_last_round = True
-    # 3. 不取消任务：强制下一轮重新领取替换（旧任务仍在追踪）
+        # 走位成功 = 已到宝象国领取点（非返程轮次的按钮/落点判据均过
+        # 地图名门控）：再读一次位置确认，确认后才允许下一轮走位信任
+        # 按钮直达信号（just_returned 不做地图名门控，跨图按钮模板会
+        # 误命中）；未确认时下一轮照常按地图名门控走位
+        img = win.capture(force_activate=False)
+        pos_after = game_map.read_map_position(win, img=img) \
+            if img is not None else None
+        _returned_last_round = (pos_after is not None
+                                and pos_after[0].strip() == BAOXIANGGUO)
+    # 3. 不取消任务：强制重新领取替换（旧任务仍在追踪）；标记保持到
+    #    领取成功（领取被队伍不足打断时下一轮仍走替换分支）
     _battle_recovery_pending = False
     _battle_failed_reclaim = True
     _team_checked = False  # 重新领取前强制队伍检查（暂离/组号归队/补人）
+    # 队员归队推迟到队长回到宝象国领取点之后（见 _rejoin_deferred）：
+    # 轮回司归队会把队员传送到轮回司，白跑一趟还要二次归队
+    _rejoin_deferred = True
     return "reclaim", "战斗失败，已回宝象国，下一轮直接重新领取替换任务"
 
 
@@ -3888,9 +3915,11 @@ def _check_team_ready(win, create_if_missing=False):
     return _team_flow.check_team_ready(win, create_if_missing)
 
 
-def _check_team_with_retry(win, tries=3, create_if_missing=False):
+def _check_team_with_retry(win, tries=3, create_if_missing=False,
+                           away_handling=True):
     """队伍检查带瞬态失败重试（共享实现在 workflows/team_flow.py）。"""
-    return _team_flow.check_team_with_retry(win, tries, create_if_missing)
+    return _team_flow.check_team_with_retry(
+        win, tries, create_if_missing, away_handling=away_handling)
 
 
 def _keep_alive(win, info):
@@ -3988,8 +4017,8 @@ def run_loop(win, cycle_interval=1.0):
     返回结束原因描述。
     """
     global _fight_via_kanda, _battle_failed_reason, _battle_failed_reclaim, \
-        _battle_recovery_pending, _team_checked, _task_gone_last_round, \
-        _xj_need_replace, _manual_reclaim_pending, \
+        _rejoin_deferred, _battle_recovery_pending, _team_checked, \
+        _task_gone_last_round, _xj_need_replace, _manual_reclaim_pending, \
         _replace_fail_streak, _hpg_task_seen, _shout_text, _returned_last_round, \
         _kuimulang_on, _last_replace_at
     max_rounds = load_task_counts().get(TASK_MODE, 0)
@@ -4167,8 +4196,8 @@ def run_loop(win, cycle_interval=1.0):
                 if status == "reclaim":
                     _battle_recovery_pending = False
                     log(f"[五倍] {rinfo}", "SYS")
-                    # 已回宝象国：继续本轮（下面消费 _battle_failed_reclaim
-                    # 走领取/替换分支）
+                    # 已回宝象国：继续本轮（_battle_failed_reclaim 置位，
+                    # 下面走领取/替换分支，直到领取成功才清除）
                 else:
                     log(f"[五倍] {rinfo}", "WARN")
                     time.sleep(cycle_interval)
@@ -4196,7 +4225,9 @@ def run_loop(win, cycle_interval=1.0):
             xj_replace = _xj_need_replace
             _xj_need_replace = False  # 消费替换请求（本轮走领取分支）
             battle_replace = _battle_failed_reclaim
-            _battle_failed_reclaim = False  # 消费战斗失败请求（本轮重新领取）
+            # 战斗失败待重领**不在这里消费**：保持到领取成功（2026-11-26
+            # 实机——回城后领取被「队伍人数不足」打断，标记被消费后下一轮
+            # 按「已有任务」续跑打过期的失败任务，人补齐也不重领）
             manual_reclaim = _manual_reclaim_pending
             _manual_reclaim_pending = False  # 消费手动寻路重领请求
             kuimulang_replace = kuimulang and not _kuimulang_on
@@ -4285,9 +4316,12 @@ def run_loop(win, cycle_interval=1.0):
                             # 原地通过检查再走位，无进度损失。确定性非队长
                             # 由 _keep_alive 处理。
                             # 自动创建队伍并入本次检查（同一次菜单打开）
+                            # 战斗失败恢复后队长尚未回到宝象国：本次只读
+                            # 身份/人数，不为暂离队员归队（见 _rejoin_deferred）
                             while True:
                                 status, info = _check_team_with_retry(
-                                    win, create_if_missing=pending_create)
+                                    win, create_if_missing=pending_create,
+                                    away_handling=not _rejoin_deferred)
                                 pending_create = False  # 自动创建一次即消费
                                 if status == "not_leader" \
                                         and team.is_definitive_not_leader(info):
@@ -4317,6 +4351,9 @@ def run_loop(win, cycle_interval=1.0):
                     log(f"[五倍] {info}", "WARN")
                     time.sleep(cycle_interval)
                     continue
+                # 走位成功 = 队长已到宝象国领取点：解除队员归队推迟，
+                # 后续监控/领取被拒补人链路可放心替暂离队员归队
+                _rejoin_deferred = False
                 if not check_team:
                     # 关闭队伍检查：不开面板判定身份，任务自行寻路即视为
                     # 队长（抢盒子的队长规则依赖此记录，见 battle._handle_hezi）
@@ -4387,6 +4424,9 @@ def run_loop(win, cycle_interval=1.0):
                 # 下轮仍须替换时距此满 6s 才再次重领；普通领取重置
                 # （下一次替换重新视为首次、免等待）
                 _last_replace_at = time.time() if need_replace else 0.0
+                # 战斗失败待重领到此完成（领取已确认/已受理）：清除标记，
+                # 下一轮按新任务正常续跑；领取失败时标记保持，下轮继续重领
+                _battle_failed_reclaim = False
                 # 战斗失败重领不做签名变化校验（用户 2026-11-14）：游戏
                 # 可能给出同地点同文案的新任务，签名相同属正常；若领取
                 # 实际未生效，下一轮继续打原任务即可自然重试，不按替换

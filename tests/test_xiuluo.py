@@ -1280,12 +1280,18 @@ def test_recover_battle_failure_non_leader_keep_alive(monkeypatch):
 
 
 def test_recover_battle_failure_canceled_then_reclaim(monkeypatch):
-    """队长取消成功：等 6s 重新领取，并复位队伍检查标记。"""
+    """队长取消成功：等 6s 重新领取，并复位队伍检查标记。
+
+    身份检查只读身份/人数（away_handling=False）：队长回灵兽村前不替
+    暂离队员归队；归队推迟到走位到领取点后（_rejoin_deferred）。
+    """
     clock = _FakeClock()
     monkeypatch.setattr(xiuluo, "time", clock)
     monkeypatch.setattr(xiuluo, "log", lambda *a, **k: None)
+    check_kwargs = {}
     monkeypatch.setattr(xiuluo, "_check_team_with_retry",
-                        lambda w, **k: ("ready", "队伍满足"))
+                        lambda w, **k: check_kwargs.update(k)
+                        or ("ready", "队伍满足"))
     monkeypatch.setattr(xiuluo.game_map, "read_map_position",
                         lambda w, img=None: ("灵兽村", 117, 95))
     monkeypatch.setattr(xiuluo, "_cancel_task",
@@ -1294,8 +1300,11 @@ def test_recover_battle_failure_canceled_then_reclaim(monkeypatch):
     monkeypatch.setattr(xiuluo, "_team_checked", True)
     monkeypatch.setattr(xiuluo, "_task_gone_last_round", False)
     monkeypatch.setattr(xiuluo, "_battle_recovery_pending", True)
+    monkeypatch.setattr(xiuluo, "_rejoin_deferred", False)
     status, info = xiuluo._recover_battle_failure(_FakeWin(), True)
     assert status == "canceled" and "重新领取" in info
+    assert check_kwargs.get("away_handling") is False
+    assert xiuluo._rejoin_deferred is True
     assert clock.t >= xiuluo.CANCEL_RE_CLAIM_DELAY
     assert xiuluo._team_checked is False
     assert xiuluo._task_gone_last_round is True
@@ -1340,8 +1349,9 @@ def test_recover_battle_failure_completed_when_task_gone(monkeypatch):
     assert xiuluo._battle_recovery_pending is False
 
 
-def test_recover_battle_failure_lunhuisi_uses_talisman(monkeypatch):
-    """落轮回司：世界地图不可用，改走修罗回城符返程（2026-11-11 实测）。"""
+def test_recover_battle_failure_lunhuisi_walks_not_talisman(monkeypatch):
+    """落轮回司：回城符只有任务完成才能用（战斗失败/死亡不可用，用户
+    2026-11-26 确认），一律走世界地图/小地图寻路回灵兽村。"""
     monkeypatch.setattr(xiuluo, "log", lambda *a, **k: None)
     monkeypatch.setattr(xiuluo, "time", _FakeClock())
     monkeypatch.setattr(xiuluo.game_map, "read_map_position",
@@ -1349,33 +1359,37 @@ def test_recover_battle_failure_lunhuisi_uses_talisman(monkeypatch):
     calls = []
     monkeypatch.setattr(
         xiuluo, "_return_to_npc",
-        lambda w: calls.append("talisman") or (True, "已返回灵兽村"))
+        lambda w: (_ for _ in ()).throw(
+            AssertionError("战斗失败不得使用回城符")))
     monkeypatch.setattr(
         xiuluo, "_walk_to_claim_spot",
-        lambda w, **k: (_ for _ in ()).throw(
-            AssertionError("轮回司不应走世界地图")))
+        lambda w, **k: calls.append("walk") or (True, "已到达领取点"))
     monkeypatch.setattr(xiuluo, "_cancel_task",
                         lambda w: (True, "已取消修罗任务"))
     monkeypatch.setattr(xiuluo, "_cancel_confirmed_at", None)
     monkeypatch.setattr(xiuluo, "_team_checked", True)
     status, _info = xiuluo._recover_battle_failure(_FakeWin(), False)
-    assert status == "canceled" and calls == ["talisman"]
+    assert status == "canceled" and calls == ["walk"]
 
 
 def test_recover_battle_failure_return_failed(monkeypatch):
-    """回灵兽村多次失败：报告失败（主循环下轮重试）。"""
+    """回灵兽村多次失败：报告失败（主循环下轮重试）；不再尝试回城符。"""
     clock = _FakeClock()
     monkeypatch.setattr(xiuluo, "time", clock)
     monkeypatch.setattr(xiuluo, "log", lambda *a, **k: None)
     monkeypatch.setattr(xiuluo.game_map, "read_map_position",
                         lambda w, img=None: ("长安", 100, 100))
+    walks = []
     monkeypatch.setattr(xiuluo, "_walk_to_claim_spot",
-                        lambda w, **k: (False, "寻路超时"))
-    monkeypatch.setattr(xiuluo, "_return_to_npc",
-                        lambda w: (False, "背包打开失败"))
+                        lambda w, **k: walks.append(1) or (False, "寻路超时"))
+    monkeypatch.setattr(
+        xiuluo, "_return_to_npc",
+        lambda w: (_ for _ in ()).throw(
+            AssertionError("战斗失败不得使用回城符")))
     monkeypatch.setattr(xiuluo, "_battle_recovery_pending", False)
     status, info = xiuluo._recover_battle_failure(_FakeWin(), False)
     assert status == "failed" and "回灵兽村失败" in info
+    assert len(walks) == xiuluo._lunhuisi_retry_count
     assert clock.t >= 3 * 3.0  # 3 次重试间隔
     # 恢复未完成：下一轮先重试恢复，不得回走任务跟踪
     assert xiuluo._battle_recovery_pending is True

@@ -18,6 +18,11 @@ BAG_ICON = "bag.png"
 # 拖到中部后匹配分 0.946→0.698，is_bag_open 误判导致开包流程失败。
 # 新模板已交叉验证：左缘/中部两位置 + 储物格开/关两状态均 ≥0.9。
 BAG_BOX_ICON = "bag_box.png"
+# 给与面板标志模板（res/img/give_title.png，32x114 横幅「给与」静态标题区）。
+# 给与面板复用与背包完全相同的储物格列（壹貳叁肆，35px 间距），切格
+# 前台复检必须同时认它——给与面板不是背包（2026-11-26 用户截图实测：
+# bag_box 仅 0.382、box_task 0.705/0.707 均不命中，give_title 1.000）。
+GIVE_TITLE_ICON = "give_title.png"
 # 摄妖香物品图标模板（res/img/sheyaoxiang.png，49x48，实测匹配度 1.0）
 SHEYAOXIANG_ICON = "sheyaoxiang.png"
 # 摄妖香匹配阈值：0.8 实测漏检（真实图标渲染分数 0.79 起步，见
@@ -168,6 +173,32 @@ def is_bag_open(win):
                                           cv2.COLOR_RGB2BGR))
 
 
+def slot_panel_on_frame(img_bgr):
+    """判定「带储物格切换列的面板」是否在场（背包面板或给与面板）。
+
+    find_item_with_slots 切格点按前的前台复检用：储物格列（壹貳叁肆，
+    35px 间距、box_one_close 同一模板两面板实测 0.99+）在背包与给与
+    面板中完全一致，但给与面板不是背包——bag_box 在给与面板上仅 0.382
+    不命中，只按背包判定会把在场给与面板误判成被遮挡而中止切格
+    （2026-11-26 客栈给与九转还魂汤：三轮「背包面板不在前台」空转，
+    物品就在后续储物格里）。给与面板以横幅标题区为锚点（同帧 1.000，
+    kezhan/wuhuan 给与流程共用该模板）。背包路径 bag_box 先命中即
+    返回，给与路径零额外成本仅当背包未命中时多跑一张小模板。
+    """
+    if bag_open_on_frame(img_bgr):
+        return True
+    return game_map.match_frame_np(img_bgr, GIVE_TITLE_ICON) is not None
+
+
+def is_slot_panel_open(win):
+    """截一帧（不激活窗口）判定带储物格列的面板在场（见 slot_panel_on_frame）。"""
+    img = win.capture(force_activate=False)
+    if img is None:
+        return False
+    return slot_panel_on_frame(cv2.cvtColor(np.asarray(img),
+                                            cv2.COLOR_RGB2BGR))
+
+
 def find_item_in_bag(win, icon_name, threshold=0.8):
     """在游戏窗口中查找指定物品图标（背包打开状态下）。
 
@@ -252,7 +283,8 @@ def find_item_with_slots(win, icon_name, label, threshold=0.8):
        等待 0.5s 复检一次——背包刚打开时物品图标可能尚未渲染完
        （实测摄妖香在储物格 4 上首检漏检，遍历一圈回来才 0.84 命中）
     3. 仍未命中：点击 box_one_close（储物格切换），以 35px 为步长向下
-       点击，最多 4 个储物格；每次操作前等待 100ms
+       点击，最多 4 个储物格；每次操作前等待 100ms，并复检带储物格列
+       的面板（背包或给与面板，见 slot_panel_on_frame）仍在前台
     返回 (MatchResult 或 None, 过程描述)。
     """
     items = find_item_in_bag(win, icon_name, threshold=threshold)
@@ -279,14 +311,14 @@ def find_item_with_slots(win, icon_name, label, threshold=0.8):
 
     for i, offset in enumerate(SLOT_OFFSETS):
         time.sleep(0.1)  # 每次操作前等待（识别物品的耗时不计入等待）
-        # 点击前复检背包仍在前台：储物格切换期间可能有别的窗口（地图/
-        # 面板）被另一线程打开并盖住背包，此时点击会落到那个窗口上——
-        # 2026-11-26 实机：手动寻路开图期间空闲摄妖香线程切格，点击落
-        # 到地图上把人物寻路去了 (176,7)。面板不在前台立即中止，绝不
-        # 向未知窗口盲点
-        if not is_bag_open(win):
-            return None, (f"背包面板不在前台（第 {i + 1} 格前检测丢失，"
-                          f"可能被地图/面板遮挡），中止储物格切换")
+        # 点击前复检带储物格列的面板仍在前台（背包或给与面板）：切格
+        # 期间可能有别的窗口（地图/面板）被另一线程打开并盖住面板，此
+        # 时点击会落到那个窗口上——2026-11-26 实机：手动寻路开图期间
+        # 空闲摄妖香线程切格，点击落到地图上把人物寻路去了 (176,7)。
+        # 面板不在前台立即中止，绝不向未知窗口盲点
+        if not is_slot_panel_open(win):
+            return None, (f"背包/给与面板不在前台（第 {i + 1} 格前检测"
+                          f"丢失，可能被地图/面板遮挡），中止储物格切换")
         y = base.y + offset
         log(f"[背包] {label}未检测到，点击储物格 {i + 1}: ({base.x}, {y})"
             f"（box_one_close 下方 {offset}px）", "INFO")

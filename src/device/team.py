@@ -1468,7 +1468,7 @@ def check_team_conditions(win, min_members=None, required_races=None):
 
 def check_team_min(win, min_members=None, allow_kick=False,
                    create_if_missing=False, prefix="[组队]",
-                   kick_timeout=None, kick_overdue=True):
+                   kick_timeout=None, kick_overdue=True, away_handling=True):
     """领取前队伍检查（通用，修罗/五倍等复用）：一次打开队伍面板完成
     队长判定、人数检查与成员信息采集。
 
@@ -1491,6 +1491,10 @@ def check_team_min(win, min_members=None, allow_kick=False,
     扫描稳定时在同一面板打开内处理暂离成员——组号暂离队员先切 Tab
     归队，再按名字记账、超时未归队从后往前连踢（面板不关闭），踢人
     后重扫成员——人数判定用最新值。
+    away_handling=False：跳过暂离处理（组号归队 + 超时请离），只读
+    身份与人数（战斗失败恢复的「先回城再归队」顺序用，2026-11-26
+    用户实机：轮回司身份检查替队员点归队会把队员传到轮回司，队长
+    再回宝象国后队员还得二次归队）。
     kick_overdue：是否执行超时请离（修罗设置开关，默认 True；关闭时
     组号暂离队员归队仍照常，只是不再请离超时成员）。
     kick_timeout：暂离超时阈值（秒），None 用默认 5 分钟；修罗设置
@@ -1547,7 +1551,7 @@ def check_team_min(win, min_members=None, allow_kick=False,
     # 人数与成员信息同帧完成（5 固定区域扫描，首空位截断；面板数据
     # 渲染滞后时内部重截一帧兜底）——不重复开关面板、不取消选中
     ok, members, count = _analyze_panel_frame(win, img)
-    if allow_kick and ok:
+    if allow_kick and away_handling and ok:
         # todo2 暂离处理：组号队员归队 pass +（开关允许时）超时请离。
         # 面板保持打开按名字记账连踢（从后往前），踢人后重扫成员——
         # 人数判定用最新值（请离后区域平移）
