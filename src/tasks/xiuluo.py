@@ -81,6 +81,7 @@ from ..core.settings import (load_task_counts, load_xiuluo_settings,
                              load_xiuluo_manual_nav,
                              load_xiuluo_force_manual)  # 任务次数上限/修罗设置/自动巫医/自动修理/自动归队/暂离请离/组号开关/手动寻路
 from ..workflows.team_flow import TeamFlow  # 组队流程编排（检查/建队/补人/喊话/归队）
+from ..workflows import follow  # 寻路期摄妖香续用（手动寻路行走期窗口）
 from ..workflows import return_flow  # 返程流程编排（开箱/回程道具/清屏/归位）
 from ..workflows import claim_flow  # 领取共享流程（选项/地图门控/校验探针）
 from ..device import tab_group  # 组号模式（一窗口多 Tab）：初始化/队员 pass/抑制标志
@@ -2634,7 +2635,7 @@ def _manual_nav_round(win, dest, pos_hint=None):
         win, map_name, gx, gy,
         log_fn=lambda m: log(f"[修罗][手动] {m}", "INFO"),
         pos_hint=pos_hint,
-        on_walk_start=lambda: _maybe_tab_bars_pass(win))
+        on_walk_start=lambda: _manual_walk_start(win))
     if not ok:
         return False, f"手动寻路失败: {info}"
     return _click_markers_and_fight(win, dest)
@@ -2822,6 +2823,18 @@ def _recover_battle_failure(win, check_team):
 def _maybe_tab_bars_pass(win):
     """组号模式队员血蓝 pass（共享实现在 workflows/team_flow.py）。"""
     return _team_flow.maybe_tab_bars_pass(win)
+
+
+def _manual_walk_start(win):
+    """手动寻路位移启动后的行走期插队：摄妖香续用 → 组号队员血蓝 pass。
+
+    顺序与 follow 点任务追踪后一致（「点击寻路 → 摄妖香 → 切 Tab
+    血蓝」，用户 2026-11-04）：手动寻路此前没有摄妖香续用通道，空闲
+    兜底线程会在开图期间抢开背包（2026-11-26 实机误点地图走了
+    (176,7)）；位移已启动、地图已关闭的行走期才是背包交互安全窗口。
+    """
+    follow.maybe_sheyaoxiang(win)
+    _maybe_tab_bars_pass(win)
 
 
 def _wait_battle_end(win, timeout=60):

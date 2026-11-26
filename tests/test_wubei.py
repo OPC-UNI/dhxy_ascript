@@ -1800,6 +1800,7 @@ def test_team_flow_injects_kick_away_settings(monkeypatch):
 
     monkeypatch.setattr(team_flow.team, "check_team_min", _check)
     monkeypatch.setattr(team_flow.team, "update_overlay_team", lambda *a: None)
+    monkeypatch.setattr(team_flow, "_in_battle", lambda win: False)
     wubei._team_flow.check_team_ready(object())
     assert calls["kick_overdue"] is True     # 首次默认开启
     assert calls["kick_timeout"] == 300      # 首次默认 5 分钟

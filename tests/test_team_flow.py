@@ -1,6 +1,14 @@
 """workflows.team_flow：组队流程编排的共享实现测试。"""
+import pytest
+
 from src.device import silent_click
 from src.workflows import team_flow
+
+
+@pytest.fixture(autouse=True)
+def _not_in_battle(monkeypatch):
+    """默认非战斗（战斗门单独用例覆盖）：_in_battle 不在单测里截窗。"""
+    monkeypatch.setattr(team_flow, "_in_battle", lambda win: False)
 
 
 def _flow(**overrides):
@@ -80,6 +88,79 @@ def test_check_team_with_retry_definitive_member_immediate(monkeypatch):
     assert status == "not_leader"
     assert "非队长" in info
     assert len(calls) == 1  # 确定性状态不重试
+
+
+def test_check_team_ready_defers_in_battle(monkeypatch):
+    """战斗中不开组队菜单、不判身份（2026-11-26 队长误转保持模式教训）。"""
+    checks = []
+    monkeypatch.setattr(team_flow, "_in_battle", lambda win: True)
+    monkeypatch.setattr(team_flow.team, "check_team_min",
+                        lambda *a, **k: checks.append(1))
+    status, info = _flow().check_team_ready(object())
+    assert status == "not_leader"
+    assert info == team_flow.BATTLE_DEFER_INFO
+    # 顺延描述不得被当成确定性非队长（否则调用方转保持模式）
+    assert not team_flow.team.is_definitive_not_leader(info)
+    assert checks == []
+
+
+def test_check_team_ready_invalidates_result_if_battle_starts(monkeypatch):
+    """检查期间开打：确定性「未组队」结论作废，不写悬浮层。"""
+    seq = iter([False, True])  # 检查前非战，检查后已开战
+    monkeypatch.setattr(team_flow, "_in_battle", lambda win: next(seq))
+    overlay = []
+    monkeypatch.setattr(
+        team_flow.team, "check_team_min",
+        lambda *a, **k: ("not_leader", "未组队（菜单中无「队伍信息」）", []))
+    monkeypatch.setattr(team_flow.team, "update_overlay_team",
+                        lambda *a: overlay.append(a))
+    status, info = _flow().check_team_ready(object())
+    assert status == "not_leader"
+    assert info == team_flow.BATTLE_DEFER_INFO
+    assert overlay == []
+
+
+def test_check_team_with_retry_returns_immediately_in_battle(monkeypatch):
+    """战斗中直接顺延：不消耗重试、不调用检查。"""
+    checks = []
+    monkeypatch.setattr(team_flow, "_in_battle", lambda win: True)
+    monkeypatch.setattr(
+        team_flow.TeamFlow, "check_team_ready",
+        lambda self, win, create_if_missing=False: checks.append(1))
+    status, info = _flow().check_team_with_retry(object())
+    assert status == "not_leader"
+    assert info == team_flow.BATTLE_DEFER_INFO
+    assert checks == []
+
+
+def test_monitor_team_and_fill_waits_out_battle(monkeypatch):
+    """监控循环战斗中不检查/不补人（只记一条），战斗结束立即恢复。"""
+    seq = iter([True, True, False])
+    monkeypatch.setattr(team_flow, "_in_battle", lambda win: False)
+    monkeypatch.setattr(team_flow.battle, "watch_in_battle",
+                        lambda: next(seq, False))
+    monkeypatch.setattr(team_flow, "is_in_battle_frame", lambda img: False)
+    sleeps = []
+    monkeypatch.setattr(team_flow.time, "sleep", lambda s: sleeps.append(s))
+    logs = []
+    monkeypatch.setattr(team_flow, "log",
+                        lambda msg, level="INFO": logs.append((msg, level)))
+    checks = []
+    monkeypatch.setattr(
+        team_flow.TeamFlow, "check_team_with_retry",
+        lambda self, win, create_if_missing=False:
+        checks.append(1) or ("ready", "队伍满足人数要求"))
+    monkeypatch.setattr(team_flow.team, "has_pending_apply", lambda img: False)
+
+    class _Win:
+        def capture(self, force_activate=False):
+            return object()
+
+    _flow().monitor_team_and_fill(_Win())
+    assert checks == [1]  # 战斗解除后才做队伍检查
+    assert sleeps == [3.0, 3.0]  # 战斗中按识别重试节奏轮询
+    battle_logs = [m for m, lv in logs if "顺延到战斗结束后" in m]
+    assert len(battle_logs) == 1  # 只记一条，不刷屏
 
 
 def test_check_team_ready_kick_switch_and_timeout(monkeypatch):

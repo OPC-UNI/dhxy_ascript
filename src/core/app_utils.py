@@ -1040,31 +1040,41 @@ _last_track_walk = 0.0
 
 
 def mark_track_walk():
-    """记录一次「点击任务追踪成功」（寻路开始）的时间戳。
+    """记录一次「寻路开始」的时间戳。
 
-    follow_task 点击任务绿字成功后调用；空闲期兜底据此判断
-    「任务运行但 N 分钟无寻路」（寻路期续用没机会触发——连续
-    回城符/地图点击赶路、流程卡在无寻路环节等）。
+    follow_task 点击任务绿字成功后调用；map_nav 开图/点地图点导航
+    （手动寻路/修理/领取点走位）入口也调用——手动寻路同样是寻路期，
+    不记时会让空闲兜底线程把正在寻路的任务当「长期空闲」（2026-11-26
+    实机：修罗手动寻路进程重启后 3 分钟，空闲摄妖香线程在开图期间
+    抢开背包，储物格点击落到地图上，人物寻路去了 (176,7) 而非
+    领取对话框给的 (200,35)）。
     """
     global _last_track_walk
     _last_track_walk = time.time()
 
 
 def track_walk_idle_seconds():
-    """距上次点击追踪寻路的秒数（从未寻路返回大值——视为长期空闲）。"""
+    """距上次寻路开始的秒数（从未寻路返回大值——视为长期空闲）。"""
     if not _last_track_walk:
         return 1e9
     return time.time() - _last_track_walk
 
 
-def sheyaoxiang_idle_due(win, idle_minutes):
+def sheyaoxiang_idle_due(win, idle_minutes, uptime_seconds=None):
     """空闲期兜底条件：摄妖香到期且距上次寻路 ≥ idle_minutes 分钟。
 
     win 仅供 due 判定（角色维度时间戳）；空闲期兜底线程每分钟查
     此条件，命中才走 use_sheyaoxiang_if_due 完整门控使用流程。
+    uptime_seconds：进程已运行秒数——进程启动后从未寻路时
+    track_walk_idle_seconds 返回极大值，重启后会被立刻当成「长期
+    空闲」（2026-11-26 实机同次事故：重启 3 分钟即在手动寻路开图
+    期间抢开背包）。传入后空闲时长取「距上次寻路」与「进程运行
+    时长」的较小值，启动初期不再判空闲。
     """
-    return sheyaoxiang_due(win) \
-        and track_walk_idle_seconds() >= idle_minutes * 60
+    idle = track_walk_idle_seconds()
+    if uptime_seconds is not None:
+        idle = min(idle, uptime_seconds)
+    return sheyaoxiang_due(win) and idle >= idle_minutes * 60
 
 
 # ---- 当天任务完成进度持久化（停止/重启不重置完成度） ----

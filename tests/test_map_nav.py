@@ -1800,6 +1800,35 @@ def test_wait_arrival_skips_frame_check_when_watch_confirms_battle(monkeypatch):
     assert polls["frame"] == 1  # 线程确认期零帧级战斗判定
 
 
+def test_navigate_marks_track_walk(monkeypatch):
+    """地图点导航计入寻路信号（空闲摄妖香兜底时钟）。
+
+    2026-11-26 实机：手动寻路不记寻路信号，进程重启后空闲摄妖香线程
+    把任务当长期空闲，在开图期间抢开背包，点击落到地图上寻路去了
+    (176,7) 而非任务坐标 (200,35)。
+    """
+    calls = []
+    monkeypatch.setattr(map_nav.app_utils, "mark_track_walk",
+                        lambda: calls.append(1))
+    monkeypatch.setattr(map_nav, "_navigate_impl",
+                        lambda *a, **k: (False, "失败"))
+    map_nav.navigate_to_map_coordinate(
+        object(), "洛阳城", 10, 20, log_fn=lambda m: None)
+    assert calls == [1]
+
+
+def test_start_navigation_marks_track_walk(monkeypatch):
+    """点地图点开寻路（start_navigation）同样计入寻路信号。"""
+    calls = []
+    monkeypatch.setattr(map_nav.app_utils, "mark_track_walk",
+                        lambda: calls.append(1))
+    monkeypatch.setattr(map_nav, "_start_impl",
+                        lambda *a, **k: (False, "失败", None))
+    map_nav.start_navigation(object(), "洛阳城", 10, 20,
+                             log_fn=lambda m: None)
+    assert calls == [1]
+
+
 def test_navigate_retries_once_after_stall(monkeypatch):
     """停滞提示 → 自动重新导航一次；补过仍失败不无限重试。"""
     calls = []

@@ -335,6 +335,21 @@ def test_sheyaoxiang_idle_due(monkeypatch):
     assert not app_utils.sheyaoxiang_idle_due(_win(), 10)  # 未到期不命中
 
 
+def test_sheyaoxiang_idle_due_uptime_cap(monkeypatch):
+    """进程刚启动（从未寻路）不判空闲：重启后空闲兜底线程不会立刻在
+    任务寻路/开图期间抢开背包（2026-11-26 实机误点地图教训）。"""
+    fake_time = {"t": 2000.0}
+    monkeypatch.setattr(app_utils.time, "time", lambda: fake_time["t"])
+    monkeypatch.setattr(app_utils, "_last_track_walk", 0.0)
+    monkeypatch.setattr(app_utils, "sheyaoxiang_due", lambda _w: True)
+    fake_time["t"] = 2000.0 + 3 * 60  # 启动 3 分钟：从未寻路也不算空闲
+    assert not app_utils.sheyaoxiang_idle_due(
+        _win(), 10, uptime_seconds=3 * 60)
+    # 进程已运行满 10 分钟：仍未寻路才按长期空闲处理
+    assert app_utils.sheyaoxiang_idle_due(
+        _win(), 10, uptime_seconds=10 * 60)
+
+
 def _win():
     return type("W", (), {"hwnd": 1})()
 

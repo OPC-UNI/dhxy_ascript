@@ -230,3 +230,27 @@ def test_close_bag_closed_does_not_press_hotkey(monkeypatch):
                             AssertionError("已关闭不应按热键")))
     ok, info = bag.close_bag(_TaskBoxWin())
     assert ok and info == "背包未打开"
+
+
+# ---- 切储物格前复检背包在前台（2026-11-26 实机误点地图教训）----
+
+def test_find_item_with_slots_aborts_when_bag_covered(monkeypatch):
+    """背包被地图/面板盖住：切格前复检中止，绝不向未知窗口盲点。
+
+    2026-11-26 修罗手动寻路：空闲摄妖香线程切储物格的点击落到同时
+    打开的地图上，人物寻路去了 (176,7) 而不是任务坐标 (200,35)。
+    """
+    monkeypatch.setattr(bag, "find_item_in_bag", lambda *a, **k: [])
+    monkeypatch.setattr(bag, "_match_all_template", lambda *a, **k: [])
+    base = type("R", (), {"x": 446, "y": 579})()
+    monkeypatch.setattr(bag, "find_box_one_close", lambda w: base)
+    monkeypatch.setattr(bag, "is_bag_open", lambda w: False)
+    monkeypatch.setattr(bag.time, "sleep", lambda s: None)
+    clicks = []
+    monkeypatch.setattr(bag, "human_click", lambda *a, **k: clicks.append(a))
+    item, desc = bag.find_item_with_slots(
+        object(), "sheyaoxiang.png", "摄妖香", threshold=0.69)
+    assert item is None
+    assert "不在前台" in desc
+    assert clicks == []  # 面板已不在前台，一次储物格点击都不能发
+

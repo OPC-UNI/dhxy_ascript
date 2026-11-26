@@ -21,7 +21,25 @@ from ..core.app_utils import log
 from ..device import battle
 from ..device import tab_group
 from ..device import team
-from ..device.battle import is_in_battle
+from ..device.battle import is_in_battle, is_in_battle_frame
+
+
+# 战斗中队伍检查顺延（2026-11-26 实机教训）：12:39:48 首次检查按钮未命中，
+# 重试 sleep 2s 跨进 12:39:51 的第 29 场战斗，12:39:54 在战斗中把「组队
+# 菜单中无『队伍信息』」当确定性未组队，队长被误转保持模式跳过核心流程。
+# 战斗中组队按钮/菜单不可读、队伍面板会干扰战斗——队伍身份一律不在战斗
+# 期间判定。该描述刻意不含「未组队」「非队长」字样，不触发
+# team.is_definitive_not_leader（调用方按瞬态失败在战后重查）。
+BATTLE_DEFER_INFO = "战斗中，队伍检查顺延到战斗结束后重查"
+
+
+def _in_battle(win):
+    """战斗判定：战斗线程确认态优先（零成本内存读），单帧判定兜底。
+
+    战斗线程的确认态覆盖战斗全程；进场确认前约 1s 的窗口由单帧模板
+    判定补位。组号 pass 期间 is_in_battle 恒 True，检查同样顺延。
+    """
+    return battle.watch_in_battle() or is_in_battle(win)
 
 
 class TeamFlow:
@@ -61,12 +79,22 @@ class TeamFlow:
         return value() if callable(value) else value
 
     def check_team_ready(self, win, create_if_missing=False):
-        """领取前队伍检查：一次面板开关，结果顺带更新悬浮层队伍行。"""
+        """领取前队伍检查：一次面板开关，结果顺带更新悬浮层队伍行。
+
+        战斗期间不检查；检查期间开打的结果一并作废（见 BATTLE_DEFER_INFO）
+        ——战斗中组队菜单/面板读数不可信，交调用方战后重查。
+        """
+        if _in_battle(win):
+            return "not_leader", BATTLE_DEFER_INFO
         status, info, members = team.check_team_min(
             win, min_members=self._team_min(), allow_kick=True,
             create_if_missing=create_if_missing, prefix=self.create_prefix,
             kick_timeout=self._kick_timeout_now(),
             kick_overdue=self._kick_overdue_now())
+        if _in_battle(win):
+            # 检查期间进入战斗：本次读到的身份/人数可能来自战斗界面或
+            # 被战斗打断的菜单，不能作为任何确定性结论；不写悬浮层
+            return "not_leader", BATTLE_DEFER_INFO
         team.update_overlay_team(status, info, members)
         return status, info
 
@@ -82,9 +110,16 @@ class TeamFlow:
         非队长；瞬态两三次失败不能把队长降级）。"""
         last = ("not_leader", "队伍检查未执行")
         for i in range(tries):
+            if _in_battle(win):
+                # 战斗中不判身份：不打开组队菜单、不消耗重试，直接交
+                # 调用方按瞬态处理（战后再重查）
+                return "not_leader", BATTLE_DEFER_INFO
             status, info = self.check_team_ready(
                 win, create_if_missing=create_if_missing)
             last = (status, info)
+            if info == BATTLE_DEFER_INFO:
+                # 检查期间开打：结果已作废，战斗中菜单不可读，不再重试
+                return "not_leader", BATTLE_DEFER_INFO
             if status != "not_leader":
                 return status, info
             # 确定性非队长（未组队 / 面板打开且无解散按钮）：立即返回
@@ -194,8 +229,25 @@ class TeamFlow:
         无申请人时按 shout_min_interval 限频喊话招募。
         """
         shortfall = None  # 最近一次人数检查的缺口；None=未知按 1 人保守补
+        battle_wait_logged = False
         while True:
-            img = win.capture(force_activate=False)
+            # 战斗中不查队伍、不补人（组队菜单/申请面板会干扰战斗且读数
+            # 不可信）；战斗线程确认态是内存读，先短路免截帧；非战斗时
+            # 本帧同时给申请人证据判定复用。只在进入等待时记一条，不刷屏，
+            # 3s 轮询便于战斗结束立即恢复检查
+            in_battle = battle.watch_in_battle()
+            img = None
+            if not in_battle:
+                img = win.capture(force_activate=False)
+                in_battle = img is not None and is_in_battle_frame(img)
+            if in_battle:
+                if not battle_wait_logged:
+                    battle_wait_logged = True
+                    log(f"{self.prefix} 战斗中，队伍检查/补人顺延到战斗结束后",
+                        "INFO")
+                time.sleep(self.recog_retry_interval)
+                continue
+            battle_wait_logged = False
             if img is not None and team.has_pending_apply(img):
                 ok_fill, fill_info = team.fill_team(
                     win, target=self._team_min(), max_allow=shortfall or 1)
@@ -209,8 +261,10 @@ class TeamFlow:
             if status == "not_leader":
                 if team.is_definitive_not_leader(info):
                     self.keep_alive(win, info)  # 无限循环，用户手动停止
-                # 瞬态失败（遮挡/加载/按钮未命中等）：不退出监控，按间隔重查
-                interval = (self.recog_retry_interval if "识别失败" in info
+                # 瞬态失败（遮挡/加载/按钮未命中等）：不退出监控，按间隔重查；
+                # 战斗中/识别失败用快节奏，战后立即恢复检查
+                interval = (self.recog_retry_interval
+                            if "识别失败" in info or info == BATTLE_DEFER_INFO
                             else self.check_retry_interval)
                 log(f"{self.prefix} {info}（瞬态失败，{interval}s 后重查）",
                     "WARN")

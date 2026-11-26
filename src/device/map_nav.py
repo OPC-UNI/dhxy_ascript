@@ -4231,6 +4231,10 @@ def navigate_to_map_coordinate(win, target, x, y, log_fn=None, verbose=False,
     仍会走到最后一次点击的目标点。
     """
     emit = log_fn or (lambda m: log(f"[地图导航] {m}", "INFO"))
+    # 寻路信号：地图点导航也是寻路期（空闲摄妖香兜底的时钟）。不记时
+    # 会让空闲兜底线程在手动寻路开图期间抢开背包——2026-11-26 实机
+    # 储物格点击落到地图，人物寻路去了 (176,7) 而非 (200,35)。
+    app_utils.mark_track_walk()
     _CANCEL.clear()
     try:
         entry = special_map_entry(target)
@@ -4301,6 +4305,9 @@ def start_navigation(win, target, x, y, log_fn=None, on_map_open=None,
     返回 (ok, info, point)。
     """
     emit = log_fn or (lambda m: log(f"[地图导航] {m}", "INFO"))
+    # 寻路信号：点地图点开寻路同样计入「寻路开始」（见
+    # navigate_to_map_coordinate；空闲摄妖香兜底的时钟）
+    app_utils.mark_track_walk()
     _CANCEL.clear()
     try:
         ok, info, ctx = _start_impl(win, target, x, y, emit,

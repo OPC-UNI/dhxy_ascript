@@ -60,6 +60,8 @@ Before every key decision step such as click, long press, text input, submit, pa
 - Check negative conditions such as blocking dialogs or error states.
 - Skip, wait, or report when preconditions fail.
 - Before any click/burst/long-press inside a **modal minigame window**, re-check the window title template on a fresh frame; never click cached button coordinates once the template is gone — a click on the world starts the character walking (2026-11-20 破除封印 real-device lesson: [23,61]→[28,68]).
+- Team identity checks (组队菜单/队伍面板/补人) must run only outside battle: in battle the team menu is unreadable, and a retry that crossed into battle turned "菜单中无「队伍信息」" into a definitive 未组队 verdict that threw the leader into keep-alive mode (2026-11-26 修罗 log: battle start 12:39:51, false non-leader 12:39:54). Defer battle-time checks to after the battle; discard any check result that overlapped a battle start — see `workflows/team_flow.py` `BATTLE_DEFER_INFO`.
+- Background/idle threads must never open UI while the task thread is in a map/panel flow: the 摄妖香 idle fallback opened the bag during manual map navigation, its storage-slot clicks landed on the map, and the character auto-pathed to (176,7) instead of the task's (200,35) (2026-11-26 修罗). Map-point navigation now marks the walk signal, manual-nav walk-start renews 摄妖香 in the safe walking window, and bag slot switching re-checks the bag is foreground before every click.
 
 Auxiliary waits, swipes, and helper functions do not need heavyweight precondition checks.
 

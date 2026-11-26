@@ -1721,7 +1721,7 @@ def test_manual_nav_round_passes_pos_hint(monkeypatch):
 
 
 def test_manual_nav_round_wires_bars_pass_to_walk_start(monkeypatch):
-    """手动寻路回合：组号队员血蓝 pass 挂在 on_walk_start（行走期触发）。"""
+    """手动寻路回合：行走期回调先续摄妖香再跑组号队员血蓝 pass。"""
     captured = {}
 
     def _fake_nav(win, name, x, y, log_fn=None, on_walk_start=None,
@@ -1733,15 +1733,18 @@ def test_manual_nav_round_wires_bars_pass_to_walk_start(monkeypatch):
         xiuluo.map_nav, "navigate_to_map_coordinate", _fake_nav)
     monkeypatch.setattr(xiuluo, "_click_markers_and_fight",
                         lambda win, dest=None: (True, "战斗已结束"))
-    bars = []
+    order = []
+    monkeypatch.setattr(xiuluo.follow, "maybe_sheyaoxiang",
+                        lambda win: order.append("sheyaoxiang"))
     monkeypatch.setattr(xiuluo, "_maybe_tab_bars_pass",
-                        lambda win: bars.append(win))
+                        lambda win: order.append("bars"))
     ok, _info = xiuluo._manual_nav_round(_FakeWin(), ("洛阳城", 191, 110))
     assert ok
     assert callable(captured.get("cb"))
-    assert bars == []  # 回调只在位移启动后由 map_nav 调用
+    assert order == []  # 回调只在位移启动后由 map_nav 调用
     captured["cb"]()
-    assert len(bars) == 1
+    # 顺序与 follow 点任务追踪后一致：摄妖香续用 → 组号队员血蓝 pass
+    assert order == ["sheyaoxiang", "bars"]
 
 
 def test_click_markers_fight_flow(monkeypatch):

@@ -179,6 +179,7 @@ def _sheyaoxiang_idle_fallback(win):
     下分钟重试。
     """
     from src.device import tab_group  # 延迟导入：pass_active 抑制
+    started_at = time.time()  # 进程启动后的前 10 分钟不算空闲（见 sheyaoxiang_idle_due）
     while True:
         time.sleep(60)
         try:
@@ -187,7 +188,8 @@ def _sheyaoxiang_idle_fallback(win):
             if not tab_group.on_leader_screen(win):
                 continue  # 用户手动切到队员 Tab：不能在队员身上用摄妖香
             if not app_utils.sheyaoxiang_idle_due(
-                    win, _SHEYAOXIANG_IDLE_FALLBACK_MINUTES):
+                    win, _SHEYAOXIANG_IDLE_FALLBACK_MINUTES,
+                    uptime_seconds=time.time() - started_at):
                 continue
             ran, info = bag.use_sheyaoxiang_if_due(win)
             if ran:

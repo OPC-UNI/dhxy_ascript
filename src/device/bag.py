@@ -279,6 +279,14 @@ def find_item_with_slots(win, icon_name, label, threshold=0.8):
 
     for i, offset in enumerate(SLOT_OFFSETS):
         time.sleep(0.1)  # 每次操作前等待（识别物品的耗时不计入等待）
+        # 点击前复检背包仍在前台：储物格切换期间可能有别的窗口（地图/
+        # 面板）被另一线程打开并盖住背包，此时点击会落到那个窗口上——
+        # 2026-11-26 实机：手动寻路开图期间空闲摄妖香线程切格，点击落
+        # 到地图上把人物寻路去了 (176,7)。面板不在前台立即中止，绝不
+        # 向未知窗口盲点
+        if not is_bag_open(win):
+            return None, (f"背包面板不在前台（第 {i + 1} 格前检测丢失，"
+                          f"可能被地图/面板遮挡），中止储物格切换")
         y = base.y + offset
         log(f"[背包] {label}未检测到，点击储物格 {i + 1}: ({base.x}, {y})"
             f"（box_one_close 下方 {offset}px）", "INFO")

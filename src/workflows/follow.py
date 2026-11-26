@@ -533,6 +533,16 @@ def _maybe_sheyaoxiang(win):
         log(f"[摄妖香] 寻路期续用异常: {e}", "WARN")
 
 
+def maybe_sheyaoxiang(win):
+    """寻路期摄妖香续用公开入口（任务手动寻路等行走期安全窗口调用）。
+
+    与 follow 点任务追踪后的续用同语义：位移已启动、地图已关闭、
+    窗口空闲，是背包交互的安全窗口（2026-11-26：手动寻路此前没有
+    这条续用通道，空闲兜底线程在开图期间抢开背包致误点地图）。
+    """
+    _maybe_sheyaoxiang(win)
+
+
 def _handle_dialogs(win, items, img_np, img, title="", prefix="",
                     story_gate=None, green_order=None, green_picker=None,
                     fallback_keywords=None, require_coord=False,

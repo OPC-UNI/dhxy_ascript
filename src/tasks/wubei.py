@@ -101,6 +101,7 @@ from ..device.dialog_common import (SCREEN_CENTER_POS, green_option_center,
                             last_center_click_at as dc_last_center_click_at,
                             )  # 对话框共享组件（屏幕中间点击/选项中心/文案检测）
 from ..workflows.team_flow import TeamFlow  # 组队流程编排（检查/建队/补人/喊话/归队）
+from ..workflows import follow  # 寻路期摄妖香续用（手动寻路行走期窗口）
 from ..workflows import return_flow  # 返程流程编排（开箱/回程道具/清屏/归位）
 from ..workflows import claim_flow  # 领取共享流程（选项/地图门控/校验探针）
 from ..device import tab_group  # 组号模式（一窗口多 Tab）：初始化/队员 pass/抑制标志
@@ -2200,7 +2201,7 @@ def _manual_navigate(win, map_name, coord):
     ok, info = map_nav.navigate_to_map_coordinate(
         win, map_name, coord[0], coord[1],
         log_fn=lambda m: log(f"[五倍][手动] {m}", "INFO"),
-        on_walk_start=lambda: _maybe_tab_bars_pass(win))
+        on_walk_start=lambda: _manual_walk_start(win))
     if not ok:
         return False, f"手动寻路失败: {info}"
     _manual_phase(f"寻路到达 {map_name} {tuple(coord)}")
@@ -3799,6 +3800,17 @@ def _follow_to_done(win, first_items=None):
 def _maybe_tab_bars_pass(win):
     """组号模式队员血蓝 pass（共享实现在 workflows/team_flow.py）。"""
     return _team_flow.maybe_tab_bars_pass(win)
+
+
+def _manual_walk_start(win):
+    """手动寻路位移启动后的行走期插队：摄妖香续用 → 组号队员血蓝 pass。
+
+    顺序与 follow 点任务追踪后一致（用户 2026-11-04）：位移已启动、
+    地图已关闭的行走期才是背包交互安全窗口；没有这条通道时空闲兜底
+    线程可能在开图期间抢开背包误点地图（2026-11-26 修罗实机教训）。
+    """
+    follow.maybe_sheyaoxiang(win)
+    _maybe_tab_bars_pass(win)
 
 
 def _handle_pre_click(win, items, img_np):
