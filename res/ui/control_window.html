@@ -2185,7 +2185,11 @@
                         <button id="btn-verify-xiuluo-return-silent" class="btn" onclick="verifyXiuluoReturnSilent()">静默修罗回程</button>
                         <span class="verify-result" id="silent-return-verify-result"></span>
                     </div>
-                    <div class="group-hint">与实际流程一致、时序无额外延时，且都不改变任务状态：回程=定位回城符不点击；领取=点击领取按钮开对话框、选项仅定位不点击、点屏幕中间关闭；巫医=走位到 NPC、定位后点击打开对话框（医治选项由战斗线程处理）；组号巫医=巫医完整链路后逐个切换队员 Tab 点击其医治对话框并切回队长（需窗口内 ≥2 个已登录 Tab，开关状态不校验）；修理=走位到洛阳城修理 NPC、点击打开对话框（两套弹窗按文案→选项映射，选项由验证流程自行点击，与战斗线程等效）；组号修理=修理完整链路后逐个切换队员 Tab 点击其修理对话框并切回队长（需 ≥2 个已登录 Tab）。静默修罗领取/静默修罗巫医/静默修罗回程=与领取/巫医/回程验证同流程，但全程静默点击（不移动物理鼠标、不激活游戏窗口，游戏窗口可不前台），用于验证静默通道跑通完整链路。本窗口任务运行中不可验证（多开时其他窗口运行不影响）。</div>
+                    <div class="verify-row">
+                        <button id="btn-verify-xiuluo-task-query" class="btn" onclick="verifyXiuluoTaskQuery()">查询修罗任务（任务栏识别）</button>
+                        <span class="verify-result" id="xiuluo-task-query-result"></span>
+                    </div>
+                    <div class="group-hint">与实际流程一致、时序无额外延时，且都不改变任务状态：回程=定位回城符不点击；领取=点击领取按钮开对话框、选项仅定位不点击、点屏幕中间关闭；巫医=走位到 NPC、定位后点击打开对话框（医治选项由战斗线程处理）；组号巫医=巫医完整链路后逐个切换队员 Tab 点击其医治对话框并切回队长（需窗口内 ≥2 个已登录 Tab，开关状态不校验）；修理=走位到洛阳城修理 NPC、点击打开对话框（两套弹窗按文案→选项映射，选项由验证流程自行点击，与战斗线程等效）；组号修理=修理完整链路后逐个切换队员 Tab 点击其修理对话框并切回队长（需 ≥2 个已登录 Tab）。静默修罗领取/静默修罗巫医/静默修罗回程=与领取/巫医/回程验证同流程，但全程静默点击（不移动物理鼠标、不激活游戏窗口，游戏窗口可不前台），用于验证静默通道跑通完整链路。查询修罗任务=打开任务栏→展开「常规玩法」分组→选中「修罗任务」→读任务目的并识别（修罗恒单杀，轮次 1）→关闭任务栏，只识别不移动人物、不寻路；「任务提示」段是玩法说明，不参与识别返回。本窗口任务运行中不可验证（多开时其他窗口运行不影响）。</div>
                 </div>
                 <div class="group-box">
                     <div class="group-title">五倍（降魔任务）链路</div>
@@ -2731,6 +2735,8 @@
     const silentWuyiVerifyResultEl = document.getElementById('silent-wuyi-verify-result');
     const btnVerifyXiuluoReturnSilent = document.getElementById('btn-verify-xiuluo-return-silent');
     const silentReturnVerifyResultEl = document.getElementById('silent-return-verify-result');
+    const btnVerifyXiuluoTaskQuery = document.getElementById('btn-verify-xiuluo-task-query');
+    const xiuluoTaskQueryResultEl = document.getElementById('xiuluo-task-query-result');
     const btnVerifyWubeiClaim = document.getElementById('btn-verify-wubei-claim');
     const wubeiClaimVerifyResultEl = document.getElementById('wubei-claim-verify-result');
     const btnVerifyZhongzuClaim = document.getElementById('btn-verify-zhongzu-claim');
@@ -6829,6 +6835,38 @@
         btnVerifyXiuluoClaim.disabled = false;
         claimVerifyResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
         claimVerifyResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
+    };
+
+    // 任务栏查询修罗任务（只识别不寻路）：打开任务栏→展开「常规玩法」→
+    // 选中「修罗任务」→读任务目的并识别→关闭任务栏；结果经
+    // onXiuluoTaskQueryResult 异步回推（用户 2026-11-26）。
+    async function verifyXiuluoTaskQuery() {
+        if (verifying) return;
+        verifying = true;
+        btnVerifyXiuluoTaskQuery.disabled = true;
+        xiuluoTaskQueryResultEl.style.color = 'var(--text)';
+        xiuluoTaskQueryResultEl.innerText = '识别中...（过程见日志）';
+        try {
+            const r = await callPython('verify_xiuluo_task_query');
+            if (!r || r.status !== 'success') {
+                xiuluoTaskQueryResultEl.style.color = 'var(--danger-text)';
+                xiuluoTaskQueryResultEl.innerText = (r && r.msg) || '识别请求失败';
+                verifying = false;
+                btnVerifyXiuluoTaskQuery.disabled = false;
+            }
+            // 成功：等待 Python 侧 onXiuluoTaskQueryResult 回推最终结果
+        } catch (e) {
+            xiuluoTaskQueryResultEl.style.color = 'var(--danger-text)';
+            xiuluoTaskQueryResultEl.innerText = '识别请求异常';
+            verifying = false;
+            btnVerifyXiuluoTaskQuery.disabled = false;
+        }
+    }
+    window.onXiuluoTaskQueryResult = function (ok, info) {
+        verifying = false;
+        btnVerifyXiuluoTaskQuery.disabled = false;
+        xiuluoTaskQueryResultEl.style.color = ok ? 'var(--accent)' : 'var(--danger-text)';
+        xiuluoTaskQueryResultEl.innerText = (ok ? '✔ ' : '✘ ') + info;
     };
 
     // 修罗巫医验证：与回程/领取验证同模式，结果经 onWuyiVerifyResult 异步回推

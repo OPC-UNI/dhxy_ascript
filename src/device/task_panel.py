@@ -1,7 +1,10 @@
 """任务栏（Alt+Q 任务面板）操作：开关面板、展开分组、选中任务、读取任务目的。
 
 五倍任务在任务栏中的分组名为「降魔任务」（同一玩法不同叫法，用户
-2026-11-23 明确）；识别结果见 demon_task。
+2026-11-23 明确）；修罗任务位于「常规玩法」分组下，子任务行文案
+「修罗任务」（同组还可能有山河名望等其他子任务，须按任务名选中）。
+识别结果见 demon_task。任务详情底部的「任务提示」段是玩法说明，
+读取时整段截掉、不参与识别也不返回（用户 2026-11-26）。
 
 面板结构（2026-11-23 实机标定，长相思窗口 1378x831）：
 - 任务栏是游戏内独立面板，可用鼠标拖动，面板大小固定；左「任务列表」与
@@ -62,7 +65,8 @@ TASK_PANEL_EXPAND_TIMEOUT = 2.5
 TASK_PANEL_DETAIL_TIMEOUT = 2.0
 # 同一视觉行的纵向合并容差（行距约 19px，同行碎片中心差 <2px）
 TASK_PANEL_ROW_MERGE_DY = 8
-# 子任务行与分组行的最大中心距（行距约 19px，留一组噪声余量）
+# 子任务行与上一行（分组行/前一条子任务行）的最大中心距（行距约
+# 19px，留一组噪声余量）
 TASK_PANEL_CHILD_MAX_GAP = 40
 # 子任务行右侧选中标记：详情栏正在显示的任务行右缘有勾选/追踪标记。
 # 实机只读探针 2026-11-24 抓到 OCR 读作「[~]」（三藏逢魔行，面板打开
@@ -73,10 +77,19 @@ TASK_PANEL_SELECTED_MARKERS = ("~", "√", "✓", "☑")
 # 目标分组关键词（「降魔任务」分组；标题栏任务名还会显示为
 # 「三藏逢魔[降魔任务]」，此处只匹配任务列表里的分组行）
 TASK_PANEL_DEMON_KEYWORD = "降魔"
+# 修罗任务（用户 2026-11-26 实机截图）：位于「常规玩法」分组下（分组行
+# 如「常规玩法[2]」），子任务行文案「修罗任务」。同组还可能有「山河
+# 名望」等其他子任务，必须按任务名选中而不是取第一个子任务。
+TASK_PANEL_XIULUO_GROUP = "常规玩法"
+TASK_PANEL_XIULUO_TASK = "修罗任务"
+# 任务详情中的「任务提示」段落：玩法说明（每日共享次数/混沌之气等），
+# 不参与任务识别，也不需要返回（用户 2026-11-26）——读取结果整段截掉。
+TASK_PANEL_HINT_HEAD = "任务提示"
 # 任务详情中「任务目的」段落的结束标志（后续段落标题）
 TASK_PANEL_SECTION_HEADS = (
     "任务轮次", "任务状态", "今日已完成", "当前状态", "任务奖励",
     "任务积分", "遣灵积分", "剩余时间", "你当前", "全队当前",
+    TASK_PANEL_HINT_HEAD,
 )
 # 任务详情 OCR 行最低置信度（低于此值视为噪声：实测暗雷任务首行下方
 # 出现过 0.548 的单字碎片「叁」）
@@ -309,23 +322,45 @@ def find_group_row(rows, keyword=TASK_PANEL_DEMON_KEYWORD):
     return groups[0] if groups else None
 
 
-def first_child_row(rows, group_row):
-    """分组行的第一个子任务行；下一行为另一分组/距离过远时返回 None。"""
+def child_rows(rows, group_row):
+    """分组行下的子任务行列表（至下一分组行或行距过大为止）。
+
+    行距按相邻视觉行判定（行距约 19px，TASK_PANEL_CHILD_MAX_GAP=40
+    留一组噪声余量）：分组下可能有多条子任务（「常规玩法」下实测有
+    修罗任务 / 山河名望），全部纳入供按任务名挑选。
+    """
     try:
         idx = rows.index(group_row)
     except ValueError:
+        return []
+    out = []
+    prev_cy = group_row["cy"]
+    for row in rows[idx + 1:]:
+        if row["cy"] - prev_cy > TASK_PANEL_CHILD_MAX_GAP:
+            break
+        if _is_group_line(row["text"]):
+            break
+        out.append(row)
+        prev_cy = row["cy"]
+    return out
+
+
+def first_child_row(rows, group_row, name_keyword=None):
+    """分组行的第一个子任务行；下一行为另一分组/距离过远时返回 None。
+
+    name_keyword：按任务名挑选子任务行（如「修罗任务」）。分组下有多条
+    子任务时不指定关键字取第一个（五倍原行为）。
+    """
+    children = child_rows(rows, group_row)
+    if name_keyword:
+        children = [r for r in children if name_keyword in r["text"]]
+    if not children:
         return None
-    if idx + 1 >= len(rows):
-        return None
-    nxt = rows[idx + 1]
-    if nxt["cy"] - group_row["cy"] > TASK_PANEL_CHILD_MAX_GAP:
-        return None
-    if _is_group_line(nxt["text"]):
-        return None
-    txt, rect, score = nxt["items"][0]  # 最左块=任务名，排除右侧 [√] 标记
+    row = children[0]
+    txt, rect, score = row["items"][0]  # 最左块=任务名，排除右侧 [√] 标记
     if len(txt.strip()) < 2:
         return None
-    return {"text": txt, "rect": rect, "row": nxt, "score": score}
+    return {"text": txt, "rect": rect, "row": row, "score": score}
 
 
 def row_selected(row):
@@ -491,13 +526,15 @@ def ensure_group_expanded(win, keyword=TASK_PANEL_DEMON_KEYWORD, prefix=TAG):
     return False, f"三次尝试后仍未展开：{last_info}", None
 
 
-def select_first_child(win, keyword=TASK_PANEL_DEMON_KEYWORD, prefix=TAG):
-    """在已展开的分组下选中第一个子任务，返回 (子任务信息, 描述)。
+def select_first_child(win, keyword=TASK_PANEL_DEMON_KEYWORD, prefix=TAG,
+                       task_keyword=None):
+    """在已展开的分组下选中子任务，返回 (子任务信息, 描述)。
 
     子任务信息：{'text': 任务名, 'rect': OCR 框, 'row': 视觉行}；失败返回
     (None, 描述)。点击任务名字框中心（行内选择，不会点到右侧 [√] 标记）；
     子任务行右侧已有选中标记（详情栏正在显示它）时跳过点击直接返回
     （用户 2026-11-24：已展开且已选中的情况不再重复点击）。
+    task_keyword：按任务名选中（如「修罗任务」），None 取第一个子任务。
     """
     rows, bgr, _img, panel = _read_list(win)
     if rows is None or bgr is None or panel is None:
@@ -505,9 +542,10 @@ def select_first_child(win, keyword=TASK_PANEL_DEMON_KEYWORD, prefix=TAG):
     group = find_group_row(rows, keyword)
     if group is None:
         return None, f"任务列表中未找到「{keyword}」分组"
-    child = first_child_row(rows, group)
+    child = first_child_row(rows, group, task_keyword)
     if child is None:
-        return None, f"「{group['text']}」分组下未找到子任务"
+        return None, (f"「{group['text']}」分组下未找到子任务"
+                      + (f"「{task_keyword}」" if task_keyword else ""))
     if row_selected(child["row"]):
         log(f"{prefix}子任务「{child['text']}」已选中，跳过点击", "SYS")
         return child, f"「{child['text']}」已选中"
@@ -562,6 +600,21 @@ def objective_lines(items):
     return out
 
 
+def trim_hint_lines(items):
+    """截掉「任务提示」段落及其后续行（用户 2026-11-26）。
+
+    任务提示段是玩法说明（每日共享次数、混沌之气等），不参与任务识别，
+    也不需要识别返回——读取结果从段标题起整段丢弃。段标题按前 8 字
+    包含判定（容忍 OCR 冒号/前导噪声）；未读到时原样返回。
+    """
+    out = []
+    for it in items:
+        if TASK_PANEL_HINT_HEAD in (it[0] or "")[:8]:
+            break
+        out.append(it)
+    return out
+
+
 def _wait_detail(win, prefix=TAG):
     """等待任务详情渲染出内容（点击子任务后），返回 OCR 行。"""
     deadline = time.time() + TASK_PANEL_DETAIL_TIMEOUT
@@ -577,14 +630,19 @@ def _wait_detail(win, prefix=TAG):
     return items
 
 
-def read_first_group_task(win, keyword=TASK_PANEL_DEMON_KEYWORD, prefix=TAG):
-    """完整流程：打开任务栏 → 展开目标分组 → 选中第一个子任务 → 读取任务目的。
+def read_first_group_task(win, keyword=TASK_PANEL_DEMON_KEYWORD, prefix=TAG,
+                          task_keyword=None):
+    """完整流程：打开任务栏 → 展开目标分组 → 选中子任务 → 读取任务目的。
 
     步骤：
     1. Alt+Q 确保任务栏打开（已打开不重复按，避免开关误关）；
-    2. 在任务列表定位「降魔任务」分组（可折叠），必要时点击行首图标展开；
-    3. 选中该分组下的第一个子任务（行右缘已有 √ 选中标记则跳过点击）；
-    4. OCR 任务详情栏，识别「任务目的」段落；
+    2. 在任务列表定位目标分组（默认「降魔任务」，修罗传「常规玩法」），
+       可折叠时点击行首图标展开；
+    3. 选中该分组下的子任务（默认第一个；task_keyword 指定任务名，如
+       「修罗任务」——同一分组下可能还有山河名望等其他子任务）。行右缘
+       已有 √ 选中标记则跳过点击；
+    4. OCR 任务详情栏，识别「任务目的」段落；「任务提示」段整段截掉
+       （玩法说明，不参与识别也不返回，用户 2026-11-26）；
     5. demon_task.recognize 解析任务类型与目标（击杀/显形镜/需重领），
        日志只打识别摘要一行（用户 2026-11-24：任务详情逐行/任务目的
        原文不再刷屏，识别结果已含地图/坐标/目标/轮次）。
@@ -598,12 +656,14 @@ def read_first_group_task(win, keyword=TASK_PANEL_DEMON_KEYWORD, prefix=TAG):
     ok, info, _group = ensure_group_expanded(win, keyword, prefix)
     if not ok:
         return None, f"展开分组失败: {info}"
-    child, info = select_first_child(win, keyword, prefix)
+    child, info = select_first_child(win, keyword, prefix,
+                                     task_keyword=task_keyword)
     if child is None:
         return None, f"选中子任务失败: {info}"
     detail = _wait_detail(win, prefix)
     if not detail:
         return None, "任务详情为空（未读取到任何文本）"
+    detail = trim_hint_lines(detail)
     objective = objective_lines(detail)
     obj_text = "".join(objective)
     recognition = demon_task.recognize(child["text"], obj_text)

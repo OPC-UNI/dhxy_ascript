@@ -473,3 +473,99 @@ def test_read_first_group_task_fails_without_group(monkeypatch):
                         lambda _img, _region: (only_other, None))
     result, info = tp.read_first_group_task(object())
     assert result is None and "未找到" in info
+
+
+# ---- 修罗任务（用户 2026-11-26 实机截图）：常规玩法分组 + 按任务名选中 ----
+
+# 任务列表实机形态：常规玩法[2] 下有「山河名望」（第一个）与「修罗任务」
+# 两条子任务，必须先按任务名挑中修罗任务，不能取第一个子任务
+XIULUO_LIST_ITEMS = _items(
+    ("任务列表", (445, 297, 516, 316)),
+    ("追踪", (593, 296, 634, 316)),
+    ("天常规玩法[2]", (437, 355, 541, 377)),
+    ("山河名望", (451, 374, 520, 397)),
+    ("修罗任务", (451, 393, 520, 416)),
+    ("田门派试炼[1]", (437, 414, 541, 436)),
+)
+
+# 任务详情实机形态：任务目的 → 任务状态 → … → 任务提示（玩法说明）
+XIULUO_DETAIL_ITEMS = _items(
+    ("任务详情", (779, 297, 850, 316)),
+    ("分享", (915, 295, 950, 316)),
+    ("任务目的：", (661, 317, 732, 336)),
+    ("前往凤巢六层(84,55)处消灭修罗。", (661, 334, 931, 354)),
+    ("任务状态：", (661, 402, 732, 423)),
+    ("当前环数：10/10", (660, 418, 779, 439)),
+    ("今日已完成次数：7", (660, 436, 800, 457)),
+    ("当前拥有混沌之气：357", (660, 454, 840, 475)),
+    ("任务提示：", (660, 472, 732, 493)),
+    ("1.小鬼/天庭/鬼王/修罗每日共享任务", (660, 490, 931, 511)),
+    ("次数，一共为90次；", (660, 508, 800, 529)),
+)
+
+
+def test_child_rows_all_and_named_child():
+    """常规玩法分组下两条子任务：默认取第一个，按任务名选中修罗任务。"""
+    rows = tp._visual_rows(XIULUO_LIST_ITEMS)
+    group = tp.find_group_row(rows, tp.TASK_PANEL_XIULUO_GROUP)
+    assert group is not None and "常规玩法" in group["text"]
+    children = tp.child_rows(rows, group)
+    assert [r["text"] for r in children] == ["山河名望", "修罗任务"]
+    first = tp.first_child_row(rows, group)
+    assert first is not None and first["text"] == "山河名望"
+    named = tp.first_child_row(rows, group, tp.TASK_PANEL_XIULUO_TASK)
+    assert named is not None and named["text"] == "修罗任务"
+
+
+def test_objective_lines_stops_at_task_hint():
+    """「任务状态」段头漏读时，任务提示段仍能截断任务目的。"""
+    items = _items(
+        ("任务目的：", (661, 317, 732, 336)),
+        ("前往凤巢六层(84,55)处消灭修罗。", (661, 334, 931, 354)),
+        ("任务提示：", (660, 352, 732, 373)),
+        ("1.小鬼/天庭/鬼王/修罗每日共享任务", (660, 370, 931, 391)),
+    )
+    assert tp.objective_lines(items) == ["前往凤巢六层(84,55)处消灭修罗。"]
+
+
+def test_trim_hint_lines_drops_hint_section():
+    """任务提示段（玩法说明）整段不返回；其上方的任务状态行保留。"""
+    out = tp.trim_hint_lines(XIULUO_DETAIL_ITEMS)
+    texts = [it[0] for it in out]
+    assert "任务状态：" in texts and "当前拥有混沌之气：357" in texts
+    assert "任务提示：" not in texts
+    assert not any("每日共享" in t or "一共为90次" in t for t in texts)
+
+
+def test_read_first_group_task_xiuluo_named_child(monkeypatch):
+    """修罗任务：按任务名选中 → 读任务目的 → 识别为单杀 → 任务提示不返回。"""
+    monkeypatch.setattr(tp, "time", _FakeClock())
+    panel = _fake_panel()
+    monkeypatch.setattr(tp, "_capture_bgr", lambda _w: (object(), object()))
+    monkeypatch.setattr(tp, "locate_panel", lambda _b: panel)
+    from src.device import map as game_map
+
+    def fake_ocr(_img, region):
+        if tuple(region) == tuple(panel["list_region"]):
+            return list(XIULUO_LIST_ITEMS), None
+        return list(XIULUO_DETAIL_ITEMS), None
+
+    monkeypatch.setattr(game_map, "ocr_region", fake_ocr)
+    clicks = []
+    monkeypatch.setattr(tp, "human_click",
+                        lambda _w, x, y: clicks.append((x, y)))
+    result, info = tp.read_first_group_task(
+        object(), keyword=tp.TASK_PANEL_XIULUO_GROUP,
+        task_keyword=tp.TASK_PANEL_XIULUO_TASK)
+    assert result is not None, info
+    # 只点选「修罗任务」行（山河名望是第一个子任务，不得被选中）
+    assert clicks == [((451 + 520) // 2, (393 + 416) // 2)]
+    assert result["task"] == "修罗任务"
+    assert result["objective_text"] == "前往凤巢六层(84,55)处消灭修罗。"
+    assert all("任务提示" not in line[0] for line in result["detail"])
+    rec = result["recognition"]
+    assert rec["kind"] == "kill"
+    assert rec["map"] == "凤巢六层"
+    assert rec["coords"] == [(84, 55)]
+    assert rec["target"] == "修罗"
+    assert rec["max_rounds"] == 1

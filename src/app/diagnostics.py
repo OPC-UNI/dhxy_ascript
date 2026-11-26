@@ -2191,6 +2191,102 @@ class DiagnosticsMixin(ControlHost):
             except Exception:
                 pass
 
+    def verify_xiuluo_task_query(self):
+        """诊断-任务栏查询修罗任务（只识别，不寻路，不改变任务状态）。
+
+        用户 2026-11-26：任务栏支持查询修罗任务——打开任务栏 → 展开
+        「常规玩法」分组 → 选中「修罗任务」→ 读取任务目的并识别（修罗
+        恒单杀，轮次 1）→ 关闭任务栏。「任务提示」段是玩法说明，不参与
+        识别也不返回。
+        """
+        if _task_running_here(self._tm):
+            return {"status": "error", "msg": "任务运行中，请先停止任务再识别"}
+        if self._verifying:
+            return {"status": "error", "msg": "验证进行中，请稍候"}
+        win = game.find_main_window()
+        if win is None:
+            return {"status": "error",
+                    "msg": "未检测到游戏窗口（游戏未启动或已最小化）"}
+        if not _game_window_clickable(win):
+            return {"status": "error",
+                    "msg": "游戏窗口被其他窗口遮挡，请将游戏窗口置于前台后再识别"}
+        self._verifying = True
+        try:
+            threading.Thread(target=self._run_xiuluo_task_query,
+                             args=(win,), daemon=True,
+                             name="xiuluo-task-query").start()
+        except Exception as e:  # noqa: BLE001 —— 线程启动失败须复位标志
+            self._verifying = False
+            return {"status": "error", "msg": f"启动识别线程失败：{e}"}
+        return {"status": "success",
+                "msg": "已开始：打开任务栏→识别修罗任务（只识别，不寻路），"
+                       "过程见日志"}
+
+    def _run_xiuluo_task_query(self, win):
+        """修罗任务查询线程体：读取 → 识别 → 关闭任务栏 → 回推页面。"""
+        def emit(msg):
+            app_utils.log(f"[诊断] {msg}")
+            try:
+                self.add_logs([f"[诊断] {msg}"])
+            except Exception:
+                pass
+
+        ok, info = False, "未知错误"
+        try:
+            from ..device import demon_task, task_panel
+            try:
+                emit("任务栏查询修罗任务开始：打开任务栏 → 常规玩法 → 修罗任务")
+                result, rinfo = task_panel.read_first_group_task(
+                    win,
+                    keyword=task_panel.TASK_PANEL_XIULUO_GROUP,
+                    task_keyword=task_panel.TASK_PANEL_XIULUO_TASK)
+                if result is None:
+                    ok, info = False, f"任务栏读取失败: {rinfo}"
+                else:
+                    rec = result.get("recognition") or {}
+                    emit(f"识别结果：任务「{result.get('task') or '?'}」 "
+                         f"{demon_task.describe(rec)}")
+                    if rec.get("kind") != demon_task.KIND_KILL:
+                        ok, info = False, (
+                            "未识别为击杀任务（修罗任务恒单杀）："
+                            + demon_task.describe(rec))
+                    else:
+                        ok, info = True, (
+                            f"修罗任务识别成功：地图 {rec.get('map') or '?'} "
+                            f"坐标 {rec.get('coord_a')} "
+                            f"目标 {rec.get('target') or '?'}"
+                            f"（单杀，轮次 {rec.get('max_rounds') or 1}）")
+            except Exception as e:  # noqa: BLE001 —— 线程体兜底
+                ok, info = False, f"识别异常: {e}"
+            # 无论成败都关闭任务栏（读取过程会 Alt+Q 打开面板）
+            try:
+                closed, cinfo = task_panel.close_task_panel(win)
+                emit(f"关闭任务栏：{'成功' if closed else '失败'}（{cinfo}）")
+                if not closed and ok:
+                    ok, info = False, f"关闭任务栏失败: {cinfo}"
+            except Exception as e:  # noqa: BLE001 —— 关闭失败不掩盖识别结果
+                emit(f"关闭任务栏异常: {e}")
+            try:
+                app_utils.log(f"[诊断] 查询修罗任务结果: {info}")
+                self.add_logs([f"[诊断] 查询修罗任务结果: {info}"])
+            except Exception:
+                pass
+            self._notify_xiuluo_task_query_result(ok, info)
+        finally:
+            self._verifying = False
+
+    def _notify_xiuluo_task_query_result(self, ok, info):
+        """任务栏查询修罗任务结果回推页面。"""
+        if self.webview_instance:
+            try:
+                ok_js = "true" if ok else "false"
+                self.webview_instance.evaluate_js(
+                    f"if(window.onXiuluoTaskQueryResult){{"
+                    f"window.onXiuluoTaskQueryResult({ok_js}, "
+                    f"{json.dumps(info)});}}")
+            except Exception:
+                pass
+
     def verify_dialog_detect(self):
         """诊断-测试对话框识别按钮：单帧模板判定对话框在场 + 对话区
         OCR 计时（只读不点击）。有/无对话框场景各点一次，对照日志

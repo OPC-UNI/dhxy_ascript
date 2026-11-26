@@ -364,6 +364,7 @@ class ControlWindow(DiagnosticsMixin, SettingsApiMixin, MessageApiMixin,
         self.expose(self.verify_map_navigate)
         self.expose(self.verify_site_navigate)
         self.expose(self.verify_demon_navigate)
+        self.expose(self.verify_xiuluo_task_query)
         self.expose(self.cancel_map_navigate)
         self.expose(self.verify_dialog_detect)
         self.expose(self.verify_apply_panel)

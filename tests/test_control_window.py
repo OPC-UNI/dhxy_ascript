@@ -1427,6 +1427,91 @@ def test_run_demon_navigate_missing_coord(monkeypatch):
     assert "缺少地图/坐标" in host.notified[0][2]
 
 
+# ---- 任务栏查询修罗任务（只识别不寻路，用户 2026-11-26） ----
+
+def test_verify_xiuluo_task_query_guards(monkeypatch):
+    """查询修罗任务：无游戏窗口给出错误，不抛异常。"""
+    import types
+
+    from src.app import diagnostics
+
+    class _Host(diagnostics.DiagnosticsMixin):
+        def __init__(self):
+            self._tm = types.SimpleNamespace(is_running=lambda role=None: False)
+            self._verifying = False
+
+    host = _Host()
+    monkeypatch.setattr(diagnostics.game, "find_main_window", lambda: None)
+    r = host.verify_xiuluo_task_query()
+    assert r["status"] == "error" and "未检测到游戏窗口" in r["msg"]
+
+
+def test_verify_xiuluo_task_query_starts_thread(monkeypatch):
+    """查询修罗任务线程参数：(win,)，启动后置忙标志。"""
+    import types
+
+    from src.app import diagnostics
+
+    class _Host(diagnostics.DiagnosticsMixin):
+        def __init__(self):
+            self._tm = types.SimpleNamespace(is_running=lambda role=None: False)
+            self._verifying = False
+
+    host = _Host()
+    fake_win = object()
+    monkeypatch.setattr(diagnostics.game, "find_main_window",
+                        lambda: fake_win)
+    monkeypatch.setattr(diagnostics, "_game_window_clickable",
+                        lambda win: True)
+    started = {}
+
+    class _FakeThread:
+        def __init__(self, target=None, args=(), daemon=None, name=None):
+            started.update(target=target, args=args, name=name)
+
+        def start(self):
+            started["started"] = True
+
+    monkeypatch.setattr(diagnostics.threading, "Thread", _FakeThread)
+    r = host.verify_xiuluo_task_query()
+    assert r["status"] == "success"
+    assert started["started"] is True and started["args"] == (fake_win,)
+    assert host._verifying is True
+
+
+def test_run_xiuluo_task_query_reads_named_child(monkeypatch):
+    """查询修罗任务：按「常规玩法/修罗任务」读取、识别单杀、关闭任务栏。"""
+    from src.app import diagnostics
+    from src.device import task_panel
+
+    calls = {}
+
+    def fake_read(win, keyword=None, prefix=task_panel.TAG, task_keyword=None):
+        calls["keywords"] = (keyword, task_keyword)
+        rec = {"kind": "kill", "task": "修罗任务", "map": "凤巢六层",
+               "coords": [(84, 55)], "coord_a": (84, 55), "coord_b": None,
+               "target": "修罗", "max_rounds": 1}
+        return {"task": "修罗任务", "recognition": rec}, "ok"
+
+    monkeypatch.setattr(task_panel, "read_first_group_task", fake_read)
+    closed = []
+    monkeypatch.setattr(task_panel, "close_task_panel",
+                        lambda win: closed.append(1) or (True, "已关闭"))
+    monkeypatch.setattr(diagnostics.app_utils, "log", lambda *a, **k: None)
+    host = _demon_host(diagnostics)
+    host._verifying = True
+    host._notify_xiuluo_task_query_result = (
+        lambda ok, info: host.notified.append((ok, info)))
+    host._run_xiuluo_task_query(object())
+    assert calls["keywords"] == (task_panel.TASK_PANEL_XIULUO_GROUP,
+                                 task_panel.TASK_PANEL_XIULUO_TASK)
+    assert closed == [1]
+    ok, info = host.notified[0]
+    assert ok is True
+    assert "凤巢六层" in info and "修罗" in info and "单杀" in info
+    assert host._verifying is False
+
+
 def test_cancel_map_navigate_only_when_running(monkeypatch):
     """中断按钮：无导航时拒绝，导航中转发 map_nav.request_cancel。"""
     import types

@@ -41,6 +41,13 @@ task_panel.objective_lines 截取），识别只做文本解析，不截图、�
    目标名紧邻括号地图坐标、没有「消灭/击败」等击杀动词，按已知任务名
    「奎星归位」判定（用户确认该任务同样是杀一次）。
 
+6. 修罗任务（2026-11-26 用户实机截图，任务栏「常规玩法」分组）：
+   「前往凤巢六层(84,55)处消灭修罗。」
+   → kind=kill，map=凤巢六层，coords=[(84,55)]，target=修罗，
+     max_rounds=1（修罗任务恒为单杀，用户 2026-11-26）。层级图地名
+     （龙窟/凤巢/大雁塔 + 层数）整名保留，不被世界地图归一模糊成基础
+     图名；任务提示段（玩法说明）由 task_panel 截掉，不参与识别。
+
 未匹配已知文案时 kind=unknown，仍尽量返回地图/坐标，供调用方决策。
 OCR 容错：全/半角括号与逗号、缺右括号、显形镜被读成「豆形镜」等（取
 「形镜」子串）；地图名经 map.resolve_world_map_name 繁体/形近归一。
@@ -69,7 +76,9 @@ HUANGPAO_TASK_NAMES = ("智斗黄袍",)
 # 新增变体在此追加）。奎星归位（奎木狼，2026-11-25 用户实机截图）：
 # 任务目的为「奎木狼(火云戈壁，134，12)终于要出动了，与他一决雌雄吧！」
 # ——目标名紧邻括号地图坐标，没有击杀动词；「奎星」子串容忍尾部 OCR 误读。
-KILL_TASK_NAMES = ("奎星归位", "奎星")
+# 修罗任务（2026-11-26 用户实机截图）：任务栏「常规玩法」分组下的单杀
+# 任务，每轮 1 场战斗；任务目的形如「前往凤巢六层(84,55)处消灭修罗。」
+KILL_TASK_NAMES = ("奎星归位", "奎星", "修罗任务")
 _HUANGPAO_KILL_RE = re.compile(
     r"(?:消灭|击败|击杀)[^。！；，]{0,8}黄袍怪")
 # 黄袍怪轮次数：任务文案写明「（最多5轮）」，2026-11-23 可乐可口日志
@@ -121,10 +130,45 @@ def _clean(text):
     return re.sub(r"\s+", "", text or "")
 
 
+_MAP_NAMES_CACHE = None
+
+
+def _known_map_names():
+    """已知地图名（普通地图 + 层级图 + 别名），按长度降序（供后缀匹配）。
+
+    层级图名（凤巢六层/龙窟五层/大雁塔四层…）由 map_nav 维护——函数内
+    导入防循环（map_nav → battle → …），只在首次识别时建立缓存。
+    """
+    global _MAP_NAMES_CACHE
+    if _MAP_NAMES_CACHE is None:
+        from . import map_nav  # 函数内导入防循环
+        names = set(game_map.WORLD_MAP_LABELS) | set(map_nav.layer_map_names())
+        names |= set((game_map.WORLD_MAP_NAME_ALIASES or {}).keys())
+        _MAP_NAMES_CACHE = sorted((n for n in names if n),
+                                  key=len, reverse=True)
+    return _MAP_NAMES_CACHE
+
+
 def _resolve_map(name):
-    """地名归一：优先 WORLD_MAP_LABELS 键；未收录保留原文（调用方判断）。"""
+    """地名归一：层级图/普通地图按整名或后缀命中；未收录保留原文。
+
+    修罗任务的层级图地名（如「凤巢六层」）必须整名保留——世界地图归一
+    （resolve_world_map_name）会把层名模糊归一成基础图「凤巢」，丢层号
+    （2026-11-26 用户实机截图校准）。坐标前的地名候选可能带叙述前缀
+    （「请速去大雁塔四层」），按已知地名后缀取最长者；仍未命中再走
+    繁体/形近归一。
+    """
     if not name:
         return None
+    name = _clean(name)
+    aliases = game_map.WORLD_MAP_NAME_ALIASES or {}
+    names = _known_map_names()
+    for known in names:
+        if name == known:
+            return aliases.get(known, known)
+    for known in names:
+        if len(name) > len(known) and name.endswith(known):
+            return aliases.get(known, known)
     return game_map.resolve_world_map_name(name) or name
 
 

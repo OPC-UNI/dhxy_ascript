@@ -46,6 +46,10 @@ KUIXING_GUIWEI = (
     "奎木狼(火云戈壁，134，12)终于要出动了，"
     "与他一决雌雄吧！"
 )
+# 修罗任务（用户 2026-11-26 实机截图）：任务栏「常规玩法」分组下的
+# 单杀任务；任务目的为层级图坐标文案
+XIULUO_FENGCHAO = "前往凤巢六层(84,55)处消灭修罗。"
+XIULUO_DAYANTA = "请速去大雁塔四层(108, 37)处消灭修罗，阻止它为非作歹。"
 
 
 def test_kill_task_sishengzhuang():
@@ -143,6 +147,55 @@ def test_kill_kuimulang_ocr_variants():
         assert rec["map"] == "火云戈壁"
         assert rec["coords"] == [(134, 12)]
         assert rec["target"] == "奎木狼"
+
+
+def test_xiuluo_task_kill_once_layer_map():
+    """修罗任务：单杀（轮次 1），层级图地名整名保留（不归一成「凤巢」）。"""
+    rec = dt.recognize("修罗任务", XIULUO_FENGCHAO)
+    assert rec["kind"] == dt.KIND_KILL
+    assert rec["reclaim"] is False
+    assert rec["map"] == "凤巢六层"
+    assert rec["coords"] == [(84, 55)]
+    assert rec["coord_a"] == (84, 55) and rec["coord_b"] is None
+    assert rec["target"] == "修罗"
+    assert rec["max_rounds"] == 1  # 用户确认：修罗都是只杀一次
+    assert "击杀任务" in dt.describe(rec)
+    assert "轮次=1" in dt.describe(rec)
+
+
+def test_xiuluo_claim_dialog_text_keeps_layer():
+    """领取对话框文案（请速去…）：坐标前最近地名层号不丢。"""
+    rec = dt.recognize("修罗任务", XIULUO_DAYANTA)
+    assert rec["kind"] == dt.KIND_KILL
+    assert rec["map"] == "大雁塔四层"
+    assert rec["coords"] == [(108, 37)]
+    assert rec["target"] == "修罗"
+    assert rec["max_rounds"] == 1
+
+
+def test_xiuluo_task_name_fallback_without_target_text():
+    """任务目的丢失击杀句时按任务名「修罗任务」兜底判击杀（单杀）。"""
+    rec = dt.recognize("修罗任务", "前往凤巢六层(84,55)处。")
+    assert rec["kind"] == dt.KIND_KILL
+    assert rec["map"] == "凤巢六层"
+    assert rec["coords"] == [(84, 55)]
+    assert rec["target"] is None
+    assert rec["max_rounds"] == 1
+
+
+def test_xiuluo_hint_text_does_not_change_result():
+    """任务提示段（每日共享次数/混沌之气）不参与识别：结果不受影响。"""
+    text = XIULUO_FENGCHAO + (
+        "任务提示：1.小鬼/天庭/鬼王/修罗每日共享任"
+        "务次数，一共为90次；2.每日任务次数小于90次时，击败修罗消耗"
+        "1点任务次数并消耗2点混沌之气；3.前往灵兽村找巫医净化混沌之气，"
+        "净化成功则获得正常修罗奖励。")
+    rec = dt.recognize("修罗任务", text)
+    assert rec["kind"] == dt.KIND_KILL
+    assert rec["map"] == "凤巢六层"
+    assert rec["coords"] == [(84, 55)]
+    assert rec["target"] == "修罗"
+    assert rec["max_rounds"] == 1
 
 
 def test_name_before_coord_needs_known_kill_task():
