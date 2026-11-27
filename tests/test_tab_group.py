@@ -422,6 +422,7 @@ def test_rejoin_pass_matches_and_rejoins_member(monkeypatch):
     ]
     returned = _make_rejoin_env(monkeypatch, children,
                                 ["id-m2", "id-m1", "id-leader"])
+    monkeypatch.setattr(tab_group, "_team_member_ids", {"id-m1"})
     called = []
 
     def _maybe_rejoin(win, prefix="[组队]"):
@@ -449,6 +450,57 @@ def test_rejoin_pass_matches_and_rejoins_member(monkeypatch):
     assert returned == [1, 1]
 
 
+def test_rejoin_pass_skips_non_member_tab(monkeypatch):
+    """非组员 Tab 即使角色名与暂离昵称相近，也不执行归队（2026-11-27）。
+
+    归队 pass 与其余队员 pass 一致只操作启动检查确认在队伍中的 Tab
+    （only_members）：C（碧桃浪子）不在队伍里，名字与暂离的「碧桃娘子」
+    模糊比 0.75 会命中 _name_similar——修复前会被切过去开面板点归队。
+    """
+    children = [
+        {"id": "id-leader", "title": "队长号（ID：id-leader）", "visible": True},
+        {"id": "id-c", "title": "碧桃浪子（ID：id-c）", "visible": False},
+        {"id": "id-m1", "title": "碧桃娘子（ID：id-m1）", "visible": False},
+    ]
+    _make_rejoin_env(monkeypatch, children, ["id-c", "id-m1", "id-leader"])
+    monkeypatch.setattr(tab_group, "_team_member_ids", {"id-m1"})
+    called = []
+
+    def _maybe_rejoin(win, prefix="[组队]"):
+        called.append(win)
+        return True, "已归队（归队按钮已消失）"
+
+    import src.device.team as team_mod
+    monkeypatch.setattr(team_mod, "rejoin_from_away", _maybe_rejoin)
+    from src.device import battle as battle_mod
+    monkeypatch.setattr(battle_mod, "is_in_battle_frame", lambda img: False)
+
+    done, _info, matched = tab_group.member_rejoin_pass(
+        _CapWin(), ["碧桃娘子"])
+    assert done == 1
+    assert len(called) == 1  # 只有组员 Tab（id-m1）执行了归队
+    assert matched == {"碧桃娘子"}
+
+
+def test_rejoin_pass_non_member_match_not_claimed(monkeypatch):
+    """只有非组员 Tab 名字相近：不切 Tab、不把暂离昵称标记为自家处理。
+
+    否则调用方（超时请离）会因 matched_away 含该昵称而排除真正的暂离
+    队员，导致不归队也不请离（2026-11-27）。
+    """
+    children = [
+        {"id": "id-leader", "title": "队长号（ID：id-leader）", "visible": True},
+        {"id": "id-c", "title": "碧桃浪子（ID：id-c）", "visible": False},
+    ]
+    returned = _make_rejoin_env(monkeypatch, children, [])
+    monkeypatch.setattr(tab_group, "_team_member_ids", {"id-m1"})
+    done, info, matched = tab_group.member_rejoin_pass(
+        _FakeWin(), ["碧桃娘子"])
+    assert done == 0 and info == "" and matched == set()
+    # finally 的幂等回队长（不进入遍历循环，_switch_next 未被调用）
+    assert returned == [1]
+
+
 def test_rejoin_pass_no_match_no_switch(monkeypatch):
     """暂离昵称无 Tab 匹配：不做任何切换，返回空集合。"""
     children = [
@@ -462,6 +514,7 @@ def test_rejoin_pass_no_match_no_switch(monkeypatch):
         return None
 
     _make_rejoin_env(monkeypatch, children, [])
+    monkeypatch.setattr(tab_group, "_team_member_ids", {"id-m1"})
     monkeypatch.setattr(tab_group, "_switch_next", _switch)
     done, info, matched = tab_group.member_rejoin_pass(
         _FakeWin(), ["碧桃娘子"])
@@ -473,6 +526,7 @@ def test_rejoin_pass_throttled(monkeypatch):
     """30s 节流：间隔内重复调用直接返回，不切 Tab。"""
     import time as _time
     monkeypatch.setattr(tab_group, "_active", True)
+    monkeypatch.setattr(tab_group, "_team_member_ids", {"id-m1"})
     monkeypatch.setattr(tab_group, "_last_rejoin_pass_at",
                         _time.time() - 10)
     switched = []
@@ -554,6 +608,7 @@ def test_rejoin_pass_force_bypasses_throttle(monkeypatch):
     """force=True（诊断按钮）：30s 节流不生效，手动连点不被静默吞掉。"""
     import time as _time
     monkeypatch.setattr(tab_group, "_active", False)
+    monkeypatch.setattr(tab_group, "_team_member_ids", {"id-m1"})
     monkeypatch.setattr(tab_group, "_last_rejoin_pass_at", _time.time())
     monkeypatch.setattr(tab_group, "_try_enter_pass", lambda: True)
     monkeypatch.setattr(tab_group, "_exit_pass", lambda: None)

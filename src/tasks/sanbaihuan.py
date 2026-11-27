@@ -27,11 +27,13 @@
 - 点击萧举人小地图点后地图保持打开，对话框叠加在地图窗口上；点完
   选项后再关闭地图。
 """
+import random
 import re
 import time
 
 from ..core import app_utils
 from ..core import debug_overlay
+from ..core import poem_bank
 from ..core import settings
 from ..core.app_utils import log, norm_text
 from ..device import items as item_catalog
@@ -40,6 +42,11 @@ from ..device import map_nav
 from ..device import task_panel
 from ..device import task_tracker
 from ..device.battle import is_in_battle
+from ..device.dialog_common import (_click_green_option_once,
+                                    _dialog_text_present,
+                                    click_green_option_safe,
+                                    DIALOG_FRAME_THRESHOLD,
+                                    dialog_frame_score)
 from ..minigames import sanbaihuan_jigsaw as jigsaw
 from ..workflows import claim_flow
 from ..workflows import give_flow
@@ -342,7 +349,7 @@ def run_loop(win, cycle_interval=3.0):
         log(f"{TAG}当天进度已达上限 {done}/{max_rounds}，无需再执行", "SYS")
         return f"已完成 {done} 段300环任务，达到次数上限 {max_rounds}"
 
-    _DIG_STATE.update(key=None, used=False,
+    _DIG_STATE.update(key=None, used=False, used_at=0.0,
                       last_pos_at=0.0, last_try=0.0)  # 新一局复位挖宝状态
     fail_streak = 0  # 连续领取/续跑失败次数（用户规则：3 次升级一条 ERROR）
     while True:
@@ -461,16 +468,142 @@ def _task_text_from_items(items):
     return "".join(texts)
 
 
+# ---- 答题类环：千古一题（2026-11-27 用户实机）----
+# 流程：追踪「千古一题[江湖历练任务]」→ 点追踪链接走到赵大 → 开场白
+# 「…回答我的千古三题」+ 三个绿字选项（首项「这人到底靠谱不……也罢
+# 横竖一试」开始答题）→ 三题诗句问答：一条白色诗句行（给出上一句）+
+# 四个绿色诗句选项（下一句候选）→ 按诗句库（core/poem_bank.py，跨任务
+# 复用）点正确的下一句；三题后赵大长对话（无选项）由剧情兜底点屏推进，
+# 任务推进到下一环（挖宝）。未收录的诗句（含 OCR 严重误读）按用户规则
+# 随机点一个绿色选项。
+QUIZ_INTRO_TEXT = "回答我的千古三题"
+QUIZ_START_OPTION = "这人到底靠谱不"
+# 答题文本紧裁剪区（2026-11-27 实机标定）：生产 DIALOG_REGION 大裁剪
+# 对 4 行选项的行检测会合并/漏检（同帧实测只检出 2 行），紧裁剪
+# (420,360,760,500) 同帧 4 行全检出（含正确答案 0.997）——答题链路是
+# 低频路径，多一次区域 OCR（~0.1-0.2s）换正确率。
+QUIZ_OCR_REGION = (420, 360, 760, 500)
+# 备用裁剪：主裁剪行检测偶发把相邻选项合并/漏检时换一档再试一次
+# （2026-11-27 离线实测同一帧两档裁剪检出的行集合互补；仅在主裁剪
+# 已见绿字选项迹象时启用，无选项的剧情长对话不付第二次 OCR）
+QUIZ_OCR_FALLBACK = (425, 375, 640, 490)
+# 问题/选项行左缘带上界：标准对话框文案列左缘实测 x=433~448；右侧
+# 世界玩家名字浮标实测 x≥544，用带上界排除（防随机兜底点到玩家名）
+QUIZ_TEXT_X_MAX = 520
+QUIZ_OPTION_DX = 40          # 选项与问题行左缘的水平容差
+QUIZ_OPTION_MAX_DY = 200     # 选项须在问题行下方该距离内
+QUIZ_QUESTION_MIN_LEN = 3    # 诗句问题行长度范围（norm_text 后）
+QUIZ_QUESTION_MAX_LEN = 12
+
+
+def _quiz_question_row(qitems, img_np):
+    """答题帧里定位诗句问题行（白字、绿字选项上方最近的短行）。"""
+    green_tops = [r[1] for _t, r, _s in qitems
+                  if task_tracker.is_green_text(img_np, r)]
+    if not green_tops:
+        return None
+    top = min(green_tops)
+    best = None
+    for txt, rect, score in qitems:
+        if score < 0.55 or task_tracker.is_green_text(img_np, rect):
+            continue
+        if not (task_tracker.PANEL_MAX_X <= rect[0] <= QUIZ_TEXT_X_MAX):
+            continue
+        n = norm_text(txt)
+        if not (QUIZ_QUESTION_MIN_LEN <= len(n) <= QUIZ_QUESTION_MAX_LEN):
+            continue
+        # 须紧邻最上方绿字选项：覆盖 OCR 框重叠（实测问题框底 400、
+        # 首选项框顶 400），同时排除对话框上方的 NPC 名/世界浮名
+        if rect[3] > top + 8 or top - rect[3] > 40:
+            continue
+        if best is None or rect[3] > best[1][3]:
+            best = (txt, rect)
+    return best
+
+
+def _quiz_option_rows(qitems, img_np, qrect):
+    """问题行下方的绿字选项行（左缘对齐、限定在对话框文案列）。"""
+    rows = []
+    for txt, rect, score in qitems:
+        if score < 0.55 or not task_tracker.is_green_text(img_np, rect):
+            continue
+        if not (task_tracker.PANEL_MAX_X <= rect[0] <= QUIZ_TEXT_X_MAX):
+            continue
+        if abs(rect[0] - qrect[0]) > QUIZ_OPTION_DX:
+            continue
+        if rect[1] < qrect[1] or rect[1] - qrect[3] > QUIZ_OPTION_MAX_DY:
+            continue
+        rows.append((txt, rect, score))
+    return rows
+
+
+def _quiz_option_band(qitems, img_np):
+    """帧内是否有对话框文案列的绿字行（判断要不要换裁剪重试）。"""
+    return any(it[2] >= 0.55 and task_tracker.is_green_text(img_np, it[1])
+               and task_tracker.PANEL_MAX_X <= it[1][0] <= QUIZ_TEXT_X_MAX
+               for it in qitems)
+
+
+def _quiz_tick(win, items, img_np):
+    """千古一题处理：开场点开始选项；诗句题点下一句；未收录随机点。"""
+    # 环判定用「千古」宽松匹配（标题「千古一题」+ 目标行「千古谜题」都含，
+    # OCR 误读一个字也不至于让整环卡死在答题对话上；其他环无此词）
+    if "千古" not in _task_text_from_items(items):
+        return False
+    dlg = [it for it in (items or [])
+           if it[2] >= 0.55 and it[1][0] >= task_tracker.PANEL_MAX_X]
+    if not dlg:
+        return False
+    # 开场白 → 点「这人到底靠谱不……也罢横竖一试」开始答题
+    if _dialog_text_present(dlg, QUIZ_INTRO_TEXT):
+        ok = click_green_option_safe(win, items, img_np, QUIZ_START_OPTION,
+                                     prefix=TAG)
+        if ok:
+            log(f"{TAG}答题（千古一题）：已点击开始答题选项", "SYS")
+        return ok
+    # 诗句题：标准对话框在场才做紧裁剪 OCR（行走/空场景零额外开销）
+    if img_np is None \
+            or dialog_frame_score(img_np) < DIALOG_FRAME_THRESHOLD:
+        return False
+    qitems, _ = game_map.ocr_region(img_np, QUIZ_OCR_REGION)
+    qrow = _quiz_question_row(qitems, img_np)
+    opts = _quiz_option_rows(qitems, img_np, qrow[1]) if qrow else []
+    if len(opts) < 2:
+        # 主裁剪行检测偶发合并/漏检：有所见（问题行或绿字选项）才换一档
+        # 裁剪再试；无选项的剧情长对话（三题后的赵大长对话）不做第二次 OCR
+        if qrow is None and not _quiz_option_band(qitems, img_np):
+            return False
+        qitems, _ = game_map.ocr_region(img_np, QUIZ_OCR_FALLBACK)
+        qrow = _quiz_question_row(qitems, img_np)
+        if qrow is None:
+            return False
+        opts = _quiz_option_rows(qitems, img_np, qrow[1])
+    if len(opts) < 2:
+        return False
+    qtxt, qrect = qrow
+    ans = poem_bank.answer_for(qtxt)
+    if ans is not None:
+        ok = click_green_option_safe(win, opts, img_np, ans, prefix=TAG)
+        if ok:
+            log(f"{TAG}答题（千古一题）：{qtxt} → {ans}", "SYS")
+        return ok
+    txt = random.choice(opts)[0]
+    log(f"{TAG}答题（千古一题）：诗句「{qtxt}」未收录，随机点选项「{txt}」",
+        "WARN")
+    return _click_green_option_once(win, opts, img_np, txt, prefix=TAG)
+
+
 def _extra_dialog_handler(win, items, img_np):
-    """follow 注入：给与面板打开时按任务要求选物并给与。
+    """follow 注入：给与面板选物给与；答题类环（千古一题）诗句问答。
 
     物品定位：任务文案解析物品名 → 物品目录（device/items.py）取图标
     模板定位候选格 → 悬停读物品名确认（同名多卷/近似图标靠提示名区分）。
-    未登记物品走全格悬停兜底（慢路径，不常见）。
+    未登记物品走全格悬停兜底（慢路径，不常见）。给与面板不在场时交给
+    答题处理（追踪任务不是千古一题时零开销返回）。
     """
     global _LAST_GIVE_TRY
     if not give_flow.give_panel_open(img_np):
-        return False
+        return _quiz_tick(win, items, img_np)
     now = time.time()
     if now - _LAST_GIVE_TRY < GIVE_RETRY_INTERVAL:
         return True  # 面板已占用：节流窗口内不再重复 OCR/悬停
@@ -538,7 +671,8 @@ DIG_HOE_ICON = item_catalog.icon("wabaochutou")
 DIG_ARRIVE_TOLERANCE = 8        # 藏宝处到达容差（寻路停在点旁，±8）
 DIG_POS_POLL = 1.0              # 位置 OCR 节流（轮询 0.5s，位置读 ~0.1s）
 DIG_RETRY_INTERVAL = 5.0        # 用锄头失败重试间隔
-_DIG_STATE = {"key": None, "used": False,
+DIG_USED_RETRY = 15.0           # 用过锄头后任务仍无变化的重新尝试间隔
+_DIG_STATE = {"key": None, "used": False, "used_at": 0.0,
               "last_pos_at": 0.0, "last_try": 0.0}
 
 _DIG_TARGET_RE = re.compile(
@@ -556,8 +690,12 @@ def parse_dig_target(text):
 def _dig_tick(win, items, img):
     """挖宝监控：追踪含藏宝处且到达目标坐标 → 右键挖宝锄头。
 
-    返回 True 表示本帧由挖宝链路占用（继续轮询），False 表示不是
-    挖宝任务（走普通跟踪/其它处理器）。
+    返回 True 仅在本帧真正执行了挖宝动作（右键锄头，帧已过期）时；
+    其余帧一律返回 False，交回 follow 正常链路——前往藏宝处的导航
+    由 follow 点任务追踪绿字驱动（用户 2026-11-26：藏宝处可以点击
+    任务追踪到达目的地）。旧实现非到达帧恒返回 True，wait_handler
+    占住内层轮询，follow 永远看不到任务签名变化、不点追踪链接，
+    挖宝环出现后人物原地不动（2026-11-27 实机日志）。
     """
     text = _task_text_from_items(items)
     if "藏宝处" not in text:
@@ -569,29 +707,35 @@ def _dig_tick(win, items, img):
         return False
     tmap, tx, ty = target
     key = (tmap, tx, ty)
+    now = time.time()
     if _DIG_STATE.get("key") != key:
-        _DIG_STATE.update(key=key, used=False,
+        _DIG_STATE.update(key=key, used=False, used_at=0.0,
                           last_pos_at=0.0, last_try=0.0)
         log(f"{TAG}挖宝任务：{tmap} ({tx},{ty}) 藏宝处", "SYS")
     if _DIG_STATE.get("used"):
-        return True
-    now = time.time()
+        # 已用过锄头：等任务推进（挖到物品/换环）由 follow 正常检测。
+        # 长时间无变化（右键可能落在动画/遮挡帧没生效）允许重试一次
+        if now - _DIG_STATE.get("used_at", 0.0) < DIG_USED_RETRY:
+            return False
+        _DIG_STATE.update(used=False, last_try=now)
     if now - _DIG_STATE["last_pos_at"] < DIG_POS_POLL:
-        return True
+        return False
     _DIG_STATE["last_pos_at"] = now
     if img is None:
-        return True
+        return False
     pos = game_map.read_map_position(win, img=img)
-    if pos is None or not map_nav.names_match(pos[0], tmap)             or abs(pos[1] - tx) > DIG_ARRIVE_TOLERANCE             or abs(pos[2] - ty) > DIG_ARRIVE_TOLERANCE:
-        return True
+    if pos is None or not map_nav.names_match(pos[0], tmap) \
+            or abs(pos[1] - tx) > DIG_ARRIVE_TOLERANCE \
+            or abs(pos[2] - ty) > DIG_ARRIVE_TOLERANCE:
+        return False
     if now - _DIG_STATE["last_try"] < DIG_RETRY_INTERVAL:
-        return True
+        return False
     _DIG_STATE["last_try"] = now
     ok, info = item_use.use_task_box_item(
         win, DIG_HOE_ICON, "挖宝锄头", prefix="300环")
     log(f"{TAG}挖宝：{info}", "SYS" if ok else "WARN")
     if ok:
-        _DIG_STATE["used"] = True
+        _DIG_STATE.update(used=True, used_at=time.time())
     return True
 
 

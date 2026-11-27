@@ -144,3 +144,104 @@ def test_parse_dig_target_map_and_coords():
     assert sb.parse_dig_target("无关文案") is None
     from src.device import items as item_catalog
     assert item_catalog.item("wabaochutou").storage == item_catalog.TASK_BOX
+
+
+def test_dig_tick_does_not_block_tracking_click(monkeypatch):
+    """挖宝未到达时不得占用轮询：交回 follow 点追踪链接寻路。
+
+    2026-11-27 实机：挖宝环出现后人物原地不动——旧实现非到达帧恒返回
+    True，wait_handler 占住内层轮询，follow 看不到签名变化、不点追踪。
+    """
+    clock = _Clock()
+    monkeypatch.setattr(sb, "time", clock)
+    sb._DIG_STATE.update(key=None, used=False, used_at=0.0,
+                         last_pos_at=0.0, last_try=0.0)
+    items = [("到方寸后山（39，50）藏宝处", (60, 300, 330, 330), 0.95)]
+    used = []
+
+    def _use(*_a, **_k):
+        used.append(1)
+        return True, "已使用挖宝锄头"
+
+    monkeypatch.setattr(sb.item_use, "use_task_box_item", _use)
+    pos = {"v": ("长安城", 100, 100)}
+    monkeypatch.setattr(sb.game_map, "read_map_position",
+                        lambda w, img=None: pos["v"])
+
+    # 未到达：False（follow 继续正常跟踪、点追踪链接），不碰任务储物格
+    assert sb._dig_tick(object(), items, object()) is False
+    assert used == []
+
+    # 到达藏宝处：右键锄头一次，本帧返回 True（帧已过期，不再交给 follow）
+    pos["v"] = ("方寸后山", 39, 50)
+    clock.sleep(sb.DIG_POS_POLL)
+    assert sb._dig_tick(object(), items, object()) is True
+    assert len(used) == 1
+
+    # 用过之后不重复右键，交回 follow 等待任务推进/消失
+    clock.sleep(sb.DIG_POS_POLL)
+    assert sb._dig_tick(object(), items, object()) is False
+    assert len(used) == 1
+
+
+# ---- 答题类（千古一题） ----
+
+def _quiz_qitems(question):
+    """合成答题帧 OCR：问题行 + 4 个选项 + 世界浮名（不参与）。"""
+    return [
+        (question, [436, 382, 546, 403], 0.99),
+        ("都尉朝天跃马归", [434, 400, 544, 421], 1.0),
+        ("青云之交不可攀", [434, 417, 544, 438], 1.0),
+        ("银鞍紫轻照云日", [435, 433, 544, 454], 0.9),
+        ("扶摇直上九万里", [434, 450, 544, 472], 0.997),
+        ("幽冥地鬼", [620, 500, 700, 520], 1.0),
+    ]
+
+
+def _patch_quiz(monkeypatch, qitems):
+    calls = {"safe": [], "once": []}
+    option_txts = {t for t, _r, _s in qitems if t.startswith(("都尉", "青云",
+                                                              "银鞍", "扶摇"))}
+    monkeypatch.setattr(sb, "dialog_frame_score", lambda _img: 0.99)
+    monkeypatch.setattr(sb.game_map, "ocr_region",
+                        lambda _img, _region: (qitems, None))
+    monkeypatch.setattr(sb.task_tracker, "is_green_text",
+                        lambda _img, _rect: any(
+                            t in option_txts and _rect == r
+                            for t, r, _s in qitems))
+    monkeypatch.setattr(sb, "click_green_option_safe",
+                        lambda _w, _its, _img, text, prefix="":
+                        calls["safe"].append(text) or True)
+    monkeypatch.setattr(sb, "_click_green_option_once",
+                        lambda _w, _its, _img, text, prefix="":
+                        calls["once"].append(text) or True)
+    return calls
+
+
+def test_quiz_tick_answers_known_poem(monkeypatch):
+    """白字问上一句 + 绿字选项 → 点内置的下一句；世界浮名不参与。"""
+    calls = _patch_quiz(monkeypatch, _quiz_qitems("大鹏一日同风起"))
+    items = [("·千古一题[江湖历练任务]", [9, 230, 191, 252], 0.997)] \
+        + _quiz_qitems("大鹏一日同风起")
+    assert sb._quiz_tick(None, items, object()) is True
+    assert calls == {"safe": ["扶摇直上九万里"], "once": []}
+
+
+def test_quiz_tick_starts_intro_and_random_fallback(monkeypatch):
+    """开场白点开始选项；诗句未收录时随机点一个绿色选项。"""
+    calls = _patch_quiz(monkeypatch, _quiz_qitems("甲乙丙丁戊己庚"))
+    intro = [
+        ("·千古一题[江湖历练任务]", [9, 230, 191, 252], 0.997),
+        ("呵，原来是来寻求答案的，那也是知道的规矩了！来吧，回答我的千古三题",
+         [435, 381, 940, 401], 0.999),
+        ("这人到底靠谱不……也罢横竖一试", [435, 417, 664, 437], 0.973),
+        ("找你有其他事情", [435, 435, 544, 456], 0.999),
+    ]
+    assert sb._quiz_tick(None, intro, object()) is True
+    assert calls["safe"] == ["这人到底靠谱不"]
+
+    monkeypatch.setattr(sb.random, "choice", lambda seq: seq[1])
+    items = [("·千古一题[江湖历练任务]", [9, 230, 191, 252], 0.997)] \
+        + _quiz_qitems("甲乙丙丁戊己庚")
+    assert sb._quiz_tick(None, items, object()) is True
+    assert calls["once"] == ["青云之交不可攀"]

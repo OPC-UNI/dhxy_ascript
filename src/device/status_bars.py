@@ -144,7 +144,8 @@ def check_all_bars(win):
         if pct is None:
             log(f"[血蓝] {label}: 未检测到填充（空条或召唤兽未出战）", "WARN")
             continue
-        log(f"[血蓝] {label}: {pct * 100:.0f}%（低于{threshold}%）", "WARN")
+        # 低于阈值是自动回满的正常触发条件，不是异常：用 INFO 记录
+        log(f"[血蓝] {label}: {pct * 100:.0f}%（低于{threshold}%）", "INFO")
         # 低于阈值：移动到条中心右键回满
         cx = (rect[0] + rect[2]) // 2
         cy = (rect[1] + rect[3]) // 2

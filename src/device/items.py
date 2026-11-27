@@ -39,6 +39,9 @@ ITEMS = {
     "mihoutao": ItemDef(
         "mihoutao", "猕猴桃", "item_mihoutao.png", BAG,
         "用户 2026-11-26 提供（46x38）"),
+    "yimengfu": ItemDef(
+        "yimengfu", "忆梦符", "item_yimengfu.png", BAG,
+        "属性13（用户 2026-11-27 提供 48x48）"),
     "sheyaoxiang": ItemDef(
         "sheyaoxiang", "摄妖香", "sheyaoxiang.png", BAG,
         "自动使用摄妖香（bag.use_sheyaoxiang）"),

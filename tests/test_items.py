@@ -10,6 +10,7 @@ from src.device import items
 def test_item_catalog_entries_valid_and_templates_exist():
     root = Path(__file__).resolve().parent.parent / "res" / "img"
     assert "mihoutao" in items.ITEMS          # 用户 2026-11-26 新增
+    assert "yimengfu" in items.ITEMS          # 用户 2026-11-27 新增（属性13）
     for key, entry in items.ITEMS.items():
         assert entry.key == key
         assert entry.name and entry.icon

@@ -1451,12 +1451,23 @@ def member_rejoin_pass(win, away_names, force=False):
     30s 节流（REJOIN_PASS_MIN_INTERVAL）防每轮检查频繁切 Tab；归队
     成功后该成员离开暂离名单，自然不再触发。
     pass 互斥/前台校验/未登录跳过/绕回队长与其余 pass 同款。
-    force=True 供验证模式绕过 active() 检查（主进程无任务模式）。
+    与其余队员 pass 一致只操作启动检查确认「在队伍中」的 Tab
+    （only_members；2026-11-27 一致性修复）：一个窗口里非组员的 Tab
+    即使角色名与暂离昵称相近也不会被切过去开面板/点归队；未确认到
+    任何队员 Tab 时整个 pass 跳过不切。
+    force=True 供验证模式绕过 active()/队员确认检查（主进程无任务模式）。
     返回 (已归队数, 描述, 匹配到的暂离昵称集合)——昵称集合供调用方
     （超时请离）排除自家号：自家队员 Tab 归队优先、不自动请离。
     """
-    global pass_active, _last_rejoin_pass_at
+    global pass_active, _last_rejoin_pass_at, _no_members_logged
     if not _active and not force:
+        return 0, "", set()
+    if not force and not _team_member_ids:
+        # 与其余队员 pass 同款：未确认在队伍中的队员 Tab 不碰（非组员 Tab
+        # 可能在别的队伍/干别的事，切过去操作会干扰）
+        if not _no_members_logged:
+            _no_members_logged = True
+            log("[组号] 未确认到在队伍中的队员 Tab，跳过归队 pass", "WARN")
         return 0, "", set()
     now = time.time()
     if not force and now - _last_rejoin_pass_at < REJOIN_PASS_MIN_INTERVAL:
@@ -1472,6 +1483,10 @@ def member_rejoin_pass(win, away_names, force=False):
         matched = {}  # 账号 ID → (Tab 角色名, 匹配的暂离昵称)
         for c in children:
             if not c["id"] or c["id"] == _leader_id:
+                continue
+            if not force and c["id"] not in _team_member_ids:
+                # 非组员 Tab 即使名字与暂离昵称相近也不参与匹配：不能替
+                # 它归队，也不能据此把真正的暂离队员排除在超时请离之外
                 continue
             cname = _tab_char_name(c["title"])
             for n in away_names:
@@ -1506,7 +1521,8 @@ def member_rejoin_pass(win, away_names, force=False):
             if ok:
                 done += 1
 
-        _for_each_member(win, _rejoin_one, "归队 pass", force=force)
+        _for_each_member(win, _rejoin_one, "归队 pass", force=force,
+                         only_members=True)
         matched_away = {n for _cname, n in matched.values()}
         if done:
             return done, f"已归队 {done} 名队员", matched_away
