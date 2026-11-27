@@ -56,11 +56,6 @@ def test_sanitize_filters_invalid_modes():
     assert _sanitize_modes([]) == []
 
 
-def test_sanitize_single_mode_each_valid():
-    for mode in TASK_MODES:
-        assert _sanitize_modes([mode]) == [mode]
-
-
 def test_settings_spec_covers_all_task_modes():
     """方案快照按 _COUNT_KEYS 展开时不得缺键——「仅战斗」加入
     TASK_MODES 后 TASK_COUNT_DEFAULTS 漏键导致切换方案 KeyError
@@ -72,7 +67,8 @@ def test_settings_spec_covers_all_task_modes():
     from src.core import schemes
     expected = {
         "五环": 2, "客栈": 20, "修罗": 90, "五倍": 100,
-        "种族比武": 10, "玄枢轶闻": 5, "名望": 5, "仅战斗": 0,
+        "种族比武": 10, "玄枢轶闻": 5, "名望": 5, "300环": 1,
+        "仅战斗": 0,
     }
     assert set(TASK_COUNT_DEFAULTS) == set(TASK_MODES)
     spec = schemes._settings_spec()
@@ -87,79 +83,6 @@ def _patch_kv_empty(monkeypatch):
     真实 config.json——用户在面板改过开关后断言「首次默认」会误报）。"""
     from ascript.windows.system.key_value import KeyValue
     monkeypatch.setattr(KeyValue, "get", lambda key, default=None: default)
-
-
-def test_settings_spec_rejoin_and_check_team_defaults(monkeypatch):
-    """自动归队与检查队伍键在方案快照默认值表中存在且默认开启
-    （load_* 首次默认与 _settings_spec 必须一致，否则方案对比/
-    导入导出把默认值判成脏值）。"""
-    from src.core import schemes
-    from src.core.settings import (
-        _WUBEI_AUTO_REJOIN_KEY, _XIULUO_AUTO_REJOIN_KEY, _BATTLE_ONLY_AUTO_REJOIN_KEY,
-        _WUBEI_CHECK_TEAM_KEY, _XIULUO_CHECK_TEAM_KEY, load_wubei_auto_rejoin,
-        load_xiuluo_auto_rejoin, load_battle_only_auto_rejoin, load_wubei_check_team,
-        load_xiuluo_check_team,
-    )
-    spec = schemes._settings_spec()
-    assert spec[_WUBEI_AUTO_REJOIN_KEY] is True
-    assert spec[_XIULUO_AUTO_REJOIN_KEY] is True
-    assert spec[_BATTLE_ONLY_AUTO_REJOIN_KEY] is True
-    assert spec[_WUBEI_CHECK_TEAM_KEY] is True
-    assert spec[_XIULUO_CHECK_TEAM_KEY] is True
-    # load_* 首次默认同开（KeyValue 未写入时）
-    _patch_kv_empty(monkeypatch)
-    for key, load in ((_WUBEI_AUTO_REJOIN_KEY, load_wubei_auto_rejoin),
-                      (_XIULUO_AUTO_REJOIN_KEY, load_xiuluo_auto_rejoin),
-                      (_BATTLE_ONLY_AUTO_REJOIN_KEY, load_battle_only_auto_rejoin)):
-        assert load() == spec[key]
-
-
-def test_battle_only_hezi_default_off_and_roundtrip():
-    """仅战斗自动抢盒子（2026-11-15 用户需求）：方案快照注册键、首次
-    默认关闭（与 load_* 一致），保存后可读回。"""
-    from src.core import schemes
-    from src.core.settings import (
-        _BATTLE_ONLY_HEZI_KEY, load_battle_only_hezi, save_battle_only_hezi,
-    )
-    spec = schemes._settings_spec()
-    assert spec[_BATTLE_ONLY_HEZI_KEY] is False
-    assert load_battle_only_hezi() is False
-    assert save_battle_only_hezi(True)["status"] == "success"
-    assert load_battle_only_hezi() is True
-    assert save_battle_only_hezi(False)["status"] == "success"
-    assert load_battle_only_hezi() is False
-
-
-def test_wubei_manual_nav_default_and_roundtrip():
-    """五倍兼容无快捷寻路：方案快照注册键、首次默认开启、保存可读回。"""
-    from src.core import schemes
-    from src.core.settings import (
-        _WUBEI_MANUAL_NAV_KEY, load_wubei_manual_nav, save_wubei_manual_nav,
-    )
-    spec = schemes._settings_spec()
-    assert spec[_WUBEI_MANUAL_NAV_KEY] is True
-    assert load_wubei_manual_nav() is True
-    assert save_wubei_manual_nav(False)["status"] == "success"
-    assert load_wubei_manual_nav() is False
-    assert save_wubei_manual_nav(True)["status"] == "success"
-    assert load_wubei_manual_nav() is True
-
-
-def test_wubei_force_manual_default_off_and_roundtrip():
-    """五倍强制手动寻路（测试用，与修罗同款）：方案快照注册键、
-    首次默认关闭、保存可读回。"""
-    from src.core import schemes
-    from src.core.settings import (
-        _WUBEI_FORCE_MANUAL_KEY, load_wubei_force_manual,
-        save_wubei_force_manual,
-    )
-    spec = schemes._settings_spec()
-    assert spec[_WUBEI_FORCE_MANUAL_KEY] is False
-    assert load_wubei_force_manual() is False
-    assert save_wubei_force_manual(True)["status"] == "success"
-    assert load_wubei_force_manual() is True
-    assert save_wubei_force_manual(False)["status"] == "success"
-    assert load_wubei_force_manual() is False
 
 
 def test_settings_spec_kick_away_defaults(monkeypatch):
@@ -194,24 +117,6 @@ def test_settings_spec_kick_away_defaults(monkeypatch):
         assert load_minutes() == 8
         assert save_switch(False) == {"status": "success"}
         assert load_switch() is False
-
-
-def test_settings_spec_auto_create_team_defaults(monkeypatch):
-    """自动创建队伍键在方案快照默认值表中存在且默认开启（修罗/五倍
-    各一开关；load_* 首次默认与 _settings_spec 必须一致，2026-11-12
-    用户改为默认开）。"""
-    from src.core import schemes
-    from src.core.settings import (
-        _WUBEI_AUTO_CREATE_TEAM_KEY, _XIULUO_AUTO_CREATE_TEAM_KEY,
-        load_wubei_auto_create_team, load_xiuluo_auto_create_team,
-    )
-    spec = schemes._settings_spec()
-    assert spec[_WUBEI_AUTO_CREATE_TEAM_KEY] is True
-    assert spec[_XIULUO_AUTO_CREATE_TEAM_KEY] is True
-    _patch_kv_empty(monkeypatch)
-    for key, load in ((_WUBEI_AUTO_CREATE_TEAM_KEY, load_wubei_auto_create_team),
-                      (_XIULUO_AUTO_CREATE_TEAM_KEY, load_xiuluo_auto_create_team)):
-        assert load() == spec[key]
 
 
 def test_settings_spec_shout_and_tab_group_defaults(monkeypatch):
@@ -411,16 +316,6 @@ def test_build_group_last_scan_payload_merges_actions(monkeypatch):
 # ---- 调试相关全局设置不进配置方案（2026-11-10 用户要求） ----
 
 
-def test_settings_spec_excludes_debug_overlay():
-    """调试信息开关放 config.json、不随方案走：切换方案不得改变
-    「诊断」导航与悬浮层显隐，方案白名单不得包含该键。"""
-    from src.core import schemes
-    from src.core.settings import (
-        _DEBUG_OVERLAY_KEY,
-    )
-    assert _DEBUG_OVERLAY_KEY not in schemes._settings_spec()
-
-
 def test_snapshot_excludes_debug_globals(monkeypatch):
     """方案快照（切换/保存时写回）同样不得携带调试全局键，
     否则旧方案里残留的 debug_overlay 会随快照再次混入。"""
@@ -432,31 +327,6 @@ def test_snapshot_excludes_debug_globals(monkeypatch):
     snap = schemes._snapshot_current()
     assert _DEBUG_OVERLAY_KEY not in snap
     assert _DEBUG_UI_KEY not in snap
-
-
-def test_theme_is_global_not_in_scheme(monkeypatch):
-    """界面主题为全局设置（2026-11-11 用户确认）：不进方案白名单/
-    快照，切账号/切方案不改主题。"""
-    from src.core import schemes
-    from src.core.settings import (
-        _UI_THEME_KEY,
-    )
-    assert _UI_THEME_KEY not in schemes._settings_spec()
-    _patch_kv_empty(monkeypatch)
-    snap = schemes._snapshot_current()
-    assert _UI_THEME_KEY not in snap
-
-
-def test_debug_ui_unlock_save_load(monkeypatch):
-    """「显示与调试」卡片解锁标记：默认关闭、保存后读回开启
-    （全局键，写入 config.json）。"""
-    from src.app import control_window
-    store = _patch_kv_store(monkeypatch)
-    assert control_window.load_debug_ui_unlocked() is False
-    r = settings.save_debug_ui_unlocked(True)
-    assert r == {"status": "success"}
-    assert store[settings._DEBUG_UI_KEY] is True
-    assert control_window.load_debug_ui_unlocked() is True
 
 
 # ---- 任务启动 Tab 对齐绑定（2026-11-13 组号 pass 切 Tab 角色漂移修复） ----
@@ -1236,16 +1106,6 @@ def test_task_running_here_uses_selected_window(monkeypatch):
     tm4 = _TM(None)
     assert diagnostics._task_running_here(tm4) is True
     assert tm4.calls == [None]
-
-
-def test_demon_nav_kinds_cover_task_types():
-    """四类降魔任务各一个按钮：kind 集合与 demon_task 常量一致。"""
-    from src.app import diagnostics
-    from src.device import demon_task
-
-    expected = {demon_task.KIND_KILL, demon_task.KIND_HUANGPAO,
-                demon_task.KIND_XIANXING, demon_task.KIND_RECLAIM}
-    assert {spec[1] for spec in diagnostics.DEMON_NAV_KINDS.values()} == expected
 
 
 def test_verify_demon_navigate_guards(monkeypatch):

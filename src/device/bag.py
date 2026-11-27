@@ -9,6 +9,7 @@ from ascript.windows.screen.find_images import FindImages
 from ..core.app_utils import log, human_click
 from ..core import app_utils  # 高性能模式共享设施（high_perf 开关等）
 from . import map as game_map  # 找图能力复用（TRAY_BTN_REGION 按钮条带等）
+from . import items as item_catalog  # 物品目录（统一物品模板/名称/储物位置）
 
 # 背包按钮模板（res/img/bag.png，34x34，实测匹配度 0.999）
 BAG_ICON = "bag.png"
@@ -24,7 +25,7 @@ BAG_BOX_ICON = "bag_box.png"
 # bag_box 仅 0.382、box_task 0.705/0.707 均不命中，give_title 1.000）。
 GIVE_TITLE_ICON = "give_title.png"
 # 摄妖香物品图标模板（res/img/sheyaoxiang.png，49x48，实测匹配度 1.0）
-SHEYAOXIANG_ICON = "sheyaoxiang.png"
+SHEYAOXIANG_ICON = item_catalog.icon("sheyaoxiang")
 # 摄妖香匹配阈值：0.8 实测漏检（真实图标渲染分数 0.79 起步，见
 # 2026-10-11 10:27 日志），按用户要求降到 0.69（仅摄妖香，其他
 # 物品保持 0.8——给与/购买物品误匹配代价高）

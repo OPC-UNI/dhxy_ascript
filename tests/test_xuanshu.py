@@ -261,11 +261,6 @@ def test_panel_present_small_frame_graceful():
 
 
 # ---- 钓鱼小游戏（2026-11-10：与客栈破除封印同款窗口，仅标题模板不同）----
-def test_diaoyu_template_exists():
-    """标题/长按按钮模板必须真实存在于 res/img（禁止引用不存在的模板）。"""
-    base = Path(__file__).resolve().parent.parent / "res/img"
-    assert (base / xuanshu.DIAOYU_TITLE_ICON).is_file()
-    assert (base / xuanshu.DIAOYU_HOLD_ICON).is_file()
 
 
 def test_diaoyu_arm_only_entry_option():

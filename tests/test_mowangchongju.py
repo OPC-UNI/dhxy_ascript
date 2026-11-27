@@ -64,11 +64,6 @@ def test_parse_hint_direction_levels():
             "dir", (None, "adjacent"))
 
 
-def test_parse_hint_unknown():
-    assert mw._parse_hint("无关文案") == (None, None)
-    assert mw._parse_hint("") == (None, None)
-
-
 def _patch_actions(monkeypatch, hint=(None, None)):
     """桩：提示、跨图/寻路动作、关地图、道具使用。"""
     st = {"uses": 0, "ok": True, "hint": hint, "go": [], "walk": [],

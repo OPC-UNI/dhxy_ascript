@@ -569,3 +569,145 @@ def test_read_first_group_task_xiuluo_named_child(monkeypatch):
     assert rec["coords"] == [(84, 55)]
     assert rec["target"] == "修罗"
     assert rec["max_rounds"] == 1
+
+
+# ---- 标签页切换 / 列表滚动 / 关键字扫描（300环 日常活动页） ----
+
+TAB_ITEMS = [
+    ("当前任务", (456, 273, 534, 295), 1.0),
+    ("日常活动", (559, 270, 636, 291), 1.0),
+    ("周常副本", (659, 273, 738, 294), 1.0),
+    ("其他任务", (759, 271, 841, 296), 1.0),
+]
+
+DAILY_ROWS = _items(
+    ("常规玩法[6]", (436, 317, 541, 339)),
+    ("五环任务", (452, 334, 519, 355)),
+    ("客栈任务", (452, 355, 519, 376)),
+    ("雁塔除妖[1]", (436, 457, 541, 479)),
+    ("江湖历练任务[1]", (436, 527, 572, 551)),
+    ("历练征程", (452, 549, 519, 570)),
+    ("街坊玩法[4]", (436, 587, 541, 609)),
+)
+
+NO_TARGET_ROWS = [it for it in DAILY_ROWS if "江湖历练" not in it[0]
+                  and "历练征程" not in it[0]]
+
+
+class _Img:
+    size = (1378, 831)
+
+
+def _fake_tab_ocr(panel, list_rows, tabs=TAB_ITEMS):
+    def fake_ocr(_img, region):
+        if tuple(region) == tuple(panel["list_region"]):
+            return list(list_rows), None
+        return list(tabs), None
+    return fake_ocr
+
+
+def test_click_tab_clicks_daily_tab_and_ignores_missing(monkeypatch):
+    panel = _fake_panel()
+    monkeypatch.setattr(tp, "_capture_bgr", lambda _w: (_Img(), object()))
+    monkeypatch.setattr(tp, "locate_panel", lambda _b: panel)
+    from src.device import map as game_map
+    monkeypatch.setattr(game_map, "ocr_region", _fake_tab_ocr(panel, []))
+    clicks = []
+    monkeypatch.setattr(tp, "human_click",
+                        lambda _w, x, y: clicks.append((x, y)))
+    ok, info = tp.click_tab(object(), tp.TASK_PANEL_TAB_DAILY)
+    assert ok and "已点击" in info
+    assert clicks == [(597, 280)]
+    # 标签读不到时不盲点其它标签（返回失败、零点击）
+    monkeypatch.setattr(game_map, "ocr_region",
+                        lambda _img, _region: (list(TAB_ITEMS[:1]), None))
+    ok, _info = tp.click_tab(object(), tp.TASK_PANEL_TAB_DAILY)
+    assert not ok and clicks == [(597, 280)]
+
+
+def test_switch_to_tab_waits_for_daily_anchor(monkeypatch):
+    """切到日常活动并等锚点行出现（首轮列表未刷新，第二轮出现）。"""
+    monkeypatch.setattr(tp, "time", _FakeClock())
+    panel = _fake_panel()
+    monkeypatch.setattr(tp, "_capture_bgr", lambda _w: (_Img(), object()))
+    monkeypatch.setattr(tp, "locate_panel", lambda _b: panel)
+    from src.device import map as game_map
+    state = {"n": 0}
+
+    def fake_ocr(_img, region):
+        if tuple(region) == tuple(panel["list_region"]):
+            state["n"] += 1
+            return (list(NO_TARGET_ROWS) if state["n"] == 1
+                    else list(DAILY_ROWS)), None
+        return list(TAB_ITEMS), None
+
+    monkeypatch.setattr(game_map, "ocr_region", fake_ocr)
+    clicks = []
+    monkeypatch.setattr(tp, "human_click",
+                        lambda _w, x, y: clicks.append((x, y)))
+    ok, info = tp.switch_to_tab(
+        object(), tp.TASK_PANEL_TAB_DAILY, tp.TASK_PANEL_DAILY_ANCHORS)
+    assert ok and "已切换到" in info
+    assert clicks == [(597, 280)]
+
+
+def test_scan_list_for_scrolls_down_and_finds_row(monkeypatch):
+    """目标不在当前可见区：向上到顶后向下滚动，找到「江湖历练任务」。"""
+    monkeypatch.setattr(tp, "time", _FakeClock())
+    panel = _fake_panel()
+    monkeypatch.setattr(tp, "_capture_bgr", lambda _w: (_Img(), object()))
+    monkeypatch.setattr(tp, "locate_panel", lambda _b: panel)
+    from src.device import map as game_map
+    top_rows = [it for it in DAILY_ROWS if it[0] in
+                ("常规玩法[6]", "五环任务", "客栈任务", "雁塔除妖[1]")]
+    bottom_rows = [it for it in DAILY_ROWS if it[0] not in
+                   ("常规玩法[6]", "五环任务", "客栈任务")]
+    state = {"list_calls": 0, "scrolls": []}
+
+    def fake_ocr(_img, region):
+        if tuple(region) == tuple(panel["list_region"]):
+            state["list_calls"] += 1
+            if state["list_calls"] <= 3:
+                return list(top_rows), None      # 初始/向上到顶（尚无目标）
+            return list(bottom_rows), None       # 向下后目标出现
+        return list(TAB_ITEMS), None
+
+    monkeypatch.setattr(game_map, "ocr_region", fake_ocr)
+    monkeypatch.setattr(tp, "human_click", lambda _w, x, y: None)
+
+    def fake_scroll(win, lines, prefix=""):
+        state["scrolls"].append(lines)
+        return True, f"列表滚动 {lines:+d} 行"
+
+    monkeypatch.setattr(tp, "scroll_list", fake_scroll)
+    row, info = tp.scan_list_for(object(), "江湖历练任务",
+                                 tab=tp.TASK_PANEL_TAB_DAILY,
+                                 anchors=tp.TASK_PANEL_DAILY_ANCHORS)
+    assert row is not None, info
+    assert "江湖历练任务" in row["text"]
+    # 先向上到顶（一次内容不变即停），再向下找到
+    assert state["scrolls"][0] == tp.TASK_PANEL_SCROLL_LINES
+    assert tp.TASK_PANEL_SCROLL_LINES in state["scrolls"]
+    assert -tp.TASK_PANEL_SCROLL_LINES in state["scrolls"]
+
+
+def test_scan_list_for_returns_none_when_absent(monkeypatch):
+    monkeypatch.setattr(tp, "time", _FakeClock())
+    panel = _fake_panel()
+    monkeypatch.setattr(tp, "_capture_bgr", lambda _w: (_Img(), object()))
+    monkeypatch.setattr(tp, "locate_panel", lambda _b: panel)
+    from src.device import map as game_map
+    rows_only = [it for it in DAILY_ROWS if "江湖历练" not in it[0]
+                 and "历练征程" not in it[0]]
+    monkeypatch.setattr(game_map, "ocr_region",
+                        lambda _img, _region: (list(rows_only), None))
+    monkeypatch.setattr(tp, "human_click", lambda _w, x, y: None)
+    monkeypatch.setattr(tp, "scroll_list",
+                        lambda win, lines, prefix="": (True, "滚动"))
+    row, info = tp.scan_list_for(object(), "江湖历练任务",
+                                 tab=tp.TASK_PANEL_TAB_DAILY,
+                                 anchors=tp.TASK_PANEL_DAILY_ANCHORS)
+    assert row is None and "未找到" in info
+
+
+

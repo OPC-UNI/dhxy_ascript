@@ -152,6 +152,7 @@ from ..device import map_nav  # 坐标化寻路（通用设置开关，关闭回
 from ..device.map import bgr_frame as _bgr_frame  # PIL→BGR（模板匹配用）
 from ..device import task_tracker  # 任务追踪面板（对话框区域常量）
 from ..device import bag  # 背包操作（五庄封印任务储物格用唤风符）
+from ..device import items as item_catalog  # 物品目录（统一物品模板/名称/储物位置）
 from ..device import zuoqi  # 飞行驭器（蛟魔复仇到达目标地图后降落）
 from ..minigames import moqushendan as _moqu_minigame  # 天宫奇遇「魔取仙丹」顺序解封小游戏
 from ..minigames import mowangchongju as _mowang_minigame  # 魔王重聚「传音石寻人」引导（读提示找图/按方向收敛）
@@ -441,7 +442,7 @@ SEAL_MOVE_LOG_INTERVAL = 5.0            # 寻路中点屏抑制日志限频（�
 # 打开」而实际仍开着（用户 2026-11-10 实测）；等对话框消失后按帧检测
 # bag_box 再关，限频重试。
 SEAL_BAG_CLOSE_INTERVAL = 2.0           # 残留背包检测/关闭最小间隔（秒）
-SEAL_ITEM_ICON = "mingwang_huanfengfu.png"  # 唤风符（用户素材 图31，46×47）
+SEAL_ITEM_ICON = item_catalog.icon("huanfengfu")  # 唤风符（用户素材 图31，46×47）
 SEAL_ITEM_LABEL = "唤风符"
 SEAL_ITEM_THRESHOLD = 0.8               # 物品图标匹配阈值（静态图标）
 SEAL_ITEM_FIND_TIMEOUT = 10.0           # 任务储物格中查找唤风符的时限（秒）
@@ -506,7 +507,7 @@ PICK_USE_RETRY_AFTER = 15.0             # 触发词仍在时的用镐重试间�
 PICK_USE_RETRY_MAX = 2                  # 最多重试用镐次数
 PICK_ABSENT_RESET = 5                   # 触发词连续缺失轮询数 → 状态复位
 PICK_BAG_CLOSE_INTERVAL = 2.0           # 残留背包检测/关闭最小间隔（秒）
-PICK_ITEM_ICON = "mingwang_lingligao.png"  # 灵力镐（用户素材，46×42）
+PICK_ITEM_ICON = item_catalog.icon("lingligao")  # 灵力镐（用户素材，46×42）
 PICK_ITEM_LABEL = "灵力镐"
 PICK_ITEM_THRESHOLD = 0.8               # 物品图标匹配阈值（静态图标）
 PICK_ITEM_FIND_TIMEOUT = 10.0           # 任务储物格中查找灵力镐的时限（秒）
@@ -548,7 +549,7 @@ _pick_mining_last_check = 0.0  # 上次开采石头窗口检测时间（限频�
 # 使用传音石后的寻人引导（读中央提示 → 跨图/按方向收敛 → 近身触发
 # 「魔王护卫」战斗）全部在 minigames/mowangchongju.py，本模块只提供
 # 道具使用能力与战后交付对话配置。实机流程与标定见该小游戏模块。
-CHUANYIN_ITEM_ICON = "mingwang_chuanyinshi.png"  # 传音石（用户素材，47×47）
+CHUANYIN_ITEM_ICON = item_catalog.icon("chuanyinshi")  # 传音石（用户素材，47×47）
 CHUANYIN_ITEM_LABEL = "传音石"
 CHUANYIN_ITEM_THRESHOLD = 0.8            # 物品图标匹配阈值（静态图标）
 CHUANYIN_ITEM_FIND_TIMEOUT = 10.0        # 任务储物格中查找传音石的时限（秒）
@@ -578,7 +579,7 @@ TGQY_USE_RETRY_MAX = 2                  # 最多重试用道具次数
 TGQY_GAME_RETRY_AFTER = 15.0            # 小游戏游玩失败后的重试间隔（秒）
 TGQY_ABSENT_RESET = 5                   # phase 0 触发词连续缺失轮询数 → 复位
 TGQY_BAG_CLOSE_INTERVAL = 2.0           # 残留背包检测/关闭最小间隔（秒）
-TGQY_ITEM_ICON = "mingwang_toudanhulu.png"  # 偷丹葫芦（用户素材 图1，49×48）
+TGQY_ITEM_ICON = item_catalog.icon("toudanhulu")  # 偷丹葫芦（用户素材 图1，49×48）
 TGQY_ITEM_LABEL = "偷丹葫芦"
 TGQY_ITEM_THRESHOLD = 0.8               # 物品图标匹配阈值（静态图标）
 TGQY_ITEM_FIND_TIMEOUT = 10.0           # 任务储物格中查找偷丹葫芦的时限（秒）

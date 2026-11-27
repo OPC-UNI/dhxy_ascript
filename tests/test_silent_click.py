@@ -70,10 +70,6 @@ class _FakeUser32:
 
 # ---- 帧差统计 ----
 
-def test_diff_ratio_identical_frames():
-    a = np.zeros((10, 10, 3), dtype=np.int16)
-    pct, mean = silent_click._diff_ratio(a, a)
-    assert pct == 0.0 and mean == 0.0
 
 
 def test_diff_ratio_threshold_filters_small_changes():
@@ -83,15 +79,6 @@ def test_diff_ratio_threshold_filters_small_changes():
     pct, mean = silent_click._diff_ratio(a, b)
     assert pct == 0.0
     assert abs(mean - 16.0) < 1e-6
-
-
-def test_diff_ratio_half_changed():
-    a = np.zeros((10, 10, 3), dtype=np.int16)
-    b = a.copy()
-    b[:5] = 100
-    pct, mean = silent_click._diff_ratio(a, b)
-    assert pct == 50.0
-    assert abs(mean - 50.0) < 1e-6
 
 
 # ---- 点击目标选择 ----
@@ -260,18 +247,6 @@ def test_send_silent_hotkey_alt_u_sequence(monkeypatch):
     assert [m[2] for m in fake.msgs] == [0x12, 0x55, 0x55, 0x12]
 
 
-def test_send_silent_hotkey_alt_digit_sequence(monkeypatch):
-    """Alt+1/Alt+2（高性能开小地图/世界地图）主键码在键表中。"""
-    fake = _FakeUser32(client=(1366, 768))
-    monkeypatch.setattr(silent_click, "user32", fake)
-    monkeypatch.setattr(silent_click.game, "list_tab_windows", lambda w: [])
-    info = silent_click.send_silent_hotkey(_FakeWin(0x123), ("alt",), "2")
-    assert info["modifiers"] == ["alt"] and info["key"] == "2"
-    assert [m[2] for m in fake.msgs] == [0x12, 0x32, 0x32, 0x12]
-    info = silent_click.send_silent_hotkey(_FakeWin(0x123), ("alt",), "1")
-    assert [m[2] for m in fake.msgs[-4:]] == [0x12, 0x31, 0x31, 0x12]
-
-
 def test_send_silent_hotkey_ctrl_tab_sequence(monkeypatch):
     fake = _FakeUser32(client=(1366, 768))
     monkeypatch.setattr(silent_click, "user32", fake)
@@ -291,20 +266,6 @@ def test_send_silent_hotkey_invalid(monkeypatch):
         silent_click.send_silent_hotkey(_FakeWin(0x123), ("shift",), "c")
     with pytest.raises(ValueError):
         silent_click.send_silent_hotkey(_FakeWin(0x123), ("alt",), "alt")
-
-
-def test_send_and_report_key(monkeypatch):
-    fake = _FakeUser32(client=(1366, 768))
-    monkeypatch.setattr(silent_click, "user32", fake)
-    monkeypatch.setattr(silent_click.game, "list_tab_windows", lambda w: [])
-    logs = []
-    ok, info = silent_click.send_and_report_key(_FakeWin(0x123), logs.append)
-    assert ok
-    assert "Alt+C" in info
-    assert [m[1] for m in fake.msgs] == [WM_SYSKEYDOWN, WM_SYSKEYDOWN,
-                                         WM_SYSKEYUP, WM_SYSKEYUP]
-    assert any("已投递" in l and "Alt+C" in l for l in logs)
-    assert any("请自行观察游戏效果" in l for l in logs)
 
 
 def test_send_silent_hotkey_enter_plain(monkeypatch):
@@ -355,19 +316,6 @@ def test_send_silent_paste_sequence(monkeypatch):
     assert [(m[1], m[2], m[3]) for m in fake.msgs] == [(0x0302, 0, 0)]  # WM_PASTE
 
 
-def test_send_and_report_paste(monkeypatch):
-    fake = _FakeUser32(client=(1366, 768))
-    monkeypatch.setattr(silent_click, "user32", fake)
-    monkeypatch.setattr(silent_click.game, "list_tab_windows", lambda w: [])
-    monkeypatch.setattr(silent_click, "set_clipboard_text", lambda t: None)
-    logs = []
-    ok, info = silent_click.send_and_report_paste(_FakeWin(0x123), logs.append)
-    assert ok
-    assert "测试粘贴" in info
-    assert [m[1] for m in fake.msgs] == [0x0302]
-    assert any("WM_PASTE" in l for l in logs)
-
-
 def test_send_silent_unichar_sequence(monkeypatch):
     fake = _FakeUser32(client=(1366, 768))
     monkeypatch.setattr(silent_click, "user32", fake)
@@ -408,15 +356,6 @@ def test_send_silent_text_with_enter(monkeypatch):
     assert [(m[1], m[2]) for m in fake.msgs] == [
         (WM_CHAR, ord("测")), (WM_CHAR, ord("试")), (WM_CHAR, 0x0D)]
     assert info["msg_results"] == (0, 0, 0)
-
-
-def test_send_silent_text_no_enter(monkeypatch):
-    fake = _FakeUser32(client=(1366, 768))
-    monkeypatch.setattr(silent_click, "user32", fake)
-    monkeypatch.setattr(silent_click.game, "list_tab_windows", lambda w: [])
-    info = silent_click.send_silent_text(_FakeWin(0x123), "1000")
-    assert [(m[1], m[2]) for m in fake.msgs] == [
-        (WM_CHAR, ord("1")), (WM_CHAR, ord("0")), (WM_CHAR, ord("0")), (WM_CHAR, ord("0"))]
 
 
 # ---- Tab 条只读探测（SysTabControl32；仅 int-only 消息：带指针
@@ -491,16 +430,6 @@ def test_tab_control_hwnd_non_direct_child_skipped(monkeypatch):
     fake = _FakeUser32Tab(main_hwnd=0x999, children=[(0x777, "SysTabControl32")])
     monkeypatch.setattr(silent_click, "user32", fake)
     assert silent_click.tab_control_hwnd(_FakeWin(0x123)) is None
-
-
-def test_tab_item_read_helpers(monkeypatch):
-    fake = _FakeUser32Tab(tcm={silent_click.TCM_GETITEMCOUNT: 5,
-                               silent_click.TCM_GETCURSEL: 2})
-    monkeypatch.setattr(silent_click, "user32", fake)
-    assert silent_click.tab_item_count(_TAB_HWND) == 5
-    assert silent_click.tab_current_index(_TAB_HWND) == 2
-    assert fake.msgs[0] == (_TAB_HWND, silent_click.TCM_GETITEMCOUNT, 0, 0)
-    assert fake.msgs[1] == (_TAB_HWND, silent_click.TCM_GETCURSEL, 0, 0)
 
 
 # ---- 静默切 Tab 点击（UIA 矩形 + DOWN/UP 最小序列，2026-11-04 实机验证） ----

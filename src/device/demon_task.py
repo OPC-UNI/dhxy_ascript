@@ -55,6 +55,7 @@ OCR 容错：全/半角括号与逗号、缺右括号、显形镜被读成「豆
 import re
 
 from . import map as game_map
+from . import items as item_catalog
 
 KIND_KILL = "kill"            # 击杀类：地图 + 坐标 + 目标名
 KIND_XIANXING = "xianxing"    # 显形镜类：地图 + A/B 两坐标 + 显形镜
@@ -90,7 +91,7 @@ _MAX_ROUNDS_RE = re.compile(r"最多\s*(\d+)\s*轮")
 # 显形镜道具：名称与背包-任务储物格的图标模板（用户 2026-11-23 素材；
 # 原图 47x46，裁去四周深色留白后为 24x44 的图标本体）
 XIANXING_ITEM = "显形镜"
-XIANXING_ICON = "wubei_xianxingjing.png"
+XIANXING_ICON = item_catalog.icon("xianxingjing")
 # 用「形镜」而非「显形镜」：追踪面板 OCR 对「显」稳定误读成「豆」
 # （实测「豆形镜」，见 wubei.XIANXINGJING_LINK_KEYWORD 同款结论）
 XIANXING_KEYWORDS = ("形镜",)

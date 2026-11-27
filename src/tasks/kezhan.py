@@ -64,6 +64,7 @@ from ascript.windows.hardware.keyboard import Keyboard
 from ..core.app_utils import log, human_click, move_away, norm_text
 from ..core import app_utils  # 高性能模式共享设施（固定位置缓存点击）
 from ..device import bag  # 物品栏开关
+from ..device import items as item_catalog  # 物品目录（统一物品模板/名称/储物位置）
 from ..device import map as game_map  # 地图操作（世界地图/小地图/位置识别）
 from ..device import map_nav  # 坐标化寻路（通用设置开关，关闭回滚固定像素）
 from ..minigames import pochufengyin as _pochu_minigame  # 破除封印/钓鱼共用小游戏（闭环实现）
@@ -517,16 +518,16 @@ QUIZ_ANSWER_MAP = {
     "五谷丰登": {"answer": "瓜", "options": "稻麦瓜"},
 }
 # ---- 物品给与（高等食材→婉儿姑娘 / 九转还魂汤→苏巧儿；给与流程参考五环提交装备） ----
-GAODENGSHICAI_ICON = "kezhan_gaodengshicai.png"  # 高等食材物品（给与面板检索）
-JIUZHUAN_ICON = "kezhan__jiuzhuanhuanhuntang.png"  # 九转还魂汤物品（给与面板检索）
-DINGHUNTANG_ICON = "bag_dinghuntang.png"  # 九转还魂汤物品（给与面板检索）
-TAOZHI_ICON = "kezhan_taozhi.png"  # 桃枝物品（给与面板检索）
-YIHELIPIN_ICON = "kezhan_yihelipin.png"  # 一盒礼品物品（给与面板检索）
-JIGUANCAILIAO_ICON = "kezhan_jiguancailiao.png"
-MIXIN_ICON = "kezhan_mixin.png"
-QINGTIE_ICON = "kezhan_qingtie.png"
-HUALIDEJINHE_ICON = "kezhan_hualidejinhe.png"
-XUGUGAO_ICON = "kezhan_xugugao.png"
+GAODENGSHICAI_ICON = item_catalog.icon("gaodengshicai")  # 高等食材物品（给与面板检索）
+JIUZHUAN_ICON = item_catalog.icon("jiuzhuanhuanhuntang")  # 九转还魂汤物品（给与面板检索）
+DINGHUNTANG_ICON = item_catalog.icon("dinghuntang")  # 九转还魂汤物品（给与面板检索）
+TAOZHI_ICON = item_catalog.icon("taozhi")  # 桃枝物品（给与面板检索）
+YIHELIPIN_ICON = item_catalog.icon("yihelipin")  # 一盒礼品物品（给与面板检索）
+JIGUANCAILIAO_ICON = item_catalog.icon("jiguancailiao")
+MIXIN_ICON = item_catalog.icon("mixin")
+QINGTIE_ICON = item_catalog.icon("qingtie")
+HUALIDEJINHE_ICON = item_catalog.icon("hualidejinhe")
+XUGUGAO_ICON = item_catalog.icon("xugugao")
 GIVE_TITLE_ICON = "give_title.png"  # 给与面板标志（横幅「给与」静态标题区）
 # 旧 GIVE_ICON=give.png（32x213 整条横幅）含随物品类别变化的动态区，实测
 # 苏巧儿面板 0.906 → 桃枝面板 0.665 低于 0.8 阈值，面板检查会误判未打开；

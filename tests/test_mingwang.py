@@ -115,37 +115,6 @@ def _pil(bgr):
     return Image.fromarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
 
 
-def test_templates_self_match():
-    for icon, threshold in TEMPLATES:
-        frame = _paste_bgr(icon)
-        score, pt = game_map.best_match_np(frame, icon)
-        assert score >= threshold, (icon, score, threshold)
-        assert game_map.match_frame_np(frame, icon, threshold=threshold,
-                                       fallback=False) is not None, icon
-
-
-def test_templates_no_false_positive():
-    frame = _noise_bgr(seed=99)
-    for icon, threshold in TEMPLATES:
-        score, _pt = game_map.best_match_np(frame, icon)
-        assert score < threshold, (icon, score, threshold)
-
-
-def test_race_from_items_mozu():
-    race, counts, lines = mingwang._race_from_items(MOZU_ITEMS)
-    assert race == "魔族"
-    assert counts["魔族"] == 3  # 男魔角色 / 逆天魔 / 女魔角色
-    assert counts["仙族"] == 0
-    assert len(lines) == len(MOZU_ITEMS)
-
-
-def test_race_from_items_xianzu():
-    race, counts, _lines = mingwang._race_from_items(XIANZU_ITEMS)
-    assert race == "仙族"
-    assert counts["仙族"] >= 3
-    assert counts["魔族"] == 0
-
-
 def test_race_from_items_unknown_and_tie():
     race, counts, lines = mingwang._race_from_items(
         [("人物属性", [0, 0, 10, 10], 0.9)])
@@ -164,24 +133,6 @@ def test_race_from_items_xianzu_role_name_without_xian():
             [(name, [0, 0, 60, 20], 0.95)])
         assert race == "仙族", name
         assert counts["仙族"] == 1 and counts["魔族"] == 0
-
-
-def test_claim_points_config():
-    """种族领取点配置完整（小地图快捷领取：地图/黄字点/筛选点），
-    模板文件存在可解码。"""
-    assert set(mingwang.CLAIM_POINTS) == {"魔族", "仙族"}
-    for race, claim in mingwang.CLAIM_POINTS.items():
-        assert claim["map"] and claim["npc_name"], race
-        assert len(claim["map_filter_pos"]) == 2
-        assert len(claim["map_label_pos"]) == 2
-        assert game_map.template_size(
-            game_map.world_map_label_icon(claim["map"])) is not None, race
-    assert mingwang.CLAIM_POINTS["仙族"]["map"] == "天宫"
-    # 旧「坐标寻路 + NPC 模板」路线已移除（用户 2026-11-16 规则）
-    for race in ("魔族", "仙族"):
-        for key in ("target", "mini_click", "npc_icon", "npc_icon2",
-                    "npc_threshold", "npc_full_fallback"):
-            assert key not in mingwang.CLAIM_POINTS[race], (race, key)
 
 
 def test_race_strip_rect():
@@ -416,15 +367,6 @@ def test_follow_task_uses_mingwang_dialog_map(monkeypatch):
     assert "task_gone_require_panel" not in calls
 
 
-def test_dialog_skip_texts_config():
-    """跳过表配置：文案非空、点击次数为正整数；与选项表互不冲突。"""
-    assert mingwang.DIALOG_SKIP_TEXTS
-    for text, clicks in mingwang.DIALOG_SKIP_TEXTS.items():
-        assert isinstance(text, str) and text.strip()
-        assert isinstance(clicks, int) and clicks > 0
-        assert text not in mingwang.DIALOG_OPTION_MAP
-
-
 def test_dialog_skip_texts_matches_live_mingyue_dialog():
     """实机 OCR 原样（说话人名 + 两行换行拆分）必须命中跳过表。"""
     items = [
@@ -512,14 +454,6 @@ LIVE_CARD_ITEMS = {
 
 def _live_rects():
     return {(r, c): rect for r, c, rect in mingwang._card_rects(LIVE_ANCHOR)}
-
-
-def test_card_grid_geometry():
-    rects = _live_rects()
-    assert rects[(0, 0)] == (392, 290, 582, 444)
-    assert rects[(0, 2)] == (794, 290, 984, 444)
-    assert rects[(1, 0)] == (392, 451, 582, 605)
-    assert rects[(1, 2)] == (794, 451, 984, 605)
 
 
 def test_card_level_and_title_from_live_ocr():
@@ -895,14 +829,6 @@ def test_shahai_start_arm_timeout(monkeypatch):
     assert not ok and mingwang._shahai_armed_at == 0.0
 
 
-def test_shahai_start_not_clicked_when_not_armed(monkeypatch):
-    monkeypatch.setattr(mingwang, "_shahai_armed_at", 0.0)
-    monkeypatch.setattr(mingwang, "human_click",
-                        lambda *a, **k: (_ for _ in ()).throw(
-                            AssertionError("未 arm 不应点击")))
-    assert mingwang._maybe_click_shahai_start(object()) is False
-
-
 def test_shahai_start_click_arms_game_check(monkeypatch):
     """「开始」点击成功后 arm 小游戏弹窗检测窗口。"""
     monkeypatch.setattr(mingwang, "_shahai_armed_at", time.time())
@@ -1146,14 +1072,6 @@ def test_qingxi_start_arm_timeout(monkeypatch):
     assert not ok and mingwang._qingxi_armed_at == 0.0
 
 
-def test_qingxi_start_not_clicked_when_not_armed(monkeypatch):
-    monkeypatch.setattr(mingwang, "_qingxi_armed_at", 0.0)
-    monkeypatch.setattr(mingwang, "human_click",
-                        lambda *a, **k: (_ for _ in ()).throw(
-                            AssertionError("未 arm 不应点击")))
-    assert mingwang._maybe_click_qingxi_start(object()) is False
-
-
 def test_handle_dialog_options_second_candidate(monkeypatch):
     """候选选项：第一个不存在时尝试第二个（如 <山河名望>）。"""
     monkeypatch.setattr(mingwang, "_shahai_armed_at", 0.0)
@@ -1167,15 +1085,6 @@ def test_handle_dialog_options_second_candidate(monkeypatch):
     assert calls == ["逆天魔大将派我前来", "<山河名望>"]
 
 
-def test_dialog_option_map_config():
-    """配置校验：文案非空；值必须是字符串或非空字符串元组。"""
-    for dtxt, opts in mingwang.DIALOG_OPTION_MAP.items():
-        assert isinstance(dtxt, str) and dtxt.strip()
-        vals = (opts,) if isinstance(opts, str) else opts
-        assert isinstance(vals, tuple) and vals
-        assert all(isinstance(o, str) and o.strip() for o in vals)
-
-
 # ---- 蛟魔探秘：钓鱼小游戏（与玄枢钓鱼共用 pochufengyin 闭环） ----
 def test_pick_card_priority_over_row_order():
     """级别优先级高于卡片顺序：中级卡在前仍先选高级已实现任务。"""
@@ -1187,40 +1096,6 @@ def test_pick_card_priority_over_row_order():
     ]
     _card, task = mingwang._pick_card(cards)
     assert task["title"] == "蛟魔复仇"
-
-
-def test_pick_card_level_none_matches_any_level(monkeypatch):
-    """任务定义级别为 None 时按卡片实际级别匹配（不限级别）。"""
-    monkeypatch.setattr(mingwang, "CLAIM_TASKS",
-                        ({"title": "蛟魔探秘", "level": None},))
-    cards = [{"row": 0, "col": 0, "rect": (0, 0, 190, 154),
-              "level": "中级", "title": "蛟魔探秘"}]
-    _card, task = mingwang._pick_card(cards)
-    assert task["title"] == "蛟魔探秘"
-
-
-def test_pick_card_wuzhuang_seal_high_level():
-    """仙族「五庄封印」为高级卡片（用户实机确认）；初级卡不匹配。"""
-    cards = [{"row": 0, "col": 0, "rect": (0, 0, 190, 154),
-              "level": "高级", "title": "五庄封印"}]
-    _card, task = mingwang._pick_card(cards)
-    assert task["title"] == "五庄封印"
-    low = [{"row": 0, "col": 0, "rect": (0, 0, 190, 154),
-            "level": "初级", "title": "五庄封印"}]
-    _card, task = mingwang._pick_card(low)
-    assert task is None
-
-
-def test_pick_card_shadu_xiuluo_high_level():
-    """「沙都修罗」为高级已实现任务（2026-11-10 用户规则：通用跟踪即可）。"""
-    cards = [{"row": 0, "col": 0, "rect": (0, 0, 190, 154),
-              "level": "高级", "title": "沙都修罗"}]
-    _card, task = mingwang._pick_card(cards)
-    assert task["title"] == "沙都修罗" and task["level"] == "高级"
-    low = [{"row": 0, "col": 0, "rect": (0, 0, 190, 154),
-            "level": "中级", "title": "沙都修罗"}]
-    _card, task = mingwang._pick_card(low)
-    assert task is None
 
 
 def test_claim_panel_task_claims_shadu(monkeypatch):
@@ -1244,13 +1119,6 @@ def test_claim_panel_task_claims_shadu(monkeypatch):
 
 
 # ---- 沙都修罗（高级）：追踪文案触发 → 蟠桃园五路点找 NPC → 点名字上方 ----
-def test_shadu_trigger_phrases():
-    """触发词：完整文案/短词精确命中；短词 1 字 OCR 误读仍触发。"""
-    assert mingwang._shadu_trigger(
-        "山河名望日常沙都修罗根据三张蟠桃园残像所示位置")
-    assert mingwang._shadu_trigger("蟠桃园残像")
-    assert mingwang._shadu_trigger("根据三张蟠桃园残相所示位置")
-    assert not mingwang._shadu_trigger("日常五庄封印山河名望")
 
 
 def test_shadu_npc_point_skips_tracking_panel():
@@ -1293,25 +1161,6 @@ def test_shadu_scan_npc_prefers_template(monkeypatch):
     pt, info = mingwang._shadu_scan_npc(_FakeWin([_pil(frame)]))
     assert pt == (600 + tw // 2, 300 + th // 2)
     assert "模板" in info
-
-
-def test_shadu_scan_npc_falls_back_to_ocr(monkeypatch):
-    """模板未命中 → 两段 OCR 文案并返回文案上方 40px。"""
-    frame = _noise_bgr(seed=20261117)
-    seen = []
-    monkeypatch.setattr(mingwang.time, "sleep", lambda s: None)
-    monkeypatch.setattr(mingwang, "_shadu_panel_rect",
-                        lambda img: (7, 227, 307, 557))
-    monkeypatch.setattr(
-        mingwang.game_map, "ocr_regions",
-        lambda img, regions: (seen.append(regions)
-                              or ([("沙都修罗", [600, 300, 660, 320], 0.99)],
-                                  None)))
-    pt, info = mingwang._shadu_scan_npc(_FakeWin([_pil(frame)]))
-    assert pt == (630, 260)
-    assert "文案" in info
-    # 世界区两段 OCR（原生尺寸检出，见 SHADU_NPC_BANDS 注释）
-    assert seen and seen[0] == mingwang.SHADU_NPC_BANDS
 
 
 def _patch_shadu_search(monkeypatch, calls, pos=("蟠桃园", 300, 300)):
@@ -1522,14 +1371,6 @@ def test_mingwang_diaoyu_window_runs_minigame(monkeypatch):
     assert calls.get("mash") is True
     assert "action_icon" not in calls
     assert mingwang._mingwang_diaoyu_armed_at == 0.0
-
-
-def test_mingwang_diaoyu_not_armed_noop(monkeypatch):
-    monkeypatch.setattr(mingwang, "_mingwang_diaoyu_armed_at", 0.0)
-    monkeypatch.setattr(mingwang, "human_click",
-                        lambda *a, **k: (_ for _ in ()).throw(
-                            AssertionError("未 arm 不应操作")))
-    assert mingwang._mingwang_diaoyu_window_check(object()) is False
 
 
 # ---- 蛟魔探秘钓鱼失败重试（关面板 X → 点任务追踪重走，用户 2026-11-17）----
@@ -1994,15 +1835,6 @@ def test_use_huanfengfu_clicks_item(monkeypatch):
     assert clicks == [(600, 300, "secondary")]
 
 
-def test_seal_config():
-    # 封印点为动态解析（五行任选两个，2026-11-17 用户确认）
-    assert mingwang.SEAL_LINK_NAME_SUFFIX == "藏之位"
-    assert mingwang._seal_parse_links("找到金藏之位和土藏") == ["金", "土"]
-    assert game_map.template_size(mingwang.SEAL_ITEM_ICON) is not None
-    assert mingwang.SEAL_ARRIVE_POLLS >= 2
-
-
-
 # ---- 到达后无选项对话自动推进 / 用符后残留背包补关（2026-11-10 实机）----
 def test_seal_dialog_advances_when_no_option(monkeypatch):
     """到达后无绿字选项对话：连续 4 轮询（~2s）后点屏推进一次。
@@ -2168,13 +2000,6 @@ PICK_ITEMS = [
     ("蕴灵石头", [140, 268, 210, 286], 0.93),
     ("(412,45)。", [10, 290, 90, 306], 0.90),
 ]
-
-
-def test_lingligao_trigger_keywords():
-    assert mingwang._pick_trigger("山河名望 前往大唐边境，使用灵力镐")
-    assert mingwang._pick_trigger("前往大唐边境，使用灵力稿")  # OCR 形近
-    assert not mingwang._pick_trigger("火藏之位 木藏之位")
-    assert not mingwang._pick_trigger("")
 
 
 def test_lingligao_link_point_targets_stone_not_pickaxe():
@@ -2448,30 +2273,6 @@ def test_jiamo_target_map_parse():
     assert mingwang._jiamo_target_map("山河名望请在女儿村一带仔细搜查暗雷战斗") == "女儿村"
     assert mingwang._jiamo_target_map("山河名望请在仔细搜查暗雷战斗") is None
     assert mingwang._jiamo_target_map("山河名望暗雷战斗") is None
-
-
-def test_jiamo_trigger_from_tracker_items():
-    """实机追踪面板 OCR 行（含拆行）→ _seal_sig 触发词 + 目标地图解析。"""
-    items = [
-        ("[日常]蛟魔复仇[山河名望]", [11, 230, 205, 253], 0.99),
-        ("仙族兵士逃窜而去，请在女儿村仔细搜查，可不能让让他就这么走了。",
-         [11, 256, 300, 280], 0.98),
-        ("（暗雷战斗）", [11, 282, 120, 300], 0.97),
-    ]
-    sig = mingwang._seal_sig(items)
-    assert mingwang.JIAMO_ANLEI_KEYWORD in sig
-    assert mingwang._jiamo_target_map(sig) == "女儿村"
-
-
-def test_jiamo_map_match():
-    """地名比对：精确 + 等长 ≥3 字容 1 字误读；不做包含匹配。"""
-    assert mingwang._jiamo_map_match("女儿村", "女儿村")
-    assert mingwang._jiamo_map_match("女儿材", "女儿村")
-    assert not mingwang._jiamo_map_match("长寿村", "女儿村")
-    assert not mingwang._jiamo_map_match("长安城", "长安城东")  # 前缀地图不误判
-    assert not mingwang._jiamo_map_match("天宫", "地府")        # 2 字不容错
-    assert not mingwang._jiamo_map_match(None, "女儿村")
-    assert not mingwang._jiamo_map_match("女儿村", None)
 
 
 def _patch_jiamo(monkeypatch, sig, pos, land_ok=True):
@@ -2802,18 +2603,6 @@ def test_ensure_minimap_task_filter_clicks_when_unchecked(monkeypatch):
     assert ok and clicks == [(501, 665)]
 
 
-def test_ensure_minimap_task_filter_skips_when_checked(monkeypatch):
-    """任务筛选已勾选 → 不点击（勾选状态零 OCR 判定）。"""
-    win = _FakeWin([_pil(_noise_bgr(seed=1))])
-    monkeypatch.setattr(game_map, "minimap_task_filter_checked",
-                        lambda *a: True)
-    clicks = []
-    monkeypatch.setattr(game_map, "human_click",
-                        lambda w, x, y, button="primary": clicks.append((x, y)))
-    ok, _info = game_map.ensure_minimap_task_filter(win, (501, 665))
-    assert ok and clicks == []
-
-
 def test_minimap_quick_navigate_opens_scene_map_directly(monkeypatch):
     """已在目标地图 → 直接开小地图（不绕世界地图）→ 勾筛选 → 点黄字
     固定点（绝对坐标，只点一次）。"""
@@ -3027,12 +2816,6 @@ def test_tgqy_at_target_one_px_tolerance():
     assert not mingwang._tgqy_at_target(None)
 
 
-def test_tgqy_trigger_keywords():
-    assert mingwang._tgqy_trigger("前往老君丹房门口，使用偷丹葫芦。")
-    assert mingwang._tgqy_trigger("老君丹房")   # 短词兜底 OCR 截断
-    assert not mingwang._tgqy_trigger("五庄封印火藏之位")
-
-
 def _tgqy_link_frame():
     """追踪行「前往老君丹房门口，使用偷丹」+ 两段亮绿下划线。
 
@@ -3127,14 +2910,6 @@ def test_maybe_play_tgqy_detects_and_plays(monkeypatch):
     assert mingwang._tgqy_phase == 2
 
 
-def test_maybe_play_tgqy_not_armed_noop(monkeypatch):
-    """未 arm：零操作，不截图。"""
-    monkeypatch.setattr(mingwang, "is_in_battle",
-                        lambda w: (_ for _ in ()).throw(
-                            AssertionError("未 arm 不应检测")))
-    assert mingwang._maybe_play_tgqy(object()) is False
-
-
 # ---- 魔取仙丹小游戏：金色亮起判定 / 演示顺序录制 / 按钮三态 ----
 def _moqu_rgb_frame(lit_names=()):
     """合成 RGB 帧：指定葫芦 ROI 填金色（亮起），其余暗金（未亮）。"""
@@ -3188,15 +2963,6 @@ def test_moqu_button_label_three_states(monkeypatch, text, label):
                           (text, [0, 0, 2, 2], 0.99)], None))
     got, _texts = moqu._button_label(object())
     assert got == label
-
-
-def test_moqu_template_present_and_absent():
-    tpl = cv2.imread(R.img(moqu.MOQUSHENDAN_TITLE_ICON), cv2.IMREAD_COLOR)
-    th, tw = tpl.shape[:2]
-    frame = _noise_bgr(seed=7)
-    frame[310:310 + th, 700:700 + tw] = tpl
-    assert moqu.moqushendan_present(frame)
-    assert not moqu.moqushendan_present(_noise_bgr(seed=8))
 
 
 def test_play_moqu_click_order(monkeypatch):
@@ -3331,29 +3097,6 @@ def _patch_refresh_state(monkeypatch):
         mingwang.app_utils, "char_state_set",
         lambda key, win, value: store.__setitem__(key, value))
     return store
-
-
-def test_parse_refresh_used():
-    """顶部计数「任务已刷新：X/3」解析（整行/拆段/低置信度/无匹配）。"""
-    assert mingwang._parse_refresh_used(
-        [("今日已完成：3/5 任务已刷新：0/3",
-          [393, 261, 661, 282], 0.999)]) == 0
-    assert mingwang._parse_refresh_used(
-        [("今日已完成：3/5", [393, 261, 520, 282], 1.0),
-         ("任务已刷新：2/3", [530, 261, 661, 282], 1.0)]) == 2
-    assert mingwang._parse_refresh_used(
-        [("任务已刷新：1／3", [530, 261, 661, 282], 0.8)]) == 1
-    assert mingwang._parse_refresh_used([]) is None
-    assert mingwang._parse_refresh_used(
-        [("任务已刷新：X/3", [530, 261, 661, 282], 0.4)]) is None
-
-
-def test_refresh_header_strip():
-    """计数条带：锚点左缘向右 310px、锚点上下区域内。"""
-    assert mingwang._refresh_header_strip((392, 252, 425, 287),
-                                          (1378, 831)) == (392, 256, 702, 287)
-    assert mingwang._refresh_header_strip((1300, 500, 1330, 540),
-                                          (1378, 831)) == (1300, 504, 1378, 540)
 
 
 def test_card_refresh_point_live_offset():

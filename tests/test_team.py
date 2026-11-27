@@ -63,17 +63,6 @@ def test_classify_leader_frame_unclear_on_empty_frame():
     assert js < team._TEMPLATE_THRESHOLD and ls < team._TEMPLATE_THRESHOLD
 
 
-def test_classify_leader_frame_weak_member_triggered_by_confirm():
-    """离开按钮降质（离开分落在 0.8~0.9）：分类仍为 member，但
-    _confirm_leader_kind 应触发复核而非直接采信。"""
-    # 半透明叠加会使模板区域与噪声混合，分数低于实贴
-    frame = _paste_tpl(_frame(), "likaiduiwu.png", 600, 520, alpha=0.55)
-    kind, scores = team._classify_leader_frame(frame)
-    assert kind == "member" or kind == "unclear"  # 降质后可能低于 0.8
-    if kind == "member":
-        assert scores[1] < team._MEMBER_CONFIRM_SCORE
-
-
 # ---- 复核 ----
 
 class _SeqWin:
@@ -168,11 +157,6 @@ def test_confirm_weak_member_triggers_recheck(monkeypatch):
 
 # ---- 确定性非队长判定口径 ----
 
-def test_definitive_not_leader_only_member_and_ungrouped():
-    assert team.is_definitive_not_leader("非队长（面板无「解散队伍」）")
-    assert team.is_definitive_not_leader("未组队（菜单中无「队伍信息」）")
-    assert not team.is_definitive_not_leader("队长无法判定（面板内解散/离开按钮未命中）")
-    assert not team.is_definitive_not_leader("队长无法判定（窗口截图失败）")
 
 
 # ---- 自动归队（todo1：轮回司判定与 maybe_rejoin） ----
@@ -210,15 +194,6 @@ def test_at_lunhuisi_requires_two_confirms(monkeypatch):
     ok, desc = team._at_lunhuisi(win)
     assert not ok and "不在轮回司" in desc
     assert reads["n"] == 2
-
-
-def test_at_lunhuisi_confirmed(monkeypatch):
-    monkeypatch.setattr(team.game_map, "read_map_position",
-                        lambda win, img=None: ("轮回司", 1, 1))
-    monkeypatch.setattr(team.time, "sleep", lambda _s: None)
-    win = _SeqWin([_frame()])
-    ok, desc = team._at_lunhuisi(win)
-    assert ok and "在轮回司" in desc
 
 
 def test_maybe_rejoin_skips_when_not_lunhuisi(monkeypatch):
@@ -452,25 +427,6 @@ def test_open_team_panel_no_create_by_default(monkeypatch):
     assert env["menu_closed"] == 1
 
 
-def test_check_team_min_forwards_create_flag(monkeypatch):
-    """check_team_min 把自动创建标记与日志前缀传到 open_team_panel。"""
-    seen = {}
-    monkeypatch.setattr(team, "_is_panel_open", lambda win: False)
-    monkeypatch.setattr(team, "has_pending_apply", lambda img: False)
-
-    def open_panel(win, create_if_missing=False, prefix="[组队]"):
-        seen["create"] = create_if_missing
-        seen["prefix"] = prefix
-        return False, "组队菜单未打开"
-
-    monkeypatch.setattr(team, "open_team_panel", open_panel)
-    monkeypatch.setattr(team, "record_leader_status", lambda is_leader: None)
-    win = _SeqWin([_frame()])
-    team.check_team_min(win, create_if_missing=True,
-                        prefix="[五倍][创建队伍]")
-    assert seen == {"create": True, "prefix": "[五倍][创建队伍]"}
-
-
 def test_chuangjianduiwu_target_frame_unique_hit():
     """创建队伍模板目标帧（贴入原模板）以 0.8 阈值唯一命中（用户
     2026-11-07 提供 113x22 模板；真图交叉验证待实机菜单帧校准）。"""
@@ -481,12 +437,6 @@ def test_chuangjianduiwu_target_frame_unique_hit():
     # 命中中心 = 贴入中心（113x22 的一半偏移：113//2=56, 22//2=11）
     _score, x, y = hits[0]
     assert (x, y) == (656, 411)
-
-
-def test_chuangjianduiwu_noise_frame_below_threshold():
-    """纯噪声帧（非目标场景）创建队伍模板最佳分低于 0.8 阈值。"""
-    score, _ = team.game_map.best_match_np(_bgr_frame(), team.CHUANGJIAN_DUIWU_ICON)
-    assert score < team._TEMPLATE_THRESHOLD
 
 
 def test_chuangjianduiwu_not_confused_as_team_buttons():
@@ -664,28 +614,6 @@ def test_scan_away_members(monkeypatch):
     assert closed == [1]
 
 
-def test_scan_away_members_name_none_fallback(monkeypatch):
-    """昵称 OCR 未识别（None）时降级只显示第 X 名。"""
-    monkeypatch.setattr(team, "_is_panel_open", lambda win: True)
-    monkeypatch.setattr(team, "close_team_panel", lambda win: (True, ""))
-    monkeypatch.setattr(team, "_away_member_indices",
-                        lambda img: ([(2, None, None)], None))
-    win = _SeqWin([_frame()])
-    ok, away, info = team.scan_away_members(win)
-    assert ok and away == [(2, None, None)]
-    assert "第 3 名" in info and "「" not in info
-
-
-def test_scan_away_members_none_away(monkeypatch):
-    monkeypatch.setattr(team, "_is_panel_open", lambda win: True)
-    monkeypatch.setattr(team, "close_team_panel", lambda win: (True, ""))
-    monkeypatch.setattr(team, "_away_member_indices", lambda img: ([], None))
-    win = _SeqWin([_frame()])
-    ok, away, info = team.scan_away_members(win)
-    assert ok and away == []
-    assert "无暂离成员" in info
-
-
 def test_kick_away_member_click_and_verify(monkeypatch):
     """请离链路：点选第 2 名暂离成员卡中心 → 请离队伍按钮出现即点 →
     暂离标记减少 → 成功（日志带昵称）。"""
@@ -823,31 +751,6 @@ def test_auto_kick_overdue_kicks_back_to_front(monkeypatch):
     team.reset_away_tracking()
 
 
-def test_auto_kick_overdue_only_expired_kicked(monkeypatch):
-    """4 超时、5 未超时：只请离 4（序号 3）。"""
-    now = time.time()
-    team.reset_away_tracking()
-    team._away_seen.update({("女人", "甲"): now - 400,
-                            ("男人", "乙"): now - 10})
-    scans = {"n": 0}
-    kicked = []
-
-    def _away(img):
-        scans["n"] += 1
-        if scans["n"] == 1:
-            return [(3, "甲", "女人"), (4, "乙", "男人")], None
-        return [(4, "乙", "男人")], None
-
-    monkeypatch.setattr(team, "_away_member_indices", _away)
-    monkeypatch.setattr(team, "_kick_one",
-                        lambda win, idx, name, race, away_before:
-                        (kicked.append((idx, name)) or True, "ok"))
-    n, _info = team._auto_kick_overdue(_SeqWin([_frame()]))
-    assert n == 1
-    assert kicked == [(3, "甲")]
-    team.reset_away_tracking()
-
-
 def test_auto_kick_overdue_stops_on_kick_failure(monkeypatch):
     """请离失败即停（识别问题不盲目连踢），失败信息带出。"""
     now = time.time()
@@ -869,23 +772,6 @@ def test_auto_kick_overdue_stops_on_kick_failure(monkeypatch):
     assert n == 0
     assert kicked == [(4, "乙")]
     assert "未出现请离按钮" in info
-    team.reset_away_tracking()
-
-
-def test_auto_kick_overdue_tracks_without_kick(monkeypatch):
-    """无人超时：仅记账不请离，返回 (0, "")。"""
-    now = time.time()
-    team.reset_away_tracking()
-    team._away_seen.update({("女魔", "丙"): now - 10})
-
-    def _boom(*_a):
-        raise AssertionError("不应请离")
-
-    monkeypatch.setattr(team, "_away_member_indices",
-                        lambda img: ([(1, "丙", "女魔")], None))
-    monkeypatch.setattr(team, "_kick_one", _boom)
-    n, info = team._auto_kick_overdue(_SeqWin([_frame()]))
-    assert n == 0 and info == ""
     team.reset_away_tracking()
 
 
@@ -979,17 +865,6 @@ def test_auto_kick_overdue_disabled_keeps_tab_rejoin(monkeypatch):
     assert n == 0 and info == ""
     assert calls == [["甲"]]
     assert team._away_seen == {}  # 不记账
-
-
-def test_overdue_away_custom_timeout():
-    """超时阈值可配：同一账本 5 分钟未到、2 分钟已到。"""
-    now = time.time()
-    team.reset_away_tracking()
-    team._away_seen.update({("女人", "甲"): now - 150})
-    away = [(1, "甲", "女人")]
-    assert team._overdue_away(away, 300) == []
-    assert team._overdue_away(away, 120) == [(1, "甲", "女人")]
-    team.reset_away_tracking()
 
 
 def test_auto_kick_overdue_excludes_matched_tabs(monkeypatch):
@@ -1160,15 +1035,6 @@ def test_verify_apply_panel_below_threshold_no_rows_scan(monkeypatch):
     assert not ok and "0.62" in info and "未达阈值" in info
 
 
-def test_verify_apply_panel_no_applicant_rows(monkeypatch):
-    monkeypatch.setattr(team, "log", lambda *a, **k: None)
-    monkeypatch.setattr(team.FindImages, "find_all_template",
-                        lambda *a, **k: [_FakeMatch(0.95, [116, 86, 472, 145])])
-    monkeypatch.setattr(team, "_apply_rows", lambda img, box: [])
-    ok, info = team.verify_apply_panel(_FrameWin())
-    assert ok and "未识别出申请人行" in info
-
-
 def test_verify_apply_panel_no_match(monkeypatch):
     monkeypatch.setattr(team, "log", lambda *a, **k: None)
     monkeypatch.setattr(team.FindImages, "find_all_template",
@@ -1324,13 +1190,6 @@ def test_clear_pending_apply_item2_click_clear_close(monkeypatch):
     assert calls["close"] == [1]
 
 
-def test_clear_pending_apply_panel_already_open(monkeypatch):
-    """申请加入面板残留打开：不点组队按钮，直接清空+关闭。"""
-    hit, info, calls = _run_clear_pending(monkeypatch, [_frame()], [(300, 300)])
-    assert hit and info == "已清空申请列表并关闭面板"
-    assert calls["click"] == [(330, 458)] and calls["close"] == [1]
-
-
 def test_clear_pending_apply_panel_never_opens(monkeypatch):
     """点了 item2 但面板未打开：不点清空，报告未清空。"""
     hit, info, calls = _run_clear_pending(monkeypatch, [_frame()],
@@ -1419,17 +1278,6 @@ def test_find_template_in_region_cropped():
     assert game_map.find_template_in(frame2, team.ZUDUI_ITEM2_ICON,
                                      team.ZUDUI_ITEM2_THRESHOLD,
                                      region=team.ZUDUI_ITEM_REGION) is None
-
-
-def test_has_pending_apply_uses_item_region(monkeypatch):
-    """has_pending_apply 的 item2 查询限定右下角条带。"""
-    calls = []
-    monkeypatch.setattr(team.game_map, "find_template_in",
-                        lambda img, icon, threshold=0.8, region=None:
-                        calls.append(region) or None)
-    monkeypatch.setattr(team, "_apply_panel_flag", lambda img: None)
-    assert team.has_pending_apply(_frame()) is False
-    assert calls == [team.ZUDUI_ITEM_REGION]
 
 
 # ---- 暂离身份匹配易混字符归一化（2026-11-09） ----

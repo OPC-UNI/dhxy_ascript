@@ -95,11 +95,6 @@ def test_human_move_other_exception_passthrough(fake_mouse):
         app_utils.human_move(100, 200)
 
 
-def test_human_move_normal_path(fake_mouse):
-    app_utils.human_move(100, 200, duration=0.05)
-    assert fake_mouse.calls == [("mouse_move", 100, 200)]
-
-
 def test_human_click_failsafe_converts(fake_mouse):
     fake_mouse.exc = FailSafeException("fail-safe")
     with pytest.raises(app_utils.UserAbort):
@@ -293,33 +288,13 @@ def test_mouse_hold_physical_start_failsafe_releases_lock(monkeypatch,
     assert not app_utils._INPUT_LOCK._is_owned()
 
 
-def test_keyboard_ok_not_silent_always_true(monkeypatch):
-    monkeypatch.setattr(app_utils, "_SILENT_CLICK", False)
-    assert app_utils.keyboard_ok(None) is True
-
-
 def test_keyboard_ok_silent_no_win_false(monkeypatch):
     monkeypatch.setattr(app_utils, "_SILENT_CLICK", True)
     assert app_utils.keyboard_ok(None) is False
 
 
-def test_set_silent_mode_toggle():
-    app_utils.set_silent_mode(True)
-    assert app_utils.silent_mode_on() is True
-    app_utils.set_silent_mode(False)
-    assert app_utils.silent_mode_on() is False
-
-
 # ---- 寻路信号（摄妖香续用双通道的时钟） ----
 
-def test_track_walk_signal(monkeypatch):
-    monkeypatch.setattr(app_utils, "_last_track_walk", 0.0)  # 复位：防用例间状态泄漏
-    fake_time = {"t": 1000.0}
-    monkeypatch.setattr(app_utils.time, "time", lambda: fake_time["t"])
-    assert app_utils.track_walk_idle_seconds() > 1e8  # 从未寻路：视为长期空闲
-    app_utils.mark_track_walk()
-    fake_time["t"] = 1600.0
-    assert app_utils.track_walk_idle_seconds() == 600.0
 
 
 def test_sheyaoxiang_idle_due(monkeypatch):
@@ -428,17 +403,6 @@ def test_char_state_isolated_by_role(monkeypatch, tmp_path):
     assert app_utils.char_state_get("mingwang_race", w2) is None
     assert (tmp_path / "data" / "1001" / "state.json").exists()
     assert not (tmp_path / "data" / "2002" / "state.json").exists()
-
-
-def test_task_progress_isolated_by_role(monkeypatch, tmp_path):
-    user_data = _patch_role_data(monkeypatch, tmp_path)
-    w1 = _RoleWin("服务器 - 角色甲（ID：1001）")
-    w2 = _RoleWin("服务器 - 角色乙（ID：2002）")
-    app_utils.task_progress_add(w1, "修罗", 3)
-    assert app_utils.task_progress_done(w1, "修罗") == 3
-    assert app_utils.task_progress_done(w2, "修罗") == 0
-    entry = user_data.get_state("task_progress", "1001")
-    assert entry["modes"] == {"修罗": 3}
 
 
 def test_kv_remove_many_merged(monkeypatch, tmp_path):

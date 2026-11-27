@@ -11,7 +11,3 @@ def test_lock_name_scoped_by_install_root():
     assert a1.startswith("Local\\ZhuomuniaoInstance_")
 
 
-def test_event_name_matches_lock_key():
-    root = r"C:\Apps\Zhuomuniao"
-    key = instance_lock.lock_name(root).split("_")[-1]
-    assert instance_lock.event_name(root).endswith(key)

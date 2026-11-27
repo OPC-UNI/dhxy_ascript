@@ -54,18 +54,6 @@ def test_click_track_link_clicks_underline_not_rect_center(monkeypatch):
     assert clicks == [(73, 269)]
 
 
-def test_click_track_link_no_match_no_click(monkeypatch):
-    clicks = []
-    monkeypatch.setattr(wubei, "human_click",
-                        lambda win, x, y, **k: clicks.append((x, y)))
-    monkeypatch.setattr(wubei, "move_away", lambda win: None)
-    monkeypatch.setattr(wubei, "log", lambda *a, **k: None)
-    img = np.zeros((831, 1378, 3), dtype=np.uint8)
-    items = [("前往平顶山消灭魔尊", [14, 249, 185, 269], 0.99)]
-    assert wubei._click_track_link(object(), items, img, "黄袍") is False
-    assert clicks == []
-
-
 # ---- 巫医链：轮询点击时间戳立即返回 / 超时兜底（2026-11-04 对齐修罗） ----
 
 import pytest
@@ -327,30 +315,6 @@ def test_xj_quota_full_skips_walk_back(monkeypatch):
     assert any("A、B 两处" in m for m in logs)
 
 
-def test_xj_use_log_includes_side(monkeypatch):
-    """用镜日志带侧别（A/B）：日志看不出第几处在哪侧排查困难（2026-11-10）。"""
-    logs = []
-    monkeypatch.setattr(wubei, "battle_watch_in_battle", lambda: False)
-    monkeypatch.setattr(wubei, "_xj_pos", lambda win, items: ("平顶山", 212, 131))
-    monkeypatch.setattr(wubei, "log",
-                        lambda msg, level="INFO": logs.append(msg))
-    monkeypatch.setattr(wubei, "_click_xianxingjing_use",
-                        lambda win, items, img_np: True)
-    monkeypatch.setattr(wubei, "_xj_phase", 0)
-    monkeypatch.setattr(wubei, "_xj_stable", 3)
-    monkeypatch.setattr(wubei, "_xj_anchor", ("平顶山", 212, 131))
-    monkeypatch.setattr(wubei, "_xj_last_pos", ("平顶山", 212, 131))
-    monkeypatch.setattr(wubei, "_xj_use_count", 0)
-    monkeypatch.setattr(wubei, "_xj_need_move", False)
-    monkeypatch.setattr(wubei, "_xj_move_stuck", 0)
-    monkeypatch.setattr(wubei, "_xj_walk_side", None)
-    monkeypatch.setattr(wubei, "_xj_missing", 0)
-    items = [("前往平顶山处使用显形镜查探", (40, 260, 200, 280), 0.99)]
-    img = np.zeros((831, 1378, 3), dtype=np.uint8)
-    assert wubei._handle_xianxingjing_track(object(), items, img) is True
-    assert any("用镜" in m and "A 侧" in m for m in logs)
-
-
 # ---- 显形镜：到达锚点/地图门/翻侧上限（2026-11-11 半路用镜修复） ----
 
 def test_xj_walking_never_counts_as_arrived(monkeypatch):
@@ -581,18 +545,6 @@ def test_xj_dialog_click_skipped_when_story_gate_just_clicked(monkeypatch):
     assert wubei._xj_dismissed_at > 0  # 模板窗口照常开启
 
 
-def test_xj_dialog_click_after_cooldown_clicks_once(monkeypatch):
-    """无他人点击时显形镜处理器照常点一次关闭对话框。"""
-    clicks, _logs = _patch_xj_dialog_env(monkeypatch,
-                                         last_center_click_ago=
-                                         wubei.XIANXINGJING_XJ_CLICK_GUARD + 1)
-    items = [("一阵光芒闪过，白龙马出现在眼前", (400, 300, 900, 340), 0.9)]
-    img = np.zeros((831, 1378, 3), dtype=np.uint8)
-    assert wubei._handle_xianxingjing(object(), items, img) is True
-    assert clicks == ["center"]
-    assert wubei._xj_dismissed_at > 0
-
-
 def test_xj_template_hit_clicks_button_not_reclick(monkeypatch):
     """模板达标时点击按钮、不点屏推进（回归：先取最高分再取候选）。"""
     clicks, _logs = _patch_xj_btn_env(monkeypatch, score=0.92,
@@ -676,11 +628,6 @@ def test_xj_wuben_absent_not_handled():
 
 
 # ---- 领取点到达判据地图名门控（2026-11-11 用户规则：五倍必须宝象国） ----
-def test_in_claim_map_requires_baoxiangguo():
-    assert wubei._in_claim_map(("宝象国", 86, 86))
-    assert not wubei._in_claim_map(("长安", 367, 27))
-    assert not wubei._in_claim_map(("灵兽村", 111, 90))
-    assert not wubei._in_claim_map(None)  # 位置读不出不采信按钮
 
 
 def test_walk_to_claim_spot_button_in_changan_not_arrival(monkeypatch):
@@ -709,13 +656,6 @@ def test_track_state_panel_closed(monkeypatch):
     assert wubei._track_state(_FakeWin()) == (False, False, False)
 
 
-def test_track_state_panel_visible_no_task(monkeypatch):
-    monkeypatch.setattr(wubei.task_tracker, "panel_visible", lambda **k: True)
-    monkeypatch.setattr(wubei.task_tracker, "ocr_track_read",
-                        lambda img: ([], None))
-    assert wubei._track_state(_FakeWin()) == (False, False, False)
-
-
 def test_claimed_task_replace_kind_suoyaowang(monkeypatch):
     """新领取任务为锁妖网：修理前先替换（用户 2026-11-23 顺序修正）。"""
     monkeypatch.setattr(wubei, "_track_state", lambda w: (True, True, False))
@@ -728,14 +668,6 @@ def test_claimed_task_replace_kind_kuimulang_switch(monkeypatch):
     monkeypatch.setattr(wubei, "_kuimulang_on", False)
     assert wubei._claimed_task_replace_kind(_FakeWin()) == "奎木狼"
     monkeypatch.setattr(wubei, "_kuimulang_on", True)
-    assert wubei._claimed_task_replace_kind(_FakeWin()) is None
-
-
-def test_claimed_task_replace_kind_normal_and_unknown(monkeypatch):
-    monkeypatch.setattr(wubei, "_track_state", lambda w: (True, False, False))
-    assert wubei._claimed_task_replace_kind(_FakeWin()) is None
-    # 面板过渡/关闭读不到任务：不阻塞修理，跟随期仍会兜底替换
-    monkeypatch.setattr(wubei, "_track_state", lambda w: (False, False, False))
     assert wubei._claimed_task_replace_kind(_FakeWin()) is None
 
 
@@ -1142,22 +1074,6 @@ def test_manual_template_fight_coord_unavailable_continues_alt(monkeypatch):
     assert named == [["智慧魔尊"]]  # 名字 OCR 兜底执行
 
 
-def test_manual_target_names_huangpao_variants():
-    """黄袍怪三种写法共用短名兜底；普通击杀用完整目标名。"""
-    assert wubei._manual_target_names(
-        {"kind": "huangpao", "target": "愤怒的黄袍怪"}) == \
-        ["愤怒的黄袍怪", "黄袍怪"]
-    assert wubei._manual_target_names(
-        {"kind": "huangpao", "target": "黄袍怪"}) == ["黄袍怪"]
-    assert wubei._manual_target_names(
-        {"kind": "huangpao", "target": None}) == ["黄袍怪"]
-    assert wubei._manual_target_names(
-        {"kind": "kill", "target": "智慧魔尊"}) == ["智慧魔尊"]
-    assert wubei._manual_target_names(
-        {"kind": "kill", "target": None}) == []
-    assert wubei._manual_target_names(None) == []
-
-
 def test_manual_nav_round_xianxing_ab(monkeypatch):
     """显形镜：A 未完成 → B；B 战斗结束直接返程（不再读任务栏确认）。
 
@@ -1212,22 +1128,6 @@ def test_manual_nav_round_reclaim_fails_fast(monkeypatch):
     # 防每轮手动回合空转（暗雷/锁妖网无法手动推进）
     assert wubei._manual_reclaim_pending is True
     wubei._manual_reclaim_pending = False  # 复位，防跨测试污染
-
-
-def test_claim_task_replace_allows_existing_task(monkeypatch):
-    """替换任务场景（allow_existing=True）：面板有任务仍走领取流程。"""
-    monkeypatch.setattr(wubei, "is_in_battle", lambda w: False)
-    monkeypatch.setattr(wubei, "is_in_battle_frame", lambda img: False)
-    monkeypatch.setattr(wubei.task_tracker, "ocr_track", lambda img: ([], None))
-    monkeypatch.setattr(wubei.task_tracker, "task_signature_in",
-                        lambda items, title: "sig")
-    called = []
-    monkeypatch.setattr(
-        wubei, "_click_entry_ensuring_dialog",
-        lambda w, **k: called.append(1) or (False, "入口失败", None, None, None))
-    ok, info, frame = wubei._claim_task(_FakeWin(), allow_existing=True)
-    assert ok is False and info == "入口失败"
-    assert called == [1]  # 已进入领取入口流程
 
 
 def test_claim_task_auto_dialog_clicks_claim_option(monkeypatch):
@@ -1844,12 +1744,6 @@ def test_claim_flow_open_map_wiring(monkeypatch):
     assert captured["prefix"] == "[五倍]"
     assert captured["on_filter_state"] is wubei._set_claim_task_filter
     assert captured["map_coord"] == wubei.BAOXIANG_CLAIM_COORD
-
-
-def test_claim_flow_set_filter_state_writes_global(monkeypatch):
-    monkeypatch.setattr(wubei, "_claim_task_filter_on", True)
-    wubei._set_claim_task_filter(None)
-    assert wubei._claim_task_filter_on is None
 
 
 def test_claim_flow_relocate_wiring(monkeypatch):

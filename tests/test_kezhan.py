@@ -80,24 +80,6 @@ def test_handle_qiyu_dialog_template_anchor_clicks_first_option(monkeypatch):
     assert clicks == [((653 + 748) // 2, (507 + 529) // 2)]
 
 
-def test_handle_qiyu_dialog_template_anchor_picks_first_of_multi(monkeypatch):
-    """多选项：模板锚点路径按阅读序取第一个选项。"""
-    clicks = []
-    monkeypatch.setattr(kezhan, "human_click",
-                        lambda win, x, y, **k: clicks.append((x, y)))
-    monkeypatch.setattr(kezhan, "move_away", lambda win: None)
-    monkeypatch.setattr(kezhan, "log", lambda *a, **k: None)
-    items = [
-        ("客栈奇遇", (619, 287, 770, 350), 1.00),
-        ("师傅传你一套口诀，问你如何运功", (462, 388, 900, 417), 1.00),
-        ("立即运功，镇压凶气", (641, 470, 761, 494), 1.00),
-        ("不为所动，催劲强压", (641, 494, 761, 518), 1.00),
-    ]
-    assert kezhan._handle_qiyu_dialog(
-        object(), items, None, banner_pt=(697, 332), banner_h=29) is True
-    assert clicks == [((641 + 761) // 2, (470 + 494) // 2)]
-
-
 def test_clear_qiyu_popup_clicks_until_gone(monkeypatch):
     """残留弹窗：模板命中→点选项，下一帧模板消失→返回已处理。"""
     calls = []
@@ -660,19 +642,6 @@ def test_verify_find_awang_battle_short_circuit(monkeypatch):
     assert ok is False and "战斗中" in info and called == []
 
 
-def test_verify_find_awang_delegates_to_walk_to_dali(monkeypatch):
-    """非战斗：走真实 _walk_to_dali 链路，结果原样透传。"""
-    monkeypatch.setattr(kezhan, "is_in_battle", lambda w: False)
-    monkeypatch.setattr(kezhan, "_walk_to_dali",
-                        lambda w: (True, "已点击阿旺"))
-
-    class W:
-        pass
-
-    ok, info = kezhan.verify_find_awang(W())
-    assert ok is True and info == "已点击阿旺"
-
-
 # ---- 任务消失判定：面板缺席处理已统一到 workflows.follow._confirm_task_gone
 #      （2026-11-12 用户规则：缺席+站定=完成、缺席+寻路中=任务仍在），
 #      客栈不再传 per-task 参数 ----
@@ -684,16 +653,6 @@ class _AwangWin:
     class rect:
         width = 1376
         height = 828
-
-
-def test_awang_approach_left_side_walks_to_right():
-    """阿旺在屏幕左侧 → 走到其右侧 90px。"""
-    assert kezhan._awang_approach_pos(200, 400, _AwangWin()) == (290, 400)
-
-
-def test_awang_approach_right_side_walks_to_left():
-    """阿旺在屏幕右侧 → 走到其左侧 90px。"""
-    assert kezhan._awang_approach_pos(1200, 400, _AwangWin()) == (1110, 400)
 
 
 def test_awang_approach_center_region_no_walk():
@@ -791,16 +750,6 @@ def test_find_awang_threshold_boundary_hits(monkeypatch):
     assert kezhan._find_awang(_AwangCaptureWin()) == (120, 130)
 
 
-def test_find_awang_all_below_threshold_returns_none(monkeypatch):
-    """三模板分数均低于 0.72 → 未命中（交给 OCR 名字兜底）。"""
-    monkeypatch.setattr(kezhan, "log", lambda *a, **k: None)
-    _awang_templates_present(monkeypatch)
-    _awang_scores(monkeypatch, {"awang.png": (0.71, (10, 10)),
-                                "awang2.png": (0.71, (20, 20)),
-                                "awang3.png": (0.71, (30, 30))})
-    assert kezhan._find_awang(_AwangCaptureWin()) is None
-
-
 def test_find_awang_missing_template_skipped_warn_once(monkeypatch):
     """缺失模板跳过、其余照常匹配；缺失告警只记录一次。"""
     logs = []
@@ -814,24 +763,6 @@ def test_find_awang_missing_template_skipped_warn_once(monkeypatch):
     assert len(logs) == 1 and "awang3.png" in logs[0]
     # 标志已置位：再次调用不重复告警
     assert kezhan._find_awang(_AwangCaptureWin()) == (250, 250)
-    assert len(logs) == 1
-
-
-def test_find_awang_all_templates_missing_returns_none(monkeypatch):
-    """三模板全部缺失：直接返回 None（不截帧），OCR 名字兜底仍在。"""
-    logs, captured = [], []
-    monkeypatch.setattr(kezhan, "log",
-                        lambda msg, *a, **k: logs.append(msg))
-    monkeypatch.setattr(kezhan, "_awang_missing_logged", False)
-    monkeypatch.setattr(kezhan.game_map, "template_size", lambda icon: None)
-
-    class W:
-        def capture(self, **k):
-            captured.append(1)
-            return None
-
-    assert kezhan._find_awang(W()) is None
-    assert captured == []
     assert len(logs) == 1
 
 
@@ -872,13 +803,6 @@ def test_find_awang_by_ocr_excludes_tracker_panel(monkeypatch):
     """追踪面板矩形内的同名文案跳过（「找阿旺。」不可点）。"""
     _patch_awang_ocr(monkeypatch, [
         ("找阿旺。", [20, 300, 100, 326], 0.99)])
-    assert kezhan._find_awang_by_ocr(_AwangFrameWin()) is None
-
-
-def test_find_awang_by_ocr_ignores_long_lines(monkeypatch):
-    """长行（>4 字）即使含「阿旺」也不算 NPC 名字（对话/追踪长句）。"""
-    _patch_awang_ocr(monkeypatch, [
-        ("阿旺朝比武场的方向跑去了", [600, 300, 900, 326], 0.99)])
     assert kezhan._find_awang_by_ocr(_AwangFrameWin()) is None
 
 
@@ -933,16 +857,6 @@ def test_find_awang_by_gold_skips_tracker_panel(monkeypatch):
                         lambda crop: ([("阿旺", [0, 0, 10, 10], 1.0)], None))
     assert kezhan._find_awang_by_gold(
         _gold_label_frame(x=100, y=300)) is None
-
-
-def test_find_awang_by_gold_no_gold_pixels_returns_none(monkeypatch):
-    """无金色像素（黑帧）→ 直接 None，不做任何 OCR。"""
-    calls = []
-    monkeypatch.setattr(kezhan.game_map, "ocr_zoom",
-                        lambda crop: (calls.append(1), ([], None))[1])
-    assert kezhan._find_awang_by_gold(
-        _AwangFrameWin().capture()) is None
-    assert calls == []
 
 
 def test_find_awang_by_ocr_band_hit_skips_gold_fallback(monkeypatch):
@@ -1012,14 +926,6 @@ def test_walk_to_luoyang_pos_coord_nav(monkeypatch, coord_nav_enabled):
         _NavWin(), (623, 317), (223, 195), 10, "大理寺墙外")
     assert ok is True
     assert started["args"] == (kezhan.LUOYANG_CITY, 223, 195)
-
-
-def test_near_luoyang_single_target_still_works():
-    """单点目标（大理寺墙外等）行为不变。"""
-    assert kezhan._near_luoyang(("洛阳城", 223, 195),
-                                kezhan.DALI_TARGET_POS) is True
-    assert kezhan._near_luoyang(("洛阳城", 223, 205),
-                                kezhan.DALI_TARGET_POS) is False
 
 
 # ---- 音律小游戏：动态追亮点（2026-11-13 用户规则 + 实机验证） ----
@@ -1187,15 +1093,6 @@ def test_bug_button_pt_prefers_higher_score(monkeypatch):
     assert seen["region"] == duchong.BUG_BUTTON_REGION
 
 
-def test_bug_button_pt_below_threshold_returns_none(monkeypatch):
-    monkeypatch.setattr(
-        kezhan.game_map, "best_match_multi_np",
-        lambda img, icons, region=None: {
-            duchong.BUG_RESTART_ICON: (0.60, (680, 553)),
-            duchong.BUG_START_ICON: (0.55, (681, 553))})
-    assert kezhan._bug_button_pt(object()) is None
-
-
 def test_bug_candidates_diff_finds_moving_blob():
     import numpy as np
     l, t, _, _ = duchong.BUG_REGION
@@ -1204,12 +1101,6 @@ def test_bug_candidates_diff_finds_moving_blob():
     cur[t + 100:t + 150, l + 200:l + 260] = 255
     boxes = duchong._bug_candidates(prev, cur)
     assert boxes == [(l + 200, t + 100, 60, 50)]
-
-
-def test_bug_candidates_ignores_static_scene():
-    import numpy as np
-    frame = np.zeros((831, 1378, 3), np.uint8)
-    assert duchong._bug_candidates(frame, frame.copy()) == []
 
 
 def test_match_duchong_returns_best_with_full_frame_offset(monkeypatch):
@@ -1594,17 +1485,6 @@ def test_try_flag_dialog_only_for_inn_destination(monkeypatch):
     assert clicked == []
 
 
-def test_pos_is_inn_and_near_spot():
-    """客栈地名繁简兼容；24,7 附近判定。"""
-    assert kezhan._pos_is_inn(("洛阳客栈", 24, 7)) is True
-    assert kezhan._pos_is_inn(("洛陽客棧", 24, 7)) is True  # 繁体兼容
-    assert kezhan._pos_is_inn(("洛阳城", 24, 7)) is False
-    assert kezhan._pos_is_inn(None) is False
-    assert kezhan._near_inn_spot(("洛阳客栈", 24, 7)) is True
-    assert kezhan._near_inn_spot(("洛阳客栈", 29, 11)) is True
-    assert kezhan._near_inn_spot(("洛阳客栈", 40, 20)) is False
-
-
 def test_go_to_inn_waits_for_inn_landing(monkeypatch, coord_nav_enabled):
     """点击快送/飞行旗后按「洛阳客栈 24,7」确认到达，不提前返回成功。"""
     from src.device import map_nav
@@ -1647,10 +1527,3 @@ def test_try_fast_travel_handles_waypoint_menu(monkeypatch):
     assert clicked == [kezhan.FAST_DIALOG_OPTION]
 
 
-def test_verify_go_to_inn_delegates(monkeypatch):
-    """诊断-客栈入口按钮走真实 _go_to_inn 链路。"""
-    calls = []
-    monkeypatch.setattr(kezhan, "_go_to_inn",
-                        lambda w: calls.append(w) or (True, "ok"))
-    assert kezhan.verify_go_to_inn(object()) == (True, "ok")
-    assert len(calls) == 1

@@ -109,10 +109,13 @@ core  ←  device  ←  workflows  ←  tasks
 3. **兼容期留 shim**：如 `xuanshu.follow_task = workflows.follow.follow_task`
    保留一个提交，调用方全部改完后删除；测试同提交更新。
 4. **每个抽取的模块保留/补齐测试**；提交前 `python -m pytest -q` 全绿
-   （基线：1368 passed, 2 deselected，2026-11-18）。
+   （基线：1817 passed, 3 deselected，2026-11-26）。
 5. **涉及任务链路的抽取至少真机跑一轮**对应任务；纯移动/改名可只跑测试。
 6. **打包**：`pyproject.toml` 的 `packages` 必须包含新子包；
    Nuitka `--include-package=src` 会自动跟随，但 pip/ascript 打包不会。
+7. **测试只覆盖核心路径**（用户 2026-11-26 规则）：关键状态判定、影响
+   后续动作的分支、失败/安全兜底、共享能力的行为契约；不为常量、简单
+   包装/转发、琐碎边界逐一加测，新增功能通常 3~5 条即可。
 
 ---
 
@@ -129,6 +132,13 @@ core  ←  device  ←  workflows  ←  tasks
   - `UNREFERENCED_KEEP`：暂未接入代码、但要保留的素材，登记时写清理由，
     只减不增（数量锁定为 10）；一旦被引用或删除必须移除条目。
   - `RUNTIME_OUTPUTS`：诊断截图/失败落盘等运行期产物，不是模板。
+- **物品模板统一登记**（用户 2026-11-26）：物品图标/名称/储物位置
+  （普通背包 `bag` / 背包-任务储物格 `task_box`）一律登记在
+  `src/device/items.py` 的 `ITEMS`；新物品模板命名 `item_<key>.png`，
+  历史模板保留原名并在条目登记实际文件名。新代码通过
+  `items.icon(key)` / `items.item(key)` 取用，不再散落 icon 常量；
+  既有常量按迁移进度逐步改为引用本表。`tests/test_items.py` 校验
+  登记合法与模板真实存在（RGB）。
 - 日志：任务模块统一 `[任务名]` 前缀；共享模块使用调用方传入的 `prefix`。
 - 时序常量：名称带含义，注释写实测日期与来源；重构时不得「顺手调」。
 

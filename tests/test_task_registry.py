@@ -12,8 +12,8 @@ from pathlib import Path
 
 from src.app import task_registry as registry
 from src.core import debug_overlay, settings
-from src.tasks import (kezhan, mingwang, wuhuan, wubei, xiuluo, xuanshu,
-                       zhongzu)
+from src.tasks import (kezhan, mingwang, sanbaihuan, wuhuan, wubei, xiuluo,
+                       xuanshu, zhongzu)
 
 
 def test_registry_modes_match_settings_order():
@@ -44,12 +44,13 @@ def test_registry_real_mapping_is_pinned():
         "种族比武": zhongzu.run_loop,
         "玄枢轶闻": xuanshu.run_loop,
         "名望": mingwang.run_loop,
+        "300环": sanbaihuan.run_loop,
     }
     for mode, run_loop in expected.items():
         assert registry.TASKS_BY_MODE[mode].run_loop is run_loop
     assert registry.TASKS_BY_MODE["客栈"].pre_run is registry._pre_kezhan
     assert registry.TASKS_BY_MODE["玄枢轶闻"].pre_run is registry._pre_xuanshu
-    for mode in ("五环", "修罗", "五倍", "种族比武", "名望"):
+    for mode in ("五环", "修罗", "五倍", "种族比武", "名望", "300环"):
         assert registry.TASKS_BY_MODE[mode].pre_run is None
 
 

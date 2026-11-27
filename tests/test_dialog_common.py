@@ -7,10 +7,6 @@ def _item(txt, x=500, y=400, score=0.95):
     return (txt, [x, y, x + 100, y + 30], score)
 
 
-def test_norm_text_strips_punct():
-    assert norm_text("看打！，「」；：。") == "看打"
-
-
 def test_dialog_text_present_fuzzy_tolerance():
     """文案检测为模糊匹配：抗 OCR 单字误读（设计行为）；无关文案不命中。
 

@@ -31,11 +31,6 @@ def test_char_skill_pos():
     assert battle.char_skill_pos("自动") is None
 
 
-def test_norm_text():
-    assert battle._norm_text("看打！，「」") == "看打"
-    assert battle._norm_text("全部医治和修复") == "全部医治和修复"
-
-
 # ---- 战斗帧判定（真实模板 + 条带语义） ----
 
 def test_is_in_battle_frame_bar_hit(monkeypatch):

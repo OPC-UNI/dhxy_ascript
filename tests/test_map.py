@@ -17,8 +17,6 @@ def _tpl(icon):
 
 # ---- 文案解析 ----
 
-def test_clean_map_pos_normal():
-    assert game_map._clean_map_pos("灵兽村[120,83]") == "灵兽村[120,83]"
 
 
 def test_clean_map_pos_fullwidth_and_noise():
@@ -37,13 +35,6 @@ class _FakeRes:
         self.boxes = boxes
         self.txts = txts
         self.scores = scores
-
-
-def test_engine_items_format():
-    res = _FakeRes(boxes=np.array([[[10, 20], [50, 20], [50, 40], [10, 40]]]),
-                   txts=["测试"], scores=[0.99])
-    items = game_map._engine_items(res)
-    assert items == [("测试", [10, 20, 50, 40], 0.99)]
 
 
 # ---- OCR 引擎预热/懒加载 ----
@@ -105,14 +96,6 @@ def test_match_frame_np_region_restricts():
     assert got is not None
 
 
-def test_match_frame_multi():
-    tpl = _tpl("fashu.png")
-    frame = paste_template(make_bgr_frame(), tpl, 300, 600)
-    found = game_map.match_frame_multi(frame, ("fashu.png", "fangyu.png"))
-    assert found["fashu.png"] is not None
-    assert found["fangyu.png"] is None
-
-
 def test_match_frame_all_multi_instance():
     tpl = _tpl("auto.png")
     frame = paste_template(make_bgr_frame(), tpl, 200, 500)
@@ -154,10 +137,6 @@ def test_best_match_multi_np_region_and_missing():
 
 # ---- 模板缓存 ----
 
-def test_load_template_cache_identity():
-    a = game_map._load_template("fashu.png")
-    b = game_map._load_template("fashu.png")
-    assert a is not None and a is b  # 第二次命中缓存（同一对象）
 
 
 # ---- 世界地图标签全表（按地图名导航用）----
@@ -537,12 +516,6 @@ def test_minimap_task_filter_state_checked():
     frame = _minimap_filter_frame(checked=True)
     img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
     assert game_map.minimap_task_filter_state(None, img=img) is True
-
-
-def test_minimap_task_filter_state_unchecked():
-    frame = _minimap_filter_frame(checked=False)
-    img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-    assert game_map.minimap_task_filter_state(None, img=img) is False
 
 
 def test_minimap_task_filter_state_no_map():

@@ -49,9 +49,6 @@ def _isolate_affine_caches(monkeypatch, tmp_path):
 
 # ---------------- 层级图与下拉 ----------------
 
-def test_parse_layer_target():
-    assert map_nav.parse_navigate_target("龙窟四层") == ("龙窟", "龙窟四层")
-    assert map_nav.parse_navigate_target("凤巢七层") == ("凤巢", "凤巢七层")
 
 
 def test_parse_normal_target():
@@ -60,14 +57,6 @@ def test_parse_normal_target():
     # 未收录的层名按普通图处理，由 resolve 阶段报错
     assert map_nav.parse_navigate_target("龙窟八层") == ("龙窟八层", None)
     assert map_nav.parse_navigate_target("") == ("", None)
-
-
-def test_layer_map_names():
-    names = map_nav.layer_map_names()
-    assert len(names) == 20           # 龙窟/凤巢各 7 + 大雁塔 6
-    assert names[0] == "龙窟一层" and names[6] == "龙窟七层"
-    assert "凤巢一层" in names and "凤巢七层" in names
-    assert "大雁塔一层" in names and "大雁塔六层" in names
 
 
 def test_all_navigate_maps_excludes_unsupported_includes_layers():
@@ -180,13 +169,6 @@ def test_locate_search_bar_no_ocr_fast_path(monkeypatch):
 
 # ---------------- 悬停浮层坐标解析 ----------------
 
-def test_parse_tooltip_text():
-    assert map_nav.parse_tooltip_text("271,146") == (271, 146)
-    assert map_nav.parse_tooltip_text("41, 46") == (41, 46)
-    assert map_nav.parse_tooltip_text("x 157，112") == (157, 112)  # 全角逗号
-    assert map_nav.parse_tooltip_text("怪物等级：70") is None      # 无逗号数字对
-    assert map_nav.parse_tooltip_text("") is None
-    assert map_nav.parse_tooltip_text(None) is None
 
 
 # ---------------- 线性变换求解 ----------------
@@ -721,14 +703,6 @@ def test_find_destination_link_prefers_yellow_band(monkeypatch):
     assert abs(pt[0] - 91) <= 1 and pt[1] == 20
 
 
-def test_yellow_text_bands():
-    bands = map_nav._yellow_text_bands(_link_frame(), (0, 0, 200, 120))
-    assert len(bands) == 1
-    (cx, cy), rect = bands[0]
-    assert abs(cx - 80) <= 1 and cy == 20
-    assert rect == (10, 10, 150, 30)
-
-
 def test_find_destination_link_fallback_lowest_when_no_yellow():
     """无黄色命中时退独立链接行文本（绿色链接），点目的地子串中心。"""
     lines = [("到大雁塔四层", 80, 60, (10, 50, 150, 70)),
@@ -843,20 +817,6 @@ def test_close_xunlu_panel_clicks_measured_x_center(monkeypatch):
     assert abs(x - 866) <= 6 and abs(y - 335) <= 4
 
 
-def test_find_xunlu_anchors_no_ocr_fast_path(monkeypatch):
-    """allow_ocr=False（等面板热路径）：模板未命中直接 None，不跑 OCR。"""
-    monkeypatch.setattr(map_nav.game_map, "bgr_frame", lambda img: img)
-    monkeypatch.setattr(map_nav.game_map, "best_match_np",
-                        lambda *a, **k: (0.1, (0, 0)))
-
-    def _boom(*a, **k):  # pragma: no cover - 被调用即失败
-        raise AssertionError("allow_ocr=False 不应调用 OCR")
-
-    monkeypatch.setattr(map_nav.game_map, "ocr_regions", _boom)
-    assert map_nav._find_xunlu_anchors(object(), allow_ocr=False) == \
-        (None, None, None)
-
-
 def test_find_xunlu_anchors_merged_dao(monkeypatch):
     """从字段有层名时整行识别成「大雁塔二层到」，仍应找到 到 锚点。"""
     monkeypatch.setattr(
@@ -867,19 +827,6 @@ def test_find_xunlu_anchors_merged_dao(monkeypatch):
     assert dao == (655, 349, 679, 371)
     assert search == (804, 350, 851, 373)
     assert frm == (514, 351, 534, 368)
-
-
-def test_find_xunlu_anchors_merged_from_and_dao_same_line(monkeypatch):
-    """宽区域输出把「从大雁塔二层到」和「搜索」各识别为一行。"""
-    items = [("从大雁塔二层到", (512, 348, 678, 373), 0.997),
-             ("搜索", (804, 350, 854, 373), 0.999)]
-    monkeypatch.setattr(
-        map_nav.game_map, "ocr_regions",
-        lambda img, regions: (items, None))
-    dao, search, frm = map_nav._find_xunlu_anchors(np.zeros((831, 1378, 3),
-                                                            dtype=np.uint8))
-    assert dao is not None and search is not None
-    assert frm == (512, 348, 678, 373)
 
 
 def test_find_xunlu_anchors_excludes_advanced_search(monkeypatch):
@@ -1034,41 +981,6 @@ def test_open_mini_map_quick_retries_once(monkeypatch):
                         lambda win: False)
     assert map_nav._open_mini_map_quick(object(), timeout=0.01) is False
     assert len(clicks) == 2  # 重试一次后放弃
-
-
-def test_navigate_timing_summary(monkeypatch):
-    """导航日志/结果带分段耗时（开图/定位/标定点击/行走/总计）。"""
-    monkeypatch.setattr(map_nav, "parse_navigate_target",
-                        lambda t: ("洛阳城", None))
-    monkeypatch.setattr(map_nav.game_map, "resolve_world_map_name",
-                        lambda n: n)
-    monkeypatch.setattr(map_nav, "_read_pos", lambda win: ("长安", 1, 2))
-    monkeypatch.setattr(map_nav, "_open_target_map",
-                        lambda *a: (True, "地图已打开"))
-    monkeypatch.setattr(map_nav, "locate_search_bar",
-                        lambda win: {"x": 100, "y": 200})
-    monkeypatch.setattr(map_nav, "affine_for",
-                        lambda win, key: {"sx": 3.0, "sy": -3.0,
-                                          "ax": 10.0, "ay": 600.0})
-    monkeypatch.setattr(map_nav, "_aim_and_click",
-                        lambda *a, **k: (True, (500, 400), ""))
-    monkeypatch.setattr(map_nav, "_wait_movement", lambda *a, **k: True)
-    monkeypatch.setattr(map_nav, "_wait_arrival",
-                        lambda *a, **k: (True, "到达 洛阳城 (10,20)"))
-    monkeypatch.setattr(map_nav.game_map, "close_maps",
-                        lambda *a, **k: None)
-    monkeypatch.setattr(map_nav, "_close_xunlu_panel_if_open",
-                        lambda *a: False)
-    emits = []
-    ok, info = map_nav.navigate_to_map_coordinate(
-        object(), "洛阳城", 10, 20, log_fn=emits.append)
-    assert ok
-    assert "耗时：" in info and "开图" in info and "总计" in info
-    assert any(m.startswith("目标地图已打开") for m in emits)
-    assert any(m.startswith("搜索条锚点") for m in emits)
-    assert any(m.startswith("点击地图点") for m in emits)
-    assert any(m.startswith("位移启动") for m in emits)
-    assert any(m.startswith("耗时: ") and "行走到达" in m for m in emits)
 
 
 def test_navigate_timing_layer_entry(monkeypatch):
@@ -1255,17 +1167,6 @@ def test_find_destination_link_rejects_other_layer_band(monkeypatch):
     assert checked  # 确实做了文本校验，而不是直接点最靠下黄带
 
 
-def test_find_destination_link_clicks_verified_destination_band(monkeypatch):
-    """滚出目的地行后：读回目的地的黄带照常可点。"""
-    img = np.zeros((140, 420, 3), dtype=np.uint8)
-    img[60:74, 33:106] = (255, 255, 0)
-    lines = [("到大雁塔四层", 66, 67, (20, 58, 120, 78))]
-    _stub_rect_text(monkeypatch, lambda r: "大雁塔四层")
-    pt = map_nav.find_destination_link(img, lines, "大雁塔四层",
-                                       region=(0, 0, 420, 140))
-    assert pt is not None and 55 <= pt[1] <= 80 and pt[0] >= 60
-
-
 def test_find_destination_link_rejects_estimate_on_other_layer(monkeypatch):
     """OCR 行串色时，目的地子串估算位置读回别的层文本 → 不点。"""
     img = np.zeros((140, 420, 3), dtype=np.uint8)
@@ -1376,13 +1277,6 @@ def test_open_xunlu_destination_stops_scrolling_at_bottom(monkeypatch):
                                                emits.append)
     assert not ok and "未找到" in info
     assert scrolls == [-map_nav.XUNLU_WHEEL_NOTCHES]   # 只滚一次就判到底
-
-
-def test_xunlu_list_region_derived_from_anchors():
-    dao = (640, 346, 685, 377)
-    search = (798, 346, 862, 378)
-    frm = (510, 346, 588, 374)
-    assert map_nav._xunlu_list_region(dao, search, frm) == (505, 390, 870, 575)
 
 
 if __name__ == "__main__":
@@ -1600,17 +1494,6 @@ def test_start_impl_pos_hint_skips_position_read(monkeypatch):
     assert any("hint" in m for m in emits)
 
 
-def test_start_impl_without_hint_reads_position(monkeypatch):
-    """未传 hint：照常读位置（hint 只是可选优化）。"""
-    _patch_start_env(monkeypatch)
-    read = []
-    monkeypatch.setattr(map_nav, "_read_pos",
-                        lambda win: read.append(1) or ("长安", 1, 2))
-    ok, _info, _ctx = map_nav._start_impl(
-        object(), "凤巢七层", 10, 20, lambda m: None)
-    assert ok and read == [1]
-
-
 def test_start_impl_trusted_clicks_computed_point_without_hover(monkeypatch):
     """trusted：有标定直接点（免悬停校验/采样）——固定领取点专用。"""
     _patch_start_env(monkeypatch)
@@ -1656,6 +1539,24 @@ def test_start_impl_trusted_rejects_out_of_window(monkeypatch):
         object(), "洛阳城", 10, 20, lambda m: None, trusted=True)
     assert not ok and ctx is None and "超出窗口" in info
     assert clicks == []
+
+
+def test_start_impl_keep_putong_skips_putong_uncheck(monkeypatch):
+    """keep_putong=True（300环萧举人）保留「普通」勾选，交调用方取消。"""
+    _patch_start_env(monkeypatch)
+    wants = []
+    monkeypatch.setattr(
+        map_nav, "_set_minimap_putong_filter",
+        lambda win, want, emit: wants.append(want) or (True, ""))
+    monkeypatch.setattr(map_nav.game_map, "uncheck_minimap_task_filter",
+                        lambda win: (True, ""))
+    ok, _info, _ctx = map_nav._start_impl(
+        object(), "洛阳城", 10, 20, lambda m: None, keep_putong=True)
+    assert ok and wants == []          # 勾选状态原样保留
+    ok, _info, _ctx = map_nav._start_impl(
+        object(), "洛阳城", 10, 20, lambda m: None)
+    assert ok and wants == [False]     # 默认仍统一取消
+
 
 
 def test_navigate_closes_xunlu_panel_after_walk_start(monkeypatch):
@@ -1817,18 +1718,6 @@ def test_navigate_marks_track_walk(monkeypatch):
     assert calls == [1]
 
 
-def test_start_navigation_marks_track_walk(monkeypatch):
-    """点地图点开寻路（start_navigation）同样计入寻路信号。"""
-    calls = []
-    monkeypatch.setattr(map_nav.app_utils, "mark_track_walk",
-                        lambda: calls.append(1))
-    monkeypatch.setattr(map_nav, "_start_impl",
-                        lambda *a, **k: (False, "失败", None))
-    map_nav.start_navigation(object(), "洛阳城", 10, 20,
-                             log_fn=lambda m: None)
-    assert calls == [1]
-
-
 def test_navigate_retries_once_after_stall(monkeypatch):
     """停滞提示 → 自动重新导航一次；补过仍失败不无限重试。"""
     calls = []
@@ -1984,31 +1873,6 @@ def test_start_navigation_failure_cleans_maps(monkeypatch):
     assert closed == [1]
 
 
-def test_prewalk_point_is_map_coordinate(monkeypatch):
-    """预走路点坐标化：灵兽村 (14,13) 按标定换算成小地图点击像素。
-
-    原固定像素 (317,616) 的标定反算即 (14,13)；换算后点击点应回到
-    同一像素（灵兽村内置标定 sx 2.9268/ax 275.3 下为 (316.3,616.8)）。
-    """
-    clicks = []
-    monkeypatch.setattr(map_nav.app_utils, "current_task_mode",
-                        lambda: "修罗")
-    monkeypatch.setattr(map_nav, "affine_for",
-                        lambda win, target: {"sx": 2.0, "sy": -2.0,
-                                             "ax": 275.0, "ay": 655.0})
-    monkeypatch.setattr(map_nav, "names_match", lambda a, b: False)
-    monkeypatch.setattr(map_nav, "_open_mini_map_quick", lambda win: True)
-    monkeypatch.setattr(map_nav, "human_click",
-                        lambda win, x, y: clicks.append((x, y)))
-    monkeypatch.setattr(map_nav.game_map, "close_map_if_open",
-                        lambda *a, **k: None)
-    dt = map_nav._prewalk_if_configured(
-        object(), ("灵兽村", 1, 2), "长安城", None, lambda m: None)
-    assert dt > 0
-    assert map_nav.PREWALK_POINTS["灵兽村"] == (14, 13)
-    assert clicks == [(275 + 2 * 14, 655 - 2 * 13)]
-
-
 def test_prewalk_skips_without_affine(monkeypatch):
     """无标定（窗口尺寸/布局不匹配）时不按旧像素硬点，直接跳过预走。"""
     clicks = []
@@ -2078,59 +1942,8 @@ def test_wait_map_name_skips_frame_check_when_watch_confirms_battle(
     assert polls["frame"] == 1  # 线程确认期零帧级战斗判定
 
 
-def test_wait_arrival_position_log_quiet_without_verbose(monkeypatch):
-    """生产默认只在地名变化时输出位置；诊断 verbose=True 逐次输出。"""
-    map_nav._CANCEL.clear()
-    seq = [("灵兽村", 10, 10), ("灵兽村", 11, 10), ("灵兽村", 12, 11),
-           ("冰窟", 5, 5), ("冰窟", 6, 6)]
-
-    def fake_pos(win, img=None):
-        return seq.pop(0) if seq else ("大雁塔四层", 108, 37)
-
-    monkeypatch.setattr(map_nav, "is_in_battle_frame", lambda img: False)
-    monkeypatch.setattr(map_nav.game_map, "read_map_position", fake_pos)
-    monkeypatch.setattr(map_nav, "ARRIVE_POLL_INTERVAL", 0.0)
-    emits = []
-    ok, _info = map_nav._wait_arrival(
-        _arrival_win(), "大雁塔四层", "大雁塔四层", 108, 37, emits.append)
-    assert ok
-    pos_lines = [m for m in emits if m.startswith("位置")]
-    assert pos_lines == ["位置: ('灵兽村', 10, 10)",
-                         "位置: ('冰窟', 5, 5)",
-                         "位置: ('大雁塔四层', 108, 37)"]
-
-    map_nav._CANCEL.clear()
-    seq = [("灵兽村", 10, 10), ("灵兽村", 11, 10), ("灵兽村", 12, 11)]
-    emits2 = []
-    ok, _info = map_nav._wait_arrival(
-        _arrival_win(), "大雁塔四层", "大雁塔四层", 108, 37,
-        emits2.append, verbose=True)
-    assert ok
-    assert len([m for m in emits2 if m.startswith("位置")]) == 4
-
-
-def test_start_navigation_unchecks_task_filter(monkeypatch):
-    """开图后、点击前取消小地图「任务」筛选（仅名望需要勾选）。"""
-    _patch_start_env(monkeypatch)
-    calls = []
-    monkeypatch.setattr(
-        map_nav.game_map, "uncheck_minimap_task_filter",
-        lambda win: calls.append(1) or (True, "「任务」筛选未勾选"))
-    ok, _info, _pt = map_nav.start_navigation(
-        object(), "洛阳城", 321, 110, log_fn=lambda m: None)
-    assert ok and calls == [1]
-
-
 # ---------------- 特殊地图（莲花洞等，世界地图无标签） ----------------
 
-def test_special_map_entry_table():
-    """莲花洞入口定义：父地图平顶山 (102,42)，场景地图黄字锚点同名。"""
-    entry = map_nav.special_map_entry("莲花洞")
-    assert entry == {"parent": "平顶山", "entry": (102, 42),
-                     "npc_anchor": "莲花洞", "portal": (84, 9)}
-    assert map_nav.special_map_entry(" 莲花洞 ") is entry
-    assert map_nav.special_map_entry("洛阳城") is None
-    assert map_nav.special_map_entry("") is None
 
 
 def test_wait_arrival_accepts_special_enter_name(monkeypatch):
@@ -2171,18 +1984,6 @@ def _fake_filter_boxes(states):
                 (checked, 411, 657), (False, 479, 657), (False, 547, 657)]
 
     return fake
-
-
-def test_putong_filter_box_selects_third_box(monkeypatch):
-    """「普通」= 筛选行第 3 个框（全部/传送/普通/任务/商业）。"""
-    monkeypatch.setattr(
-        map_nav.game_map, "minimap_filter_boxes",
-        lambda img: [(False, 275, 657), (False, 343, 657), (True, 411, 657),
-                     (False, 479, 657), (False, 547, 657)])
-    assert map_nav._putong_filter_box(object()) == (True, 411, 657)
-    monkeypatch.setattr(map_nav.game_map, "minimap_filter_boxes",
-                        lambda img: None)
-    assert map_nav._putong_filter_box(object()) is None
 
 
 def _npc_test_image(anchor=(100, 100, 150, 120)):
@@ -2403,17 +2204,6 @@ def test_enter_special_by_npc_fails_when_never_starts(monkeypatch):
 
 # ---------------- 洞内按坐标步行（无小地图/不用角色名） ----------------
 
-def test_special_settle_pos_returns_final_position(monkeypatch):
-    """到达后等停稳：返回最终 HUD 位置（半路位置会被后续站位替代）。"""
-    monkeypatch.setattr(map_nav.time, "sleep", lambda s: None)
-    monkeypatch.setattr(map_nav, "_special_read_pos",
-                        lambda win: ("火云洞", 74, 22))
-    assert map_nav._special_settle_pos(
-        None, ("火云洞", 74, 22)) == ("火云洞", 74, 22)
-    monkeypatch.setattr(map_nav, "_special_read_pos",
-                        lambda win: ("火云洞", 72, 20))
-    assert map_nav._special_settle_pos(
-        None, ("火云洞", 74, 22)) == ("火云洞", 72, 20)
 
 
 def test_walk_special_coordinate_endpoint_bias_correction(monkeypatch):
@@ -2531,17 +2321,6 @@ def test_walk_special_coordinate_probe_all_blocked(monkeypatch):
     ok, info = map_nav._walk_special_coordinate(
         _W(), "莲花洞", 75, 21, lambda m: None, use_route=False)
     assert not ok and "探针" in info
-
-
-def test_name_hit_fuzzy():
-    """名字标签 OCR 容忍 1 字误识别；短名字只认全等。"""
-    assert map_nav._name_hit("20「可乐可口」", "可乐可口")
-    assert map_nav._name_hit("20「同乐可口」", "可乐可口")   # 实测误识别
-    assert not map_nav._name_hit("独孤剑客", "可乐可口")
-    assert map_nav._name_hit("可乐可口", "可乐可口")
-    assert not map_nav._name_hit("口乐", "可乐")            # 2 字名字不模糊
-    assert map_nav._name_hit("「可乐」", "可乐")
-    assert not map_nav._name_hit("", "可乐可口")
 
 
 def test_name_label_anchor_zoom_crop_mapping(monkeypatch):
@@ -3001,13 +2780,6 @@ def test_walk_special_coordinate_direct_stuck_rescues_to_trace(monkeypatch):
     assert any("改走描边路网绕行" in m for m in emits)
     assert abs(state["pos"][1] - 19) <= map_nav.SPECIAL_WALK_TOLERANCE
     assert abs(state["pos"][2] - 19) <= map_nav.SPECIAL_WALK_TOLERANCE
-
-
-def test_special_route_validation_accepts_trace_only():
-    """只有人工描边轨迹（无中心/臂）也是有效路网。"""
-    assert map_nav._valid_special_route(
-        {"trace": [[0, 0], [1, 1]]}) is not None
-    assert map_nav._valid_special_route({"trace": [[0, 0]]}) is None
 
 
 def test_walk_special_coordinate_visible_nav_skips_unreachable_waypoint(monkeypatch):

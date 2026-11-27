@@ -282,11 +282,6 @@ def test_wait_claim_entry_prefers_name_over_mismatched_template(monkeypatch):
     assert zhongzu._wait_claim_entry(_name_entry_win(), 1.0) ==         ((830, 388), here)
 
 
-def test_claim_npc_template4_exists():
-    """第 4 姿态模板（用户 2026-11-21 实机截图裁剪）已随仓库提供。"""
-    assert zhongzu._template_exists("zhongzu_claim_npc4.png")
-
-
 def test_claim_npc_icons_skips_missing(monkeypatch):
     """模板缺失时跳过且只告警一次（其余模板照常参与匹配）。"""
     logs = []

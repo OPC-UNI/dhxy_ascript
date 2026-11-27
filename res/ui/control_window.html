@@ -1728,6 +1728,18 @@
                     </div>
                 </div>
             </div>
+            <div class="task-card" data-mode="300环">
+                <div class="task-card-main">
+                    <span class="task-order"></span>
+                    <span class="task-name">300环</span>
+                    <span class="badge">江湖历练</span>
+                    <div class="task-count">
+                        <button class="th-btn" onclick="count('300环', -1)">−</button>
+                        <span class="th-val" id="cnt-300环">1</span>
+                        <button class="th-btn" onclick="count('300环', 1)">＋</button>
+                    </div>
+                </div>
+            </div>
             <div class="task-card" data-mode="仅战斗">
                 <div class="task-card-main">
                     <span class="task-order"></span>
@@ -2609,7 +2621,7 @@
     let logSeq = 0;                // 日志到达序号（selected 视图归并排序键）
     let lastSelectedLogKey = null; // 选中行切换时才重建日志 DOM（防滚动重置）
     let lastTabRole = null;        // 已显示的 active Tab（变化时才自动滚入视野）
-    const TASK_MODES = ['五环', '客栈', '修罗', '五倍', '种族比武', '玄枢轶闻', '名望', '仅战斗'];
+    const TASK_MODES = ['五环', '客栈', '修罗', '五倍', '种族比武', '玄枢轶闻', '名望', '300环', '仅战斗'];
     const BATTLE_ONLY = '仅战斗';   // 与其它任务互斥：勾选时禁用其它，勾选其它时禁用本项
     const COUNT_MAX = {'五环': 2, '客栈': 20, '种族比武': 100, '玄枢轶闻': 5, '名望': 5};
     // 印章动效：移动类阶段（左右轻摆走路节奏；其余按战斗/对话/默认分档）
@@ -3892,7 +3904,7 @@
     })();
 
     /* ================= 成就页（累计产出 + 效率 + 7 日趋势） ================= */
-    const STATS_MODES = ['五环', '客栈', '修罗', '五倍', '种族比武', '玄枢轶闻', '名望', '仅战斗'];
+    const STATS_MODES = ['五环', '客栈', '修罗', '五倍', '种族比武', '玄枢轶闻', '名望', '300环', '仅战斗'];
     const STATS_WINDOW_DAYS = 7;
     const pageStats = document.getElementById('page-stats');
     const statBody = document.getElementById('stat-body');

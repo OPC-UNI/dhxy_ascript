@@ -41,6 +41,7 @@ from ..core.app_utils import log, human_click, precise_click, move_away, norm_te
 from ..core import app_utils  # 高性能模式共享设施（固定位置缓存点击）
 from ..core import user_data  # 领取冷却截止时间持久化（按角色 state.json）
 from ..device import bag  # 背包操作（储物格切换搜索）
+from ..device import items as item_catalog  # 物品目录（统一物品模板/名称/储物位置）
 from ..device import map as game_map  # 地图操作（世界地图/小地图/位置识别）
 from ..device import map_nav  # 坐标化寻路（通用设置开关，关闭回滚固定像素）
 from ..device import task_tracker  # 任务追踪面板操作
@@ -96,7 +97,7 @@ YUNYOU_TARGET_POS = (95, 175)                      # 云游大师附近地图坐
                                                    # 原 88,175）
 MAP_POS_TOLERANCE = 5                              # 到达判定容差（坐标 OCR 噪声）
 SHOP_OWNER_POS = (643, 463)                         # 牛记布店老板坐标（进店后点击开始对话）
-FUZHUANGDIAN_XIANGLIAN_ICON = "fuzhuangdian_xianglian.png"  # 服装店项链（21.png）
+FUZHUANGDIAN_XIANGLIAN_ICON = item_catalog.icon("xianglian")  # 服装店项链（21.png）
 GOUMAI_ICON = "goumai.png"                          # 购买按钮（24.png）
 BUY_DIALOG_OPTION = "我想买点东西"
 EQUIPMENT_COUNT = 2                                 # 购买 2 件 2 级装备
@@ -136,7 +137,7 @@ _story_dismisser = StoryDialogDismisser(
     allow_dismiss=lambda: time.time() >= _give_expected_until)
 GIVE_ICON = "give_title.png"          # 给与面板标志（横幅「给与」静态标题区，32x114）
 GIVE_BTN_ICON = "give_btn.png"                      # 给与按钮（28.png，OCR 读作「给子」）
-XIANGLIAN_ICON = "fuzhuangdian_xianglian.png"       # 项链（与商店/给与面板行格式相同，实测给与面板匹配 1.0）
+XIANGLIAN_ICON = item_catalog.icon("xianglian")       # 项链（与商店/给与面板行格式相同，实测给与面板匹配 1.0）
 MISSING_EQUIPMENT_INFO = "缺少五环装备"              # 终止原因描述
 # ---- 完成标记 ----
 COMPLETE_DIALOG_TEXT = "恭喜你完成了今天五环任务"    # 今日五环全部完成的对话框文案

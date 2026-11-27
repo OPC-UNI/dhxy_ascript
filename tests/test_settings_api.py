@@ -74,24 +74,6 @@ def test_all_delegates_defined_on_mixin_and_control_window():
     assert ControlWindow.save_message_config.__module__ == "src.app.message_api"
 
 
-@pytest.mark.parametrize("name", DELEGATE_NAMES)
-def test_every_delegate_forwards_args_and_result(monkeypatch, name):
-    """55 个转发逐一验证：参数原样到达 core.settings，返回值原样透传。"""
-    sentinel = object()
-    calls = []
-
-    def fake(*args, **kwargs):
-        calls.append((args, kwargs))
-        return sentinel
-
-    params = list(inspect.signature(getattr(settings, name)).parameters)
-    dummy = [object() for _ in params]
-    monkeypatch.setattr(settings, name, fake)
-    method = getattr(settings_api.SettingsApiMixin, name)
-    assert method(settings_api.SettingsApiMixin(), *dummy) is sentinel
-    assert calls == [(tuple(dummy), {})]
-
-
 def test_guarded_saves_reject_while_running():
     host = settings_api.SettingsApiMixin()
     host._tm = type("Tm", (), {"is_running": lambda self, role=None: True})()

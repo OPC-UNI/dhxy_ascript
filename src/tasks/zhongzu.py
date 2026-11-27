@@ -52,6 +52,7 @@ from ..device import map as game_map
 from ..device import team
 from ..core import debug_overlay
 from ..device import bag
+from ..device import items as item_catalog
 from ..device.battle import is_in_battle, is_in_battle_frame
 from ..device import repair
 from ..core.settings import (load_task_counts, load_zhongzu_check_team,
@@ -153,7 +154,7 @@ _WAIT_POLL_INTERVAL = 0.3      # 领取/对话轮询间隔（非防抖判定点�
 
 # ---- 返程（任务储物格 → 助威令右键 → 回长安；共享实现在
 #      workflows/return_flow.py） ----
-ZHUWEILING_ICON = "zhongzu_zhuweiling.png"   # 助威令模板（用户提供 47x47）
+ZHUWEILING_ICON = item_catalog.icon("zhuweiling")   # 助威令模板（用户提供 47x47）
 ZHUWEILING_LABEL = "助威令"
 
 # ---- 自动巫医（能力保留，链路待实现；用户 2026-11-12 确认） ----

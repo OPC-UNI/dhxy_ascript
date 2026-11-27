@@ -2218,6 +2218,17 @@ def _ensure_minimap_putong_filter(win, emit):
     return _set_minimap_putong_filter(win, True, emit)
 
 
+def set_minimap_putong_filter(win, checked, log_fn=None):
+    """公开版「普通」筛选勾选设置（任务领取流程用；需地图已打开）。
+
+    300环领取（用户 2026-11-26 规则）：点小地图萧举人前勾选「普通」
+    显示 NPC 绿字，点击后立即取消——勾选状态下 NPC 名会吃掉其它点击，
+    不能残留。返回 (ok, 描述)；识别不到筛选行绝不盲点。
+    """
+    emit = log_fn or (lambda m: log(f"[地图导航] {m}", "INFO"))
+    return _set_minimap_putong_filter(win, bool(checked), emit)
+
+
 def _find_special_entry_npc(win, anchor_name, bar):
     """在父地图场景地图中定位特殊地图入口 NPC，返回点击点或 None。
 
@@ -4290,7 +4301,7 @@ def site_coord_nav_enabled():
 
 
 def start_navigation(win, target, x, y, log_fn=None, on_map_open=None,
-                     trusted=False):
+                     trusted=False, keep_putong=False):
     """坐标化寻路（只开图/标定/点击，不等到达）：任务点位迁移用。
 
     与 navigate_to_map_coordinate 前半段一致：同图直开小地图/跨图经
@@ -4302,6 +4313,9 @@ def start_navigation(win, target, x, y, log_fn=None, on_map_open=None,
     筛选状态等）。回调异常只记日志、不影响寻路。
     trusted：有标定直接点（免悬停校验/采样），固定领取点专用；无标定
     立即失败由调用方回退固定像素点（见 _start_impl）。
+    keep_putong：True 时保留小地图「普通」筛选勾选（不清除）——300环
+    领取需要点小地图 NPC 名绿字，调用方在 on_map_open 里勾选、点击后
+    自行取消（用户 2026-11-26 规则，普通勾选有 NPC 名吃点击的风险）。
     返回 (ok, info, point)。
     """
     emit = log_fn or (lambda m: log(f"[地图导航] {m}", "INFO"))
@@ -4311,7 +4325,8 @@ def start_navigation(win, target, x, y, log_fn=None, on_map_open=None,
     _CANCEL.clear()
     try:
         ok, info, ctx = _start_impl(win, target, x, y, emit,
-                                    on_map_open=on_map_open, trusted=trusted)
+                                    on_map_open=on_map_open, trusted=trusted,
+                                    keep_putong=keep_putong)
         if not ok:
             return False, info, None
         return True, f"已点击目标点 {ctx['point']}，开始寻路", ctx["point"]
@@ -4335,7 +4350,7 @@ def start_navigation(win, target, x, y, log_fn=None, on_map_open=None,
 
 
 def _start_impl(win, target, x, y, emit, on_map_open=None, pos_hint=None,
-                trusted=False):
+                trusted=False, keep_putong=False):
     """开图 + 标定 + 点击前半段（start_navigation / _navigate_impl 共用）。
 
     世界地图（layer=None）开图后统一取消「普通」筛选（用户 2026-11-24）：
@@ -4426,12 +4441,14 @@ def _start_impl(win, target, x, y, emit, on_map_open=None, pos_hint=None,
     t_bar = time.time()
     emit(f"搜索条锚点: ({bar['x']},{bar['y']})"
          f"（定位 {t_bar - t_map:.1f}s）")
-    if layer is None:
+    if layer is None and not keep_putong:
         # 「普通」筛选统一取消勾选（用户 2026-11-24）：世界地图坐标导航的
         # 点击点都是地形点，勾选时 NPC 绿字（金角大王等）会吃掉点击/误开
         # 对话框；特殊地图 NPC 入口兜底（_enter_special_by_npc）自行勾选、
         # 进入后残留的勾选状态由这里在下次开图时统一取消。层级图
         # （龙窟/凤巢/大雁塔层）页面无该筛选行，不做处理。
+        # keep_putong=True（300环 萧举人）：保留勾选，调用方 on_map_open
+        # 勾选、点击后自行取消（用户 2026-11-26 规则）。
         try:
             ok_p, info_p = _set_minimap_putong_filter(win, False, emit)
         except Exception as e:  # noqa: BLE001 —— 辅助检查不得阻断寻路

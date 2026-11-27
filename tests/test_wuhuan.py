@@ -83,16 +83,6 @@ def test_link_line_missing_returns_empty():
     assert _sig(_F) == ""
 
 
-def test_title_punctuation_normalized():
-    """标题标点变体（「·五环[五环]」）归一后签名一致。"""
-    items = _make([
-        ("·五环[五环]", 14, 233, 100, 253),
-        ("去找大雁塔二层(13，47)情缘", 20, 249, 224, 276),
-    ])
-    sig = _sig(items)
-    assert sig.startswith("五环五环|")
-
-
 # ---- 链接行精确定位（_wuhuan_link_picker）----
 
 def _frame_with_link_fragments():
@@ -629,14 +619,6 @@ def test_cooldown_parse_minutes():
     assert wuhuan._parse_cooldown_seconds(_COOLDOWN_ITEMS) == 300
 
 
-def test_cooldown_parse_hours_and_minutes():
-    items = _make([
-        ("你距离下次领取5环任务还差1小时20分钟，等等再来吧！",
-         435, 390, 930, 430),
-    ])
-    assert wuhuan._parse_cooldown_seconds(items) == 4800
-
-
 def test_cooldown_parse_split_lines():
     """对话框被 OCR 拆成两行（「…还差」+「30分钟…」）仍能解析。"""
     items = _make([
@@ -646,22 +628,11 @@ def test_cooldown_parse_split_lines():
     assert wuhuan._parse_cooldown_seconds(items) == 1800
 
 
-def test_cooldown_parse_seconds_unit():
-    items = _make([
-        ("你距离下次领取5环任务还差30秒，等等再来吧！", 435, 390, 930, 430),
-    ])
-    assert wuhuan._parse_cooldown_seconds(items) == 30
-
-
 def test_cooldown_parse_unparseable_returns_none():
     items = _make([
         ("你距离下次领取5环任务还差一会儿，等等再来吧！", 435, 390, 930, 430),
     ])
     assert wuhuan._parse_cooldown_seconds(items) is None
-
-
-def test_cooldown_dialog_present_main_needle():
-    assert wuhuan._cooldown_dialog_present(_COOLDOWN_ITEMS) is True
 
 
 def test_cooldown_dialog_present_marker_fallback():
@@ -723,28 +694,6 @@ def test_consume_cooldown_dialog_absent_no_side_effects(monkeypatch):
     assert wuhuan._consume_cooldown_dialog(
         None, _make([("普通的对话", 435, 390, 930, 430)])) is None
     assert called == []
-
-
-def test_consume_cooldown_dialog_diagnostic_no_close(monkeypatch):
-    """诊断链路 close=False：记录冷却但不点屏（不改动界面状态）。"""
-    noted, clicks = [], []
-    monkeypatch.setattr(wuhuan, "_note_cooldown",
-                        lambda win, seconds: noted.append(seconds) or 0.0)
-    monkeypatch.setattr(wuhuan, "_click_screen_center",
-                        lambda *a, **k: clicks.append(1))
-    monkeypatch.setattr(wuhuan, "log", lambda *a, **k: None)
-    assert wuhuan._consume_cooldown_dialog(None, _COOLDOWN_ITEMS,
-                                           close=False) == 300
-    assert noted == [300] and clicks == []
-
-
-def test_claim_blocker_cooldown_info(monkeypatch):
-    monkeypatch.setattr(wuhuan, "_consume_cooldown_dialog",
-                        lambda win, items, close=True: 300)
-    ended, info, continued = wuhuan._handle_claim_blockers(None, [], None)
-    assert ended is True
-    assert info == wuhuan.COOLDOWN_INFO
-    assert continued is False
 
 
 def test_claim_blocker_cooldown_handled_skips_recheck(monkeypatch):

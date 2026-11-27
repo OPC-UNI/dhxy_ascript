@@ -330,11 +330,6 @@ def test_wuyi_chain_timeout_self_click_uses_cached_pos(wuyi_chain, monkeypatch):
 
 
 # ---- 领取点到达判据地图名门控（2026-11-11 用户实机长安误判） ----
-def test_in_claim_map_requires_lingshoucun():
-    assert xiuluo._in_claim_map(("灵兽村", 111, 90))
-    assert not xiuluo._in_claim_map(("长安", 367, 27))
-    assert not xiuluo._in_claim_map(("长安城东", 111, 90))
-    assert not xiuluo._in_claim_map(None)  # 位置读不出不采信按钮
 
 
 def test_walk_to_claim_spot_button_in_changan_not_arrival(monkeypatch):
@@ -471,16 +466,6 @@ def test_task_state_panel_closed(monkeypatch):
 
     monkeypatch.setattr(xiuluo.task_tracker, "ocr_track", _boom)
     assert xiuluo._task_state(_FakeWin()) is False
-
-
-def test_task_state_panel_visible_task_found(monkeypatch):
-    monkeypatch.setattr(claim_flow, "is_in_battle_frame", lambda img: False)
-    monkeypatch.setattr(xiuluo.task_tracker, "panel_visible", lambda **k: True)
-    monkeypatch.setattr(xiuluo.task_tracker, "ocr_track",
-                        lambda img: ([], None))
-    monkeypatch.setattr(xiuluo.task_tracker, "has_task_in",
-                        lambda items, img_np, title, fallback=(): True)
-    assert xiuluo._task_state(_FakeWin()) is True
 
 
 def test_claim_task_skips_when_task_reappeared(monkeypatch):
@@ -713,16 +698,6 @@ def test_build_shout_text_replaces_race_placeholder(monkeypatch):
     assert xiuluo._build_shout_text() == "百次修罗来人，效率队，来随意来人"
 
 
-def test_build_shout_text_custom_template(monkeypatch):
-    """自定义内容照常喊出；无占位符时原样输出。"""
-    monkeypatch.setattr(xiuluo, "load_xiuluo_shout_text",
-                        lambda: "百次修罗速度队，{种族}优先")
-    monkeypatch.setattr(xiuluo, "load_xiuluo_settings",
-                        lambda: {"min_members": 5, "races": ["女仙"]})
-    assert xiuluo._build_shout_text() == "百次修罗速度队，女仙优先"
-    assert xiuluo._build_shout_text("随缘来人") == "随缘来人"
-
-
 # ---- 返程交接对齐五倍（2026-11-14：1 轮消失确认 + 返程前 has_task 复查） ----
 
 def test_follow_to_done_uses_single_gone_poll(monkeypatch):
@@ -751,13 +726,6 @@ def test_task_still_tracked_before_return_true(monkeypatch):
     assert xiuluo._task_still_tracked_before_return(_FakeWin()) is True
     assert calls == [(xiuluo.TASK_TITLE, xiuluo.TASK_FALLBACK_TEXTS,
                       {"fast_absent": True})]
-
-
-def test_task_still_tracked_before_return_false(monkeypatch):
-    """返程前复查确认任务消失：放行返程。"""
-    monkeypatch.setattr(xiuluo.task_tracker, "has_task",
-                        lambda win, title, fallback, **kwargs: False)
-    assert xiuluo._task_still_tracked_before_return(_FakeWin()) is False
 
 
 # ---- 取消任务（2026-11-14 用户指定：流程同领取，选项「我想取消任务」） ----
@@ -1462,12 +1430,6 @@ def test_claim_flow_open_map_wiring(monkeypatch):
     assert captured["on_filter_state"] is xiuluo._set_claim_task_filter
 
 
-def test_claim_flow_set_filter_state_writes_global(monkeypatch):
-    monkeypatch.setattr(xiuluo, "_claim_task_filter_on", True)
-    xiuluo._set_claim_task_filter(False)
-    assert xiuluo._claim_task_filter_on is False
-
-
 def test_claim_flow_relocate_wiring(monkeypatch):
     captured = {}
     win = _FakeWin()
@@ -1496,15 +1458,6 @@ def test_relocate_arrival_button_requires_map_gate(monkeypatch):
     img = np.zeros((831, 1378, 3), np.uint8)
     assert xiuluo._relocate_arrival(
         None, img, img, ("长安", 367, 27)) is None
-
-
-def test_relocate_arrival_button_in_map(monkeypatch):
-    monkeypatch.setattr(xiuluo, "_claim_task_filter_on", False)
-    monkeypatch.setattr(xiuluo.game_map, "match_frame_np", lambda *a, **k: (300, 300))
-    monkeypatch.setattr(xiuluo, "_near_claim_spot", lambda pos, tol: False)
-    img = np.zeros((831, 1378, 3), np.uint8)
-    desc = xiuluo._relocate_arrival(None, img, img, ("灵兽村", 60, 60))
-    assert desc and "领取按钮可见" in desc
 
 
 def test_relocate_arrival_dialog_checked_even_when_filter_off(monkeypatch):
@@ -1650,22 +1603,10 @@ def test_parse_claim_destination_normal(monkeypatch):
     assert any("领取对话框文案" in m for m in logged)  # 全文写日志便于调整
 
 
-def test_parse_claim_destination_layer(monkeypatch):
-    monkeypatch.setattr(xiuluo, "log", lambda m, l="INFO": None)
-    items = [("速去大雁塔四层(10, 20)消灭修罗", (500, 300, 800, 330), 0.95)]
-    assert xiuluo._parse_claim_destination(None, items) == ("大雁塔四层", 10, 20)
-
-
 def test_parse_claim_destination_ignores_panel_lines(monkeypatch):
     """只认对话框区域行（x≥PANEL_MAX_X）；追踪面板行里的坐标不算。"""
     monkeypatch.setattr(xiuluo, "log", lambda m, l="INFO": None)
     items = [("洛阳城（191,110）", (10, 230, 380, 250), 0.95)]
-    assert xiuluo._parse_claim_destination(None, items) is None
-
-
-def test_parse_claim_destination_no_coords(monkeypatch):
-    monkeypatch.setattr(xiuluo, "log", lambda m, l="INFO": None)
-    items = [("阻止它为非作歹", (500, 300, 800, 330), 0.95)]
     assert xiuluo._parse_claim_destination(None, items) is None
 
 
@@ -1680,18 +1621,6 @@ def test_task_markers_dedupes_and_sorts(monkeypatch):
     monkeypatch.setattr(xiuluo.game_map, "find_all_template_in", _find)
     assert xiuluo._task_markers(_FakeWin()) == [(300, 100), (100, 200)]
     assert seen["icon"] == "xiuluo_renwu_marker.png"
-
-
-def test_task_marker_template_is_user_provided_sign():
-    """手动寻路任务标记模板：用户 2026-11-21 提供的「任务」小牌（41x19 RGB）。"""
-    from pathlib import Path
-    from PIL import Image
-    path = (Path(__file__).resolve().parent.parent / "res/img"
-            / xiuluo.XIULUO_MARKER_ICON)
-    assert path.is_file()
-    im = Image.open(path)
-    assert im.size == (41, 19)
-    assert im.mode == "RGB"
 
 
 def test_manual_nav_round_without_dest(monkeypatch):
@@ -1714,24 +1643,6 @@ def test_manual_nav_round_navigates_and_fights(monkeypatch):
                         lambda win, dest=None: (True, "战斗已结束"))
     ok, _info = xiuluo._manual_nav_round(_FakeWin(), ("洛阳城", 191, 110))
     assert ok and calls == [("洛阳城", 191, 110)]
-
-
-def test_manual_nav_round_passes_pos_hint(monkeypatch):
-    """领取后人物必在灵兽村领取点：传 pos_hint 免导航开头一次位置 OCR。"""
-    captured = {}
-
-    def _fake_nav(win, name, x, y, log_fn=None, on_walk_start=None,
-                  pos_hint=None):
-        captured["pos_hint"] = pos_hint
-        return True, "到达"
-
-    monkeypatch.setattr(
-        xiuluo.map_nav, "navigate_to_map_coordinate", _fake_nav)
-    monkeypatch.setattr(xiuluo, "_click_markers_and_fight",
-                        lambda win, dest=None: (True, "战斗已结束"))
-    ok, _info = xiuluo._manual_nav_round(
-        _FakeWin(), ("洛阳城", 191, 110), pos_hint=("灵兽村", 120, 88))
-    assert ok and captured["pos_hint"] == ("灵兽村", 120, 88)
 
 
 def test_manual_nav_round_wires_bars_pass_to_walk_start(monkeypatch):
@@ -1938,12 +1849,6 @@ def test_click_markers_battle_skips_alt(monkeypatch):
     assert xiuluo._fight_via_kanda is True  # 战后按原流程返程
 
 
-def test_force_manual_default_off():
-    """强制手动寻路开关默认关闭（测试用，用户 2026-11-20）。"""
-    from src.core import settings as core_settings
-    assert core_settings.load_xiuluo_force_manual() is False
-
-
 def test_parse_claim_destination_wait_retries(monkeypatch):
     """强制模式：校验帧没解析到目的地时短窗轮询现场 OCR。"""
     calls = []
@@ -1967,20 +1872,6 @@ def test_parse_claim_destination_gates_dialog_template(monkeypatch):
 
     monkeypatch.setattr(xiuluo.game_map, "ocr_region", _boom)
     assert xiuluo._parse_claim_destination(_FakeWin(), None) is None
-
-
-def test_manual_nav_default_on():
-    """兼容无快捷寻路默认开启（有追踪时行为不变）。"""
-    from src.core import settings as core_settings
-    assert core_settings.load_xiuluo_manual_nav() is True
-
-
-def test_schemes_include_manual_nav_keys():
-    """两个新开关进入配置方案表（快照/应用/导出都覆盖）。"""
-    from src.core import schemes, settings as core_settings
-    spec = schemes._settings_spec()
-    assert spec[core_settings._XIULUO_MANUAL_NAV_KEY] is True
-    assert spec[core_settings._XIULUO_FORCE_MANUAL_KEY] is False
 
 
 def test_wait_fight_dialog_direct_battle_marks_kanda(monkeypatch):

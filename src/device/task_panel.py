@@ -31,7 +31,7 @@ import time
 import cv2
 import numpy as np
 
-from ..core.app_utils import log, human_click
+from ..core.app_utils import log, human_click, human_scroll
 from . import demon_task
 from . import map as game_map
 
@@ -99,6 +99,19 @@ TASK_PANEL_MIN_OCR_SCORE = 0.55
 # 上方，纵向取标题条顶 -60 ~ -2px。
 TASK_PANEL_TAB_TEXT = "当前任务"
 TASK_PANEL_TAB_TOP_PAD = 60
+# 顶部四个标签页（顺序固定；2026-11-26 实机 1378x831）
+TASK_PANEL_TABS = ("当前任务", "日常活动", "周常副本", "其他任务")
+TASK_PANEL_TAB_DAILY = "日常活动"
+# 切页成功判据：日常活动页列表始终包含这些行之一（实机 2026-11-26：
+# 常规玩法[6] 分组及其子项五环任务/客栈任务等、雁塔除妖、江湖历练任务、
+# 街坊玩法；列表可滚动，任意一行出现即认为在正确的标签页）
+TASK_PANEL_DAILY_ANCHORS = ("常规玩法", "五环任务", "客栈任务", "雁塔除妖",
+                            "江湖历练任务", "街坊玩法")
+# 列表滚动（human_scroll 在列表中心，正数向上、负数向下）：每次 3 行，
+# 最多双向各 8 次（日常活动全列表 ~20 行，实测 2~3 次即可见底）
+TASK_PANEL_SCROLL_LINES = 3
+TASK_PANEL_MAX_SCROLLS = 8
+TASK_PANEL_SCROLL_WAIT = 0.35
 
 _GROUP_COUNT_RE = re.compile(r"[\[［【]\s*(\d+)\s*[\]］】]")
 
@@ -424,6 +437,49 @@ def _read_list(win):
     return _visual_rows(items), bgr, img, panel
 
 
+def _tab_region(img, panel):
+    """标签行 OCR 区域：两块标题条上方（纵向 标题条顶 -60 ~ -2px）。
+
+    面板可拖动，区域随标题条模板定位；标签行横向覆盖两栏宽度。
+    """
+    size = getattr(img, "size", None)
+    if not size:
+        return None
+    l, t, _r, _b = panel["list_header"]
+    right = panel["detail_header"][2]
+    region = (max(0, l), max(0, t - TASK_PANEL_TAB_TOP_PAD),
+              min(size[0], right), max(1, t - 2))
+    if region[2] <= region[0] or region[3] <= region[1]:
+        return None
+    return region
+
+
+def _click_tab_text(win, img, panel, tab_text, prefix=TAG):
+    """OCR 标签行并点击 tab_text 标签页中心。返回是否点击。
+
+    标签文字唯一性：同一标签被 OCR 拆成多个框时取精确匹配优先、其次
+    最高分框；完全读不到返回 False（不盲点其它标签）。
+    """
+    region = _tab_region(img, panel)
+    if region is None:
+        return False
+    items, _ = game_map.ocr_region(img, region)
+    cands = [it for it in items
+             if tab_text in (it[0] or "")
+             and it[2] >= TASK_PANEL_MIN_OCR_SCORE]
+    if not cands:
+        log(f"{prefix}未读到「{tab_text}」标签，无法切换标签页", "WARN")
+        return False
+    exact = [it for it in cands if (it[0] or "").strip() == tab_text]
+    hit = max(exact or cands, key=lambda it: it[2])
+    _txt, rect, score = hit
+    cx, cy = (rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2
+    human_click(win, cx, cy)
+    log(f"{prefix}已点击「{tab_text}」标签页 ({cx},{cy})"
+        f"（匹配度 {score:.2f}），等待列表刷新", "SYS")
+    return True
+
+
 def _click_current_tab(win, panel, prefix=TAG):
     """点击任务栏「当前任务」标签页（仅在列表找不到目标分组时兜底）。
 
@@ -435,32 +491,182 @@ def _click_current_tab(win, panel, prefix=TAG):
     img, bgr = _capture_bgr(win)
     if img is None:
         return False
-    size = getattr(img, "size", None)
-    if not size:
-        return False
     fresh = locate_panel(bgr) or panel
     if fresh is None:
         return False
-    l, t, _r, _b = fresh["list_header"]
-    right = fresh["detail_header"][2]
-    region = (max(0, l), max(0, t - TASK_PANEL_TAB_TOP_PAD),
-              min(size[0], right), max(1, t - 2))
-    if region[2] <= region[0] or region[3] <= region[1]:
-        return False
-    items, _ = game_map.ocr_region(img, region)
-    hit = next((it for it in items
-                if TASK_PANEL_TAB_TEXT in it[0]
-                and it[2] >= TASK_PANEL_MIN_OCR_SCORE), None)
-    if hit is None:
-        log(f"{prefix}未读到「{TASK_PANEL_TAB_TEXT}」标签，无法切换标签页",
+    return _click_tab_text(win, img, fresh, TASK_PANEL_TAB_TEXT, prefix)
+
+
+def _rows_text(rows):
+    """列表视觉行文本按序拼接（滚动前后是否变化的比较键）。"""
+    return "|".join(r["text"] for r in rows)
+
+
+def _read_list_retry(win, attempts=2):
+    """读一次列表；面板/截图瞬时失败时短重试。返回 (rows, panel)。"""
+    for i in range(attempts):
+        rows, bgr, _img, panel = _read_list(win)
+        if rows is not None and panel is not None:
+            return rows, panel
+        if i + 1 < attempts:
+            time.sleep(TASK_PANEL_POLL_INTERVAL)
+    return None, None
+
+
+def click_tab(win, tab_text, prefix=TAG):
+    """点击任务栏指定标签页（不等待列表渲染）。返回 (是否成功, 描述)。"""
+    img, bgr = _capture_bgr(win)
+    if img is None:
+        return False, "窗口截图失败"
+    panel = locate_panel(bgr)
+    if panel is None:
+        return False, "未定位到任务栏面板"
+    ok = _click_tab_text(win, img, panel, tab_text, prefix)
+    return ok, ("已点击标签页" if ok else f"未找到「{tab_text}」标签")
+
+
+def switch_to_tab(win, tab_text, anchors=(), prefix=TAG,
+                  timeout=TASK_PANEL_DETAIL_TIMEOUT):
+    """切换标签页并等待列表出现锚点行（确认切页成功）。
+
+    anchors 为空时只点击一次、不做内容校验（返回点击结果）。日常活动
+    页传 TASK_PANEL_DAILY_ANCHORS：列表可滚动，任一锚点行出现即确认。
+    """
+    for attempt in (1, 2):
+        ok, info = click_tab(win, tab_text, prefix)
+        if not ok:
+            return False, info
+        if not anchors:
+            return True, f"已点击「{tab_text}」"
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            time.sleep(TASK_PANEL_POLL_INTERVAL)
+            rows, _panel = _read_list_retry(win, attempts=1)
+            if rows is None:
+                continue
+            if any(a in r["text"] for r in rows for a in anchors):
+                return True, f"已切换到「{tab_text}」"
+        log(f"{prefix}第{attempt}次点击「{tab_text}」后未出现预期列表，重试",
             "WARN")
-        return False
-    _txt, rect, _score = hit
+    return False, f"两次点击「{tab_text}」后列表仍未切换"
+
+
+def select_row(win, row, prefix=TAG):
+    """点击任务行主文本（选中该行并刷新右侧任务详情）。
+
+    row 为 _visual_rows 结构；点击点取主文本框中心（不含行首展开图标、
+    不含右侧追踪标记）。返回 (是否点击, 描述)。
+    """
+    rect = (row or {}).get("rect")
+    if not rect:
+        return False, "任务行缺少文本框"
     cx, cy = (rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2
     human_click(win, cx, cy)
-    log(f"{prefix}已点击「{TASK_PANEL_TAB_TEXT}」标签页 ({cx},{cy})，"
-        f"等待列表刷新", "SYS")
-    return True
+    log(f"{prefix}已选中任务行「{row.get('text', '')}」({cx},{cy})，"
+        f"等待详情刷新", "SYS")
+    time.sleep(TASK_PANEL_POLL_INTERVAL)
+    return True, "已选中任务行"
+
+
+def read_list_rows(win):
+    """读取任务列表视觉行。返回 (rows, 描述)；失败 rows 为 None。"""
+    rows, panel = _read_list_retry(win)
+    if rows is None:
+        return None, "未定位到任务栏面板"
+    return rows, "ok"
+
+
+def find_row(rows, keyword, require_group=False):
+    """在视觉行中查找包含 keyword 的行（可选仅分组行）。"""
+    if not keyword:
+        return None
+    for row in rows:
+        if keyword not in row["text"]:
+            continue
+        if require_group and not _is_group_line(row["text"]):
+            continue
+        return row
+    return None
+
+
+def scroll_list(win, lines, prefix=TAG):
+    """在任务列表中心滚动滚轮（lines 正数向上、负数向下）。"""
+    img, bgr = _capture_bgr(win)
+    if img is None:
+        return False, "窗口截图失败"
+    panel = locate_panel(bgr)
+    if panel is None:
+        return False, "未定位到任务栏面板"
+    l, t, r, b = panel["list_region"]
+    cx, cy = (l + r) // 2, (t + b) // 2
+    ok = human_scroll(win, cx, cy, int(lines))
+    if not ok:
+        return False, f"列表滚动投递失败 @({cx},{cy})"
+    time.sleep(TASK_PANEL_SCROLL_WAIT)
+    return True, f"列表滚动 {lines:+d} 行"
+
+
+def scan_list_for(win, keyword, *, tab=None, anchors=(), prefix=TAG,
+                  scroll=True, require_group=False,
+                  max_scrolls=TASK_PANEL_MAX_SCROLLS):
+    """在任务列表中查找 keyword 行（可切标签、双向滚动全列表）。
+
+    返回 (命中行或 None, 描述)。命中行沿用 _visual_rows 结构
+    （text/items/rect/cy）。滚动方向：先向上到顶，再向下扫到底；
+    每个位置读取一次列表并检查。列表滚动后内容不变即判定到达边界。
+    scroll=False 时只看当前可见区。
+    """
+    img, bgr = _capture_bgr(win)
+    if img is None:
+        return None, "窗口截图失败"
+    panel = locate_panel(bgr)
+    if panel is None:
+        return None, "未定位到任务栏面板"
+    if tab:
+        ok, info = switch_to_tab(win, tab, anchors, prefix)
+        if not ok:
+            return None, info
+    rows, panel = _read_list_retry(win)
+    if rows is None:
+        return None, "任务列表读取失败"
+    hit = find_row(rows, keyword, require_group=require_group)
+    if hit is not None:
+        return hit, f"当前可见区已找到「{keyword}」"
+    if not scroll:
+        return None, f"当前可见区未找到「{keyword}」"
+    # 向上扫到顶（human_scroll 正数向上）
+    last = _rows_text(rows)
+    for i in range(max_scrolls):
+        ok, _info = scroll_list(win, TASK_PANEL_SCROLL_LINES, prefix)
+        if not ok:
+            return None, _info
+        rows, panel = _read_list_retry(win)
+        if rows is None:
+            continue
+        hit = find_row(rows, keyword, require_group=require_group)
+        if hit is not None:
+            return hit, f"向上滚动 {i + 1} 次后找到「{keyword}」"
+        cur = _rows_text(rows)
+        if cur == last:
+            break
+        last = cur
+    # 向下扫到底
+    last = _rows_text(rows or [])
+    for i in range(max_scrolls):
+        ok, _info = scroll_list(win, -TASK_PANEL_SCROLL_LINES, prefix)
+        if not ok:
+            return None, _info
+        rows, panel = _read_list_retry(win)
+        if rows is None:
+            continue
+        hit = find_row(rows, keyword, require_group=require_group)
+        if hit is not None:
+            return hit, f"向下滚动 {i + 1} 次后找到「{keyword}」"
+        cur = _rows_text(rows)
+        if cur == last:
+            break
+        last = cur
+    return None, f"全列表扫描后未找到「{keyword}」"
 
 
 def ensure_group_expanded(win, keyword=TASK_PANEL_DEMON_KEYWORD, prefix=TAG):
