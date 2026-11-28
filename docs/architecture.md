@@ -15,7 +15,7 @@
 | 进程模型 | **主进程**（pywebview GUI / 控制平面）+ **任务子进程**（spawn，daemon）+ **悬浮层绘制子进程**（subprocess，独立进程） |
 | 线程模型 | 主进程：GUI 主线程、TaskManager 日志监听、窗口看护、老板键消息泵、托盘、Runtime 驻留、OCR 预热、消息服务轮询/事件线程；任务子进程：`task_start` daemon 线程、`battle.watch_loop` 战斗线程、摄妖香空闲兜底线程、debug_overlay 监督线程 |
 | 停止模型 | **杀进程是唯一可靠的全线程清理方式**：`stop_event → join 3s → terminate → join 1s → kill`（业务循环无协作式停止标志） |
-| 任务编排 | 面板勾选任务 → 按顺序逐个进入 `app.task_registry.run_task_mode`；每个任务循环自然结束后切下一个，全部结束任务进程退出。五环领取冷却期间（昨天/今天领取间隔提示）由 `main._run_selected_tasks` 在队列层顺延：排到队尾先做其他任务、冷却结束插回队首、全部做完仍未到点在云游大师处等待（`wuhuan.cooldown_remaining` 按角色持久化） |
+| 任务编排 | 面板勾选任务 → 按顺序逐个进入 `app.task_registry.run_task_mode`；每个任务循环自然结束后先做**任务结束自清理**（`dialog_common.clean_task_leftovers`：任务专属钩子如客栈奇遇/名望面板 + 标准对话框 + 地图/物品栏，防残留界面遮挡下一任务领取），再切下一个，全部结束任务进程退出。五环领取冷却期间（昨天/今天领取间隔提示）由 `main._run_selected_tasks` 在队列层顺延：排到队尾先做其他任务、冷却结束插回队首、全部做完仍未到点在云游大师处等待（`wuhuan.cooldown_remaining` 按角色持久化） |
 | 感知 | Win32 窗口截图（不激活）→ PIL 帧（OCR / 绿字）或 BGR 帧（模板匹配）；RapidOCR 三种引擎（全帧 / 区域 / 2x 放大）+ OpenCV 模板匹配 |
 | 执行 | 物理鼠标（拟人化，全局 `RLock` 串行）或静默消息通道（`WM_MOUSEMOVE/LBUTTONDOWN/UP`，不移动鼠标、不抢前台）；键盘同理区分物理 / `WM_SYSKEY` / `WM_CHAR` |
 | 持久化 | `config.json`（KeyValue：软件全局设置 + 窗口绑定）、`data/<角色ID>/`（settings/schemes/state/task_stats/high_perf，按角色隔离）、`debug_overlay_state.json`（看板/悬浮层心跳）、`logs/日期.log`；详见 docs/user-data-layout.md |
@@ -1232,7 +1232,7 @@ flowchart LR
 | 文件 | 职责 | 关键入口 |
 |---|---|---|
 | `main.py` | 进程入口、授权门、绑定、仅战斗、停止善后 | `task_start`、`_task_start_body`、`_battle_only_loop`、`task_stop` |
-| `src/app/task_registry.py` | 任务模式注册表（执行侧单点登记：模式 → 前置钩子 → 主循环） | `TaskSpec`、`TASKS`、`TASKS_BY_MODE`、`run_task_mode` |
+| `src/app/task_registry.py` | 任务模式注册表（执行侧单点登记：模式 → 前置钩子 → 主循环 → 自清理） | `TaskSpec`、`TASKS`、`TASKS_BY_MODE`、`run_task_mode`、`run_task_cleanup` |
 | `src/app/task_manager.py` | 任务子进程生命周期、日志回流、窗口看护 | `TaskManager.start/stop/is_running`、`_worker_wrapper`、`_window_watchdog` |
 | `src/app/control_window.py` | 控制面板外壳、设置项 UI 接线、启停、看板（设置/消息/方案方法见对应 mixin） | `ControlWindow`、`ApiBridge`、`start_task` |
 | `src/app/diagnostics.py` | 诊断/验证工具（2026-11-18 从 control_window 抽出的 mixin） | `DiagnosticsMixin`、`verify_*`、`_run_*_verify`、`_game_window_clickable` |

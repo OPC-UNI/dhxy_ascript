@@ -3919,6 +3919,27 @@ def _close_shanhe_panel(win):
     return False, "山河名望面板关闭失败（右键标题牌未生效）"
 
 
+def cleanup_leftovers(win):
+    """任务结束自清理钩子（app.task_registry.TaskSpec.cleanup）：关名望面板。
+
+    用户 2026-11-17 规则：名望结束须关闭山河名望面板——残留面板遮挡
+    后续任务的追踪面板/对话框区，后续任务模块不会处理它。次数达到上限
+    直接返回时面板可能仍在（领取链路异常中断等），这里补关一次；面板
+    本就未打开时零动作，不点屏（领取面板在场时点屏幕中心可能误点
+    「接取」，故 clear_dialog 一律关闭）。标准对话框由通用自清理处理。
+    返回是否检测到并处理了残留面板。
+    """
+    img = win.capture(force_activate=False)
+    if img is None:
+        return False
+    score, _pt = game_map.best_match_np(_bgr_frame(img), CLAIM_SHANHE_ICON)
+    if score < CLAIM_SHANHE_THRESHOLD:
+        return False  # 面板未打开：无残留可报
+    ok, desc = _close_shanhe_panel(win)
+    log(f"[名望] 自清理：{desc}", "SYS" if ok else "WARN")
+    return True  # 检测到面板即算本轮已处理（下一轮复查仍在则重试关闭）
+
+
 def _resume_tracking(win):
     """已有追踪任务时直接跟踪至完成（续跑，不重新领取）。
 

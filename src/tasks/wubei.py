@@ -198,9 +198,13 @@ BAOXIANG_MAP_POS = (517, 488)                      # 宝象国小地图上领取
                                                    # 默认位置，固定绝对坐标即可，锚点相对偏移
                                                    # 反而会因关闭按钮所在面板宽度变化点偏）
 BAOXIANG_CLAIM_COORD = (94, 84)                    # 领取点坐标化寻路坐标（用户 2026-11-25 指定）：
-                                                   # 按当前内置标定点击像素 (512,491)，人物走到
+                                                   # 默认面板几何下点击像素 (512,491)，人物走到
                                                    # (94,84)——即旧固定像素点击的实测停点
-                                                   # （WALK_TARGET_SPOT），市场人流挡路时中途会
+                                                   # （WALK_TARGET_SPOT）；2026-11-28 实机复验
+                                                   # （可乐可口窗口：悬停读回 (94,84)、点击落点
+                                                   # (94,84)）。小地图面板可拖动/缩放，几何漂移
+                                                   # 由 map_nav trusted 单次悬停校验兜底（偏差
+                                                   # 超限自动重采样）。市场人流挡路时中途会
                                                    # 暂停（实测 86,82），故入口点击另有驻足放行
                                                    # 兜底。此前为 (91,84)（像素 507,491，偏西
                                                    # 3 格）。坐标化开关关闭时回滚用 BAOXIANG_MAP_POS
@@ -337,6 +341,15 @@ _xj_veto_click_at = 0.0 # 地图门否决后重点寻路链接时间（冷却）
 _xj_dialog_clicked_at = 0.0  # 白龙马对话框屏幕中间连点时间（冷却防连点）
 _xj_diag_at = 0.0            # 宽限内「对话框在场但文案不匹配」诊断日志时间
                              # （每次宽限最多一条，2026-11-10 临时诊断）
+_xj_wrong_dialog_polls = 0   # 用镜后宽限内「标准对话框在场但非白龙马文案」
+                             # 连续轮询数（达确认轮数即判本处失败）
+_xj_spot_failed = False      # 本处已证伪（错误对话框已点屏关闭）：对话框
+                             # 消失后立即转另一侧，不等宽限到期（2026-11-28）
+_xj_wrong_dialog_clicked_at = 0.0  # 错误对话框点屏关闭时间（关闭动画等待用）
+_xj_spot_pos = None          # 用镜时的站定位置（错误对话框点屏前的站定基准，
+                             # 规则 13：行走中点屏会取消寻路）
+_xj_wrong_dialog_pos = None  # 错误对话框帧的上次位置读取（连续两帧位置不变
+                             # = 站定；比对照 WalkGuard 的坐标复核口径）
 _xj_dismissed_at = 0.0       # 对话框关闭时间（此后窗口内找模板点击）
 _xj_tpl_best = (0.0, (0, 0)) # 找模板窗口内的最高匹配分与位置（失败日志诊断）
 XIANXINGJING_XJ_CLICK_GUARD = 2.5  # 白龙马对话框点击前检查「屏幕中间最近一次
@@ -349,6 +362,10 @@ XIANXINGJING_RESIDUAL_CLICK = 2.0  # 模板未现但对话框仍在场时继续�
                                    # 对话框仍在场、按钮被文字遮挡无法匹配；
                                    # 一次点击即关闭（用户 2026-11-11 确认），
                                    # 关掉后本分支自然不再触发
+XIANXINGJING_WRONG_DIALOG_POLLS = 2  # 用镜后「标准对话框在场但非白龙马文案」
+                                     # 的连续帧确认数：单帧 OCR 截断/过渡帧
+                                     # 可能把真白龙马页误判成剧情页（同手动
+                                     # 寻路腿 2026-11-24 的 2 帧确认）
 # ---- 白龙马任务按钮点击失败 → 替换任务（用户 2026-10-17 决策）：
 # 关闭遮挡文字的点地点击会让人物走动，走远后点任务按钮无效（模板
 # 可见但点击不生效）；或模板始终被遮挡不出现。原「点寻路链接走回
@@ -435,6 +452,15 @@ def _xj_pos(win, items):
     return _xjf_pos
 
 
+def _xj_same_pos(a, b):
+    """两个位置是否同一地图且坐标差在站定容差内（None/跨图 = 不同）。"""
+    if a is None or b is None:
+        return False
+    return a[0] == b[0] \
+        and abs(a[1] - b[1]) <= XIANXINGJING_STABLE_TOL \
+        and abs(a[2] - b[2]) <= XIANXINGJING_STABLE_TOL
+
+
 def _reset_xianxingjing_state(keep_progress=False):
     """显形镜状态机复位。
 
@@ -449,7 +475,9 @@ def _reset_xianxingjing_state(keep_progress=False):
         _xj_grace_start, _xj_warned, _xj_missing, _xj_need_move, _xj_walk_from, \
         _xj_move_stuck, _xj_walk_side, _xj_flip_count, _xj_veto_click_at, \
         _xj_dialog_clicked_at, _xj_dismissed_at, _xj_tpl_best, \
-        _xj_quota_exhausted_at, _xj_diag_at
+        _xj_quota_exhausted_at, _xj_diag_at, _xj_wrong_dialog_polls, \
+        _xj_spot_failed, _xj_wrong_dialog_clicked_at, _xj_spot_pos, \
+        _xj_wrong_dialog_pos
     global _xj_btn_clicked_at, _xj_btn_missing, _xj_btn_candidates, _xj_btn_idx, \
         _xj_need_replace, _xj_block_clicked_at
     _xj_phase = 0
@@ -463,6 +491,11 @@ def _reset_xianxingjing_state(keep_progress=False):
     _xj_dismissed_at = 0.0
     _xj_tpl_best = (0.0, (0, 0))
     _xj_diag_at = 0.0
+    _xj_wrong_dialog_polls = 0
+    _xj_spot_failed = False
+    _xj_wrong_dialog_clicked_at = 0.0
+    _xj_spot_pos = None
+    _xj_wrong_dialog_pos = None
     _xj_btn_clicked_at = 0.0
     _xj_btn_missing = 0
     _xj_btn_candidates = []
@@ -604,7 +637,7 @@ def _in_claim_map(pos):
 
 
 def _near_walk_target_spot(pos):
-    """小地图点击 (521,488) 寻路的实际落点 (94,84) 盒判定（用户实测）。
+    """小地图坐标化寻路 (94,84) 的实际落点盒判定（用户实测）。
 
     仅判「坐标在读落点盒内」——盒内≠已停：走位途中必然穿过盒子
     （坐标文本提前读入盒内值），点击前须由调用方叠加位置稳定判定
@@ -1370,8 +1403,8 @@ def _walk_to_claim_spot(win, just_returned=False):
     """寻路到宝象国领取点附近（与队伍人数无关，队长身份下执行）。
 
     用户流程：已在领取点 86,86 附近（±15）→ 跳过寻路；
-    不在宝象国 → 世界地图点击宝象国图标 → 小地图点击 (521,488) 寻路；
-    在宝象国但不在领取点附近 → 直接打开小地图点击 (521,488) 寻路。
+    不在宝象国 → 世界地图点击宝象国图标 → 小地图按坐标 (94,84) 寻路；
+    在宝象国但不在领取点附近 → 直接打开小地图按坐标 (94,84) 寻路。
     等待到达小地图落点 (94,84)（±5 严格容差，用户实测落点）。
     走位路径返回的到达置位 _arrive_by_walk：入口点击按走位规则
     （只在落点 (94,84)±2 点 lingqu）；站着到达（决策帧/宽限窗路径）
@@ -3406,7 +3439,9 @@ def _handle_xianxingjing_track(win, items, img_np):
     global _xj_phase, _xj_stable, _xj_anchor, _xj_last_pos, _xj_use_count, \
         _xj_grace_start, _xj_warned, _xj_missing, _xj_need_move, _xj_walk_from, \
         _xj_move_stuck, _xj_walk_side, _xj_flip_count, _xj_veto_click_at, \
-        _xj_quota_exhausted_at, _xj_need_replace, _xj_diag_at
+        _xj_quota_exhausted_at, _xj_need_replace, _xj_diag_at, \
+        _xj_wrong_dialog_polls, _xj_spot_failed, _xj_wrong_dialog_clicked_at, \
+        _xj_spot_pos, _xj_wrong_dialog_pos
     if battle_watch_in_battle():
         return False  # 战斗中：面板隐藏不可点链接（防宽限过期后战斗期空点）
     sig = "".join(norm_text(t) for t, r, s in items
@@ -3429,7 +3464,8 @@ def _handle_xianxingjing_track(win, items, img_np):
     # 等待模板/替换路径）与模板判定窗（_xj_btn_clicked_at，候选
     # 模板逐一尝试）同样冻结：命中文案后找不到任务按钮即任务无法
     # 继续，不再走 A→B 回退（用户 2026-10-21 决策）。
-    # 位置无关，跳过位置读取（区域 OCR ~150ms/轮询）
+    # 位置无关，常规路径跳过位置读取（区域 OCR ~150ms/轮询）；仅错误
+    # 对话框点屏关闭前读位置做站定复核（见下方快速路径）
     if _xj_phase == 1:
         if _xj_dialog_present(items) \
                 or _xj_fight_dialog_open(items) \
@@ -3437,10 +3473,54 @@ def _handle_xianxingjing_track(win, items, img_np):
                 or _xj_btn_clicked_at > 0:
             _xj_grace_start = now
             return False
+        # 用镜后标准对话框在场但非白龙马文案 = 本处是剧情幌子点（无怪；
+        # 2026-11-28 用户实机：A 处出「十三年前，八月十五…」剧情页，
+        # 59 出对话框、05 才点 B 链接）。连续 2 帧确认（防单帧 OCR 截断
+        # 把真白龙马页误判成剧情页）后点屏关闭对话框，判本处失败、
+        # 对话框消失后立即转另一侧——不再交给剧情兜底（动态背景让站定
+        # 判定持续「寻路中」，白等 3-4s），也不空等宽限到期。
+        region_items = [it for it in items
+                        if it[2] >= 0.55
+                        and it[1][0] >= task_tracker.DIALOG_REGION[0]
+                        and it[1][1] >= task_tracker.DIALOG_REGION[1]]
+        if region_items \
+                and dialog_frame_score(img_np) >= DIALOG_FRAME_THRESHOLD \
+                and not green_option_row_present(img_np, region_items):
+            _xj_wrong_dialog_polls += 1
+            # 点屏前确认人物站定（规则 13：行走中点屏会取消寻路）：
+            # 位置与用镜站定点或上一帧读取一致即站定（坐标直接信号；
+            # 像素差分在动态背景会持续误判「寻路中」白等 3-4s）
+            pos_now = _xj_pos(win, items)
+            standing = _xj_same_pos(pos_now, _xj_spot_pos) \
+                or _xj_same_pos(pos_now, _xj_wrong_dialog_pos)
+            _xj_wrong_dialog_pos = pos_now
+            # 关闭点击按共享防连点冷却重试（点击被淡入/动画吞掉时每
+            # 2.5s 补一次；已点过则只重试不再刷日志）
+            if _xj_wrong_dialog_polls >= XIANXINGJING_WRONG_DIALOG_POLLS \
+                    and standing \
+                    and now - dc_last_center_click_at() \
+                    >= XIANXINGJING_XJ_CLICK_GUARD:
+                _click_screen_center(win, times=1, prefix="五倍")
+                _xj_wrong_dialog_clicked_at = now
+                if not _xj_spot_failed:
+                    _xj_spot_failed = True
+                    log(f"[五倍] 显形镜：本处对话框未命中白龙马文案"
+                        f"（{region_items[0][0][:20]}），已点屏关闭，"
+                        f"对话框消失后立即转另一侧", "WARN")
+            # 本帧接管：防剧情兜底同帧另点一次。宽限过期/关闭点击
+            # 久未生效（人物在走或点击被吞）时交回原宽限路径点链接
+            if now - _xj_grace_start < XIANXINGJING_GRACE \
+                    or (_xj_spot_failed
+                        and now - _xj_wrong_dialog_clicked_at
+                        < XIANXINGJING_GRACE):
+                return True
+        else:
+            _xj_wrong_dialog_polls = 0
         # 诊断（2026-11-10 临时）：宽限内出现标准对话框但白龙马文案不
         # 匹配——记录对话区 OCR 行与当前位置，供定性（OCR 漏读 vs 走位
-        # 不对）。每个宽限窗口最多一条（复用 GRACE 做限频）
-        if now - _xj_diag_at >= XIANXINGJING_GRACE \
+        # 不对）。每个宽限窗口最多一条（复用 GRACE 做限频）。快速路径
+        # 已在上面接管剧情页；走到这里的只剩带绿字选项页等未接管场景
+        if region_items and now - _xj_diag_at >= XIANXINGJING_GRACE \
                 and dialog_frame_score(img_np) >= DIALOG_FRAME_THRESHOLD:
             _xj_diag_at = now
             pos_diag = _xj_pos(win, items)
@@ -3450,7 +3530,13 @@ def _handle_xianxingjing_track(win, items, img_np):
             log(f"[五倍] 显形镜：宽限内对话框在场但未匹配白龙马文案"
                 f"（当前位置 {pos_diag}，对话区 OCR: {dump or '(无)'}）",
                 "WARN")
-        if now - _xj_grace_start < XIANXINGJING_GRACE:
+        if _xj_spot_failed:
+            # 本处已证伪：错误对话框关闭动画期内先等消失再点寻路链接
+            # （动画未结束时点击会被对话框吞掉），最多等关闭窗口
+            if dialog_frame_score(img_np) >= DIALOG_FRAME_THRESHOLD \
+                    and now - _xj_wrong_dialog_clicked_at < XJ_BLOCK_CLOSE_WAIT:
+                return False
+        elif now - _xj_grace_start < XIANXINGJING_GRACE:
             return False
         # 配额已满（A、B 各用过一次仍失败）：再走位已无意义——到达后
         # phase 0 也只会进入替换路径，白走 ~20s 还拖后替换（2026-11-10
@@ -3475,8 +3561,9 @@ def _handle_xianxingjing_track(win, items, img_np):
             side = "b" if _xj_use_count <= 1 else "a"
         if _click_xianxingjing_walk(win, items, img_np, side=side):
             _xj_walk_side = side
-            log(f"[五倍] 显形镜：本处未触发对话框，已点寻路链接前往"
-                f"{'A' if side == 'a' else 'B'} 侧", "WARN")
+            log(f"[五倍] 显形镜："
+                f"{'本处为剧情对话框（非白龙马）' if _xj_spot_failed else '本处未触发对话框'}，"
+                f"已点寻路链接前往{'A' if side == 'a' else 'B'} 侧", "WARN")
             _xj_phase = 0
             _xj_stable = 0
             _xj_anchor = None
@@ -3579,6 +3666,11 @@ def _handle_xianxingjing_track(win, items, img_np):
         _xj_grace_start = now
         _xj_stable = 0
         _xj_anchor = None
+        _xj_wrong_dialog_polls = 0  # 本处用镜后的错误对话框判定从头计
+        _xj_spot_failed = False
+        _xj_wrong_dialog_clicked_at = 0.0
+        _xj_spot_pos = _xj_last_pos     # 站定基准（点屏关闭错误对话框前复核）
+        _xj_wrong_dialog_pos = None
         return True
     log("[五倍] 显形镜：追踪面板未找到显形镜文案，下轮询重试", "WARN")
     return False

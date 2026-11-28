@@ -1494,22 +1494,69 @@ def test_start_impl_pos_hint_skips_position_read(monkeypatch):
     assert any("hint" in m for m in emits)
 
 
-def test_start_impl_trusted_clicks_computed_point_without_hover(monkeypatch):
-    """trusted：有标定直接点（免悬停校验/采样）——固定领取点专用。"""
+def test_start_impl_trusted_hover_check_passes_clicks_computed_point(monkeypatch):
+    """trusted：单次悬停校验通过 → 直点换算像素（固定领取点专用）。"""
     _patch_start_env(monkeypatch)
-    monkeypatch.setattr(map_nav, "_aim_and_click",
-                        lambda *a, **k: (_ for _ in ()).throw(
-                            AssertionError("trusted 不应悬停校验")))
+    monkeypatch.setattr(map_nav, "_hover_coord", lambda *a: (10, 20))
     monkeypatch.setattr(map_nav, "_collect_hover_samples",
                         lambda *a, **k: (_ for _ in ()).throw(
-                            AssertionError("trusted 不应完整采样")))
+                            AssertionError("校验通过不应完整采样")))
     clicks = []
     monkeypatch.setattr(map_nav, "human_click",
                         lambda win, x, y, **k: clicks.append((x, y)))
+    emits = []
     ok, _info, ctx = map_nav._start_impl(
-        object(), "洛阳城", 10, 20, lambda m: None, trusted=True)
+        object(), "洛阳城", 10, 20, emits.append, trusted=True)
     assert ok and ctx["point"] == (40, 540)
     assert clicks == [(40, 540)]
+    assert any("悬停校验通过" in m for m in emits)
+
+
+def test_start_impl_trusted_hover_unavailable_clicks_blind(monkeypatch):
+    """trusted：悬停浮层不可用（None）→ 仍直点，不采样（不空转约束）。"""
+    _patch_start_env(monkeypatch)
+    monkeypatch.setattr(map_nav, "_hover_coord", lambda *a: None)
+    monkeypatch.setattr(map_nav, "_collect_hover_samples",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("悬停不可用不应完整采样")))
+    clicks = []
+    monkeypatch.setattr(map_nav, "human_click",
+                        lambda win, x, y, **k: clicks.append((x, y)))
+    emits = []
+    ok, _info, ctx = map_nav._start_impl(
+        object(), "洛阳城", 10, 20, emits.append, trusted=True)
+    assert ok and ctx["point"] == (40, 540)
+    assert clicks == [(40, 540)]
+    assert any("悬停不可用免校验" in m for m in emits)
+
+
+def test_start_impl_trusted_hover_mismatch_resamples(monkeypatch):
+    """trusted：悬停读回偏差过大（面板几何变化）→ 回退完整采样重标定。"""
+    _patch_start_env(monkeypatch)
+    # 标定换算 (10,20)→(40,540)，悬停读回 x 偏 3 格 → 判过期
+    monkeypatch.setattr(map_nav, "_hover_coord", lambda *a: (13, 20))
+    samples = [(100, 200, 11, 20), (200, 300, 12, 21)]
+    monkeypatch.setattr(map_nav, "_collect_hover_samples",
+                        lambda win, bar, emit: samples)
+    good = {"sx": 3.0, "sy": -3.0, "ax": 20.0, "ay": 620.0}
+    monkeypatch.setattr(map_nav, "solve_affine", lambda s: good)
+    remembered = []
+    monkeypatch.setattr(map_nav, "remember_affine",
+                        lambda win, key, aff: remembered.append((key, aff)))
+    aimed = {}
+
+    def _aim(win, aff, anchor, x, y, emit, on_affine_corrected=None):
+        aimed["aff"], aimed["xy"] = aff, (x, y)
+        return True, (55, 555), ""
+
+    monkeypatch.setattr(map_nav, "_aim_and_click", _aim)
+    emits = []
+    ok, _info, ctx = map_nav._start_impl(
+        object(), "洛阳城", 10, 20, emits.append, trusted=True)
+    assert ok and ctx["point"] == (55, 555)
+    assert remembered == [("洛阳城", good)]
+    assert aimed["aff"] == good and aimed["xy"] == (10, 20)
+    assert any("回退完整采样" in m for m in emits)
 
 
 def test_start_impl_trusted_without_affine_fails_fast(monkeypatch):

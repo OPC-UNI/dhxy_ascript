@@ -10,10 +10,20 @@
 import re
 from pathlib import Path
 
+import pytest
+
 from src.app import task_registry as registry
 from src.core import debug_overlay, settings
 from src.tasks import (kezhan, mingwang, sanbaihuan, wuhuan, wubei, xiuluo,
                        xuanshu, zhongzu)
+
+
+@pytest.fixture(autouse=True)
+def _stub_task_cleanup(monkeypatch):
+    """单测不跑真实自清理：fake win 无 capture，且会走真实设备通道。"""
+    monkeypatch.setattr(registry.dialog_common, "clean_task_leftovers",
+                        lambda win, prefix="", extra_cleaners=():
+                        (True, "已清理"))
 
 
 def test_registry_modes_match_settings_order():
@@ -30,6 +40,8 @@ def test_registry_every_spec_has_callable_run_loop():
         assert registry.TASKS_BY_MODE[spec.mode] is spec
         if spec.pre_run is not None:
             assert callable(spec.pre_run)
+        if spec.cleanup is not None:
+            assert callable(spec.cleanup)
     assert set(registry.TASKS_BY_MODE) == set(registry.TASK_MODES)
     assert len(registry.TASKS_BY_MODE) == len(registry.TASKS)
 
@@ -52,6 +64,11 @@ def test_registry_real_mapping_is_pinned():
     assert registry.TASKS_BY_MODE["玄枢轶闻"].pre_run is registry._pre_xuanshu
     for mode in ("五环", "修罗", "五倍", "种族比武", "名望"):
         assert registry.TASKS_BY_MODE[mode].pre_run is None
+    # 任务结束自清理钩子：客栈（奇遇弹窗）/名望（山河名望面板）
+    assert registry.TASKS_BY_MODE["客栈"].cleanup is kezhan.cleanup_leftovers
+    assert registry.TASKS_BY_MODE["名望"].cleanup is mingwang.cleanup_leftovers
+    for mode in ("五环", "修罗", "五倍", "种族比武", "玄枢轶闻", "300环"):
+        assert registry.TASKS_BY_MODE[mode].cleanup is None
 
 
 def test_frontend_and_stats_mode_tables_match_settings():
@@ -113,11 +130,14 @@ def test_run_task_mode_skips_all_when_daily_limit_reached(monkeypatch):
     monkeypatch.setattr(registry, "load_task_counts", lambda: {"客栈": 20})
     monkeypatch.setattr(registry.app_utils, "task_progress_done",
                         lambda win, mode: 20)
+    monkeypatch.setattr(registry.dialog_common, "clean_task_leftovers",
+                        lambda win, prefix="", extra_cleaners=():
+                        calls.append("cleanup"))
     logs = []
     monkeypatch.setattr(registry, "log",
                         lambda msg, level="INFO": logs.append((msg, level)))
     info = registry.run_task_mode(object(), "客栈")
-    assert calls == []                       # 退队/主循环都不执行
+    assert calls == []                       # 退队/主循环/自清理都不执行
     assert "20/20" in info and "无需再执行" in info
     assert logs == [("[任务] 客栈 当天已完成 20/20 次，无需再执行", "SYS")]
 
@@ -135,6 +155,74 @@ def test_run_task_mode_runs_below_daily_limit(monkeypatch):
                         lambda win, mode: 19)
     assert registry.run_task_mode(object(), "客栈") == "done"
     assert calls == ["pre", "loop"]
+
+
+def test_run_task_mode_cleanup_after_loop(monkeypatch):
+    """主循环正常返回 → 紧接着跑自清理，任务专属钩子透传给通用清理。
+
+    2026-11-28：任务到次数上限直接返回会遗留对话框/奇遇弹窗，须在
+    下一任务启动前清掉（10 次客栈后接修罗领取按钮被遮挡）。
+    """
+    hooks = []
+    spec = registry.TaskSpec(
+        "测试", lambda win: hooks.append("loop") or "done",
+        None, lambda win: hooks.append("task-cleanup") or True)
+    monkeypatch.setattr(registry, "TASKS_BY_MODE", {"测试": spec})
+    monkeypatch.setattr(registry, "load_task_counts", lambda: {})
+
+    def _clean(win, prefix="", extra_cleaners=()):
+        hooks.append(("generic", prefix, [label for label, _f in extra_cleaners]))
+        return True, "无残留界面"
+
+    monkeypatch.setattr(registry.dialog_common, "clean_task_leftovers", _clean)
+    assert registry.run_task_mode(object(), "测试") == "done"
+    assert hooks == ["loop", ("generic", "测试", ["测试"])]
+
+
+def test_run_task_mode_cleanup_skipped_when_loop_raises(monkeypatch):
+    """主循环异常（含用户接管/顶号）不跑自清理：不得再点游戏。"""
+    calls = []
+
+    def _raise(win):
+        raise RuntimeError("boom")
+
+    spec = registry.TaskSpec("测试", _raise)
+    monkeypatch.setattr(registry, "TASKS_BY_MODE", {"测试": spec})
+    monkeypatch.setattr(registry, "load_task_counts", lambda: {})
+    monkeypatch.setattr(registry.dialog_common, "clean_task_leftovers",
+                        lambda win, prefix="", extra_cleaners=():
+                        calls.append("cleanup"))
+    with pytest.raises(RuntimeError):
+        registry.run_task_mode(object(), "测试")
+    assert calls == []
+
+
+def test_run_task_cleanup_skips_on_session_abort(monkeypatch):
+    """会话已中止（顶号）→ 不点游戏，直接跳过自清理。"""
+    logs = []
+    monkeypatch.setattr(registry.app_utils, "session_abort_reason",
+                        lambda: "账号被顶")
+    monkeypatch.setattr(registry.dialog_common, "clean_task_leftovers",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("中止后不得清场")))
+    monkeypatch.setattr(registry, "log",
+                        lambda msg, level="INFO": logs.append((msg, level)))
+    spec = registry.TaskSpec("测试", lambda win: "done")
+    assert registry.run_task_cleanup(object(), spec) is False
+    assert logs and logs[0][1] == "WARN"
+
+
+def test_run_task_cleanup_swallows_errors(monkeypatch):
+    """清理异常只记 WARN：卫生动作失败不得把任务正常结束变成失败。"""
+    logs = []
+    monkeypatch.setattr(registry.app_utils, "session_abort_reason", lambda: None)
+    monkeypatch.setattr(registry.dialog_common, "clean_task_leftovers",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("坏")))
+    monkeypatch.setattr(registry, "log",
+                        lambda msg, level="INFO": logs.append((msg, level)))
+    spec = registry.TaskSpec("测试", lambda win: "done")
+    assert registry.run_task_cleanup(object(), spec) is False
+    assert any(level == "WARN" for _msg, level in logs)
 
 
 def test_run_task_mode_unlimited_skips_progress_read(monkeypatch):

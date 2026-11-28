@@ -1214,3 +1214,150 @@ def verify_dialog_detect(win, extra_score=None, extra_threshold=0.8,
     if extra_value is not None:
         desc += f"；{(extra_label or '附加')}模板 {extra_value:.3f}"
     return True, desc
+
+
+# ---- 任务结束自清理（2026-11-28 用户需求） ----
+# 任务次数达到上限后 run_loop 直接返回，可能把本任务的对话框/奇遇弹窗/
+# 打开的面板留在屏幕上（用户实报：10 次客栈做完接 100 次修罗，残留
+# 对话框/奇遇挡住灵兽村领取按钮模板 → 领取失败）。任务正常结束后由
+# app.task_registry 调用本函数做「自清理」：先跑任务专属残留处理器
+# （extra_cleaners，如客栈奇遇横幅），再推平标准对话框，最后关地图/
+# 物品栏。任务异常/会话中止路径不调用（用户接管或顶号后不得再点游戏）。
+#
+# 边界：带绿字选项的对话框**不自动选择**——错选「取消任务」等选项会
+# 把下一任务的前置状态搞坏；只记 WARN 交给下一任务或人工。战斗中不
+# 点击（战斗 UI 的模板匹配与点屏会干扰战斗线程）。标准对话框复用
+# StoryDialogDismisser 的全套守卫（人物站定、绿字选项行、已知文案），
+# 满足 CLAUDE.md 规则 13「点屏推进必须先确认人物站定」。
+CLEAN_MAX_SECONDS = 20.0        # 总时限（多屏剧情快速翻页可能占数秒）
+CLEAN_POLL_INTERVAL = 0.5       # 无残留时的复查间隔
+CLEAN_ACTION_INTERVAL = 0.3     # 处理动作后的复查间隔
+# 连续干净帧确认数（约 1.5s 观察窗）：奇遇/完成弹窗可能在任务结束帧
+# 之后才渲染（用户实报的客栈残留即任务追踪消失后才出现），单帧干净
+# 不足以宣告清理完成。
+CLEAN_QUIET_STREAK = 3
+CLEAN_OPTION_STUCK_LIMIT = 2    # 选项对话框连续命中上限（不自动选择，早退）
+CLEAN_EXTRA_STUCK_LIMIT = 4     # 同一任务钩子连续报告残留上限（防反复 OCR/点击刷屏）
+
+
+def _clean_panel_open(frame_bgr):
+    """当前帧上待清理的场景面板名（小地图/世界地图/物品栏），无则空串。
+
+    与 close_scene_panels 的关闭范围一致；给予/队伍面板没有安全的通用
+    关闭通道，不在通用自清理内（由任务侧钩子处理）。
+    """
+    if bag.bag_open_on_frame(frame_bgr):
+        return "物品栏"
+    if game_map.match_frame_np(frame_bgr, game_map.MINI_MAP_OPEN_ICON,
+                               region=game_map.MINI_MAP_REGION) is not None:
+        return "小地图"
+    if game_map.match_frame_np(frame_bgr, game_map.WORLD_MAP_OPEN_ICON) is not None:
+        return "世界地图"
+    return ""
+
+
+def clean_task_leftovers(win, prefix="", extra_cleaners=()):
+    """任务结束自清理：清掉本任务可能遗留的对话框/弹窗/场景面板。
+
+    由 app.task_registry.run_task_mode 在本任务主循环正常返回后调用。
+    extra_cleaners：任务专属残留处理器 [(标签, callable(win) -> bool)]，
+    返回 True = 本帧检测到并已尝试处理（下一轮复查；如客栈奇遇弹窗、
+    名望面板）。返回 (是否已清理干净, 描述)。
+
+    每轮单帧判定（PIL 帧供模板/OCR，BGR 同帧判面板）：任务专属残留 →
+    标准对话框 → 场景面板；连续 CLEAN_QUIET_STREAK 帧无任何残留才算
+    干净（面板/弹窗可能在任务结束帧后才渲染）。选项对话框连续命中
+    CLEAN_OPTION_STUCK_LIMIT 轮即早退，不自动选择（见上方边界说明）。
+    """
+    import cv2
+    import numpy as np
+    from . import battle, tab_group  # 函数内导入：battle 顶层依赖本模块（循环）
+
+    tag = f"[{prefix}] " if prefix else ""
+    where = f"[{prefix}]" if prefix else ""
+    dismisser = StoryDialogDismisser()
+    deadline = time.time() + CLEAN_MAX_SECONDS
+    cleaned = []
+    quiet = 0
+    option_stuck = 0
+    extra_stuck = {}
+    last_note = ""
+    while time.time() < deadline:
+        img = win.capture(force_activate=False)
+        if img is None:
+            time.sleep(CLEAN_POLL_INTERVAL)
+            continue
+        if battle.is_in_battle_frame(img):
+            return False, "战斗中，跳过自清理"
+        if app_utils.session_abort_reason():
+            return False, "会话已中止，自清理停止"
+        # 组号模式：屏幕不是队长 Tab（pass 中/用户手动切走）时不点击——
+        # 队员屏的对话框/面板不是本任务的，误点会操作到队员（2026-11-13
+        # 同款归属门控，见 tab_group.on_leader_screen）。
+        if not tab_group.on_leader_screen(win):
+            return False, "当前不是队长 Tab（组号 pass/手动切换），跳过自清理"
+        frame = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
+        busy = False
+        # 1) 任务专属残留（无标准边框/无通用关闭通道，模板由任务侧提供）
+        for label, cleaner in extra_cleaners:
+            try:
+                handled = cleaner(win)
+            except Exception as e:  # noqa: BLE001 —— 单个处理器失败不阻断清理
+                log(f"{tag}自清理[{label}]异常: {e}", "WARN")
+                continue
+            if not handled:
+                extra_stuck[label] = 0
+                continue
+            busy = True
+            cleaned.append(label)
+            last_note = f"{label}已处理"
+            extra_stuck[label] = extra_stuck.get(label, 0) + 1
+            if extra_stuck[label] >= CLEAN_EXTRA_STUCK_LIMIT:
+                # 钩子反复报告同一残留（如奇遇选项无法定位）：停止重试，
+                # 避免反复 OCR/点击刷屏；交下一任务或人工处理。
+                return False, f"{label}持续残留（已尝试 {extra_stuck[label]} 轮）"
+        # 2) 标准对话框（模板命中才 OCR；无选项剧情对话点屏推进）
+        if not busy and dialog_frame_score(img) >= DIALOG_FRAME_THRESHOLD:
+            busy = True
+            items, img_np = game_map.ocr_regions(
+                img, (task_tracker.DIALOG_REGION,))
+            if abort_if_kicked(items, where):
+                return False, "会话中止（顶号），自清理停止"
+            dl, dt = task_tracker.DIALOG_REGION[0], task_tracker.DIALOG_REGION[1]
+            region_items = [it for it in items
+                            if it[2] >= 0.55 and it[1][0] >= dl
+                            and it[1][1] >= dt]
+            if green_option_row_present(img_np, region_items):
+                option_stuck += 1
+                txt = "/".join(str(it[0])[:16] for it in region_items[:3])
+                last_note = f"残留选项对话框（{txt}），不自动选择"
+                log(f"{tag}自清理：{last_note}，交下一任务/人工处理", "WARN")
+                if option_stuck >= CLEAN_OPTION_STUCK_LIMIT:
+                    return False, last_note
+            else:
+                option_stuck = 0
+                if dismisser.try_dismiss(win, items, img_np,
+                                         prefix=prefix, img=img):
+                    cleaned.append("对话框")
+                    last_note = "对话框已推进"
+                else:
+                    last_note = "对话框在场，等待站定后推进"
+        # 3) 场景面板（地图/物品栏）：无对话框时才动（模态会挡热键）
+        if not busy:
+            panel = _clean_panel_open(frame)
+            if panel:
+                busy = True
+                close_scene_panels(win, prefix, quiet=True)
+                cleaned.append(panel)
+                last_note = f"{panel}已关闭"
+        if busy:
+            quiet = 0
+            time.sleep(CLEAN_ACTION_INTERVAL)
+            continue
+        quiet += 1
+        if quiet >= CLEAN_QUIET_STREAK:
+            if cleaned:
+                return True, "已清理：" + "、".join(dict.fromkeys(cleaned))
+            return True, "无残留界面"
+        time.sleep(CLEAN_POLL_INTERVAL)
+    return False, f"自清理超时（{last_note or '界面持续变化'}）"

@@ -72,10 +72,14 @@ def _check_cancel():
 
 # ---- 内置标定表（res/map_nav_affines.json）----
 # 按「地图名 + 游戏窗口尺寸」记录悬停标定解（比例+原点），避免每次
-# 导航重新采样（省 ~4s）。地图窗口可拖动 → 原点可能漂移，因此表值
-# 只作热启动，点击前仍做悬停校验（偏差 1~2 次悬停内自动修正），校验
-# 不通过回退完整采样。龙窟/凤巢各层暂不内置（TODO，首次使用现场采样
-# 并记入会话缓存）。
+# 导航重新采样（省 ~4s）。地图窗口可拖动/缩放 → 原点、比例都可能
+# 漂移（2026-11-25 会话小地图面板缩小且下移 12px，按当时几何重标定
+# 宝象国后默认几何下 (94,84) 实走 (98,87)，2026-11-28 实机复验默认
+# 几何与 1.9459/-1.954/329.5/655.3 一致），因此表值只作热启动，点击前
+# 仍做悬停校验（偏差 1~2 次悬停内自动修正），校验不通过回退完整采样；
+# trusted 直点同样做单次悬停校验，浮层不可用才免校验直点（见
+# _start_impl）。龙窟/凤巢各层暂不内置（TODO，首次使用现场采样并记入
+# 会话缓存）。
 AFFINE_TABLE_FILE = "map_nav_affines.json"
 _AFFINE_TABLE = None
 _AFFINE_TABLE_MTIME = None
@@ -4583,10 +4587,16 @@ def _start_impl(win, target, x, y, emit, on_map_open=None, pos_hint=None,
 
     if trusted:
         # trusted 直点（2026-11-25 用户确认）：固定领取点这类坐标容差大
-        # （差 1-2 格不影响到达判据），跳过悬停标定/校验——悬停浮层在
-        # 窗口非前台时可能整体不渲染（2026-11-25 实机 32 次×36s 空转），
-        # 直点让重走领取点不再被标定链拖死。无标定/换算越界立即失败，
-        # 由调用方回退固定像素点（claim_flow 的旧生产路径），不跑采样。
+        # （差 1-2 格不影响到达判据）。无标定/换算越界立即失败，由调用方
+        # 回退固定像素点（claim_flow 的旧生产路径），不跑采样。
+        # 2026-11-28 实机教训：小地图面板可被拖动/缩放——11-25 会话面板
+        # 缩小且下移（搜索条锚点 479,229 / 关闭图标 1011,229，默认几何为
+        # 460,217 / 1030,217），按当时几何的「悬停真值」重标定后，(94,84)
+        # 换算像素 (521,488) 实走 (98,87)。单点固定标定无法覆盖面板几何
+        # 漂移，故直点前做**一次**廉价悬停校验：读回与目标差超过
+        # AIM_TOLERANCE 即判标定过期，回退完整采样重新求解并持久化；
+        # 悬停不可用（浮层不渲染）时仍直点——不做邻域试探/收缩/多点采样，
+        # 单次悬停约 1s 封顶，保持 2026-11-25「不空转」约束。
         if affine is None:
             _cleanup()
             emit(f"耗时: trusted 直点无标定（总计 {time.time() - t_start:.1f}s）")
@@ -4599,10 +4609,22 @@ def _start_impl(win, target, x, y, emit, on_map_open=None, pos_hint=None,
                  f"（总计 {time.time() - t_start:.1f}s）")
             return False, f"trusted 直点 ({px},{py}) 超出窗口", None
         _check_cancel()
-        emit(f"使用内置/会话标定（trusted 直点，免悬停校验）→ ({px},{py})")
-        human_click(win, px, py)
-        point = (px, py)
-        ok = True
+        got = _hover_coord(win, px, py)
+        if got is not None and (abs(got[0] - x) > AIM_TOLERANCE
+                                or abs(got[1] - y) > AIM_TOLERANCE):
+            emit(f"trusted 悬停校验 ({px},{py}) 读回 {got}，与目标"
+                 f" ({x},{y}) 偏差过大（小地图面板几何变化？），"
+                 f"回退完整采样")
+            affine = None
+            trusted = False
+        else:
+            emit("使用内置/会话标定（trusted 直点"
+                 + ("，悬停校验通过" if got is not None
+                    else "，悬停不可用免校验")
+                 + f"）→ ({px},{py})")
+            human_click(win, px, py)
+            point = (px, py)
+            ok = True
     elif affine is not None:
         emit("使用内置/会话标定（悬停校验）")
         ok, point, err = _aim_and_click(win, affine, None, x, y, emit,

@@ -726,6 +726,26 @@ def test_close_shanhe_panel_not_open(monkeypatch):
     assert ok and "未打开" in info
 
 
+def test_cleanup_leftovers_closes_panel_only_when_visible(monkeypatch):
+    """任务结束自清理钩子：面板在场才关（用户 2026-11-17 规则）；不在场
+    零动作，避免残留面板遮挡下一任务的追踪/对话框区。"""
+    win = _FakeWin([_pil(_noise_bgr(seed=6))])
+    closed = []
+    monkeypatch.setattr(mingwang.game_map, "best_match_np",
+                        lambda frame, icon: (0.1, (0, 0)))
+    monkeypatch.setattr(mingwang, "_close_shanhe_panel",
+                        lambda w: closed.append(w) or (True, "未打开"))
+    assert mingwang.cleanup_leftovers(win) is False
+    assert closed == []
+
+    monkeypatch.setattr(mingwang.game_map, "best_match_np",
+                        lambda frame, icon: (0.99, (350, 379)))
+    monkeypatch.setattr(mingwang, "_close_shanhe_panel",
+                        lambda w: closed.append(w) or (True, "已关闭"))
+    assert mingwang.cleanup_leftovers(win) is True
+    assert closed == [win]
+
+
 def test_close_shanhe_panel_right_click(monkeypatch):
     """面板仍在 → 右键标题牌关闭，消失即成功。"""
     seq = [(0.99, (350, 379)), (0.1, (0, 0))]

@@ -116,6 +116,20 @@ def test_clear_qiyu_popup_no_popup(monkeypatch):
     assert called == []
 
 
+def test_cleanup_leftovers_clears_residual_qiyu(monkeypatch):
+    """任务结束自清理钩子：次数达到上限后残留的奇遇弹窗由本钩子清掉。
+
+    2026-11-28 用户实报：10 次客栈后接修罗，残留奇遇弹窗遮挡灵兽村
+    领取按钮 → 领取失败。奇遇无标准边框，通用对话框清理检测不到。
+    """
+    calls = []
+    monkeypatch.setattr(kezhan, "_clear_qiyu_popup",
+                        lambda win: calls.append(win) or True)
+    win = object()
+    assert kezhan.cleanup_leftovers(win) is True
+    assert calls == [win]
+
+
 # ---- 对话框模板门控（2026-11-09）----
 def test_qiyu_frame_band_covers_real_banner_rect():
     """奇遇横幅实测位置（2026-10-31 截图 OCR「客栈奇遇」@619,287-768,351）
@@ -1596,3 +1610,104 @@ def test_try_fast_travel_handles_waypoint_menu(monkeypatch):
     assert clicked == [kezhan.FAST_DIALOG_OPTION]
 
 
+
+
+# ---- 掌柜被人物遮挡的走开拉开（2026-11-28 用户反馈）----
+def _walk_win():
+    class _WalkWin:
+        def capture(self, force_activate=False):
+            return object()
+    return _WalkWin()
+
+
+def test_find_zhanggui_walks_aside_when_blocked(monkeypatch):
+    """初始/奇遇/对话框/兜底点击均未命中 → 点远处空地走开重扫命中。"""
+    clicks = []
+    monkeypatch.setattr(kezhan, "log", lambda *a, **k: None)
+    monkeypatch.setattr(kezhan, "human_click",
+                        lambda w, x, y, **k: clicks.append((x, y)))
+    monkeypatch.setattr(kezhan, "_zhanggui_scan", lambda w: None)
+    monkeypatch.setattr(kezhan, "_clear_qiyu_popup", lambda w: False)
+    monkeypatch.setattr(kezhan, "clear_blocking_dialog",
+                        lambda w, prefix="": (False, False))
+    monkeypatch.setattr(kezhan.time, "sleep", lambda s: None)
+    monkeypatch.setattr(kezhan.game_map, "read_map_position",
+                        lambda w, img=None: (kezhan.KEZHAN_MAP, 18, 12))
+    monkeypatch.setattr(kezhan, "_wait_zhanggui_walk",
+                        lambda w, start: (413, 539))
+    assert kezhan._find_zhanggui(_walk_win()) == (413, 539)
+    # 兜底点 + 第一个走开步点
+    assert clicks == [kezhan.ZHANGGUI_FALLBACK_CLICK_POS,
+                      kezhan.ZHANGGUI_WALK_STEPS[0]]
+
+
+def test_walk_aside_tries_next_step_after_settle_without_hit(monkeypatch):
+    """第一步走完仍未命中（None）→ 换第二个步点重扫命中。"""
+    clicks = []
+    monkeypatch.setattr(kezhan, "log", lambda *a, **k: None)
+    monkeypatch.setattr(kezhan, "human_click",
+                        lambda w, x, y, **k: clicks.append((x, y)))
+    monkeypatch.setattr(kezhan.game_map, "read_map_position",
+                        lambda w, img=None: (kezhan.KEZHAN_MAP, 18, 12))
+    results = iter([None, (413, 539)])
+    monkeypatch.setattr(kezhan, "_wait_zhanggui_walk",
+                        lambda w, start: next(results))
+    assert kezhan._walk_aside_reveal_zhanggui(_walk_win()) == (413, 539)
+    assert clicks == list(kezhan.ZHANGGUI_WALK_STEPS)
+
+
+def test_walk_aside_skips_when_not_at_inn(monkeypatch):
+    """场景锚点不在客栈：不点步点（防步点落到出口/世界），直接返回 None。"""
+    clicks = []
+    monkeypatch.setattr(kezhan, "log", lambda *a, **k: None)
+    monkeypatch.setattr(kezhan, "human_click",
+                        lambda w, x, y, **k: clicks.append((x, y)))
+    monkeypatch.setattr(kezhan.game_map, "read_map_position",
+                        lambda w, img=None: ("洛阳城", 381, 18))
+    assert kezhan._walk_aside_reveal_zhanggui(_walk_win()) is None
+    assert clicks == []
+
+
+def _walk_clock(monkeypatch):
+    clock = iter(range(100))
+    monkeypatch.setattr(kezhan.time, "time", lambda: float(next(clock)))
+    monkeypatch.setattr(kezhan.time, "sleep", lambda s: None)
+
+
+def test_wait_zhanggui_walk_stops_after_settle(monkeypatch):
+    """走位站定（位置先变化再连续相同）仍未命中 → 返回 None 换方向。"""
+    _walk_clock(monkeypatch)
+    monkeypatch.setattr(kezhan, "_zhanggui_on_frame", lambda img: None)
+    positions = iter([(kezhan.KEZHAN_MAP, 20, 12),
+                      (kezhan.KEZHAN_MAP, 22, 11),
+                      (kezhan.KEZHAN_MAP, 22, 11),
+                      (kezhan.KEZHAN_MAP, 22, 11)])
+    monkeypatch.setattr(kezhan.game_map, "read_map_position",
+                        lambda w, img=None: next(positions))
+    start = (kezhan.KEZHAN_MAP, 18, 12)
+    assert kezhan._wait_zhanggui_walk(_walk_win(), start) is None
+
+
+def test_wait_zhanggui_walk_returns_match_mid_walk(monkeypatch):
+    """走位途中某一帧即命中 → 立即返回该坐标（不必等站定）。"""
+    _walk_clock(monkeypatch)
+    frames = iter([None])
+    monkeypatch.setattr(
+        kezhan, "_zhanggui_on_frame",
+        lambda img: next(frames, (413, 539)))
+    monkeypatch.setattr(kezhan.game_map, "read_map_position",
+                        lambda w, img=None: (kezhan.KEZHAN_MAP, 22, 11))
+    start = (kezhan.KEZHAN_MAP, 18, 12)
+    assert kezhan._wait_zhanggui_walk(_walk_win(), start) == (413, 539)
+
+
+def test_at_inn_never_presses_alt_c(monkeypatch):
+    """洛阳客栈是室内场景不能飞行（2026-11-28 用户规则）：_at_inn 只用
+    普通位置读取，不得触发 Alt+C 恢复。"""
+    monkeypatch.setattr(kezhan.game_map, "read_map_position",
+                        lambda w, img=None: (kezhan.KEZHAN_MAP, 24, 7))
+    recovered = []
+    monkeypatch.setattr(kezhan.game_map, "read_position_with_recovery",
+                        lambda w: recovered.append(w))
+    assert kezhan._at_inn(object()) is True
+    assert recovered == []

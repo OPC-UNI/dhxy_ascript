@@ -25,7 +25,7 @@ from typing import Callable, Optional
 from ..core import app_utils
 from ..core.app_utils import log
 from ..core.settings import load_task_counts
-from ..device import task_tracker, team
+from ..device import dialog_common, task_tracker, team
 from ..tasks import (kezhan, mingwang, sanbaihuan, wuhuan, wubei, xiuluo,
                      xuanshu, zhongzu)
 
@@ -54,22 +54,29 @@ class TaskSpec:
     mode：面板模式名（与 core.settings.TASK_MODES 一致）。
     run_loop：主循环入口 `(win) -> str`（返回结束原因描述）。
     pre_run：可选前置钩子 `(win) -> None`（退队等），在主循环前执行。
+    cleanup：可选任务结束自清理钩子 `(win) -> bool`（残留奇遇弹窗、
+        名望面板等无标准边框界面）；返回 True = 本轮检测到并已处理。
+        标准对话框/地图/物品栏由 dialog_common.clean_task_leftovers 统一
+        清理，钩子只补任务专属残留（2026-11-28 用户需求）。
     """
 
     mode: str
     run_loop: Callable
     pre_run: Optional[Callable] = None
+    cleanup: Optional[Callable] = None
 
 
 TASKS = (
     TaskSpec("五环", wuhuan.run_loop),
-    TaskSpec("客栈", kezhan.run_loop, _pre_kezhan),
+    # 客栈：奇遇弹窗无标准边框，任务结束帧可能残留并遮挡下一任务领取按钮
+    TaskSpec("客栈", kezhan.run_loop, _pre_kezhan, kezhan.cleanup_leftovers),
     TaskSpec("修罗", xiuluo.run_loop),
     TaskSpec("五倍", wubei.run_loop),
     TaskSpec("种族比武", zhongzu.run_loop),
     TaskSpec("玄枢轶闻", xuanshu.run_loop, _pre_xuanshu),
     # 名望：第一阶段（种族判定 + 领取入口）；其余种族/流程待补充
-    TaskSpec("名望", mingwang.run_loop),
+    # 结束须关闭山河名望面板（残留面板遮挡后续任务追踪/对话框区）
+    TaskSpec("名望", mingwang.run_loop, None, mingwang.cleanup_leftovers),
     TaskSpec("300环", sanbaihuan.run_loop),
 )
 TASK_MODES = tuple(spec.mode for spec in TASKS)
@@ -96,11 +103,38 @@ def _daily_count_reached(win, mode):
     return f"当天已完成 {done}/{max_rounds} 次，无需再执行"
 
 
+def run_task_cleanup(win, spec):
+    """任务正常结束后的自清理（2026-11-28 用户需求）。
+
+    任务完成次数达到上限直接返回时，可能把对话框/奇遇弹窗/打开的面板
+    留给下一任务（实报：10 次客栈后接修罗，残留界面挡住灵兽村领取按钮）。
+    这里调 dialog_common.clean_task_leftovers：任务专属钩子（spec.cleanup）
+    + 标准对话框 + 地图/物品栏。异常/会话中止路径不调用（用户接管或
+    顶号后不得再点游戏）；清理本身的异常只记 WARN，不影响任务队列继续。
+    """
+    if app_utils.session_abort_reason():
+        log(f"[任务] {spec.mode} 会话已中止，跳过自清理", "WARN")
+        return False
+    extras = []
+    if spec.cleanup is not None:
+        extras.append((spec.mode, spec.cleanup))
+    try:
+        ok, info = dialog_common.clean_task_leftovers(
+            win, prefix=spec.mode, extra_cleaners=extras)
+    except Exception as e:  # noqa: BLE001 —— 卫生动作失败不得阻断任务队列
+        log(f"[任务] {spec.mode} 自清理异常: {e}", "WARN")
+        return False
+    log(f"[任务] {spec.mode} 自清理：{info}", "SYS" if ok else "WARN")
+    return ok
+
+
 def run_task_mode(win, mode):
-    """执行单个任务模式（次数上限检查 → 前置钩子 → 主循环）。
+    """执行单个任务模式（次数上限检查 → 前置钩子 → 主循环 → 自清理）。
 
     当天次数已达上限时直接返回跳过说明，不做前置动作（退队等）——
     与各任务 run_loop 开头的上限检查结论一致，只是提前到前置之前。
+    主循环正常返回后执行任务自清理（run_task_cleanup）；主循环抛异常
+    （含 UserAbort/SessionAbort）时不清场，由 task_start 顶层收口。
     未登记的模式（含「仅战斗」）与旧 main._run_task_mode 行为一致：
     WARN 后跳过并返回说明。
     """
@@ -114,4 +148,6 @@ def run_task_mode(win, mode):
         return f"{mode} {reason}"
     if spec.pre_run is not None:
         spec.pre_run(win)
-    return spec.run_loop(win)
+    info = spec.run_loop(win)
+    run_task_cleanup(win, spec)
+    return info

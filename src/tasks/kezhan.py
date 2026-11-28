@@ -4,8 +4,9 @@
 0. 任务追踪中已有「客栈」任务（续跑）→ 直接跟踪（复用 workflows.follow.follow_task）
 1. 没有任务时，前往洛阳客栈领取任务：
    1.1 已在洛阳客栈 → 查找掌柜（双模板 zhanggui.png / zhanggui2.png，
-       任一匹配即命中）；未找到 → Alt+6 后重试一次，
-       仍无 → 点击兜底点 (530,593) 后重试一次（用户实测有效），
+       任一匹配即命中）；未找到 → 清理奇遇弹窗/遮挡对话框 → 点击兜底点
+       (530,593) 后重试（用户实测有效）→ 仍无 → 点远处空地走开拉开
+       （交付类任务后人物站在掌柜身上遮挡模板，2026-11-28）→
        仍没有 → 终止任务
    1.2 不在洛阳客栈 → 世界地图 → 点击洛阳城 → 小地图点击 (884,600)
        - 出现「你要到洛阳客栈」对话框 → 点绿色选项「快送我去」
@@ -110,6 +111,19 @@ ZHANGGUI_ICON = "zhanggui.png"       # 掌柜模板 1（实测素材）
 ZHANGGUI_ICON2 = "zhanggui2.png"     # 掌柜模板 2（另一种外观/状态，用户提供素材）
 ZHANGGUI_THRESHOLD = 0.75            # 双模板共用阈值（模板 1 实测 0.806，0.7 以上无误匹配留余量）
 ZHANGGUI_FALLBACK_CLICK_POS = (530, 593)  # 找不到掌柜时的兜底点击点（用户实测：点击后重试可找到）
+# ---- 掌柜被人物遮挡时的走开拉开（2026-11-28 用户反馈）----
+# 交付类任务（谢礼/密信交给掌柜）完成后人物正好站在掌柜位置上，身体把
+# 掌柜模板整个挡住：洛阳客栈[18,12] 实测 zhanggui 0.571 / zhanggui2 0.607
+# （均低于 0.75），原有兜底点击 (530,593) 离人物太近不产生位移，下一轮
+# 领取直接判「未找到掌柜」终止任务。点远处空地走开拉开后重扫：
+# (950,640) 走到 [44,9] 后 0.923 / 0.980 命中。客栈是固定视角室内场景，
+# 掌柜屏幕位置不随人物移动变化（实测恒在 (413,555) 附近），固定屏幕
+# 步点即可。左下方 (350,700) 是客栈出口（实测点到会走到洛阳城），步点
+# 必须避开左下出口与右下工具栏/左下方自动面板。
+ZHANGGUI_WALK_STEPS = ((950, 640), (1150, 560))  # 走开步点（窗口相对坐标，实测均留在客栈内）
+ZHANGGUI_WALK_SETTLE = 5.0           # 等人物走完的上限（秒；走位实测约 2~3s）
+ZHANGGUI_WALK_POLL = 0.4             # 走位轮询间隔（秒；模板匹配+位置 OCR 同帧）
+ZHANGGUI_WALK_STABLE = 2             # 位置连续相同次数（站定判定，防走到一半就换方向）
 INN_MAP_CLICK_POS = (884, 600)       # 洛阳小地图上客栈位置的点击点（窗口相对坐标）
 INN_COORD = (381, 26)                # 客栈坐标化寻路坐标（旧固定像素 884,600 的
                                      # 标定反算值——点同一 POI，仍触发「快送我去」
@@ -758,8 +772,14 @@ _baoxiang_last_done = 0.0                    # 上次宝箱流程结束时间（
 
 
 def _at_inn(win):
-    """判断是否已在洛阳客栈（位置地名精确匹配，繁简兼容）。"""
-    pos = game_map.read_position_with_recovery(win)
+    """判断是否已在洛阳客栈（位置地名精确匹配，繁简兼容）。
+
+    只用普通位置读取：客栈是室内场景不能飞行（2026-11-28 用户规则），
+    人物不可能处于未落地状态，Alt+C 恢复（read_position_with_recovery）
+    在这里无意义且是多余的热键投递。识别失败按「不在客栈」处理，交给
+    _go_to_inn 走正常寻路（其等待阶段同样不用 Alt+C）。
+    """
+    pos = game_map.read_map_position(win)
     return _pos_is_inn(pos)
 
 
@@ -794,6 +814,9 @@ def _find_zhanggui(win):
        （2026-11-07 用户反馈）
     3. 点击兜底点 (530,593) 后重试（用户实测有效；点位在对话框区域
        之下，即使有对话框打开，点击也不会落在选项上）
+    4. 走开拉开：交付类任务结束后人物站在掌柜身上，身体把模板整个
+       挡住（2026-11-28 用户反馈，见 ZHANGGUI_WALK_STEPS 注释）——
+       近点兜底点击不产生位移，必须点远处空地走开再重扫。
 
     原 Alt+6 画面刷新重试已移除（启动清屏已处理屏蔽，无需重复按键）。
 
@@ -825,7 +848,69 @@ def _find_zhanggui(win):
     pt = _zhanggui_scan(win)
     if pt is not None:
         log("[客栈] 点击兜底点后已找到掌柜", "SYS")
-    return pt
+        return pt
+    # 人物站在掌柜身上遮挡模板：点远处空地走开拉开后重扫
+    return _walk_aside_reveal_zhanggui(win)
+
+
+def _walk_aside_reveal_zhanggui(win):
+    """点远处空地走开，拉开人物对掌柜模板的遮挡后重扫。
+
+    2026-11-28 用户反馈实测：交付类任务（谢礼/密信交给掌柜）结束后人物
+    停在掌柜位置，身体遮挡模板（zhanggui 0.571 / zhanggui2 0.607 <
+    0.75），兜底点击 (530,593) 离人物太近不产生位移。逐方向点远处空地
+    走开，走位期间每轮询重扫模板，命中即返回 (x, y)；全部方向走完仍未
+    命中返回 None。步点/阈值见 ZHANGGUI_WALK_STEPS 注释。
+
+    每次点步点前先读位置作场景锚点：不在洛阳客栈就不点（走位可能点到
+    出口离开客栈，交给外层重新寻路）。
+    """
+    for wx, wy in ZHANGGUI_WALK_STEPS:
+        start = game_map.read_map_position(win)
+        if start is not None and not _pos_is_inn(start):
+            log(f"[客栈] 走开拉开前已不在客栈（{start}），跳过", "WARN")
+            return None
+        log(f"[客栈] 掌柜疑似被人物遮挡，点击 ({wx},{wy}) 走开拉开后重扫", "SYS")
+        human_click(win, wx, wy)
+        pt = _wait_zhanggui_walk(win, start)
+        if pt is not None:
+            log("[客栈] 走开拉开后已找到掌柜", "SYS")
+            return pt
+    return None
+
+
+def _wait_zhanggui_walk(win, start):
+    """等走位结束并重扫掌柜：每轮询只截一帧（模板与位置识别同帧复用），
+    位置先发生位移、再连续 ZHANGGUI_WALK_STABLE 次相同即为站定，或超时
+    结束。返回 (x, y) 或 None。
+
+    start 为点击步点前读到的位置（_pos_is_inn 锚点由调用方校验）；
+    None 表示位置不可读，按可能位移处理、只靠站定计数结束。
+    """
+    last = start
+    moved = start is None
+    stable = 0
+    deadline = time.time() + ZHANGGUI_WALK_SETTLE
+    while time.time() < deadline:
+        time.sleep(ZHANGGUI_WALK_POLL)
+        img = win.capture(force_activate=False)
+        if img is None:
+            continue
+        pt = _zhanggui_on_frame(img)
+        if pt is not None:
+            return pt
+        pos = game_map.read_map_position(win, img=img)
+        if pos is None:
+            continue
+        if not _pos_is_inn(pos):
+            return None  # 走位意外离开客栈（如点到出口），交外层寻路
+        if start is not None and pos != start:
+            moved = True
+        stable = stable + 1 if pos == last else 0
+        last = pos
+        if moved and stable >= ZHANGGUI_WALK_STABLE:
+            return None  # 已站定仍未找到：换下一个方向
+    return None
 
 
 def _click_fast_travel_option(win, items, img_np):
@@ -997,8 +1082,18 @@ def _ensure_zhanggui(win):
             pt = _find_zhanggui(win)
             if pt is not None:
                 return pt, f"已在洛阳客栈并找到掌柜（第 {attempt} 轮）"
-            # 在客栈但找不到掌柜（Alt+6 与兜底点击均已重试）：按用户要求终止任务
-            return None, "在洛阳客栈但未找到掌柜（Alt+6 与兜底点击后仍无），终止任务"
+            # 走开拉开时可能意外走出客栈（步点已避开出口，仅作保险）：
+            # 交给下一轮按寻路回客栈重试，不直接终止。
+            # 用只读位置识别（不走 Alt+C 恢复：走位可能仍在进行，Alt+C
+            # 会打断自动寻路）；位置不可读按仍在客栈处理。
+            pos = game_map.read_map_position(win)
+            if pos is not None and not _pos_is_inn(pos):
+                log("[客栈] 未找到掌柜且已不在客栈，重新寻路后重试", "WARN")
+                continue
+            # 在客栈但找不到掌柜（弹窗/对话框清理、兜底点击、走开拉开均已
+            # 重试）：按用户要求终止任务
+            return None, ("在洛阳客栈但未找到掌柜（弹窗/遮挡清理、兜底点击、"
+                          "走开拉开后仍无），终止任务")
         log(f"[客栈] 不在洛阳客栈（第 {attempt}/{NAV_MAX_ATTEMPTS} 轮），开始寻路", "SYS")
         ok, info = _go_to_inn(win)
         log(f"[客栈] {info}", "SYS" if ok else "WARN")
@@ -2768,6 +2863,19 @@ def _clear_qiyu_popup(win, max_rounds=3):
             return detected  # 选项未定位：不盲点（下一轮/人工）
         time.sleep(QIYU_CLEAR_WAIT)
     return detected
+
+
+def cleanup_leftovers(win):
+    """任务结束自清理钩子（app.task_registry.TaskSpec.cleanup）：清奇遇弹窗。
+
+    2026-11-28 用户实报：10 次客栈达到上限直接返回后，任务完成帧遗留的
+    奇遇弹窗留在屏上；下一项修罗在灵兽村的领取按钮模板被遮挡 → 领取
+    失败。奇遇弹窗无标准边框，通用的 clear_blocking_dialog / 对话框
+    模板门控都检测不到，必须由本钩子点第一个选项推进关闭。标准对话框
+    与地图/物品栏由 dialog_common.clean_task_leftovers 统一清理。
+    返回是否检测到并处理了奇遇弹窗。
+    """
+    return _clear_qiyu_popup(win)
 
 
 def _arm_yinlv_check(opt):

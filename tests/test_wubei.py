@@ -418,6 +418,127 @@ def test_xj_keyword_miss_reset_keeps_quota(monkeypatch):
     assert wubei._xj_missing == 0
 
 
+def _patch_xj_wrong_dialog_env(monkeypatch, dialog_score, clicks, walks,
+                               green_row=False, last_click_ago=100.0):
+    """相1 错误对话框环境：追踪面板带「镜」行 + 对话区剧情页。"""
+    monkeypatch.setattr(wubei, "battle_watch_in_battle", lambda: False)
+    monkeypatch.setattr(wubei, "log", lambda *a, **k: None)
+    monkeypatch.setattr(wubei, "_xj_pos", lambda win, items: ("火云洞", 31, 18))
+    monkeypatch.setattr(wubei, "dialog_frame_score",
+                        lambda img: dialog_score[0])
+    monkeypatch.setattr(wubei, "green_option_row_present",
+                        lambda img, region_items: green_row)
+    monkeypatch.setattr(wubei, "_click_screen_center",
+                        lambda win, times=1, prefix="":
+                        clicks.append((times, prefix)))
+    monkeypatch.setattr(wubei, "dc_last_center_click_at",
+                        lambda: wubei.time.time() - last_click_ago)
+    monkeypatch.setattr(wubei, "_click_xianxingjing_walk",
+                        lambda win, items, img_np, side="b":
+                        walks.append(side) or True)
+    monkeypatch.setattr(wubei, "_xj_phase", 1)
+    monkeypatch.setattr(wubei, "_xj_use_count", 1)
+    monkeypatch.setattr(wubei, "_xj_grace_start", wubei.time.time())
+    monkeypatch.setattr(wubei, "_xj_walk_side", None)
+    monkeypatch.setattr(wubei, "_xj_dismissed_at", 0.0)
+    monkeypatch.setattr(wubei, "_xj_btn_clicked_at", 0.0)
+    monkeypatch.setattr(wubei, "_xj_missing", 0)
+    monkeypatch.setattr(wubei, "_xj_warned", False)
+    monkeypatch.setattr(wubei, "_xj_quota_exhausted_at", 0.0)
+    monkeypatch.setattr(wubei, "_xj_diag_at", 0.0)
+    monkeypatch.setattr(wubei, "_xj_wrong_dialog_polls", 0)
+    monkeypatch.setattr(wubei, "_xj_spot_failed", False)
+    monkeypatch.setattr(wubei, "_xj_wrong_dialog_clicked_at", 0.0)
+    monkeypatch.setattr(wubei, "_xj_spot_pos", ("火云洞", 31, 18))
+    monkeypatch.setattr(wubei, "_xj_wrong_dialog_pos", None)
+
+
+_XJ_TRACK_ITEMS = [("宝象迷情降魔任务", (10, 240, 180, 258), 0.99),
+                   ("前往火云洞、火云洞处使用", (40, 260, 200, 280), 0.99),
+                   ("显形镜查探。", (40, 276, 140, 292), 0.99)]
+_XJ_LORE_DIALOG = [("十三年前，八月十五，宝象国三公主百花羞玩月中间，遭妖风所摄",
+                    (410, 300, 960, 340), 0.99)]
+
+
+def test_xj_wrong_dialog_dismissed_then_leave_immediately(monkeypatch):
+    """用镜后非白龙马标准对话框 = 本处剧情幌子点（2026-11-28 用户实机）：
+    连续 2 帧确认后点屏关闭，对话框消失即转另一侧，不等宽限到期
+    （旧路径交给剧情兜底，动态背景让站定判定持续「寻路中」白等数秒）。"""
+    clicks, walks = [], []
+    score = [0.99]
+    _patch_xj_wrong_dialog_env(monkeypatch, score, clicks, walks)
+    img = np.zeros((831, 1378, 3), dtype=np.uint8)
+    # 第 1 帧：确认中，不点（防单帧 OCR 截断把真白龙马页误判成剧情页）
+    assert wubei._handle_xianxingjing_track(
+        object(), _XJ_TRACK_ITEMS + _XJ_LORE_DIALOG, img) is True
+    assert clicks == []
+    # 第 2 帧：确认命中 → 点屏关闭一次，判本处失败
+    assert wubei._handle_xianxingjing_track(
+        object(), _XJ_TRACK_ITEMS + _XJ_LORE_DIALOG, img) is True
+    assert clicks == [(1, "五倍")]
+    assert wubei._xj_spot_failed is True
+    # 对话框消失（宽限远未到期）：立即点另一侧链接（A 处失败 → B）
+    score[0] = 0.0
+    assert wubei._handle_xianxingjing_track(
+        object(), _XJ_TRACK_ITEMS, img) is True
+    assert walks == ["b"]
+    assert wubei._xj_phase == 0
+    assert wubei._xj_walk_side == "b"
+
+
+def test_xj_wrong_dialog_with_green_options_not_dismissed(monkeypatch):
+    """带绿字选项的对话不得当剧情页点屏关闭（选项会丢）；仍走宽限路径。"""
+    clicks, walks = [], []
+    _patch_xj_wrong_dialog_env(monkeypatch, [0.99], clicks, walks,
+                               green_row=True)
+    img = np.zeros((831, 1378, 3), dtype=np.uint8)
+    items = _XJ_TRACK_ITEMS + _XJ_LORE_DIALOG
+    assert wubei._handle_xianxingjing_track(object(), items, img) is False
+    assert wubei._handle_xianxingjing_track(object(), items, img) is False
+    assert clicks == []
+    assert wubei._xj_spot_failed is False
+    assert walks == []
+
+
+def test_xj_wrong_dialog_click_guard_then_retry(monkeypatch):
+    """关闭点击受共享防连点冷却约束：刚点过屏的帧不补点，冷却后再点。"""
+    clicks, walks = [], []
+    _patch_xj_wrong_dialog_env(monkeypatch, [0.99], clicks, walks,
+                               last_click_ago=0.3)
+    items = _XJ_TRACK_ITEMS + _XJ_LORE_DIALOG
+    img = np.zeros((831, 1378, 3), dtype=np.uint8)
+    for _ in range(3):
+        assert wubei._handle_xianxingjing_track(object(), items, img) is True
+    assert clicks == []          # 冷却中：不补点
+    assert wubei._xj_spot_failed is False
+    # 冷却结束：补点一次
+    monkeypatch.setattr(wubei, "dc_last_center_click_at", lambda: 0.0)
+    assert wubei._handle_xianxingjing_track(object(), items, img) is True
+    assert clicks == [(1, "五倍")]
+    assert wubei._xj_spot_failed is True
+
+
+def test_xj_wrong_dialog_moving_no_screen_click(monkeypatch):
+    """人物仍在移动时不得点屏关闭（规则 13：行走中点屏会取消寻路）：
+    坐标连续变化不点，稳定后才点。"""
+    clicks, walks = [], []
+    positions = iter([("火云洞", 31, 24), ("火云洞", 31, 28),
+                      ("火云洞", 31, 28)])
+    _patch_xj_wrong_dialog_env(monkeypatch, [0.99], clicks, walks)
+    monkeypatch.setattr(wubei, "_xj_pos",
+                        lambda win, items: next(positions))
+    items = _XJ_TRACK_ITEMS + _XJ_LORE_DIALOG
+    img = np.zeros((831, 1378, 3), dtype=np.uint8)
+    for _ in range(2):
+        assert wubei._handle_xianxingjing_track(object(), items, img) is True
+    assert clicks == []          # 坐标在变：按移动处理，不点屏
+    assert wubei._xj_spot_failed is False
+    # 坐标两帧一致：确认站定后点屏关闭
+    assert wubei._handle_xianxingjing_track(object(), items, img) is True
+    assert clicks == [(1, "五倍")]
+    assert wubei._xj_spot_failed is True
+
+
 def test_xj_flip_retry_capped(monkeypatch):
     """寻路未启动翻侧 3 次后按失败替换，不再 A/B 无限乒乓
     （2026-11-11 13:09 连续 11 次/50s 实测）。"""

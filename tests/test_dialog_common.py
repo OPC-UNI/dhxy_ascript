@@ -465,3 +465,113 @@ def test_green_option_row_px_rejects_inline_green_link():
     frame[t + 60:t + 78, l + 15:l + 380] = (230, 230, 230)
     frame[t + 60:t + 78, l + 120:l + 200] = (20, 210, 20)
     assert not dialog_common.green_option_row_present_px(frame)
+
+
+# ---- 任务结束自清理（2026-11-28 用户需求：残留对话框/奇遇遮挡下一任务） ----
+
+class _CleanWin:
+    def __init__(self, frame):
+        self._frame = frame
+
+    def capture(self, force_activate=False):
+        return self._frame
+
+
+def _clean_env(monkeypatch, in_battle=False, score=0.0):
+    import numpy as np
+    from src.device import battle, tab_group
+    frame = np.zeros((831, 1378, 3), np.uint8)
+    logs = []
+    monkeypatch.setattr(dialog_common.time, "sleep", lambda s: None)
+    monkeypatch.setattr(dialog_common, "log",
+                        lambda msg, level="INFO": logs.append((msg, level)))
+    monkeypatch.setattr(dialog_common, "dialog_frame_score", lambda img: score)
+    monkeypatch.setattr(dialog_common, "_clean_panel_open", lambda f: "")
+    monkeypatch.setattr(battle, "is_in_battle_frame", lambda img: in_battle)
+    monkeypatch.setattr(tab_group, "on_leader_screen", lambda win: True)
+    return _CleanWin(frame), logs
+
+
+def test_clean_task_leftovers_battle_skips_untouched(monkeypatch):
+    """战斗中自清理整段跳过：不跑任务钩子、不点屏（战斗线程在操作）。"""
+    win, _ = _clean_env(monkeypatch, in_battle=True)
+    called = []
+    ok, info = dialog_common.clean_task_leftovers(
+        win, prefix="客栈",
+        extra_cleaners=[("奇遇", lambda w: called.append(w) or True)])
+    assert ok is False and "战斗" in info
+    assert called == []
+
+
+def test_clean_task_leftovers_off_leader_tab_skips(monkeypatch):
+    """组号模式屏幕不是队长 Tab（pass 中/手动切走）：不点击队员画面。"""
+    win, _ = _clean_env(monkeypatch)
+    from src.device import tab_group
+    monkeypatch.setattr(tab_group, "on_leader_screen", lambda w: False)
+    called = []
+    ok, info = dialog_common.clean_task_leftovers(
+        win, prefix="修罗",
+        extra_cleaners=[("面板", lambda w: called.append(w) or True)])
+    assert ok is False and "队长 Tab" in info
+    assert called == []
+
+
+def test_clean_task_leftovers_extra_cleaner_then_quiet(monkeypatch):
+    """任务专属钩子报告残留 → 计入清理结果；连续干净帧后才判定完成。"""
+    win, _ = _clean_env(monkeypatch)
+    state = {"n": 0}
+
+    def cleaner(_win):
+        state["n"] += 1
+        return state["n"] == 1  # 首轮检测到并处理，之后无残留
+
+    ok, info = dialog_common.clean_task_leftovers(
+        win, prefix="客栈", extra_cleaners=[("奇遇弹窗", cleaner)])
+    assert ok is True
+    assert "奇遇弹窗" in info
+    assert state["n"] >= 2  # 处理后又复查，未凭单帧宣告干净
+
+
+def test_clean_task_leftovers_standard_dialog_dismissed(monkeypatch):
+    """标准对话框模板命中 → 交 StoryDialogDismisser 点屏推进。"""
+    win, _ = _clean_env(monkeypatch)
+    scores = [0.99, 0.0, 0.0]
+    monkeypatch.setattr(dialog_common, "dialog_frame_score",
+                        lambda img: scores.pop(0) if scores else 0.0)
+    monkeypatch.setattr(dialog_common.game_map, "ocr_regions",
+                        lambda img, regions: ([], img))
+    monkeypatch.setattr(dialog_common, "green_option_row_present",
+                        lambda img_np, rows: False)
+    calls = []
+
+    class _Dismisser:
+        def try_dismiss(self, win, items, img_np, prefix="", img=None):
+            calls.append(prefix)
+            return True
+
+    monkeypatch.setattr(dialog_common, "StoryDialogDismisser", _Dismisser)
+    ok, info = dialog_common.clean_task_leftovers(win, prefix="客栈")
+    assert ok is True and "对话框" in info
+    assert calls == ["客栈"]
+
+
+def test_clean_task_leftovers_option_dialog_not_auto_chosen(monkeypatch):
+    """残留选项对话框不自动选择（错选会取消/接取错误任务），记 WARN 早退。"""
+    win, logs = _clean_env(monkeypatch, score=0.99)
+    items = [("领取任务", [500, 400, 600, 430], 0.99)]
+    monkeypatch.setattr(dialog_common.game_map, "ocr_regions",
+                        lambda img, regions: (items, img))
+    monkeypatch.setattr(dialog_common, "green_option_row_present",
+                        lambda img_np, rows: True)
+    clicks = []
+
+    class _Dismisser:
+        def try_dismiss(self, *a, **k):
+            clicks.append(1)
+            return True
+
+    monkeypatch.setattr(dialog_common, "StoryDialogDismisser", _Dismisser)
+    ok, info = dialog_common.clean_task_leftovers(win, prefix="客栈")
+    assert ok is False and "选项对话框" in info
+    assert clicks == []
+    assert any(level == "WARN" for _msg, level in logs)
