@@ -641,6 +641,35 @@ def underline_point(img_np, rect, x):
     return None if best is None else best[1]
 
 
+def merge_same_line(rows, overlap=0.6):
+    """同一视觉行的 OCR 碎片合并（链接行定位用，2026-11-28 下沉自五环）。
+
+    rows：[(rect, payload), ...]。纵向重叠 ≥overlap 视为同一行（行距约
+    18px 的相邻行达不到），合并后返回按行序排列的
+    [(merged_rect, [(rect, payload), ...]), ...]；members 按横向（x）
+    排序——同一行被 OCR 拆碎的碎片可按阅读顺序拼接文本。
+    """
+    merged = []  # [ [merged_rect(list), [(rect, payload), ...]], ... ]
+    for rect, payload in rows:
+        for mrect, members in merged:
+            if min(rect[3], mrect[3]) - max(rect[1], mrect[1]) \
+                    >= overlap * min(rect[3] - rect[1], mrect[3] - mrect[1]):
+                mrect[0] = min(mrect[0], rect[0])
+                mrect[1] = min(mrect[1], rect[1])
+                mrect[2] = max(mrect[2], rect[2])
+                mrect[3] = max(mrect[3], rect[3])
+                members.append((rect, payload))
+                break
+        else:
+            merged.append([list(rect), [(rect, payload)]])
+    out = []
+    for mrect, members in merged:
+        members.sort(key=lambda m: (m[0][0], m[0][1]))
+        out.append((mrect, members))
+    out.sort(key=lambda it: (it[0][1], it[0][0]))
+    return out
+
+
 def _is_title_line(txt):
     """标题行判定：短行且含方括号，且括号段内不含数字。
 

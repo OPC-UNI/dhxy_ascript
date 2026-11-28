@@ -206,6 +206,62 @@ def send_silent_move(win, x, y):
             "msg_result": int(r)}
 
 
+def send_silent_drag(win, points, button="primary", step_px=4,
+                     move_interval=0.02):
+    """静默拖拽：按窗口相对坐标点序列投递 按下→连续移动→抬起。
+
+    points 为 [(x, y), ...]（human_click 同空间窗口相对坐标；首点按下，
+    末点抬起），相邻点之间按 step_px 像素插值投递 WM_MOUSEMOVE
+    （MK_LBUTTON 保持按下态）——绘制类小游戏（300环 画符）沿路径运笔。
+    全程持全局输入锁，与战斗/任务线程的点击序列互斥；结束后追加一条
+    WM_MOUSEMOVE 到客户区左下中性区（同 send_silent_click 防悬停残留）。
+    返回投递描述 dict；窗口/坐标换算失败或点数不足返回 None。
+    """
+    pts = [(int(x), int(y)) for (x, y) in (points or [])]
+    if not pts:
+        return None
+    msg = _BUTTON_MESSAGES.get(button)
+    if msg is None:
+        raise ValueError(f"不支持的按键类型: {button!r}（primary/secondary）")
+    down, up, mk = msg
+    resolved = _resolve_point(win, pts[0][0], pts[0][1])
+    if resolved is None:
+        return None
+    target, cx0, cy0, _sx, _sy, cw, ch = resolved
+    wx0, wy0 = pts[0]
+
+    def _lp(cx, cy):
+        return (int(cy) << 16) | (int(cx) & 0xFFFF)
+
+    sent = 0
+    with app_utils._INPUT_LOCK:
+        user32.SendMessageW(target, WM_MOUSEMOVE, 0, _lp(cx0, cy0))
+        time.sleep(0.03)
+        user32.SendMessageW(target, down, mk, _lp(cx0, cy0))
+        time.sleep(0.03)
+        last_cx, last_cy = cx0, cy0
+        for (px, py) in pts[1:]:
+            tcx = cx0 + (px - wx0)
+            tcy = cy0 + (py - wy0)
+            dist = max(abs(tcx - last_cx), abs(tcy - last_cy))
+            steps = max(1, int(round(dist / float(step_px))))
+            for i in range(1, steps + 1):
+                cx = int(round(last_cx + (tcx - last_cx) * i / steps))
+                cy = int(round(last_cy + (tcy - last_cy) * i / steps))
+                user32.SendMessageW(target, WM_MOUSEMOVE, mk, _lp(cx, cy))
+                sent += 1
+                if move_interval > 0:
+                    time.sleep(move_interval)
+            last_cx, last_cy = tcx, tcy
+        time.sleep(0.03)
+        user32.SendMessageW(target, up, 0, _lp(last_cx, last_cy))
+        time.sleep(0.05)
+        away_lp = ((ch - 20) << 16) | 20
+        user32.SendMessageW(target, WM_MOUSEMOVE, 0, away_lp)
+    return {"hwnd": target, "class": win_class(target), "button": button,
+            "client": (cw, ch), "points": len(pts), "moves": sent}
+
+
 def send_silent_wheel(win, x, y, notches=-1):
     """静默滚轮：光标先移到 (x,y)，再投递 notches 次 WM_MOUSEWHEEL。
 

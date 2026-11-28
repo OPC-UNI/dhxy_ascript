@@ -4290,6 +4290,120 @@ def navigate_to_map_coordinate(win, target, x, y, log_fn=None, verbose=False,
         raise
 
 
+def navigate_within_map(win, map_name, x, y, log_fn=None):
+    """在当前地图内按小地图坐标导航（世界地图无标签的子场景，如庭院）。
+
+    与 navigate_to_map_coordinate 的区别：不打开世界地图/地图标签，
+    直接打开当前地图的小地图（game_map.open_mini_map）→ 搜索条锚点 →
+    标定缓存/悬停采样 → 悬停校验点击 → 等位移 → 关图 → 等到达。
+    适用于「高级庭院」这类不在 WORLD_MAP_LABELS 里的场景（用户
+    2026-11-27：庭院聚灵台打造需要小地图走到 112,47）。
+
+    要求 HUD 地名与 map_name 匹配（names_match，允许别名）；否则返回
+    失败，由调用方先进入该场景。已在目标附近（±ARRIVE_TOLERANCE）
+    直接返回成功，不再开图。标定按地图名写会话缓存 + 角色持久化，
+    同图后续导航首次悬停即命中（庭院实测首采 3 样本、点击偏差 0）。
+    返回 (ok, info)；中断/异常路径统一关闭残留地图与寻路面板。
+    """
+    emit = log_fn or (lambda m: log(f"[地图导航] {m}", "INFO"))
+    # 寻路信号：同 navigate_to_map_coordinate（空闲摄妖香兜底时钟）
+    app_utils.mark_track_walk()
+    _CANCEL.clear()
+
+    def _cleanup():
+        game_map.close_maps(win, quiet=True)
+        _close_xunlu_panel_if_open(win)
+
+    try:
+        pos = _read_pos(win)
+        if pos is None or not names_match(pos[0], map_name):
+            return False, (f"当前不在{map_name}（位置 {pos}），"
+                           f"无法在当前地图按坐标导航")
+        if _arrived(pos, map_name, None, x, y):
+            emit(f"已在目标附近 {pos}")
+            return True, f"已在目标附近 {pos}"
+        # 清理可能残留的世界地图/小地图：世界地图的搜索条与本图小地图
+        # 同款，残留时标定会挂到错误窗口上
+        game_map.close_maps(win, quiet=True)
+        ok, info = game_map.open_mini_map(win)
+        if not ok:
+            _cleanup()
+            return False, info
+        img = win.capture(force_activate=False)
+        bar = locate_search_bar(win, img=img)
+        if bar is None:
+            for _ in range(4):
+                time.sleep(0.5)
+                bar = locate_search_bar(win)
+                if bar is not None:
+                    break
+        if bar is None:
+            _cleanup()
+            return False, "小地图窗口未出现搜索条（无法定位地图窗口）"
+        emit(f"搜索条锚点: ({bar['x']},{bar['y']})")
+        aff = affine_for(win, map_name)
+        point = None
+        err = ""
+        ok = False
+        if aff is not None:
+            emit("使用内置/会话标定（悬停校验）")
+            ok, point, err = _aim_and_click(
+                win, aff, None, x, y, emit,
+                on_affine_corrected=lambda a: remember_affine(win, map_name, a))
+            if not ok:
+                emit(f"标定未通过校验（{err}），回退完整采样")
+        if not ok:
+            samples = _collect_hover_samples(win, bar, emit)
+            if len(samples) < 2:
+                _cleanup()
+                return False, (f"悬停采样不足（{len(samples)} 个有效点，"
+                               f"浮层未出现）")
+            aff = solve_affine(samples)
+            if aff is None:
+                _cleanup()
+                return False, "悬停样本无法解出线性变换（两轴比例异常）"
+            remember_affine(win, map_name, aff)
+            emit(f"标定: 比例 {aff['sx']:.3f}/{aff['sy']:.3f} px/格，"
+                 f"原点 ({aff['ax']:.1f},{aff['ay']:.1f})")
+            ok, point, err = _aim_and_click(
+                win, aff, (samples[0][0], samples[0][1]), x, y, emit,
+                on_affine_corrected=lambda a: remember_affine(win, map_name, a))
+        if not ok or point is None:
+            _cleanup()
+            return False, err or "瞄准点击失败"
+        emit(f"点击小地图点 {point} 开始寻路")
+        # 位移启动后关图（与 _navigate_impl 同款）：到达等待只读 HUD 位置
+        before = pos
+        if not _wait_movement(win, before):
+            cur = _read_pos(win)
+            if _arrived(cur, map_name, None, x, y):
+                _cleanup()
+                emit(f"已在目标附近 {cur}")
+                return True, f"已在目标附近 {cur}"
+            emit("点击后无位移（可能点到无效点），偏移重试")
+            human_click(win, min(point[0] + CLICK_OFFSET_RETRY, 1377),
+                        point[1])
+            _wait_movement(win, before)
+        game_map.close_maps(win, quiet=True)
+        ok, info = _wait_arrival(win, map_name, None, x, y, emit,
+                                 allow_restart=False)
+        _cleanup()
+        return ok, info
+    except NavigationCancelled:
+        emit("已中断寻路（用户手动中断），关闭地图/寻路面板")
+        try:
+            _cleanup()
+        except Exception:  # noqa: BLE001 —— 中断收尾不得再抛
+            pass
+        return False, "已中断寻路"
+    except BaseException:
+        try:
+            _cleanup()
+        except Exception:  # noqa: BLE001 —— 收尾不得掩盖原始异常
+            pass
+        raise
+
+
 def site_coord_nav_enabled():
     """任务点位坐标化寻路开关（通用设置，默认开启）。
 

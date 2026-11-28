@@ -62,6 +62,7 @@ from ..core.settings import (
     load_debug_ui_unlocked, load_high_perf, load_selected_modes, load_silent_mode,
     load_site_coord_nav,
     load_task_counts, load_thresholds, load_ui_theme, load_update_auto_check, load_update_feed_url,
+    load_give_honor_high_first,
     load_update_last_check, load_update_skipped_version, load_use_sheyaoxiang,
     load_wubei_auto_create_team, load_wubei_auto_kick_away, load_wubei_kick_away_minutes,
     load_wubei_auto_rejoin, load_wubei_auto_repair, load_wubei_auto_wuyi, load_wubei_check_team,
@@ -268,6 +269,7 @@ class ControlWindow(DiagnosticsMixin, SettingsApiMixin, MessageApiMixin,
         self.expose(self.get_task_stats)
         self.expose(self.clear_task_stats)
         self.expose(self.save_use_sheyaoxiang)
+        self.expose(self.save_give_honor_high_first)
         self.expose(self.save_threshold)
         self.expose(self.save_battle_action)
         self.expose(self.save_xiuluo_min)
@@ -781,6 +783,7 @@ class ControlWindow(DiagnosticsMixin, SettingsApiMixin, MessageApiMixin,
                 "modes": load_selected_modes(),
                 "task_counts": load_task_counts(),
                 "use_sheyaoxiang": load_use_sheyaoxiang(),
+                "give_honor_high_first": load_give_honor_high_first(),
                 "thresholds": load_thresholds(),
                 "battle": load_battle_actions(),
                 "group_check_team": {"xiuluo": load_xiuluo_check_team(),

@@ -1169,30 +1169,6 @@ def _wuhuan_progress_key(items, img_np):
     return "|".join(sorted(found))
 
 
-def _merge_same_line(rows):
-    """同行碎片合并：同一视觉行的碎片纵向高度重叠 ≥60%（行距约 18px 的
-    相邻行达不到），返回 [(merged_rect, [(rect, txt), ...]), ...]。
-
-    碎片再拆分也不改变合并结果——链接行「去找大雁塔二层(13，47)情缘」
-    被区域 OCR 拆成「去找大雁塔二」+「情缘」或整段漏检都不影响定位。
-    """
-    rows.sort(key=lambda r: r[0][1])
-    merged = []  # [(merged_rect, [(rect, txt), ...])]
-    for rect, txt in rows:
-        for mrect, mparts in merged:
-            if min(rect[3], mrect[3]) - max(rect[1], mrect[1]) \
-                    >= 0.6 * min(rect[3] - rect[1], mrect[3] - mrect[1]):
-                mrect[0] = min(mrect[0], rect[0])
-                mrect[2] = max(mrect[2], rect[2])
-                mrect[1] = min(mrect[1], rect[1])
-                mrect[3] = max(mrect[3], rect[3])
-                mparts.append((rect, txt))
-                break
-        else:
-            merged.append([list(rect), [(rect, txt)]])
-    return merged
-
-
 def _wuhuan_link_picker(items, img_np):
     """五环绿字精确定位回调（track_task 的 green_picker）。
 
@@ -1264,7 +1240,7 @@ def _wuhuan_link_picker(items, img_np):
             r0, b0 = min(w, r0), min(h, b0)
             if r0 > l0 and b0 > t0:
                 img_np[t0:b0, l0:r0] = 0
-    for mrect, members in _merge_same_line(rows):
+    for mrect, members in task_tracker.merge_same_line(rows):
         if any(_LINK_MARK_RE.search(txt)
                or task_tracker.MAP_COORD_RE.search(txt)
                for _rect, txt in members):
@@ -1310,7 +1286,7 @@ def _wuhuan_text_key(items, img_np):
     if not rows:
         return ""
     parts = []
-    for _mrect, mparts in _merge_same_line(rows):
+    for _mrect, mparts in task_tracker.merge_same_line(rows):
         mparts.sort(key=lambda p: p[0][0])
         line = _LINK_STRIP_RE.sub("", "".join(t for _rect, t in mparts))
         if line:

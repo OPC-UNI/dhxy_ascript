@@ -84,6 +84,10 @@ class SettingsApiMixin(ControlHost):
         """摄妖香开关变更：保存开关状态。"""
         return settings_module.save_use_sheyaoxiang(on)
 
+    def save_give_honor_high_first(self, on):
+        """300环给与设置变更：保存「高雅誉值优先」开关状态。"""
+        return settings_module.save_give_honor_high_first(on)
+
     def save_wubei_auto_create_team(self, on):
         """五倍设置变更：保存自动创建队伍开关状态。"""
         return settings_module.save_wubei_auto_create_team(on)

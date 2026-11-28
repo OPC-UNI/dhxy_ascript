@@ -18,8 +18,10 @@ from . import role_settings
 from . import user_data
 
 # ---- 任务模式（UI 多选项，角色设置持久化，记住上次选择） ----
+# 300环入口临时关闭（用户 2026-11-28 符文验证期间），验证完成后恢复
+# "300环" 到列表（顺序在「名望」与「仅战斗」之间）。
 TASK_MODES = ["五环", "客栈", "修罗", "五倍", "种族比武", "玄枢轶闻", "名望",
-              "300环", "仅战斗"]
+              "仅战斗"]
 _DEFAULT_MODES = ["五环"]  # 首次默认选中五环（与原单选默认一致）
 _MODES_KEY = "task_modes"           # 多选列表（新键）
 _MODE_KEY_OLD = "task_mode"         # 旧单选键（自动迁移）
@@ -30,6 +32,10 @@ ENV_THEME = "水墨"               # 已适配的游戏 UI 主题
 ENV_ADAPT_RES = (1378, 831)      # 坐标标定的窗口分辨率（实测布局基准）
 # 是否使用摄妖香（UI 开关，角色设置持久化）
 _USE_SHEYAOXIANG_KEY = "use_sheyaoxiang"
+# 300环给与物品选择偏好（UI 开关，角色设置持久化；2026-11-27 用户要求）：
+# 给与文案含多件可选物品（「千年魂石(40点雅誉)或天书残卷一或二(3点雅誉)」）
+# 时，True=高雅誉值优先（40→千年魂石），False=低雅誉值优先（3→天书残卷）。
+_GIVE_HONOR_HIGH_FIRST_KEY = "give_honor_high_first"
 # 调试信息悬浮显示（UI 开关，KeyValue 持久化；游戏窗口上绘制任务/配置/进度）
 _DEBUG_OVERLAY_KEY = "debug_overlay"
 # 「显示与调试」卡片解锁标记（发行版默认隐藏该卡片与诊断入口；在「系统页-
@@ -113,6 +119,17 @@ def save_use_sheyaoxiang(on):
     return {"status": "success"}
 
 
+def load_give_honor_high_first():
+    """读取 300环给与物品雅誉偏好（首次默认高雅誉值优先）。"""
+    return bool(role_settings.get(_GIVE_HONOR_HIGH_FIRST_KEY, True))
+
+
+def save_give_honor_high_first(on):
+    """保存 300环给与物品雅誉偏好（True=高雅誉值优先），返回结果。"""
+    role_settings.set_value(_GIVE_HONOR_HIGH_FIRST_KEY, bool(on))
+    return {"status": "success"}
+
+
 def load_debug_overlay():
     """读取调试信息悬浮开关（首次默认关闭）。"""
     return bool(KeyValue.get(_DEBUG_OVERLAY_KEY, False))
@@ -193,7 +210,7 @@ def _as_bool(value):
 # ---- 任务次数设置（每个任务模式独立，步进 1，下限 0；部分模式有上限） ----
 TASK_COUNT_DEFAULTS = {"五环": 2, "客栈": 20, "修罗": 90, "五倍": 100,
                        "种族比武": 10, "玄枢轶闻": 5, "名望": 5,
-                       "300环": 1,
+                       # "300环": 1,  # 入口临时关闭（用户 2026-11-28）
                        "仅战斗": 0}  # 仅战斗持续运行无次数概念（0=不限；页面无步进器，
                                      # 方案快照 _settings_spec 按 _COUNT_KEYS 展开需要该键）
 # 上限约束：未列出的模式（修罗、五倍）无上限

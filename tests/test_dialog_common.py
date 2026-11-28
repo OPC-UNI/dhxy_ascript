@@ -432,3 +432,36 @@ def test_dialog_frame_score_no_dialog_frame_stays_low():
     from tests.conftest import make_bgr_frame
     score = dialog_common.dialog_frame_score(make_bgr_frame(seed=3))
     assert score < dialog_common.DIALOG_FRAME_THRESHOLD
+
+
+# ---- 剧情对话快速翻页：纯像素绿字选项行判据（2026-11-27） ----
+
+def _dialog_box_frame():
+    """空白对话框文字区帧（DIALOG_BOX_REGION 内画内容）。"""
+    import numpy as np
+    frame = np.zeros((831, 1378, 3), np.uint8)
+    l, t, r, b = dialog_common.DIALOG_BOX_REGION
+    frame[t:b, l:r] = (40, 40, 40)  # 暗色对话框底
+    return frame
+
+
+def test_green_option_row_px_detects_full_green_line():
+    """整行绿字（选项行）：判为选项行 → 快速翻页必须停。"""
+    frame = _dialog_box_frame()
+    l, t, _r, _b = dialog_common.DIALOG_BOX_REGION
+    # 一行连续绿字：绿像素占满该行文字列，无白色正文
+    frame[t + 60:t + 78, l + 15:l + 300] = (20, 210, 20)  # BGR 绿
+    assert dialog_common.green_option_row_present_px(frame)
+    # 下一行白字正文（与选项行间留空行）
+    frame[t + 90:t + 108, l + 15:l + 400] = (230, 230, 230)
+    assert dialog_common.green_option_row_present_px(frame)
+
+
+def test_green_option_row_px_rejects_inline_green_link():
+    """行内绿字链接（白正文 + 少量绿字）不算选项行 → 快速翻页放行。"""
+    frame = _dialog_box_frame()
+    l, t, _r, _b = dialog_common.DIALOG_BOX_REGION
+    # 白字正文行中嵌一小段绿字（物品链接）
+    frame[t + 60:t + 78, l + 15:l + 380] = (230, 230, 230)
+    frame[t + 60:t + 78, l + 120:l + 200] = (20, 210, 20)
+    assert not dialog_common.green_option_row_present_px(frame)

@@ -566,6 +566,22 @@ STORY_MOVE_LOG_INTERVAL = 5.0   # 寻路抑制日志限频（秒）
 STORY_MOVE_VERIFY_AFTER = 3.0
 STORY_MOVE_VERIFY_INTERVAL = 1.2
 
+# ---- 剧情对话快速翻页（2026-11-27 用户：「使用任务追踪到达后一般都会有
+# 对话框推进任务，现在点击很慢」）----
+# 旧实现每页点屏需 2 轮询确认 + 1s 点击间隔 + 每轮对话区 OCR，实测
+# ~2-3s/页——多页 NPC 开场白要 10s+。首次点屏后由 _fast_advance 接管：
+# 对话框文字区像素变化（新一页渲染）即点下一页，只有「出现绿字选项行」
+# 「对话框消失」「页面不再变化」才停；选项行用纯像素判据（与
+# green_option_row_present 同口径，零 OCR）。实测同页帧差 0.0、换页
+# 帧差 10~82（42 对真实帧），阈值 1.5 离两端余量充足。
+DIALOG_BOX_REGION = (425, 330, 950, 515)  # 对话框文字/选项区（框位置锚定，
+                                          # dialog_frame 匹配中心恒 (894,475)）
+STORY_FAST_INTERVAL = 0.12      # 快速翻页轮询间隔（秒）
+STORY_FAST_CHANGE_EPS = 1.5     # 文字区平均像素差「换页」阈值
+STORY_FAST_PAGE_TIMEOUT = 1.2   # 点击后页面不变的放弃时限（交回正常链）
+STORY_FAST_MAX_PAGES = 30       # 单次连续翻页上限（防失控）
+STORY_FAST_MAX_SECONDS = 15.0   # 快速翻页总时限（秒）
+
 
 def _position_crop(img):
     """地图位置文字区域裁剪（寻路判定的像素信号）。失败返回 None。"""
@@ -881,6 +897,79 @@ def green_option_row_present(img_np, region_items):
     return False
 
 
+def green_option_row_present_px(img_np, region=None):
+    """纯像素版绿字选项行检测（零 OCR，快速翻页热路径用）。
+
+    与 green_option_row_present 同判据（整行绿字：绿像素够多、白色正文
+    像素极少或不多于绿像素、绿字列覆盖 >= OPTION_ROW_GREEN_COVER），
+    区别是行带由「绿/亮像素行游程」切分而不是 OCR 框——快速翻页里
+    每页只做像素比对，不付对话区 OCR（2026-11-27）。
+
+    行带切分：连续「该行有绿或亮像素」的游程为一带，遇全空行断开。
+    一行白字正文 + 一行绿字选项之间必有空行（实机选项行上下各 >=3px
+    空白），不会误并；行内绿字链接（物品名/人名混白正文）body 像素多、
+    绿字列覆盖低，按同口径拒绝（名望「吹到了暖玉轩。」类误判已由
+    覆盖判据兜住，2026-11-17）。
+
+    region 缺省 DIALOG_BOX_REGION（对话框文字区）。
+    """
+    import numpy as np
+    if img_np is None:
+        return False
+    arr = np.asarray(img_np)
+    l, t, r, b = DIALOG_BOX_REGION if region is None else region
+    if arr.ndim < 3 or arr.shape[0] < b or arr.shape[1] < r:
+        return False
+    sub = arr[t:b, l:r, :3].astype(int)
+    red, green_ch, blue = sub[:, :, 0], sub[:, :, 1], sub[:, :, 2]
+    green = (green_ch > task_tracker.GREEN_MIN_G) \
+        & (green_ch > red + task_tracker.GREEN_DOMINANCE) \
+        & (green_ch > blue + task_tracker.GREEN_DOMINANCE)
+    bright = (red > 120) | (green_ch > 120) | (blue > 120)
+    row_has = (green | bright).any(axis=1)
+    bands = []
+    start = None
+    for i, has in enumerate(row_has):
+        if has and start is None:
+            start = i
+        elif not has and start is not None:
+            bands.append((start, i))
+            start = None
+    if start is not None:
+        bands.append((start, len(row_has)))
+    for s, e in bands:
+        if e - s < 6:
+            continue
+        gband = green[s:e]
+        body = bright[s:e] & ~gband
+        green_px = int(gband.sum())
+        body_px = int(body.sum())
+        if green_px < 40:
+            continue  # 零星绿点（世界粒子/图标）不算选项行
+        cols_text = bright[s:e].any(axis=0)
+        n_text = int(cols_text.sum())
+        if n_text <= 0:
+            continue
+        cover = float(gband.any(axis=0)[cols_text].mean())
+        if (body_px <= OPTION_ROW_BODY_MAX
+                or body_px <= green_px * OPTION_ROW_BODY_GREEN_MAX) \
+                and cover >= OPTION_ROW_GREEN_COVER:
+            return True
+    return False
+
+
+def _dialog_box_crop(img):
+    """对话框文字区裁剪（快速翻页的页面变化信号）。失败返回 None。"""
+    import numpy as np
+    if img is None:
+        return None
+    arr = np.asarray(img)
+    l, t, r, b = DIALOG_BOX_REGION
+    if arr.ndim < 2 or arr.shape[0] < b or arr.shape[1] < r:
+        return None
+    return arr[t:b, l:r].astype(np.int16)
+
+
 class StoryDialogDismisser:
     """无绿字选项的标准对话框（NPC 剧情台词）点屏幕中间推进/关闭。
 
@@ -982,7 +1071,92 @@ class StoryDialogDismisser:
         txt = region_items[0][0][:20]
         log(f"[{prefix}] 检测到无选项剧情对话「{txt}」，点击屏幕中间推进", "SYS")
         _click_screen_center(win, times=1, prefix=prefix)
+        # 快速翻页（2026-11-27）：首次点屏后接管多页剧情——换页即点，
+        # 出现绿字选项/对话框关闭/页面不再变化即停（像素判据零 OCR）
+        try:
+            self._fast_advance(win, prefix=prefix, img=img)
+        except Exception as e:  # 快速翻页异常不影响正常轮询路径
+            log(f"[{prefix}] 剧情对话快速翻页异常: {e}", "WARN")
         return True
+
+    def _wait_stable_page(self, win, max_seconds=2.0):
+        """等对话框文字区稳定（连续两帧近似相等）后返回该帧。
+
+        换页过程有淡出/淡入过渡帧，直接比对会把过渡帧当成新页提前点屏；
+        稳定后才做选项行判定与点屏。超时返回最后一帧（交调用方判定）。
+        """
+        import numpy as np
+        prev = None
+        frame = None
+        deadline = time.time() + max_seconds
+        while time.time() < deadline:
+            time.sleep(STORY_FAST_INTERVAL)
+            frame = win.capture(force_activate=False)
+            if frame is None:
+                continue
+            crop = _dialog_box_crop(frame)
+            if crop is None:
+                return frame
+            if prev is not None \
+                    and float(np.abs(crop - prev).mean()) < STORY_FAST_CHANGE_EPS:
+                return frame
+            prev = crop
+        return frame
+
+    def _fast_advance(self, win, prefix="", img=None):
+        """首次点屏后的连续翻页（像素判据，零 OCR）。返回翻过的页数。
+
+        每轮：截帧 → 对话框模板在场？→ 文字区相对上次点击时的快照是否
+        变化（新一页渲染）→ 等页面稳定 → 无绿字选项行则点屏并更新快照。
+        对话框关闭/绿字选项页/页面不再变化（末页或点击未生效）即停，
+        交回正常轮询链（其 2 轮确认与 1s 间隔兜底）。
+        人物寻路中点屏会取消寻路（2026-11-11 用户实机），每页点击前
+        复用 WalkGuard 复查。
+        """
+        import numpy as np
+        if img is None:
+            img = win.capture(force_activate=False)
+        snapshot = _dialog_box_crop(img)
+        if snapshot is None:
+            return 0
+        pages = 0
+        deadline = time.time() + STORY_FAST_MAX_SECONDS
+        last_click = time.time()
+        while time.time() < deadline and pages < STORY_FAST_MAX_PAGES:
+            app_utils.raise_if_aborted()
+            time.sleep(STORY_FAST_INTERVAL)
+            frame = win.capture(force_activate=False)
+            if frame is None:
+                continue
+            if dialog_frame_score(frame) < DIALOG_FRAME_THRESHOLD:
+                break  # 对话框已关闭（末页点击生效）
+            crop = _dialog_box_crop(frame)
+            if crop is None:
+                break
+            if float(np.abs(crop - snapshot).mean()) < STORY_FAST_CHANGE_EPS:
+                if time.time() - last_click > STORY_FAST_PAGE_TIMEOUT:
+                    break  # 点击后页面不再变化：交回正常轮询链
+                continue
+            # 页面变化：等稳定帧（跳过淡出/淡入过渡）再判定与点屏
+            frame = self._wait_stable_page(win)
+            if frame is None:
+                break
+            if dialog_frame_score(frame) < DIALOG_FRAME_THRESHOLD:
+                break
+            if green_option_row_present_px(np.asarray(frame)):
+                break  # 绿字选项页：交回正常对话链点击选项
+            if self._walking(win, frame):
+                break  # 人物在移动：点屏会取消寻路
+            self.last_click_at = time.time()
+            _click_screen_center(win, times=1, prefix=prefix)
+            new_snapshot = _dialog_box_crop(frame)
+            if new_snapshot is not None:
+                snapshot = new_snapshot
+            pages += 1
+            last_click = time.time()
+        if pages >= 2:
+            log(f"[{prefix}] 剧情对话快速翻页：连续推进 {pages} 页", "SYS")
+        return pages
 
 
 def verify_dialog_detect(win, extra_score=None, extra_threshold=0.8,

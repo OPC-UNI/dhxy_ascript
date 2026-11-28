@@ -232,6 +232,21 @@ def test_close_bag_closed_does_not_press_hotkey(monkeypatch):
     assert ok and info == "背包未打开"
 
 
+def test_find_item_in_bag_uses_catalog_threshold(monkeypatch):
+    """数量角标模板按物品目录专用阈值匹配（珍兽丹 0.69，参考摄妖香）。"""
+    seen = []
+
+    def fake_match(win, icon, threshold=0.8):
+        seen.append((icon, threshold))
+        return []
+
+    monkeypatch.setattr(bag, "_match_all_template", fake_match)
+    bag.find_item_in_bag(object(), "item_zhenshoudan.png", threshold=0.8)
+    bag.find_item_in_bag(object(), "item_tianwaifeishi.png", threshold=0.8)
+    assert seen == [("item_zhenshoudan.png", 0.69),
+                    ("item_tianwaifeishi.png", 0.8)]
+
+
 # ---- 切储物格前复检面板在前台（2026-11-26 实机误点地图教训）----
 
 def test_find_item_with_slots_aborts_when_bag_covered(monkeypatch):

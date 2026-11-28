@@ -27,9 +27,11 @@ GIVE_TITLE_ICON = "give_title.png"
 # 摄妖香物品图标模板（res/img/sheyaoxiang.png，49x48，实测匹配度 1.0）
 SHEYAOXIANG_ICON = item_catalog.icon("sheyaoxiang")
 # 摄妖香匹配阈值：0.8 实测漏检（真实图标渲染分数 0.79 起步，见
-# 2026-10-11 10:27 日志），按用户要求降到 0.69（仅摄妖香，其他
-# 物品保持 0.8——给与/购买物品误匹配代价高）
-SHEYAOXIANG_THRESHOLD = 0.69
+# 2026-10-11 10:27 日志），按用户要求降到 0.69（模板带数量角标，
+# 数字变化让分数偏低；其他物品保持各自默认阈值——给与/购买物品误
+# 匹配代价高）。阈值统一登记在物品目录（items.ItemDef.threshold），
+# 此处取目录值，避免两处维护同一个校准数字。
+SHEYAOXIANG_THRESHOLD = item_catalog.item("sheyaoxiang").threshold
 # 背包储物格切换按钮模板（res/img/box_one_close.png，26x27）
 BOX_ONE_CLOSE_ICON = "box_one_close.png"
 # 储物格切换的纵向偏移：以 box_one_close 为基准向下 35px 递增，
@@ -203,9 +205,14 @@ def is_slot_panel_open(win):
 def find_item_in_bag(win, icon_name, threshold=0.8):
     """在游戏窗口中查找指定物品图标（背包打开状态下）。
 
-    threshold：匹配阈值（默认 0.8；摄妖香等渲染分数偏低的物品
-    由调用方按需放宽）。返回匹配结果列表，未找到返回空列表。
+    threshold：匹配阈值（默认 0.8）。物品目录登记了专用阈值时以目录
+    为准（threshold_for_icon；摄妖香/珍兽丹等模板带数量角标，数量字
+    每次渲染可能不同，分数低于默认阈值，实机 0.79 起步 → 0.69）。
+    返回匹配结果列表，未找到返回空列表。
     """
+    catalog_threshold = item_catalog.threshold_for_icon(icon_name)
+    if catalog_threshold > 0:
+        threshold = catalog_threshold
     return _match_all_template(win, icon_name, threshold=threshold)
 
 
@@ -277,8 +284,8 @@ def open_task_box(win, prefix=""):
 def find_item_with_slots(win, icon_name, label, threshold=0.8):
     """在背包中查找指定物品，未找到时切换储物格再找。
 
-    threshold：匹配阈值（默认 0.8；摄妖香等渲染分数偏低的物品
-    由调用方按需放宽）。流程：
+    threshold：匹配阈值（默认 0.8；物品目录登记了专用阈值的模板由
+    find_item_in_bag 自动采用，如摄妖香/珍兽丹 0.69）。流程：
     1. 直接检测（命中即返回）
     2. 未命中：低阈值诊断匹配度并记日志（区分"没检测到"与"匹配度不足"），
        等待 0.5s 复检一次——背包刚打开时物品图标可能尚未渲染完

@@ -682,6 +682,10 @@ AWANG_CENTER_MARGIN = 180                     # 屏幕中间区 = 中心左右�
                                               # 区域内距离已够近，不走近，直接点交互点
 AWANG_ARRIVE_POLLS = 2                        # 走近寻路结束判定：位置连续不变读数次数（1s 间隔）
 AWANG_ARRIVE_TIMEOUT = 20                     # 走近等待超时（秒；点击远处 NPC 走过去约 10-15s）
+AWANG_DIRECT_VERIFY_DELAY = 1.5               # 屏幕中间区直接点击后的生效判定等待（秒：
+                                              # 阿旺对话实测点击后 ~1s 弹出，留 0.5s 余量）
+AWANG_DIRECT_VERIFY_POLL = 1.0                # 生效判定的两次位置读数间隔（秒；
+                                              # 点击远处 NPC 会先走过去，位置变化即生效）
 # NPC 名字 OCR 兜底查找的排除区（任务追踪面板；面板内文案如「找阿旺。」不可点）。
 # 静态兜底；运行时由 _track_panel_region 按标题条模板动态推导（面板漂移跟随）
 TRACK_PANEL_REGION = (0, 200, 260, 600)
@@ -1215,6 +1219,37 @@ def _awang_approach_pos(x, y, win):
     return None                              # 屏幕中间区域：无需走近
 
 
+def _awang_click_took_effect(win):
+    """判定屏幕中间区「直接点交互点」是否生效；False 才改走近重试。
+
+    2026-11-27 比武场实测：阿旺在屏幕 x 中间区（±180px）内但实际站在
+    台阶上、离人物远，直接点 NPC 没有任何响应——人物不走、对话框不出
+    （点 NPC 的屏幕像素可能落在 NPC 身后不可达的地砖/建筑上），任务每
+    15s 重试空转。屏幕 x 位置不能代表实际距离，须用点击后的直接信号
+    判定生效（任一即 True）：
+
+    1. 标准对话框模板命中（阿旺对话实测点击后 ~1s 弹出、分数 0.989）；
+    2. 人物起步：间隔 1s 两次地图位置读数不同（点击远处 NPC 先走过去）。
+    两次位置都识别失败按生效处理（不确定时不改道——对话框已打开时
+    走近点击可能落到选项上）。
+
+    只用于直接点击的生效校验，不参与走近两段点击链路。
+    """
+    time.sleep(AWANG_DIRECT_VERIFY_DELAY)
+    img = win.capture(force_activate=False)
+    if img is not None and dialog_frame_score(img) >= DIALOG_FRAME_THRESHOLD:
+        return True
+    pos = game_map.read_map_position(win, img=img)
+    time.sleep(AWANG_DIRECT_VERIFY_POLL)
+    img2 = win.capture(force_activate=False)
+    if img2 is not None and dialog_frame_score(img2) >= DIALOG_FRAME_THRESHOLD:
+        return True
+    pos2 = game_map.read_map_position(win, img=img2)
+    if pos is None or pos2 is None:
+        return True
+    return pos != pos2
+
+
 def _check_awang(win):
     """检查阿旺 NPC：先阿旺模板组（awang.png/awang2.png/awang3.png，
     统一阈值 0.72），未命中时全屏 OCR 名字「阿旺」兜底；
@@ -1225,7 +1260,10 @@ def _check_awang(win):
     朝屏幕中间一侧，2026-11-11 用户规则），屏幕中间 ±180px 内距离已够，
     直接点交互点不走近；走近后等寻路结束（位置稳定）再重新定位点交互点
     （固定 1s 等待在距离远时点不到，反复点击还会打断寻路走不到位置）。
-    返回 (是否成功, 描述)。
+    屏幕 x 中间区不等于实际距离够近（2026-11-27 比武场实测：阿旺在台阶
+    上、离人物远，直接点 NPC 无任何响应）——直接点击后须经
+    _awang_click_took_effect 校验生效（对话框弹出/人物起步），无响应改
+    走近后重点。返回 (是否成功, 描述)。
     """
 
     def _locate():
@@ -1263,7 +1301,19 @@ def _check_awang(win):
         # 阿旺在屏幕中间 ±180px 内：距离已够近，无需走近，直接点交互点
         human_click(win, pt[0], pt[1])
         log(f"[客栈] 阿旺在屏幕中间区域，直接点击 @({pt[0]},{pt[1]})", "SYS")
-        return True, "已点击阿旺"
+        if _awang_click_took_effect(win):
+            return True, "已点击阿旺"
+        # 点击无响应：屏幕 x 中间区不等于实际距离够近（2026-11-27 比武场
+        # 实测：阿旺在台阶上、离人物远，点 NPC 人物不走也无对话，任务
+        # 每 15s 重试空转）——按屏幕中间一侧走近后再点交互点。
+        img = win.capture(force_activate=False)  # 晚到对话框兜底：有对话不走近
+        if img is not None and dialog_frame_score(img) >= DIALOG_FRAME_THRESHOLD:
+            return True, "已点击阿旺"
+        cx = win.rect.width // 2
+        ap = ((pt[0] + AWANG_APPROACH_OFFSET, pt[1]) if pt[0] < cx
+              else (pt[0] - AWANG_APPROACH_OFFSET, pt[1]))
+        log("[客栈] 直接点击阿旺无响应（人物未起步、无对话），改走近后重点",
+            "WARN")
     # 两段点击：先点阿旺左/右侧 90px 走近（点击远处 NPC 会先走过去）；
     # 等寻路结束——相机随角色移动，阿旺屏幕位置会变，须重新定位
     side = "右" if ap[0] > pt[0] else "左"

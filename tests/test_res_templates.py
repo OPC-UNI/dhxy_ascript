@@ -47,6 +47,10 @@ def test_res_img_templates_decode_to_3_or_4_channels():
 # ---- 模板命名与引用一致性（P3 命名治理，2026-11-18） ----
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE_FILES = [ROOT / "main.py", *sorted((ROOT / "src").rglob("*.py"))]
+# 数据文件中的模板引用（如 res/huafu_runes.json 的符文掩码表）：JSON
+# 不能 ast.parse，按文本扫描文件名 token（2026-11-28 符文配方库）。
+DATA_FILES = sorted((ROOT / "res").glob("*.json"))
+DATA_TOKEN_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*\.(?:png|ico)")
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_]*(\.[a-z0-9]+)?$")
 
 # 运行时产物（诊断截图/失败落盘），不是模板
@@ -94,6 +98,11 @@ def _referenced_names():
                 if NAME_RE.match(name) and name.lower().endswith(
                         (".png", ".ico")):
                     refs.add(name)
+    for src in DATA_FILES:
+        for token in DATA_TOKEN_RE.findall(src.read_text(encoding="utf-8")):
+            name = Path(token).name
+            if NAME_RE.match(name):
+                refs.add(name)
     return refs
 
 

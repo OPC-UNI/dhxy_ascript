@@ -1728,16 +1728,28 @@
                     </div>
                 </div>
             </div>
-            <div class="task-card" data-mode="300环">
+            <!-- 300环入口临时关闭（用户 2026-11-28 符文验证期间）：去掉
+                 style="display:none" 并恢复 TASK_MODES 等 4 个注册点后重新开放 -->
+            <div class="task-card" data-mode="300环" style="display:none">
                 <div class="task-card-main">
                     <span class="task-order"></span>
                     <span class="task-name">300环</span>
                     <span class="badge">江湖历练</span>
+                    <button class="task-expand" data-mode="300环" title="300环专属设置">▾</button>
                     <div class="task-count">
                         <button class="th-btn" onclick="count('300环', -1)">−</button>
                         <span class="th-val" id="cnt-300环">1</span>
                         <button class="th-btn" onclick="count('300环', 1)">＋</button>
                     </div>
+                </div>
+                <!-- 300环设置手风琴：给与物品雅誉偏好 -->
+                <div class="task-accordion">
+                    <div class="group-title">300环设置</div>
+                    <label class="switch-row">
+                        <input type="checkbox" id="give-honor-high-first">
+                        <span class="switch-track"></span>
+                        <span>给与物品高雅誉值优先（关闭则低雅誉值优先；如千年魂石 40 雅誉 / 天书残卷 3 雅誉）</span>
+                    </label>
                 </div>
             </div>
             <div class="task-card" data-mode="仅战斗">
@@ -2621,7 +2633,9 @@
     let logSeq = 0;                // 日志到达序号（selected 视图归并排序键）
     let lastSelectedLogKey = null; // 选中行切换时才重建日志 DOM（防滚动重置）
     let lastTabRole = null;        // 已显示的 active Tab（变化时才自动滚入视野）
-    const TASK_MODES = ['五环', '客栈', '修罗', '五倍', '种族比武', '玄枢轶闻', '名望', '300环', '仅战斗'];
+    // 300环入口临时关闭（用户 2026-11-28 符文验证期间），验证完成后恢复
+    // '300环'（顺序在「名望」与「仅战斗」之间）。
+    const TASK_MODES = ['五环', '客栈', '修罗', '五倍', '种族比武', '玄枢轶闻', '名望', '仅战斗'];
     const BATTLE_ONLY = '仅战斗';   // 与其它任务互斥：勾选时禁用其它，勾选其它时禁用本项
     const COUNT_MAX = {'五环': 2, '客栈': 20, '种族比武': 100, '玄枢轶闻': 5, '名望': 5};
     // 印章动效：移动类阶段（左右轻摆走路节奏；其余按战斗/对话/默认分档）
@@ -2660,6 +2674,7 @@
     const countBtns = document.querySelectorAll('.task-count .th-btn');
     const taskLockBanner = document.getElementById('task-lock-banner');
     const useSyx = document.getElementById('use-syx');
+    const giveHonorHighFirst = document.getElementById('give-honor-high-first');
     const debugOverlay = document.getElementById('debug-overlay');
     const debugCard = document.getElementById('debug-card');  // 「显示与调试」卡片（默认隐藏，连点版本号解锁）
     const devTools = document.getElementById('nav-diag');  // 调试信息开关控制「诊断」导航显隐
@@ -3904,7 +3919,8 @@
     })();
 
     /* ================= 成就页（累计产出 + 效率 + 7 日趋势） ================= */
-    const STATS_MODES = ['五环', '客栈', '修罗', '五倍', '种族比武', '玄枢轶闻', '名望', '300环', '仅战斗'];
+    // 300环入口临时关闭（用户 2026-11-28 符文验证期间），验证完成后恢复
+    const STATS_MODES = ['五环', '客栈', '修罗', '五倍', '种族比武', '玄枢轶闻', '名望', '仅战斗'];
     const STATS_WINDOW_DAYS = 7;
     const pageStats = document.getElementById('page-stats');
     const statBody = document.getElementById('stat-body');
@@ -5016,6 +5032,10 @@
     useSyx.addEventListener('change', () => {
         callPython('save_use_sheyaoxiang', useSyx.checked);
     });
+    // 300环给与雅誉偏好：开=高雅誉值优先（千年魂石 40），关=低雅誉值优先（天书残卷 3）
+    giveHonorHighFirst.addEventListener('change', () => {
+        callPython('save_give_honor_high_first', giveHonorHighFirst.checked);
+    });
 
     // 调试信息开关变更：立即保存（任务运行中切换后数秒生效），
     // 同时控制「诊断」导航入口显隐（默认关闭不展示）
@@ -5525,6 +5545,7 @@
             renderTaskZones();           // 初始化/方案切换后重渲染双区 + 互斥禁用
         }
         useSyx.checked = !!info.use_sheyaoxiang;
+        giveHonorHighFirst.checked = !!info.give_honor_high_first;
         debugOverlay.checked = !!info.debug_overlay;
         // 「显示与调试」卡片：已解锁或调试信息已开时展示（升级用户
         // config.json 只有 debug_overlay=true，卡片须一并出现才能关闭）

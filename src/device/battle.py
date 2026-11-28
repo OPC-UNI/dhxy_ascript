@@ -77,6 +77,23 @@ ROUND_BANNER_ICON = "round_banner.png"  # 回合横幅「回合」文字区（�
 ROUND_BANNER_THRESHOLD = 0.8   # 横幅文字匹配阈值（非战斗画面实测最高 0.45，真实横幅 0.99）
 BAR_BUTTON_THRESHOLD = 0.85    # 操作条按钮匹配阈值（非战斗画面实测最高 0.39，真实按钮 1.0）
 
+# ---- 任务专属战斗计划（捕捉类环，用户 2026-11-27 实机） ----
+# 300环「贵人相助」捕捉环的遭遇战不能按常规战斗动作打（攻击会打死要
+# 捕捉的宝宝）：任务侧在环开始时 set_battle_plan(kind="capture")，战斗
+# 线程进场确认后改走本计划——第 1 回合人物点「捕捉」并点选宝宝、召唤兽
+# 「防御」；第 2 回合人物「逃跑」+ 召唤兽「防御」（用户 2026-11-27 规则：
+# 逃跑选完仍须给召唤兽选防御，否则空等 30s 倒计时）；计划在环结束
+# （任务追踪文案变化）时清除。
+ZHUOBO_ICON = "battle_zhuobo.png"  # 「捕捉」按钮模板（右列操作条，实机帧裁剪 57x21）
+TAOPAO_ICON = "battle_taopao.png"  # 「逃跑」按钮模板（右列操作条，实机帧裁剪 57x21）
+CAPTURE_TARGET_NAMES = ("猴宝宝", "蟾宫兔宝宝", "赭炎宝宝")  # 可捕捉宝宝（任意一只）
+CAPTURE_TARGET_BAND = (120, 200, 760, 720)  # 战斗左半场怪物名字标签 OCR 区
+CAPTURE_TARGET_DY = 35         # 名字标签中心 → 怪物身体中心纵向偏移（像素；
+                               # 实机帧标定：猴宝宝标签中心 y≈462、身体中心 y≈420）
+CAPTURE_TARGET_DELAY = 0.3     # 点「捕捉」后等目标选择态渲染（秒）
+CAPTURE_MAX_ROUNDS = 4         # 计划战斗最多处理回合数（防失控）
+_battle_plan = None  # 任务注入的专属战斗计划（见 set_battle_plan）
+
 # 召唤兽技能坐标（用户实测标定）：技能1~技能6 在技能面板中的
 # 窗口相对坐标——首尾实测 技能1 (588,300)、技能5 (588,410)，前 5 个
 # 平均分布（4 段，步进 27.5px）；技能6 按同一步进外推（437.5→438），
@@ -462,6 +479,11 @@ def _battle_ended(win):
     return not is_in_battle(win)
 
 
+def battle_ended(win):
+    """公开的战斗结束判定（专属战斗计划处理器复用同一确认窗口）。"""
+    return _battle_ended(win)
+
+
 def _find_in_frame(win, frame, icon):
     """帧内查找图标中心（操作条图标走条带+兜底）；frame 为 None 时自行截帧。"""
     if frame is None:
@@ -470,7 +492,8 @@ def _find_in_frame(win, frame, icon):
             return None
     region = _bar_band(frame) if icon in (FASHU_ICON, FANGYU_ICON,
                                           AUTO_ICON, AUTO2_ICON,
-                                          AUTO_CANCEL_ICON) else None
+                                          AUTO_CANCEL_ICON,
+                                          ZHUOBO_ICON, TAOPAO_ICON) else None
     return game_map.match_frame_np(frame, icon, region=region, fallback=True)
 
 
@@ -520,12 +543,29 @@ def _cancel_auto(win):
     中，且取消自动模板须达到可点击阈值才实际点击（弱匹配坐标不盲点）。
     旧「取消分数须高于自动分数」在新客户端恒不成立——自动面板「取消」
     与操作条「自动」按钮同时在场（0.883/1.000），队员配置动作因此
-    从未执行（09:21:23 实机教训）。
+    从未执行（09:21:23 实机教训）。返回是否点击了取消。
     """
     img = win.capture(force_activate=False, format=WindowCaptureFormat.OPENCV)
     if img is None:
-        return
-    _cancel_auto_frame(win, img)
+        return False
+    return _cancel_auto_frame(win, img)
+
+
+def cancel_auto(win):
+    """公开的取消自动（截一帧判定，返回是否点击了取消）。
+
+    任务注入的专属战斗计划在接管前调用：上一场常规战斗挂上的自动战斗
+    会跨场持续，抢在手动操作前提交人物行动——天下无贼战斗型投爆竹
+    （2026-11-27 21:56 实机：21:54:59 常规战斗已点自动，21:56:39 爆竹
+    战斗自动接管，右键爆竹始终不生效）。开场操作条未出现时无法判定，
+    由调用方在人物操作栏出现后重试。
+    """
+    return _cancel_auto(win)
+
+
+def cancel_auto_frame(win, img):
+    """公开的帧内取消自动（复用调用方已截帧），返回是否点击了取消。"""
+    return _cancel_auto_frame(win, img)
 
 
 def _cancel_auto_frame(win, img):
@@ -645,6 +685,148 @@ def _click_famen(win, bar_ready=False):
         return
     human_click(win, FAMEN_CLICK_POS[0], FAMEN_CLICK_POS[1])
     log(f"[战斗] 法门：已点击法门 @ ({FAMEN_CLICK_POS[0]},{FAMEN_CLICK_POS[1]})", "SYS")
+
+
+def set_battle_plan(plan):
+    """任务侧注入专属战斗计划：进场确认后由计划处理器接管本场战斗。
+
+    两种形态：
+    - {"kind": "capture", "target_names": (...)}：300环「贵人相助」捕捉
+      环（用户 2026-11-27 实机流程），由 battle 内部处理；
+    - {"kind": <名字>, "handler": callable}：任务/小游戏模块自带整场
+      处理器（如天下无贼战斗型的大型爆竹计划），battle 只负责进场转发。
+    计划设置在任务期间保持（可能连打多场），任务追踪文案变化/任务结束
+    时由任务侧 clear_battle_plan 清除；无计划时战斗按常规配置执行。
+    """
+    global _battle_plan
+    _battle_plan = dict(plan) if plan else None
+
+
+def clear_battle_plan():
+    """清除专属战斗计划（恢复常规战斗调度）。"""
+    global _battle_plan
+    _battle_plan = None
+
+
+def battle_plan():
+    """当前专属战斗计划（None=无）。"""
+    return _battle_plan
+
+
+def _find_capture_target(win, names):
+    """OCR 战斗左半场怪物名字标签，返回目标宝宝的点击点；未找到返回 None。
+
+    实机（2026-11-27 五指山捕捉环）：怪物名字标签绘制在精灵脚下（猴宝宝/
+    赭炎宝宝帧实测），点击点取标签中心上方 CAPTURE_TARGET_DY 像素（怪物
+    身体）。标签含目标名或任意「XX宝宝」短标签即命中（三只宝宝任选其一，
+    OCR 对「蟾宫兔宝宝」等长名可能误读，短标签按「宝宝」兜底）。
+    """
+    img = win.capture(force_activate=False)
+    if img is None:
+        return None
+    items, _ = game_map.ocr_region(img, CAPTURE_TARGET_BAND)
+    for txt, rect, score in items:
+        if score < 0.55:
+            continue
+        t = _norm_text(txt or "")
+        if not t:
+            continue
+        if not (any(n in t for n in names)
+                or ("宝宝" in t and len(t) <= 6)):
+            continue
+        cx = (rect[0] + rect[2]) // 2
+        cy = (rect[1] + rect[3]) // 2 - CAPTURE_TARGET_DY
+        return (cx, max(0, cy))
+    return None
+
+
+def _run_battle_plan(win, plan):
+    """执行专属战斗计划（捕捉类 / 任务注入的 handler，见常量区说明）。
+
+    阻塞到本场处理完成或战斗结束；战斗结束确认仍由 watch_loop 统一负责。
+    捕捉计划：第 1 回合点「捕捉」→ 点宝宝 → 召唤兽「防御」；其后每回合
+    点「逃跑」，找不到宝宝/点不到捕捉时直接逃跑，由任务侧走位重新遇敌。
+    handler 计划（如 300环 天下无贼战斗型的大型爆竹）：任务侧注入
+    {"kind": ..., "handler": callable}，由处理器自行完成整场操作；
+    未知 kind 且无 handler 时仅记录日志、本场不操作。
+    """
+    kind = (plan or {}).get("kind")
+    if kind == "capture":
+        _run_capture_plan(win, plan)
+        return
+    handler = (plan or {}).get("handler")
+    if callable(handler):
+        try:
+            handler(win)
+        except Exception as e:
+            log(f"[战斗] 专属战斗计划「{kind}」异常: {e}", "WARN")
+        return
+    log(f"[战斗] 未知战斗计划 {kind!r}，本场不操作", "WARN")
+
+
+def _capture_flee(win, round_no):
+    """捕捉计划逃跑阶段：人物「逃跑」→ 召唤兽「防御」。
+
+    用户 2026-11-27 实机规则：第 2 回合人物逃跑、召唤兽防御——人物逃跑
+    选完游戏仍要求召唤兽出手，不点防御会空等到 30s 倒计时（实机
+    19:17:19 点逃跑、19:18:00 才进下一回合；旧实现只等人物操作条消失，
+    而召唤兽条同样带 FASHU 图标，永远等不到消失）。逃跑立即结束战斗时
+    等不到召唤兽条，_wait_icon 由战斗结束提前返回。
+    """
+    if _click_template(win, TAOPAO_ICON):
+        log(f"[战斗] 捕捉：第 {round_no} 回合已点「逃跑」", "SYS")
+    else:
+        log(f"[战斗] 捕捉：第 {round_no} 回合未识别到「逃跑」按钮", "WARN")
+    time.sleep(PHASE_SWITCH_DELAY)  # 人物操作条关闭，召唤兽条出现
+    if _wait_icon(win, FASHU_ICON, BEAST_BAR_TIMEOUT, want_found=True):
+        if _do_action(win, "防御", "召唤兽", round_no=round_no):
+            time.sleep(PHASE_SWITCH_DELAY)
+    _wait_icon(win, FASHU_ICON, BAR_GONE_TIMEOUT, want_found=False)
+
+
+def _run_capture_plan(win, plan):
+    """捕捉类专属计划（贵人相助）：捕捉 → 召唤兽防御 → 逃跑。"""
+    names = tuple((plan or {}).get("target_names") or CAPTURE_TARGET_NAMES)
+    log(f"[战斗] 捕捉战斗开始：目标 {'/'.join(names)}"
+        f"（捕捉 → 召唤兽防御 → 逃跑）", "SYS")
+    _cancel_auto(win)  # 若处于自动战斗先取消（自动会抢先出手打死宝宝）
+    rounds = 0
+    captured = False
+    while not _battle_ended(win) and rounds < CAPTURE_MAX_ROUNDS:
+        if not _wait_icon(win, FASHU_ICON, ROUND_BAR_TIMEOUT, want_found=True):
+            break
+        img = win.capture(force_activate=False,
+                          format=WindowCaptureFormat.OPENCV)
+        if img is not None:
+            _cancel_auto_frame(win, img)
+        time.sleep(0.5)  # 操作条刚出现，稍作稳定再操作（同 handle_battle）
+        rounds += 1
+        if rounds == 1 and not captured:
+            target = _find_capture_target(win, names)
+            if target is None:
+                log("[战斗] 捕捉：未找到目标宝宝，直接逃跑", "WARN")
+            elif _click_template(win, ZHUOBO_ICON):
+                time.sleep(CAPTURE_TARGET_DELAY)
+                human_click(win, target[0], target[1])
+                captured = True
+                log(f"[战斗] 捕捉：已点「捕捉」并点选宝宝 "
+                    f"@ ({target[0]},{target[1]})", "SYS")
+            else:
+                log("[战斗] 捕捉：未识别到「捕捉」按钮，直接逃跑", "WARN")
+            if not captured:
+                _capture_flee(win, rounds)
+                continue
+            # 召唤兽阶段：有召唤兽才出现操作条，统一选「防御」保宝宝
+            _wait_icon(win, FASHU_ICON, BEAST_BAR_TIMEOUT, want_found=True)
+            if _do_action(win, "防御", "召唤兽", round_no=rounds):
+                time.sleep(PHASE_SWITCH_DELAY)
+            _wait_icon(win, FASHU_ICON, BAR_GONE_TIMEOUT, want_found=False)
+            continue
+        # 第 2 回合起（捕捉已成功）：人物「逃跑」+ 召唤兽「防御」，见
+        # _capture_flee（用户 2026-11-27 规则）
+        _capture_flee(win, rounds)
+    log("[战斗] 捕捉战斗：本场处理完成" if captured
+        else "[战斗] 捕捉战斗：本场未完成捕捉", "SYS" if captured else "WARN")
 
 
 def handle_battle(win):
@@ -1353,7 +1535,15 @@ def watch_loop(win):
                         debug_overlay.set_battle(battle_no)  # 调试悬浮层场次
                         debug_overlay.set_phase(f"战斗中 · 第 {battle_no} 场")  # 看板阶段
                         log(f"[战斗] 第 {battle_no} 场战斗开始", "SYS")
-                        if battle_no == 1:
+                        plan = _battle_plan
+                        if plan is not None:
+                            # 任务专属战斗计划（捕捉类环，见 set_battle_plan）：
+                            # 计划接管本场，不点自动/法门（计划自带逐回合动作）。
+                            # 计划里取消了自动战斗（防自动抢先打死宝宝），
+                            # 置 pending_auto 让下一场常规战斗补挂自动。
+                            _run_battle_plan(win, plan)
+                            pending_auto = True
+                        elif battle_no == 1:
                             result = handle_battle(win)  # 首场：按配置操作后点击自动
                             pending_auto = (result != "auto_ok")
                             if pending_auto:

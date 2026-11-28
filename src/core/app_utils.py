@@ -484,6 +484,49 @@ def human_click(win, x: int, y: int, button: str = "primary"):
         _mouse_call(Mouse.click, button=button)
 
 
+def drag_path(win, points, step_px=3, move_interval=0.012):
+    """沿窗口相对坐标点序列拖拽（按下→连续移动→抬起）。
+
+    绘制类小游戏（300环 画符沿笔画运笔）用：静默模式走
+    silent_click.send_silent_drag（消息投递，不动物理鼠标）；物理模式
+    Move 到起点 → mouse_down → 逐点插值移动 → mouse_up，全程持全局
+    输入锁，与战斗/任务线程的点击序列互斥。
+    points 为 [(x, y), ...]（human_click 同空间），单点时退化为单击。
+    返回静默通道的投递描述（物理模式 None）。
+    """
+    pts = [(int(x), int(y)) for (x, y) in (points or [])]
+    if not pts:
+        return None
+    if len(pts) == 1:
+        human_click(win, pts[0][0], pts[0][1])
+        return None
+    if _SILENT_CLICK:
+        from ..device import silent_click  # 延迟导入防循环（见 _silent_click）
+        return silent_click.send_silent_drag(
+            win, pts, step_px=step_px, move_interval=move_interval)
+    with _INPUT_LOCK:
+        _mouse_call(Mouse.mouse_move, win.rect.left + pts[0][0],
+                    win.rect.top + pts[0][1], move_duration=0.05)
+        _mouse_call(Mouse.mouse_down, button="primary")
+        last_x, last_y = pts[0]
+        try:
+            for (px, py) in pts[1:]:
+                dist = max(abs(px - last_x), abs(py - last_y))
+                steps = max(1, int(round(dist / float(step_px))))
+                for i in range(1, steps + 1):
+                    cx = last_x + (px - last_x) * i // steps
+                    cy = last_y + (py - last_y) * i // steps
+                    _mouse_call(Mouse.mouse_move,
+                                win.rect.left + int(cx),
+                                win.rect.top + int(cy), move_duration=0.0)
+                    if move_interval > 0:
+                        time.sleep(move_interval)
+                last_x, last_y = px, py
+        finally:
+            _mouse_call(Mouse.mouse_up, button="primary")
+    return None
+
+
 def human_scroll(win, x: int, y: int, lines: int):
     """在窗口相对坐标 (x, y) 处滚轮；lines 正数向上、负数向下。
 

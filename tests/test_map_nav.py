@@ -2831,3 +2831,69 @@ def test_walk_special_coordinate_visible_nav_skips_unreachable_waypoint(monkeypa
     # 首点直接选最远可见的 (10,10)（无首步校准，屏幕 ≈208,300），跳过 (5,10)
     assert clicks and abs(clicks[0][0] - 208) <= 6 and abs(clicks[0][1] - 300) <= 6
     assert any("途经点 (10,10)" in m for m in emits)
+
+
+# ---------------- 当前地图内坐标导航（庭院等无世界标签场景） ----------------
+
+def test_navigate_within_map_requires_current_map(monkeypatch):
+    """HUD 地名不匹配时不打开小地图（调用方负责先进入目标场景）。"""
+    map_nav._CANCEL.clear()
+    monkeypatch.setattr(map_nav, "_read_pos", lambda win: ("长安城", 165, 125))
+    opened = []
+    monkeypatch.setattr(map_nav.game_map, "open_mini_map",
+                        lambda win: opened.append(1) or (True, ""))
+    ok, info = map_nav.navigate_within_map(object(), "高级庭院", 112, 47)
+    assert not ok and "当前不在" in info
+    assert opened == []
+
+
+def test_navigate_within_map_skips_when_already_near(monkeypatch):
+    """已在目标 ±ARRIVE_TOLERANCE 内直接成功，不重复开图点击。"""
+    map_nav._CANCEL.clear()
+    monkeypatch.setattr(map_nav, "_read_pos",
+                        lambda win: ("高级庭院", 112, 47))
+    opened = []
+    monkeypatch.setattr(map_nav.game_map, "open_mini_map",
+                        lambda win: opened.append(1) or (True, ""))
+    ok, info = map_nav.navigate_within_map(object(), "高级庭院", 112, 47)
+    assert ok and "已在目标附近" in info
+    assert opened == []
+
+
+def test_navigate_within_map_clicks_cached_affine_and_waits(monkeypatch):
+    """有标定 → 瞄准点击目标点 → 等位移 → 关图 → 等到达。"""
+    map_nav._CANCEL.clear()
+    monkeypatch.setattr(map_nav, "_read_pos",
+                        lambda win: ("高级庭院", 109, 28))
+    monkeypatch.setattr(map_nav.game_map, "open_mini_map",
+                        lambda win: (True, "小地图已打开"))
+    monkeypatch.setattr(map_nav, "locate_search_bar",
+                        lambda win, img=None, allow_ocr=True:
+                        {"x": 587, "y": 283})
+    monkeypatch.setattr(map_nav, "affine_for",
+                        lambda win, target: {"sx": 2.4, "sy": -2.394,
+                                             "ax": 457.4, "ay": 586.9})
+    aimed = []
+
+    def _aim(win, aff, anchor, x, y, emit, on_affine_corrected=None):
+        aimed.append((x, y))
+        return True, (726, 474), ""
+
+    monkeypatch.setattr(map_nav, "_aim_and_click", _aim)
+    monkeypatch.setattr(map_nav, "_wait_movement",
+                        lambda win, before: True)
+    monkeypatch.setattr(map_nav.game_map, "close_maps",
+                        lambda win, quiet=True: False)
+    monkeypatch.setattr(map_nav, "_close_xunlu_panel_if_open",
+                        lambda win: False)
+    monkeypatch.setattr(map_nav, "_wait_arrival",
+                        lambda win, target, layer, x, y, emit,
+                        allow_restart=False: (True, "到达 高级庭院 (111,47)"))
+
+    class _W:
+        def capture(self, force_activate=False):
+            return object()
+
+    ok, info = map_nav.navigate_within_map(_W(), "高级庭院", 112, 47)
+    assert ok and "到达" in info
+    assert aimed == [(112, 47)]

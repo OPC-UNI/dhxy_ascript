@@ -4,7 +4,7 @@
 1. 映射目标真实存在于 core.settings；
 2. 所有方法在 mixin/ControlWindow 上可解析且归属正确（callPython 名不变，
    且不得在 ControlWindow 类体重复定义形成两份实现）；
-3. 纯转发：函数体是单条 `return settings_module.<同名>(...)`，58 个转发
+3. 纯转发：函数体是单条 `return settings_module.<同名>(...)`，59 个转发
    逐一验证参数原样到达 core.settings、返回值原样透传；
 4. 「运行中拒绝修改」守卫经 ControlWindow 的解析路径生效。
 """
@@ -33,8 +33,17 @@ def test_site_coord_nav_default_on_and_toggle():
     assert settings.load_site_coord_nav() is True
 
 
+def test_give_honor_default_high_and_toggle():
+    """300环给与雅誉偏好：默认高雅誉优先，可切低雅誉优先。"""
+    assert settings.load_give_honor_high_first() is True
+    assert settings.save_give_honor_high_first(False)["status"] == "success"
+    assert settings.load_give_honor_high_first() is False
+    assert settings.save_give_honor_high_first(True)["status"] == "success"
+    assert settings.load_give_honor_high_first() is True
+
+
 def test_delegates_target_real_settings_functions():
-    assert len(DELEGATE_NAMES) == 58
+    assert len(DELEGATE_NAMES) == 59
     for name in DELEGATE_NAMES:
         assert callable(getattr(settings, name)), name
 

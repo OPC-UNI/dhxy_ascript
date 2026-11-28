@@ -67,7 +67,8 @@ def test_settings_spec_covers_all_task_modes():
     from src.core import schemes
     expected = {
         "五环": 2, "客栈": 20, "修罗": 90, "五倍": 100,
-        "种族比武": 10, "玄枢轶闻": 5, "名望": 5, "300环": 1,
+        "种族比武": 10, "玄枢轶闻": 5, "名望": 5,
+        # "300环": 1,  # 入口临时关闭（用户 2026-11-28）
         "仅战斗": 0,
     }
     assert set(TASK_COUNT_DEFAULTS) == set(TASK_MODES)

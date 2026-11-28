@@ -481,6 +481,67 @@ def test_cancel_auto_frame_non_auto_quiet(monkeypatch):
     assert clicks == [] and logs == []
 
 
+# ---- 捕捉战斗计划：第 2 回合人物逃跑 + 召唤兽防御（用户 2026-11-27 规则） ----
+
+def test_capture_plan_round2_flee_and_beast_defend(monkeypatch):
+    """第 2 回合：人物「逃跑」后仍要给召唤兽点「防御」。
+
+    实机 2026-11-27：19:17:19 点「逃跑」后旧实现只等人物操作条消失，
+    而召唤兽操作条同样带 FASHU 图标，永远等不到消失，空耗到 30s 倒计时
+    （19:18:00 才进下一回合）。用户规则：第 2 回合人物逃跑、召唤兽防御。
+    """
+    class _FakeTime:
+        def sleep(self, _s):
+            pass
+
+        def time(self):
+            return 0.0
+
+    monkeypatch.setattr(battle, "time", _FakeTime())
+    calls = []
+    ended = {"n": 0}
+
+    def _battle_ended(_win):
+        ended["n"] += 1
+        return ended["n"] >= 3  # 第 1、2 回合存活，循环第 3 次判定战斗结束
+
+    monkeypatch.setattr(battle, "_battle_ended", _battle_ended)
+    monkeypatch.setattr(battle, "_wait_icon",
+                        lambda win, icon, timeout, want_found=True: want_found)
+    monkeypatch.setattr(battle, "_cancel_auto", lambda win: None)
+    monkeypatch.setattr(battle, "_cancel_auto_frame", lambda win, img: False)
+    monkeypatch.setattr(battle, "_find_capture_target",
+                        lambda win, names: (369, 429))
+    monkeypatch.setattr(battle, "human_click",
+                        lambda win, x, y, button="left": calls.append(
+                            ("click", x, y)))
+    monkeypatch.setattr(battle, "_click_template",
+                        lambda win, icon: calls.append(("tpl", icon)) or True)
+
+    def _do_action(_win, action, label, frame=None, round_no=None):
+        calls.append(("act", action, label, round_no))
+        return True
+
+    monkeypatch.setattr(battle, "_do_action", _do_action)
+
+    class _Win:
+        def capture(self, force_activate=False, **kw):
+            return _battle_frame()
+
+    battle.set_battle_plan({"kind": "capture", "target_names": ("猴宝宝",)})
+    try:
+        battle._run_battle_plan(_Win(), battle.battle_plan())
+    finally:
+        battle.clear_battle_plan()
+
+    assert ("tpl", battle.ZHUOBO_ICON) in calls
+    assert ("act", "防御", "召唤兽", 1) in calls
+    assert ("tpl", battle.TAOPAO_ICON) in calls          # 第 2 回合逃跑
+    assert ("act", "防御", "召唤兽", 2) in calls          # 召唤兽防御（回归点）
+    assert calls.index(("tpl", battle.TAOPAO_ICON)) \
+        < calls.index(("act", "防御", "召唤兽", 2))
+
+
 # ---- 队员配置动作：先等操作条再取消自动（2026-11-24 顺序修正） ----
 
 class _FakeMemberWin:

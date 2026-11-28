@@ -654,6 +654,9 @@ class _AwangWin:
         width = 1376
         height = 828
 
+    def capture(self, **k):
+        return None  # 默认无帧：_check_awang 的晚到对话框兜底跳过
+
 
 def test_awang_approach_center_region_no_walk():
     """阿旺在屏幕中间 ±180px 内（含边界）→ 不走近，返回 None。"""
@@ -667,18 +670,84 @@ def test_awang_approach_center_region_no_walk():
 
 
 def test_check_awang_center_clicks_interact_point_directly(monkeypatch):
-    """阿旺在屏幕中间区域：直接点交互点，不再走近等待。"""
+    """阿旺在屏幕中间区域且点击生效：只点一次交互点，不走近。"""
     clicks, arrived = [], []
     monkeypatch.setattr(kezhan, "log", lambda *a, **k: None)
     monkeypatch.setattr(kezhan, "human_click",
                         lambda win, x, y, **k: clicks.append((x, y)))
     monkeypatch.setattr(kezhan, "_find_awang", lambda w: (700, 400))
+    monkeypatch.setattr(kezhan, "_awang_click_took_effect", lambda w: True)
     monkeypatch.setattr(kezhan, "_wait_awang_arrival",
                         lambda w: arrived.append(1))
     ok, info = kezhan._check_awang(_AwangWin())
     assert ok is True and info == "已点击阿旺"
     assert clicks == [(700, 400)]
     assert arrived == []
+
+
+def test_check_awang_center_click_no_effect_walks_closer(monkeypatch):
+    """屏幕中间区直接点无响应（2026-11-27 比武场）：改点朝中间一侧 90px
+    走近，到位后重新定位再点交互点。"""
+    clicks, arrived = [], []
+    monkeypatch.setattr(kezhan, "log", lambda *a, **k: None)
+    monkeypatch.setattr(kezhan, "human_click",
+                        lambda win, x, y, **k: clicks.append((x, y)))
+    monkeypatch.setattr(kezhan, "_find_awang", lambda w: (700, 400))
+    monkeypatch.setattr(kezhan, "_awang_click_took_effect", lambda w: False)
+    monkeypatch.setattr(kezhan, "_wait_awang_arrival",
+                        lambda w: arrived.append(1))
+    ok, info = kezhan._check_awang(_AwangWin())
+    assert ok is True and info == "已点击阿旺"
+    # 700 在中心右侧 → 走近点 = 左侧 90px
+    assert clicks == [(700, 400), (610, 400), (700, 400)]
+    assert arrived == [1]
+
+
+class _AwangVerifyWin:
+    """按序返回预置帧的窗口（帧耗尽后返回 None）。"""
+
+    class rect:
+        width = 1376
+        height = 828
+
+    def __init__(self, frames):
+        self._frames = list(frames)
+
+    def capture(self, **k):
+        return self._frames.pop(0) if self._frames else None
+
+
+def test_awang_click_effect_dialog_hit(monkeypatch):
+    """对话框弹出即生效，不再读位置。"""
+    monkeypatch.setattr(kezhan.time, "sleep", lambda s: None)
+    monkeypatch.setattr(kezhan, "dialog_frame_score", lambda img: 0.99)
+    reads = []
+    monkeypatch.setattr(kezhan.game_map, "read_map_position",
+                        lambda w, img=None: reads.append(1) or ("洛阳城", 1, 1))
+    assert kezhan._awang_click_took_effect(_AwangVerifyWin([object()])) is True
+    assert reads == []
+
+
+def test_awang_click_effect_walk_or_unknown(monkeypatch):
+    """位置变化（人物起步）或两次都读不到位置（不确定）均按生效处理。"""
+    monkeypatch.setattr(kezhan.time, "sleep", lambda s: None)
+    monkeypatch.setattr(kezhan, "dialog_frame_score", lambda img: 0.1)
+    for p1, p2 in [(("洛阳城", 1, 1), ("洛阳城", 1, 9)), (None, None)]:
+        reads = iter([p1, p2])
+        monkeypatch.setattr(kezhan.game_map, "read_map_position",
+                            lambda w, img=None: next(reads))
+        assert kezhan._awang_click_took_effect(
+            _AwangVerifyWin([object(), object()])) is True
+
+
+def test_awang_click_effect_no_move_returns_false(monkeypatch):
+    """无对话且位置两次不变 → 判定点击未生效（允许改走近）。"""
+    monkeypatch.setattr(kezhan.time, "sleep", lambda s: None)
+    monkeypatch.setattr(kezhan, "dialog_frame_score", lambda img: 0.1)
+    monkeypatch.setattr(kezhan.game_map, "read_map_position",
+                        lambda w, img=None: ("洛阳城", 1, 1))
+    assert kezhan._awang_click_took_effect(
+        _AwangVerifyWin([object(), object()])) is False
 
 
 def test_check_awang_left_side_walks_then_clicks(monkeypatch):
