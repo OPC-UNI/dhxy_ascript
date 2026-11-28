@@ -61,7 +61,7 @@ _GROUP_STATE_ATTRS = ("_active", "_mode", "_leader_id", "_tab_count",
                       "_acted_ids", "_no_members_logged", "pass_active",
                       "_last_bars_pass_at", "_last_rejoin_pass_at",
                       "_off_leader_log_at", "_switch_fail_streak",
-                      "_switch_fail_alerted")
+                      "_switch_fail_alerted", "_switch_defer_reason")
 
 
 @pytest.fixture(autouse=True)
@@ -100,6 +100,7 @@ def _mock_silent_click(monkeypatch, clicks, tab=None, count=3, cur=0,
     monkeypatch.setattr(silent_click, "tab_control_hwnd", lambda _w: tab)
     monkeypatch.setattr(silent_click, "tab_item_count", lambda _t: count)
     monkeypatch.setattr(silent_click, "tab_current_index", lambda _t: cur)
+    monkeypatch.setattr(silent_click, "physical_buttons_down", lambda: False)
     names = names if names is not None else [f"角色{i}" for i in range(count)]
     monkeypatch.setattr(silent_click, "tab_items",
                         lambda _w, _c: [(n, (0, 0, 174, 23)) for n in names])
@@ -156,6 +157,41 @@ def test_switch_next_by_click_never_switches_returns_none(monkeypatch):
     assert tab_group._switch_next_by_click(_FakeWin()) is None
     assert clicks == [1, 1, 1]  # 最多尝试 TAB_SWITCH_TRIES 次
     assert invalidates == [True, True]
+
+
+def test_switch_next_by_click_defers_while_physical_button_down(monkeypatch):
+    """物理鼠标按键按下：不注入 Tab 点击（防拖动），标记主动跳过。
+
+    2026-11-28 用户实测：合成 DOWN 与按着的左键叠加，客户端把 Tab
+    拖到物理光标位置（可拖出成独立窗口）。
+    """
+    clicks = []
+    _mock_silent_click(monkeypatch, clicks, tab=TAB_HWND, count=3, cur=0)
+    from src.device import silent_click
+    monkeypatch.setattr(silent_click, "physical_buttons_down", lambda: True)
+    monkeypatch.setattr(tab_group, "TAB_INPUT_IDLE_WAIT", 0.0)
+    list_tabs, _ = _list_tabs_script([0xA, 0xA])
+    monkeypatch.setattr(tab_group.game, "list_tab_windows", list_tabs)
+    assert tab_group._switch_next_by_click(_FakeWin()) is None
+    assert clicks == []  # 一次点击都不投递
+    assert tab_group._switch_defer_reason == "物理鼠标按键按下中"
+
+
+def test_switch_next_defer_not_counted_as_failure(monkeypatch):
+    """物理鼠标占用主动跳过不计失败链：不触发「Tab 被拖出」ERROR 告警。"""
+    logs = []
+    monkeypatch.setattr(tab_group, "log",
+                        lambda msg, level="INFO": logs.append((level, msg)))
+
+    def _raw(_w):
+        tab_group._switch_defer_reason = "物理鼠标按键按下中"
+        return None
+    monkeypatch.setattr(tab_group, "_switch_next_raw", _raw)
+    for _ in range(tab_group.TAB_FAIL_ALERT_STREAK):
+        assert tab_group._switch_next(_FakeWin()) is None
+    assert tab_group._switch_fail_streak == 0
+    assert not [m for lv, m in logs if lv == "ERROR"]
+    assert any("不计失败" in m for _lv, m in logs)
 
 
 def test_switch_next_by_click_no_tab_control(monkeypatch):

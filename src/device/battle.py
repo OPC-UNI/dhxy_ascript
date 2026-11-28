@@ -77,6 +77,14 @@ ROUND_BANNER_ICON = "round_banner.png"  # 回合横幅「回合」文字区（�
 ROUND_BANNER_THRESHOLD = 0.8   # 横幅文字匹配阈值（非战斗画面实测最高 0.45，真实横幅 0.99）
 BAR_BUTTON_THRESHOLD = 0.85    # 操作条按钮匹配阈值（非战斗画面实测最高 0.39，真实按钮 1.0）
 
+# ---- 右侧动作栏阶段（8 按钮=人物 / 4 按钮=召唤兽，用户 2026-11-27 规则，
+# 通用战斗同样适用 2026-11-28）：人物动作提交后只等 4 按钮栏出现再做
+# 召唤兽操作，仍是人物阶段时不误点召唤兽按钮 ----
+BATTLE_BAR_CHAR_ICON = "battle_bar_char.png"    # 8 按钮 = 人物操作阶段
+BATTLE_BAR_BEAST_ICON = "battle_bar_beast.png"  # 4 按钮 = 召唤兽操作阶段
+BATTLE_BAR_REGION = (1250, 300, 1378, 580)      # 右侧竖栏（随布局上下漂移）
+BATTLE_BAR_THRESHOLD = 0.9
+
 # ---- 任务专属战斗计划（捕捉类环，用户 2026-11-27 实机） ----
 # 300环「贵人相助」捕捉环的遭遇战不能按常规战斗动作打（攻击会打死要
 # 捕捉的宝宝）：任务侧在环开始时 set_battle_plan(kind="capture")，战斗
@@ -417,6 +425,26 @@ def _is_round_1_frame(img):
     return first_score >= ROUND_BANNER_THRESHOLD and first_score > other_score
 
 
+def bar_phase(img):
+    """右侧动作栏阶段：'char'（8 按钮=人物）/ 'beast'（4 按钮=召唤兽）/ None。
+
+    8 按钮模板包含下面 4 个按钮，4 按钮模板在人物栏上也能命中；必须先判
+    8 按钮再判 4 按钮（用户 2026-11-27 规则）。img 接受 BGR 帧或 PIL 帧
+    （轮询帧复用）；条带外/模板不可用返回 None。
+    """
+    if isinstance(img, Image.Image):
+        img = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
+    char_score, _ = game_map.best_match_np(img, BATTLE_BAR_CHAR_ICON,
+                                           region=BATTLE_BAR_REGION)
+    if char_score >= BATTLE_BAR_THRESHOLD:
+        return "char"
+    beast_score, _ = game_map.best_match_np(img, BATTLE_BAR_BEAST_ICON,
+                                            region=BATTLE_BAR_REGION)
+    if beast_score >= BATTLE_BAR_THRESHOLD:
+        return "beast"
+    return None
+
+
 def char_skill_pos(action):
     """解析「技能C-R」为人物技能网格坐标；不合法返回 None。"""
     m = _SKILL_RE.match(action)
@@ -471,6 +499,63 @@ def _wait_icon(win, icon, timeout, want_found=True):
     return False
 
 
+def _bar_present(img):
+    """底部操作条（法术按钮）是否在场：条带内匹配，不回退全帧。"""
+    return game_map.match_frame_np(img, FASHU_ICON, region=_bar_band(img),
+                                   fallback=False) is not None
+
+
+def _read_bar_phase(win, frame=None):
+    """截帧（或复用 frame）读右侧动作栏阶段，返回 (phase, frame)。
+
+    frame 传入时直接复用（省一次截图）；截帧失败返回 (None, None)。
+    """
+    if frame is None:
+        frame = win.capture(force_activate=False,
+                            format=WindowCaptureFormat.OPENCV)
+    if frame is None:
+        return None, None
+    return bar_phase(frame), frame
+
+
+def _wait_bar_phase(win, want, timeout):
+    """等右侧动作栏进入 want 阶段（'char'/'beast'），单帧轮询。
+
+    返回 (result, img, last_phase, bar_present)：
+      result='ok'       命中（img 为该帧，供随后的动作定位复用）
+      result='ended'    战斗结束（连续 BATTLE_CONFIRM_POLLS 轮询不在战斗）
+      result='timeout'  超时（last_phase/bar_present 为最后一帧状态）
+    bar_present = 底部操作条法术按钮在场——阶段模板未命中时区分「条还在
+    但模板不认识」（旧行为兜底）与「条已关」（无该阶段/战斗将结束）。
+    """
+    deadline = time.time() + timeout
+    out_polls = 0
+    last_phase = None
+    last_img = None
+    last_present = False
+    while time.time() < deadline:
+        img = win.capture(force_activate=False,
+                          format=WindowCaptureFormat.OPENCV)
+        if img is None:
+            time.sleep(BAR_POLL_INTERVAL)
+            continue
+        phase = bar_phase(img)
+        last_phase, last_img = phase, img
+        if phase == want:
+            return "ok", img, phase, True
+        # 阶段模板本身是战斗 UI：先判阶段再判结束，防 4 按钮栏在
+        # is_in_battle_frame 条带覆盖不到时被误判为战斗结束
+        if is_in_battle_frame(img):
+            out_polls = 0
+        else:
+            out_polls += 1
+            if out_polls >= BATTLE_CONFIRM_POLLS:
+                return "ended", None, phase, False
+        last_present = _bar_present(img)
+        time.sleep(BAR_POLL_INTERVAL)
+    return "timeout", last_img, last_phase, last_present
+
+
 def _battle_ended(win):
     """战斗结束判定：连续两次轮询不在战斗（防回合间隙误判，回合变化不算）。"""
     if is_in_battle(win):
@@ -506,10 +591,15 @@ def _click_template(win, icon):
     return True
 
 
-def _click_auto_button(win):
-    """点击自动按钮（自动态有两个渲染变体 auto/auto2，任一命中即点）。"""
+def _click_auto_button(win, frame=None):
+    """点击自动按钮（自动态有两个渲染变体 auto/auto2，任一命中即点）。
+
+    frame：调用方已截帧（阶段判定同帧复用，省一次截图）；None 自行截帧。
+    """
     for icon in (AUTO_ICON, AUTO2_ICON):
-        if _click_template(win, icon):
+        pt = _find_in_frame(win, frame, icon)
+        if pt is not None:
+            human_click(win, pt[0], pt[1])
             return True
     return False
 
@@ -656,6 +746,40 @@ def _do_action(win, action, label, frame=None, round_no=None):
     _park_mouse(win)  # 鼠标移开，避免遮挡召唤兽操作条
     log(f"[战斗] {prefix}{label}：施放 {action}", "INFO")
     return True
+
+
+def _run_beast_stage(win, action, round_no=None):
+    """等召唤兽操作阶段并执行动作，返回是否发出了操作指令。
+
+    8/4 按钮判阶段（用户 2026-11-27 规则）：右侧动作栏切到 4 按钮
+    （召唤兽）后才执行；仍是 8 按钮人物阶段时不误点，继续等它切换
+    （人物动作未提交时倒计时约 30s，最多 IDLE_COUNTDOWN_WAIT）。
+    阶段模板不可用（操作条在场但两模板均未命中，旧布局/渲染差异）时
+    按旧行为直接尝试召唤兽动作；操作条已关闭（无召唤兽/战斗结束）时
+    不操作。返回是否发出了操作指令（未发出时调用方按其倒计时等待）。
+    """
+    prefix = f"第 {round_no} 回合 " if round_no else ""
+    res, img, last, present = _wait_bar_phase(win, "beast", BEAST_BAR_TIMEOUT)
+    if res == "ok":
+        return _do_action(win, action, "召唤兽", frame=img, round_no=round_no)
+    if res == "ended":
+        return False
+    if last == "char" and present:
+        # 人物阶段还没结束：不能按召唤兽操作，继续等它切换
+        res2, img2, last2, _present2 = _wait_bar_phase(
+            win, "beast", IDLE_COUNTDOWN_WAIT)
+        if res2 == "ok":
+            return _do_action(win, action, "召唤兽", frame=img2,
+                              round_no=round_no)
+        if res2 != "ended" and last2 == "char":
+            log(f"[战斗] {prefix}等待召唤兽阶段超时，操作条仍为人物阶段，"
+                f"跳过召唤兽操作", "WARN")
+        return False
+    if present:
+        # 阶段模板未命中但操作条在场：保持旧行为（按召唤兽阶段尝试）
+        return _do_action(win, action, "召唤兽", round_no=round_no)
+    # 操作条已关闭：无召唤兽阶段（无召唤兽/战斗即将结束）
+    return False
 
 
 def _click_famen(win, bar_ready=False):
@@ -832,6 +956,10 @@ def _run_capture_plan(win, plan):
 def handle_battle(win):
     """处理首场战斗：第 1 回合按配置操作，操作完成后点击自动。
 
+    阶段判定：右侧动作栏 8 按钮=人物阶段、4 按钮=召唤兽阶段（bar_phase，
+    用户 2026-11-27 规则，通用战斗同样适用）。人物动作提交后只等 4 按钮
+    栏出现再做召唤兽操作，操作条仍是人物阶段时不误点召唤兽按钮；8/4 模板
+    不可用（旧布局/渲染差异）时保持原「按流程顺序」行为。
     返回 "auto_ok"（本场已挂上自动）或 "no_auto"（战斗结束时仍未挂上，
     供 watch_loop 在下一场战斗进场时补点一次自动）。
     后续场次由 watch_loop 按场次调度（每 5 场例行点击一次自动，
@@ -844,6 +972,7 @@ def handle_battle(win):
     rounds = 0
     round_1 = True
     round1_frame = None  # 第 1 回合操作条帧（取消自动/回合判定/人物操作共用）
+    phase_unknown_logged = False  # 本场 8/4 阶段模板不可用只提示一次
     while not _battle_ended(win):
         # 等待操作条出现（新回合）
         if not _wait_icon(win, FASHU_ICON, ROUND_BAR_TIMEOUT, want_found=True):
@@ -852,7 +981,7 @@ def handle_battle(win):
         rounds += 1
         if rounds == 1:
             # 首次操作条：截一帧完成「取消自动 + 第 1 回合判定」，
-            # 该帧同时供人物操作的防御/法术按钮定位复用（省 2 次截图）
+            # 该帧同时供阶段判定与人物操作的防御/法术按钮定位复用
             round1_frame = win.capture(force_activate=False,
                                        format=WindowCaptureFormat.OPENCV)
             if round1_frame is None:
@@ -864,33 +993,57 @@ def handle_battle(win):
                 if canceled:
                     round1_frame = None  # 取消自动后操作条已变化，帧失效
             log(f"[战斗] 当前为第 1 回合" if round_1 else "[战斗] 当前非第 1 回合", "INFO")
-        # 自动使用法门：第 1 回合先点一次法门坐标（每场一次），
-        # 然后继续原流程的战斗操作（操作条已确认出现，免重复等待）
-        if rounds == 1 and round_1:
+        # 当前操作阶段（8 按钮=人物 / 4 按钮=召唤兽）：首回合复用刚截帧，
+        # 取消自动后帧失效则重截
+        phase, phase_frame = _read_bar_phase(
+            win, round1_frame if rounds == 1 else None)
+        if phase is None and not phase_unknown_logged:
+            phase_unknown_logged = True
+            log("[战斗] 未识别到 8/4 按钮操作栏阶段，按原流程"
+                "（人物→召唤兽）执行", "INFO")
+        # 自动使用法门：第 1 回合先点一次法门坐标（每场一次，仅人物
+        # 阶段）；法门点击后阶段帧可能失效，人物动作重新截帧
+        if phase != "beast" and rounds == 1 and round_1:
             _click_famen(win, bar_ready=True)
+            phase_frame = None
         # 非第 1 回合：点击自动按钮，剩余回合交由游戏自动战斗
         if not (rounds == 1 and round_1):
-            if _click_auto_button(win):
+            if _click_auto_button(win, frame=phase_frame):
                 _park_mouse(win)  # 鼠标移开，避免遮挡操作条
                 auto_engaged = True
                 log("[战斗] 已点击自动，剩余回合由游戏自动战斗", "SYS")
                 break
             log("[战斗] 未识别到自动按钮，本回合按配置手动操作", "WARN")
+        if phase == "beast":
+            # 当前已是召唤兽阶段（人物行动已提交/进场即过人物阶段）：
+            # 只做召唤兽动作，不点人物按钮
+            acted = _do_action(win, actions["beast"], "召唤兽",
+                               frame=phase_frame, round_no=rounds)
+            if rounds == 1 and round_1 and acted:
+                time.sleep(SKILL_CONFIRM_DELAY)
+                if _click_auto_button(win):
+                    _park_mouse(win)
+                    auto_engaged = True
+                    log("[战斗] 操作完成，已点击自动", "SYS")
+                    break
+                log("[战斗] 操作条已关闭未点到自动，待下一操作条补点", "INFO")
+            _wait_icon(win, FASHU_ICON,
+                       BAR_GONE_TIMEOUT if acted else IDLE_COUNTDOWN_WAIT,
+                       want_found=False)
+            continue
         # ---- 第 1 回合（或自动不可用）：按配置执行人物/召唤兽操作 ----
         # （操作日志自带回合前缀，不再单独输出「第 N 回合：X 操作」头行）
         acted = _do_action(win, actions["char"], "人物",
-                           frame=round1_frame if rounds == 1 else None,
-                           round_no=rounds)
+                           frame=phase_frame, round_no=rounds)
         if acted:
             time.sleep(PHASE_SWITCH_DELAY)  # 操作条关闭，召唤兽条出现
         else:
             _wait_icon(win, FASHU_ICON, IDLE_COUNTDOWN_WAIT, want_found=False)
         if _battle_ended(win):
             break
-        # ---- 召唤兽操作阶段 ----
-        _wait_icon(win, FASHU_ICON, BEAST_BAR_TIMEOUT, want_found=True)
-        acted = _do_action(win, actions["beast"], "召唤兽", round_no=rounds)
-        if rounds == 1 and round_1 and acted:
+        # ---- 召唤兽操作阶段：等右侧动作栏切到 4 按钮（召唤兽）再执行 ----
+        beast_acted = _run_beast_stage(win, actions["beast"], round_no=rounds)
+        if rounds == 1 and round_1 and beast_acted:
             # 操作完成立即点自动（赶在操作条关闭前）：一轮就结束的战斗也要
             # 挂上自动，否则下场战斗进场不在自动状态；点不到时由下一操作条
             # （本场第 2 回合）或 watch_loop 下场进场补点
@@ -902,7 +1055,7 @@ def handle_battle(win):
                 break
             log("[战斗] 操作条已关闭未点到自动，待下一操作条补点", "INFO")
         _wait_icon(win, FASHU_ICON,
-                   BAR_GONE_TIMEOUT if acted else IDLE_COUNTDOWN_WAIT,
+                   BAR_GONE_TIMEOUT if beast_acted else IDLE_COUNTDOWN_WAIT,
                    want_found=False)
     return "auto_ok" if auto_engaged else "no_auto"
 
@@ -930,20 +1083,32 @@ def perform_member_actions(win, actions):
         return "截图失败"
     cancelled = _cancel_auto_frame(win, img)  # 操作条在场：已自动则取消恢复手动
     time.sleep(0.5)  # 操作条刚出现，稍作稳定再操作（同 handle_battle）
-    # ---- 人物动作阶段 ----
-    if actions["char"] == "无":
-        _wait_icon(win, FASHU_ICON, BAR_GONE_TIMEOUT, want_found=False)
-    elif _do_action(win, actions["char"], "人物"):
-        time.sleep(PHASE_SWITCH_DELAY)  # 操作条关闭，召唤兽条出现
-    else:
-        _wait_icon(win, FASHU_ICON, IDLE_COUNTDOWN_WAIT, want_found=False)
-    if not _member_battle_alive(win):
-        return _member_action_end(win, cancelled, "战斗已结束")
+    # 当前操作阶段（4 按钮=召唤兽）：已是召唤兽阶段则跳过人物动作——
+    # 人物阶段已过，在召唤兽栏上点人物按钮会误操作
+    phase, phase_frame = _read_bar_phase(win)
+    if phase != "beast":
+        # ---- 人物动作阶段 ----
+        if actions["char"] == "无":
+            _wait_icon(win, FASHU_ICON, BAR_GONE_TIMEOUT, want_found=False)
+        elif _do_action(win, actions["char"], "人物", frame=phase_frame):
+            time.sleep(PHASE_SWITCH_DELAY)  # 操作条关闭，召唤兽条出现
+        else:
+            _wait_icon(win, FASHU_ICON, IDLE_COUNTDOWN_WAIT, want_found=False)
+        if not _member_battle_alive(win):
+            return _member_action_end(win, cancelled, "战斗已结束")
     # ---- 召唤兽动作阶段 ----
-    _wait_icon(win, FASHU_ICON, BEAST_BAR_TIMEOUT, want_found=True)
     if actions["beast"] == "无":
         _wait_icon(win, FASHU_ICON, BAR_GONE_TIMEOUT, want_found=False)
-    elif _do_action(win, actions["beast"], "召唤兽"):
+    elif phase == "beast":
+        # 当前已在召唤兽阶段：先复核战斗仍在（「攻击」是固定坐标点击，
+        # 战斗刚结束的残帧不得点到世界），再执行
+        if not _member_battle_alive(win):
+            return _member_action_end(win, cancelled, "战斗已结束")
+        if _do_action(win, actions["beast"], "召唤兽", frame=phase_frame):
+            time.sleep(SKILL_CONFIRM_DELAY)  # 等待面板收起
+        else:
+            _wait_icon(win, FASHU_ICON, IDLE_COUNTDOWN_WAIT, want_found=False)
+    elif _run_beast_stage(win, actions["beast"]):
         time.sleep(SKILL_CONFIRM_DELAY)  # 等待面板收起
     else:
         _wait_icon(win, FASHU_ICON, IDLE_COUNTDOWN_WAIT, want_found=False)

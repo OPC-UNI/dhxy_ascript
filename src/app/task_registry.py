@@ -26,8 +26,8 @@ from ..core import app_utils
 from ..core.app_utils import log
 from ..core.settings import load_task_counts
 from ..device import task_tracker, team
-from ..tasks import (kezhan, mingwang, wuhuan, wubei, xiuluo, xuanshu,
-                     zhongzu)
+from ..tasks import (kezhan, mingwang, sanbaihuan, wuhuan, wubei, xiuluo,
+                     xuanshu, zhongzu)
 
 
 def _pre_xuanshu(win):
@@ -70,9 +70,7 @@ TASKS = (
     TaskSpec("玄枢轶闻", xuanshu.run_loop, _pre_xuanshu),
     # 名望：第一阶段（种族判定 + 领取入口）；其余种族/流程待补充
     TaskSpec("名望", mingwang.run_loop),
-    # 300环（江湖历练）入口临时关闭（用户 2026-11-28：符文验证期间关闭，
-    # 验证完成后恢复下面一行并同步 4 个注册点）：
-    # TaskSpec("300环", sanbaihuan.run_loop),
+    TaskSpec("300环", sanbaihuan.run_loop),
 )
 TASK_MODES = tuple(spec.mode for spec in TASKS)
 TASKS_BY_MODE = {spec.mode: spec for spec in TASKS}

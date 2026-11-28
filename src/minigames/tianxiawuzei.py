@@ -451,13 +451,10 @@ def play(win, prefix="300环"):
 
 BATTLE_DAOJU_ICON = "battle_daoju.png"            # 「道具」按钮（右侧竖栏）
 BATTLE_DEFEND_ICON = "battle_fangyu_vertical.png"  # 「防御」按钮（右侧竖栏）
-BATTLE_BAR_CHAR_ICON = "battle_bar_char.png"      # 8 按钮 = 人物操作阶段
-BATTLE_BAR_BEAST_ICON = "battle_bar_beast.png"    # 4 按钮 = 召唤兽操作阶段
 FIRECRACKER_ICON = item_catalog.icon("daxingbaozhu")
 BAG_BOX_ICON = bag_lib.BAG_BOX_ICON               # 背包面板标志（同一模板）
 # 右侧竖栏搜索条带（窗口 1378x831；竖栏随布局上下漂移，实测 y 331-541）
 BATTLE_BAR_REGION = (1250, 300, 1378, 580)
-BATTLE_BAR_T = 0.9
 BAG_ANCHOR_T = 0.8
 # bag_box 模板中心 → 大型爆竹图标中心（2026-11-27 实机：锚点 (56,436)、
 # 图标 (219,766)）。背包面板可拖动，面板内相对位置恒定；该格是开战
@@ -646,18 +643,10 @@ def grid_click_point(cell):
 def _bar_phase(bgr):
     """右侧竖栏阶段：'char'（8 按钮=人物）/ 'beast'（4 按钮=召唤兽）/ None。
 
-    8 按钮模板包含下面 4 个按钮，4 按钮模板在人物栏上也能命中；先判
-    8 按钮，再判 4 按钮（用户 2026-11-27 规则：4 按钮=需要召唤兽操作）。
+    与通用战斗共用 battle.bar_phase（8 按钮优先判，用户 2026-11-27 规则）；
+    保留本函数作为小游戏内部调用点（单测打桩用）。
     """
-    char_score, _pt = game_map.best_match_np(bgr, BATTLE_BAR_CHAR_ICON,
-                                             region=BATTLE_BAR_REGION)
-    if char_score >= BATTLE_BAR_T:
-        return "char"
-    beast_score, _pt = game_map.best_match_np(bgr, BATTLE_BAR_BEAST_ICON,
-                                              region=BATTLE_BAR_REGION)
-    if beast_score >= BATTLE_BAR_T:
-        return "beast"
-    return None
+    return battle_lib.bar_phase(bgr)
 
 
 def turn_red_pixels(bgr):

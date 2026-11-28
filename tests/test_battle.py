@@ -58,6 +58,95 @@ def test_is_in_battle_frame_banner_hit(monkeypatch):
     assert battle.is_in_battle_frame(frame)
 
 
+# ---- 右侧动作栏阶段（8 按钮=人物 / 4 按钮=召唤兽，通用战斗接入） ----
+
+def _paste_center(frame, tpl, center):
+    """模板中心贴到指定坐标（paste_template 按左上角贴，这里换算）。"""
+    return paste_template(frame, tpl,
+                          center[0] - tpl.shape[1] // 2,
+                          center[1] - tpl.shape[0] // 2)
+
+
+def test_bar_phase_char_beast_and_eight_first():
+    """8 按钮栏判人物、4 按钮栏判召唤兽；8 按钮必须优先判（4 按钮模板
+    在人物栏上也能命中，先 4 后 8 会把人物阶段误判成召唤兽阶段）。"""
+    l, t, r, b = battle.BATTLE_BAR_REGION
+    center = ((l + r) // 2, (t + b) // 2)
+    char_frame = _paste_center(make_bgr_frame(),
+                               _tpl(battle.BATTLE_BAR_CHAR_ICON), center)
+    assert battle.bar_phase(char_frame) == "char"
+    beast_frame = _paste_center(make_bgr_frame(),
+                                _tpl(battle.BATTLE_BAR_BEAST_ICON), center)
+    assert battle.bar_phase(beast_frame) == "beast"
+    assert battle.bar_phase(make_bgr_frame()) is None
+
+
+class _PhaseWin:
+    """按序返回帧的窗口替身（阶段轮询用）。"""
+
+    def __init__(self, frames):
+        self._frames = list(frames)
+        self._i = 0
+
+    def capture(self, *a, **k):
+        f = self._frames[min(self._i, len(self._frames) - 1)]
+        self._i += 1
+        return f
+
+
+def test_wait_bar_phase_returns_beast_frame(monkeypatch):
+    """轮询到 4 按钮栏出现即返回该帧（供召唤兽动作定位复用）。"""
+    monkeypatch.setattr(battle, "BAR_POLL_INTERVAL", 0.0)
+    monkeypatch.setattr(battle, "is_in_battle_frame", lambda img: True)
+    phases = iter([None, "char", "beast"])
+    monkeypatch.setattr(battle, "bar_phase", lambda img: next(phases, "beast"))
+    win = _PhaseWin([_battle_frame()] * 5)
+    res, img, last, present = battle._wait_bar_phase(win, "beast", 5.0)
+    assert res == "ok" and last == "beast" and present is True
+    assert img is not None
+
+
+def test_run_beast_stage_skips_when_char_bar_persists(monkeypatch):
+    """人物阶段一直不切换：不误点召唤兽按钮，超时记 WARN 跳过。"""
+    msgs = []
+    monkeypatch.setattr(battle, "log",
+                        lambda m, level="INFO": msgs.append((level, m)))
+    monkeypatch.setattr(battle, "_wait_bar_phase",
+                        lambda win, want, timeout: ("timeout", None, "char", True))
+    calls = []
+    monkeypatch.setattr(battle, "_do_action",
+                        lambda *a, **k: calls.append((a, k)) or True)
+    assert battle._run_beast_stage(object(), "防御", round_no=1) is False
+    assert calls == []  # 一次召唤兽操作都不发
+    assert any(lv == "WARN" and "跳过召唤兽操作" in m for lv, m in msgs)
+
+
+def test_run_beast_stage_acts_on_beast_bar(monkeypatch):
+    monkeypatch.setattr(
+        battle, "_wait_bar_phase",
+        lambda win, want, timeout: ("ok", _battle_frame(), "beast", True))
+    calls = []
+
+    def _do(_win, action, label, frame=None, round_no=None):
+        calls.append((action, label, round_no))
+        return True
+    monkeypatch.setattr(battle, "_do_action", _do)
+    assert battle._run_beast_stage(object(), "防御", round_no=2) is True
+    assert calls == [("防御", "召唤兽", 2)]
+
+
+def test_run_beast_stage_falls_back_when_phase_unknown(monkeypatch):
+    """阶段模板未命中但操作条在场（旧布局/渲染差异）：保持旧行为尝试。"""
+    monkeypatch.setattr(
+        battle, "_wait_bar_phase",
+        lambda win, want, timeout: ("timeout", None, None, True))
+    calls = []
+    monkeypatch.setattr(battle, "_do_action",
+                        lambda *a, **k: calls.append((a, k)) or True)
+    assert battle._run_beast_stage(object(), "防御", round_no=1) is True
+    assert len(calls) == 1
+
+
 # ---- 战斗结束证据推进（_end_poll_advance：坐标快速结束信号 + 模板路径） ----
 
 def test_end_poll_advance_pos_signal_shortcuts_end():
@@ -563,6 +652,10 @@ def _member_action_env(monkeypatch, *, bar_found, cancelled=True,
         return bar_found
 
     monkeypatch.setattr(battle, "_wait_icon", _wait_icon)
+    # 阶段判定打桩：首帧人物阶段，召唤兽阶段等待直接命中
+    monkeypatch.setattr(battle, "bar_phase", lambda img: "char")
+    monkeypatch.setattr(battle, "_wait_bar_phase",
+                        lambda win, want, timeout: ("ok", None, want, True))
     monkeypatch.setattr(
         battle, "_cancel_auto_frame",
         lambda w, img: (calls.append(("cancel_auto",)), cancelled)[1])

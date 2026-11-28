@@ -79,10 +79,8 @@ STATS_FILENAME = "task_stats.json"
 STATS_KEEP_DAYS = 90  # daily 滚动保留天数
 # 统计归属的有效模式（与 control_window.TASK_MODES 一致；任务进程不得
 # 反向 import 控制窗口，故本地维护一份）
-# 300环入口临时关闭（用户 2026-11-28 符文验证期间），验证完成后恢复
-# "300环"（顺序在「名望」与「仅战斗」之间）。
 _STATS_MODES = ("五环", "客栈", "修罗", "五倍", "种族比武", "玄枢轶闻",
-                "名望", "仅战斗")
+                "名望", "300环", "仅战斗")
 # 会话统计（任务进程内存，start() 重置）：
 _session_started_at = None   # 会话开始时间戳
 _session_rounds = 0          # 本次会话完成轮次（record_round 同步计）

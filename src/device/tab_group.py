@@ -70,6 +70,9 @@ TAB_SWITCH_SETTLE = 0.8    # Ctrl+Tab 后等待标题/可见性更新
 TAB_SWITCH_TRIES = 3       # Tab 条点击最大尝试次数（未生效时重试同一
                            # Tab；每次重试前丢弃矩形缓存重读 UIA——窗口
                            # 移动/布局变化会让缓存坐标过时，2026-11-10）
+TAB_INPUT_IDLE_WAIT = 1.0  # 物理鼠标按键释放等待上限（秒）：切 Tab 注入
+                           # 前等用户松开——合成 DOWN 与按着的左键叠加会
+                           # 把 Tab 拖到物理光标位置（2026-11-28 用户实测）
 TAB_CYCLE_GUARD = 10       # 切回队长/遍历队员的最大切换次数
 TAB_FAIL_ALERT_STREAK = 3  # 连续切 Tab 失败升级告警的阈值（成功一次即清零）：
                            # 达到后报一条 ERROR 显眼告警（2026-11-14 用户要求，
@@ -121,6 +124,9 @@ _switch_fail_streak = 0    # 连续切 Tab 失败次数（成功一次清零）�
                            # 日志据此在第 2 次起降为 INFO，达阈值升级告警
 _switch_fail_alerted = False  # 本失败链是否已升级告警（同一链只报一次，
                               # 恢复成功后随计数清零重新武装）
+_switch_defer_reason = ""  # 本轮切 Tab 主动跳过原因（物理鼠标占用等）：
+                           # 非 None 结果但不算失败链——用户按着鼠标时
+                           # 跳过是安全降级，不能触发「Tab 被拖出」告警
 
 
 def _try_enter_pass():
@@ -684,10 +690,18 @@ def _switch_next(win):
 
     成功/失败统一记账（_note_switch_ok/_note_switch_fail）：连续失败
     达 TAB_FAIL_ALERT_STREAK 次升级 ERROR 告警，成功一次即清零。
+    物理鼠标占用导致的主动跳过不计失败（见 _switch_defer_reason）——
+    否则用户按着鼠标会让「Tab 可能被拖出」的 ERROR 告警误报。
     """
+    global _switch_defer_reason
     res = _switch_next_raw(win)
+    reason = _switch_defer_reason
+    _switch_defer_reason = ""
     if res is None:
-        _note_switch_fail(win)
+        if reason:
+            log(f"[组号] {reason}，本次切 Tab 跳过（不计失败）", "INFO")
+        else:
+            _note_switch_fail(win)
     else:
         _note_switch_ok()
     return res
@@ -748,6 +762,23 @@ def _tab_name_by_id(win, tab_id):
     return tab_id
 
 
+def _wait_physical_input_idle(silent_click, timeout=None):
+    """等物理鼠标按键释放（True=可安全注入 Tab 点击）。
+
+    物理按键按下期间合成 DOWN 会与按着的左键叠加触发 Tab 拖拽（含
+    拖出成独立窗口，2026-11-28 用户实测）。最多等 timeout 秒；读状态
+    失败按空闲处理（保持原行为）。
+    """
+    timeout = TAB_INPUT_IDLE_WAIT if timeout is None else timeout
+    deadline = time.time() + timeout
+    while True:
+        if not silent_click.physical_buttons_down():
+            return True
+        if time.time() >= deadline:
+            return False
+        time.sleep(0.1)
+
+
 def _switch_next_by_click(win):
     """静默+后台的切 Tab 兜底：Tab 条消息点击（2026-11-04 实机验证
     生效——无需前台、无需键盘、不移动物理鼠标）。
@@ -759,11 +790,16 @@ def _switch_next_by_click(win):
     无操作，重算会连切两个）；每次重试前丢弃 Tab 矩形缓存重读 UIA
     （窗口被拖动/缩放后缓存坐标会过期，点击落到 Tab 条外客户端不
     消费——2026-11-10 实机：拖动窗口后整轮「点击投递未被消费」）。
+    物理按键门：用户按着鼠标时先等 TAB_INPUT_IDLE_WAIT 秒，仍按着则
+    本轮跳过（不注入，避免 Tab 被拖到物理光标位置）；跳过记入
+    _switch_defer_reason，不计入失败链。
     切换生效后输出「切至哪个角色」日志：角色名（子窗口标题解析）+
     账号 ID（用户 2026-11-07 要求——只有切换生效后 ID 才可信，
     点击时仅知道 Tab 序号）。
     返回语义同 _switch_next。
     """
+    global _switch_defer_reason
+    _switch_defer_reason = ""
     from . import silent_click  # 函数内导入：保持模块间依赖单向
     tab = silent_click.tab_control_hwnd(win)
     if not tab:
@@ -779,6 +815,13 @@ def _switch_next_by_click(win):
     next_i = _next_logged_index(win, tab, cur, count)
     if next_i is None:
         log("[组号] 除当前 Tab 外无已登录 Tab，跳过切换", _fail_log_level())
+        return None
+    # 物理按键门：用户正按着鼠标（点按/长按）时不注入——合成 DOWN 与
+    # 按着的左键叠加会把 Tab 拖到物理光标位置（2026-11-28 用户实测）
+    if not _wait_physical_input_idle(silent_click):
+        _switch_defer_reason = "物理鼠标按键按下中"
+        log("[组号] 物理鼠标按键按下中，本轮跳过静默切 Tab"
+            "（避免 Tab 被拖到物理光标位置）", "INFO")
         return None
 
     def _log_switch_ok(ok_id, info):
@@ -800,6 +843,13 @@ def _switch_next_by_click(win):
             silent_click.invalidate_tab_items(win)
         info = silent_click.send_silent_tab_click(win, next_i)
         if info is None:
+            # 投递侧物理按键门拦截（检查后到投递之间用户按下）：按主动
+            # 跳过处理，不再重试注入
+            if silent_click.physical_buttons_down():
+                _switch_defer_reason = "物理鼠标按键按下中"
+                log("[组号] 物理鼠标按键按下中，本轮跳过静默切 Tab"
+                    "（避免 Tab 被拖到物理光标位置）", "INFO")
+                return None
             time.sleep(TAB_SWITCH_SETTLE)  # 投递失败也给控件留恢复时间
             continue
         time.sleep(TAB_SWITCH_SETTLE)
@@ -829,7 +879,13 @@ def return_to_leader(win):
         if _current_id(win) == _leader_id:
             return
         if _switch_next(win) is None:
-            log("[组号] 切回队长 Tab 失败（身份未确认）", _fail_log_level())
+            from . import silent_click  # 函数内导入：与点击通道同源
+            if silent_click.physical_buttons_down():
+                # 用户按着鼠标：本轮不注入 Tab 点击（防拖动），下一轮
+                # 调用方会重试——不按失败告警刷屏
+                log("[组号] 物理鼠标按键按下中，切回队长 Tab 本轮延后", "INFO")
+            else:
+                log("[组号] 切回队长 Tab 失败（身份未确认）", _fail_log_level())
             return
     log("[组号] 切回队长 Tab 超时（未在循环内命中队长）", "WARN")
 

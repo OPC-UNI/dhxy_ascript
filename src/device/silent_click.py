@@ -43,6 +43,11 @@ WM_RBUTTONUP = 0x0205
 MK_LBUTTON = 0x0001
 MK_RBUTTON = 0x0002
 
+# 物理按键虚拟键码（GetAsyncKeyState 读真实设备状态；合成消息不改变它）
+VK_LBUTTON = 0x01
+VK_RBUTTON = 0x02
+VK_MBUTTON = 0x04
+
 # button 参数（human_click 同款命名）→ 消息常量映射
 _BUTTON_MESSAGES = {
     "primary": (WM_LBUTTONDOWN, WM_LBUTTONUP, MK_LBUTTON),
@@ -110,6 +115,8 @@ def _setup_prototypes():
     user32.GetForegroundWindow.restype = wintypes.HWND
     user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPCWSTR, ctypes.c_int]
     user32.GetClassNameW.restype = ctypes.c_int
+    user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
+    user32.GetAsyncKeyState.restype = ctypes.c_short
     # 剪贴板（静默粘贴用）
     user32.OpenClipboard.argtypes = [wintypes.HWND]
     user32.OpenClipboard.restype = wintypes.BOOL
@@ -156,6 +163,24 @@ def click_target(win):
     except Exception:
         pass  # 子窗口枚举失败不阻塞（回退主窗口）
     return hwnd
+
+
+def physical_buttons_down():
+    """物理鼠标是否有按键按下（左/右/中任一）。
+
+    用 GetAsyncKeyState 读真实设备状态——合成消息点击不改变系统按键
+    状态，这里读到的就是用户手上的操作。Tab 条切 Tab 投递前必须为
+    False：客户端 Tab 条支持拖拽排序与拖出成独立窗口，合成 DOWN 与
+    用户按着的左键叠加会把 Tab 拖到物理光标位置（2026-11-28 用户实测）。
+    读状态失败按「未按下」处理（保持原行为，不因查询失败停摆）。
+    """
+    try:
+        for vk in (VK_LBUTTON, VK_RBUTTON, VK_MBUTTON):
+            if int(user32.GetAsyncKeyState(vk)) & 0x8000:
+                return True
+    except Exception:
+        return False
+    return False
 
 
 def _resolve_point(win, x=None, y=None):
@@ -750,10 +775,15 @@ def send_silent_tab_click(win, index):
     消息集最小化：仅 WM_LBUTTONDOWN→WM_LBUTTONUP（无前置移动、无
     移出——Tab 条无中性区，移出会悬停到别的 Tab 上）；2026-11-04
     实机验证：视图切换、客户端稳定。
+    物理按键门：投递前查 physical_buttons_down()，用户正按着鼠标
+    （点按/长按）时不注入——Tab 条支持拖拽排序/拖出成独立窗口，
+    合成 DOWN 与按着的左键叠加会把 Tab 拖到物理光标位置（2026-11-28
+    用户实测）。检查贴近投递点，尽量缩小与用户操作的竞态窗口。
     坐标：缓存里已是 Tab 条客户区矩形（见 _uia_tab_items），窗口移动
     不影响；中心落在客户区外 = 缓存与当前布局不符（缩放/DPI 变化），
     失效重读 UIA 一次，仍越界则放弃投递（防点错 Tab 切错账号）。
-    序号越界/控件不存在/矩形获取失败返回 None；成功返回投递描述 dict。
+    序号越界/控件不存在/矩形获取失败/物理按键按下返回 None；成功返回
+    投递描述 dict。
     """
     tab = tab_control_hwnd(win)
     if not tab:
@@ -776,6 +806,11 @@ def send_silent_tab_click(win, index):
             return None
     lp = (cy << 16) | (cx & 0xFFFF)
     with app_utils._INPUT_LOCK:
+        # 物理按键按下不注入：合成 DOWN 与按着的左键叠加会触发 Tab
+        # 拖拽（客户端按物理按键状态驱动，能把 Tab 拖到物理光标位置）。
+        # 贴近投递点检查，缩小与用户操作的竞态窗口。
+        if physical_buttons_down():
+            return None
         r_down = user32.SendMessageW(tab, WM_LBUTTONDOWN, MK_LBUTTON, lp)
         time.sleep(0.08)
         r_up = user32.SendMessageW(tab, WM_LBUTTONUP, 0, lp)

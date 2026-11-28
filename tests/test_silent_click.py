@@ -67,6 +67,10 @@ class _FakeUser32:
         buf.value = "Win32Window"
         return len(buf.value)
 
+    def GetAsyncKeyState(self, vk):
+        """物理按键状态替身：默认全部松开（0）；用例可改写 keys。"""
+        return self.keys.get(vk, 0) if hasattr(self, "keys") else 0
+
 
 # ---- 帧差统计 ----
 
@@ -462,6 +466,33 @@ def test_send_silent_tab_click_sequence(monkeypatch, _clear_tab_rects_cache):
     assert mouse[0][2] == MK_LBUTTON and mouse[1][2] == 0
     assert mouse[0][3] == mouse[1][3] == (13 << 16) | 263
     assert info["msg_results"] == (0, 0)
+
+
+def test_send_silent_tab_click_blocked_while_physical_button_down(
+        monkeypatch, _clear_tab_rects_cache):
+    """物理按键按下时不投递 Tab 点击：合成 DOWN 会与按着的左键叠加，
+    客户端把 Tab 拖到物理光标位置（2026-11-28 用户实测）。"""
+    fake = _FakeUser32Tab(tcm={silent_click.TCM_GETITEMCOUNT: 3})
+    fake.keys = {silent_click.VK_LBUTTON: 0x8000}
+    monkeypatch.setattr(silent_click, "user32", fake)
+    monkeypatch.setattr(silent_click, "_uia_tab_items",
+                        lambda _w, _c: list(_FAKE_TAB_ITEMS))
+    assert silent_click.send_silent_tab_click(_FakeWin(0x123), 1) is None
+    assert not any(m[1] in (WM_LBUTTONDOWN, WM_LBUTTONUP) for m in fake.msgs)
+
+
+def test_physical_buttons_down_checks_left_right_middle(monkeypatch):
+    """物理按键状态查询：左/右/中任一按下为 True；只有低位标记不算。"""
+    fake = _FakeUser32()
+    fake.keys = {}
+    monkeypatch.setattr(silent_click, "user32", fake)
+    assert silent_click.physical_buttons_down() is False
+    for vk in (silent_click.VK_LBUTTON, silent_click.VK_RBUTTON,
+               silent_click.VK_MBUTTON):
+        fake.keys = {vk: 0x8000}
+        assert silent_click.physical_buttons_down() is True
+    fake.keys = {silent_click.VK_LBUTTON: 0x0001}  # 上次按下标记位
+    assert silent_click.physical_buttons_down() is False
 
 
 def test_send_silent_tab_click_out_of_range(monkeypatch, _clear_tab_rects_cache):
